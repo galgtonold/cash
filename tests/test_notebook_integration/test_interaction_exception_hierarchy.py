@@ -14,10 +14,12 @@ class TestCustomExceptionEdits:
 
     def test_edit_custom_exception(self, nb_runner):
         """Edit a custom exception class."""
-        nb_runner.create_notebook([
-            "class AppError(Exception):\n    def __init__(self, msg, code=0):\n        super().__init__(msg)\n        self.code = code",
-            "try:\n    raise AppError('test', code=42)\nexcept AppError as e:\n    print(f'msg={e} code={e.code}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "class AppError(Exception):\n    def __init__(self, msg, code=0):\n        super().__init__(msg)\n        self.code = code",
+                "try:\n    raise AppError('test', code=42)\nexcept AppError as e:\n    print(f'msg={e} code={e.code}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "msg=test code=42" in nb_runner.get_output(2)
@@ -36,10 +38,12 @@ class TestCustomExceptionEdits:
 
     def test_edit_exception_hierarchy(self, nb_runner):
         """Edit exception hierarchy."""
-        nb_runner.create_notebook([
-            "class BaseErr(Exception): pass\nclass ChildErr(BaseErr): pass",
-            "try:\n    raise ChildErr('child')\nexcept BaseErr as e:\n    print(f'caught: {type(e).__name__}: {e}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "class BaseErr(Exception): pass\nclass ChildErr(BaseErr): pass",
+                "try:\n    raise ChildErr('child')\nexcept BaseErr as e:\n    print(f'caught: {type(e).__name__}: {e}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "caught: ChildErr: child" in nb_runner.get_output(2)
@@ -58,10 +62,12 @@ class TestExceptionHandlingEdits:
 
     def test_edit_except_clause(self, nb_runner):
         """Edit which exceptions are caught."""
-        nb_runner.create_notebook([
-            "def risky(x):\n    if x == 0:\n        raise ValueError('zero')\n    return 10 / x",
-            "try:\n    result = risky(0)\nexcept ValueError as e:\n    result = f'error: {e}'\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def risky(x):\n    if x == 0:\n        raise ValueError('zero')\n    return 10 / x",
+                "try:\n    result = risky(0)\nexcept ValueError as e:\n    result = f'error: {e}'\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = error: zero" in nb_runner.get_output(2)

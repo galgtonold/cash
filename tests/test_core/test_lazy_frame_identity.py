@@ -16,6 +16,7 @@ was the two places where identity is not derived from content at all. dask
 was the other suspect and turned out to be fine: ``__dask_keys__()`` carries
 a data-derived token.
 """
+
 from __future__ import annotations
 
 import pathlib
@@ -80,13 +81,12 @@ def test_identity_is_stable_across_processes(tmp_path):
     """
     import subprocess
     import sys
+
     script = (
-        'import polars as pl, hashlib;'
-        'print(hashlib.sha256(pl.DataFrame({"x":[1,2,3]}).lazy().serialize()).hexdigest())'
+        'import polars as pl, hashlib;print(hashlib.sha256(pl.DataFrame({"x":[1,2,3]}).lazy().serialize()).hexdigest())'
     )
     digests = {
-        subprocess.run([sys.executable, "-c", script], capture_output=True,
-                       text=True, encoding="utf-8").stdout.strip()
+        subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, encoding="utf-8").stdout.strip()
         for _ in range(2)
     }
     assert len(digests) == 1, f"LazyFrame identity is not process-stable: {digests}"
@@ -100,12 +100,16 @@ def test_eager_frames_were_never_affected(cached):
     assert len(calls) == 2
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "KNOWN GAP: a scan-backed plan serializes the PATH, not the file's "
-    "contents, so editing the file in place does not move the key. Closing it "
-    "means collecting the frame to build a cache key, which defeats the point "
-    "of a LazyFrame. Documented in known-limitations; xfail so that if polars "
-    "ever starts folding source state in, we find out."))
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "KNOWN GAP: a scan-backed plan serializes the PATH, not the file's "
+        "contents, so editing the file in place does not move the key. Closing it "
+        "means collecting the frame to build a cache key, which defeats the point "
+        "of a LazyFrame. Documented in known-limitations; xfail so that if polars "
+        "ever starts folding source state in, we find out."
+    ),
+)
 def test_a_scan_backed_plan_notices_its_file_changing(tmp_path):
     c = cash.Cash(cache_dir=str(tmp_path / "cache"))
     csv = pathlib.Path(tmp_path) / "data.csv"

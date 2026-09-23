@@ -18,6 +18,7 @@ defaults were already keyed; helpers' were not.
 
 Fresh process per run, bytecode caching off.
 """
+
 from __future__ import annotations
 
 import json
@@ -30,7 +31,7 @@ import pytest
 
 pytestmark = pytest.mark.core
 
-MAIN = textwrap.dedent('''
+MAIN = textwrap.dedent("""
     import json, sys, time
     import cash
     from helpers import shrink, scaled
@@ -42,14 +43,15 @@ MAIN = textwrap.dedent('''
         return [shrink(v), scaled(v)]
 
     print(json.dumps(score(100.0)))
-''')
+""")
 
 
 def _project(tmp_path, alpha, factor=2.0):
     proj = tmp_path / "proj"
     proj.mkdir(exist_ok=True)
     (proj / "constants.py").write_text(f"FACTOR = {factor}\n", encoding="utf-8")
-    (proj / "helpers.py").write_text(textwrap.dedent(f"""
+    (proj / "helpers.py").write_text(
+        textwrap.dedent(f"""
         from constants import FACTOR
 
         ALPHA = {alpha}
@@ -63,7 +65,9 @@ def _project(tmp_path, alpha, factor=2.0):
             return scaled
 
         scaled = _make(FACTOR)               # default bound to an IMPORTED name
-    """), encoding="utf-8")
+    """),
+        encoding="utf-8",
+    )
     (proj / "main.py").write_text(MAIN, encoding="utf-8")
     return proj
 
@@ -72,8 +76,7 @@ def _run(tmp_path, proj):
     env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
     env["CASH_CACHE_DIR"] = str(tmp_path / "cache")
     env["PYTHONDONTWRITEBYTECODE"] = "1"
-    out = subprocess.run([sys.executable, "main.py"], cwd=str(proj),
-                         capture_output=True, text=True, env=env)
+    out = subprocess.run([sys.executable, "main.py"], cwd=str(proj), capture_output=True, text=True, env=env)
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout.strip().splitlines()[-1]), "RAN" in out.stderr
 

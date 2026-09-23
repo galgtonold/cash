@@ -5,6 +5,7 @@ Each concrete backend reports its own ``source_label`` as a single-element
 tier list. Composite backends (TieredBackend, CascadingBackend) flatten
 their child labels in order.
 """
+
 from __future__ import annotations
 
 from unittest.mock import patch
@@ -27,6 +28,7 @@ class TestBareBackendTierLabels:
 
     def test_redis_reports_redis(self):
         from cash.backends.redis_backend import RedisBackend
+
         pytest.importorskip("redis")
         with patch("redis.Redis"):
             b = RedisBackend()
@@ -34,12 +36,14 @@ class TestBareBackendTierLabels:
 
     def test_sqlite_reports_sqlite(self, tmp_path):
         from cash.backends.sqlite_backend import SQLiteBackend
+
         b = SQLiteBackend(str(tmp_path / "c.db"))
         assert b.tier_labels() == ["SQLITE"]
 
     def test_s3_reports_s3(self):
         pytest.importorskip("boto3")
         from cash.backends.s3_backend import S3Backend
+
         with patch("boto3.client"):
             b = S3Backend(bucket="x")
         assert b.tier_labels() == ["S3"]
@@ -47,13 +51,24 @@ class TestBareBackendTierLabels:
     def test_default_matches_source_label(self):
         """A subclass with only source_label set must auto-pick it up
         without overriding tier_labels()."""
+
         class _Custom(CacheBackend):
             source_label = "MYTIER"
-            def get(self, key): return None, None
-            def set(self, key, value, metadata=None, serializer=None): pass
-            def delete(self, key): pass
-            def clear(self): pass
-            def list_entries(self): return []
+
+            def get(self, key):
+                return None, None
+
+            def set(self, key, value, metadata=None, serializer=None):
+                pass
+
+            def delete(self, key):
+                pass
+
+            def clear(self):
+                pass
+
+            def list_entries(self):
+                return []
 
         assert _Custom().tier_labels() == ["MYTIER"]
 
@@ -65,6 +80,7 @@ class TestTieredBackendTierLabels:
 
     def test_three_tier_ram_redis_disk(self, tmp_path):
         from cash.backends.redis_backend import RedisBackend
+
         pytest.importorskip("redis")
         with patch("redis.Redis"):
             redis = RedisBackend()
@@ -74,6 +90,7 @@ class TestTieredBackendTierLabels:
     def test_order_matches_tier_order(self, tmp_path):
         """The tier list must reflect the backend list's order, not alpha or set."""
         from cash.backends.redis_backend import RedisBackend
+
         pytest.importorskip("redis")
         with patch("redis.Redis"):
             redis = RedisBackend()

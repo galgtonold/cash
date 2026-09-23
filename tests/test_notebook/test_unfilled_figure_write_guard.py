@@ -25,6 +25,7 @@ why this never showed up in a no-restart reproduction.
 These drive the guard on a synthetic trace, kernel-free, so the refusal is
 deterministic; the empty namespace IS the post-restart condition.
 """
+
 from __future__ import annotations
 
 import types
@@ -57,11 +58,9 @@ def _plot_trace(chart="electronics.png"):
     """
     return [
         _entry("fig, ax = plt.subplots(figsize=(8, 4))", outputs=("fig", "ax")),  # 0
-        _entry("ax.plot(sub['month'], sub['margin_pct'])",
-               outputs=("ax",), inputs=("ax", "sub")),                            # 1
-        _entry("ax.set_title('Electronics margin %')",
-               outputs=("ax",), inputs=("ax",)),                                  # 2
-        _entry(f"fig.savefig('{chart}')", inputs=("fig",)),                        # 3
+        _entry("ax.plot(sub['month'], sub['margin_pct'])", outputs=("ax",), inputs=("ax", "sub")),  # 1
+        _entry("ax.set_title('Electronics margin %')", outputs=("ax",), inputs=("ax",)),  # 2
+        _entry(f"fig.savefig('{chart}')", inputs=("fig",)),  # 3
     ]
 
 
@@ -69,13 +68,15 @@ class TestPostRestart:
     """An EMPTY namespace is the post-restart condition that opens the hole."""
 
     def test_a_rebuilt_but_unfilled_figure_write_is_refused(self):
-        planner = _planner({})           # nothing live: `fig` is gone
+        planner = _planner({})  # nothing live: `fig` is gone
         trace = _plot_trace()
         # The dangerous plan: rebuild the figure [0] and save it [3], with the
         # statements that draw into it [1][2] left behind.
         with pytest.warns(CashWarning):
             kept, restored = planner._guard_unfilled_figure_writes(
-                [0, 3], trace, [],
+                [0, 3],
+                trace,
+                [],
             )
         assert 3 not in kept, "the write was allowed to flush a blank figure"
         assert 0 in kept, "only the write should be dropped, not the producer"
@@ -84,9 +85,11 @@ class TestPostRestart:
         """The healthy plan: everything that fills the figure is scheduled."""
         planner = _planner({})
         with warnings.catch_warnings():
-            warnings.simplefilter("error")     # any refusal here is a bug
+            warnings.simplefilter("error")  # any refusal here is a bug
             kept, _ = planner._guard_unfilled_figure_writes(
-                [0, 1, 2, 3], _plot_trace(), [],
+                [0, 1, 2, 3],
+                _plot_trace(),
+                [],
             )
         assert kept == [0, 1, 2, 3]
 
@@ -112,6 +115,7 @@ class TestOwnership:
         """When `fig` is live that pass owns the case; this one must not fire."""
         plt = pytest.importorskip("matplotlib.pyplot")
         import matplotlib
+
         matplotlib.use("Agg")
         fig, ax = plt.subplots()
         try:
@@ -119,7 +123,9 @@ class TestOwnership:
             with warnings.catch_warnings():
                 warnings.simplefilter("error")
                 kept, _ = planner._guard_unfilled_figure_writes(
-                    [0, 3], _plot_trace(), [],
+                    [0, 3],
+                    _plot_trace(),
+                    [],
                 )
             assert kept == [0, 3]
         finally:
@@ -156,23 +162,24 @@ def test_the_guard_is_actually_wired_into_the_plan():
 
     source = inspect.getsource(ReexecutionPlanner._build_reexecution_plan)
     assert "_guard_unfilled_figure_writes" in source, (
-        "the guard is no longer called from the plan builder; the unit tests "
-        "above would not have caught this"
+        "the guard is no longer called from the plan builder; the unit tests above would not have caught this"
     )
-    assert (source.index("_complete_stateful_carrier_history")
-            < source.index("_guard_unfilled_figure_writes")), (
+    assert source.index("_complete_stateful_carrier_history") < source.index("_guard_unfilled_figure_writes"), (
         "the guard must run AFTER the carrier-history pass -- it exists to "
         "catch what that pass misses when the carrier is not live"
     )
 
 
 class TestDetector:
-    @pytest.mark.parametrize("code,expected", [
-        ("fig.savefig('a.png')", "fig"),
-        ("f2.savefig(p, dpi=200)", "f2"),
-        ("x = 1", None),
-        ("obj.figure.savefig('a.png')", None),   # not a bare receiver
-        ("this is not python(", None),           # must not raise
-    ])
+    @pytest.mark.parametrize(
+        "code,expected",
+        [
+            ("fig.savefig('a.png')", "fig"),
+            ("f2.savefig(p, dpi=200)", "f2"),
+            ("x = 1", None),
+            ("obj.figure.savefig('a.png')", None),  # not a bare receiver
+            ("this is not python(", None),  # must not raise
+        ],
+    )
     def test_receiver_detection(self, code, expected):
         assert ReexecutionPlanner._receiver_bound_figure_write(code) == expected

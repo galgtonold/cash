@@ -1,6 +1,8 @@
 """Batch 83 – complex inheritance: diamonds, MRO, super() chains."""
 
-import textwrap, pytest
+import textwrap
+
+import pytest
 
 pytestmark = [pytest.mark.stress, pytest.mark.integration]
 
@@ -10,8 +12,9 @@ class TestDiamondInheritance:
 
     def test_basic_diamond(self, nb_runner):
         """Classic diamond: A → B,C → D with super() chains."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class Base:
                     def who(self):
                         return ['Base']
@@ -32,8 +35,9 @@ class TestDiamondInheritance:
                 chain = d.who()
                 mro = [c.__name__ for c in Diamond.__mro__]
             """),
-            "print(f'chain={chain}')\nprint(f'mro={mro}')",
-        ])
+                "print(f'chain={chain}')\nprint(f'mro={mro}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -44,8 +48,9 @@ class TestDiamondInheritance:
 
     def test_mixin_diamond(self, nb_runner):
         """Mixins creating a diamond with cooperative super()."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class Serializable:
                     def serialize(self):
                         return {'type': type(self).__name__}
@@ -71,8 +76,9 @@ class TestDiamondInheritance:
                 m = ApiModel()
                 result = m.serialize()
             """),
-            "print(f'result={result}')",
-        ])
+                "print(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -82,9 +88,10 @@ class TestDiamondInheritance:
 
     def test_diamond_propagation(self, nb_runner):
         """Change in base class propagates through diamond."""
-        nb_runner.create_notebook([
-            "base_label = 'v1'",
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                "base_label = 'v1'",
+                textwrap.dedent("""\
                 class Base:
                     label = base_label
                 class Left(Base): pass
@@ -92,8 +99,9 @@ class TestDiamondInheritance:
                 class Diamond(Left, Right): pass
                 d = Diamond()
             """),
-            "print(f'label={d.label}')",
-        ])
+                "print(f'label={d.label}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "label=v1" in nb_runner.get_output(3)
@@ -104,8 +112,9 @@ class TestDiamondInheritance:
 
     def test_multi_level_inheritance(self, nb_runner):
         """3+ levels of inheritance with method overriding."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class Animal:
                     def speak(self): return "..."
                     def kind(self): return "animal"
@@ -122,8 +131,9 @@ class TestDiamondInheritance:
                 animals = [Animal(), Mammal(), Dog(), Puppy()]
                 info = [(a.kind(), a.speak()) for a in animals]
             """),
-            "print(f'info={info}')",
-        ])
+                "print(f'info={info}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -138,8 +148,9 @@ class TestSuperChains:
 
     def test_super_init_chain(self, nb_runner):
         """__init__ chain through multiple inheritance with super()."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class A:
                     def __init__(self):
                         self.log = ['A']
@@ -162,8 +173,9 @@ class TestSuperChains:
                 d = D()
                 init_order = d.log
             """),
-            "print(f'init_order={init_order}')",
-        ])
+                "print(f'init_order={init_order}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)

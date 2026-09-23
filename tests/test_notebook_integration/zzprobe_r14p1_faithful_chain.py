@@ -26,6 +26,7 @@ Move: edit cell 4's threshold, RUN cell 4, then run ONLY cell 8.
 
     python tests/test_notebook_integration/zzprobe_r14p1_faithful_chain.py
 """
+
 from __future__ import annotations
 
 import shutil
@@ -36,12 +37,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tests.test_notebook_integration.conftest import NotebookTestRunner  # noqa: E402
 
-N_ROWS = 2_000_000     # ~8 rows x 8 bytes -> comfortably past the 8 MiB sampling line
+N_ROWS = 2_000_000  # ~8 rows x 8 bytes -> comfortably past the 8 MiB sampling line
 
 CELLS = [
     "import cash\n%cash_on",
-    "import matplotlib\nmatplotlib.use('Agg')\n"
-    "import matplotlib.pyplot as plt\nimport numpy as np, pandas as pd",
+    "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt\nimport numpy as np, pandas as pd",
     f"rng = np.random.default_rng(0)\n"
     f"raw = pd.DataFrame({{'qty': rng.integers(0, 100, {N_ROWS}),\n"
     f"                    'price': rng.random({N_ROWS}) * 10,\n"
@@ -52,8 +52,7 @@ CELLS = [
     "clean['margin'] = clean['price'] - clean['cost']",
     "agg = clean.groupby('cat')['margin'].sum()",
     "fig, ax = plt.subplots()\nax.plot(agg.index, agg.values)",
-    "ax.set_title('margin')\nfig.savefig(r'{png}')\n"
-    "open(r'{marker}', 'w').write(f'{{agg.sum():.4f}}')",
+    "ax.set_title('margin')\nfig.savefig(r'{png}')\nopen(r'{marker}', 'w').write(f'{{agg.sum():.4f}}')",
 ]
 
 
@@ -77,7 +76,7 @@ def main() -> None:
         try:
             runner.run_cell(8)
             err = ""
-        except Exception as e:                       # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
             err = f"{type(e).__name__}: {str(e)[:90]}"
         after = marker.read_text(encoding="utf-8").strip()
 
@@ -85,7 +84,8 @@ def main() -> None:
         runner.set_cell_source(9 if len(cells) >= 9 else 8, "")
         oracle = runner.peek(
             "float(raw[raw.qty > 50].assign(margin=lambda d: d['price'] - d['cost'])"
-            ".groupby('cat')['margin'].sum().sum())")
+            ".groupby('cat')['margin'].sum().sum())"
+        )
     finally:
         runner.shutdown()
         shutil.rmtree(work, ignore_errors=True)
@@ -97,12 +97,10 @@ def main() -> None:
         print(f"  raised             : {err}")
     print()
     if after == before:
-        print("REPRODUCED: the save cell wrote the pre-edit value after an "
-              "upstream edit that was actually run.")
+        print("REPRODUCED: the save cell wrote the pre-edit value after an upstream edit that was actually run.")
     else:
         try:
-            print("NOT stale. Matches oracle:"
-                  f" {abs(float(after) - float(oracle)) < 0.01}")
+            print(f"NOT stale. Matches oracle: {abs(float(after) - float(oracle)) < 0.01}")
         except ValueError:
             print(f"Inconclusive -- could not compare {after!r} to {oracle!r}")
 

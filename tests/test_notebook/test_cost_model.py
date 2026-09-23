@@ -1,10 +1,8 @@
-import pytest
-
 from cash.notebook.cost_model import (
+    _COEFFS,
+    _TYPE_TO_FAMILY,
     estimated_restore_time,
     estimated_serialize_time,
-    _TYPE_TO_FAMILY,
-    _COEFFS,
 )
 
 
@@ -24,20 +22,16 @@ def test_serialize_and_restore_are_both_predicted():
 
 def test_unknown_type_falls_back_to_generic():
     """An unrecognised type name should map to the _GENERIC family."""
-    t_unknown = estimated_restore_time("SomeWeirdType", size_bytes=1_000_000,
-                                       backend_kind="disk")
-    t_generic = estimated_restore_time("_GENERIC", size_bytes=1_000_000,
-                                       backend_kind="disk")
+    t_unknown = estimated_restore_time("SomeWeirdType", size_bytes=1_000_000, backend_kind="disk")
+    t_generic = estimated_restore_time("_GENERIC", size_bytes=1_000_000, backend_kind="disk")
     # We expect identical predictions (both routed to _GENERIC).
     assert t_unknown == t_generic
 
 
 def test_unknown_backend_falls_back_to_disk():
     """Unknown backend_kind falls back to 'disk' (the slower path)."""
-    t_unknown = estimated_restore_time("DataFrame", size_bytes=1_000_000,
-                                       backend_kind="moonbeam")
-    t_disk = estimated_restore_time("DataFrame", size_bytes=1_000_000,
-                                    backend_kind="disk")
+    t_unknown = estimated_restore_time("DataFrame", size_bytes=1_000_000, backend_kind="moonbeam")
+    t_disk = estimated_restore_time("DataFrame", size_bytes=1_000_000, backend_kind="disk")
     assert t_unknown == t_disk
 
 
@@ -62,8 +56,13 @@ def test_predictions_increase_with_size_within_family():
 
 def test_type_family_map_includes_documented_types():
     expected_keys = {
-        "DataFrame", "Series", "ndarray", "csr_matrix",
-        "dict", "list", "bytes",
+        "DataFrame",
+        "Series",
+        "ndarray",
+        "csr_matrix",
+        "dict",
+        "list",
+        "bytes",
     }
     assert expected_keys.issubset(set(_TYPE_TO_FAMILY))
 
@@ -73,15 +72,14 @@ def test_coeffs_table_covers_all_known_families_and_backends():
     for family in families:
         for backend in ("ram", "disk"):
             for op in ("serialize", "deserialize"):
-                assert (family, backend, op) in _COEFFS, (
-                    f"missing constant for ({family!r}, {backend!r}, {op!r})"
-                )
+                assert (family, backend, op) in _COEFFS, f"missing constant for ({family!r}, {backend!r}, {op!r})"
 
 
 def test_cost_model_is_called_from_statement_processor_decision(monkeypatch, tmp_path):
     """End-to-end: when _should_skip_large_object_caching evaluates a
     decision, it routes through cost_model.estimated_restore_time."""
     from unittest.mock import MagicMock
+
     from cash.notebook import cost_model
 
     calls: list[tuple] = []

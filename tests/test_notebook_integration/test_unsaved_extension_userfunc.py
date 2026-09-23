@@ -8,6 +8,7 @@ stale-value guard (``_mark_stale_value_inputs_broken``) re-marked the valid
 extension broken, and the forward-probe then restored a stale cache entry keyed
 on the outdated saved-notebook lineage. Both are fixed.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
@@ -16,12 +17,14 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
 def test_unsaved_function_routed_extension_is_kept(nb_runner):
     """The classic repro: unsaved edit of a ``df = clean(df)`` cell routing
     through a user function, consumed by a downstream cell."""
-    nb_runner.create_notebook([
-        "def clean(d):\n    return d.dropna()",
-        "import pandas as pd\ndf = pd.DataFrame({'a': [1.0, None, 3.0]})",
-        "df = clean(df)",
-        "df = df.assign(flag=1)\nprint('idx=' + str(df.index.tolist()))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "def clean(d):\n    return d.dropna()",
+            "import pandas as pd\ndf = pd.DataFrame({'a': [1.0, None, 3.0]})",
+            "df = clean(df)",
+            "df = df.assign(flag=1)\nprint('idx=' + str(df.index.tolist()))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_persist()
     nb_runner.run_all()
@@ -36,9 +39,7 @@ def test_unsaved_function_routed_extension_is_kept(nb_runner):
     # [0, 1]), not restore the stale cached [0, 2].
     nb_runner.run_cell(4)
     out = nb_runner.get_output(4)
-    assert "idx=[0, 1]" in out, (
-        f"unsaved function-routed extension discarded; cell4 printed {out!r}"
-    )
+    assert "idx=[0, 1]" in out, f"unsaved function-routed extension discarded; cell4 printed {out!r}"
 
 
 def test_selfreferential_rerun_still_idempotent(nb_runner):
@@ -46,11 +47,13 @@ def test_selfreferential_rerun_still_idempotent(nb_runner):
     STILL reset to its cell-entry base on an isolated re-run. The layer-2 skip
     (which spares valid upstream extensions) must NOT suppress the stale-value
     guard for real self-modification — else the re-run would double-truncate."""
-    nb_runner.create_notebook([
-        "import pandas as pd\ndf = pd.DataFrame({'a': [1, 2, 3, 4, 5]})",
-        "df = df.iloc[1:]",
-        "print('n=' + str(len(df)))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import pandas as pd\ndf = pd.DataFrame({'a': [1, 2, 3, 4, 5]})",
+            "df = df.iloc[1:]",
+            "print('n=' + str(len(df)))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_persist()
     nb_runner.run_all()
@@ -69,11 +72,13 @@ def test_selfreferential_rerun_still_idempotent(nb_runner):
 def test_conflicting_upstream_redefinition_still_invalidates(nb_runner):
     """CONTROL (b): a genuinely conflicting upstream redefinition (saved edit)
     must still invalidate the consumer — the fix must not over-trust."""
-    nb_runner.create_notebook([
-        "import pandas as pd\ndf = pd.DataFrame({'a': [1.0, None, 3.0]})",
-        "def clean(d):\n    return d.dropna()",
-        "df2 = clean(df)\nprint('n=' + str(len(df2)))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import pandas as pd\ndf = pd.DataFrame({'a': [1.0, None, 3.0]})",
+            "def clean(d):\n    return d.dropna()",
+            "df2 = clean(df)\nprint('n=' + str(len(df2)))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_persist()
     nb_runner.run_all()

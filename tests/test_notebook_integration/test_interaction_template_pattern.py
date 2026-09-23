@@ -14,10 +14,12 @@ class TestTemplatePatternEdits:
 
     def test_edit_format_template(self, nb_runner):
         """Edit data used in string format template."""
-        nb_runner.create_notebook([
-            "name = 'Alice'\nrole = 'engineer'",
-            "msg = '{} is a {}'.format(name, role)\nprint(msg)",
-        ])
+        nb_runner.create_notebook(
+            [
+                "name = 'Alice'\nrole = 'engineer'",
+                "msg = '{} is a {}'.format(name, role)\nprint(msg)",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "Alice is a engineer" in nb_runner.get_output(2)
@@ -29,10 +31,12 @@ class TestTemplatePatternEdits:
 
     def test_edit_template_string(self, nb_runner):
         """Edit a Template string pattern."""
-        nb_runner.create_notebook([
-            "from string import Template\ntmpl = Template('Hello, $name! You have $count messages.')",
-            "result = tmpl.substitute(name='Alice', count=5)\nprint(result)",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from string import Template\ntmpl = Template('Hello, $name! You have $count messages.')",
+                "result = tmpl.substitute(name='Alice', count=5)\nprint(result)",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "Hello, Alice! You have 5 messages." in nb_runner.get_output(2)
@@ -42,13 +46,14 @@ class TestTemplatePatternEdits:
         nb_runner.run_all()
         assert "Hi Alice, 5 items in cart." in nb_runner.get_output(2)
 
-
     def test_edit_multiline_template(self, nb_runner):
         """Edit data used in multiline template."""
-        nb_runner.create_notebook([
-            "items = [('apple', 2), ('banana', 3)]",
-            "lines = []\nfor name, qty in items:\n    lines.append(f'{name}: {qty}')\noutput = ', '.join(lines)\nprint(output)",
-        ])
+        nb_runner.create_notebook(
+            [
+                "items = [('apple', 2), ('banana', 3)]",
+                "lines = []\nfor name, qty in items:\n    lines.append(f'{name}: {qty}')\noutput = ', '.join(lines)\nprint(output)",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "apple: 2, banana: 3" in nb_runner.get_output(2)

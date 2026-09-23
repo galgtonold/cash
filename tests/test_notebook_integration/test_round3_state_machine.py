@@ -1,5 +1,7 @@
 """Batch 80: State machine patterns — cash caching with FSM implementations."""
+
 import textwrap
+
 import pytest
 
 
@@ -9,8 +11,9 @@ class TestStateMachine:
 
     def test_basic_state_machine(self, nb_runner):
         """Simple FSM across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class StateMachine:
                     def __init__(self):
                         self.state = 'idle'
@@ -37,12 +40,13 @@ class TestStateMachine:
                 print(f"final={sm.state}")
                 print(f"history={sm.history}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 unique_states = set(sm.history)
                 print(f"visited={sorted(unique_states)}")
                 print(f"transitions={len(sm.history) - 1}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "final=idle" in nb_runner.get_output(1)
@@ -51,8 +55,9 @@ class TestStateMachine:
 
     def test_order_state_machine(self, nb_runner):
         """Order processing FSM across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class Order:
                     VALID_TRANSITIONS = {
                         'pending': ['confirmed', 'cancelled'],
@@ -83,11 +88,12 @@ class TestStateMachine:
                 o2 = Order('ORD-002')
                 o2.transition('cancelled')
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 print(f"o1: {o1.status}, log={o1.log}")
                 print(f"o2: {o2.status}, log={o2.log}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -96,8 +102,9 @@ class TestStateMachine:
 
     def test_fsm_propagation(self, nb_runner):
         """State machine propagates when events change."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 states = {'green': 'yellow', 'yellow': 'red', 'red': 'green'}
                 current = 'green'
                 steps = 3
@@ -106,16 +113,19 @@ class TestStateMachine:
                     current = states[current]
                     history.append(current)
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 print(f"history={history}")
                 print(f"final={history[-1]}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "final=green" in nb_runner.get_output(2)
 
-        nb_runner.set_cell_source(1, textwrap.dedent("""\
+        nb_runner.set_cell_source(
+            1,
+            textwrap.dedent("""\
             states = {'green': 'yellow', 'yellow': 'red', 'red': 'green'}
             current = 'green'
             steps = 6
@@ -123,7 +133,8 @@ class TestStateMachine:
             for _ in range(steps):
                 current = states[current]
                 history.append(current)
-        """))
+        """),
+        )
         nb_runner.run_cells([1, 2])
         # 6 transitions: green→yellow→red→green→yellow→red→green, final=green
         assert "final=green" in nb_runner.get_output(2)
@@ -136,8 +147,9 @@ class TestEventDriven:
 
     def test_event_bus(self, nb_runner):
         """Simple event bus across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class EventBus:
                     def __init__(self):
                         self._handlers = {}
@@ -158,11 +170,12 @@ class TestEventDriven:
                 bus.emit('data', 100)
                 print(f"log_count={len(bus._log)}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 results = [r for _, r in bus._log]
                 print(f"results={results}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "log_count=4" in nb_runner.get_output(1)

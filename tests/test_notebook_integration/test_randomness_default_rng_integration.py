@@ -11,6 +11,7 @@ The unit twin (``tests/test_notebook/test_randomness.py``) asserts on the
 detector's call list. This file asserts the thing a user actually experiences:
 that the warning reaches the notebook's cell output through a real kernel.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
@@ -20,12 +21,14 @@ WARNING_TEXT = "Unseeded randomness detected"
 
 def test_unseeded_default_rng_draw_warns(nb_runner):
     """The headline gap: a draw off an unseeded modern Generator must warn."""
-    nb_runner.create_notebook([
-        "import numpy as np",
-        "rng = np.random.default_rng()",
-        "x = rng.standard_normal(1000)",
-        "print('len', len(x))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np",
+            "rng = np.random.default_rng()",
+            "x = rng.standard_normal(1000)",
+            "print('len', len(x))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -46,12 +49,14 @@ def test_seeded_default_rng_draw_does_not_warn(nb_runner):
     This is what makes the test above discriminating rather than a detector that
     shouts at every method call it cannot resolve.
     """
-    nb_runner.create_notebook([
-        "import numpy as np",
-        "rng = np.random.default_rng(42)",
-        "x = rng.standard_normal(1000)",
-        "print('len', len(x))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np",
+            "rng = np.random.default_rng(42)",
+            "x = rng.standard_normal(1000)",
+            "print('len', len(x))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -61,11 +66,13 @@ def test_seeded_default_rng_draw_does_not_warn(nb_runner):
 
 def test_legacy_global_api_still_warns(nb_runner):
     """Control: do not regress CAS-114's original legacy-global detection."""
-    nb_runner.create_notebook([
-        "import numpy as np",
-        "x = np.random.rand(1000)",
-        "print('len', len(x))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np",
+            "x = np.random.rand(1000)",
+            "print('len', len(x))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -81,13 +88,13 @@ def test_generator_built_inside_function_body_warns(nb_runner):
     ``g`` never reaches ``user_ns``, so no live-value classifier can see it — the
     detection has to come off the AST of the ``def`` statement itself.
     """
-    nb_runner.create_notebook([
-        "import numpy as np",
-        "def draw_modern():\n"
-        "    g = np.random.default_rng()\n"
-        "    return float(g.standard_normal(1000).mean())",
-        "print('ok', isinstance(draw_modern(), float))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np",
+            "def draw_modern():\n    g = np.random.default_rng()\n    return float(g.standard_normal(1000).mean())",
+            "print('ok', isinstance(draw_modern(), float))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -102,12 +109,14 @@ def test_np_random_seed_does_not_quiet_a_default_rng_draw(nb_runner):
     ledger must not be allowed to suppress the Generator's warning — that would
     trade a false negative for exactly the silence CAS-135 is about.
     """
-    nb_runner.create_notebook([
-        "import numpy as np\nnp.random.seed(42)",
-        "rng = np.random.default_rng()",
-        "x = rng.standard_normal(1000)",
-        "print('len', len(x))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np\nnp.random.seed(42)",
+            "rng = np.random.default_rng()",
+            "x = rng.standard_normal(1000)",
+            "print('len', len(x))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -117,12 +126,14 @@ def test_np_random_seed_does_not_quiet_a_default_rng_draw(nb_runner):
 
 def test_allow_random_suppresses_default_rng_warning(nb_runner):
     """The documented opt-out has to cover the newly-detected API too."""
-    nb_runner.create_notebook([
-        "import numpy as np",
-        "rng = np.random.default_rng()",
-        "# @cash:allow-random\nx = rng.standard_normal(1000)",
-        "print('len', len(x))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np",
+            "rng = np.random.default_rng()",
+            "# @cash:allow-random\nx = rng.standard_normal(1000)",
+            "print('len', len(x))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -137,13 +148,15 @@ def test_pure_function_param_does_not_warn_against_stale_global(nb_runner):
     Before lexical scoping the def-only cell fired a spurious warning purely
     because ``rng`` was left in the session ledger by the cell above it.
     """
-    nb_runner.create_notebook([
-        "import numpy as np",             # cell 1
-        "rng = np.random.default_rng()",  # cell 2: stale unseeded global, same name
-        # cell 3 -- a pure function: the parameter shadows the global, no draw yet.
-        "def draw(rng):\n    return float(rng.standard_normal(1000).mean())",
-        "print('defined', callable(draw))",  # cell 4
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np",  # cell 1
+            "rng = np.random.default_rng()",  # cell 2: stale unseeded global, same name
+            # cell 3 -- a pure function: the parameter shadows the global, no draw yet.
+            "def draw(rng):\n    return float(rng.standard_normal(1000).mean())",
+            "print('defined', callable(draw))",  # cell 4
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -159,12 +172,14 @@ def test_unseeded_rng_argument_at_call_site_warns(nb_runner):
     This is the idiomatic Monte-Carlo shape that cached and froze in silence
     while the equivalent inline draw was correctly warned.
     """
-    nb_runner.create_notebook([
-        "import numpy as np",  # cell 1
-        "def price(n, rng):\n    return float(rng.standard_normal(n).mean())",  # cell 2
-        "m = price(1000, rng=np.random.default_rng())",  # cell 3: the call site
-        "print('m', isinstance(m, float))",  # cell 4
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np",  # cell 1
+            "def price(n, rng):\n    return float(rng.standard_normal(n).mean())",  # cell 2
+            "m = price(1000, rng=np.random.default_rng())",  # cell 3: the call site
+            "print('m', isinstance(m, float))",  # cell 4
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -181,12 +196,14 @@ def test_unseeded_rng_argument_at_call_site_warns(nb_runner):
 def test_seeded_rng_argument_at_call_site_does_not_warn(nb_runner):
     """Control for the case above: a seeded argument is reproducible, so the
     call site must stay quiet."""
-    nb_runner.create_notebook([
-        "import numpy as np",  # cell 1
-        "def price(n, rng):\n    return float(rng.standard_normal(n).mean())",  # cell 2
-        "m = price(1000, rng=np.random.default_rng(42))",  # cell 3: seeded call site
-        "print('m', isinstance(m, float))",  # cell 4
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np",  # cell 1
+            "def price(n, rng):\n    return float(rng.standard_normal(n).mean())",  # cell 2
+            "m = price(1000, rng=np.random.default_rng(42))",  # cell 3: seeded call site
+            "print('m', isinstance(m, float))",  # cell 4
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -203,12 +220,14 @@ def test_unseeded_rng_positional_argument_at_call_site_warns(nb_runner):
     draw. Naming the slot needs the callee's live signature, which only exists in
     a real kernel: this is the test the unit twin cannot be.
     """
-    nb_runner.create_notebook([
-        "import numpy as np",  # cell 1
-        "def price(rng, n):\n    return float(rng.standard_normal(n).mean())",  # cell 2
-        "m = price(np.random.default_rng(), 1000)",  # cell 3: unseeded, POSITIONAL
-        "print('m', isinstance(m, float))",  # cell 4
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np",  # cell 1
+            "def price(rng, n):\n    return float(rng.standard_normal(n).mean())",  # cell 2
+            "m = price(np.random.default_rng(), 1000)",  # cell 3: unseeded, POSITIONAL
+            "print('m', isinstance(m, float))",  # cell 4
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -228,12 +247,14 @@ def test_seeded_rng_positional_argument_at_call_site_does_not_warn(nb_runner):
     Without this, the test above would be satisfied by a detector that shouted at
     every positional argument it could not resolve.
     """
-    nb_runner.create_notebook([
-        "import numpy as np",  # cell 1
-        "def price(rng, n):\n    return float(rng.standard_normal(n).mean())",  # cell 2
-        "m = price(np.random.default_rng(42), 1000)",  # cell 3: seeded, POSITIONAL
-        "print('m', isinstance(m, float))",  # cell 4
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np",  # cell 1
+            "def price(rng, n):\n    return float(rng.standard_normal(n).mean())",  # cell 2
+            "m = price(np.random.default_rng(42), 1000)",  # cell 3: seeded, POSITIONAL
+            "print('m', isinstance(m, float))",  # cell 4
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 

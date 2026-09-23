@@ -36,6 +36,7 @@ assertion here counts calls):
    demonstrates loop caching with the subscript form and warns off ``append``,
    so both halves are pinned here.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.loops]
@@ -66,10 +67,12 @@ def _calls(log):
 
 def test_accumulator_fold_reuses_only_the_unchanged_prefix(nb_runner, tmp_path):
     log = tmp_path / "calls.log"
-    nb_runner.create_notebook([
-        _helpers(log),
-        "s = 0\n# @cash:no-cache-calls\nfor x in [1, 10]:\n    s += compute(x)\nprint('SUM', s)",
-    ])
+    nb_runner.create_notebook(
+        [
+            _helpers(log),
+            "s = 0\n# @cash:no-cache-calls\nfor x in [1, 10]:\n    s += compute(x)\nprint('SUM', s)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "SUM 13" in nb_runner.get_output(2)
@@ -110,10 +113,12 @@ def test_accumulator_fold_reordering_is_free_by_default(nb_runner, tmp_path):
     the opt-out variant before).
     """
     log = tmp_path / "calls.log"
-    nb_runner.create_notebook([
-        _helpers(log),
-        "s = 0\nfor x in [1, 10]:\n    s += compute(x)\nprint('SUM', s)",
-    ])
+    nb_runner.create_notebook(
+        [
+            _helpers(log),
+            "s = 0\nfor x in [1, 10]:\n    s += compute(x)\nprint('SUM', s)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "SUM 13" in nb_runner.get_output(2)
@@ -121,9 +126,7 @@ def test_accumulator_fold_reordering_is_free_by_default(nb_runner, tmp_path):
 
     def rerun(lst):
         before = _calls(log)
-        nb_runner.set_cell_source(
-            2, f"s = 0\nfor x in {lst}:\n    s += compute(x)\nprint('SUM', s)"
-        )
+        nb_runner.set_cell_source(2, f"s = 0\nfor x in {lst}:\n    s += compute(x)\nprint('SUM', s)")
         nb_runner.run_cell(2)
         return _calls(log) - before
 
@@ -149,10 +152,12 @@ def test_accumulator_fold_reordering_is_free_by_default(nb_runner, tmp_path):
 def test_without_an_accumulator_reordering_is_free(nb_runner, tmp_path):
     """The contrast that makes the entry honest: it is the fold, not the loop."""
     log = tmp_path / "calls.log"
-    nb_runner.create_notebook([
-        _helpers(log),
-        "for x in [1, 10, 5]:\n    y = compute(x)\nprint('Y', y)",
-    ])
+    nb_runner.create_notebook(
+        [
+            _helpers(log),
+            "for x in [1, 10, 5]:\n    y = compute(x)\nprint('Y', y)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert _calls(log) == 3
@@ -179,12 +184,14 @@ def test_subscript_store_caches_in_a_loop_but_append_does_not(nb_runner, tmp_pat
     hasn't opted out of anything.
     """
     log = tmp_path / "calls.log"
-    nb_runner.create_notebook([
-        _helpers(log),
-        "prices = {}\nout = []",
-        "for t in [1, 2]:\n    prices[t] = compute(t)",   # store: caches
-        "# @cash:no-cache-calls\nfor t in [1, 2]:\n    out.append(compute(t))",   # append: re-executes
-    ])
+    nb_runner.create_notebook(
+        [
+            _helpers(log),
+            "prices = {}\nout = []",
+            "for t in [1, 2]:\n    prices[t] = compute(t)",  # store: caches
+            "# @cash:no-cache-calls\nfor t in [1, 2]:\n    out.append(compute(t))",  # append: re-executes
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert _calls(log) == 4, "baseline did not run both loops"
@@ -218,12 +225,14 @@ def test_subscript_store_and_undirected_append_both_reuse_by_default(nb_runner, 
     again.
     """
     log = tmp_path / "calls.log"
-    nb_runner.create_notebook([
-        _helpers(log),
-        "prices = {}\nout = []",
-        "for t in [1, 2]:\n    prices[t] = compute(t)",   # store: caches
-        "for t in [1, 2]:\n    out.append(compute(t))",   # append: still cached by default
-    ])
+    nb_runner.create_notebook(
+        [
+            _helpers(log),
+            "prices = {}\nout = []",
+            "for t in [1, 2]:\n    prices[t] = compute(t)",  # store: caches
+            "for t in [1, 2]:\n    out.append(compute(t))",  # append: still cached by default
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     # Two, not four: the append loop makes the store loop's calls -- the same

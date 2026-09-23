@@ -24,9 +24,8 @@ statement's inputs (which include deferred free names) refused
 top. A helper that names something bound below and is called later must stay
 allowed, and so must a lambda that is stored rather than invoked.
 """
-from __future__ import annotations
 
-import pytest
+from __future__ import annotations
 
 from cash.notebook.upstream.checker import UpstreamChecker
 
@@ -81,13 +80,11 @@ class TestDeferred:
         assert "f" not in reads("g = lambda: f()")
 
     def test_a_method_body(self):
-        assert "helper" not in reads(
-            "class C:\n    def m(self):\n        return helper()")
+        assert "helper" not in reads("class C:\n    def m(self):\n        return helper()")
 
     def test_a_function_called_only_from_another_uncalled_function(self):
         """`inner` is never reached while this cell runs."""
-        assert "f" not in reads(
-            "def outer():\n    return inner()\ndef inner():\n    return f()")
+        assert "f" not in reads("def outer():\n    return inner()\ndef inner():\n    return f()")
 
 
 class TestItNeverGuesses:

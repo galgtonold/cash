@@ -11,6 +11,7 @@ user-visible "Cash auto-caching failed: list index out of range".
 
 Discovery is best-effort, so ANY failure here must degrade to "no path found".
 """
+
 from __future__ import annotations
 
 import sys
@@ -22,11 +23,14 @@ import pytest
 from cash.notebook import server_discovery as sd
 
 
-@pytest.mark.parametrize("exc", [
-    IndexError("list index out of range"),   # the real Colab / server-less shape
-    RuntimeError("boom"),                     # any other library-internal failure
-    ValueError("nope"),
-])
+@pytest.mark.parametrize(
+    "exc",
+    [
+        IndexError("list index out of range"),  # the real Colab / server-less shape
+        RuntimeError("boom"),  # any other library-internal failure
+        ValueError("nope"),
+    ],
+)
 def test_try_ipynbname_path_swallows_library_errors(monkeypatch, exc):
     fake = types.ModuleType("ipynbname")
 
@@ -72,5 +76,6 @@ def test_collect_running_servers_swallows_thirdparty_warnings(monkeypatch):
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         sd._collect_running_servers()
-    assert not any(issubclass(w.category, SyntaxWarning) for w in caught), \
+    assert not any(issubclass(w.category, SyntaxWarning) for w in caught), (
         "a third-party discovery warning leaked out of _collect_running_servers"
+    )

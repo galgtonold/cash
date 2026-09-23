@@ -15,11 +15,13 @@ class TestListMutationWithCellEdits:
 
     def test_append_then_change_source(self, nb_runner):
         """Append to list, then change the source data."""
-        nb_runner.create_notebook([
-            "items = [1, 2, 3]",
-            "items.append(4)",
-            "total = sum(items)\nprint(f'total = {total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "items = [1, 2, 3]",
+                "items.append(4)",
+                "total = sum(items)\nprint(f'total = {total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total = 10" in nb_runner.get_output(3)
@@ -34,11 +36,13 @@ class TestListMutationWithCellEdits:
 
     def test_dict_update_then_edit_keys(self, nb_runner):
         """Update dict, then edit which keys are used."""
-        nb_runner.create_notebook([
-            "config = {'a': 1, 'b': 2}",
-            "config['c'] = 3",
-            "result = sum(config.values())\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "config = {'a': 1, 'b': 2}",
+                "config['c'] = 3",
+                "result = sum(config.values())\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 6" in nb_runner.get_output(3)
@@ -52,11 +56,13 @@ class TestListMutationWithCellEdits:
 
     def test_list_extend_edit_then_slice(self, nb_runner):
         """Extend list, edit extension, use slice."""
-        nb_runner.create_notebook([
-            "base = [1, 2]",
-            "extra = [3, 4]\nbase.extend(extra)",
-            "part = base[:3]\nprint(f'part = {part}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "base = [1, 2]",
+                "extra = [3, 4]\nbase.extend(extra)",
+                "part = base[:3]\nprint(f'part = {part}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "part = [1, 2, 3]" in nb_runner.get_output(3)
@@ -73,11 +79,13 @@ class TestSetMutationWithCellEdits:
 
     def test_set_add_then_change_source(self, nb_runner):
         """Add to set, then change source set."""
-        nb_runner.create_notebook([
-            "s = {1, 2, 3}",
-            "s.add(4)",
-            "count = len(s)\nprint(f'count = {count}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "s = {1, 2, 3}",
+                "s.add(4)",
+                "count = len(s)\nprint(f'count = {count}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "count = 4" in nb_runner.get_output(3)
@@ -95,10 +103,12 @@ class TestNestedCollectionCellEdits:
 
     def test_nested_dict_edit_inner(self, nb_runner):
         """Nested dict, edit inner values."""
-        nb_runner.create_notebook([
-            "data = {'outer': {'a': 1, 'b': 2}}",
-            "inner_sum = sum(data['outer'].values())\nprint(f'inner_sum = {inner_sum}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = {'outer': {'a': 1, 'b': 2}}",
+                "inner_sum = sum(data['outer'].values())\nprint(f'inner_sum = {inner_sum}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "inner_sum = 3" in nb_runner.get_output(2)
@@ -110,10 +120,12 @@ class TestNestedCollectionCellEdits:
 
     def test_list_of_dicts_edit(self, nb_runner):
         """List of dicts, edit the list."""
-        nb_runner.create_notebook([
-            "records = [{'name': 'A', 'val': 1}, {'name': 'B', 'val': 2}]",
-            "total = sum(r['val'] for r in records)\nprint(f'total = {total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "records = [{'name': 'A', 'val': 1}, {'name': 'B', 'val': 2}]",
+                "total = sum(r['val'] for r in records)\nprint(f'total = {total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total = 3" in nb_runner.get_output(2)

@@ -7,6 +7,7 @@ numpy array a frame was built from with ``copy=False`` bypasses that: the
 blocks are the same objects, the memo answers with the old hash, and the call
 was served 10.0 where an uncached run returns 109.0.
 """
+
 from __future__ import annotations
 
 import pytest

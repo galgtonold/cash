@@ -44,7 +44,7 @@ def _content_bytes(values: Any) -> bytes:
     elements are pickled instead, which is content. Numeric arrays keep the raw
     bytes, so their hashes -- and the keys built on them -- do not move.
     """
-    if getattr(getattr(values, 'dtype', None), 'hasobject', False):
+    if getattr(getattr(values, "dtype", None), "hasobject", False):
         return pickle.dumps(values.tolist(), protocol=4)
     return values.tobytes()
 
@@ -76,7 +76,7 @@ def _frame_dtypes_signature(obj: Any) -> str:
 def _hash_dataframe_or_series(obj: Any, type_name: str) -> str:
     """Hash a pandas DataFrame or Series using shape + dtypes + data sample."""
     shape_str = f"{obj.shape}"
-    if type_name == 'DataFrame':
+    if type_name == "DataFrame":
         try:
             dtypes_str = _frame_dtypes_signature(obj)
         except _HASH_ERRORS:
@@ -84,14 +84,14 @@ def _hash_dataframe_or_series(obj: Any, type_name: str) -> str:
     else:
         dtypes_str = str(obj.dtype)
     try:
-        sample = str(_content_bytes(obj.head(5).values) if len(obj) > 0 else b'')
+        sample = str(_content_bytes(obj.head(5).values) if len(obj) > 0 else b"")
     except (TypeError, ValueError, AttributeError, pickle.PicklingError):
         sample = str(obj.head(5))
     combined = f"{shape_str}:{dtypes_str}:{sample}"
-    return hashlib.sha256(combined.encode('utf-8')).hexdigest()
+    return hashlib.sha256(combined.encode("utf-8")).hexdigest()
 
 
-_BULKY_TYPE_NAMES = frozenset({'DataFrame', 'Series', 'ndarray'})
+_BULKY_TYPE_NAMES = frozenset({"DataFrame", "Series", "ndarray"})
 
 
 def _hash_collection(obj: Any) -> str:
@@ -106,15 +106,14 @@ def _hash_collection(obj: Any) -> str:
         # element as ``compute_hash`` would hash it alone. Only then: a plain
         # collection keeps the hash it always had, so its keys do not move.
         items = list(obj.items()) if isinstance(obj, dict) else None
-        values = [v for _, v in items] if items is not None else (
-            list(obj) if isinstance(obj, (list, tuple)) else [])
+        values = [v for _, v in items] if items is not None else (list(obj) if isinstance(obj, (list, tuple)) else [])
         if any(type(v).__name__ in _BULKY_TYPE_NAMES for v in values):
             parts = [f"{type(obj).__name__}:{n}"]
             if items is not None:
                 parts.extend(f"{k!r}={compute_hash(v)}" for k, v in items)
             else:
                 parts.extend(compute_hash(v) for v in values)
-            return hashlib.sha256("|".join(parts).encode('utf-8')).hexdigest()
+            return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
         return hashlib.sha256(pickle.dumps(obj)).hexdigest()
     if isinstance(obj, (list, tuple)):
         combined = f"list:{n}:{repr(obj[:5])}:{repr(obj[-5:])}"
@@ -122,7 +121,7 @@ def _hash_collection(obj: Any) -> str:
         combined = f"dict:{n}:{repr(sorted(obj.keys())[:10])}"
     else:
         combined = f"set:{n}:{repr(sorted(obj)[:10])}"
-    return hashlib.sha256(combined.encode('utf-8')).hexdigest()
+    return hashlib.sha256(combined.encode("utf-8")).hexdigest()
 
 
 def identity_hash(obj: Any) -> str:
@@ -137,7 +136,7 @@ def identity_hash(obj: Any) -> str:
     object hashed this way that is mutated in place produces the SAME hash
     before and after, because ``id()`` does not change under mutation.
     """
-    return hashlib.sha256(str(id(obj)).encode('utf-8')).hexdigest()
+    return hashlib.sha256(str(id(obj)).encode("utf-8")).hexdigest()
 
 
 def is_identity_fallback_hash(obj: Any, hash_value: str) -> bool:
@@ -177,15 +176,15 @@ def compute_hash(obj: Any) -> str:
     type_name = type(obj).__name__
 
     try:
-        if type_name in ('DataFrame', 'Series'):
+        if type_name in ("DataFrame", "Series"):
             return _hash_dataframe_or_series(obj, type_name)
-        if type_name == 'ndarray':
+        if type_name == "ndarray":
             shape_str = str(obj.shape)
             dtype_str = str(obj.dtype)
-            sample = str(_content_bytes(obj.flat[:100]) if obj.size > 0 else b'')
+            sample = str(_content_bytes(obj.flat[:100]) if obj.size > 0 else b"")
             combined = f"{shape_str}:{dtype_str}:{sample}"
-            return hashlib.sha256(combined.encode('utf-8')).hexdigest()
-        if isinstance(obj, tuple) and isinstance(getattr(type(obj), '_fields', None), tuple):
+            return hashlib.sha256(combined.encode("utf-8")).hexdigest()
+        if isinstance(obj, tuple) and isinstance(getattr(type(obj), "_fields", None), tuple):
             # A namedtuple is its name, its fields and its values. Pickling it
             # pickles its CLASS by reference, which fails for a class made on
             # the spot -- as `df.itertuples()` makes one per call -- and the
@@ -193,8 +192,8 @@ def compute_hash(obj: Any) -> str:
             # every run: a loop over itertuples() never restored (r28s1, r28s3).
             fields = type(obj)._fields
             return hashlib.sha256(
-                f"namedtuple:{type(obj).__name__}:{fields!r}:{_hash_collection(tuple(obj))}"
-                .encode('utf-8')).hexdigest()
+                f"namedtuple:{type(obj).__name__}:{fields!r}:{_hash_collection(tuple(obj))}".encode("utf-8")
+            ).hexdigest()
         if isinstance(obj, (list, tuple, dict, set, frozenset)):
             return _hash_collection(obj)
         return hashlib.sha256(pickle.dumps(obj)).hexdigest()
@@ -224,22 +223,23 @@ def compute_hash_full(obj: Any) -> str:
     """
     type_name = type(obj).__name__
     try:
-        if type_name in ('DataFrame', 'Series'):
+        if type_name in ("DataFrame", "Series"):
             import pandas as pd
-            if type_name == 'DataFrame':
+
+            if type_name == "DataFrame":
                 schema = f"{list(obj.columns)!r}:{list(obj.index.names)!r}:"
             else:
                 schema = f"{obj.name!r}:{list(obj.index.names)!r}:"
-            h = hashlib.sha256(schema.encode('utf-8'))
+            h = hashlib.sha256(schema.encode("utf-8"))
             h.update(pd.util.hash_pandas_object(obj).values.tobytes())
             return h.hexdigest()
-        if type_name == 'ndarray':
-            if getattr(obj.dtype, 'hasobject', False):
+        if type_name == "ndarray":
+            if getattr(obj.dtype, "hasobject", False):
                 # Object arrays' buffer bytes are raw pointers, not content.
                 return hashlib.sha256(pickle.dumps(obj)).hexdigest()
-            h = hashlib.sha256(f"{obj.shape}:{obj.dtype}:".encode('utf-8'))
+            h = hashlib.sha256(f"{obj.shape}:{obj.dtype}:".encode("utf-8"))
             try:
-                h.update(memoryview(obj).cast('B'))   # no copy if contiguous
+                h.update(memoryview(obj).cast("B"))  # no copy if contiguous
             except (TypeError, ValueError):
                 h.update(obj.tobytes())
             return h.hexdigest()
@@ -258,10 +258,15 @@ _MAX_ESTIMATE_DEPTH = 4
 
 # scipy.sparse type names. Dispatched via type-name string to avoid an
 # import-time dependency on scipy.
-_SPARSE_CSR_CSC_TYPES = frozenset({
-    'csr_matrix', 'csc_matrix', 'csr_array', 'csc_array',
-})
-_SPARSE_COO_TYPES = frozenset({'coo_matrix', 'coo_array'})
+_SPARSE_CSR_CSC_TYPES = frozenset(
+    {
+        "csr_matrix",
+        "csc_matrix",
+        "csr_array",
+        "csc_array",
+    }
+)
+_SPARSE_COO_TYPES = frozenset({"coo_matrix", "coo_array"})
 
 
 def _est_sparse_csr_csc(m: Any) -> int:
@@ -288,15 +293,15 @@ def estimate_object_size(obj: Any, _depth: int = 0) -> int:
         return sys.getsizeof(obj)
     try:
         type_name = type(obj).__name__
-        if type_name in ('DataFrame', 'Series'):
+        if type_name in ("DataFrame", "Series"):
             # ``memory_usage(deep=True)``'s number, without building its Series
             # (see ``cash._sizing``); a column of Python objects is sampled.
             size = pandas_nbytes(obj)
             if size is not None:
                 return size
             usage = obj.memory_usage(deep=True)
-            return int(usage.sum() if type_name == 'DataFrame' else usage)
-        if type_name == 'ndarray':
+            return int(usage.sum() if type_name == "DataFrame" else usage)
+        if type_name == "ndarray":
             return int(obj.nbytes)
         if type_name in _SPARSE_CSR_CSC_TYPES:
             return _est_sparse_csr_csc(obj)
@@ -304,17 +309,11 @@ def estimate_object_size(obj: Any, _depth: int = 0) -> int:
             return _est_sparse_coo(obj)
         if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
             base = sys.getsizeof(obj)
-            return base + sum(
-                estimate_object_size(getattr(obj, f.name), _depth + 1)
-                for f in dataclasses.fields(obj)
-            )
-        if isinstance(obj, tuple) and hasattr(obj, '_fields'):  # namedtuple
+            return base + sum(estimate_object_size(getattr(obj, f.name), _depth + 1) for f in dataclasses.fields(obj))
+        if isinstance(obj, tuple) and hasattr(obj, "_fields"):  # namedtuple
             base = sys.getsizeof(obj)
-            return base + sum(
-                estimate_object_size(getattr(obj, name), _depth + 1)
-                for name in obj._fields
-            )
-        if type_name in ('bytes', 'bytearray'):
+            return base + sum(estimate_object_size(getattr(obj, name), _depth + 1) for name in obj._fields)
+        if type_name in ("bytes", "bytearray"):
             return len(obj)
         if isinstance(obj, (list, tuple)):
             return _estimate_indexable(obj, _depth)
@@ -362,10 +361,7 @@ def _estimate_dict(obj: dict, _depth: int) -> int:
     if _depth >= 1:
         return base + n * estimate_object_size(first_val, _depth + 1)
     last_val = next(reversed(obj.values()))
-    avg = (
-        estimate_object_size(first_val, _depth + 1) +
-        estimate_object_size(last_val, _depth + 1)
-    ) // 2
+    avg = (estimate_object_size(first_val, _depth + 1) + estimate_object_size(last_val, _depth + 1)) // 2
     return base + n * avg
 
 
@@ -396,29 +392,36 @@ def mutation_fingerprint(obj: Any) -> str | None:
     """
     h = hashlib.sha256()
     t = type(obj)
-    h.update(f"{t.__module__}.{t.__qualname__}".encode('utf-8'))
+    h.update(f"{t.__module__}.{t.__qualname__}".encode("utf-8"))
     try:
-        if t.__name__ in ('DataFrame', 'Series'):
+        if t.__name__ in ("DataFrame", "Series"):
             import pandas as pd
-            h.update(repr((obj.shape, [str(c) for c in getattr(obj, 'columns', [obj.name])],
-                           [str(d) for d in getattr(obj, 'dtypes', [obj.dtype])])).encode('utf-8'))
+
+            h.update(
+                repr(
+                    (
+                        obj.shape,
+                        [str(c) for c in getattr(obj, "columns", [obj.name])],
+                        [str(d) for d in getattr(obj, "dtypes", [obj.dtype])],
+                    )
+                ).encode("utf-8")
+            )
             h.update(pd.util.hash_pandas_object(obj, index=True).to_numpy().tobytes())
             return h.hexdigest()
-        if t.__name__ == 'ndarray':
-            h.update(repr((obj.shape, str(obj.dtype))).encode('utf-8'))
+        if t.__name__ == "ndarray":
+            h.update(repr((obj.shape, str(obj.dtype))).encode("utf-8"))
             h.update(obj.tobytes() if obj.dtype != object else pickle.dumps(obj))
             return h.hexdigest()
-        if all(hasattr(obj, a) for a in ('obs', 'var', 'uns', 'X')):
-            parts = [getattr(obj, 'shape', None),
-                     [str(c) for c in obj.obs.columns], [str(c) for c in obj.var.columns]]
-            for slot in ('uns', 'obsm', 'varm', 'obsp', 'varp', 'layers'):
+        if all(hasattr(obj, a) for a in ("obs", "var", "uns", "X")):
+            parts = [getattr(obj, "shape", None), [str(c) for c in obj.obs.columns], [str(c) for c in obj.var.columns]]
+            for slot in ("uns", "obsm", "varm", "obsp", "varp", "layers"):
                 mapping = getattr(obj, slot, None)
                 parts.append(sorted(map(str, mapping.keys())) if mapping is not None else None)
-            h.update(repr(parts).encode('utf-8'))
+            h.update(repr(parts).encode("utf-8"))
             x = obj.X
-            data = getattr(x, 'data', x)
+            data = getattr(x, "data", x)
             try:
-                h.update(repr((getattr(x, 'nnz', None), float(data.sum()))).encode('utf-8'))
+                h.update(repr((getattr(x, "nnz", None), float(data.sum()))).encode("utf-8"))
             except (TypeError, ValueError, AttributeError):
                 pass
             return h.hexdigest()

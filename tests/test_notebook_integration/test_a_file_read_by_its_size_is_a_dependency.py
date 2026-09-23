@@ -7,20 +7,26 @@ and showed the sample run's sizes: the folder's listing is a dependency, and
 the names had not changed; what ``stat`` reports was not a dependency at all.
 Exports on disk were right; the numbers on screen were not.
 """
+
 import pytest
 
 pytest.importorskip("pandas")
 
 pytestmark = [pytest.mark.integration, pytest.mark.files]
 
-SETUP = ("import os\nimport pandas as pd\nfrom pathlib import Path\n"
-         "OUT = Path('out_r')\nOUT.mkdir(exist_ok=True)\nN = {n}")
+SETUP = (
+    "import os\nimport pandas as pd\nfrom pathlib import Path\nOUT = Path('out_r')\nOUT.mkdir(exist_ok=True)\nN = {n}"
+)
 
 
-@pytest.mark.parametrize("shown", [
-    "print('SIZES', {p.name: p.stat().st_size for p in sorted(OUT.glob('*.csv'))})",
-    "print('SIZES', {'a.csv': os.path.getsize(OUT / 'a.csv')})",
-], ids=["path_stat", "os_path_getsize"])
+@pytest.mark.parametrize(
+    "shown",
+    [
+        "print('SIZES', {p.name: p.stat().st_size for p in sorted(OUT.glob('*.csv'))})",
+        "print('SIZES', {'a.csv': os.path.getsize(OUT / 'a.csv')})",
+    ],
+    ids=["path_stat", "os_path_getsize"],
+)
 def test_a_size_shown_after_the_file_changed_is_the_new_one(nb_runner, shown):
     export = "pd.DataFrame({'x': range(N)}).to_csv(OUT / 'a.csv', index=False)\n" + shown
     nb_runner.create_notebook(["import cash\n%cash_on", SETUP.format(n=10), export])

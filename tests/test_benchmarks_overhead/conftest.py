@@ -19,6 +19,7 @@ tests together but still runs many modules per worker). Concretely:
 Clearing the singleton after each test in this package undoes the leak at its
 source without touching the drivers' intended within-run singleton reuse.
 """
+
 import pytest
 from IPython.core.interactiveshell import InteractiveShell
 

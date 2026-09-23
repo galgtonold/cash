@@ -22,7 +22,8 @@ import pytest
 def _run(body: str) -> str:
     proc = subprocess.run(
         [sys.executable, "-c", textwrap.dedent(body)],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     assert proc.returncode == 0, f"probe failed:\n{proc.stdout}\n{proc.stderr}"
     return proc.stdout.strip()
@@ -65,8 +66,7 @@ def test_pandas_types_resolve_after_a_later_import():
         """
     )
     assert out == "0 True", (
-        "ref-holder types did not resolve after pandas was imported later; "
-        "the negative result was cached"
+        "ref-holder types did not resolve after pandas was imported later; the negative result was cached"
     )
 
 
@@ -92,6 +92,4 @@ def test_pandas_refholder_edge_still_detected():
     user_ns = {"frame": frame, "grouped": grouped}
     edges: dict[str, set[str]] = {}
     de.detect_derivation_edges(edges, "grouped", grouped, user_ns)
-    assert edges.get("frame") == {"grouped"}, (
-        f"groupby ref-holder edge not detected: {edges}"
-    )
+    assert edges.get("frame") == {"grouped"}, f"groupby ref-holder edge not detected: {edges}"

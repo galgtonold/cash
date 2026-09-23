@@ -30,6 +30,7 @@ re-runs everything passes the correctness checks; this is the check it fails.
 Failures are collected, not raised at the first one, so a report shows the
 whole session -- but a step after a wrong one may be wrong only because of it.
 """
+
 from __future__ import annotations
 
 import json
@@ -50,10 +51,11 @@ _ORACLE = Path(__file__).with_name("session_oracle.py")
 
 # --- steps -------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class Run:
     cell: str
-    calls: dict[str, int] | None = None      # expensive steps this run must recompute, exactly
+    calls: dict[str, int] | None = None  # expensive steps this run must recompute, exactly
     # A cost the step is known to miss today, and why. Reported, not failed --
     # and failed the day it is met, so the note is removed with the fix.
     gap: str | None = None
@@ -88,7 +90,7 @@ class AddFile:
     content: Content
 
 
-ReplaceFile = AddFile            # same operation; the name says what the user did
+ReplaceFile = AddFile  # same operation; the name says what the user did
 
 
 @dataclass(frozen=True)
@@ -99,6 +101,7 @@ class RemoveFile:
 @dataclass(frozen=True)
 class ClearDir:
     """Delete a folder of OUTPUTS (``out/``) before producing them again."""
+
     path: str
 
 
@@ -108,12 +111,13 @@ Step = Union[Run, RunAll, RestartAndRunAll, Restart, Edit, AddFile, RemoveFile, 
 @dataclass(frozen=True)
 class Session:
     name: str
-    cells: tuple[tuple[str, str], ...]        # (label, source); the first turns cash on
-    files: tuple[tuple[str, Content], ...]    # input files at the start
+    cells: tuple[tuple[str, str], ...]  # (label, source); the first turns cash on
+    files: tuple[tuple[str, Content], ...]  # input files at the start
     steps: tuple[Step, ...]
 
 
 # --- the player --------------------------------------------------------------
+
 
 def _describe(step: Step) -> str:
     """A step in one short line: a file's path, not its content."""
@@ -148,7 +152,7 @@ class _Oracle:
 @dataclass
 class Player:
     session: Session
-    runner: object                            # NotebookTestRunner, not started
+    runner: object  # NotebookTestRunner, not started
     persist: bool = False
     failures: list[str] = field(default_factory=list)
     gaps: list[str] = field(default_factory=list)
@@ -164,8 +168,7 @@ class Player:
     # -- oracle
     def _oracle(self, upto: int) -> _Oracle:
         cells = [_strip_cash(self.sources[label]) for label in self.labels[:upto]]
-        key = (tuple(cells), tuple(sorted((k, v if isinstance(v, str) else v.hex())
-                                          for k, v in self.inputs.items())))
+        key = (tuple(cells), tuple(sorted((k, v if isinstance(v, str) else v.hex()) for k, v in self.inputs.items())))
         if key not in self._oracles:
             with tempfile.TemporaryDirectory(prefix="session-oracle-") as tmp:
                 for rel, content in self.inputs.items():
@@ -174,11 +177,18 @@ class Player:
                 spec.write_text(json.dumps({"work": tmp, "cells": cells}), encoding="utf-8")
                 env = {**os.environ, "MPLBACKEND": "Agg", "PYTHONHASHSEED": "0"}
                 env.pop("CASH_TRACE_FILE", None)
-                run = subprocess.run([sys.executable, str(_ORACLE), str(spec), str(result)],
-                                     env=env, capture_output=True, text=True, timeout=600)
+                run = subprocess.run(
+                    [sys.executable, str(_ORACLE), str(spec), str(result)],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=600,
+                )
                 if run.returncode != 0:
-                    raise RuntimeError(f"{self.session.name}: the plain run itself failed "
-                                       f"-- the session is broken, not cash:\n{run.stderr[-3000:]}")
+                    raise RuntimeError(
+                        f"{self.session.name}: the plain run itself failed "
+                        f"-- the session is broken, not cash:\n{run.stderr[-3000:]}"
+                    )
                 data = json.loads(result.read_text(encoding="utf-8"))
                 for c in data["cells"]:
                     for rel in ("_spec.json", "_result.json"):
@@ -216,26 +226,34 @@ class Player:
             plain = o.get("data", {}).get("text/plain", "")
             plain = "".join(plain) if isinstance(plain, list) else plain
             if plain.startswith("<IPython.core.display.HTML object>"):
-                continue                      # the badge
+                continue  # the badge
             shown.append(plain)
         if len(shown) != want:
-            self._fail(step_no, step, f"cell {self.labels[i - 1]!r} displayed {len(shown)} "
-                                      f"value(s), Jupyter displays {want}: {[s[:60] for s in shown[:4]]}")
+            self._fail(
+                step_no,
+                step,
+                f"cell {self.labels[i - 1]!r} displayed {len(shown)} "
+                f"value(s), Jupyter displays {want}: {[s[:60] for s in shown[:4]]}",
+            )
 
     def _check_cost(self, step_no: int, step, calls_before: int) -> None:
         expected = getattr(step, "calls", None)
         if not expected:
             return
         ran = _calls(self.work)[calls_before:]
-        misses = [f"recomputed {name} {ran.count(name)}x, expected {n}x"
-                  for name, n in expected.items() if ran.count(name) != n]
+        misses = [
+            f"recomputed {name} {ran.count(name)}x, expected {n}x"
+            for name, n in expected.items()
+            if ran.count(name) != n
+        ]
         if step.gap and misses:
-            self.gaps.append(f"step {step_no} {step.cell if isinstance(step, Run) else step}: "
-                             f"{'; '.join(misses)} (known: {step.gap})")
+            self.gaps.append(
+                f"step {step_no} {step.cell if isinstance(step, Run) else step}: "
+                f"{'; '.join(misses)} (known: {step.gap})"
+            )
         elif step.gap:
-            self._fail(step_no, step, f"the known gap no longer happens ({step.gap}) "
-                                      "-- drop the note from the session")
-        for miss in ([] if step.gap else misses):
+            self._fail(step_no, step, f"the known gap no longer happens ({step.gap}) -- drop the note from the session")
+        for miss in [] if step.gap else misses:
             self._fail(step_no, step, miss)
 
     def _check_files(self, step_no, step, before, oracle_final, must_exist) -> None:
@@ -316,9 +334,8 @@ class Player:
                 self._fail(step_no, step, error)
                 return
             got, want = _cell_stdout(self.runner, i), oracle.cells[i - 1]["stdout"].rstrip("\n")
-            if i > 1 and got != want:           # cell 1 prints cash's own banner
-                self._fail(step_no, step, f"cell {self.labels[i - 1]!r} printed {got!r}, "
-                                          f"a plain run prints {want!r}")
+            if i > 1 and got != want:  # cell 1 prints cash's own banner
+                self._fail(step_no, step, f"cell {self.labels[i - 1]!r} printed {got!r}, a plain run prints {want!r}")
             if i > 1:
                 self._check_displays(step_no, step, i, oracle.cells[i - 1]["displays"])
             written.update(oracle.cells[i - 1]["written"])
@@ -326,11 +343,27 @@ class Player:
         self._check_cost(step_no, step, calls_before)
 
     def report(self) -> str:
-        return (f"{self.session.name} ({'persist all' if self.persist else 'default'}): "
-                f"{len(self.failures)} problem(s)\n  " + "\n  ".join(self.failures)
-                + "\n known gaps:\n  " + "\n  ".join(self.gaps or ["none"])
-                + "\n steps:\n  " + "\n  ".join(self.log))
+        return (
+            f"{self.session.name} ({'persist all' if self.persist else 'default'}): "
+            f"{len(self.failures)} problem(s)\n  "
+            + "\n  ".join(self.failures)
+            + "\n known gaps:\n  "
+            + "\n  ".join(self.gaps or ["none"])
+            + "\n steps:\n  "
+            + "\n  ".join(self.log)
+        )
 
 
-__all__ = ["Session", "Player", "Run", "RunAll", "RestartAndRunAll", "Restart", "Edit",
-           "AddFile", "ReplaceFile", "RemoveFile", "ClearDir"]
+__all__ = [
+    "Session",
+    "Player",
+    "Run",
+    "RunAll",
+    "RestartAndRunAll",
+    "Restart",
+    "Edit",
+    "AddFile",
+    "ReplaceFile",
+    "RemoveFile",
+    "ClearDir",
+]

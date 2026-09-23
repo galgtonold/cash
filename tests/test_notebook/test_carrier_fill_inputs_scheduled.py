@@ -27,6 +27,7 @@ the live object; since round 21 it also recognises them by their producer's
 code); `sub` present means the fill just runs. Only a state that separates them
 reaches this, which is why every "restart and re-run" attempt came back clean.
 """
+
 from __future__ import annotations
 
 import types
@@ -49,15 +50,12 @@ def _entry(stmt, outputs=(), inputs=()):
 def _trace():
     """The reporter's cell, with `sub`'s producer ahead of the figure."""
     return [
-        _entry("mm = monthly_margin(tx)", outputs=("mm",), inputs=("tx",)),        # 0
-        _entry("sub = mm[mm['category'] == 'Electronics']",
-               outputs=("sub",), inputs=("mm",)),                                  # 1
-        _entry("fig, ax = plt.subplots(figsize=(8, 4))", outputs=("fig", "ax")),   # 2
-        _entry("ax.plot(sub['month'], sub['margin_pct'], color='purple')",
-               outputs=("ax",), inputs=("ax", "sub")),                             # 3
-        _entry("ax.set_title('Electronics margin %')",
-               outputs=("ax",), inputs=("ax",)),                                   # 4
-        _entry("fig.savefig('electronics.png')", inputs=("fig",)),                 # 5
+        _entry("mm = monthly_margin(tx)", outputs=("mm",), inputs=("tx",)),  # 0
+        _entry("sub = mm[mm['category'] == 'Electronics']", outputs=("sub",), inputs=("mm",)),  # 1
+        _entry("fig, ax = plt.subplots(figsize=(8, 4))", outputs=("fig", "ax")),  # 2
+        _entry("ax.plot(sub['month'], sub['margin_pct'], color='purple')", outputs=("ax",), inputs=("ax", "sub")),  # 3
+        _entry("ax.set_title('Electronics margin %')", outputs=("ax",), inputs=("ax",)),  # 4
+        _entry("fig.savefig('electronics.png')", inputs=("fig",)),  # 5
     ]
 
 
@@ -66,6 +64,7 @@ def live_figure():
     """`fig` must be LIVE or the carrier pass never fires at all."""
     plt = pytest.importorskip("matplotlib.pyplot")
     import matplotlib
+
     matplotlib.use("Agg")
     fig, ax = plt.subplots()
     yield plt, fig, ax
@@ -104,10 +103,10 @@ def test_nothing_extra_is_scheduled_when_no_fill_needs_it(live_figure):
     plt, fig, ax = live_figure
     planner = _planner({"plt": plt, "fig": fig, "ax": ax})
     trace = [
-        _entry("data = load()", outputs=("data",)),                         # 0
-        _entry("fig, ax = plt.subplots()", outputs=("fig", "ax")),          # 1
-        _entry("ax.grid(True)", outputs=("ax",), inputs=("ax",)),           # 2
-        _entry("fig.savefig('out.png')", inputs=("fig",)),                  # 3
+        _entry("data = load()", outputs=("data",)),  # 0
+        _entry("fig, ax = plt.subplots()", outputs=("fig", "ax")),  # 1
+        _entry("ax.grid(True)", outputs=("ax",), inputs=("ax",)),  # 2
+        _entry("fig.savefig('out.png')", inputs=("fig",)),  # 3
     ]
 
     kept, _ = planner._complete_stateful_carrier_history([3], trace, [])
@@ -128,19 +127,17 @@ def test_a_file_writing_producer_is_never_dragged_in(live_figure):
     plt, fig, ax = live_figure
     planner = _planner({"plt": plt, "fig": fig, "ax": ax})
     trace = [
-        _entry("sub = audit_and_load(tx)\nsub.to_csv('audit.log', mode='a')",
-               outputs=("sub",), inputs=("tx",)),                            # 0
-        _entry("fig, ax = plt.subplots()", outputs=("fig", "ax")),           # 1
+        _entry("sub = audit_and_load(tx)\nsub.to_csv('audit.log', mode='a')", outputs=("sub",), inputs=("tx",)),  # 0
+        _entry("fig, ax = plt.subplots()", outputs=("fig", "ax")),  # 1
         _entry("ax.plot(sub['x'])", outputs=("ax",), inputs=("ax", "sub")),  # 2
-        _entry("fig.savefig('out.png')", inputs=("fig",)),                   # 3
+        _entry("fig.savefig('out.png')", inputs=("fig",)),  # 3
     ]
 
     kept, _ = planner._complete_stateful_carrier_history([3], trace, [])
 
     assert 2 in kept, "the fill should still be scheduled"
     assert 0 not in kept, (
-        "a producer that appends to a file was scheduled; re-running it "
-        "duplicates the audit line permanently"
+        "a producer that appends to a file was scheduled; re-running it duplicates the audit line permanently"
     )
 
 

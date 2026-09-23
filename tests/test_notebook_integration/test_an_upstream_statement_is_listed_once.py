@@ -5,8 +5,11 @@ twice in a row in the Upstream list. The backward scan restored the statement
 and a later planner pass scheduled it to run as well; the badge showed the
 restore and the run's cache hit.
 """
-PIN = ("cash.configure(call_cost_floor_seconds=0.0, min_execution_time_to_cache_seconds=0.0, "
-       "loop_split_max_iter_seconds=1.0, loop_split_min_remaining_seconds=0.0)\n")
+
+PIN = (
+    "cash.configure(call_cost_floor_seconds=0.0, min_execution_time_to_cache_seconds=0.0, "
+    "loop_split_max_iter_seconds=1.0, loop_split_min_remaining_seconds=0.0)\n"
+)
 SETUP = "import cash\n%load_ext cash\n%cash_badge print\n" + PIN + "%cash_on"
 
 
@@ -16,12 +19,14 @@ def _repeated_rows(out):
 
 
 def test_a_rebound_variables_first_producer_is_listed_once(nb_runner):
-    nb_runner.create_notebook([
-        SETUP,
-        "src = sum(i*i for i in range(2_000_000))",
-        "w = src + 1\nextra = 5",
-        "res = w * 2\nprint(res)",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            "src = sum(i*i for i in range(2_000_000))",
+            "w = src + 1\nextra = 5",
+            "res = w * 2\nprint(res)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     nb_runner.set_cell_source(3, "w = src + 1\nextra = 5\nw = w + extra")
@@ -32,12 +37,14 @@ def test_a_rebound_variables_first_producer_is_listed_once(nb_runner):
 
 
 def test_an_accumulators_init_is_listed_once(nb_runner):
-    nb_runner.create_notebook([
-        SETUP,
-        "src = sum(i*i for i in range(2_000_000))",
-        "acc = {}\nfor i in range(3):\n    acc[i] = src + i",
-        "res = sum(acc.values())\nprint(res)",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            "src = sum(i*i for i in range(2_000_000))",
+            "acc = {}\nfor i in range(3):\n    acc[i] = src + i",
+            "res = sum(acc.values())\nprint(res)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     nb_runner.set_cell_source(3, "acc = {}\nfor i in range(3):\n    acc[i] = src + 2*i")

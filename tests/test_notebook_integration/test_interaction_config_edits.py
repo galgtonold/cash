@@ -15,12 +15,14 @@ class TestConfigDrivenWorkflow:
 
     def test_edit_config_value(self, nb_runner):
         """Edit config value, verify all downstream updates."""
-        nb_runner.create_notebook([
-            "config = {'scale': 2, 'offset': 10}",
-            "a = 5 * config['scale']\nprint(f'a = {a}')",
-            "b = 100 + config['offset']\nprint(f'b = {b}')",
-            "c = a + b\nprint(f'c = {c}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "config = {'scale': 2, 'offset': 10}",
+                "a = 5 * config['scale']\nprint(f'a = {a}')",
+                "b = 100 + config['offset']\nprint(f'b = {b}')",
+                "c = a + b\nprint(f'c = {c}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "a = 10" in nb_runner.get_output(2)
@@ -36,10 +38,12 @@ class TestConfigDrivenWorkflow:
 
     def test_add_config_key(self, nb_runner):
         """Add a new key to config, use it downstream."""
-        nb_runner.create_notebook([
-            "params = {'lr': 0.01}",
-            "effective_lr = params['lr'] * 10\nprint(f'lr = {effective_lr}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "params = {'lr': 0.01}",
+                "effective_lr = params['lr'] * 10\nprint(f'lr = {effective_lr}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "lr = 0.1" in nb_runner.get_output(2)
@@ -59,12 +63,14 @@ class TestConstantEdits:
 
     def test_edit_constant_three_consumers(self, nb_runner):
         """One constant used by three cells."""
-        nb_runner.create_notebook([
-            "PI = 3.14",
-            "circumference = 2 * PI * 5\nprint(f'circ = {circumference}')",
-            "area = PI * 5 ** 2\nprint(f'area = {area}')",
-            "volume = (4/3) * PI * 5 ** 3\nprint(f'vol = {volume}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "PI = 3.14",
+                "circumference = 2 * PI * 5\nprint(f'circ = {circumference}')",
+                "area = PI * 5 ** 2\nprint(f'area = {area}')",
+                "volume = (4/3) * PI * 5 ** 3\nprint(f'vol = {volume}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "circ = " in nb_runner.get_output(2)
@@ -84,10 +90,12 @@ class TestConstantEdits:
 
     def test_edit_constant_with_restart(self, nb_runner):
         """Edit constant, restart, verify restored correctly."""
-        nb_runner.create_notebook([
-            "MULTIPLIER = 5",
-            "result = MULTIPLIER * 20\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "MULTIPLIER = 5",
+                "result = MULTIPLIER * 20\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 100" in nb_runner.get_output(2)

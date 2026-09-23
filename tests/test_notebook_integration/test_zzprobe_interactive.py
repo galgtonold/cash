@@ -44,11 +44,13 @@ pytestmark = [pytest.mark.timeout(90)]
 
 # ---------------------------------------------------------------- 1
 def test_out_of_order_first_execution_then_run_all(nb_runner):
-    nb_runner.create_notebook([
-        "x = 10",
-        "y = x * 3\nprint('y', y)",
-        "print('standalone', 7)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "x = 10",
+            "y = x * 3\nprint('y', y)",
+            "print('standalone', 7)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_cells([3, 1, 2])
     assert "standalone 7" in nb_runner.get_output(3), nb_runner.get_output(3)
@@ -63,12 +65,14 @@ def test_out_of_order_first_execution_then_run_all(nb_runner):
 
 # ---------------------------------------------------------------- 2
 def test_reset_magic_no_phantom_restore(nb_runner):
-    nb_runner.create_notebook([
-        "a = 5",
-        "%reset -f",
-        "b = 10\nprint('b', b)",
-        "try:\n    print('a =', a)\nexcept NameError:\n    print('a missing')",
-    ])
+    nb_runner.create_notebook(
+        [
+            "a = 5",
+            "%reset -f",
+            "b = 10\nprint('b', b)",
+            "try:\n    print('a =', a)\nexcept NameError:\n    print('a missing')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "b 10" in nb_runner.get_output(3), nb_runner.get_output(3)
@@ -86,11 +90,13 @@ def test_reset_magic_no_phantom_restore(nb_runner):
 
 # ---------------------------------------------------------------- 3
 def test_del_upstream_then_isolated_rerun_consumer(nb_runner):
-    nb_runner.create_notebook([
-        "x = 7",
-        "y = x * 3\nprint('y', y)",
-        "del x",
-    ])
+    nb_runner.create_notebook(
+        [
+            "x = 7",
+            "y = x * 3\nprint('y', y)",
+            "del x",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "y 21" in nb_runner.get_output(2), nb_runner.get_output(2)
@@ -105,21 +111,23 @@ def test_del_upstream_then_isolated_rerun_consumer(nb_runner):
 
 # ---------------------------------------------------------------- 4
 def test_cash_off_edit_cash_on_run_all(nb_runner):
-    nb_runner.create_notebook([
-        "p = 1",
-        "q = p + 1\nprint('q', q)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "p = 1",
+            "q = p + 1\nprint('q', q)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_debug()
     nb_runner.run_all()
     assert "q 2" in nb_runner.get_output(2), nb_runner.get_output(2)
 
     # Turn caching off, edit + run the upstream cell during the gap.
-    nb_runner.add_cell("%cash_off", save=True)   # cell 3
+    nb_runner.add_cell("%cash_off", save=True)  # cell 3
     nb_runner.run_cell(3)
     nb_runner.set_cell_source(1, "p = 100")
-    nb_runner.run_cell(1)                        # runs while cash is off
-    nb_runner.add_cell("%cash_on", save=True)    # cell 4
+    nb_runner.run_cell(1)  # runs while cash is off
+    nb_runner.add_cell("%cash_on", save=True)  # cell 4
     nb_runner.run_cell(4)
 
     # Full run with caching back on: q must reflect the edit, not stale q=2.
@@ -131,10 +139,12 @@ def test_cash_off_edit_cash_on_run_all(nb_runner):
 
 # ---------------------------------------------------------------- 5
 def test_cash_cellmagic_fresh_value_and_ttl(nb_runner):
-    nb_runner.create_notebook([
-        "%%cash\ntotal = sum(range(50000))\nprint('total', total)",
-        "%%cash ttl=60\ndoubled = total * 2\nprint('doubled', doubled)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "%%cash\ntotal = sum(range(50000))\nprint('total', total)",
+            "%%cash ttl=60\ndoubled = total * 2\nprint('doubled', doubled)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "total 1249975000" in nb_runner.get_output(1), nb_runner.get_output(1)
@@ -150,11 +160,13 @@ def test_cash_cellmagic_fresh_value_and_ttl(nb_runner):
 
 # ---------------------------------------------------------------- 6
 def test_time_magic_assignment_invalidation(nb_runner):
-    nb_runner.create_notebook([
-        "n = 6",
-        "%time m = n * 7",
-        "%%time\np = m + 8\nprint('p', p)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "n = 6",
+            "%time m = n * 7",
+            "%%time\np = m + 8\nprint('p', p)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "p 50" in nb_runner.get_output(3), nb_runner.get_output(3)
@@ -175,11 +187,13 @@ def test_time_magic_assignment_invalidation(nb_runner):
 
 # ---------------------------------------------------------------- 7
 def test_shell_escape_output_replay(nb_runner):
-    nb_runner.create_notebook([
-        "a = 1",
-        "!echo hi",
-        "b = a + 1\nprint('b', b)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "a = 1",
+            "!echo hi",
+            "b = a + 1\nprint('b', b)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "hi" in nb_runner.get_output(2), nb_runner.get_output(2)
@@ -194,14 +208,16 @@ def test_shell_escape_output_replay(nb_runner):
 
 # ---------------------------------------------------------------- 8
 def test_exotic_cells_empty_comment_import_introspection(nb_runner):
-    nb_runner.create_notebook([
-        "",
-        "# just a comment",
-        "import math",
-        "x = 42",
-        "x?",
-        "print('after', math.floor(3.7) + x)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "",
+            "# just a comment",
+            "import math",
+            "x = 42",
+            "x?",
+            "print('after', math.floor(3.7) + x)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "after 45" in nb_runner.get_output(6), nb_runner.get_output(6)
@@ -217,11 +233,13 @@ def test_exotic_cells_empty_comment_import_introspection(nb_runner):
 
 # ---------------------------------------------------------------- 9
 def test_display_repr_and_semicolon_suppression_on_rerun(nb_runner):
-    nb_runner.create_notebook([
-        "import pandas as pd\ndf = pd.DataFrame({'a': [1, 2, 3]})",
-        "df.tail(2)",
-        "df.head(1);",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import pandas as pd\ndf = pd.DataFrame({'a': [1, 2, 3]})",
+            "df.tail(2)",
+            "df.head(1);",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_debug()
     nb_runner.enable_persist()
@@ -256,11 +274,13 @@ def test_duplicate_identical_cells_isolated_rerun_disambiguation(nb_runner):
     """
     import pytest as _pytest
 
-    nb_runner.create_notebook([
-        "x = 0",
-        "x = x + 1\nprint('x', x)",
-        "x = x + 1\nprint('x', x)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "x = 0",
+            "x = x + 1\nprint('x', x)",
+            "x = x + 1\nprint('x', x)",
+        ]
+    )
     nb_runner.start_kernel()
     with _pytest.raises(Exception) as exc:
         nb_runner.run_all()
@@ -287,11 +307,13 @@ def test_add_cell_mid_session_consumes_old_var(nb_runner):
 def test_swap_cell_sources_values_follow_new_order(nb_runner):
     src_a = "cfg = {'k': 1}"
     src_b = "cfg['k'] = 2"
-    nb_runner.create_notebook([
-        src_a,
-        src_b,
-        "print('k', cfg['k'])",
-    ])
+    nb_runner.create_notebook(
+        [
+            src_a,
+            src_b,
+            "print('k', cfg['k'])",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "k 2" in nb_runner.get_output(3), nb_runner.get_output(3)
@@ -307,10 +329,12 @@ def test_swap_cell_sources_values_follow_new_order(nb_runner):
 
 # ---------------------------------------------------------------- 13
 def test_restart_no_persist_full_recompute(nb_runner):
-    nb_runner.create_notebook([
-        "v = 123",
-        "w = v * 2\nprint('w', w)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "v = 123",
+            "w = v * 2\nprint('w', w)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "w 246" in nb_runner.get_output(2), nb_runner.get_output(2)
@@ -323,11 +347,13 @@ def test_restart_no_persist_full_recompute(nb_runner):
 
 # ---------------------------------------------------------------- 14
 def test_restart_persist_then_edit_upstream_recomputes(nb_runner):
-    nb_runner.create_notebook([
-        "seed = 3",
-        "derived = seed * 100\nprint('derived', derived)",
-        "final = derived + 7\nprint('final', final)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "seed = 3",
+            "derived = seed * 100\nprint('derived', derived)",
+            "final = derived + 7\nprint('final', final)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_debug()
     nb_runner.enable_persist()
@@ -354,10 +380,12 @@ def test_restart_persist_then_edit_upstream_recomputes(nb_runner):
 
 # ---------------------------------------------------------------- 15
 def test_rapid_quadruple_rerun_idempotent(nb_runner):
-    nb_runner.create_notebook([
-        "counter = 0",
-        "counter = counter + 1\nprint('counter', counter)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "counter = 0",
+            "counter = counter + 1\nprint('counter', counter)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "counter 1" in nb_runner.get_output(2), nb_runner.get_output(2)

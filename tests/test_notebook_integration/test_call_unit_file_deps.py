@@ -52,6 +52,7 @@ store time -- ``CallUnit._replay_deps`` in isolation is verified directly,
 and for the un-masked remote channel, in
 ``tests/test_notebook/test_call_unit_ambient_capture.py``.
 """
+
 from __future__ import annotations
 
 SETUP = """\
@@ -71,21 +72,18 @@ def load_and_scale(k):
 
 
 def _cell(total_init: int) -> str:
-    return (
-        f"total = {total_init}\n"
-        "# @cash:cache-calls\n"
-        "total += load_and_scale(k)\n"
-        "print('TOTAL', total)"
-    )
+    return f"total = {total_init}\n# @cash:cache-calls\ntotal += load_and_scale(k)\nprint('TOTAL', total)"
 
 
 def test_sub_unit_hit_preserves_the_statements_file_dep(nb_runner, tmp_path):
-    nb_runner.create_notebook([
-        SETUP,
-        DEFS,
-        "k = 2",
-        _cell(0),
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            DEFS,
+            "k = 2",
+            _cell(0),
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "TOTAL 20" in nb_runner.get_output(4)
@@ -102,6 +100,4 @@ def test_sub_unit_hit_preserves_the_statements_file_dep(nb_runner, tmp_path):
     # statement's own entry when the call hit on the second.
     (tmp_path / "data.csv").write_text("100")
     nb_runner.run_cells([4])
-    assert "TOTAL 205" in nb_runner.get_output(4), (
-        "the file dependency was lost when the sub-call hit"
-    )
+    assert "TOTAL 205" in nb_runner.get_output(4), "the file dependency was lost when the sub-call hit"

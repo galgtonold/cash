@@ -19,6 +19,7 @@ Counted with ``os.write``: a cached
 callee's own writes to a variable would be restored on a hit and count the
 same either way.
 """
+
 from pathlib import Path
 
 import pytest
@@ -63,13 +64,14 @@ def _fits(runner) -> int:
 
 def _expected_rows(swap):
     import pandas as pd
+
     rows = []
     for w in [3, 5]:
         total = 0.0
         for m in range(6):
-            h = pd.DataFrame({'v': [float(m * 100 + i) for i in range(30)]})
+            h = pd.DataFrame({"v": [float(m * 100 + i) for i in range(30)]})
             h = h * 2 if m in swap else h
-            total += round(float(h.rolling(w, min_periods=1).mean()['v'].sum()), 6)
+            total += round(float(h.rolling(w, min_periods=1).mean()["v"].sum()), 6)
         rows.append((w, round(total, 6)))
     return f"ROWS {rows}"
 
@@ -104,11 +106,13 @@ def test_renaming_what_the_sweep_assigns_refits_nothing(nb_runner):
 
 
 def test_the_same_call_in_another_cell_is_served(nb_runner):
-    again = ("for W in [3]:\n"
-             "    check = {}\n"
-             "    for mid in sorted(cleaned):\n"
-             "        check[mid] = fit_score(make_features(cleaned[mid], W))\n"
-             "print('CHECK', round(sum(check.values()), 6))")
+    again = (
+        "for W in [3]:\n"
+        "    check = {}\n"
+        "    for mid in sorted(cleaned):\n"
+        "        check[mid] = fit_score(make_features(cleaned[mid], W))\n"
+        "print('CHECK', round(sum(check.values()), 6))"
+    )
     nb_runner.create_notebook(_cells() + [again])
     nb_runner.start_kernel()
     nb_runner.run_all()
@@ -135,14 +139,18 @@ STORES = (
     "    train = g[g['day'] <= cutoff]\n"
     "    return round(float(train['v'].mean() * params['alpha']), 6)"
 )
-WORK = ("FIX = {fix}\n"
-        "work = pd.DataFrame({{'store': [s for s in range(6) for _ in range(10)],\n"
-        "                      'day': [d for _ in range(6) for d in range(10)],\n"
-        "                      'v': [float(s * 10 + d + (5 if s in FIX else 0)) for s in range(6) for d in range(10)]}})")
-FIT = ("PARAMS = {'alpha': 0.5}\n"
-       "cutoff = work['day'].max() - 3\n"
-       "models = {key: fit_series(g, PARAMS, cutoff) for key, g in work.groupby('store')}\n"
-       "print('MODELS', round(sum(models.values()), 6))")
+WORK = (
+    "FIX = {fix}\n"
+    "work = pd.DataFrame({{'store': [s for s in range(6) for _ in range(10)],\n"
+    "                      'day': [d for _ in range(6) for d in range(10)],\n"
+    "                      'v': [float(s * 10 + d + (5 if s in FIX else 0)) for s in range(6) for d in range(10)]}})"
+)
+FIT = (
+    "PARAMS = {'alpha': 0.5}\n"
+    "cutoff = work['day'].max() - 3\n"
+    "models = {key: fit_series(g, PARAMS, cutoff) for key, g in work.groupby('store')}\n"
+    "print('MODELS', round(sum(models.values()), 6))"
+)
 
 
 def test_fixing_one_group_refits_only_it_when_settings_are_passed_by_name(nb_runner):
@@ -178,9 +186,11 @@ def test_a_setting_passed_by_name_still_refits_when_its_value_changes(nb_runner)
 # with the chosen window in the next cell, `{... make_features(cleaned[mid],
 # BEST_WIN) ...}`: all 200 fits ran again. The sweep's keys carried the loop's
 # variable; the pick, outside any loop, had none to match.
-PICK = ("BEST_W = 5\n"
-        "best = {mid: fit_score(make_features(cleaned[mid], BEST_W)) for mid in sorted(cleaned)}\n"
-        "print('BEST', round(sum(best.values()), 6))")
+PICK = (
+    "BEST_W = 5\n"
+    "best = {mid: fit_score(make_features(cleaned[mid], BEST_W)) for mid in sorted(cleaned)}\n"
+    "print('BEST', round(sum(best.values()), 6))"
+)
 
 
 def test_the_chosen_setting_is_served_from_the_sweep(nb_runner):

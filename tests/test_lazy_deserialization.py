@@ -2,8 +2,8 @@
 Tests for lazy deserialization proxy and FileBackend.get_metadata.
 """
 
-from cash.backends.lazy import LazyProxy, make_lazy_loader
 from cash.backends import FileBackend, InMemoryBackend
+from cash.backends.lazy import LazyProxy, make_lazy_loader
 
 
 class TestLazyProxy:

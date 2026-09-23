@@ -1,4 +1,5 @@
 from cash.notebook.cache_status import CacheStatus
+
 """
 Tests for downstream advancement fallback when cell is not found in notebook.
 
@@ -14,19 +15,21 @@ When re-executing the cell:
 The fix: When cell is not found but simulation cache exists, still perform the
 downstream advancement check using cached virtual lineage from the last successful run.
 """
-import pytest
 import hashlib
 from unittest.mock import MagicMock, patch
 
+import pytest
+from traitlets.config.configurable import Configurable
+
+from cash.backends import InMemoryBackend
+from cash.core import Cash
 from cash.notebook.ipython.magics import CashMagics
 from cash.notebook.upstream import _SimulationCacheEntry
-from cash.core import Cash
-from cash.backends import InMemoryBackend
-from traitlets.config.configurable import Configurable
 
 
 class MockShell(Configurable):
     """Mock IPython shell for testing."""
+
     def __init__(self):
         super().__init__()
         self.user_ns = {}
@@ -53,9 +56,9 @@ def magics_fixture():
 
 def _compute_lineage(code: str, input_lineages: list) -> str:
     """Compute a lineage hash the same way Cash does (simplified)."""
-    source_hash = hashlib.sha256(code.encode('utf-8')).hexdigest()
+    source_hash = hashlib.sha256(code.encode("utf-8")).hexdigest()
     lineage_str = source_hash + ":" + ":".join(sorted(input_lineages))
-    return hashlib.sha256(lineage_str.encode('utf-8')).hexdigest()
+    return hashlib.sha256(lineage_str.encode("utf-8")).hexdigest()
 
 
 class TestDownstreamAdvancementFallback:
@@ -87,12 +90,12 @@ class TestDownstreamAdvancementFallback:
         ahead_lineage_df = "bbbb2222" * 8  # 64 char hex
 
         # Set the "ahead" lineage in variable_lineage (as if previous cell execution advanced it)
-        upstream.variable_lineage['df'] = ahead_lineage_df
+        upstream.variable_lineage["df"] = ahead_lineage_df
 
         # Set up simulation cache with the virtual lineage
         # Format: (cell_code_hash, virtual_lineage, virtual_modules, trace, mutated, stale_files, file_deps)
         upstream.simulator._virtual_lineage._simulation_cache = [
-            _SimulationCacheEntry("hash_cell_0", {'df': virtual_lineage_df}, set(), [], set(), set(), {}),
+            _SimulationCacheEntry("hash_cell_0", {"df": virtual_lineage_df}, set(), [], set(), set(), {}),
         ]
         # The current cell was previously found at index 1 (cell 0 is the only upstream cell)
         upstream.last_cell_index = 1
@@ -105,32 +108,33 @@ class TestDownstreamAdvancementFallback:
         old_cell_code = "df['VolAdj'] = df['Close'] * df['Volume']\ndf['SMA_60'] = df['Close'].rolling(60).mean()"
         notebook_cells = [
             "import pandas as pd",  # cell 0
-            old_cell_code,          # cell 1 (old version, doesn't match edited code)
+            old_cell_code,  # cell 1 (old version, doesn't match edited code)
         ]
         cells_with_ids = [
             ("#VSC-abc123", "import pandas as pd"),
             ("#VSC-def456", old_cell_code),
         ]
 
-        with patch('cash.notebook.server_discovery.get_notebook_path', return_value='/fake/notebook.ipynb'), \
-             patch('cash.notebook.upstream.checker.get_notebook_cells', return_value=notebook_cells), \
-             patch('cash.notebook.upstream.checker.get_notebook_cells_with_ids', return_value=cells_with_ids), \
-             patch('cash.notebook.server_discovery.invalidate_notebook_path_cache'):
-
-            required_inputs = {'df'}
-            current_cell_outputs = {'df'}
+        with (
+            patch("cash.notebook.server_discovery.get_notebook_path", return_value="/fake/notebook.ipynb"),
+            patch("cash.notebook.upstream.checker.get_notebook_cells", return_value=notebook_cells),
+            patch("cash.notebook.upstream.checker.get_notebook_cells_with_ids", return_value=cells_with_ids),
+            patch("cash.notebook.server_discovery.invalidate_notebook_path_cache"),
+        ):
+            required_inputs = {"df"}
+            current_cell_outputs = {"df"}
 
             metrics, restore_time, exec_time = upstream._check_notebook_based(
                 cell_code,
                 required_inputs,
                 MagicMock(),  # process_statement_callback
                 None,  # global_ttl
-                current_cell_outputs=current_cell_outputs
+                current_cell_outputs=current_cell_outputs,
             )
 
         # The key assertion: df's lineage should be reset to the virtual hash,
         # not the "ahead" hash from previous execution
-        assert upstream.variable_lineage['df'] == virtual_lineage_df, (
+        assert upstream.variable_lineage["df"] == virtual_lineage_df, (
             f"Expected df lineage to be reset to virtual {virtual_lineage_df[:8]}... "
             f"but got {upstream.variable_lineage['df'][:8]}..."
         )
@@ -147,32 +151,33 @@ class TestDownstreamAdvancementFallback:
         virtual_lineage_x = "aaaa1111" * 8
         actual_lineage_x = "bbbb2222" * 8
 
-        upstream.variable_lineage['x'] = actual_lineage_x
+        upstream.variable_lineage["x"] = actual_lineage_x
         upstream.simulator._virtual_lineage._simulation_cache = [
-            _SimulationCacheEntry("hash_cell_0", {'x': virtual_lineage_x}, set(), [], set(), set(), {}),
+            _SimulationCacheEntry("hash_cell_0", {"x": virtual_lineage_x}, set(), [], set(), set(), {}),
         ]
         upstream.last_cell_index = 1
 
         cell_code = "y = x * 2"
 
-        with patch('cash.notebook.server_discovery.get_notebook_path', return_value='/fake/notebook.ipynb'), \
-             patch('cash.notebook.upstream.checker.get_notebook_cells', return_value=["x = 10"]), \
-             patch('cash.notebook.upstream.checker.get_notebook_cells_with_ids', return_value=[("#id1", "x = 10")]), \
-             patch('cash.notebook.server_discovery.invalidate_notebook_path_cache'):
-
+        with (
+            patch("cash.notebook.server_discovery.get_notebook_path", return_value="/fake/notebook.ipynb"),
+            patch("cash.notebook.upstream.checker.get_notebook_cells", return_value=["x = 10"]),
+            patch("cash.notebook.upstream.checker.get_notebook_cells_with_ids", return_value=[("#id1", "x = 10")]),
+            patch("cash.notebook.server_discovery.invalidate_notebook_path_cache"),
+        ):
             upstream._check_notebook_based(
                 cell_code,
-                {'x'},        # required_inputs
+                {"x"},  # required_inputs
                 # A bare MagicMock's result carries a truthy .get('error'),
                 # which the CAS-87 loud-failure path (correctly) raises on -
                 # return None so the auto-executed statement reports cleanly.
                 MagicMock(return_value=None),
                 None,
-                current_cell_outputs={'y'},  # x is NOT an output
+                current_cell_outputs={"y"},  # x is NOT an output
             )
 
         # x should NOT be reset — it's only an input, not an output
-        assert upstream.variable_lineage['x'] == actual_lineage_x
+        assert upstream.variable_lineage["x"] == actual_lineage_x
 
     def test_no_reset_without_simulation_cache(self, magics_fixture):
         """
@@ -183,26 +188,27 @@ class TestDownstreamAdvancementFallback:
         upstream = magics._upstream_checker
 
         actual_lineage_df = "bbbb2222" * 8
-        upstream.variable_lineage['df'] = actual_lineage_df
+        upstream.variable_lineage["df"] = actual_lineage_df
         upstream.simulator._virtual_lineage._simulation_cache = []  # No cache
 
         cell_code = "df['col'] = 1"
 
-        with patch('cash.notebook.server_discovery.get_notebook_path', return_value='/fake/notebook.ipynb'), \
-             patch('cash.notebook.upstream.checker.get_notebook_cells', return_value=["x = 10"]), \
-             patch('cash.notebook.upstream.checker.get_notebook_cells_with_ids', return_value=[("#id1", "x = 10")]), \
-             patch('cash.notebook.server_discovery.invalidate_notebook_path_cache'):
-
+        with (
+            patch("cash.notebook.server_discovery.get_notebook_path", return_value="/fake/notebook.ipynb"),
+            patch("cash.notebook.upstream.checker.get_notebook_cells", return_value=["x = 10"]),
+            patch("cash.notebook.upstream.checker.get_notebook_cells_with_ids", return_value=[("#id1", "x = 10")]),
+            patch("cash.notebook.server_discovery.invalidate_notebook_path_cache"),
+        ):
             upstream._check_notebook_based(
                 cell_code,
-                {'df'},
+                {"df"},
                 MagicMock(),
                 None,
-                current_cell_outputs={'df'},
+                current_cell_outputs={"df"},
             )
 
         # No cache → no reset
-        assert upstream.variable_lineage['df'] == actual_lineage_df
+        assert upstream.variable_lineage["df"] == actual_lineage_df
 
     def test_no_reset_when_lineages_already_match(self, magics_fixture):
         """
@@ -213,29 +219,30 @@ class TestDownstreamAdvancementFallback:
         upstream = magics._upstream_checker
 
         same_lineage = "aaaa1111" * 8
-        upstream.variable_lineage['df'] = same_lineage
+        upstream.variable_lineage["df"] = same_lineage
         upstream.simulator._virtual_lineage._simulation_cache = [
-            _SimulationCacheEntry("hash_cell_0", {'df': same_lineage}, set(), [], set(), set(), {}),
+            _SimulationCacheEntry("hash_cell_0", {"df": same_lineage}, set(), [], set(), set(), {}),
         ]
         upstream.last_cell_index = 1
 
         cell_code = "df['col'] = 1"
 
-        with patch('cash.notebook.server_discovery.get_notebook_path', return_value='/fake/notebook.ipynb'), \
-             patch('cash.notebook.upstream.checker.get_notebook_cells', return_value=["x = 10"]), \
-             patch('cash.notebook.upstream.checker.get_notebook_cells_with_ids', return_value=[("#id1", "x = 10")]), \
-             patch('cash.notebook.server_discovery.invalidate_notebook_path_cache'):
-
+        with (
+            patch("cash.notebook.server_discovery.get_notebook_path", return_value="/fake/notebook.ipynb"),
+            patch("cash.notebook.upstream.checker.get_notebook_cells", return_value=["x = 10"]),
+            patch("cash.notebook.upstream.checker.get_notebook_cells_with_ids", return_value=[("#id1", "x = 10")]),
+            patch("cash.notebook.server_discovery.invalidate_notebook_path_cache"),
+        ):
             upstream._check_notebook_based(
                 cell_code,
-                {'df'},
+                {"df"},
                 MagicMock(),
                 None,
-                current_cell_outputs={'df'},
+                current_cell_outputs={"df"},
             )
 
         # Lineage should remain the same (it was already correct)
-        assert upstream.variable_lineage['df'] == same_lineage
+        assert upstream.variable_lineage["df"] == same_lineage
 
     @pytest.mark.xfail(reason="Known failure: downstream advancement fallback multi-var reset")
     def test_multiple_overlap_vars_reset(self, magics_fixture):
@@ -251,30 +258,31 @@ class TestDownstreamAdvancementFallback:
         ahead_df1 = "bbbb2222" * 8
         ahead_df2 = "dddd4444" * 8
 
-        upstream.variable_lineage['df1'] = ahead_df1
-        upstream.variable_lineage['df2'] = ahead_df2
+        upstream.variable_lineage["df1"] = ahead_df1
+        upstream.variable_lineage["df2"] = ahead_df2
         upstream.simulator._virtual_lineage._simulation_cache = [
-            _SimulationCacheEntry("hash_cell_0", {'df1': virtual_df1, 'df2': virtual_df2}, set(), [], set(), set(), {}),
+            _SimulationCacheEntry("hash_cell_0", {"df1": virtual_df1, "df2": virtual_df2}, set(), [], set(), set(), {}),
         ]
         upstream.last_cell_index = 1
 
         cell_code = "df1['a'] = df2['b']\ndf2['c'] = df1['d']"
 
-        with patch('cash.notebook.server_discovery.get_notebook_path', return_value='/fake/notebook.ipynb'), \
-             patch('cash.notebook.upstream.checker.get_notebook_cells', return_value=["x = 10"]), \
-             patch('cash.notebook.upstream.checker.get_notebook_cells_with_ids', return_value=[("#id1", "x = 10")]), \
-             patch('cash.notebook.server_discovery.invalidate_notebook_path_cache'):
-
+        with (
+            patch("cash.notebook.server_discovery.get_notebook_path", return_value="/fake/notebook.ipynb"),
+            patch("cash.notebook.upstream.checker.get_notebook_cells", return_value=["x = 10"]),
+            patch("cash.notebook.upstream.checker.get_notebook_cells_with_ids", return_value=[("#id1", "x = 10")]),
+            patch("cash.notebook.server_discovery.invalidate_notebook_path_cache"),
+        ):
             upstream._check_notebook_based(
                 cell_code,
-                {'df1', 'df2'},
+                {"df1", "df2"},
                 MagicMock(),
                 None,
-                current_cell_outputs={'df1', 'df2'},
+                current_cell_outputs={"df1", "df2"},
             )
 
-        assert upstream.variable_lineage['df1'] == virtual_df1
-        assert upstream.variable_lineage['df2'] == virtual_df2
+        assert upstream.variable_lineage["df1"] == virtual_df1
+        assert upstream.variable_lineage["df2"] == virtual_df2
 
     def test_end_to_end_partial_cell_caching_after_edit(self, magics_fixture):
         """
@@ -287,20 +295,21 @@ class TestDownstreamAdvancementFallback:
 
         # Step 1: Set up df in user namespace
         import pandas as pd
-        shell.user_ns['pd'] = pd
-        shell.user_ns['df'] = pd.DataFrame({'Close': [100.0, 200.0, 300.0], 'Volume': [10, 20, 30]})
+
+        shell.user_ns["pd"] = pd
+        shell.user_ns["df"] = pd.DataFrame({"Close": [100.0, 200.0, 300.0], "Volume": [10, 20, 30]})
 
         # Step 2: Process first statement (computes VolAdj)
         metrics1 = processor.process_statement("df['VolAdj'] = df['Close'] * df['Volume']")
-        assert metrics1['status'] == CacheStatus.COMPUTED
-        assert 'VolAdj' in shell.user_ns['df'].columns
+        assert metrics1["status"] == CacheStatus.COMPUTED
+        assert "VolAdj" in shell.user_ns["df"].columns
 
         # Step 3: Process second statement (computes SMA_60)
         metrics2 = processor.process_statement("df['SMA_60'] = df['Close'].rolling(2).mean()")
-        assert metrics2['status'] == CacheStatus.COMPUTED
+        assert metrics2["status"] == CacheStatus.COMPUTED
 
         # Record the lineage state after both statements ran
-        df_lineage_after_both = upstream.variable_lineage.get('df')
+        df_lineage_after_both = upstream.variable_lineage.get("df")
 
         # Step 4: Simulate "cell not found" scenario for the second run
         # The cell was edited (SMA_60 → SMA_61) but notebook not saved.
@@ -328,34 +337,37 @@ class TestDownstreamAdvancementFallback:
         pre_cell_df_lineage = "pre_cell_hash_" + "a" * 50  # placeholder
 
         upstream.simulator._virtual_lineage._simulation_cache = [
-            _SimulationCacheEntry("hash_upstream_cell", {'df': pre_cell_df_lineage}, set(), [], set(), set(), {}),
+            _SimulationCacheEntry("hash_upstream_cell", {"df": pre_cell_df_lineage}, set(), [], set(), set(), {}),
         ]
         # Simulate that the current cell was previously at index 1
         # (the only upstream cell is at index 0)
         upstream.last_cell_index = 1
 
         # Set df's lineage to the "ahead" value (as if both statements already ran)
-        upstream.variable_lineage['df'] = df_lineage_after_both
+        upstream.variable_lineage["df"] = df_lineage_after_both
 
         # Now run _check_notebook_based with cell code that won't match notebook
         edited_cell_code = "df['VolAdj'] = df['Close'] * df['Volume']\ndf['SMA_61'] = df['Close'].rolling(2).mean()"
         old_cell_code = "df['VolAdj'] = df['Close'] * df['Volume']\ndf['SMA_60'] = df['Close'].rolling(2).mean()"
 
-        with patch('cash.notebook.server_discovery.get_notebook_path', return_value='/fake/notebook.ipynb'), \
-             patch('cash.notebook.upstream.checker.get_notebook_cells', return_value=[old_cell_code]), \
-             patch('cash.notebook.upstream.checker.get_notebook_cells_with_ids', return_value=[("#VSC-abc", old_cell_code)]), \
-             patch('cash.notebook.server_discovery.invalidate_notebook_path_cache'):
-
+        with (
+            patch("cash.notebook.server_discovery.get_notebook_path", return_value="/fake/notebook.ipynb"),
+            patch("cash.notebook.upstream.checker.get_notebook_cells", return_value=[old_cell_code]),
+            patch(
+                "cash.notebook.upstream.checker.get_notebook_cells_with_ids", return_value=[("#VSC-abc", old_cell_code)]
+            ),
+            patch("cash.notebook.server_discovery.invalidate_notebook_path_cache"),
+        ):
             upstream._check_notebook_based(
                 edited_cell_code,
-                {'df'},                  # required_inputs
-                MagicMock(),             # process_statement_callback
-                None,                    # global_ttl
-                current_cell_outputs={'df'},
+                {"df"},  # required_inputs
+                MagicMock(),  # process_statement_callback
+                None,  # global_ttl
+                current_cell_outputs={"df"},
             )
 
         # df's lineage should be reset to the pre-cell value
-        assert upstream.variable_lineage['df'] == pre_cell_df_lineage, (
+        assert upstream.variable_lineage["df"] == pre_cell_df_lineage, (
             f"Expected df lineage to be reset to pre-cell value, "
             f"but it's still '{upstream.variable_lineage['df'][:20]}...'"
         )

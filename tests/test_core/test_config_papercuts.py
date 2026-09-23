@@ -12,6 +12,7 @@ looked for its config is visible.
   invalid statement at line 1, column 1.
 * ``explain()`` did not say which cache it had read.
 """
+
 from __future__ import annotations
 
 import os
@@ -27,8 +28,8 @@ from cash.config import get_config, parse_size
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
 
 needs_toml = pytest.mark.skipif(
-    sys.version_info < (3, 11) and not __import__("importlib").util.find_spec("tomli"),
-    reason="no TOML parser")
+    sys.version_info < (3, 11) and not __import__("importlib").util.find_spec("tomli"), reason="no TOML parser"
+)
 
 
 def _codes(record, code):
@@ -36,8 +37,7 @@ def _codes(record, code):
 
 
 def _clean_env(**extra):
-    env = {k: v for k, v in os.environ.items()
-           if not k.startswith(("CASH_", "PYTEST_"))}
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("CASH_", "PYTEST_"))}
     env.update(extra)
     return env
 
@@ -45,9 +45,9 @@ def _clean_env(**extra):
 @needs_toml
 def test_a_misspelled_key_is_named_with_the_setting_it_meant(tmp_path):
     project = tmp_path / "pyproject.toml"
-    project.write_text('[tool.cash]\nmax_cache_siz = "2GB"\n'
-                       '[[tool.cash.tiers]]\ntype = "memory"\nmax_entrys = 3\n',
-                       encoding="utf-8")
+    project.write_text(
+        '[tool.cash]\nmax_cache_siz = "2GB"\n[[tool.cash.tiers]]\ntype = "memory"\nmax_entrys = 3\n', encoding="utf-8"
+    )
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
         cfg = get_config(project_config_path=str(project), user_config_path=None)
@@ -60,8 +60,7 @@ def test_a_misspelled_key_is_named_with_the_setting_it_meant(tmp_path):
 @needs_toml
 def test_a_pyproject_without_a_cash_table_is_not_cash_s_to_check(tmp_path):
     project = tmp_path / "pyproject.toml"
-    project.write_text('[project]\nname = "p"\n[tool.black]\nline-length = 88\n',
-                       encoding="utf-8")
+    project.write_text('[project]\nname = "p"\n[tool.black]\nline-length = 88\n', encoding="utf-8")
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
         cfg = get_config(project_config_path=str(project), user_config_path=None)
@@ -91,21 +90,32 @@ def test_a_byte_order_mark_is_named(tmp_path):
     assert said and "byte-order mark" in said[0], [str(w.message) for w in rec]
 
 
-@pytest.mark.parametrize("written, shown", [
-    ("2GB", "2 GB"), ("512MiB", "512 MiB"), ("1.5GiB", "1.5 GiB"), ("64KB", "64 KB"),
-])
+@pytest.mark.parametrize(
+    "written, shown",
+    [
+        ("2GB", "2 GB"),
+        ("512MiB", "512 MiB"),
+        ("1.5GiB", "1.5 GiB"),
+        ("64KB", "64 KB"),
+    ],
+)
 def test_a_size_is_shown_in_the_unit_it_was_written_in(written, shown):
     from cash.config import format_size
+
     assert format_size(parse_size(written)) == shown
 
 
 @needs_toml
 def test_cash_info_lists_every_setting_and_where_it_came_from(tmp_path):
-    (tmp_path / "pyproject.toml").write_text(
-        '[tool.cash]\ndisable = true\nmax_cache_size = "2GB"\n', encoding="utf-8")
-    out = subprocess.run([sys.executable, "-m", "cash", "info"], cwd=str(tmp_path),
-                         env=_clean_env(CASH_SUMMARY="false"),
-                         capture_output=True, text=True, timeout=120).stdout
+    (tmp_path / "pyproject.toml").write_text('[tool.cash]\ndisable = true\nmax_cache_size = "2GB"\n', encoding="utf-8")
+    out = subprocess.run(
+        [sys.executable, "-m", "cash", "info"],
+        cwd=str(tmp_path),
+        env=_clean_env(CASH_SUMMARY="false"),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    ).stdout
     assert "Disabled:   yes" in out, out
     assert "2 GB (2,000,000,000 bytes)" in out, out
     settings = out.split("Settings", 1)[1]
@@ -134,7 +144,8 @@ def test_pytest_from_above_the_project_uses_the_project_config(tmp_path, workers
     project = tmp_path / "proj"
     (project / "tests").mkdir(parents=True)
     (project / "pyproject.toml").write_text(
-        '[project]\nname = "p"\n[tool.cash]\ncache_dir = "mycache"\n', encoding="utf-8")
+        '[project]\nname = "p"\n[tool.cash]\ncache_dir = "mycache"\n', encoding="utf-8"
+    )
     out = tmp_path / "where.txt"
     (project / "tests" / "test_where.py").write_text(
         "import os\n"
@@ -142,14 +153,18 @@ def test_pytest_from_above_the_project_uses_the_project_config(tmp_path, workers
         "def test_where():\n"
         "    with open(os.environ['WHERE'], 'a') as f:\n"
         "        f.write(str(get_config().cache_dir) + '\\n')\n",
-        encoding="utf-8")
+        encoding="utf-8",
+    )
     run = subprocess.run(
         [sys.executable, "-m", "pytest", "proj/tests", "-q", "-p", "no:cacheprovider", *workers],
-        cwd=str(tmp_path), env=_clean_env(WHERE=str(out)),
-        capture_output=True, text=True, timeout=240)
+        cwd=str(tmp_path),
+        env=_clean_env(WHERE=str(out)),
+        capture_output=True,
+        text=True,
+        timeout=240,
+    )
     assert run.returncode == 0, run.stdout + run.stderr
-    seen = [os.path.normcase(os.path.realpath(p))
-            for p in out.read_text(encoding="utf-8").splitlines()]
+    seen = [os.path.normcase(os.path.realpath(p)) for p in out.read_text(encoding="utf-8").splitlines()]
     assert seen == [os.path.normcase(os.path.realpath(project / "mycache"))], seen
 
 
@@ -158,18 +173,20 @@ def test_a_config_file_named_in_code_outranks_the_launching_projects_pyproject(t
     and named it with Cash(config_path=...); the pyproject.toml of whatever
     project launched it overrode them. Environment variables still win."""
     from cash.config import _resolve_config
+
     own = tmp_path / "pkg" / "cash.toml"
     own.parent.mkdir()
     own.write_text('[tool.cash]\nmax_cache_size = "1GB"\nverbose = true\n', encoding="utf-8")
     project = tmp_path / "launcher" / "pyproject.toml"
     project.parent.mkdir()
-    project.write_text('[project]\nname = "l"\nversion = "0"\n\n[tool.cash]\n'
-                       'max_cache_size = "5GB"\nverbose = false\n', encoding="utf-8")
+    project.write_text(
+        '[project]\nname = "l"\nversion = "0"\n\n[tool.cash]\nmax_cache_size = "5GB"\nverbose = false\n',
+        encoding="utf-8",
+    )
     for key in [k for k in os.environ if k.startswith("CASH_")]:
         monkeypatch.delenv(key)
     config = _resolve_config(own, user_config_path=None, project_config_path=project)
     assert config.max_cache_size == 1_000_000_000
     assert config.verbose is True
     monkeypatch.setenv("CASH_VERBOSE", "0")
-    assert _resolve_config(own, user_config_path=None,
-                           project_config_path=project).verbose is False
+    assert _resolve_config(own, user_config_path=None, project_config_path=project).verbose is False

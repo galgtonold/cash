@@ -15,8 +15,8 @@ from __future__ import annotations
 
 __all__ = ["LazyProxy", "make_lazy_loader"]
 
-from typing import Any
 from collections.abc import Callable
+from typing import Any
 
 from ._base import CacheBackend, MetadataDict
 

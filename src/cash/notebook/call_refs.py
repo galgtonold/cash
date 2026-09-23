@@ -24,6 +24,7 @@ reads the call entry back. Two things make that sound:
 A version of the statement weighs the bytes it refers to when versions are
 pruned, and the call entries only a pruned version referred to go with it.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -103,10 +104,14 @@ REFS_FIELD = "call_refs"
 REF_BYTES_FIELD = "call_ref_bytes"
 
 
-def with_call_refs(variables: dict[str, Any], held: dict[int, tuple[Any, str, str, int]],
-                   referenced: dict[str, int] | None = None, *,
-                   trusted: tuple[str, int] | None = None,
-                   unpacked: dict[str, int] | None = None) -> dict[str, Any]:
+def with_call_refs(
+    variables: dict[str, Any],
+    held: dict[int, tuple[Any, str, str, int]],
+    referenced: dict[str, int] | None = None,
+    *,
+    trusted: tuple[str, int] | None = None,
+    unpacked: dict[str, int] | None = None,
+) -> dict[str, Any]:
     """*variables* with each value that is an unchanged held call result
     replaced by a :class:`CallRef`. *held* maps ``id(result)`` to
     ``(result, call key, digest, pickled bytes)``; *referenced*, when given,
@@ -147,8 +152,7 @@ def with_call_refs(variables: dict[str, Any], held: dict[int, tuple[Any, str, st
         if type(result) in (tuple, list):
             refs = {}
             for name, position in unpacked.items():
-                if (name in variables and position < len(result)
-                        and variables[name] is result[position]):
+                if name in variables and position < len(result) and variables[name] is result[position]:
                     refs[name] = CallRef(entry[1], entry[2], item=position)
             if refs:
                 if referenced is not None:

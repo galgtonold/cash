@@ -12,6 +12,7 @@ body doesn't run, so the counter is the number of real computes. Tests about the
 warning contract use pure functions instead, so the only warning that can fire
 is the one under test.
 """
+
 from __future__ import annotations
 
 import os
@@ -50,6 +51,7 @@ def _cash(tmp_path) -> Cash:
 #                             docs/tutorials/feature-guides/dynamic-dependencies.md)
 # --------------------------------------------------------------------------- #
 
+
 def test_datasource_token_invalidates_when_it_changes(tmp_path):
     """A ``depends_on`` DataSource whose ``has_changed()`` returns a state
     *token* invalidates the cache exactly when that token changes."""
@@ -61,7 +63,7 @@ def test_datasource_token_invalidates_when_it_changes(tmp_path):
             return "tok"
 
         def has_changed(self):
-            return state["v"]      # a token (int), not a bool
+            return state["v"]  # a token (int), not a bool
 
         def update_state(self):
             pass
@@ -131,6 +133,7 @@ def test_datasource_bool_has_changed_warns(tmp_path):
 # File tracking: file_depends_on = mtime, auto = content  (docs/decorator.md)  #
 # --------------------------------------------------------------------------- #
 
+
 def test_file_depends_on_tracks_mtime_not_content(tmp_path):
     """``file_depends_on=`` keys on the file **mtime**, not its content: a
     content edit that leaves the mtime unchanged stays cached; bumping the
@@ -151,13 +154,13 @@ def test_file_depends_on_tracks_mtime_not_content(tmp_path):
     g()
     assert n["c"] == 1
 
-    p.write_text("bbbb")                                   # same size, new content
-    os.utime(p, (st.st_atime, st.st_mtime))                # reset mtime to original
+    p.write_text("bbbb")  # same size, new content
+    os.utime(p, (st.st_atime, st.st_mtime))  # reset mtime to original
     g()
     assert n["c"] == 1, "content changed but mtime reset -> still cached (mtime-only)"
 
     time.sleep(0.02)
-    os.utime(p, None)                                      # bump mtime only
+    os.utime(p, None)  # bump mtime only
     g()
     assert n["c"] == 2, "mtime changed -> recomputed"
 
@@ -180,8 +183,8 @@ def test_auto_file_tracking_is_content_hash(tmp_path):
     load()
     assert n["c"] == 1
 
-    p.write_text("a,b\n9,9\n")                             # same size, new content
-    os.utime(p, (st.st_atime, st.st_mtime))                # reset mtime
+    p.write_text("a,b\n9,9\n")  # same size, new content
+    os.utime(p, (st.st_atime, st.st_mtime))  # reset mtime
     load()
     assert n["c"] == 2, "content changed (mtime reset) -> recomputed (content-hash)"
 
@@ -189,6 +192,7 @@ def test_auto_file_tracking_is_content_hash(tmp_path):
 # --------------------------------------------------------------------------- #
 # Content hashing, module globals, cache_if, helpers, unhashable args         #
 # --------------------------------------------------------------------------- #
+
 
 def test_content_equal_args_share_one_entry(tmp_path):
     """Two content-equal but non-identical args (here dicts differing only in
@@ -218,7 +222,7 @@ def test_read_module_global_invalidates_on_change(tmp_path):
     @c.cache(assume_safe=True)
     def net(x):
         n["c"] += 1
-        return x * (1 - _TAX_RATE)   # reads the module global
+        return x * (1 - _TAX_RATE)  # reads the module global
 
     assert net(100) == 80.0
     _TAX_RATE = 0.5
@@ -287,14 +291,30 @@ def _render_reference_badge() -> list[str]:
     from cash.notebook.cache_status import CacheStatus
 
     metrics = [
-        {"code": "df = pd.read_csv('sales.csv')", "status": str(CacheStatus.RESTORED),
-         "execution_time": 0.004, "total_time": 0.004, "saved_time": 0.42,
-         "storage_tiers": ["RAM", "DISK"], "variables": ["df"]},
-        {"code": "summary = df.groupby('region').sum()", "status": str(CacheStatus.COMPUTED),
-         "execution_time": 0.01, "total_time": 0.01, "variables": ["summary"]},
-        {"code": "n = len(df)", "status": str(CacheStatus.COMPUTED),
-         "execution_time": 0.0001, "total_time": 0.0001,
-         "uncacheable_reasons": ["Too cheap to cache"], "variables": ["n"]},
+        {
+            "code": "df = pd.read_csv('sales.csv')",
+            "status": str(CacheStatus.RESTORED),
+            "execution_time": 0.004,
+            "total_time": 0.004,
+            "saved_time": 0.42,
+            "storage_tiers": ["RAM", "DISK"],
+            "variables": ["df"],
+        },
+        {
+            "code": "summary = df.groupby('region').sum()",
+            "status": str(CacheStatus.COMPUTED),
+            "execution_time": 0.01,
+            "total_time": 0.01,
+            "variables": ["summary"],
+        },
+        {
+            "code": "n = len(df)",
+            "status": str(CacheStatus.COMPUTED),
+            "execution_time": 0.0001,
+            "total_time": 0.0001,
+            "uncacheable_reasons": ["Too cheap to cache"],
+            "variables": ["n"],
+        },
     ]
     buf = io.StringIO()
     with redirect_stdout(buf):
@@ -304,14 +324,9 @@ def _render_reference_badge() -> list[str]:
 
 def _agent_guide_badge_block() -> list[str]:
     """The fenced ``[Cash] ...`` transcript from docs/for-coding-agents.md."""
-    page = (
-        pathlib.Path(__file__).resolve().parents[2]
-        / "docs" / "for-coding-agents.md"
-    ).read_text(encoding="utf-8")
+    page = (pathlib.Path(__file__).resolve().parents[2] / "docs" / "for-coding-agents.md").read_text(encoding="utf-8")
     blocks = re.findall(r"^```\n(\[Cash\] .*?)^```", page, re.M | re.S)
-    assert len(blocks) == 1, (
-        f"expected exactly one [Cash] transcript in for-coding-agents.md, found {len(blocks)}"
-    )
+    assert len(blocks) == 1, f"expected exactly one [Cash] transcript in for-coding-agents.md, found {len(blocks)}"
     return [ln for ln in blocks[0].splitlines() if ln.strip()]
 
 
@@ -359,6 +374,7 @@ def test_agent_guide_badge_example_matches_what_the_renderer_emits():
 # How a script's cached functions are NAMED
 # ---------------------------------------------------------------------------
 
+
 def test_a_scripts_cached_function_is_keyed_by_filename_not_dunder_main(tmp_path):
     """`docs/decorator.md` and `docs/cli.md` show `cash inspect` / CASH_SUMMARY
     output right after telling the reader to run `python model.py`, so the
@@ -389,10 +405,8 @@ def test_a_scripts_cached_function_is_keyed_by_filename_not_dunder_main(tmp_path
         "print('KEY:', next(iter(c.functions)))\n",
         encoding="utf-8",
     )
-    cp = subprocess.run([sys.executable, str(script)], capture_output=True,
-                        text=True, cwd=str(tmp_path), timeout=180)
-    names = [ln.split("KEY:", 1)[1].strip()
-             for ln in cp.stdout.splitlines() if ln.startswith("KEY:")]
+    cp = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, cwd=str(tmp_path), timeout=180)
+    names = [ln.split("KEY:", 1)[1].strip() for ln in cp.stdout.splitlines() if ln.startswith("KEY:")]
     assert names, (
         "the probe observed no registered function, so it proves nothing:\n"
         f"stdout={cp.stdout!r}\nstderr={cp.stderr[-500:]!r}"
@@ -409,6 +423,7 @@ def test_a_scripts_cached_function_is_keyed_by_filename_not_dunder_main(tmp_path
 # Ambient reads  (docs/decorator.md "strict= and assume_safe= - purity gates", #
 #                 docs/warnings.md#key-ambient-read)                          #
 # --------------------------------------------------------------------------- #
+
 
 def test_decorator_doc_ambient_read_bullet_actually_fires(tmp_path):
     """The doc says `datetime.now()` gets a `CashImpurityWarning`. Run it.
@@ -429,6 +444,7 @@ def test_decorator_doc_ambient_read_bullet_actually_fires(tmp_path):
         @c.cache
         def stamped():
             import datetime
+
             ran.append("call")
             return datetime.datetime.now().year
 
@@ -437,9 +453,7 @@ def test_decorator_doc_ambient_read_bullet_actually_fires(tmp_path):
     impurity = [w for w in rec if issubclass(w.category, CashImpurityWarning)]
     assert impurity, "docs/decorator.md promises a CashImpurityWarning here"
     text = "\n".join(str(w.message) for w in impurity)
-    assert "KEY-AMBIENT-READ" in text, (
-        f"docs/warnings.md documents this code for the ambient reads:\n{text}"
-    )
+    assert "KEY-AMBIENT-READ" in text, f"docs/warnings.md documents this code for the ambient reads:\n{text}"
     # The other half of the same bullet: warned, and STILL CACHED. Counted, not
     # compared -- two calls a second apart return the same year either way.
     with warnings.catch_warnings():
@@ -452,11 +466,13 @@ def test_decorator_doc_ambient_read_bullet_actually_fires(tmp_path):
 # Round-18 docs sweep: each test executes one sentence the docs now make.     #
 # --------------------------------------------------------------------------- #
 
+
 def _counted(c, calls, **decorator):
     @c.cache(assume_safe=True, **decorator)
     def value_of(v):
         calls.append(v)
         return v
+
     return value_of
 
 
@@ -484,7 +500,7 @@ def test_a_changed_default_recomputes_a_call_that_passes_the_argument(tmp_path):
     f(2, k=5)
     f(2, k=5)
     assert calls == [5], "control: an unchanged function hits"
-    scaled.__defaults__ = (4,)          # what editing `K` does to the function
+    scaled.__defaults__ = (4,)  # what editing `K` does to the function
     f(2, k=5)
     assert calls == [5, 5]
 
@@ -590,7 +606,8 @@ def test_clearing_an_inner_function_leaves_its_caller_serving(tmp_path):
     import textwrap
 
     script = tmp_path / "pipeline.py"
-    script.write_text(textwrap.dedent("""
+    script.write_text(
+        textwrap.dedent("""
         import sys, time
         import cash
 
@@ -607,13 +624,16 @@ def test_clearing_an_inner_function_leaves_its_caller_serving(tmp_path):
             return inner(x) + 1
 
         print(outer(1))
-    """), encoding="utf-8")
+    """),
+        encoding="utf-8",
+    )
     env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
     env.update(CASH_CACHE_DIR=str(tmp_path / ".cash"), PYTHONDONTWRITEBYTECODE="1")
 
     def run(*argv):
-        return subprocess.run([sys.executable, *argv], cwd=str(tmp_path), env=env,
-                              capture_output=True, text=True, timeout=120)
+        return subprocess.run(
+            [sys.executable, *argv], cwd=str(tmp_path), env=env, capture_output=True, text=True, timeout=120
+        )
 
     first = run(str(script))
     assert "RUN inner" in first.stderr and "RUN outer" in first.stderr
@@ -631,7 +651,8 @@ def test_the_debug_line_format_matches_the_guide(tmp_path):
     import textwrap
 
     script = tmp_path / "model.py"
-    script.write_text(textwrap.dedent("""
+    script.write_text(
+        textwrap.dedent("""
         import cash
 
         @cash.cache(assume_safe=True)
@@ -640,11 +661,14 @@ def test_the_debug_line_format_matches_the_guide(tmp_path):
 
         build_grid(3)
         build_grid(3)
-    """), encoding="utf-8")
+    """),
+        encoding="utf-8",
+    )
     env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
     env.update(CASH_DEBUG="1", CASH_CACHE_DIR=str(tmp_path / ".cash"))
-    err = subprocess.run([sys.executable, str(script)], cwd=str(tmp_path), env=env,
-                         capture_output=True, text=True, timeout=120).stderr
+    err = subprocess.run(
+        [sys.executable, str(script)], cwd=str(tmp_path), env=env, capture_output=True, text=True, timeout=120
+    ).stderr
     lines = [line for line in err.splitlines() if line.startswith("cash.calls:")]
     assert re.match(r"cash\.calls: MISS model\.build_grid  \[[0-9a-f]{12}\]  no entry yet", lines[0]), lines
     assert re.match(r"cash\.calls: HIT  model\.build_grid  \[[0-9a-f]{12}\]  \(saved ", lines[1]), lines

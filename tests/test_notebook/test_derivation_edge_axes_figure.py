@@ -6,6 +6,7 @@ file dependencies). With those gone, nothing linked ``ax.bar(names, totals)``
 to ``fig``, and editing ``totals`` left the old chart on disk -- the
 ``ax -> fig`` derivation edge is that dependency.
 """
+
 import pytest
 
 from cash.notebook.statement.derivation_edges import (
@@ -28,8 +29,9 @@ def test_an_axes_bumps_its_named_figure():
         assert edges == {"ax": {"fig"}}
 
         lineage = {"fig": "f0", "ax": "a1"}
-        bumped = bump_derived_lineages(edges, lineage, {"ax"}, {"ax", "totals"},
-                                       record=lineage.__setitem__, present=lambda _: True)
+        bumped = bump_derived_lineages(
+            edges, lineage, {"ax"}, {"ax", "totals"}, record=lineage.__setitem__, present=lambda _: True
+        )
         assert bumped == {"fig"} and lineage["fig"] != "f0"
     finally:
         plt.close(fig)

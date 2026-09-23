@@ -10,6 +10,7 @@ output carried the SAME lineage hash as the old one - and the downstream
 returned a stale wrong answer. The lineage hash now folds in a fingerprint of
 the files the producer read.
 """
+
 from __future__ import annotations
 
 import time
@@ -39,7 +40,7 @@ def test_downstream_recomputes_after_upstream_file_change(tmp_path):
     assert summarize(load(str(csv))) == 6
 
     time.sleep(0.02)
-    pd.DataFrame({"v": [10, 20, 30]}).to_csv(csv, index=False)   # upstream file changed
+    pd.DataFrame({"v": [10, 20, 30]}).to_csv(csv, index=False)  # upstream file changed
 
     # load recomputes (file dep); summarize must see the NEW data, not stale 6.
     result = summarize(load(str(csv)))
@@ -66,11 +67,11 @@ def test_lineage_survives_disk_restore(tmp_path):
         calls["n"] += 1
         return int(df["v"].sum())
 
-    d1 = load(5)                       # freshly computed
+    d1 = load(5)  # freshly computed
     assert hasattr(d1, "_cash_lineage_hash")
     total(d1)
 
-    d2 = load(5)                       # restored from disk
+    d2 = load(5)  # restored from disk
     assert hasattr(d2, "_cash_lineage_hash"), "lineage hash lost on disk restore"
     total(d2)
 
@@ -82,6 +83,7 @@ def test_lineage_short_circuit_still_hits_in_memory(tmp_path):
     with no file dependency."""
     pd = pytest.importorskip("pandas")
     from cash import InMemoryBackend
+
     c = Cash(backend=InMemoryBackend())
 
     @c.cache
@@ -97,5 +99,5 @@ def test_lineage_short_circuit_still_hits_in_memory(tmp_path):
 
     df = gen(5)
     total(df)
-    total(df)                      # same in-memory object -> lineage hit
+    total(df)  # same in-memory object -> lineage hit
     assert calls["n"] == 1

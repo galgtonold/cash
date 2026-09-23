@@ -31,6 +31,7 @@ discriminating value AND that neither of the two ways this fix could go wrong
 (losing reorder-reuse, or losing per-iteration reuse within one statement) has
 happened.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.loops]
@@ -95,13 +96,8 @@ def test_two_statements_same_call_text_get_independent_call_caches(nb_runner, tm
     nb_runner.run_all()
 
     assert "FIRST [('a', 1), ('b', 2), ('c', 3)]" in nb_runner.get_output(2)
-    assert "SECOND [('a', 4), ('b', 5), ('c', 6)]" in nb_runner.get_output(3), (
-        nb_runner.get_output(3)
-    )
-    assert _n(log) == 6, (
-        f"expected 6 real fetch_next() executions (3 per loop, no cross-loop "
-        f"sharing), got {_n(log)}"
-    )
+    assert "SECOND [('a', 4), ('b', 5), ('c', 6)]" in nb_runner.get_output(3), nb_runner.get_output(3)
+    assert _n(log) == 6, f"expected 6 real fetch_next() executions (3 per loop, no cross-loop sharing), got {_n(log)}"
 
 
 def test_reorder_within_one_statement_still_reuses_cached_calls(nb_runner, tmp_path):
@@ -201,21 +197,19 @@ def test_reorder_re_runs_a_stateful_callee_and_matches_the_oracle(nb_runner, tmp
         "    vals[step] = fetch_next(conn)\n"
         "print('OUT', sorted(vals.items()))\n"
     )
-    nb_runner.create_notebook([_defs(log), loop_code.format(order=['a', 'b', 'c'])])
+    nb_runner.create_notebook([_defs(log), loop_code.format(order=["a", "b", "c"])])
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "OUT [('a', 1), ('b', 2), ('c', 3)]" in nb_runner.get_output(2)
 
     before = _n(log)
-    nb_runner.set_cell_source(2, loop_code.format(order=['c', 'b', 'a']))
+    nb_runner.set_cell_source(2, loop_code.format(order=["c", "b", "a"]))
     nb_runner.run_cell(2)
     assert _n(log) - before == 3, (
-        f"a reorder must re-run a callee whose value depends on call order; "
-        f"got {_n(log) - before} new calls"
+        f"a reorder must re-run a callee whose value depends on call order; got {_n(log) - before} new calls"
     )
     assert "OUT [('a', 3), ('b', 2), ('c', 1)]" in nb_runner.get_output(2), (
-        "the reordered values do not match a clean top-to-bottom run of the "
-        "edited source"
+        "the reordered values do not match a clean top-to-bottom run of the edited source"
     )
 
 

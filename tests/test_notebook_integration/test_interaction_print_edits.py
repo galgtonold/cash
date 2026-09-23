@@ -14,10 +14,12 @@ class TestPrintFormatEdits:
 
     def test_edit_print_format_style(self, nb_runner):
         """Change from f-string to format()."""
-        nb_runner.create_notebook([
-            "x = 42\ny = 3.14",
-            "print(f'x={x}, y={y}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 42\ny = 3.14",
+                "print(f'x={x}, y={y}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "x=42, y=3.14" in nb_runner.get_output(2)
@@ -28,18 +30,18 @@ class TestPrintFormatEdits:
 
     def test_add_more_prints(self, nb_runner):
         """Add additional print statements."""
-        nb_runner.create_notebook([
-            "a = 1\nb = 2\nc = 3",
-            "print(f'a = {a}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 1\nb = 2\nc = 3",
+                "print(f'a = {a}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "a = 1" in nb_runner.get_output(2)
 
         # Add more prints
-        nb_runner.set_cell_source(
-            2, "print(f'a = {a}')\nprint(f'b = {b}')\nprint(f'c = {c}')"
-        )
+        nb_runner.set_cell_source(2, "print(f'a = {a}')\nprint(f'b = {b}')\nprint(f'c = {c}')")
         nb_runner.run_all()
         output = nb_runner.get_output(2)
         assert "a = 1" in output
@@ -48,10 +50,12 @@ class TestPrintFormatEdits:
 
     def test_change_output_variable(self, nb_runner):
         """Change which variable is printed."""
-        nb_runner.create_notebook([
-            "first = 'hello'\nsecond = 'world'",
-            "print(first)",
-        ])
+        nb_runner.create_notebook(
+            [
+                "first = 'hello'\nsecond = 'world'",
+                "print(first)",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "hello" in nb_runner.get_output(2)
@@ -66,10 +70,12 @@ class TestOutputCollectionEdits:
 
     def test_list_to_table_format(self, nb_runner):
         """Change from list output to table-like format."""
-        nb_runner.create_notebook([
-            "data = [('A', 1), ('B', 2), ('C', 3)]",
-            "for name, val in data:\n    print(f'{name}: {val}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = [('A', 1), ('B', 2), ('C', 3)]",
+                "for name, val in data:\n    print(f'{name}: {val}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         output = nb_runner.get_output(2)
@@ -88,10 +94,12 @@ class TestOutputCollectionEdits:
 
     def test_json_output_edit(self, nb_runner):
         """Change between JSON and plain output."""
-        nb_runner.create_notebook([
-            "import json\nresult = {'status': 'ok', 'count': 42}",
-            "print(json.dumps(result))",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import json\nresult = {'status': 'ok', 'count': 42}",
+                "print(json.dumps(result))",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         output = nb_runner.get_output(2)

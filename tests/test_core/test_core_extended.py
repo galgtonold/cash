@@ -1,9 +1,11 @@
 """Tests for the Cash class and decorator-based caching (core.py)."""
+
 import time
-from unittest.mock import patch, MagicMock
-from cash.core import Cash
-from cash.backends import InMemoryBackend, CascadingBackend
+from unittest.mock import MagicMock, patch
+
+from cash.backends import CascadingBackend, InMemoryBackend
 from cash.backends.tiered_backend import TieredBackend
+from cash.core import Cash
 from cash.data_source import FileDataSource
 
 
@@ -12,7 +14,7 @@ class TestCashInit:
 
     def test_default_init(self, tmp_path):
         """Cash() creates a default TieredBackend with .cash directory."""
-        with patch('cash.core.get_config') as mock_config:
+        with patch("cash.core.get_config") as mock_config:
             mock_config.return_value = MagicMock(
                 cache_dir=str(tmp_path / ".cash"),
                 compress=False,
@@ -69,7 +71,7 @@ class TestCashInit:
 
     def test_init_with_smart_persistence(self, tmp_path):
         """Cash with smart_persistence creates TieredBackend with policy."""
-        with patch('cash.core.get_config') as mock_config:
+        with patch("cash.core.get_config") as mock_config:
             mock_config.return_value = MagicMock(
                 cache_dir=str(tmp_path / ".cash"),
                 compress=False,
@@ -92,7 +94,7 @@ class TestCashInit:
         corrected rule mirrors the statement processor's Gate A:
         ``promote iff execution_time - est_restore > min_savings · execution_time``.
         """
-        with patch('cash.core.get_config') as mock_config:
+        with patch("cash.core.get_config") as mock_config:
             mock_config.return_value = MagicMock(
                 cache_dir=str(tmp_path / ".cash"),
                 compress=False,
@@ -132,8 +134,8 @@ class TestCashInit:
             # Genuine refuse: a 1 GB result computed in only 0.5 s. Predicted
             # restore (~2.1 s) is slower than recomputing, so rehydrating would
             # cost more than it saves — keep it RAM-only.
-            assert policy(0.5, 1024 ** 3) is False
-            assert policy(1.0, 1024 ** 3) is False
+            assert policy(0.5, 1024**3) is False
+            assert policy(1.0, 1024**3) is False
 
     def test_repr(self):
         """Cash repr includes backend and function count."""
@@ -441,5 +443,5 @@ class TestCashRegisterMagic:
         """register_magic() handles missing IPython gracefully."""
         c = Cash(backend=InMemoryBackend(), register_magic=False)
         # Should not raise even if IPython is not available
-        with patch('cash.core.get_ipython', return_value=None, create=True):
+        with patch("cash.core.get_ipython", return_value=None, create=True):
             c.register_magic()

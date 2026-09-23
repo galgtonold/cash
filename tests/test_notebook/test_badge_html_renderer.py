@@ -87,26 +87,30 @@ def test_normal_summaries_are_unchanged_by_the_empty_state() -> None:
     Without this, making the empty case non-EXECUTED could equally have been
     achieved by breaking the EXECUTED path outright.
     """
-    metrics = [{
-        "code": "y = expensive()",
-        "status": str(CacheStatus.COMPUTED),
-        "total_time": 1.23,
-        "evaluated_vars": ["y"],
-    }]
+    metrics = [
+        {
+            "code": "y = expensive()",
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 1.23,
+            "evaluated_vars": ["y"],
+        }
+    ]
     html = render_html(build_interactive_badge(metrics))
     assert "EXECUTED" in html
     assert "BYPASSED" not in html
 
 
 def test_restored_row_uses_cached_kind_and_saved_time() -> None:
-    metrics = [{
-        "code": "x = 1",
-        "status": str(CacheStatus.RESTORED),
-        "total_time": 0.001,
-        "saved_time": 0.5,
-        "source": "RAM",
-        "restored_vars": ["x"],
-    }]
+    metrics = [
+        {
+            "code": "x = 1",
+            "status": str(CacheStatus.RESTORED),
+            "total_time": 0.001,
+            "saved_time": 0.5,
+            "source": "RAM",
+            "restored_vars": ["x"],
+        }
+    ]
     html = render_html(build_interactive_badge(metrics))
     assert 'data-kind="cached"' in html
     assert "CACHED" in html
@@ -115,13 +119,15 @@ def test_restored_row_uses_cached_kind_and_saved_time() -> None:
 
 
 def test_computed_row_uses_exec_kind_and_renders_tier_dots() -> None:
-    metrics = [{
-        "code": "y = expensive()",
-        "status": str(CacheStatus.COMPUTED),
-        "total_time": 1.23,
-        "evaluated_vars": ["y"],
-        "storage": ["RAM", "DISK"],
-    }]
+    metrics = [
+        {
+            "code": "y = expensive()",
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 1.23,
+            "evaluated_vars": ["y"],
+            "storage": ["RAM", "DISK"],
+        }
+    ]
     html = render_html(build_interactive_badge(metrics))
     assert 'data-kind="exec"' in html
     assert "EXECUTED" in html
@@ -134,12 +140,14 @@ def test_computed_row_uses_exec_kind_and_renders_tier_dots() -> None:
 
 
 def test_uncacheable_row_renders_blocked_dots() -> None:
-    metrics = [{
-        "code": "print('x')",
-        "status": str(CacheStatus.COMPUTED),
-        "total_time": 0.1,
-        "uncacheable_reasons": ["Side effect: print() (io)"],
-    }]
+    metrics = [
+        {
+            "code": "print('x')",
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 0.1,
+            "uncacheable_reasons": ["Side effect: print() (io)"],
+        }
+    ]
     html = render_html(build_interactive_badge(metrics))
     assert "c3-dot-blocked" in html
     assert "c3-dots-warn" in html
@@ -155,14 +163,17 @@ def test_for_loop_with_multiple_body_stmts_emits_one_header_row() -> None:
     metrics = []
     for body_id, code in enumerate(["a = 1", "b = 2", "c = 3", "d = 4", "e = 5"]):
         for x in ("TSLA", "AAPL", "MSFT", "GOOG"):
-            metrics.append({
-                "code": f"# __iteration_context__: {body_id}_{x}\n{code}",
-                "status": str(CacheStatus.COMPUTED),
-                "total_time": 0.01,
-                "loop_vars": {"x": x},
-            })
+            metrics.append(
+                {
+                    "code": f"# __iteration_context__: {body_id}_{x}\n{code}",
+                    "status": str(CacheStatus.COMPUTED),
+                    "total_time": 0.01,
+                    "loop_vars": {"x": x},
+                }
+            )
     html = render_html(build_interactive_badge(metrics))
     import re
+
     head_rows = re.findall(r'class="c3-row c3-loop-head"', html)
     body_rows = re.findall(r'class="c3-rowx c3-loop-body"', html)
     assert len(head_rows) == 1, f"want 1 head row, got {len(head_rows)}"
@@ -173,12 +184,18 @@ def test_for_loop_with_multiple_body_stmts_emits_one_header_row() -> None:
 
 def test_loop_iterations_render_as_collapsible_details_with_histogram() -> None:
     metrics = [
-        {"code": "# __iteration_context__:loop1\ny = x*2",
-         "status": str(CacheStatus.COMPUTED), "total_time": 0.01,
-         "loop_vars": {"x": 1}},
-        {"code": "# __iteration_context__:loop1\ny = x*2",
-         "status": str(CacheStatus.COMPUTED), "total_time": 0.02,
-         "loop_vars": {"x": 2}},
+        {
+            "code": "# __iteration_context__:loop1\ny = x*2",
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 0.01,
+            "loop_vars": {"x": 1},
+        },
+        {
+            "code": "# __iteration_context__:loop1\ny = x*2",
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 0.02,
+            "loop_vars": {"x": 2},
+        },
     ]
     html = render_html(build_interactive_badge(metrics))
     assert "c3-loop-head" in html
@@ -194,10 +211,8 @@ def test_loop_iterations_render_as_collapsible_details_with_histogram() -> None:
 
 def test_skipped_bucket_renders_as_collapsible_with_count_and_saved() -> None:
     metrics = [
-        {"code": "step1", "status": str(CacheStatus.SKIPPED),
-         "is_upstream": True, "saved_time": 0.3},
-        {"code": "step2", "status": str(CacheStatus.SKIPPED),
-         "is_upstream": True, "saved_time": 0.2},
+        {"code": "step1", "status": str(CacheStatus.SKIPPED), "is_upstream": True, "saved_time": 0.3},
+        {"code": "step2", "status": str(CacheStatus.SKIPPED), "is_upstream": True, "saved_time": 0.2},
     ]
     html = render_html(build_interactive_badge(metrics))
     assert "c3-skipped" in html
@@ -216,8 +231,13 @@ def test_upstream_rails_softened_by_section_cascade() -> None:
     stylesheet, not on each ``StatementRow``.
     """
     metrics = [
-        {"code": "setup()", "status": str(CacheStatus.RESTORED),
-         "is_upstream": True, "saved_time": 0.3, "total_time": 0.0},
+        {
+            "code": "setup()",
+            "status": str(CacheStatus.RESTORED),
+            "is_upstream": True,
+            "saved_time": 0.3,
+            "total_time": 0.0,
+        },
         {"code": "current()", "status": str(CacheStatus.COMPUTED), "total_time": 0.2},
     ]
     html = render_html(build_interactive_badge(metrics))
@@ -228,13 +248,17 @@ def test_upstream_rails_softened_by_section_cascade() -> None:
 
 
 def test_decorator_section_renders_with_cache_tag() -> None:
-    metrics = [{
-        "code": "f()", "status": str(CacheStatus.COMPUTED), "total_time": 0.1,
-        "decorator_calls": [
-            {"func_name": "myf", "cache_hit": True, "execution_time": 0.001},
-            {"func_name": "myf", "cache_hit": False, "execution_time": 0.05},
-        ],
-    }]
+    metrics = [
+        {
+            "code": "f()",
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 0.1,
+            "decorator_calls": [
+                {"func_name": "myf", "cache_hit": True, "execution_time": 0.001},
+                {"func_name": "myf", "cache_hit": False, "execution_time": 0.05},
+            ],
+        }
+    ]
     html = render_html(build_interactive_badge(metrics))
     assert "c3-cache-tag" in html
     assert "DECORATOR CACHE" in html
@@ -244,8 +268,7 @@ def test_decorator_section_renders_with_cache_tag() -> None:
 
 def test_condensed_decorator_group_renders_breakdown_strip() -> None:
     calls = [{"func_name": "f", "cache_hit": True, "execution_time": 0.001} for _ in range(4)]
-    metrics = [{"code": "loop", "status": str(CacheStatus.COMPUTED), "total_time": 0.1,
-                "decorator_calls": calls}]
+    metrics = [{"code": "loop", "status": str(CacheStatus.COMPUTED), "total_time": 0.1, "decorator_calls": calls}]
     html = render_html(build_interactive_badge(metrics))
     # Condensed decorator group reuses the c3-loop-body <details> shell
     # so the same summary-toggle CSS applies.
@@ -264,12 +287,14 @@ def test_footer_always_renders_bug_report_link() -> None:
 def test_overhead_renders_as_single_collapsed_row() -> None:
     """All sub-categories collapse into one row instead of N near-zero rows."""
     metrics = [{"code": "x=1", "status": str(CacheStatus.COMPUTED), "total_time": 1.0}]
-    html = render_html(build_interactive_badge(
-        metrics,
-        timing_breakdown={"badge_init": 0.05, "upstream_check": 0.02},
-        cell_total_time=1.1,
-    ))
-    body = html.split("</style>", 1)[1]   # strip <style> block (has the word 'OVERHEAD' in a comment)
+    html = render_html(
+        build_interactive_badge(
+            metrics,
+            timing_breakdown={"badge_init": 0.05, "upstream_check": 0.02},
+            cell_total_time=1.1,
+        )
+    )
+    body = html.split("</style>", 1)[1]  # strip <style> block (has the word 'OVERHEAD' in a comment)
     # Exactly one overhead row.
     assert body.count('class="c3-row c3-ovh"') == 1
     # Lowercase 'overhead' label, no shouting OVERHEAD banner.
@@ -285,26 +310,35 @@ def test_overhead_renders_as_single_collapsed_row() -> None:
 
 
 def test_running_state_summary_when_step_info_provided() -> None:
-    html = render_html(build_interactive_badge(
-        [], status="RUNNING", current_step=2, total_steps=5, current_code="z = slow()",
-    ))
+    html = render_html(
+        build_interactive_badge(
+            [],
+            status="RUNNING",
+            current_step=2,
+            total_steps=5,
+            current_code="z = slow()",
+        )
+    )
     assert "PROCESSING" in html
     assert "(2/5)" in html
 
 
 def test_syntax_highlighting_wraps_keywords() -> None:
-    metrics = [{"code": "for i in range(10):", "status": str(CacheStatus.COMPUTED),
-                "total_time": 0.1}]
+    metrics = [{"code": "for i in range(10):", "status": str(CacheStatus.COMPUTED), "total_time": 0.1}]
     html = render_html(build_interactive_badge(metrics))
     assert 'class="c3-kw"' in html  # for, in are keywords
     assert 'class="c3-num"' in html  # 10 is a number
 
 
 def test_function_changed_renders_as_notification_row() -> None:
-    metrics = [{
-        "code": "x = compute()", "status": "FUNCTION_CHANGED",
-        "is_upstream": True, "changed_functions": ["compute"],
-    }]
+    metrics = [
+        {
+            "code": "x = compute()",
+            "status": "FUNCTION_CHANGED",
+            "is_upstream": True,
+            "changed_functions": ["compute"],
+        }
+    ]
     html = render_html(build_interactive_badge(metrics))
     assert "c3-notif-pill" in html
     assert "changed" in html
@@ -315,16 +349,15 @@ def test_skipped_row_does_not_claim_storage() -> None:
     """SKIPPED ('not re-run') rows must not show a filled RAM dot — the
     value was never produced this run, so claiming it lives in RAM is a lie."""
     metrics = [
-        {"code": "step1()", "status": str(CacheStatus.SKIPPED), "is_upstream": True,
-         "saved_time": 0.3},
+        {"code": "step1()", "status": str(CacheStatus.SKIPPED), "is_upstream": True, "saved_time": 0.3},
         {"code": "current()", "status": str(CacheStatus.COMPUTED), "total_time": 0.1},
     ]
     html = render_html(build_interactive_badge(metrics))
     body = html.split("</style>", 1)[1]
     # The skipped row's dots cell renders both dots as empty.
-    skip_row = body[body.find("step1()"):body.find("step1()") + 800]
-    assert 'c3-dot-solid' not in skip_row
-    assert 'c3-dot-empty' in skip_row
+    skip_row = body[body.find("step1()") : body.find("step1()") + 800]
+    assert "c3-dot-solid" not in skip_row
+    assert "c3-dot-empty" in skip_row
 
 
 def test_loop_head_carries_aggregate_drawer_and_body_uses_per_iter_drill() -> None:
@@ -333,22 +366,28 @@ def test_loop_head_carries_aggregate_drawer_and_body_uses_per_iter_drill() -> No
     (above it). Below threshold (2 iters), the body row uses the
     per-iter table rather than the summary drawer."""
     metrics = [
-        {"code": "# __iteration_context__: a\ny = x*2",
-         "status": str(CacheStatus.COMPUTED), "total_time": 0.05,
-         "loop_vars": {"x": 1}},
-        {"code": "# __iteration_context__: b\ny = x*2",
-         "status": str(CacheStatus.COMPUTED), "total_time": 0.07,
-         "loop_vars": {"x": 2}},
+        {
+            "code": "# __iteration_context__: a\ny = x*2",
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 0.05,
+            "loop_vars": {"x": 1},
+        },
+        {
+            "code": "# __iteration_context__: b\ny = x*2",
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 0.07,
+            "loop_vars": {"x": 2},
+        },
     ]
     html = render_html(build_interactive_badge(metrics))
     body = html.split("</style>", 1)[1]
     # Head row: condensed-summary drawer with counts.
-    head_block = body[body.find("c3-loop-head"):body.find("c3-loop-body")]
+    head_block = body[body.find("c3-loop-head") : body.find("c3-loop-body")]
     assert "c3-rowtip" in head_block
     assert "Iterations" in head_block
     # Body row (below the iter threshold): per-iter drill-down table, not
     # a c3-rowtip summary.
-    body_block = body[body.find("c3-loop-body"):]
+    body_block = body[body.find("c3-loop-body") :]
     assert "c3-iter-table" in body_block
     assert "c3-iter-row" in body_block
 
@@ -359,14 +398,17 @@ def test_loop_body_with_many_iterations_caps_drilldown() -> None:
     to a totally different "condensed counts" drawer (which lost the
     per-iter view entirely)."""
     metrics = [
-        {"code": f"# __iteration_context__: {i}\ny = x*2",
-         "status": str(CacheStatus.COMPUTED), "total_time": 0.01,
-         "loop_vars": {"x": i}}
+        {
+            "code": f"# __iteration_context__: {i}\ny = x*2",
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 0.01,
+            "loop_vars": {"x": i},
+        }
         for i in range(40)
     ]
     html = render_html(build_interactive_badge(metrics))
     body = html.split("</style>", 1)[1]
-    body_block = body[body.find("c3-loop-body"):]
+    body_block = body[body.find("c3-loop-body") :]
     # Drilldown table is still present — capped, not replaced.
     assert "c3-iter-table" in body_block
     assert "c3-iter-more" in body_block
@@ -382,8 +424,15 @@ def test_rows_use_checkbox_hack_for_click_to_expand_no_js() -> None:
     checkbox-hack: hidden <input type=checkbox> + <label for=id> + CSS
     sibling combinators (:checked ~ .c3-rowtip). Works since IE9.
     """
-    metrics = [{"code": "y = expensive()", "status": str(CacheStatus.COMPUTED),
-                "total_time": 1.0, "evaluated_vars": ["y"], "storage": ["RAM"]}]
+    metrics = [
+        {
+            "code": "y = expensive()",
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 1.0,
+            "evaluated_vars": ["y"],
+            "storage": ["RAM"],
+        }
+    ]
     html = render_html(build_interactive_badge(metrics))
 
     # No JS at all.
@@ -410,16 +459,18 @@ def test_scoped_scrollbar_styling_present() -> None:
 
 def test_each_row_has_pure_css_hover_tooltip() -> None:
     """Tooltip is a sibling div inside .c3-row, revealed via :hover CSS."""
-    metrics = [{
-        "code": "y = expensive()",
-        "status": str(CacheStatus.COMPUTED),
-        "total_time": 1.0,
-        "evaluated_vars": ["y"],
-        "storage": ["RAM"],
-    }]
+    metrics = [
+        {
+            "code": "y = expensive()",
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 1.0,
+            "evaluated_vars": ["y"],
+            "storage": ["RAM"],
+        }
+    ]
     html = render_html(build_interactive_badge(metrics))
     assert "c3-rowtip" in html
-    assert "<dt>Produced</dt>" in html        # vars surface in the drawer
+    assert "<dt>Produced</dt>" in html  # vars surface in the drawer
     assert "<dt>Storage</dt>" in html
 
 
@@ -430,12 +481,15 @@ def test_overhead_bars_share_cell_max_scale_with_user_rows() -> None:
     bar; if overhead had its own scale it'd be misleadingly full-width.
     """
     metrics = [{"code": "x=1", "status": str(CacheStatus.COMPUTED), "total_time": 5.0}]
-    html = render_html(build_interactive_badge(
-        metrics,
-        timing_breakdown={"badge_init": 0.05, "upstream_check": 0.02},
-        cell_total_time=5.1,
-    ))
+    html = render_html(
+        build_interactive_badge(
+            metrics,
+            timing_breakdown={"badge_init": 0.05, "upstream_check": 0.02},
+            cell_total_time=5.1,
+        )
+    )
     import re
+
     widths = [float(w) for w in re.findall(r"c3-tbar-fill[^>]*width:([0-9.]+)%", html)]
     # The 5.0s statement should be the widest bar; overhead bars are well below.
     assert max(widths) >= 99.0
@@ -453,6 +507,7 @@ def test_sqrt_scaling_keeps_small_rows_visible() -> None:
     ]
     html = render_html(build_interactive_badge(metrics))
     import re
+
     widths = [float(w) for w in re.findall(r"c3-tbar-fill[^>]*width:([0-9.]+)%", html)]
     widths.sort()
     # 0.5/100 = 0.5% linear, but sqrt(0.005)*100 = ~7% — visible.
@@ -470,8 +525,7 @@ def test_bug_report_link_uses_important_to_beat_jupyter_anchor_style() -> None:
 def test_summary_includes_sparkline_when_current_rows_exist() -> None:
     metrics = [
         {"code": "a=1", "status": str(CacheStatus.COMPUTED), "total_time": 0.1},
-        {"code": "b=2", "status": str(CacheStatus.RESTORED), "total_time": 0.001,
-         "saved_time": 0.5},
+        {"code": "b=2", "status": str(CacheStatus.RESTORED), "total_time": 0.001, "saved_time": 0.5},
     ]
     html = render_html(build_interactive_badge(metrics))
     assert "c3-summary-spark" in html
@@ -488,18 +542,26 @@ def test_rng_pill_shares_the_code_grid_cell_not_a_sixth_column():
     (visible on an ``UNSEEDED`` draw). The pill is folded into a flex box with
     the code (``c3-codepill``) so the row keeps exactly five grid items.
     """
-    html = render_html(build_interactive_badge([{
-        "code": "x = np.random.rand(200_000_000)",
-        "status": "COMPUTED", "total_time": 0.29,
-        "random_effect": "draw", "random_unseeded": True,
-        "evaluated_vars": ["x"],
-    }]))
+    html = render_html(
+        build_interactive_badge(
+            [
+                {
+                    "code": "x = np.random.rand(200_000_000)",
+                    "status": "COMPUTED",
+                    "total_time": 0.29,
+                    "random_effect": "draw",
+                    "random_unseeded": True,
+                    "evaluated_vars": ["x"],
+                }
+            ]
+        )
+    )
     body = html.split("</style>", 1)[1]  # ignore the .c3-codepill CSS rule
     assert "c3-rng-warn" in body, "expected the unseeded pill to render"
     # The pill sits INSIDE the code+pill flex cell, before the dots cell — i.e.
     # it is not a bare grid child that would push the chip to a new line.
     i = body.index('<div class="c3-codepill">')
-    segment = body[i:body.index("c3-dots-cell", i)]
+    segment = body[i : body.index("c3-dots-cell", i)]
     assert "c3-rng-pill" in segment, "the pill must live inside .c3-codepill with the code"
 
 
@@ -507,9 +569,17 @@ def test_row_without_rng_pill_has_no_codepill_wrapper():
     """Rows with no RNG role keep the code as the grid cell directly — the
     wrapper is added only when a pill is present, so ordinary rows are untouched.
     """
-    html = render_html(build_interactive_badge([{
-        "code": "y = 1", "status": "COMPUTED", "total_time": 0.0,
-    }]))
+    html = render_html(
+        build_interactive_badge(
+            [
+                {
+                    "code": "y = 1",
+                    "status": "COMPUTED",
+                    "total_time": 0.0,
+                }
+            ]
+        )
+    )
     body = html.split("</style>", 1)[1]  # ignore the .c3-codepill CSS rule
     assert '<div class="c3-codepill">' not in body
 
@@ -526,6 +596,7 @@ def _visible_text(fragment: str) -> str:
     """
     import re
     from html import unescape
+
     return unescape(re.sub(r"<[^>]+>", "", fragment))
 
 
@@ -542,13 +613,15 @@ def test_a_multiline_statement_renders_across_lines() -> None:
     The visible text of the code cell must equal the display source
     EXACTLY, embedded newlines included -- not a first-line-only summary.
     """
-    display = 'x = (\n    a\n    + 1\n)'
-    metrics = [{
-        "code": "x = a + 1",
-        "display_code": display,
-        "status": str(CacheStatus.COMPUTED),
-        "total_time": 0.5,
-    }]
+    display = "x = (\n    a\n    + 1\n)"
+    metrics = [
+        {
+            "code": "x = a + 1",
+            "display_code": display,
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 0.5,
+        }
+    ]
     html = render_html(build_interactive_badge(metrics))
     text = _code_cell_text(html)
     assert text == display, (
@@ -576,18 +649,18 @@ def test_a_row_without_display_code_is_unchanged() -> None:
     diverge, so it is the arm that actually controls for something.
     """
     for code in ("x = a + 1", "total = (\n    a\n    + b\n)"):
-        metrics = [{
-            "code": code,
-            "status": str(CacheStatus.COMPUTED),
-            "total_time": 0.5,
-        }]
+        metrics = [
+            {
+                "code": code,
+                "status": str(CacheStatus.COMPUTED),
+                "total_time": 0.5,
+            }
+        ]
         html = render_html(build_interactive_badge(metrics))
         start = html.index('<pre class="c3-code">')
         end = html.index("</pre>", start) + len("</pre>")
         block = html[start:end]
-        assert block == f'<pre class="c3-code">{_code_html(code)}</pre>', (
-            f"regressed for code={code!r}"
-        )
+        assert block == f'<pre class="c3-code">{_code_html(code)}</pre>', f"regressed for code={code!r}"
 
 
 def test_a_top_level_def_still_renders_clipped_to_one_line() -> None:
@@ -618,12 +691,14 @@ def test_a_top_level_def_still_renders_clipped_to_one_line() -> None:
         "if this fires, the regression is in _statement_source, not here"
     )
 
-    metrics = [{
-        "code": code,
-        "display_code": display_code,
-        "status": str(CacheStatus.COMPUTED),
-        "total_time": 0.02,
-    }]
+    metrics = [
+        {
+            "code": code,
+            "display_code": display_code,
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 0.02,
+        }
+    ]
     html = render_html(build_interactive_badge(metrics))
     text = _code_cell_text(html)
     assert "\n" not in text, f"a def row must stay collapsed to one line; got {text!r}"
@@ -649,13 +724,7 @@ def test_a_top_level_match_statement_renders_across_lines() -> None:
 
     from cash.notebook.ipython.cell_executor import _statement_source
 
-    cell = (
-        'match command:\n'
-        '    case "go":\n'
-        '        result = 1\n'
-        '    case _:\n'
-        '        result = 0\n'
-    )
+    cell = 'match command:\n    case "go":\n        result = 1\n    case _:\n        result = 0\n'
     node = ast.parse(cell).body[0]
     code = ast.unparse(node)
     display_code = _statement_source(cell, node)
@@ -664,17 +733,17 @@ def test_a_top_level_match_statement_renders_across_lines() -> None:
         "match -- if this fires, someone added ast.Match to the exclusion"
     )
 
-    metrics = [{
-        "code": code,
-        "display_code": display_code,
-        "status": str(CacheStatus.COMPUTED),
-        "total_time": 0.03,
-    }]
+    metrics = [
+        {
+            "code": code,
+            "display_code": display_code,
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 0.03,
+        }
+    ]
     html = render_html(build_interactive_badge(metrics))
     text = _code_cell_text(html)
-    assert text == display_code, (
-        f"a match row must render its full source, not a summary; got {text!r}"
-    )
+    assert text == display_code, f"a match row must render its full source, not a summary; got {text!r}"
 
 
 def test_multiline_row_is_stamped_data_multiline_single_line_is_not() -> None:
@@ -684,12 +753,14 @@ def test_multiline_row_is_stamped_data_multiline_single_line_is_not() -> None:
     and a single-line (including every ``display_code=None``) row never
     carries it at all.
     """
-    multiline_metrics = [{
-        "code": "x = a + 1",
-        "display_code": 'x = (\n    a\n    + 1\n)',
-        "status": str(CacheStatus.COMPUTED),
-        "total_time": 0.5,
-    }]
+    multiline_metrics = [
+        {
+            "code": "x = a + 1",
+            "display_code": "x = (\n    a\n    + 1\n)",
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 0.5,
+        }
+    ]
     html = render_html(build_interactive_badge(multiline_metrics))
     # Ignore the <style> block for both checks below: the CSS rule/comment
     # for [data-multiline] legitimately contains this exact string whether
@@ -697,11 +768,13 @@ def test_multiline_row_is_stamped_data_multiline_single_line_is_not() -> None:
     body = html.split("</style>", 1)[1]
     assert 'data-multiline="true"' in body
 
-    single_line_metrics = [{
-        "code": "x = a + 1",
-        "status": str(CacheStatus.COMPUTED),
-        "total_time": 0.5,
-    }]
+    single_line_metrics = [
+        {
+            "code": "x = a + 1",
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 0.5,
+        }
+    ]
     html2 = render_html(build_interactive_badge(single_line_metrics))
     body2 = html2.split("</style>", 1)[1]
     assert "data-multiline" not in body2
@@ -788,8 +861,7 @@ def test_the_row_code_cell_still_ellipsizes_long_lines() -> None:
     block = next((b for b in bare_blocks if "text-overflow:" in b), None)
     assert block is not None, f"no bare .c3-code rule declares text-overflow; rules={bare_blocks}"
     assert "text-overflow:ellipsis" in block, (
-        "the truncation indicator must be declared -- without it a long "
-        "line is hard-cut mid-glyph with no marker"
+        "the truncation indicator must be declared -- without it a long line is hard-cut mid-glyph with no marker"
     )
     assert "overflow:hidden" in block, (
         "overflow:hidden must stay -- it defeats Jupyter's overflow:auto, which "
@@ -801,15 +873,16 @@ def test_the_row_code_cell_still_ellipsizes_long_lines() -> None:
         "PER line, it does not collapse the block to one"
     )
 
-    display = 'x = (\n    a\n    + 1\n)'
-    metrics = [{
-        "code": "x = a + 1",
-        "display_code": display,
-        "status": str(CacheStatus.COMPUTED),
-        "total_time": 0.5,
-    }]
+    display = "x = (\n    a\n    + 1\n)"
+    metrics = [
+        {
+            "code": "x = a + 1",
+            "display_code": display,
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 0.5,
+        }
+    ]
     multiline_html = render_html(build_interactive_badge(metrics))
     assert _code_cell_text(multiline_html) == display, (
-        "restoring text-overflow must not re-collapse a multi-line "
-        "statement onto one line"
+        "restoring text-overflow must not re-collapse a multi-line statement onto one line"
     )

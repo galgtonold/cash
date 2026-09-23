@@ -11,6 +11,7 @@ later tell them something important.
 
 The bar: one short line per statement, the full explanation once per cell.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -32,8 +33,12 @@ _PARAGRAPH_MARKER = "Perpetual cache miss"
 
 def _guarded_metrics(n):
     return [
-        {'status': 'COMPUTED', 'code': f'df_{i} = transform(df_{i})',
-         'execution_time': 0.12, 'skipped_reason': GUARD_SKIP_REASON}
+        {
+            "status": "COMPUTED",
+            "code": f"df_{i} = transform(df_{i})",
+            "execution_time": 0.12,
+            "skipped_reason": GUARD_SKIP_REASON,
+        }
         for i in range(n)
     ]
 
@@ -46,19 +51,17 @@ def test_the_paragraph_is_not_repeated_per_statement():
     """The reported bug: 7 statements produced 7 copies of the paragraph."""
     out = _render(7)
 
-    assert out.count(_PARAGRAPH_MARKER) == 0, (
-        "the guard's 46-word paragraph is still being printed inline"
-    )
+    assert out.count(_PARAGRAPH_MARKER) == 0, "the guard's 46-word paragraph is still being printed inline"
 
 
 def test_each_guarded_row_still_says_it_was_not_cached_and_why():
     """Quieter must not mean silent - the row keeps its verdict and reason."""
     out = _render(3)
-    rows = [ln for ln in out.splitlines() if 'df_' in ln and 'stopped caching' not in ln]
+    rows = [ln for ln in out.splitlines() if "df_" in ln and "stopped caching" not in ln]
 
     assert len(rows) == 3
     for row in rows:
-        assert 'NOT CACHED' in row
+        assert "NOT CACHED" in row
         assert GUARD_SHORT in row
         # One line per statement, not a paragraph.
         assert len(row) < 100, f"row is still a paragraph: {row!r}"
@@ -67,25 +70,29 @@ def test_each_guarded_row_still_says_it_was_not_cached_and_why():
 def test_the_full_explanation_appears_once_per_cell():
     out = _render(7)
 
-    assert out.count('stopped caching') == 1
-    assert '7 statements stopped caching' in out
+    assert out.count("stopped caching") == 1
+    assert "7 statements stopped caching" in out
     # The two facts the per-row line cannot carry.
-    assert 'still run' in out
-    assert 're-probes' in out
+    assert "still run" in out
+    assert "re-probes" in out
 
 
 def test_singular_wording_for_a_single_statement():
     out = _render(1)
-    assert '1 statement stopped caching' in out
+    assert "1 statement stopped caching" in out
 
 
 def test_no_summary_when_the_guard_did_not_fire():
     """A quiet guard must be silent, not merely brief."""
-    out = render_text(build_interactive_badge([
-        {'status': 'COMPUTED', 'code': 'x = f()', 'execution_time': 0.5},
-    ]))
+    out = render_text(
+        build_interactive_badge(
+            [
+                {"status": "COMPUTED", "code": "x = f()", "execution_time": 0.5},
+            ]
+        )
+    )
 
-    assert 'stopped caching' not in out
+    assert "stopped caching" not in out
     assert GUARD_SHORT not in out
 
 
@@ -113,12 +120,15 @@ def test_other_skip_reasons_are_passed_through_untouched():
     assert shorten_skipped_reason(other) == other
     assert not is_guard_reason(other)
 
-    out = render_text(build_interactive_badge([
-        {'status': 'COMPUTED', 'code': 'big = load()',
-         'execution_time': 1.0, 'skipped_reason': other},
-    ]))
+    out = render_text(
+        build_interactive_badge(
+            [
+                {"status": "COMPUTED", "code": "big = load()", "execution_time": 1.0, "skipped_reason": other},
+            ]
+        )
+    )
     assert other in out
-    assert 'stopped caching' not in out
+    assert "stopped caching" not in out
 
 
 @pytest.mark.parametrize("reason", [None, ""])
@@ -144,13 +154,13 @@ def test_the_summary_names_which_statements():
     no statement named, and none of the rows marked where the tester looked --
     one of their model fits, or something trivial? The summary names them."""
     out = _render(1)
-    summary = out[out.index('stopped caching') - 30:]
-    assert 'df_0 = transform(df_0)' in summary, out
+    summary = out[out.index("stopped caching") - 30 :]
+    assert "df_0 = transform(df_0)" in summary, out
 
 
 def test_the_summary_names_a_few_and_counts_the_rest():
     out = _render(7)
-    summary = out[out.index('stopped caching') - 30:]
-    assert 'df_0 = transform(df_0)' in summary and 'df_2 = transform(df_2)' in summary
-    assert 'df_3 = transform(df_3)' not in summary
-    assert 'and 4 more' in summary, out
+    summary = out[out.index("stopped caching") - 30 :]
+    assert "df_0 = transform(df_0)" in summary and "df_2 = transform(df_2)" in summary
+    assert "df_3 = transform(df_3)" not in summary
+    assert "and 4 more" in summary, out

@@ -13,6 +13,7 @@ cancelled out. Cash already measures that tax (``file_tracker.
 tracking_seconds`` and ``CallUnit.overhead_s``, used for ``compute_cost``);
 the session totals just did not subtract it.
 """
+
 from __future__ import annotations
 
 import json
@@ -62,8 +63,7 @@ def test_the_tax_inside_a_statement_is_overhead(magics_fixture, capsys):
     inside it: 4 s of tax plus the 0.2 s around it, not 0.2 s."""
     magics, _shell, _backend = magics_fixture
     magics._update_session_stats(
-        [{"status": CacheStatus.COMPUTED, "execution_time": 9.8,
-          "cash_tax": 4.0, "code": "m = fit(big)"}],
+        [{"status": CacheStatus.COMPUTED, "execution_time": 9.8, "cash_tax": 4.0, "code": "m = fit(big)"}],
         cell_total_time=10.0,
     )
     data = _stats_json(magics, capsys)
@@ -88,8 +88,7 @@ def test_the_tax_never_makes_compute_negative(magics_fixture, capsys):
     timing) floors at zero rather than crediting cash with negative work."""
     magics, _shell, _backend = magics_fixture
     magics._update_session_stats(
-        [{"status": CacheStatus.COMPUTED, "execution_time": 1.0,
-          "cash_tax": 5.0, "code": "x = f()"}],
+        [{"status": CacheStatus.COMPUTED, "execution_time": 1.0, "cash_tax": 5.0, "code": "x = f()"}],
         cell_total_time=1.2,
     )
     data = _stats_json(magics, capsys)
@@ -103,13 +102,11 @@ def test_a_verified_saving_is_credited_at_the_users_cost(magics_fixture, capsys)
     its own overhead."""
     magics, _shell, _backend = magics_fixture
     magics._update_session_stats(
-        [{"status": CacheStatus.COMPUTED, "execution_time": 9.8,
-          "cash_tax": 4.0, "code": "m = fit(big)"}],
+        [{"status": CacheStatus.COMPUTED, "execution_time": 9.8, "cash_tax": 4.0, "code": "m = fit(big)"}],
         cell_total_time=10.0,
     )
     magics._update_session_stats(
-        [{"status": CacheStatus.RESTORED, "saved_time": 9.8,
-          "execution_time": 0.0, "code": "m = fit(big)"}],
+        [{"status": CacheStatus.RESTORED, "saved_time": 9.8, "execution_time": 0.0, "code": "m = fit(big)"}],
         cell_total_time=0.3,
     )
     data = _stats_json(magics, capsys)

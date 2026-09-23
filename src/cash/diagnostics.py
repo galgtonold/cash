@@ -23,6 +23,7 @@ still gets one code (``CACHE-IDENTITY-COUPLED`` names every kind of
 identity-coupled object). The test for "same code?" is whether one section of
 prose, with one piece of advice, serves every site that emits it.
 """
+
 from __future__ import annotations
 
 import logging
@@ -128,6 +129,7 @@ def _warn_at(instance: Warning, level: int | None, fallback: tuple[str, int] | N
         level = _stacklevel_of_first_user_frame() - 1
     warnings.warn(instance, stacklevel=level + 1)
 
+
 #: Every diagnostic code Cash can emit. Adding a warning means adding its code
 #: here AND a section in ``docs/warnings.md``. Once both exist, the bijection
 #: test at ``tests/docs/test_warning_codes_documented.py`` will fail if either
@@ -135,109 +137,103 @@ def _warn_at(instance: Warning, level: int | None, fallback: tuple[str, int] | N
 #: as a contract to honour by hand.
 #:
 #: The gloss on each line is the one-sentence claim its doc section expands.
-DIAGNOSTIC_CODES: frozenset[str] = frozenset({
-    # -- ANNOT: a ``# @cash:`` annotation Cash could not honour -------------
-    "ANNOT-TTL-INVALID",       # `# @cash:ttl=` is not whole seconds; ignored
-
-    # -- CACHE: caching happened, or refused to, and it is worth saying -----
-    "CACHE-ASYNC-GENERATOR",   # async generators are returned unwrapped
-    "CACHE-IDENTITY-COUPLED",  # result is a live Figure/Axes; storing it would
-                               # detach the library's copy from yours
-    "CACHE-IF-BYPASSED",       # result outgrew a chunk, so cache_if never ran
-    "CACHE-DIR-MOVED",         # the project-anchored default cache dir differs
-                               # from an existing cache in the current directory
-    "CACHE-FRESHNESS-COST",    # proving the entry fresh cost a serious share
-                               # of the compute it avoids
-    "CACHE-IF-RAISED",         # the cache_if predicate raised
-    "CACHE-LOOP-GROWTH",       # a loop is persisting every state of a growing
-                               # object, costing the sum of every snapshot
-    "CACHE-NET-LOSS",          # key hashing has cost more than it has saved
-    "CACHE-THRASH",            # at the cap, evicting within writes of storing
-    "CACHE-DIR-UNWRITABLE",    # the cache directory cannot be written at all,
-                               # so nothing reaches disk this run
-    "CACHE-NOT-WORTH-BYTES",   # more disk per second saved than cash will spend
-    "CACHE-VALUE-TOO-BIG",     # too large for any persistent tier; RAM only
-    "CACHE-WRITE-ABANDONED",   # a write was still running at the exit deadline,
-                               # so the process exited without storing it
-
-    # -- CONFIG: a setting cash found but could not act on ------------------
-    "CONFIG-INVALID",          # a value of the wrong type, or a config file that
-                               # is not valid TOML; ignored, defaults apply
-    "CONFIG-UNKNOWN-KEY",      # a [tool.cash] / cash config key that is not a
-                               # setting, so it does nothing (usually a typo)
-    "CONFIG-TOML-UNREADABLE",  # a config file exists but nothing can parse it
-                               # (Python 3.10 without `tomli`), so every
-                               # setting in it is being ignored
-    "CONFIG-FILE-MISSING",     # Cash(config_path=...) names a file that does
-                               # not exist, so none of its settings apply
-
-    # -- IMPURE: the function does something a cache hit will not repeat ----
-    "IMPURE-OBSERVED-EFFECTS", # watching the first call caught effects static
-                               # analysis could not see
-    "IMPURE-SCOPE-MUTATION",   # calling it rewrites a global or captured
-                               # variable, which can then no longer be tracked
-    "IMPURE-SIDE-EFFECTS",     # static analysis found likely side effects
-
-    # -- KEY: something the result depends on is not in the cache key -------
-    "KEY-AMBIENT-READ",        # the body reads the clock / environment / cwd /
-                               # a fresh uuid, so the first call's value freezes
-    "KEY-BOOL-STATE-TOKEN",    # DataSource.has_changed() returned a bool,
-                               # which cannot track changes
-    "KEY-BUILD-FAILED",        # key construction raised
-    "KEY-CALLABLE-HASHER",     # a hasher registered for every function /
-                               # method / partial; closures can share its value
-    "KEY-DEPENDS-ON-OPAQUE",   # a declared depends_on= target has no readable
-                               # source, so editing it invalidates nothing
-    "KEY-DYNAMIC-DEP-FAILED",  # a dynamic_depends_on resolver raised
-    "KEY-FROZEN-MUTATED",      # a result declared frozen=True was modified
-    "KEY-FROZEN-NO-EFFECT",    # frozen=True on a function whose result it cannot mark
-                               # after it was returned; keyed by content now
-    "KEY-INSTANCE-STATE",      # a bound method's instance could not be hashed;
-                               # falling back to its process-local identity
-    "KEY-DYNAMIC-DEPENDENCY",  # code reached through an argument resolves a
-                               # dependency at runtime (getattr(m, name)(), eval)
-    "KEY-OPAQUE-CALLABLE",     # a callable reached the call but its code could
-                               # not be hashed, so editing it changes nothing
-    "KEY-SOURCE-CHANGED",      # a cached function's or helper's file was edited
-                               # after import; keyed by the code actually running
-    "KEY-UNHASHABLE-ARG",      # an argument could not be hashed; not cached
-    "KEY-UNHASHABLE-DEFAULT",  # a parameter default could not be hashed
-    "KEY-UNHASHABLE-GLOBAL",   # a global the function reads could not be
-                               # hashed, so changing it invalidates nothing
-
-    # -- NOTEBOOK: notebook-wide machinery, not one statement ---------------
-    "NOTEBOOK-BAILOUT",        # cash hit an internal error, stepped aside, and
-                               # ran the cell uncached; previously log-only
-    "NOTEBOOK-CELL-SYNTAX",    # an upstream cell does not parse, so cells that
-                               # depend on it stop being tracked
-    "NOTEBOOK-NOT-FOUND",      # no notebook path; upstream tracking is off
-    "NOTEBOOK-SAVEFIG-SKIP",   # refused to re-run plt.savefig() during
-                               # reconstruction; it would overwrite your chart
-
-    # -- RANDOM: a cached value that randomness makes non-reproducible ------
-    "RANDOM-REPLAYED",         # what you are seeing is a replay of an earlier
-                               # draw, not a fresh one
-    "RANDOM-SEED-NONE",        # seed(None) cannot refresh cached values below
-    "RANDOM-UNSEEDED",         # an unseeded draw is being cached and frozen
-
-    # -- REMOTE: tracking a remote object's freshness -----------------------
-    "REMOTE-FRESHNESS-COST",   # freshness checks cost more than they protect
-    "REMOTE-SIZE-ONLY",        # tracked by size alone; a same-size edit is
-                               # invisible
-    "REMOTE-STATE-UNREADABLE", # could not read remote state; will recompute
-
-    # -- STORE: compute succeeded, the write did not ------------------------
-    "STORE-CODE-CHANGED",      # a code file changed on disk after the key
-                               # was read, so the result was not stored
-    "STORE-CHUNK-FAILED",      # a chunked write failed partway; the entry is
-                               # incomplete on retrieval
-    "CACHE-RESULT-SHARED",     # the result shares state with the caller's own object
-    "STORE-FAILED",            # the backend refused the write
-    "STORE-INPUT-CHANGED",     # a file the call read changed before it
-                               # returned, so the result was not stored
-    "STORE-LOCK-FAILED",       # lock acquisition failed; proceeding unlocked
-    "STORE-METADATA-INVALID",  # a stored entry's metadata did not validate
-})
+DIAGNOSTIC_CODES: frozenset[str] = frozenset(
+    {
+        # -- ANNOT: a ``# @cash:`` annotation Cash could not honour -------------
+        "ANNOT-TTL-INVALID",  # `# @cash:ttl=` is not whole seconds; ignored
+        # -- CACHE: caching happened, or refused to, and it is worth saying -----
+        "CACHE-ASYNC-GENERATOR",  # async generators are returned unwrapped
+        "CACHE-IDENTITY-COUPLED",  # result is a live Figure/Axes; storing it would
+        # detach the library's copy from yours
+        "CACHE-IF-BYPASSED",  # result outgrew a chunk, so cache_if never ran
+        "CACHE-DIR-MOVED",  # the project-anchored default cache dir differs
+        # from an existing cache in the current directory
+        "CACHE-FRESHNESS-COST",  # proving the entry fresh cost a serious share
+        # of the compute it avoids
+        "CACHE-IF-RAISED",  # the cache_if predicate raised
+        "CACHE-LOOP-GROWTH",  # a loop is persisting every state of a growing
+        # object, costing the sum of every snapshot
+        "CACHE-NET-LOSS",  # key hashing has cost more than it has saved
+        "CACHE-THRASH",  # at the cap, evicting within writes of storing
+        "CACHE-DIR-UNWRITABLE",  # the cache directory cannot be written at all,
+        # so nothing reaches disk this run
+        "CACHE-NOT-WORTH-BYTES",  # more disk per second saved than cash will spend
+        "CACHE-VALUE-TOO-BIG",  # too large for any persistent tier; RAM only
+        "CACHE-WRITE-ABANDONED",  # a write was still running at the exit deadline,
+        # so the process exited without storing it
+        # -- CONFIG: a setting cash found but could not act on ------------------
+        "CONFIG-INVALID",  # a value of the wrong type, or a config file that
+        # is not valid TOML; ignored, defaults apply
+        "CONFIG-UNKNOWN-KEY",  # a [tool.cash] / cash config key that is not a
+        # setting, so it does nothing (usually a typo)
+        "CONFIG-TOML-UNREADABLE",  # a config file exists but nothing can parse it
+        # (Python 3.10 without `tomli`), so every
+        # setting in it is being ignored
+        "CONFIG-FILE-MISSING",  # Cash(config_path=...) names a file that does
+        # not exist, so none of its settings apply
+        # -- IMPURE: the function does something a cache hit will not repeat ----
+        "IMPURE-OBSERVED-EFFECTS",  # watching the first call caught effects static
+        # analysis could not see
+        "IMPURE-SCOPE-MUTATION",  # calling it rewrites a global or captured
+        # variable, which can then no longer be tracked
+        "IMPURE-SIDE-EFFECTS",  # static analysis found likely side effects
+        # -- KEY: something the result depends on is not in the cache key -------
+        "KEY-AMBIENT-READ",  # the body reads the clock / environment / cwd /
+        # a fresh uuid, so the first call's value freezes
+        "KEY-BOOL-STATE-TOKEN",  # DataSource.has_changed() returned a bool,
+        # which cannot track changes
+        "KEY-BUILD-FAILED",  # key construction raised
+        "KEY-CALLABLE-HASHER",  # a hasher registered for every function /
+        # method / partial; closures can share its value
+        "KEY-DEPENDS-ON-OPAQUE",  # a declared depends_on= target has no readable
+        # source, so editing it invalidates nothing
+        "KEY-DYNAMIC-DEP-FAILED",  # a dynamic_depends_on resolver raised
+        "KEY-FROZEN-MUTATED",  # a result declared frozen=True was modified
+        "KEY-FROZEN-NO-EFFECT",  # frozen=True on a function whose result it cannot mark
+        # after it was returned; keyed by content now
+        "KEY-INSTANCE-STATE",  # a bound method's instance could not be hashed;
+        # falling back to its process-local identity
+        "KEY-DYNAMIC-DEPENDENCY",  # code reached through an argument resolves a
+        # dependency at runtime (getattr(m, name)(), eval)
+        "KEY-OPAQUE-CALLABLE",  # a callable reached the call but its code could
+        # not be hashed, so editing it changes nothing
+        "KEY-SOURCE-CHANGED",  # a cached function's or helper's file was edited
+        # after import; keyed by the code actually running
+        "KEY-UNHASHABLE-ARG",  # an argument could not be hashed; not cached
+        "KEY-UNHASHABLE-DEFAULT",  # a parameter default could not be hashed
+        "KEY-UNHASHABLE-GLOBAL",  # a global the function reads could not be
+        # hashed, so changing it invalidates nothing
+        # -- NOTEBOOK: notebook-wide machinery, not one statement ---------------
+        "NOTEBOOK-BAILOUT",  # cash hit an internal error, stepped aside, and
+        # ran the cell uncached; previously log-only
+        "NOTEBOOK-CELL-SYNTAX",  # an upstream cell does not parse, so cells that
+        # depend on it stop being tracked
+        "NOTEBOOK-NOT-FOUND",  # no notebook path; upstream tracking is off
+        "NOTEBOOK-SAVEFIG-SKIP",  # refused to re-run plt.savefig() during
+        # reconstruction; it would overwrite your chart
+        # -- RANDOM: a cached value that randomness makes non-reproducible ------
+        "RANDOM-REPLAYED",  # what you are seeing is a replay of an earlier
+        # draw, not a fresh one
+        "RANDOM-SEED-NONE",  # seed(None) cannot refresh cached values below
+        "RANDOM-UNSEEDED",  # an unseeded draw is being cached and frozen
+        # -- REMOTE: tracking a remote object's freshness -----------------------
+        "REMOTE-FRESHNESS-COST",  # freshness checks cost more than they protect
+        "REMOTE-SIZE-ONLY",  # tracked by size alone; a same-size edit is
+        # invisible
+        "REMOTE-STATE-UNREADABLE",  # could not read remote state; will recompute
+        # -- STORE: compute succeeded, the write did not ------------------------
+        "STORE-CODE-CHANGED",  # a code file changed on disk after the key
+        # was read, so the result was not stored
+        "STORE-CHUNK-FAILED",  # a chunked write failed partway; the entry is
+        # incomplete on retrieval
+        "CACHE-RESULT-SHARED",  # the result shares state with the caller's own object
+        "STORE-FAILED",  # the backend refused the write
+        "STORE-INPUT-CHANGED",  # a file the call read changed before it
+        # returned, so the result was not stored
+        "STORE-LOCK-FAILED",  # lock acquisition failed; proceeding unlocked
+        "STORE-METADATA-INVALID",  # a stored entry's metadata did not validate
+    }
+)
 
 
 def doc_url(code: str) -> str:
@@ -314,12 +310,11 @@ def warn_diagnostic(
 
     Raises ``KeyError`` before emitting anything if *code* is unregistered.
     """
-    message = format_diagnostic(code, what, fix)   # raises on an unknown code
+    message = format_diagnostic(code, what, fix)  # raises on an unknown code
     instance = category(message)
     instance.code = code
     if location is not None:
-        warnings.warn_explicit(instance, category, filename=location[0],
-                               lineno=location[1], registry=None)
+        warnings.warn_explicit(instance, category, filename=location[0], lineno=location[1], registry=None)
         return
     _warn_at(instance, _user_frame_level() if stacklevel is None else stacklevel + 1, None)
 
@@ -356,7 +351,7 @@ def warn_diagnostic_explicit(
     quietly appearing, so the claim "pinned by test" was itself unpinned.
     """
     warnings.warn_explicit(
-        format_diagnostic(code, what, fix),   # raises on an unknown code
+        format_diagnostic(code, what, fix),  # raises on an unknown code
         category,
         filename=filename,
         lineno=lineno,
@@ -365,7 +360,11 @@ def warn_diagnostic_explicit(
 
 
 def warn_diagnostic_message(
-    category: type[Warning], code: str, message: str, *, stacklevel: int | None = None,
+    category: type[Warning],
+    code: str,
+    message: str,
+    *,
+    stacklevel: int | None = None,
     fallback: tuple[str, int] | None = None,
 ) -> None:
     """Emit an already-rendered *message* carrying *code*.

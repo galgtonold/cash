@@ -6,6 +6,7 @@ even to run_all. Tracking the enumerated directory (its mtime bumps on
 add/remove) invalidates the reader when membership changes, while an unchanged
 directory keeps the cache hit.
 """
+
 import time
 
 import pytest
@@ -19,11 +20,9 @@ def test_new_file_in_globbed_dir_invalidates(nb_runner, tmp_path):
     (gdir / "d1.num").write_text("1")
     (gdir / "d2.num").write_text("2")
     gp = str(gdir).replace("\\", "/")
-    nb_runner.create_notebook([
-        "import glob\n"
-        f"vals = [int(open(fp).read()) for fp in sorted(glob.glob('{gp}/*.num'))]\n"
-        "print('vals =', vals)"
-    ])
+    nb_runner.create_notebook(
+        [f"import glob\nvals = [int(open(fp).read()) for fp in sorted(glob.glob('{gp}/*.num'))]\nprint('vals =', vals)"]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "vals = [1, 2]" in nb_runner.get_output(1)
@@ -40,11 +39,9 @@ def test_unchanged_globbed_dir_stays_cached(nb_runner, tmp_path):
     (gdir / "a.num").write_text("5")
     (gdir / "b.num").write_text("6")
     gp = str(gdir).replace("\\", "/")
-    nb_runner.create_notebook([
-        "import glob\n"
-        f"vals = [int(open(fp).read()) for fp in sorted(glob.glob('{gp}/*.num'))]\n"
-        "print('vals =', vals)"
-    ])
+    nb_runner.create_notebook(
+        [f"import glob\nvals = [int(open(fp).read()) for fp in sorted(glob.glob('{gp}/*.num'))]\nprint('vals =', vals)"]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_debug()
     nb_runner.run_all()
@@ -69,11 +66,13 @@ def test_new_file_in_pathlib_listed_dir_invalidates(nb_runner, tmp_path, listing
     (pdir / "d1.num").write_text("1")
     (pdir / "d2.num").write_text("2")
     pp = str(pdir).replace("\\", "/")
-    nb_runner.create_notebook([
-        "from pathlib import Path\n"
-        f"vals = sorted(int(p.read_text()) for p in Path('{pp}').{listing})\n"
-        "print('vals =', vals)"
-    ])
+    nb_runner.create_notebook(
+        [
+            "from pathlib import Path\n"
+            f"vals = sorted(int(p.read_text()) for p in Path('{pp}').{listing})\n"
+            "print('vals =', vals)"
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "vals = [1, 2]" in nb_runner.get_output(1)
@@ -89,11 +88,7 @@ def test_os_listdir_new_file_invalidates(nb_runner, tmp_path):
     ldir.mkdir()
     (ldir / "x.txt").write_text("x")
     lp = str(ldir).replace("\\", "/")
-    nb_runner.create_notebook([
-        "import os\n"
-        f"names = sorted(os.listdir('{lp}'))\n"
-        "print('names =', names)"
-    ])
+    nb_runner.create_notebook([f"import os\nnames = sorted(os.listdir('{lp}'))\nprint('names =', names)"])
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "names = ['x.txt']" in nb_runner.get_output(1)

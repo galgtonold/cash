@@ -21,6 +21,7 @@ retrievable source -- the same blind spot the purity analyzer has. That boundary
 is pinned explicitly by `test_decorator_silent_when_source_unavailable` rather
 than being allowed to silently hide a regression.
 """
+
 import tempfile
 import warnings
 
@@ -41,10 +42,7 @@ def _fresh_cash():
 def _randomness_warnings(records):
     from cash import CashRandomnessWarning
 
-    return [
-        str(r.message) for r in records
-        if issubclass(r.category, CashRandomnessWarning)
-    ]
+    return [str(r.message) for r in records if issubclass(r.category, CashRandomnessWarning)]
 
 
 # ---------------------------------------------------------------------------
@@ -52,11 +50,14 @@ def _randomness_warnings(records):
 # compared against -- kept intact so a regression here is attributed correctly.
 # ---------------------------------------------------------------------------
 
+
 def test_notebook_path_warns_on_unseeded_randomness(nb_runner):
-    nb_runner.create_notebook([
-        "import numpy as np",
-        "# @cash:persist\nx = np.random.rand(1000)\nprint('sum=', round(float(x.sum()), 6))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np",
+            "# @cash:persist\nx = np.random.rand(1000)\nprint('sum=', round(float(x.sum()), 6))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     raw = nb_runner.get_raw_output(2)
@@ -67,25 +68,30 @@ def test_notebook_path_warns_on_unseeded_randomness(nb_runner):
 # Decorator path: must now warn, and must warn at DECORATION time, once.
 # ---------------------------------------------------------------------------
 
+
 def _unseeded_numpy():
     return float(np.random.randn())
 
 
 def _unseeded_stdlib():
     import random
+
     return random.random()
 
 
 def _unseeded_generator():
-    rng = np.random.default_rng()          # no seed
+    rng = np.random.default_rng()  # no seed
     return float(rng.normal())
 
 
-@pytest.mark.parametrize("fn,label", [
-    (_unseeded_numpy, "np.random.randn"),
-    (_unseeded_stdlib, "random.random"),
-    (_unseeded_generator, "np.random.default_rng (unseeded carrier)"),
-])
+@pytest.mark.parametrize(
+    "fn,label",
+    [
+        (_unseeded_numpy, "np.random.randn"),
+        (_unseeded_stdlib, "random.random"),
+        (_unseeded_generator, "np.random.default_rng (unseeded carrier)"),
+    ],
+)
 def test_decorator_warns_on_unseeded_randomness(fn, label):
     """CAS-158: the decorator is no longer silent about an unseeded draw."""
     c = _fresh_cash()
@@ -97,8 +103,7 @@ def test_decorator_warns_on_unseeded_randomness(fn, label):
     decoration_msgs = _randomness_warnings(at_decoration)
     assert decoration_msgs, f"{label}: decorator did not warn (CAS-158 regressed)"
     assert COLD_TEXT in decoration_msgs[0], (
-        f"{label}: message diverged from the notebook path's wording: "
-        f"{decoration_msgs[0]!r}"
+        f"{label}: message diverged from the notebook path's wording: {decoration_msgs[0]!r}"
     )
 
     # The freeze itself is unchanged -- the warning is advice, not a behaviour
@@ -147,6 +152,7 @@ def test_decorator_warning_is_discoverable_via_cache_info():
 # (CAS-154/167) -- a detector that warns on everything is useless.
 # ---------------------------------------------------------------------------
 
+
 def _seeded_numpy():
     np.random.seed(0)
     return float(np.random.randn())
@@ -159,6 +165,7 @@ def _seeded_generator():
 
 def _seeded_stdlib():
     import random
+
     random.seed(7)
     return random.random()
 
@@ -167,25 +174,27 @@ def _no_randomness(a, b):
     return a + b
 
 
-@pytest.mark.parametrize("fn,label", [
-    (_seeded_numpy, "np.random.seed"),
-    (_seeded_generator, "default_rng(42)"),
-    (_seeded_stdlib, "random.seed"),
-    (_no_randomness, "no randomness at all"),
-])
+@pytest.mark.parametrize(
+    "fn,label",
+    [
+        (_seeded_numpy, "np.random.seed"),
+        (_seeded_generator, "default_rng(42)"),
+        (_seeded_stdlib, "random.seed"),
+        (_no_randomness, "no randomness at all"),
+    ],
+)
 def test_decorator_silent_when_seeded_or_deterministic(fn, label):
     c = _fresh_cash()
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
         c.cache(fn)
-    assert not _randomness_warnings(rec), (
-        f"{label}: false positive -- a seeded/deterministic function must not warn"
-    )
+    assert not _randomness_warnings(rec), f"{label}: false positive -- a seeded/deterministic function must not warn"
 
 
 # ---------------------------------------------------------------------------
 # Opt-out, both spellings.
 # ---------------------------------------------------------------------------
+
 
 def test_allow_random_kwarg_suppresses_the_warning():
     """`@cash.cache(allow_random=True)` -- the decorator-path opt-out."""
@@ -226,6 +235,7 @@ def test_allow_random_does_not_disable_caching():
 # ---------------------------------------------------------------------------
 # Documented boundaries of a source-based check.
 # ---------------------------------------------------------------------------
+
 
 def test_decorator_silent_when_source_unavailable():
     """`exec`-defined functions have no retrievable source -> no claim is made.

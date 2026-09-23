@@ -12,34 +12,35 @@ pytestmark = [pytest.mark.stress, pytest.mark.upstream, pytest.mark.timeout(90)]
 class TestInterCellCalls:
     """Functions calling functions from other cells."""
 
-
     def test_edit_calling_function(self, nb_runner):
         """Edit a function that calls another function."""
-        nb_runner.create_notebook([
-            "def square(x):\n    return x ** 2",
-            "def process(x):\n    return square(x) + 1",
-            "result = process(4)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def square(x):\n    return x ** 2",
+                "def process(x):\n    return square(x) + 1",
+                "result = process(4)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         # square(4)=16, process(4)=17
         assert "result = 17" in nb_runner.get_output(3)
 
         # Edit process
-        nb_runner.set_cell_source(
-            2, "def process(x):\n    return square(x) * 10"
-        )
+        nb_runner.set_cell_source(2, "def process(x):\n    return square(x) * 10")
         nb_runner.run_all()
         assert "result = 160" in nb_runner.get_output(3)
 
     def test_three_level_call_chain(self, nb_runner):
         """Three functions calling each other across cells."""
-        nb_runner.create_notebook([
-            "def level1(x):\n    return x + 1",
-            "def level2(x):\n    return level1(x) * 2",
-            "def level3(x):\n    return level2(x) + 10",
-            "result = level3(3)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def level1(x):\n    return x + 1",
+                "def level2(x):\n    return level1(x) * 2",
+                "def level3(x):\n    return level2(x) + 10",
+                "result = level3(3)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         # level1(3)=4, level2(3)=8, level3(3)=18
@@ -57,11 +58,13 @@ class TestCallbackEdits:
 
     def test_edit_callback_function(self, nb_runner):
         """Edit a callback function passed to another function."""
-        nb_runner.create_notebook([
-            "def apply_fn(fn, data):\n    return [fn(x) for x in data]",
-            "def transform(x):\n    return x * 2",
-            "result = apply_fn(transform, [1, 2, 3])\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def apply_fn(fn, data):\n    return [fn(x) for x in data]",
+                "def transform(x):\n    return x * 2",
+                "result = apply_fn(transform, [1, 2, 3])\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = [2, 4, 6]" in nb_runner.get_output(3)
@@ -73,11 +76,13 @@ class TestCallbackEdits:
 
     def test_edit_apply_function(self, nb_runner):
         """Edit the higher-order function."""
-        nb_runner.create_notebook([
-            "def processor(fn, data):\n    return [fn(x) for x in data]",
-            "def double(x):\n    return x * 2",
-            "result = processor(double, [5, 10])\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def processor(fn, data):\n    return [fn(x) for x in data]",
+                "def double(x):\n    return x * 2",
+                "result = processor(double, [5, 10])\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = [10, 20]" in nb_runner.get_output(3)

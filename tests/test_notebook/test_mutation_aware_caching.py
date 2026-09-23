@@ -1,5 +1,6 @@
-from cash.notebook.cache_status import CacheStatus
 from cash.notebook.annotations import CacheAnnotation
+from cash.notebook.cache_status import CacheStatus
+
 """
 Tests for mutation-aware caching in statement_processor.
 
@@ -8,13 +9,15 @@ the cache should be skipped because the mutated state can't be captured
 by lineage alone.
 """
 
-import pytest
 from unittest.mock import MagicMock
-from cash.notebook.ipython.magics import CashMagics
-from cash.notebook.cacheability import analyze_statement
-from cash.core import Cash
-from cash.backends import InMemoryBackend
+
+import pytest
 from traitlets.config.configurable import Configurable
+
+from cash.backends import InMemoryBackend
+from cash.core import Cash
+from cash.notebook.cacheability import analyze_statement
+from cash.notebook.ipython.magics import CashMagics
 
 # Force caching regardless of the 10 ms min-execution-time floor, so tests
 # that exercise cache mechanics (restore-after-write) aren't skipped.
@@ -23,6 +26,7 @@ _PERSIST = CacheAnnotation(persist=True)
 
 class MockShell(Configurable):
     """Mock IPython shell for testing."""
+
     def __init__(self):
         super().__init__()
         self.user_ns = {}
@@ -47,6 +51,7 @@ def processor_fixture():
 
 
 # --- Tests for analyze_statement(...).top_level_mutated_vars ---
+
 
 def _top_level(code: str) -> set:
     return set(analyze_statement(code, None).top_level_mutated_vars)
@@ -83,19 +88,19 @@ def process(items):
         """Top-level list.append() should be detected."""
         code = "data.append(42)"
         result = _top_level(code)
-        assert result == {'data'}
+        assert result == {"data"}
 
     def test_top_level_augmented_assign_detected(self):
         """Top-level augmented assignment (x += 1) should be detected."""
         code = "counter += 1"
         result = _top_level(code)
-        assert result == {'counter'}
+        assert result == {"counter"}
 
     def test_top_level_subscript_assign_detected(self):
         """Top-level dict subscript assignment should be detected."""
         code = "config['key'] = 'value'"
         result = _top_level(code)
-        assert result == {'config'}
+        assert result == {"config"}
 
     def test_mixed_top_level_and_class(self):
         """Only top-level mutations detected, not class body ones."""
@@ -110,7 +115,7 @@ obj = MyClass()
 results.append(obj)
 """
         result = _top_level(code)
-        assert result == {'results'}
+        assert result == {"results"}
 
     def test_async_function_body_excluded(self):
         """Mutations inside async function bodies should NOT be detected."""
@@ -139,6 +144,7 @@ async def update(state):
 
 # --- Tests for mutation-aware caching in StatementProcessor ---
 
+
 class TestMutationAwareCaching:
     """Tests that mutation-aware caching works correctly in statement processing."""
 
@@ -147,17 +153,17 @@ class TestMutationAwareCaching:
         processor, shell, backend = processor_fixture
 
         # Set up existing list in namespace
-        shell.user_ns['data'] = [1, 2, 3]
+        shell.user_ns["data"] = [1, 2, 3]
 
         code = "data.append(4)"
         metrics = processor.process_statement(code)
-        assert metrics['status'] == CacheStatus.COMPUTED
+        assert metrics["status"] == CacheStatus.COMPUTED
 
         # Run again — should still be COMPUTED (not RESTORED) because it's uncacheable
         metrics2 = processor.process_statement(code)
-        assert metrics2['status'] == CacheStatus.COMPUTED
+        assert metrics2["status"] == CacheStatus.COMPUTED
         # Check that uncacheable reason is recorded
-        assert any('mutation' in r.lower() or 'In-place' in r for r in metrics2.get('uncacheable_reasons', []))
+        assert any("mutation" in r.lower() or "In-place" in r for r in metrics2.get("uncacheable_reasons", []))
 
     def test_class_definition_still_cacheable(self, processor_fixture):
         """Class definitions with internal self.x=y should still be cacheable.
@@ -174,14 +180,14 @@ class Point:
 p = Point(3, 4)
 """
         metrics = processor.process_statement(code, annotation=_PERSIST)
-        assert metrics['status'] == CacheStatus.COMPUTED
+        assert metrics["status"] == CacheStatus.COMPUTED
 
         # Clear and re-run — should be RESTORED from cache
-        shell.user_ns.pop('Point', None)
-        shell.user_ns.pop('p', None)
+        shell.user_ns.pop("Point", None)
+        shell.user_ns.pop("p", None)
 
         metrics2 = processor.process_statement(code, annotation=_PERSIST)
-        assert metrics2['status'] == CacheStatus.RESTORED
+        assert metrics2["status"] == CacheStatus.RESTORED
 
     def test_augmented_assign_as_output(self, processor_fixture):
         """Augmented assignment on output variable (x += 1 where x is output) is cacheable."""
@@ -189,22 +195,22 @@ p = Point(3, 4)
 
         code = "x = 10\nx += 5"
         metrics = processor.process_statement(code)
-        assert metrics['status'] == CacheStatus.COMPUTED
-        assert shell.user_ns.get('x') == 15
+        assert metrics["status"] == CacheStatus.COMPUTED
+        assert shell.user_ns.get("x") == 15
 
     def test_dict_update_mutation_detected(self, processor_fixture):
         """Dict update mutation on non-output var should skip cache."""
         processor, shell, backend = processor_fixture
 
-        shell.user_ns['config'] = {'a': 1}
+        shell.user_ns["config"] = {"a": 1}
         code = "config.update({'b': 2})"
 
         metrics = processor.process_statement(code)
-        assert metrics['status'] == CacheStatus.COMPUTED
+        assert metrics["status"] == CacheStatus.COMPUTED
 
         # Run again — should be COMPUTED, not RESTORED
         metrics2 = processor.process_statement(code)
-        assert metrics2['status'] == CacheStatus.COMPUTED
+        assert metrics2["status"] == CacheStatus.COMPUTED
 
     def test_function_def_with_mutation_cacheable(self, processor_fixture):
         """Function that internally mutates args should still be cacheable as a definition.
@@ -218,8 +224,8 @@ def transform(lst):
     return lst[0]
 """
         metrics = processor.process_statement(code, annotation=_PERSIST)
-        assert metrics['status'] == CacheStatus.COMPUTED
+        assert metrics["status"] == CacheStatus.COMPUTED
 
-        shell.user_ns.pop('transform', None)
+        shell.user_ns.pop("transform", None)
         metrics2 = processor.process_statement(code, annotation=_PERSIST)
-        assert metrics2['status'] == CacheStatus.RESTORED
+        assert metrics2["status"] == CacheStatus.RESTORED

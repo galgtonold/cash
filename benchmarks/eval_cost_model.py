@@ -40,6 +40,7 @@ Known limitations
 - For those cells, restore_times.jsonl will contain t_restore_actual=None and
   the confusion matrix will have lower n.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -55,7 +56,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import cash  # noqa: F401 — neutralise IPython auto-load side-effect
-
 from benchmarks._cost_model_eval import (
     CellDecision,
     CellRestore,
@@ -64,14 +64,14 @@ from benchmarks._cost_model_eval import (
     render_report,
     score_confusion_matrix,
 )
-from benchmarks._overhead_driver import _enable_cash, run_notebook
+from benchmarks._overhead_driver import run_notebook
 from benchmarks._overhead_io import CodeCell, load_code_cells
 from benchmarks._overhead_results import CellTiming, StatementMetric
-
 
 # ---------------------------------------------------------------------------
 # Force-cache shim (option b — keeps _overhead_driver.py untouched)
 # ---------------------------------------------------------------------------
+
 
 def run_notebook_force_cache(
     cells: list[CodeCell],
@@ -90,6 +90,7 @@ def run_notebook_force_cache(
     ground-truth t_restore_actual observations for the confusion matrix.
     """
     from IPython.core.interactiveshell import InteractiveShell
+
     from cash.core import Cash
     from cash.notebook.ipython.magics import CashMagics
     from cash.notebook.statement import StatementProcessor
@@ -112,16 +113,18 @@ def run_notebook_force_cache(
         try:
             status = result.get("status", "UNKNOWN")
             status_str = status.value if hasattr(status, "value") else str(status)
-            statement_sink.append(StatementMetric(
-                code=str(result.get("code", code))[:200],
-                execution_time=float(result.get("execution_time", 0.0)),
-                total_time=float(result.get("total_time", 0.0)),
-                status=status_str,
-                cost_model_size_bytes=result.get("cost_model_size_bytes"),
-                cost_model_restore_seconds=result.get("cost_model_restore_seconds"),
-                cost_model_type_name=result.get("cost_model_type_name"),
-                cost_model_family=result.get("cost_model_family"),
-            ))
+            statement_sink.append(
+                StatementMetric(
+                    code=str(result.get("code", code))[:200],
+                    execution_time=float(result.get("execution_time", 0.0)),
+                    total_time=float(result.get("total_time", 0.0)),
+                    status=status_str,
+                    cost_model_size_bytes=result.get("cost_model_size_bytes"),
+                    cost_model_restore_seconds=result.get("cost_model_restore_seconds"),
+                    cost_model_type_name=result.get("cost_model_type_name"),
+                    cost_model_family=result.get("cost_model_family"),
+                )
+            )
         except Exception:  # noqa: BLE001
             pass
         return result
@@ -144,13 +147,15 @@ def run_notebook_force_cache(
         shell.run_cell(cell.source)
         t1 = time.perf_counter()
         cell_metrics = list(statement_sink[before:])
-        timings.append(CellTiming(
-            index=cell.index,
-            notebook_cell_index=cell.notebook_cell_index,
-            wall_seconds=t1 - t0,
-            source_chars=len(cell.source),
-            statement_metrics=cell_metrics,
-        ))
+        timings.append(
+            CellTiming(
+                index=cell.index,
+                notebook_cell_index=cell.notebook_cell_index,
+                wall_seconds=t1 - t0,
+                source_chars=len(cell.source),
+                statement_metrics=cell_metrics,
+            )
+        )
     return timings
 
 
@@ -223,18 +228,20 @@ def _decisions_from_timings(
             type_name = cost_stmt.cost_model_type_name
             family = cost_stmt.cost_model_family
 
-        decisions.append(CellDecision(
-            cell_id=cell_id,
-            repeat=repeat,
-            t_compute=t_compute,
-            est_obj_size_bytes=est_obj_size_bytes,
-            est_restore_seconds=est_restore_seconds,
-            type_name=type_name,
-            family=family,
-            policy_decision=policy_decision,  # type: ignore[arg-type]
-            policy_reason=policy_reason,
-            expected_label=expected_labels.get(cell_id, "unknown"),
-        ))
+        decisions.append(
+            CellDecision(
+                cell_id=cell_id,
+                repeat=repeat,
+                t_compute=t_compute,
+                est_obj_size_bytes=est_obj_size_bytes,
+                est_restore_seconds=est_restore_seconds,
+                type_name=type_name,
+                family=family,
+                policy_decision=policy_decision,  # type: ignore[arg-type]
+                policy_reason=policy_reason,
+                expected_label=expected_labels.get(cell_id, "unknown"),
+            )
+        )
     return decisions
 
 
@@ -254,22 +261,20 @@ def _restores_from_timings(
         # t_restore_actual: find the RESTORED statement in the warm run.
         t_restore_actual: float | None = None
         if ct_warm is not None:
-            restored_times = [
-                sm.total_time
-                for sm in ct_warm.statement_metrics
-                if sm.status == "RESTORED"
-            ]
+            restored_times = [sm.total_time for sm in ct_warm.statement_metrics if sm.status == "RESTORED"]
             if restored_times:
                 t_restore_actual = max(restored_times)
 
         # t_warm_policy: total cell wall time from the warm-after-policy run.
         # We'll fill this in separately; for now leave as None.
-        restores.append(CellRestore(
-            cell_id=cell_id,
-            repeat=repeat,
-            t_restore_actual=t_restore_actual,
-            t_warm_policy=None,
-        ))
+        restores.append(
+            CellRestore(
+                cell_id=cell_id,
+                repeat=repeat,
+                t_restore_actual=t_restore_actual,
+                t_warm_policy=None,
+            )
+        )
     return restores
 
 
@@ -291,9 +296,7 @@ def _oracle_wall(
     """Sum of cell times under the oracle policy."""
     total = 0.0
     for row in residuals:
-        oracle = classify_oracle(
-            row["t_compute"], row["t_restore_actual"], epsilon_write, min_savings_pct
-        )
+        oracle = classify_oracle(row["t_compute"], row["t_restore_actual"], epsilon_write, min_savings_pct)
         if oracle == "cache":
             total += row["t_restore_actual"] * (1.0 + epsilon_write)
         else:
@@ -304,6 +307,7 @@ def _oracle_wall(
 # ---------------------------------------------------------------------------
 # Per-repeat runner
 # ---------------------------------------------------------------------------
+
 
 def _run_repeat(
     cells: list[CodeCell],
@@ -367,6 +371,7 @@ def _run_repeat(
 # Output helpers
 # ---------------------------------------------------------------------------
 
+
 def _write_jsonl(path: Path, records: list) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = []
@@ -390,6 +395,7 @@ def _write_csv(path: Path, rows: list[dict]) -> None:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -432,10 +438,7 @@ def main() -> None:
     min_savings_pct: float = args.min_savings_pct
 
     cells = load_code_cells(notebook_path)
-    expected_labels: dict[int, str] = {
-        cell.notebook_cell_index: _extract_expected(cell.source)
-        for cell in cells
-    }
+    expected_labels: dict[int, str] = {cell.notebook_cell_index: _extract_expected(cell.source) for cell in cells}
 
     print(f"Loaded {len(cells)} code cells from {notebook_path}")
     print(f"Repeats: {args.repeats}  (repeat 0 = warmup, discarded)")
@@ -448,8 +451,12 @@ def main() -> None:
     for rep in range(args.repeats):
         print(f"--- Repeat {rep} {'(warmup — will be discarded)' if rep == 0 else ''} ---")
         decisions, restores, wall = _run_repeat(
-            cells, cache_root, rep,
-            expected_labels, epsilon_write, min_savings_pct,
+            cells,
+            cache_root,
+            rep,
+            expected_labels,
+            epsilon_write,
+            min_savings_pct,
         )
         if rep == 0:
             print("  Warmup repeat discarded.\n")
@@ -461,13 +468,16 @@ def main() -> None:
         print()
 
     if not all_decisions:
-        print("WARNING: all repeats were warmup (--repeats=1). "
-              "Using warmup data for the report.")
+        print("WARNING: all repeats were warmup (--repeats=1). Using warmup data for the report.")
         # Re-run repeat 0 and use its data for reporting.
         print("--- Repeat 0 (forced single-repeat mode) ---")
         decisions, restores, wall = _run_repeat(
-            cells, cache_root, 0,
-            expected_labels, epsilon_write, min_savings_pct,
+            cells,
+            cache_root,
+            0,
+            expected_labels,
+            epsilon_write,
+            min_savings_pct,
         )
         all_decisions.extend(decisions)
         all_restores.extend(restores)
@@ -497,17 +507,14 @@ def main() -> None:
     _write_jsonl(results_dir / "decisions.jsonl", all_decisions)
     _write_jsonl(results_dir / "restore_times.jsonl", all_restores)
     _write_csv(results_dir / "residuals.csv", residuals)
-    (results_dir / "confusion_matrix.json").write_text(
-        json.dumps(cm, indent=2), encoding="utf-8"
-    )
+    (results_dir / "confusion_matrix.json").write_text(json.dumps(cm, indent=2), encoding="utf-8")
     (results_dir / "report.md").write_text(report_text, encoding="utf-8")
 
     print("\n" + "=" * 60)
     print(report_text)
     print("=" * 60)
     print(f"\nArtifacts written to {results_dir}/")
-    for name in ("decisions.jsonl", "restore_times.jsonl", "residuals.csv",
-                 "confusion_matrix.json", "report.md"):
+    for name in ("decisions.jsonl", "restore_times.jsonl", "residuals.csv", "confusion_matrix.json", "report.md"):
         p = results_dir / name
         size = p.stat().st_size if p.exists() else 0
         print(f"  {name}: {size} bytes")

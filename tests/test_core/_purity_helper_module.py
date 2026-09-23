@@ -8,6 +8,7 @@ Lives in its own module so that:
 3. The qualname is simple — no ``<locals>`` suffix that the analyzer
    currently skips when capturing resolution paths.
 """
+
 from __future__ import annotations
 
 

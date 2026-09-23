@@ -9,6 +9,7 @@
   cached method: the class walk read cash's own wrapper.
 * ``mutable_global`` on the loader of a lazily filled settings dict.
 """
+
 from __future__ import annotations
 
 import importlib
@@ -27,8 +28,7 @@ pytestmark = [pytest.mark.core]
 def _module(tmp_path, monkeypatch, files: dict[str, str]):
     tag = f"_{time.monotonic_ns()}"
     for name, text in files.items():
-        (tmp_path / f"{name}{tag}.py").write_text(
-            textwrap.dedent(text).replace("{tag}", tag), encoding="utf-8")
+        (tmp_path / f"{name}{tag}.py").write_text(textwrap.dedent(text).replace("{tag}", tag), encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
     mods = {name: importlib.import_module(f"{name}{tag}") for name in files}
     for full in [f"{n}{tag}" for n in files]:
@@ -46,14 +46,20 @@ def _messages(tmp_path, fn, *args):
 
 def test_a_numpy_function_named_like_a_list_method_is_not_a_write(tmp_path, monkeypatch):
     np = pytest.importorskip("numpy")
-    mods = _module(tmp_path, monkeypatch, {"npsort": """
+    mods = _module(
+        tmp_path,
+        monkeypatch,
+        {
+            "npsort": """
         import numpy as np
 
         def work(x):
             y = np.sort(x)
             z = np.append(y, 1.0)
             return float(z[0])
-    """})
+    """
+        },
+    )
     text = _messages(tmp_path, mods["npsort"].work, np.array([2.0, 1.0]))
     assert "write method" not in text, text
 
@@ -62,18 +68,28 @@ def test_a_numpy_save_is_still_a_write(tmp_path, monkeypatch):
     """Control: only the container-mutator names are exempt on a module."""
     np = pytest.importorskip("numpy")
     out = tmp_path / "out.npy"
-    mods = _module(tmp_path, monkeypatch, {"npsave": f"""
+    mods = _module(
+        tmp_path,
+        monkeypatch,
+        {
+            "npsave": f"""
         import numpy as np
 
         def work(x):
             np.save({str(out)!r}, x)
             return 1
-    """})
+    """
+        },
+    )
     assert "np.save() - write method" in _messages(tmp_path, mods["npsave"].work, np.array([1.0]))
 
 
 def test_sleep_and_a_log_helper_are_not_discarded_calls(tmp_path, monkeypatch):
-    mods = _module(tmp_path, monkeypatch, {"sleepy": """
+    mods = _module(
+        tmp_path,
+        monkeypatch,
+        {
+            "sleepy": """
         import sys, time
         from time import sleep
 
@@ -85,7 +101,9 @@ def test_sleep_and_a_log_helper_are_not_discarded_calls(tmp_path, monkeypatch):
             sleep(0.001)
             _log("step")
             return n
-    """})
+    """
+        },
+    )
     text = _messages(tmp_path, mods["sleepy"].work, 1)
     assert "discards return of time.sleep" not in text
     assert "discards return of sleep" not in text
@@ -94,8 +112,11 @@ def test_sleep_and_a_log_helper_are_not_discarded_calls(tmp_path, monkeypatch):
 
 
 def test_a_line_inside_a_wraps_wrapper_is_numbered_in_its_own_file(tmp_path, monkeypatch):
-    mods = _module(tmp_path, monkeypatch, {
-        "deco": """
+    mods = _module(
+        tmp_path,
+        monkeypatch,
+        {
+            "deco": """
             import functools, sys
 
             def timed(fn):
@@ -106,7 +127,8 @@ def test_a_line_inside_a_wraps_wrapper_is_numbered_in_its_own_file(tmp_path, mon
                     return out
                 return wrapper
         """,
-        "helpers": "\n" * 40 + """
+            "helpers": "\n" * 40
+            + """
 from deco{tag} import timed
 
 @timed
@@ -116,13 +138,18 @@ def slow_square(x):
 def work(x):
     return slow_square(x)
 """,
-    })
+        },
+    )
     text = _messages(tmp_path, mods["helpers"].work, 3)
     assert "line 8: [impure_call] print()" in text, text
 
 
 def test_a_class_with_cached_methods_does_not_report_cash_s_own_globals(tmp_path, monkeypatch):
-    mods = _module(tmp_path, monkeypatch, {"model": """
+    mods = _module(
+        tmp_path,
+        monkeypatch,
+        {
+            "model": """
         import cash
 
         c = cash.Cash(cache_dir={cache!r})
@@ -138,21 +165,25 @@ def test_a_class_with_cached_methods_does_not_report_cash_s_own_globals(tmp_path
             @c.cache
             def score(self, xs):
                 return sum(xs) * self.k
-    """.replace("{cache!r}", repr(str(tmp_path / "mcache")))})
+    """.replace("{cache!r}", repr(str(tmp_path / "mcache")))
+        },
+    )
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
         mods["model"].Model(3).fit([1, 2])
     assert not [w for w in rec if "ACTIVE_CONFIG" in str(w.message)]
 
 
-def test_a_cached_function_called_through_its_module_does_not_report_cash_s_globals(
-        tmp_path, monkeypatch):
+def test_a_cached_function_called_through_its_module_does_not_report_cash_s_globals(tmp_path, monkeypatch):
     """Round 22: ``rates.fetch(day)`` inside a cached ``process`` warned about
     'rates.fetch.ACTIVE_CONFIG' on every run -- the module walk's twin of the
     class walk above. The user's constants inside ``fetch`` still count."""
     cache = repr(str(tmp_path / "rcache"))
-    mods = _module(tmp_path, monkeypatch, {
-        "rates": f"""
+    mods = _module(
+        tmp_path,
+        monkeypatch,
+        {
+            "rates": f"""
             import cash
             c = cash.Cash(cache_dir={cache})
             BASE = 1.0
@@ -161,20 +192,25 @@ def test_a_cached_function_called_through_its_module_does_not_report_cash_s_glob
             def fetch(day):
                 return BASE + len(day) / 100
         """,
-        "daily": """
+            "daily": """
             import rates{tag} as rates
 
             def process(day):
                 return rates.fetch(day) * 2
         """,
-    })
+        },
+    )
     text = _messages(tmp_path, mods["daily"].process, "2026-06-01")
     assert "ACTIVE_CONFIG" not in text, text
     assert "KEY-UNHASHABLE-GLOBAL" not in text, text
 
 
 def test_the_loader_of_a_settings_dict_is_not_a_stale_read(tmp_path, monkeypatch):
-    mods = _module(tmp_path, monkeypatch, {"settings": """
+    mods = _module(
+        tmp_path,
+        monkeypatch,
+        {
+            "settings": """
         _CFG = {}
 
         def load():
@@ -189,7 +225,9 @@ def test_the_loader_of_a_settings_dict_is_not_a_stale_read(tmp_path, monkeypatch
 
         def work():
             return get("threshold") * 10
-    """})
+    """
+        },
+    )
     mods["settings"].load()
     text = _messages(tmp_path, mods["settings"].work)
     assert "mutable_global" not in text, text

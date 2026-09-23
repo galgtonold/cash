@@ -19,6 +19,7 @@ container -- there is none on this machine, and the parsing (v2's ``max``,
 v1's huge sentinel) is the part that can be wrong. Labelled as such rather than
 claimed as a container test.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -43,7 +44,7 @@ def test_no_cgroup_files_means_no_limit(cgroup):
 def test_a_v2_limit_is_read(cgroup):
     v2, _ = cgroup
     v2.write_text("2147483648\n", encoding="utf-8")
-    assert adaptive_caps._cgroup_memory_limit() == 2 * 1024 ** 3
+    assert adaptive_caps._cgroup_memory_limit() == 2 * 1024**3
 
 
 def test_v2_max_means_unlimited(cgroup):
@@ -56,7 +57,7 @@ def test_v2_max_means_unlimited(cgroup):
 def test_a_v1_limit_is_read_when_v2_is_absent(cgroup):
     _, v1 = cgroup
     v1.write_text("1073741824\n", encoding="utf-8")
-    assert adaptive_caps._cgroup_memory_limit() == 1024 ** 3
+    assert adaptive_caps._cgroup_memory_limit() == 1024**3
 
 
 def test_the_v1_sentinel_is_not_a_limit(cgroup):
@@ -75,18 +76,19 @@ def test_garbage_is_ignored_rather_than_raising(cgroup):
 
 # --- what the budget does with it -------------------------------------------
 
+
 def test_the_budget_is_the_smaller_of_the_two(cgroup, monkeypatch):
     """The container case: a big host, a small limit."""
     v2, _ = cgroup
-    v2.write_text(str(2 * 1024 ** 3), encoding="utf-8")
-    monkeypatch.setattr(adaptive_caps, "_total_system_ram", lambda: 64 * 1024 ** 3)
+    v2.write_text(str(2 * 1024**3), encoding="utf-8")
+    monkeypatch.setattr(adaptive_caps, "_total_system_ram", lambda: 64 * 1024**3)
 
-    assert adaptive_caps._memory_budget() == 2 * 1024 ** 3
+    assert adaptive_caps._memory_budget() == 2 * 1024**3
 
 
 def test_the_host_total_is_used_when_nothing_limits_the_process(cgroup, monkeypatch):
-    monkeypatch.setattr(adaptive_caps, "_total_system_ram", lambda: 64 * 1024 ** 3)
-    assert adaptive_caps._memory_budget() == 64 * 1024 ** 3
+    monkeypatch.setattr(adaptive_caps, "_total_system_ram", lambda: 64 * 1024**3)
+    assert adaptive_caps._memory_budget() == 64 * 1024**3
 
 
 def test_a_limited_container_gets_a_cap_inside_its_limit(cgroup, monkeypatch):
@@ -97,16 +99,16 @@ def test_a_limited_container_gets_a_cap_inside_its_limit(cgroup, monkeypatch):
     ceiling: twice what it was allowed to allocate in total.
     """
     v2, _ = cgroup
-    v2.write_text(str(2 * 1024 ** 3), encoding="utf-8")
-    monkeypatch.setattr(adaptive_caps, "_total_system_ram", lambda: 64 * 1024 ** 3)
+    v2.write_text(str(2 * 1024**3), encoding="utf-8")
+    monkeypatch.setattr(adaptive_caps, "_total_system_ram", lambda: 64 * 1024**3)
 
     cap = adaptive_caps.resolve_ram_cap()
 
-    assert cap < 2 * 1024 ** 3, "a cache budget above the container's own limit"
+    assert cap < 2 * 1024**3, "a cache budget above the container's own limit"
     assert cap == adaptive_caps.RAM_FLOOR
 
 
 def test_an_unlimited_process_is_unaffected(cgroup, monkeypatch):
     """The control: no cgroup limit, so the answer must not change."""
-    monkeypatch.setattr(adaptive_caps, "_total_system_ram", lambda: 64 * 1024 ** 3)
+    monkeypatch.setattr(adaptive_caps, "_total_system_ram", lambda: 64 * 1024**3)
     assert adaptive_caps.resolve_ram_cap() == adaptive_caps.RAM_CEILING

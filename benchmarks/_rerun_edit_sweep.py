@@ -15,6 +15,7 @@ Usage:
     python benchmarks/_rerun_edit_sweep.py <results-dir>
         [--max-sites N] [--session {restart,live}] [--timeout S]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -40,39 +41,40 @@ def _summarise(results_dir: pathlib.Path, session_mode: str) -> None:
             continue
         nulls = [s for s in report["scenarios"] if s["kind"] != "linked"]
         controls = [s for s in report["scenarios"] if s["kind"] == "linked"]
-        rows.append((
-            pathlib.Path(report["notebook"]).name,
-            report["restorable_count"],
-            sum(s["wasted_count"] for s in nulls),
-            sum(s["wasted_seconds"] for s in nulls),
-            len(nulls),
-            all(c["control_sink_recomputed"] for c in controls) if controls else None,
-        ))
+        rows.append(
+            (
+                pathlib.Path(report["notebook"]).name,
+                report["restorable_count"],
+                sum(s["wasted_count"] for s in nulls),
+                sum(s["wasted_seconds"] for s in nulls),
+                len(nulls),
+                all(c["control_sink_recomputed"] for c in controls) if controls else None,
+            )
+        )
 
     if not rows:
         print("\nno results to summarise")
         return
 
     print(f"\n=== edit sweep ({session_mode}) ===")
-    print(f"{'notebook':38s} {'restorable':>10s} {'wasted':>8s} "
-          f"{'wasted s':>9s} {'scenarios':>10s} {'control':>8s}")
+    print(f"{'notebook':38s} {'restorable':>10s} {'wasted':>8s} {'wasted s':>9s} {'scenarios':>10s} {'control':>8s}")
     for name, restorable, wasted, secs, n, control_ok in rows:
         # A control that did not fire means this notebook's zeros are not
         # evidence of anything -- say so on the row rather than in a footnote.
         control = "-" if control_ok is None else ("ok" if control_ok else "BROKEN")
-        print(f"{name[:38]:38s} {restorable:10d} {wasted:8d} "
-              f"{secs:9.2f} {n:10d} {control:>8s}")
-    print("\n'wasted' counts statements that restore when nothing is edited "
-          "but recompute after an edit\nthat cannot have invalidated them. "
-          "Zero is the target; a BROKEN control voids that row.")
+        print(f"{name[:38]:38s} {restorable:10d} {wasted:8d} {secs:9.2f} {n:10d} {control:>8s}")
+    print(
+        "\n'wasted' counts statements that restore when nothing is edited "
+        "but recompute after an edit\nthat cannot have invalidated them. "
+        "Zero is the target; a BROKEN control voids that row."
+    )
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("results_dir")
     ap.add_argument("--max-sites", type=int, default=3)
-    ap.add_argument("--session", dest="session_mode", default="restart",
-                    choices=["restart", "live"])
+    ap.add_argument("--session", dest="session_mode", default="restart", choices=["restart", "live"])
     ap.add_argument("--timeout", type=int, default=1800)
     args = ap.parse_args()
 
@@ -88,10 +90,15 @@ def main() -> int:
             continue
         t0 = time.perf_counter()
         cmd = [
-            sys.executable, str(DRIVER), nb,
-            "--results-dir", str(out),
-            "--max-sites", str(args.max_sites),
-            "--session", args.session_mode,
+            sys.executable,
+            str(DRIVER),
+            nb,
+            "--results-dir",
+            str(out),
+            "--max-sites",
+            str(args.max_sites),
+            "--session",
+            args.session_mode,
             "--quiet",
         ]
         # UTF-8 for the child, for the same reason the overhead sweep does
@@ -102,9 +109,16 @@ def main() -> int:
         # codec and loses the output to a dead reader thread.
         env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
         try:
-            p = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True,
-                               encoding="utf-8", errors="replace",
-                               timeout=args.timeout, env=env)
+            p = subprocess.run(
+                cmd,
+                cwd=REPO,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=args.timeout,
+                env=env,
+            )
         except subprocess.TimeoutExpired:
             print(f"TIMEOUT {nb}", flush=True)
             failures.append(f"{nb}: timeout")

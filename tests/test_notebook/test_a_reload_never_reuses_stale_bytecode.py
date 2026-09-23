@@ -11,6 +11,7 @@ the old code, and the badge said MODULE RELOADED over a stale answer: the
 intermittent ``test_a_helper_edit_reaches_a_cell_below::test_a_from_import``
 failure (sweep9, 2026-09-21; once in round 28).
 """
+
 import importlib
 import os
 import sys
@@ -33,7 +34,7 @@ def helper(tmp_path, monkeypatch):
 
 def _edit_within_the_same_second(path):
     first = os.stat(path).st_mtime
-    path.write_text("def f(rows):\n    return max(rows)\n", encoding="utf-8")   # same size
+    path.write_text("def f(rows):\n    return max(rows)\n", encoding="utf-8")  # same size
     second = int(first) + 0.5
     os.utime(path, (second, second))
     assert int(os.stat(path).st_mtime) == int(first)
@@ -49,10 +50,11 @@ def test_a_reload_runs_the_edit_when_the_pyc_cannot_be_deleted(helper, monkeypat
 
     real_remove = os.remove
 
-    def locked(p, *a, **k):              # what an antivirus scan's open handle does
+    def locked(p, *a, **k):  # what an antivirus scan's open handle does
         if str(p).endswith(".pyc"):
             raise PermissionError(32, "The process cannot access the file", str(p))
         return real_remove(p, *a, **k)
+
     monkeypatch.setattr(os, "remove", locked)
 
     assert tracker.reload_module(name)
@@ -61,7 +63,7 @@ def test_a_reload_runs_the_edit_when_the_pyc_cannot_be_deleted(helper, monkeypat
 
 def test_a_reload_runs_the_edit_when_the_pyc_is_deleted(helper):
     name, path = helper
-    module = importlib.import_module(name)
+    importlib.import_module(name)
     tracker = FunctionTracker()
     tracker.track_module(name)
     _edit_within_the_same_second(path)

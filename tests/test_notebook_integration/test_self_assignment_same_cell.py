@@ -24,16 +24,18 @@ class TestSelfAssignmentSameCell:
         After changing only the second self-assignment statement,
         the first should be restored from cache, not recomputed.
         """
-        nb_runner.create_notebook([
-            # Cell 1: Create data
-            "import pandas as pd\ndf = pd.DataFrame({'A': [3, 1, 2], 'B': [10, 20, 30]})",
-            # Cell 2: Sort (self-assignment)
-            "df = df.sort_values('A').reset_index(drop=True)",
-            # Cell 3: Two self-assignment statements
-            "df['C'] = df['A'] * 10\ndf['D'] = df['B'] + 5",
-            # Cell 4: Print result
-            "print(f\"C={list(df['C'])} D={list(df['D'])}\")",
-        ])
+        nb_runner.create_notebook(
+            [
+                # Cell 1: Create data
+                "import pandas as pd\ndf = pd.DataFrame({'A': [3, 1, 2], 'B': [10, 20, 30]})",
+                # Cell 2: Sort (self-assignment)
+                "df = df.sort_values('A').reset_index(drop=True)",
+                # Cell 3: Two self-assignment statements
+                "df['C'] = df['A'] * 10\ndf['D'] = df['B'] + 5",
+                # Cell 4: Print result
+                "print(f\"C={list(df['C'])} D={list(df['D'])}\")",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         output1 = nb_runner.get_output(4)
@@ -54,25 +56,27 @@ class TestSelfAssignmentSameCell:
         Verify the first statement is RESTORED or SKIPPED (not COMPUTED) after the
         second statement changes. Use time.sleep to distinguish compute from cache.
         """
-        nb_runner.create_notebook([
-            # Cell 1: Create data
-            "import pandas as pd\nimport time\ndf = pd.DataFrame({'A': [3, 1, 2], 'B': [10, 20, 30]})",
-            # Cell 2: Sort
-            "df = df.sort_values('A').reset_index(drop=True)",
-            # Cell 3: Two self-assignment statements - first has a sleep
-            "time.sleep(0.5)\ndf['C'] = df['A'] * 10\ndf['D'] = df['B'] + 5",
-            # Cell 4: Verify
-            "print(f\"C={list(df['C'])} D={list(df['D'])}\")",
-        ])
+        nb_runner.create_notebook(
+            [
+                # Cell 1: Create data
+                "import pandas as pd\nimport time\ndf = pd.DataFrame({'A': [3, 1, 2], 'B': [10, 20, 30]})",
+                # Cell 2: Sort
+                "df = df.sort_values('A').reset_index(drop=True)",
+                # Cell 3: Two self-assignment statements - first has a sleep
+                "time.sleep(0.5)\ndf['C'] = df['A'] * 10\ndf['D'] = df['B'] + 5",
+                # Cell 4: Verify
+                "print(f\"C={list(df['C'])} D={list(df['D'])}\")",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
         # Change only second statement
         nb_runner.set_cell_source(3, "time.sleep(0.5)\ndf['C'] = df['A'] * 10\ndf['D'] = df['B'] + 100")
 
-        t_start = __import__('time').time()
+        t_start = __import__("time").time()
         nb_runner.run_cell(3)
-        t_elapsed = __import__('time').time() - t_start
+        t_elapsed = __import__("time").time() - t_start
 
         # If the first statement (with sleep(0.5)) was recomputed, cell 3 takes >1s
         # (0.5 for first stmt + some time for second stmt)
@@ -100,30 +104,32 @@ class TestSelfAssignmentSameCell:
         More realistic scenario matching the original bug report:
         df['VolAdj'] = df.groupby(...).transform(...)
         df['SMA'] = df.groupby(...).transform(...)
-        
+
         Change SMA window, VolAdj should cache-hit.
         """
-        nb_runner.create_notebook([
-            # Cell 1: Create data
-            (
-                "import pandas as pd\n"
-                "import numpy as np\n"
-                "np.random.seed(42)\n"
-                "df = pd.DataFrame({\n"
-                "    'Ticker': ['A'] * 20 + ['B'] * 20,\n"
-                "    'Close': np.random.randn(40).cumsum() + 100\n"
-                "})"
-            ),
-            # Cell 2: Sort
-            "df = df.sort_values(['Ticker']).reset_index(drop=True)",
-            # Cell 3: Two groupby transforms (self-assignment)
-            (
-                "df['VolAdj'] = df.groupby('Ticker')['Close'].transform(lambda x: x.rolling(window=5).std())\n"
-                "df['SMA'] = df.groupby('Ticker')['Close'].transform(lambda x: x.rolling(window=10).mean())"
-            ),
-            # Cell 4: Print summary
-            "print(f\"VolAdj_mean={df['VolAdj'].mean():.4f} SMA_mean={df['SMA'].mean():.4f}\")",
-        ])
+        nb_runner.create_notebook(
+            [
+                # Cell 1: Create data
+                (
+                    "import pandas as pd\n"
+                    "import numpy as np\n"
+                    "np.random.seed(42)\n"
+                    "df = pd.DataFrame({\n"
+                    "    'Ticker': ['A'] * 20 + ['B'] * 20,\n"
+                    "    'Close': np.random.randn(40).cumsum() + 100\n"
+                    "})"
+                ),
+                # Cell 2: Sort
+                "df = df.sort_values(['Ticker']).reset_index(drop=True)",
+                # Cell 3: Two groupby transforms (self-assignment)
+                (
+                    "df['VolAdj'] = df.groupby('Ticker')['Close'].transform(lambda x: x.rolling(window=5).std())\n"
+                    "df['SMA'] = df.groupby('Ticker')['Close'].transform(lambda x: x.rolling(window=10).mean())"
+                ),
+                # Cell 4: Print summary
+                "print(f\"VolAdj_mean={df['VolAdj'].mean():.4f} SMA_mean={df['SMA'].mean():.4f}\")",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         output1 = nb_runner.get_output(4)
@@ -134,9 +140,10 @@ class TestSelfAssignmentSameCell:
         volAdj_mean_1 = output1.split("VolAdj_mean=")[1].split(" ")[0]
 
         # Change ONLY the SMA window (10 -> 3)
-        nb_runner.set_cell_source(3,
+        nb_runner.set_cell_source(
+            3,
             "df['VolAdj'] = df.groupby('Ticker')['Close'].transform(lambda x: x.rolling(window=5).std())\n"
-            "df['SMA'] = df.groupby('Ticker')['Close'].transform(lambda x: x.rolling(window=3).mean())"
+            "df['SMA'] = df.groupby('Ticker')['Close'].transform(lambda x: x.rolling(window=3).mean())",
         )
         nb_runner.run_cell(3)
         nb_runner.run_cell(4)
@@ -155,41 +162,44 @@ class TestSelfAssignmentSameCell:
         and function definitions BETWEEN the two self-assignment statements.
         This matches the financial_analysis_demo.ipynb pattern.
         """
-        nb_runner.create_notebook([
-            # Cell 1: Create data
-            (
-                "import pandas as pd\n"
-                "import numpy as np\n"
-                "import time\n"
-                "np.random.seed(42)\n"
-                "df = pd.DataFrame({\n"
-                "    'Ticker': ['A'] * 20 + ['B'] * 20,\n"
-                "    'Close': np.random.randn(40).cumsum() + 100\n"
-                "})"
-            ),
-            # Cell 2: Sort
-            "df = df.sort_values(['Ticker']).reset_index(drop=True)",
-            # Cell 3: Realistic cell with prints, timing, and two self-assignments
-            (
-                "print('Calculating VolAdj...')\n"
-                "t0 = time.time()\n"
-                "df['VolAdj'] = df.groupby('Ticker')['Close'].transform(lambda x: x.rolling(window=5).std())\n"
-                "print(f'VolAdj done in {time.time() - t0:.2f}s')\n"
-                "print('Calculating SMA...')\n"
-                "t0 = time.time()\n"
-                "df['SMA'] = df.groupby('Ticker')['Close'].transform(lambda x: x.rolling(window=10).mean())\n"
-                "print(f'SMA done in {time.time() - t0:.2f}s')"
-            ),
-            # Cell 4: Print summary
-            "print(f\"VolAdj_mean={df['VolAdj'].mean():.4f} SMA_mean={df['SMA'].mean():.4f}\")",
-        ])
+        nb_runner.create_notebook(
+            [
+                # Cell 1: Create data
+                (
+                    "import pandas as pd\n"
+                    "import numpy as np\n"
+                    "import time\n"
+                    "np.random.seed(42)\n"
+                    "df = pd.DataFrame({\n"
+                    "    'Ticker': ['A'] * 20 + ['B'] * 20,\n"
+                    "    'Close': np.random.randn(40).cumsum() + 100\n"
+                    "})"
+                ),
+                # Cell 2: Sort
+                "df = df.sort_values(['Ticker']).reset_index(drop=True)",
+                # Cell 3: Realistic cell with prints, timing, and two self-assignments
+                (
+                    "print('Calculating VolAdj...')\n"
+                    "t0 = time.time()\n"
+                    "df['VolAdj'] = df.groupby('Ticker')['Close'].transform(lambda x: x.rolling(window=5).std())\n"
+                    "print(f'VolAdj done in {time.time() - t0:.2f}s')\n"
+                    "print('Calculating SMA...')\n"
+                    "t0 = time.time()\n"
+                    "df['SMA'] = df.groupby('Ticker')['Close'].transform(lambda x: x.rolling(window=10).mean())\n"
+                    "print(f'SMA done in {time.time() - t0:.2f}s')"
+                ),
+                # Cell 4: Print summary
+                "print(f\"VolAdj_mean={df['VolAdj'].mean():.4f} SMA_mean={df['SMA'].mean():.4f}\")",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         output1 = nb_runner.get_output(4)
         volAdj_mean_1 = output1.split("VolAdj_mean=")[1].split(" ")[0]
 
         # Change ONLY the SMA window (10 -> 3)
-        nb_runner.set_cell_source(3,
+        nb_runner.set_cell_source(
+            3,
             "print('Calculating VolAdj...')\n"
             "t0 = time.time()\n"
             "df['VolAdj'] = df.groupby('Ticker')['Close'].transform(lambda x: x.rolling(window=5).std())\n"
@@ -197,7 +207,7 @@ class TestSelfAssignmentSameCell:
             "print('Calculating SMA...')\n"
             "t0 = time.time()\n"
             "df['SMA'] = df.groupby('Ticker')['Close'].transform(lambda x: x.rolling(window=3).mean())\n"
-            "print(f'SMA done in {time.time() - t0:.2f}s')"
+            "print(f'SMA done in {time.time() - t0:.2f}s')",
         )
         nb_runner.run_cell(3)
         nb_runner.run_cell(4)
@@ -216,16 +226,18 @@ class TestSelfAssignmentSameCell:
         After kernel restart, the first statement should be restored from
         disk cache (not recomputed) when only the second statement changes.
         """
-        nb_runner.create_notebook([
-            # Cell 1: Create data
-            "import pandas as pd\ndf = pd.DataFrame({'A': [3, 1, 2], 'B': [10, 20, 30]})",
-            # Cell 2: Sort
-            "df = df.sort_values('A').reset_index(drop=True)",
-            # Cell 3: Two self-assignment statements
-            "df['C'] = df['A'] * 10\ndf['D'] = df['B'] + 5",
-            # Cell 4: Print result
-            "print(f\"C={list(df['C'])} D={list(df['D'])}\")",
-        ])
+        nb_runner.create_notebook(
+            [
+                # Cell 1: Create data
+                "import pandas as pd\ndf = pd.DataFrame({'A': [3, 1, 2], 'B': [10, 20, 30]})",
+                # Cell 2: Sort
+                "df = df.sort_values('A').reset_index(drop=True)",
+                # Cell 3: Two self-assignment statements
+                "df['C'] = df['A'] * 10\ndf['D'] = df['B'] + 5",
+                # Cell 4: Print result
+                "print(f\"C={list(df['C'])} D={list(df['D'])}\")",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         output1 = nb_runner.get_output(4)

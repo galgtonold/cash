@@ -20,6 +20,7 @@ type is even read -- so an exception there drops the message unhandled. For an
 `CapturingDisplayPublisher` lacks; those are called by user code rather than by
 dispatch, but they are the same defect and are covered here too.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -81,9 +82,7 @@ def test_set_parent_during_capture_reaches_the_real_publisher(shell_with_recordi
     with StatementProcessor._make_capture_ctx(stream_output=False, skip_capture=False):
         shell.display_pub.set_parent(parent)
 
-    assert real.parents == [parent], (
-        "the parent set during capture never reached the real publisher"
-    )
+    assert real.parents == [parent], "the parent set during capture never reached the real publisher"
 
 
 def test_display_hooks_survive_capture(shell_with_recording_pub):
@@ -108,9 +107,7 @@ def test_capture_still_captures(shell_with_recording_pub):
     from IPython.display import display
 
     shell, real = shell_with_recording_pub
-    with StatementProcessor._make_capture_ctx(
-        stream_output=False, skip_capture=False
-    ) as captured:
+    with StatementProcessor._make_capture_ctx(stream_output=False, skip_capture=False) as captured:
         print("to stdout")
         display({"text/plain": "rich"}, raw=True)
 

@@ -15,6 +15,7 @@ proves nothing: the same assertion passes if the loop is never cached at all,
 and a statement under the cost floor is never cached. So the unrolled arm has to
 be present *and* have to be caching, or this file is measuring nothing.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -116,7 +117,7 @@ def test_an_unchanged_rerun_of_the_loop_still_restores(nb_runner):
     nb_runner.run_all()
     first = _total(nb_runner, 4)
 
-    nb_runner.run_all()          # nothing edited
+    nb_runner.run_all()  # nothing edited
     assert _total(nb_runner, 4) == first
 
     # `%cash_badge print` in the setup cell: nb_runner strips the HTML badge
@@ -130,8 +131,7 @@ def test_an_unchanged_rerun_of_the_loop_still_restores(nb_runner):
     # both expensive enough to be cached and the exact statement whose key this
     # fix changes, so it is the one that moves if the fix over-invalidates.
     badge = nb_runner.get_output(3)
-    restored = [ln for ln in badge.splitlines()
-                if "CACHED" in ln and "fillna" in ln]
+    restored = [ln for ln in badge.splitlines() if "CACHED" in ln and "fillna" in ln]
     assert restored, (
         f"`feat = feat.fillna(...)` was recomputed on an unchanged re-run; the "
         f"fix has traded staleness for permanent invalidation. Cell 3 badge:\n"

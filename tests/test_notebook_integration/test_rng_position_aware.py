@@ -10,6 +10,7 @@ position it holds top-to-bottom, not from wherever the live state was last left.
 Testable in plain pytest: nb_runner writes a real .ipynb and persists edits
 without running the cell. Oracle = the same cell sources run in order, no cash.
 """
+
 import re
 
 import pytest
@@ -55,7 +56,7 @@ def test_cas226_draw_above_a_later_seed_keys_on_its_own_seed(nb_runner):
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert _v(nb_runner, 3, "A") == pytest.approx(SEED0_P0, abs=1e-9)
-    nb_runner.run_cell(3)   # re-run the draw out of order (global state is now at seed(1))
+    nb_runner.run_cell(3)  # re-run the draw out of order (global state is now at seed(1))
     got = _v(nb_runner, 3, "A")
     assert got == pytest.approx(SEED0_P0, abs=1e-9), (
         f"draw took a downstream seed's value: got {got}, want seed(0) p0 {SEED0_P0}"
@@ -79,12 +80,14 @@ def test_warm_rerun_all_is_unaffected(nb_runner):
 @pytest.mark.timeout(180)
 def test_non_random_cell_rerun_is_untouched(nb_runner):
     """Guard: the mechanism only fires for drawing cells."""
-    nb_runner.create_notebook([
-        C_ON,
-        C_SEED0,
-        C_DRAW_A,
-        "s = a[0] * 2\nprint('S', s)",   # pure, no RNG
-    ])
+    nb_runner.create_notebook(
+        [
+            C_ON,
+            C_SEED0,
+            C_DRAW_A,
+            "s = a[0] * 2\nprint('S', s)",  # pure, no RNG
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     s1 = _v(nb_runner, 4, "S")
@@ -105,8 +108,8 @@ def test_combined_edit_seed_with_intervening_draw(nb_runner):
     nb_runner.create_notebook([C_ON, C_SEED0, C_DRAW_A, C_DRAW_B])
     nb_runner.start_kernel()
     nb_runner.run_all()
-    nb_runner.set_cell_source(2, C_SEED1)   # edit the seed, do NOT re-run it
-    nb_runner.run_cell(4)                    # run only the 2nd draw
+    nb_runner.set_cell_source(2, C_SEED1)  # edit the seed, do NOT re-run it
+    nb_runner.run_cell(4)  # run only the 2nd draw
     got = _v(nb_runner, 4, "B")
     assert got == pytest.approx(0.7203244934421581, abs=1e-9), (
         f"combined case: got {got}, want seed(1) position-1 0.720324"
@@ -118,17 +121,19 @@ def test_indirect_draw_inside_a_function(nb_runner):
     """A draw INSIDE a called function is invisible to static analysis; the
     runtime observer (before/after state diff) catches it, so editing the seed
     and re-running the caller refreshes correctly."""
-    nb_runner.create_notebook([
-        C_ON,
-        C_SEED0,
-        "def f():\n    return float(np.random.rand(1)[0])",
-        "x = f()\nprint('X', x)",   # indirect draw — no np.random in the cell source
-    ])
+    nb_runner.create_notebook(
+        [
+            C_ON,
+            C_SEED0,
+            "def f():\n    return float(np.random.rand(1)[0])",
+            "x = f()\nprint('X', x)",  # indirect draw — no np.random in the cell source
+        ]
+    )
     nb_runner.start_kernel()
-    nb_runner.run_all()                       # observes: cell 4 changed the RNG
+    nb_runner.run_all()  # observes: cell 4 changed the RNG
     assert _v(nb_runner, 4, "X") == pytest.approx(SEED0_P0, abs=1e-9)
-    nb_runner.set_cell_source(2, C_SEED1)     # edit the seed, do NOT re-run it
-    nb_runner.run_cell(4)                      # re-run the caller
+    nb_runner.set_cell_source(2, C_SEED1)  # edit the seed, do NOT re-run it
+    nb_runner.run_cell(4)  # re-run the caller
     got = _v(nb_runner, 4, "X")
     assert got == pytest.approx(0.417022004702574, abs=1e-9), (
         f"indirect draw not refreshed on seed edit: got {got}, want seed(1) first 0.417022"

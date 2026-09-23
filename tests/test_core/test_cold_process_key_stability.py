@@ -12,6 +12,7 @@ across processes.
 analyzer used to treat that call as a body statement and walk into cash's own
 decorator machinery, flagging its internal mutations as the user's.
 """
+
 from __future__ import annotations
 
 import json
@@ -20,8 +21,6 @@ import subprocess
 import sys
 import textwrap
 import warnings
-
-import pytest
 
 from cash import Cash, CashImpurityWarning, FileBackend
 
@@ -48,6 +47,7 @@ def _build_chain(c: Cash):
 
 
 # --- #7 -------------------------------------------------------------------
+
 
 def test_lookup_key_equals_store_key_first_call(tmp_path):
     """explain() (pre-execution) and the actual stored key must match on the
@@ -91,10 +91,11 @@ def test_cross_process_consumer_zero_warmup_misses(tmp_path):
     """End-to-end: a fresh *process* that only reads results another process
     computed gets 100% hits (no per-function warm-up recompute)."""
     mod = tmp_path / "qf_chain.py"
-    mod.write_text(textwrap.dedent(f"""
+    mod.write_text(
+        textwrap.dedent(f"""
         import cash
         from cash import FileBackend
-        c = cash.Cash(backend=FileBackend(cache_dir={str(tmp_path / 'c')!r}))
+        c = cash.Cash(backend=FileBackend(cache_dir={str(tmp_path / "c")!r}))
 
         def base_helper(x): return x + 1
 
@@ -106,7 +107,8 @@ def test_cross_process_consumer_zero_warmup_misses(tmp_path):
 
         @c.cache(depends_on=[mid])
         def top(x): return mid(x) + 100
-    """))
+    """)
+    )
     driver = textwrap.dedent("""
         import sys, json, qf_chain
         phase = sys.argv[1]
@@ -120,19 +122,19 @@ def test_cross_process_consumer_zero_warmup_misses(tmp_path):
     env = dict(os.environ, PYTHONPATH=str(tmp_path))
 
     def run(phase):
-        p = subprocess.run([sys.executable, "-c", driver, phase],
-                           capture_output=True, text=True, env=env)
+        p = subprocess.run([sys.executable, "-c", driver, phase], capture_output=True, text=True, env=env)
         return p
 
     run("write")
     out = run("read")
     line = [l for l in out.stdout.splitlines() if l.startswith("RESULT ")]
     assert line, f"no result:\n{out.stdout}\n{out.stderr}"
-    res = json.loads(line[0][len("RESULT "):])
+    res = json.loads(line[0][len("RESULT ") :])
     assert res == {"hits": 3, "misses": 0}, res
 
 
 # --- #9 -------------------------------------------------------------------
+
 
 def test_decorator_line_does_not_leak_cash_internals(tmp_path):
     """A cached function whose decorator is ``@c.cache(depends_on=[...])`` must

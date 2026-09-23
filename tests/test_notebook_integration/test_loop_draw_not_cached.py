@@ -14,6 +14,7 @@ Figure/Axes. If that condition were drawn any wider it would disable
 per-iteration caching for ordinary loop bodies -- trading a correctness bug for
 a silent performance regression. These tests fail if that happens.
 """
+
 import pytest
 
 pytestmark = pytest.mark.libraries
@@ -30,19 +31,14 @@ def test_an_ordinary_loop_body_still_restores_on_a_warm_run(nb_runner):
     and would make this test measure its own instrumentation rather than the
     loop.
     """
-    nb_runner.create_notebook([
-        SETUP,
-        "CALLS = []\n"
-        "def work(x):\n"
-        "    CALLS.append(x)\n"
-        "    return x * 2\n"
-        "print('defined')",
-        "out = []\n"
-        "for i in range(5):\n"
-        "    out.append(work(i))\n"
-        "print('sum', sum(out))",
-        "print('calls', len(CALLS))",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            "CALLS = []\ndef work(x):\n    CALLS.append(x)\n    return x * 2\nprint('defined')",
+            "out = []\nfor i in range(5):\n    out.append(work(i))\nprint('sum', sum(out))",
+            "print('calls', len(CALLS))",
+        ]
+    )
     nb_runner.start_kernel()
 
     nb_runner.run_all()
@@ -51,7 +47,7 @@ def test_an_ordinary_loop_body_still_restores_on_a_warm_run(nb_runner):
     nb_runner.run_all()
     warm = nb_runner.get_output(4)
 
-    assert 'calls' in cold, f"counter cell produced no reading: {cold!r}"
+    assert "calls" in cold, f"counter cell produced no reading: {cold!r}"
     assert warm.strip() == cold.strip(), (
         f"warm pass changed the call count ({cold.strip()!r} -> {warm.strip()!r}): "
         f"per-iteration caching for an ordinary, non-drawing loop regressed"
@@ -69,17 +65,14 @@ def test_a_loop_calling_a_dataframe_method_still_caches(nb_runner):
     """
     pytest.importorskip("pandas")
 
-    nb_runner.create_notebook([
-        SETUP,
-        "import pandas as pd\n"
-        "df = pd.DataFrame({'v': range(20)})\n"
-        "SEEN = []\n"
-        "print('setup')",
-        "for _ in range(3):\n"
-        "    SEEN.append(len(df.head()))\n"
-        "print('seen', SEEN)",
-        "print('n', len(SEEN))",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            "import pandas as pd\ndf = pd.DataFrame({'v': range(20)})\nSEEN = []\nprint('setup')",
+            "for _ in range(3):\n    SEEN.append(len(df.head()))\nprint('seen', SEEN)",
+            "print('n', len(SEEN))",
+        ]
+    )
     nb_runner.start_kernel()
 
     nb_runner.run_all()

@@ -28,12 +28,7 @@ pytestmark = pytest.mark.integration
 # so cell 2 genuinely caches (and therefore genuinely HITs) without persist
 # mode.  The draw stays visible in the statement's RHS, so this is a faithful
 # repro rather than one that hides the call behind a helper.
-_HELPER = (
-    "import numpy as np, random, time\n"
-    "def _slow(v):\n"
-    "    time.sleep(0.05)\n"
-    "    return v\n"
-)
+_HELPER = "import numpy as np, random, time\ndef _slow(v):\n    time.sleep(0.05)\n    return v\n"
 
 
 def _fmt(name):
@@ -46,12 +41,14 @@ def _fmt(name):
 @pytest.mark.timeout(90)
 def test_object_generator_state_replayed_across_cache_hit(nb_runner):
     """A cache hit on the draw statement must advance the live generator."""
-    nb_runner.create_notebook([
-        _HELPER + "rng = np.random.default_rng(42)",
-        "x = _slow(rng.integers(0, 100, 3))",
-        "y = rng.integers(0, 100, 3)",
-        _fmt('x') + "\n" + _fmt('y'),
-    ])
+    nb_runner.create_notebook(
+        [
+            _HELPER + "rng = np.random.default_rng(42)",
+            "x = _slow(rng.integers(0, 100, 3))",
+            "y = rng.integers(0, 100, 3)",
+            _fmt("x") + "\n" + _fmt("y"),
+        ]
+    )
     nb_runner.start_kernel()
 
     # Pass 1 (cold cache) is the oracle.
@@ -77,12 +74,14 @@ def test_object_generator_state_replayed_across_cache_hit(nb_runner):
 @pytest.mark.timeout(90)
 def test_user_held_randomstate_replayed_across_cache_hit(nb_runner):
     """A user-held np.random.RandomState is a carrier too."""
-    nb_runner.create_notebook([
-        _HELPER + "rs = np.random.RandomState(42)",
-        "x = _slow(rs.randint(0, 100, 3))",
-        "y = rs.randint(0, 100, 3)",
-        _fmt('x') + "\n" + _fmt('y'),
-    ])
+    nb_runner.create_notebook(
+        [
+            _HELPER + "rs = np.random.RandomState(42)",
+            "x = _slow(rs.randint(0, 100, 3))",
+            "y = rs.randint(0, 100, 3)",
+            _fmt("x") + "\n" + _fmt("y"),
+        ]
+    )
     nb_runner.start_kernel()
 
     nb_runner.run_all()
@@ -93,20 +92,20 @@ def test_user_held_randomstate_replayed_across_cache_hit(nb_runner):
     nb_runner.run_all()
     out2 = nb_runner.get_output(4)
     assert "x=51,92,14" in out2, out2
-    assert "y=71,60,20" in out2, (
-        f"user-held RandomState not advanced across the hit: {out2!r}"
-    )
+    assert "y=71,60,20" in out2, f"user-held RandomState not advanced across the hit: {out2!r}"
 
 
 @pytest.mark.timeout(90)
 def test_random_dot_random_instance_replayed_across_cache_hit(nb_runner):
     """A stdlib random.Random instance is a carrier too."""
-    nb_runner.create_notebook([
-        _HELPER + "r = random.Random(42)",
-        "x = _slow([r.randint(0, 100) for _ in range(3)])",
-        "y = [r.randint(0, 100) for _ in range(3)]",
-        _fmt('x') + "\n" + _fmt('y'),
-    ])
+    nb_runner.create_notebook(
+        [
+            _HELPER + "r = random.Random(42)",
+            "x = _slow([r.randint(0, 100) for _ in range(3)])",
+            "y = [r.randint(0, 100) for _ in range(3)]",
+            _fmt("x") + "\n" + _fmt("y"),
+        ]
+    )
     nb_runner.start_kernel()
 
     nb_runner.run_all()
@@ -117,9 +116,7 @@ def test_random_dot_random_instance_replayed_across_cache_hit(nb_runner):
     nb_runner.run_all()
     out2 = nb_runner.get_output(4)
     assert "x=81,14,3" in out2, out2
-    assert "y=94,35,31" in out2, (
-        f"random.Random instance not advanced across the hit: {out2!r}"
-    )
+    assert "y=94,35,31" in out2, f"random.Random instance not advanced across the hit: {out2!r}"
 
 
 # --- 3. Control: the global channel must not regress ------------------------
@@ -128,12 +125,14 @@ def test_random_dot_random_instance_replayed_across_cache_hit(nb_runner):
 @pytest.mark.timeout(90)
 def test_global_numpy_random_still_replayed(nb_runner):
     """The already-correct module-global channel keeps working."""
-    nb_runner.create_notebook([
-        _HELPER + "np.random.seed(42)",
-        "x = _slow(np.random.randint(0, 100, 3))",
-        "y = np.random.randint(0, 100, 3)",
-        _fmt('x') + "\n" + _fmt('y'),
-    ])
+    nb_runner.create_notebook(
+        [
+            _HELPER + "np.random.seed(42)",
+            "x = _slow(np.random.randint(0, 100, 3))",
+            "y = np.random.randint(0, 100, 3)",
+            _fmt("x") + "\n" + _fmt("y"),
+        ]
+    )
     nb_runner.start_kernel()
 
     nb_runner.run_all()
@@ -144,9 +143,7 @@ def test_global_numpy_random_still_replayed(nb_runner):
     nb_runner.run_all()
     out2 = nb_runner.get_output(4)
     assert "x=51,92,14" in out2, out2
-    assert "y=71,60,20" in out2, (
-        f"global numpy RNG channel regressed: {out2!r}"
-    )
+    assert "y=71,60,20" in out2, f"global numpy RNG channel regressed: {out2!r}"
 
 
 # --- 4. Control: no over-capture --------------------------------------------
@@ -161,15 +158,13 @@ def test_non_rng_input_is_not_captured(nb_runner):
     exercises the *missing-key* restore branch on a real kernel — the same code
     path an entry written before CAS-90 takes.
     """
-    nb_runner.create_notebook([
-        "import pandas as pd, time\n"
-        "df = pd.DataFrame({'a': [1, 2, 3]})",
-        "def _slow(v):\n"
-        "    time.sleep(0.05)\n"
-        "    return v\n"
-        "total = _slow(int(df['a'].sum()))",
-        "print('total=' + str(total))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import pandas as pd, time\ndf = pd.DataFrame({'a': [1, 2, 3]})",
+            "def _slow(v):\n    time.sleep(0.05)\n    return v\ntotal = _slow(int(df['a'].sum()))",
+            "print('total=' + str(total))",
+        ]
+    )
     nb_runner.start_kernel()
 
     nb_runner.run_all()
@@ -189,32 +184,40 @@ def test_capture_scoped_to_inputs_and_skips_non_rng_objects():
     from cash.notebook.randomness import capture_object_rng_states
 
     ns = {
-        'df': pd.DataFrame({'a': [1, 2, 3]}),
-        'n': 42,
-        's': "hello",
-        'rng': np.random.default_rng(0),
+        "df": pd.DataFrame({"a": [1, 2, 3]}),
+        "n": 42,
+        "s": "hello",
+        "rng": np.random.default_rng(0),
     }
 
     # A statement whose inputs are all non-RNG captures nothing at all, so the
     # payload key is omitted and its shape is unchanged.
-    assert capture_object_rng_states({'df', 'n', 's'}, ns) == {}
+    assert capture_object_rng_states({"df", "n", "s"}, ns) == {}
 
     # Names not in the statement's inputs are never even looked at — this is
     # what bounds the cost (no full user_ns walk).
-    assert capture_object_rng_states({'df'}, ns) == {}
-    assert 'rng' in capture_object_rng_states({'rng', 'df'}, ns)
+    assert capture_object_rng_states({"df"}, ns) == {}
+    assert "rng" in capture_object_rng_states({"rng", "df"}, ns)
 
     # Missing names are tolerated.
-    assert capture_object_rng_states({'nope'}, ns) == {}
+    assert capture_object_rng_states({"nope"}, ns) == {}
 
     # The module-global singletons are owned by the global channel, not this
     # one — capturing them here would let a stale alias fight the global state.
-    assert capture_object_rng_states(
-        {'g'}, {'g': np.random.mtrand._rand},
-    ) == {}
-    assert capture_object_rng_states(
-        {'g'}, {'g': random._inst},
-    ) == {}
+    assert (
+        capture_object_rng_states(
+            {"g"},
+            {"g": np.random.mtrand._rand},
+        )
+        == {}
+    )
+    assert (
+        capture_object_rng_states(
+            {"g"},
+            {"g": random._inst},
+        )
+        == {}
+    )
 
 
 def test_foreign_and_unpicklable_carriers_are_skipped():
@@ -230,16 +233,20 @@ def test_foreign_and_unpicklable_carriers_are_skipped():
 
     # random.SystemRandom subclasses random.Random but getstate() raises
     # NotImplementedError — it must be skipped silently at capture time.
-    assert capture_object_rng_states(
-        {'sr'}, {'sr': random.SystemRandom()},
-    ) == {}
+    assert (
+        capture_object_rng_states(
+            {"sr"},
+            {"sr": random.SystemRandom()},
+        )
+        == {}
+    )
 
     # On the restore side, a state the live bit generator rejects (a foreign or
     # mismatched bit generator) must be dropped, not propagated to the user.
     rng = np.random.default_rng(0)
-    states = capture_object_rng_states({'rng'}, {'rng': rng})
-    states['rng']['state'] = {'bit_generator': 'NotAPCG64', 'state': 'garbage'}
-    restore_object_rng_states(states, {'rng': rng})  # must not raise
+    states = capture_object_rng_states({"rng"}, {"rng": rng})
+    states["rng"]["state"] = {"bit_generator": "NotAPCG64", "state": "garbage"}
+    restore_object_rng_states(states, {"rng": rng})  # must not raise
 
 
 # --- 5. Backward compatibility ----------------------------------------------
@@ -256,13 +263,13 @@ def test_payload_without_object_rng_field_restores_cleanly():
 
     # An old payload simply has no 'rng_object_states' key; the restore path
     # reads it with .get(), yielding None.
-    old_payload = {'variables': {'x': 1}, 'stdout': '', 'rng_state': {}}
-    restore_object_rng_states(old_payload.get('rng_object_states'), {'rng': rng})
+    old_payload = {"variables": {"x": 1}, "stdout": "", "rng_state": {}}
+    restore_object_rng_states(old_payload.get("rng_object_states"), {"rng": rng})
 
     assert rng.bit_generator.state == before, "no-op restore perturbed the RNG"
 
     # Empty dict is a no-op too.
-    restore_object_rng_states({}, {'rng': rng})
+    restore_object_rng_states({}, {"rng": rng})
     assert rng.bit_generator.state == before
 
 
@@ -277,19 +284,19 @@ def test_restore_guards_on_presence_and_type_match():
 
     rng = np.random.default_rng(42)
     rng.integers(0, 100, 3)
-    states = capture_object_rng_states({'rng'}, {'rng': rng})
+    states = capture_object_rng_states({"rng"}, {"rng": rng})
     assert states
 
     # Name absent from the namespace -> skipped, no raise.
     restore_object_rng_states(states, {})
 
     # Name now holds a non-carrier -> type match fails, skipped, no raise.
-    restore_object_rng_states(states, {'rng': "not an rng"})
+    restore_object_rng_states(states, {"rng": "not an rng"})
 
     # Name holds a different carrier kind -> skipped rather than forced.
     rs = np.random.RandomState(0)
     rs_state_before = rs.get_state()
-    restore_object_rng_states(states, {'rng': rs})
+    restore_object_rng_states(states, {"rng": rs})
     assert rs.get_state()[1].tolist() == rs_state_before[1].tolist()
 
 
@@ -306,9 +313,9 @@ def test_aliased_names_resolve_to_the_same_object():
     rng2 = rng
     rng.integers(0, 100, 3)
 
-    ns = {'rng': rng, 'rng2': rng2}
-    states = capture_object_rng_states({'rng', 'rng2'}, ns)
-    assert set(states) == {'rng', 'rng2'}
+    ns = {"rng": rng, "rng2": rng2}
+    states = capture_object_rng_states({"rng", "rng2"}, ns)
+    assert set(states) == {"rng", "rng2"}
 
     post = rng.bit_generator.state
     rng.integers(0, 100, 3)  # drift the live object

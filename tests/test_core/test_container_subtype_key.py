@@ -10,13 +10,10 @@ Found by an adversarial round-16 tester against the 0.1.1 build and reproduced
 independently. The counterpart guarantee matters too: an EXACT plain tuple/dict
 must keep its old key (no cache invalidation) and still HIT on a repeat call.
 """
+
 from __future__ import annotations
 
 from collections import OrderedDict, defaultdict, namedtuple
-
-import pytest
-
-import cash
 
 P = namedtuple("P", "x y")
 Q = namedtuple("Q", "x y")
@@ -25,6 +22,7 @@ Q = namedtuple("Q", "x y")
 def _fresh():
     from cash import Cash
     from cash.backends import InMemoryBackend
+
     return Cash(backend=InMemoryBackend(), register_magic=False)
 
 
@@ -90,7 +88,7 @@ def test_plain_containers_still_hit_and_key_is_unchanged():
         return sum(t)
 
     assert total((1, 2, 3)) == 6
-    assert total((1, 2, 3)) == 6        # HIT
+    assert total((1, 2, 3)) == 6  # HIT
     assert len(calls) == 1, "plain tuple stopped hitting -- key changed for the common case"
 
     # A plain dict equal but for insertion order must still share a key (CAS-108).
@@ -101,7 +99,7 @@ def test_plain_containers_still_hit_and_key_is_unchanged():
 
     keys({"a": 1, "b": 2})
     before = len(calls)
-    keys({"b": 2, "a": 1})              # reordered -> must HIT
+    keys({"b": 2, "a": 1})  # reordered -> must HIT
     assert len(calls) == before, "insertion-order-only dict difference wrongly missed"
 
 

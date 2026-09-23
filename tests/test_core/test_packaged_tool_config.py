@@ -8,6 +8,7 @@
 * Lowering a tier's ``default_ttl`` freed no disk, ``cash inspect`` still showed
   the old expiry, and nothing could drop only the expired entries.
 """
+
 from __future__ import annotations
 
 import os
@@ -24,8 +25,8 @@ from cash.config import get_config
 pytestmark = [pytest.mark.core]
 
 needs_toml = pytest.mark.skipif(
-    sys.version_info < (3, 11) and not __import__("importlib").util.find_spec("tomli"),
-    reason="no TOML parser")
+    sys.version_info < (3, 11) and not __import__("importlib").util.find_spec("tomli"), reason="no TOML parser"
+)
 
 
 def test_a_config_file_that_does_not_exist_is_named(tmp_path, monkeypatch):
@@ -54,6 +55,7 @@ def test_a_home_relative_cache_dir_in_a_config_file_is_expanded(tmp_path, monkey
 @needs_toml
 def test_cash_info_shows_what_a_tools_config_file_resolves_to(tmp_path, capsys, monkeypatch):
     from cash.__main__ import cmd_info
+
     for key in [k for k in os.environ if k.startswith("CASH_")]:
         monkeypatch.delenv(key)
     shipped = tmp_path / "cash.toml"
@@ -65,6 +67,7 @@ def test_cash_info_shows_what_a_tools_config_file_resolves_to(tmp_path, capsys, 
 
 def test_the_expiry_shown_and_cleared_follows_a_lowered_tier_default():
     from cash.__main__ import _effective_ttl
+
     assert _effective_ttl({"ttl": 86400}, tier_default=5) == 5
     assert _effective_ttl({"ttl": 86400, "ttl_declared": True}, tier_default=5) == 86400
     assert _effective_ttl({}, tier_default=5) == 5
@@ -74,6 +77,7 @@ def test_the_expiry_shown_and_cleared_follows_a_lowered_tier_default():
 def test_clear_expired_frees_what_is_never_served_again(tmp_path, capsys, monkeypatch):
     from cash.__main__ import _clear_expired, _scan_entries
     from cash.backends.file_backend import FileBackend
+
     monkeypatch.setattr("cash.__main__._tier_default_ttl", lambda: None)
     backend = FileBackend(cache_dir=str(tmp_path / "cache"))
     backend.set("app.f:s::old", 1, {"key": "app.f:s::old", "ttl": 1, "created_at": time.time() - 60})
@@ -89,8 +93,10 @@ def test_clear_expired_frees_what_is_never_served_again(tmp_path, capsys, monkey
 def test_clear_expired_with_a_function_is_refused_not_widened(tmp_path):
     # --function used to win, deleting that function's live entries as well.
     from cash.__main__ import cmd_clear
-    args = SimpleNamespace(path=str(tmp_path), all=False, tool=None, entry=None,
-                           function="f", expired=True, force=False)
+
+    args = SimpleNamespace(
+        path=str(tmp_path), all=False, tool=None, entry=None, function="f", expired=True, force=False
+    )
     with pytest.raises(SystemExit) as exit_:
         cmd_clear(args)
     assert exit_.value.code == 2

@@ -17,11 +17,13 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["TieredBackend"]
 
+
 def _cap_list(caps: list[int] | None) -> str:
-    """" (its cap is 512.0 MiB)" / " (their caps are ...)" / "" when unknown."""
+    """ " (its cap is 512.0 MiB)" / " (their caps are ...)" / "" when unknown."""
     if not caps:
         return ""
     from .adaptive_caps import human_bytes
+
     rendered = ", ".join(human_bytes(c) for c in caps)
     return f" (cap: {rendered})" if len(caps) == 1 else f" (caps: {rendered})"
 
@@ -88,8 +90,13 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         return "disk"
 
     def _cost_model_promote(
-        self, type_name: str, size_bytes: int, execution_time: float, backend_kind: str,
-        *, floor: bool = True,
+        self,
+        type_name: str,
+        size_bytes: int,
+        execution_time: float,
+        backend_kind: str,
+        *,
+        floor: bool = True,
     ) -> bool:
         """Serialization-aware promotion decision (the same rule Gate A uses):
         promote only when recomputing costs more than the predicted restore.
@@ -120,9 +127,7 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         (``_GENERIC``) family since the caller gave only ``size_bytes``. Keeps
         the 1.0 s compute floor as a designed floor for the fallback path.
         """
-        return self._cost_model_promote(
-            "", size_bytes, execution_time, self._promotion_backend_kind()
-        )
+        return self._cost_model_promote("", size_bytes, execution_time, self._promotion_backend_kind())
 
     @staticmethod
     def _serialized_size(value: Any, serializer: Serializer | None) -> int | None:
@@ -145,7 +150,10 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
             return None
 
     def _warn_oversize_not_persisted(
-        self, key: str, size_bytes: int, caps: list[int] | None = None,
+        self,
+        key: str,
+        size_bytes: int,
+        caps: list[int] | None = None,
     ) -> None:
         """Warn once/session that a worth-persisting value fit no disk tier.
 
@@ -175,7 +183,9 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         self._warned_oversize = True
         from cash.diagnostics import warn_diagnostic
         from cash.exceptions import CashCacheIneffectiveWarning
+
         from .adaptive_caps import human_bytes
+
         warn_diagnostic(
             CashCacheIneffectiveWarning,
             "CACHE-VALUE-TOO-BIG",
@@ -227,7 +237,11 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
                     logger.debug("Could not drop call ref %r", ref, exc_info=True)
 
     def _warn_not_worth_its_bytes(
-        self, key: str, size_bytes: int, compute_seconds: float, code: str | None = None,
+        self,
+        key: str,
+        size_bytes: int,
+        compute_seconds: float,
+        code: str | None = None,
     ) -> None:
         """Warn once/session that a value cost more disk than it saves compute.
 
@@ -252,8 +266,7 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         self._warned_not_worth.add(ident)
         lines = [ln for ln in ident.splitlines() if ln.strip()]
         # A loop body's stored code starts with its context marker comment.
-        first = next((ln for ln in lines if not ln.lstrip().startswith('#')),
-                     lines[0] if lines else str(key))
+        first = next((ln for ln in lines if not ln.lstrip().startswith("#")), lines[0] if lines else str(key))
         named = f"`{first[:80]}`" if code else repr(key)
         if self._not_worth_batch is not None:
             self._not_worth_batch.append((named, size_bytes, compute_seconds))
@@ -277,26 +290,34 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
     def _say_not_worth(self, refused: list[tuple[str, int, float]]) -> None:
         from cash.diagnostics import warn_diagnostic
         from cash.exceptions import CashCacheIneffectiveWarning
+
         from .adaptive_caps import human_bytes
         from .value_policy import WORTH_CEILING_BYTES_PER_SECOND
+
         ceiling = human_bytes(WORTH_CEILING_BYTES_PER_SECOND)
         if len(refused) == 1:
             named, size_bytes, compute_seconds = refused[0]
-            rate = size_bytes / max(compute_seconds, 1e-9) / (1024 ** 2)
-            what = (f"the value of {named} is {human_bytes(size_bytes)} serialized but "
-                    f"only takes {compute_seconds:.2f}s to recompute -- "
-                    f"{rate:,.0f} MiB of cache per second saved, against the "
-                    f"{ceiling} per second cash is willing to spend. It was not "
-                    f"persisted, so it is recomputed rather than restored.")
+            rate = size_bytes / max(compute_seconds, 1e-9) / (1024**2)
+            what = (
+                f"the value of {named} is {human_bytes(size_bytes)} serialized but "
+                f"only takes {compute_seconds:.2f}s to recompute -- "
+                f"{rate:,.0f} MiB of cache per second saved, against the "
+                f"{ceiling} per second cash is willing to spend. It was not "
+                f"persisted, so it is recomputed rather than restored."
+            )
         else:
-            shown = ", ".join(f"{named} ({human_bytes(size)} for {secs:.2f}s)"
-                              for named, size, secs in refused[:self._NOT_WORTH_NAMED])
+            shown = ", ".join(
+                f"{named} ({human_bytes(size)} for {secs:.2f}s)"
+                for named, size, secs in refused[: self._NOT_WORTH_NAMED]
+            )
             more = len(refused) - self._NOT_WORTH_NAMED
-            what = (f"{len(refused)} values in this cell take more cache per second "
-                    f"saved than the {ceiling} cash is willing to spend: {shown}"
-                    + (f" and {more} more" if more > 0 else "")
-                    + ". They were not persisted, so they are recomputed rather "
-                    "than restored.")
+            what = (
+                f"{len(refused)} values in this cell take more cache per second "
+                f"saved than the {ceiling} cash is willing to spend: {shown}"
+                + (f" and {more} more" if more > 0 else "")
+                + ". They were not persisted, so they are recomputed rather "
+                "than restored."
+            )
         warn_diagnostic(
             CashCacheIneffectiveWarning,
             "CACHE-NOT-WORTH-BYTES",
@@ -320,7 +341,7 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
             metadata = backend.peek_metadata(key)
             if metadata is not None:
                 metadata = dict(metadata)
-                metadata['source'] = getattr(type(backend), 'source_label', None) or type(backend).__name__
+                metadata["source"] = getattr(type(backend), "source_label", None) or type(backend).__name__
                 return metadata
         return None
 
@@ -361,12 +382,13 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         # long call ran that began inside the one-second window after the
         # first write and so was never checked (round 20: 7 of 10).
         restamped = writes > self._stamp_writes_seen and (
-            self._stamp_writes_seen >= 1 or writes - self._stamp_writes_seen >= 2)
+            self._stamp_writes_seen >= 1 or writes - self._stamp_writes_seen >= 2
+        )
         if known in (_UNSEEN, None) and writes != self._stamp_writes_seen:
             known = getattr(disk, "written_stamp", None)
         self._stamp_writes_seen = writes
         if restamped or (known not in (_UNSEEN, None) and token != known):
-            for faster in self.backends[:self.backends.index(disk)]:
+            for faster in self.backends[: self.backends.index(disk)]:
                 try:
                     faster.clear()
                 except Exception:  # noqa: BLE001
@@ -395,17 +417,24 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
                     except Exception as e:  # noqa: BLE001 (intentional: backend errors must not propagate)
                         logger.warning(
                             "Failed to promote key '%s' to tier %d (%s): %s",
-                            key, j, type(self.backends[j]).__name__, e,
+                            key,
+                            j,
+                            type(self.backends[j]).__name__,
+                            e,
                         )
 
                 # Inject source information
-                metadata['source'] = getattr(type(backend), 'source_label', None) or type(backend).__name__
+                metadata["source"] = getattr(type(backend), "source_label", None) or type(backend).__name__
 
                 return metadata, value
         return None, None
 
     def _write_persistent_tiers(
-        self, key: str, value: Any, metadata: MetadataDict, serializer: Serializer | None,
+        self,
+        key: str,
+        value: Any,
+        metadata: MetadataDict,
+        serializer: Serializer | None,
         cap_size: int,
     ) -> tuple[list[str], bool, int, list[int]]:
         """Write to every tier past RAM that takes an entry this size.
@@ -414,8 +443,8 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         """
         stored_destinations: list[str] = []
         size_refused = False  # a tier skipped this object because it's too big
-        refusing_caps: list[int] = []   # the caps it was measured against
-        refused_size = cap_size         # the size that was actually compared
+        refusing_caps: list[int] = []  # the caps it was measured against
+        refused_size = cap_size  # the size that was actually compared
         for i in range(1, len(self.backends)):
             backend = self.backends[i]
             cap = backend._promotion_size_cap()
@@ -444,7 +473,10 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
                 else:
                     logger.debug(
                         "[TIERED] Skipping %s for key %r: size %d > cap %d",
-                        type(backend).__name__, key, true_size or cap_size, cap,
+                        type(backend).__name__,
+                        key,
+                        true_size or cap_size,
+                        cap,
                     )
                     size_refused = True
                     refused_size = true_size or cap_size
@@ -452,7 +484,7 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
                     continue
             try:
                 backend.set(key, value, metadata, serializer)
-                _label = getattr(type(backend), 'source_label', None) or type(backend).__name__
+                _label = getattr(type(backend), "source_label", None) or type(backend).__name__
                 stored_destinations.append(_label)
             except Exception as e:  # noqa: BLE001 (intentional: backend errors must not propagate)
                 logger.warning("[TIERED] Failed to write to backend %s: %s", type(backend).__name__, e)
@@ -479,19 +511,19 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         """
         if len(self.backends) < 2:
             return False
-        peek = getattr(self.backends[0], 'peek_entry', None)
+        peek = getattr(self.backends[0], "peek_entry", None)
         entry = peek(key) if peek is not None else None
         if entry is None:
             return False
         stored_metadata, value = entry
-        if any(d != "RAM" for d in stored_metadata.get('storage') or ()):
+        if any(d != "RAM" for d in stored_metadata.get("storage") or ()):
             return False  # on disk already
-        if stored_metadata.get('metadata_only') or stored_metadata.get('cost_model_family') is None:
+        if stored_metadata.get("metadata_only") or stored_metadata.get("cost_model_family") is None:
             return False
-        size = stored_metadata.get('cost_model_size_bytes', stored_metadata.get('size', 0))
+        size = stored_metadata.get("cost_model_size_bytes", stored_metadata.get("size", 0))
         if not self._cost_model_promote(
-                stored_metadata.get('cost_model_type_name', ''), size, rebuild_seconds,
-                self._promotion_backend_kind()):
+            stored_metadata.get("cost_model_type_name", ""), size, rebuild_seconds, self._promotion_backend_kind()
+        ):
             return False
         # The bytes-per-compute-second ceiling applies here too, and this is
         # where it matters most: a notebook statement sets `defer_persist`, so
@@ -501,30 +533,35 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         # results the entry refers to, and against *rebuild_seconds*: what a
         # restore actually saves here is the whole upstream chain, not the one
         # statement's own time.
-        if not stored_metadata.get('force_persist'):
+        if not stored_metadata.get("force_persist"):
             from .value_policy import worth_its_bytes
-            weight = ((stored_metadata.get('size') or size)
-                      + int(stored_metadata.get('call_ref_bytes') or 0))
+
+            weight = (stored_metadata.get("size") or size) + int(stored_metadata.get("call_ref_bytes") or 0)
             if not worth_its_bytes(weight, rebuild_seconds):
-                self._warn_not_worth_its_bytes(key, weight, rebuild_seconds,
-                                               code=stored_metadata.get('code'))
-                self._drop_persisted_call_refs(stored_metadata.get('call_refs'))
-                stored_metadata['persist_skipped'] = 'bytes'
+                self._warn_not_worth_its_bytes(key, weight, rebuild_seconds, code=stored_metadata.get("code"))
+                self._drop_persisted_call_refs(stored_metadata.get("call_refs"))
+                stored_metadata["persist_skipped"] = "bytes"
                 return False
-        metadata = {k: v for k, v in stored_metadata.items()
-                    if k not in ('persist_skipped', 'source', 'storage', 'defer_persist')}
-        metadata['rebuild_time'] = rebuild_seconds
+        metadata = {
+            k: v
+            for k, v in stored_metadata.items()
+            if k not in ("persist_skipped", "source", "storage", "defer_persist")
+        }
+        metadata["rebuild_time"] = rebuild_seconds
         stored, size_refused, refused_size, refusing_caps = self._write_persistent_tiers(
-            key, value, metadata, None, stored_metadata.get('size') or size)
+            key, value, metadata, None, stored_metadata.get("size") or size
+        )
         if not stored:
             if size_refused:
                 self._warn_oversize_not_persisted(key, refused_size, refusing_caps)
             return False
-        stored_metadata['storage'] = ["RAM", *stored]
-        stored_metadata.pop('persist_skipped', None)
+        stored_metadata["storage"] = ["RAM", *stored]
+        stored_metadata.pop("persist_skipped", None)
         return True
 
-    def set(self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None) -> None:
+    def set(
+        self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None
+    ) -> None:
         if not self.backends:
             return
 
@@ -554,7 +591,9 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         except Exception as e:  # noqa: BLE001 (intentional: backend errors must not propagate)
             logger.warning(
                 "Failed to write key '%s' to tier 0 (%s): %s",
-                key, type(self.backends[0]).__name__, e,
+                key,
+                type(self.backends[0]).__name__,
+                e,
             )
             # And on the entry's metadata, so the caller hears it: the RAM tier
             # refuses a value it cannot copy, and nothing else would say why the
@@ -566,11 +605,11 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         # others — e.g. a 20 MB DataFrame goes to RAM + DISK but skips
         # Redis (10 MB cap).
         if len(self.backends) > 1:
-            exec_time = metadata.get('execution_time', 0)
-            size = metadata.get('size', 0)
+            exec_time = metadata.get("execution_time", 0)
+            size = metadata.get("size", 0)
 
             # Check if force_persist is set via @cash:persist annotation
-            force_persist = metadata.get('force_persist', False)
+            force_persist = metadata.get("force_persist", False)
 
             # Promotion decision — same rule as the statement processor's Gate A
             # (predicted restore vs compute), applied here so the two gates can
@@ -578,11 +617,11 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
             # family (notebook-cached values), predict restore time with the
             # real type; otherwise fall through to the 2-arg promotion_policy
             # (injected test lambdas, the decorator path, legacy metadata).
-            family = metadata.get('cost_model_family')
-            deferred = bool(metadata.pop('defer_persist', False)) and not force_persist
+            family = metadata.get("cost_model_family")
+            deferred = bool(metadata.pop("defer_persist", False)) and not force_persist
             if original_metadata is not None:
-                original_metadata.pop('defer_persist', None)
-            decorated = bool(metadata.get('decorator_entry'))
+                original_metadata.pop("defer_persist", None)
+            decorated = bool(metadata.get("decorator_entry"))
             if force_persist:
                 past_compute_floor = True
             elif deferred:
@@ -609,8 +648,8 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
                 past_compute_floor = True
             elif family is not None:
                 past_compute_floor = self._cost_model_promote(
-                    metadata.get('cost_model_type_name', ''),
-                    metadata.get('cost_model_size_bytes', size),
+                    metadata.get("cost_model_type_name", ""),
+                    metadata.get("cost_model_size_bytes", size),
                     exec_time,
                     self._promotion_backend_kind(),
                 )
@@ -619,7 +658,7 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
 
             # Size used for per-tier caps — prefer the cost-model estimate
             # (the notebook path sets no plain 'size' key).
-            cap_size = size or metadata.get('cost_model_size_bytes', 0)
+            cap_size = size or metadata.get("cost_model_size_bytes", 0)
 
             # ...and worth the bytes it would occupy. Every gate above asks
             # whether restoring beats recomputing; none of them asks what the
@@ -649,20 +688,20 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
             # nothing. `test_superseded_versions_are_pruned` caught exactly
             # that. The decision belongs to the statement, which is the thing
             # whose compute is actually being saved.
-            weight = cap_size + int(metadata.get('call_ref_bytes') or 0)
-            is_call_entry = str(key).startswith('call:')
+            weight = cap_size + int(metadata.get("call_ref_bytes") or 0)
+            is_call_entry = str(key).startswith("call:")
             # ...except one not digested (`call_refs.ESTIMATED_FIELD`): only
             # the statement it is the plain result of refers to it, so no
             # other statement's refusal would drop it. Weighed by its
             # estimated PICKLED size, which is what disk holds: r28s5's result
             # is 402 MiB pickled and 1.7 GiB in memory, as 3.7 million strings.
-            if is_call_entry and metadata.get('value_bytes_estimated'):
-                weight = int(metadata.get('value_bytes') or cap_size)
+            if is_call_entry and metadata.get("value_bytes_estimated"):
+                weight = int(metadata.get("value_bytes") or cap_size)
                 is_call_entry = False
             bytes_refused = False
-            if (past_compute_floor and not (force_persist or decorated)
-                    and not is_call_entry):
+            if past_compute_floor and not (force_persist or decorated) and not is_call_entry:
                 from .value_policy import worth_its_bytes
+
                 if not worth_its_bytes(weight, exec_time):
                     past_compute_floor = False
                     bytes_refused = True
@@ -670,14 +709,15 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
                     # result, which names the code the user wrote; said here
                     # too, every refusal was printed twice, the second naming
                     # an internal key (round 29, r29s1 and r29s3).
-                    if not str(key).startswith('call:'):
-                        self._warn_not_worth_its_bytes(key, weight, exec_time,
-                                                       code=metadata.get('code'))
-                    self._drop_persisted_call_refs(metadata.get('call_refs'))
+                    if not str(key).startswith("call:"):
+                        self._warn_not_worth_its_bytes(key, weight, exec_time, code=metadata.get("code"))
+                    self._drop_persisted_call_refs(metadata.get("call_refs"))
 
             stored, size_refused, refused_size, refusing_caps = (
                 self._write_persistent_tiers(key, value, metadata, serializer, cap_size)
-                if past_compute_floor else ([], False, cap_size, []))
+                if past_compute_floor
+                else ([], False, cap_size, [])
+            )
             stored_destinations.extend(stored)
 
             # The value was worth persisting (cleared the compute floor) but
@@ -690,26 +730,25 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
 
         # Update metadata with storage info so UI can see it immediately
         if metadata is not None:
-             metadata['storage'] = stored_destinations
+            metadata["storage"] = stored_destinations
 
         # Propagate storage info back to the caller's original metadata dict
         if original_metadata is not None:
-            original_metadata['storage'] = stored_destinations
+            original_metadata["storage"] = stored_destinations
             if self._store_errors:
-                original_metadata['store_errors'] = list(self._store_errors)
+                original_metadata["store_errors"] = list(self._store_errors)
             # And why it went no further, so "why did the next process miss?"
             # has an answer: the compute floor / cost model, or a size cap.
             if len(self.backends) > 1 and not any(d != "RAM" for d in stored_destinations):
                 if bytes_refused:
-                    original_metadata['persist_skipped'] = 'bytes'
+                    original_metadata["persist_skipped"] = "bytes"
                 elif size_refused:
-                    original_metadata['persist_skipped'] = 'size'
+                    original_metadata["persist_skipped"] = "size"
                 elif deferred:
-                    original_metadata['persist_skipped'] = 'replaced_in_cell'
+                    original_metadata["persist_skipped"] = "replaced_in_cell"
                 elif not past_compute_floor:
-                    original_metadata['persist_skipped'] = 'compute'
+                    original_metadata["persist_skipped"] = "compute"
 
         # Log visibility
         if stored_destinations:
-            logger.debug("[STORAGE] Stored in: %s", ', '.join(stored_destinations))
-
+            logger.debug("[STORAGE] Stored in: %s", ", ".join(stored_destinations))

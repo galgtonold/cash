@@ -10,21 +10,24 @@ raised at import on Python 3.11 manifested in Binder.
 The badge is never worth breaking a cell over, so a render failure now degrades
 to "no badge" and the cell runs and shows its output as normal.
 """
+
 from __future__ import annotations
 
 
 def _text(cell) -> str:
-    return "".join(
-        o.get("text", "") for o in cell.get("outputs", []) if o.get("output_type") == "stream"
-    )
+    return "".join(o.get("text", "") for o in cell.get("outputs", []) if o.get("output_type") == "stream")
 
 
 def _raw_exec(nb_runner, code: str) -> None:
     """Run code straight on the kernel, bypassing cash's cell hook (so this
     setup itself renders no badge)."""
-    nb_runner._run_async(nb_runner.client.kc._async_execute_interactive(
-        code, store_history=False, output_hook=lambda m: None,
-    ))
+    nb_runner._run_async(
+        nb_runner.client.kc._async_execute_interactive(
+            code,
+            store_history=False,
+            output_hook=lambda m: None,
+        )
+    )
 
 
 def test_badge_render_failure_does_not_swallow_output(nb_runner):
@@ -61,10 +64,13 @@ def test_badge_render_failure_does_not_swallow_output(nb_runner):
 
         # ...and the statement actually executed (the cell was not aborted).
         val = []
-        nb_runner._run_async(nb_runner.client.kc._async_execute_interactive(
-            "print('XIS', x)", store_history=False,
-            output_hook=lambda m: val.append(m["content"].get("text", "")) if m["msg_type"] == "stream" else None,
-        ))
+        nb_runner._run_async(
+            nb_runner.client.kc._async_execute_interactive(
+                "print('XIS', x)",
+                store_history=False,
+                output_hook=lambda m: val.append(m["content"].get("text", "")) if m["msg_type"] == "stream" else None,
+            )
+        )
         assert "XIS 42" in "".join(val), "the statement did not run — the cell was aborted"
     finally:
         _raw_exec(

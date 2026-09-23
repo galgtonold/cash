@@ -4,6 +4,7 @@ Tests drive the merge function directly with synthetic inputs — no
 ``StatementProcessor`` is constructed.  This is the test-surface gain
 that motivated extracting the function out of ``process_statement``.
 """
+
 from __future__ import annotations
 
 import ast
@@ -48,8 +49,9 @@ def _decide(
 
 class TestNoReasonsCacheable:
     def test_pure_assignment_is_cacheable(self):
-        cacheable, reasons = _decide("y = x + 1", inputs={"x"}, outputs={"y"},
-                                      user_ns={"x": 1}, variable_lineage={"x": "h"})
+        cacheable, reasons = _decide(
+            "y = x + 1", inputs={"x"}, outputs={"y"}, user_ns={"x": 1}, variable_lineage={"x": "h"}
+        )
         assert cacheable is True
         assert reasons == []
 
@@ -58,30 +60,36 @@ class TestAnnotationNoCache:
     def test_no_cache_annotation_short_circuits(self):
         cacheable, reasons = _decide(
             "y = x + 1",
-            inputs={"x"}, outputs={"y"},
+            inputs={"x"},
+            outputs={"y"},
             annotation=CacheAnnotation(no_cache=True),
-            user_ns={"x": 1}, variable_lineage={"x": "h"},
+            user_ns={"x": 1},
+            variable_lineage={"x": "h"},
         )
         assert cacheable is False
-        assert reasons == ['@cash:no-cache annotation']
+        assert reasons == ["@cash:no-cache annotation"]
 
     def test_no_cache_wins_over_other_reasons(self):
         """no_cache fires first; mutation reason never gets computed."""
         cacheable, reasons = _decide(
             "lst.append(1)",
-            inputs={"lst"}, outputs=set(),
+            inputs={"lst"},
+            outputs=set(),
             annotation=CacheAnnotation(no_cache=True),
-            user_ns={"lst": []}, variable_lineage={"lst": "h"},
+            user_ns={"lst": []},
+            variable_lineage={"lst": "h"},
         )
         assert cacheable is False
-        assert reasons == ['@cash:no-cache annotation']
+        assert reasons == ["@cash:no-cache annotation"]
 
     def test_persist_annotation_does_not_skip(self):
         cacheable, _ = _decide(
             "y = x + 1",
-            inputs={"x"}, outputs={"y"},
+            inputs={"x"},
+            outputs={"y"},
             annotation=CacheAnnotation(persist=True),
-            user_ns={"x": 1}, variable_lineage={"x": "h"},
+            user_ns={"x": 1},
+            variable_lineage={"x": "h"},
         )
         assert cacheable is True
 
@@ -90,8 +98,11 @@ class TestForbiddenFunctions:
     def test_forbidden_reasons_returned(self):
         def fake_scan(code, user_ns, tree):
             return ["Calls forbidden function: input"]
+
         cacheable, reasons = _decide(
-            "x = input()", inputs=set(), outputs={"x"},
+            "x = input()",
+            inputs=set(),
+            outputs={"x"},
             scan_forbidden=fake_scan,
         )
         assert cacheable is False
@@ -100,9 +111,13 @@ class TestForbiddenFunctions:
     def test_forbidden_scan_exception_does_not_crash(self):
         def bad_scan(*_a, **_k):
             raise TypeError("boom")
+
         cacheable, reasons = _decide(
-            "y = x + 1", inputs={"x"}, outputs={"y"},
-            user_ns={"x": 1}, variable_lineage={"x": "h"},
+            "y = x + 1",
+            inputs={"x"},
+            outputs={"y"},
+            user_ns={"x": 1},
+            variable_lineage={"x": "h"},
             scan_forbidden=bad_scan,
         )
         assert cacheable is True
@@ -112,7 +127,9 @@ class TestForbiddenFunctions:
 class TestStatefulCall:
     def test_stateful_call_short_circuits(self):
         cacheable, reasons = _decide(
-            "y = step()", inputs=set(), outputs={"y"},
+            "y = step()",
+            inputs=set(),
+            outputs={"y"},
             is_stateful_call=lambda name: name == "step",
         )
         assert cacheable is False
@@ -121,11 +138,15 @@ class TestStatefulCall:
     def test_first_stateful_match_wins(self):
         """Function returns as soon as one stateful call is found."""
         seen = []
+
         def lookup(name):
             seen.append(name)
             return name == "step"
+
         _decide(
-            "y = step()", inputs=set(), outputs={"y"},
+            "y = step()",
+            inputs=set(),
+            outputs={"y"},
             is_stateful_call=lookup,
         )
         assert seen == ["step"]
@@ -133,8 +154,11 @@ class TestStatefulCall:
     def test_stateful_lookup_exception_does_not_crash(self):
         def bad_lookup(_name):
             raise AttributeError("boom")
+
         cacheable, reasons = _decide(
-            "y = foo()", inputs=set(), outputs={"y"},
+            "y = foo()",
+            inputs=set(),
+            outputs={"y"},
             is_stateful_call=bad_lookup,
         )
         assert cacheable is True
@@ -144,8 +168,11 @@ class TestStatefulCall:
 class TestMutationsAndSideEffects:
     def test_in_place_mutation_blocks_caching(self):
         cacheable, reasons = _decide(
-            "lst.append(1)", inputs={"lst"}, outputs=set(),
-            user_ns={"lst": []}, variable_lineage={"lst": "h"},
+            "lst.append(1)",
+            inputs={"lst"},
+            outputs=set(),
+            user_ns={"lst": []},
+            variable_lineage={"lst": "h"},
         )
         assert cacheable is False
         assert any("In-place mutation" in r for r in reasons)
@@ -153,7 +180,8 @@ class TestMutationsAndSideEffects:
     def test_mutation_on_output_is_fine(self):
         cacheable, _ = _decide(
             "lst = []\nlst.append(1)",
-            inputs=set(), outputs={"lst"},
+            inputs=set(),
+            outputs={"lst"},
         )
         assert cacheable is True
 
@@ -161,49 +189,70 @@ class TestMutationsAndSideEffects:
 class TestMissingLineage:
     def test_input_without_lineage_blocks_caching(self):
         cacheable, reasons = _decide(
-            "y = x + 1", inputs={"x"}, outputs={"y"},
-            user_ns={"x": 1}, variable_lineage={},  # no lineage for x
+            "y = x + 1",
+            inputs={"x"},
+            outputs={"y"},
+            user_ns={"x": 1},
+            variable_lineage={},  # no lineage for x
         )
         assert cacheable is False
-        assert reasons == ['Input variable missing lineage']
+        assert reasons == ["Input variable missing lineage"]
 
     def test_input_not_in_user_ns_blocks_caching(self):
         cacheable, reasons = _decide(
-            "y = x + 1", inputs={"x"}, outputs={"y"},
-            user_ns={}, variable_lineage={},
+            "y = x + 1",
+            inputs={"x"},
+            outputs={"y"},
+            user_ns={},
+            variable_lineage={},
         )
         assert cacheable is False
-        assert reasons == ['Input variable missing lineage']
+        assert reasons == ["Input variable missing lineage"]
 
     def test_builtin_input_does_not_need_lineage(self):
         cacheable, _ = _decide(
-            "y = len(z)", inputs={"len", "z"}, outputs={"y"},
-            user_ns={"z": []}, variable_lineage={"z": "h"},
+            "y = len(z)",
+            inputs={"len", "z"},
+            outputs={"y"},
+            user_ns={"z": []},
+            variable_lineage={"z": "h"},
         )
         assert cacheable is True
 
     def test_get_ipython_skipped(self):
         cacheable, _ = _decide(
-            "y = 1", inputs={"get_ipython"}, outputs={"y"},
+            "y = 1",
+            inputs={"get_ipython"},
+            outputs={"y"},
         )
         assert cacheable is True
 
     def test_module_input_does_not_need_lineage(self):
         """Module-type inputs are lineage-exempt: their source is captured elsewhere."""
         import os as os_mod
+
         cacheable, _ = _decide(
-            "y = os.getcwd()", inputs={"os"}, outputs={"y"},
-            user_ns={"os": os_mod}, variable_lineage={},
+            "y = os.getcwd()",
+            inputs={"os"},
+            outputs={"y"},
+            user_ns={"os": os_mod},
+            variable_lineage={},
         )
         assert cacheable is True
 
     def test_private_callable_input_does_not_need_lineage(self):
         """Private callables are lineage-exempt (bound methods etc.)."""
+
         class _Helper:
-            def __call__(self): return 1
+            def __call__(self):
+                return 1
+
         cacheable, _ = _decide(
-            "y = _h()", inputs={"_h"}, outputs={"y"},
-            user_ns={"_h": _Helper()}, variable_lineage={},
+            "y = _h()",
+            inputs={"_h"},
+            outputs={"y"},
+            user_ns={"_h": _Helper()},
+            variable_lineage={},
         )
         assert cacheable is True
 
@@ -212,18 +261,26 @@ class TestReasonOrdering:
     """The first reason-source that triggers wins; later ones are not consulted."""
 
     def test_annotation_beats_forbidden(self):
-        def scan(*_): return ["forbidden!"]
+        def scan(*_):
+            return ["forbidden!"]
+
         _, reasons = _decide(
-            "y = x", inputs=set(), outputs={"y"},
+            "y = x",
+            inputs=set(),
+            outputs={"y"},
             annotation=CacheAnnotation(no_cache=True),
             scan_forbidden=scan,
         )
-        assert reasons == ['@cash:no-cache annotation']
+        assert reasons == ["@cash:no-cache annotation"]
 
     def test_forbidden_beats_stateful(self):
-        def scan(*_): return ["forbidden!"]
+        def scan(*_):
+            return ["forbidden!"]
+
         _, reasons = _decide(
-            "y = step()", inputs=set(), outputs={"y"},
+            "y = step()",
+            inputs=set(),
+            outputs={"y"},
             scan_forbidden=scan,
             is_stateful_call=lambda _: True,
         )
@@ -231,20 +288,25 @@ class TestReasonOrdering:
 
     def test_stateful_beats_mutation(self):
         _, reasons = _decide(
-            "lst.append(step())", inputs={"lst"}, outputs=set(),
-            user_ns={"lst": []}, variable_lineage={"lst": "h"},
+            "lst.append(step())",
+            inputs={"lst"},
+            outputs=set(),
+            user_ns={"lst": []},
+            variable_lineage={"lst": "h"},
             is_stateful_call=lambda name: name == "step",
         )
         assert reasons == ["Calls @stateful function"]
 
     def test_mutation_beats_missing_lineage(self):
         _, reasons = _decide(
-            "lst.append(1)", inputs={"lst"}, outputs=set(),
-            user_ns={"lst": []}, variable_lineage={},  # no lineage AND mutation
+            "lst.append(1)",
+            inputs={"lst"},
+            outputs=set(),
+            user_ns={"lst": []},
+            variable_lineage={},  # no lineage AND mutation
         )
         assert any("In-place mutation" in r for r in reasons)
-        assert 'Input variable missing lineage' not in reasons
-
+        assert "Input variable missing lineage" not in reasons
 
 
 class TestIdentityCoupledReason:
@@ -297,15 +359,17 @@ class TestIdentityCoupledReason:
         typically binds ONLY the dict, so nothing bare-Figure/Axes co-occurs."""
         figure_mod = pytest.importorskip("matplotlib.figure")
         fig = figure_mod.Figure()
-        axd = {'a': fig.add_subplot(2, 1, 1), 'b': fig.add_subplot(2, 1, 2)}
+        axd = {"a": fig.add_subplot(2, 1, 1), "b": fig.add_subplot(2, 1, 2)}
         assert identity_coupled_reason("axd", axd) is not None
 
     def test_nested_list_of_axes_is_refused(self):
         """CAS-155: a hand-built ``[[ax, ax], [ax, ax]]`` grid (no numpy)."""
         figure_mod = pytest.importorskip("matplotlib.figure")
         fig = figure_mod.Figure()
-        grid = [[fig.add_subplot(2, 2, 1), fig.add_subplot(2, 2, 2)],
-                [fig.add_subplot(2, 2, 3), fig.add_subplot(2, 2, 4)]]
+        grid = [
+            [fig.add_subplot(2, 2, 1), fig.add_subplot(2, 2, 2)],
+            [fig.add_subplot(2, 2, 3), fig.add_subplot(2, 2, 4)],
+        ]
         assert identity_coupled_reason("grid", grid) is not None
 
     def test_list_of_ndarray_rows_is_refused(self):

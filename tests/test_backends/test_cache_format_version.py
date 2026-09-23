@@ -14,8 +14,8 @@ import glob
 import os
 import pickle
 
+from cash.backends.entry_format import ENTRY_SUFFIX
 from cash.backends.file_backend import CACHE_FORMAT_VERSION, FileBackend
-from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry, read_entry
 
 VERSION_FILENAME = "CACHE_VERSION"
 
@@ -28,9 +28,7 @@ def _entry_files(cache_dir: str) -> list[str]:
     removed the half it knew to look for.
     """
     return [
-        f
-        for pattern in (f"*{ENTRY_SUFFIX}", "*.meta", "*.data")
-        for f in glob.glob(os.path.join(cache_dir, pattern))
+        f for pattern in (f"*{ENTRY_SUFFIX}", "*.meta", "*.data") for f in glob.glob(os.path.join(cache_dir, pattern))
     ]
 
 
@@ -114,16 +112,18 @@ def test_clear_preserves_version_marker(tmp_path):
 
 # -- CAS-125: a cache cleared under a live process ---------------------------
 
+
 def test_a_directory_recreated_by_a_live_backend_is_stamped(tmp_path):
     """`cash clear` removes the stamp with the directory; the live process
     recreated the directory for its next write but did not re-stamp it, and
     the next process discarded everything it had written as unknown format."""
     import shutil
+
     cache = tmp_path / "c"
     live = FileBackend(str(cache))
     live.set("before", {"v": 1})
-    live.get("before")                      # the write has landed
-    shutil.rmtree(cache)                    # what `cash clear` does to it
+    live.get("before")  # the write has landed
+    shutil.rmtree(cache)  # what `cash clear` does to it
     live.set("after", {"v": 2})
     live.get("after")
     live.shutdown()
@@ -150,5 +150,5 @@ def test_unstamped_entries_that_are_not_the_current_format_are_still_wiped(tmp_p
     """The control: an .entry file without the current magic is not adopted."""
     (tmp_path / f"{'0' * 64}{ENTRY_SUFFIX}").write_bytes(b"CSH1" + b"\x00" * 32)
     b = FileBackend(str(tmp_path))
-    b.get("anything")                       # initialises
+    b.get("anything")  # initialises
     assert not _entry_files(str(tmp_path))

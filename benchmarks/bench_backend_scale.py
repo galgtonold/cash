@@ -25,6 +25,7 @@ Usage:
     python benchmarks/bench_backend_scale.py [--counts 0,1000,5000,20000]
     python benchmarks/bench_backend_scale.py --counts 200 --payload 1048576
 """
+
 from __future__ import annotations
 
 import argparse
@@ -38,12 +39,13 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 ROUNDS = 7
-PAYLOAD = 512          # overridden by --payload
+PAYLOAD = 512  # overridden by --payload
 
 
 def make_backend(kind: str, root: Path):
     from cash.backends import FileBackend
     from cash.backends.sqlite_backend import SQLiteBackend
+
     if kind == "file":
         return FileBackend(str(root))
     return SQLiteBackend(str(root / "cache.db"))
@@ -61,10 +63,10 @@ def drain(backend) -> None:
 
 
 def timed_write(backend, key: str) -> float:
-    drain(backend)                       # clear the backlog BEFORE timing
+    drain(backend)  # clear the backlog BEFORE timing
     t = time.perf_counter()
     backend.set(key, b"x" * PAYLOAD, _meta())
-    drain(backend)                       # ...and drain only this one
+    drain(backend)  # ...and drain only this one
     return time.perf_counter() - t
 
 
@@ -84,7 +86,7 @@ def timed_meta_read(backend, key: str) -> float:
     """
     cache = getattr(backend, "_metadata_cache", None)
     if cache is not None:
-        cache.pop(key, None)                 # force a real read, not the cache
+        cache.pop(key, None)  # force a real read, not the cache
     t = time.perf_counter()
     backend.get_metadata(key)
     return time.perf_counter() - t
@@ -108,8 +110,12 @@ def open_cost(kind: str, root: Path) -> float:
     )
     last = 0.0
     for _ in range(2):
-        out = subprocess.run([sys.executable, "-c", script, kind, str(root), str(REPO / "src")],
-                             capture_output=True, text=True, cwd=str(REPO))
+        out = subprocess.run(
+            [sys.executable, "-c", script, kind, str(root), str(REPO / "src")],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO),
+        )
         if out.returncode != 0:
             print(out.stderr[-1200:])
             raise SystemExit(1)
@@ -131,11 +137,15 @@ def dir_stats(root: Path) -> tuple[int, int]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--counts", default="0,1000,5000,20000")
-    ap.add_argument("--skip-open", action="store_true",
-                    help="skip the fresh-process open measurement; it costs four "
-                         "subprocess launches per row, each paying a full import cash")
-    ap.add_argument("--payload", type=int, default=512,
-                    help="bytes per cached value; the file/sqlite ranking inverts with this")
+    ap.add_argument(
+        "--skip-open",
+        action="store_true",
+        help="skip the fresh-process open measurement; it costs four "
+        "subprocess launches per row, each paying a full import cash",
+    )
+    ap.add_argument(
+        "--payload", type=int, default=512, help="bytes per cached value; the file/sqlite ranking inverts with this"
+    )
     args = ap.parse_args()
     counts = [int(c) for c in args.counts.split(",")]
     global PAYLOAD
@@ -153,8 +163,10 @@ def main() -> int:
         print()
         print(f"  payload = {PAYLOAD:,}B, {ROUNDS} rounds, median")
         print()
-        print(f"  {'entries':>8}  {'backend':<8}{'write':>10}{'read':>10}"
-              f"{'meta':>10}{'open':>11}{'files':>10}{'on disk':>11}{'per entry':>12}")
+        print(
+            f"  {'entries':>8}  {'backend':<8}{'write':>10}{'read':>10}"
+            f"{'meta':>10}{'open':>11}{'files':>10}{'on disk':>11}{'per entry':>12}"
+        )
         for n in counts:
             # Fill both arms to N before measuring either.
             for k in kinds:
@@ -167,7 +179,7 @@ def main() -> int:
             reads = {k: [] for k in kinds}
             metas = {k: [] for k in kinds}
             for r in range(ROUNDS):
-                for k in kinds:                       # interleaved
+                for k in kinds:  # interleaved
                     writes[k].append(timed_write(backends[k], f"probe_{n}_{r}"))
                     if n:
                         reads[k].append(timed_read(backends[k], f"k{n // 2}"))
@@ -192,9 +204,11 @@ def main() -> int:
                 rd_s = "     -" if rd != rd else f"{rd:>7.3f}ms"
                 op_s = "        -" if op != op else f"{op:>7.1f}ms"
                 md_s = "     -" if md != md else f"{md:>7.3f}ms"
-                print(f"  {n:>8,}  {k:<8}{w:>8.2f}ms{rd_s:>10}{md_s:>10}{op_s:>11}"
-                      f"{files:>10,}{size/1e6:>9.1f}MB"
-                      f"{(size / n if n else 0):>10,.0f}B/e")
+                print(
+                    f"  {n:>8,}  {k:<8}{w:>8.2f}ms{rd_s:>10}{md_s:>10}{op_s:>11}"
+                    f"{files:>10,}{size / 1e6:>9.1f}MB"
+                    f"{(size / n if n else 0):>10,.0f}B/e"
+                )
             print()
         return 0
     finally:

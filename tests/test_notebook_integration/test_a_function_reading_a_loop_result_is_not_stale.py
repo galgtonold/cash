@@ -10,6 +10,7 @@ built on ``results``: a function records the globals it reads among its
 inputs. It holds no copy of them -- it reads them when called -- but the
 functions were rebuilt, and with them ``results = {}`` without the loop.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.upstream, pytest.mark.loops]
@@ -21,9 +22,7 @@ CELLS = [
     "    time.sleep(0.05)\n"
     "    return {'score': len(name)}\n"
     "families = ['logreg', 'forest', 'boost']",
-    "results = {}\n"
-    "for name in families:\n"
-    "    results[name] = evaluate(name)",
+    "results = {}\nfor name in families:\n    results[name] = evaluate(name)",
     "def draw_best():\n"
     "    return max(results, key=lambda n: results[n]['score'])\n"
     "def draw_logreg():\n"

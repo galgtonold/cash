@@ -9,6 +9,7 @@ no warning. These tests pin the fixed behavior: the body runs exactly once and
 both threads get the value. The async path already had single-flight (see
 ``test_async_single_flight.py``) — this covers the sync path.
 """
+
 from __future__ import annotations
 
 import tempfile
@@ -35,7 +36,7 @@ def _concurrent_calls(c: Cash, n_threads: int = 8):
         return x * x
 
     def call(_):
-        barrier.wait()          # release all threads at once → maximal overlap
+        barrier.wait()  # release all threads at once → maximal overlap
         return expensive(7)
 
     with ThreadPoolExecutor(max_workers=n_threads) as ex:
@@ -62,8 +63,7 @@ def test_in_memory_backend_single_flight():
 
 @pytest.mark.timeout(30)
 def test_file_backend_single_flight():
-    c = Cash(backend=FileBackend(cache_dir=tempfile.mkdtemp()), use_locking=True,
-             register_magic=False)
+    c = Cash(backend=FileBackend(cache_dir=tempfile.mkdtemp()), use_locking=True, register_magic=False)
     results, runs = _concurrent_calls(c)
     assert all(r == 49 for r in results)
     assert runs == 1
@@ -116,7 +116,7 @@ def test_recursive_same_key_does_not_deadlock():
             f(x)
         return x * 10
 
-    assert f(3) == 30            # would hang under a plain threading.Lock
+    assert f(3) == 30  # would hang under a plain threading.Lock
 
 
 @pytest.mark.timeout(30)

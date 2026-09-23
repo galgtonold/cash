@@ -1,7 +1,7 @@
 """TTL on async @cash.cache."""
+
 from __future__ import annotations
 
-import asyncio
 import time
 
 import pytest

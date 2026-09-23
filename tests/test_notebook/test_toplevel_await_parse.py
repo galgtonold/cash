@@ -7,6 +7,7 @@ never ran, output was swallowed, no error, no badge. This pins the parse point
 directly; the end-to-end no-op only reproduces against a LIVE Jupyter server,
 which the nbclient unit harness lacks (CAS-136).
 """
+
 import pytest
 
 from cash.notebook.analysis import CodeAnalyzer
@@ -20,9 +21,7 @@ def test_parse_cell_tolerates_top_level_await():
 
 def test_analyze_code_block_handles_await_cell():
     """Before the fix this raised ``SyntaxError: 'await' outside function``."""
-    inputs, outputs = CodeAnalyzer.analyze_code_block(
-        "import asyncio\nresult = await fetch(url)\nprint(result)"
-    )
+    inputs, outputs = CodeAnalyzer.analyze_code_block("import asyncio\nresult = await fetch(url)\nprint(result)")
     assert "result" in outputs, outputs
 
 

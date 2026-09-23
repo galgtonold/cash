@@ -16,6 +16,7 @@ set small in the kernel so a small fixture overflows it, and the host-memory
 pressure check is switched off (it reads the whole machine's memory, and under
 a parallel run it fires on its own).
 """
+
 import ast
 import os
 from pathlib import Path
@@ -29,7 +30,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(600)]
 N = 40
 CAP = 40 * 2**20
 
-_TEE = '''
+_TEE = """
 import cash.notebook.statement.processor as _p
 C = _p.StatementProcessor
 if not hasattr(C, "_test_orig"):
@@ -46,38 +47,42 @@ if not hasattr(C, "_test_orig"):
         return r
     C.process_statement = _tee
 C._test_n = {}
-'''
-_UNTEE = '''
+"""
+_UNTEE = """
 import cash.notebook.statement.processor as _p
 C = _p.StatementProcessor
 if hasattr(C, "_test_orig"):
     C.process_statement = C._test_orig
     del C._test_orig
-'''
+"""
 _RAM = "__import__('cash')._global_cash.backend.backends[0]"
 _SMALL_CAP = f"(setattr({_RAM}, '_max_size_bytes', {CAP}), setattr({_RAM}, 'max_memory_percent', 1.0))"
 _COUNTS = "__import__('cash.notebook.statement.processor', fromlist=['_']).StatementProcessor._test_n"
 _RESET = f"{_COUNTS}.clear()"
 
 SETUP = "import glob\nimport os\nimport numpy as np\nimport pandas as pd\nfiles = sorted(glob.glob('exports/*.csv'))"
-LOOP = ("parts = []\n"
-        "for f in files:\n"
-        "    d = pd.read_csv(f)\n"
-        "    d['source_file'] = os.path.basename(f)\n"
-        "    parts.append(d)\n"
-        "raw = pd.concat(parts, ignore_index=True)\n"
-        "print('rows', len(raw))")
+LOOP = (
+    "parts = []\n"
+    "for f in files:\n"
+    "    d = pd.read_csv(f)\n"
+    "    d['source_file'] = os.path.basename(f)\n"
+    "    parts.append(d)\n"
+    "raw = pd.concat(parts, ignore_index=True)\n"
+    "print('rows', len(raw))"
+)
 #: Eight 8 MB frames at 50 ms each (~6 ms per MB, where a 10 ms read of a
 #: ~50 KB file is ~200): 64 MB of cheap-per-byte values, written after the
 #: loop, against a 40 MB cap. The sleep gives each a cost the cost model
 #: caches -- ``w + k`` alone took a few ms and was never stored.
-BIG = ("import time\n"
-       "def shifted(frame, k):\n"
-       "    time.sleep(0.05)\n"
-       "    return frame + k\n"
-       "w = pd.DataFrame(np.zeros((250_000, 4)))\n"
-       + "\n".join(f"w{k} = shifted(w, {k})" for k in range(1, 9))
-       + "\nprint('w', len(w8))")
+BIG = (
+    "import time\n"
+    "def shifted(frame, k):\n"
+    "    time.sleep(0.05)\n"
+    "    return frame + k\n"
+    "w = pd.DataFrame(np.zeros((250_000, 4)))\n"
+    + "\n".join(f"w{k} = shifted(w, {k})" for k in range(1, 9))
+    + "\nprint('w', len(w8))"
+)
 
 
 @pytest.fixture

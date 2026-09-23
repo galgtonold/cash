@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 
 from benchmarks._overhead_driver import new_cash_session, run_notebook
@@ -125,12 +123,10 @@ def test_warm_session_restores_a_ram_only_value(tmp_path):
     cells = [CodeCell(index=0, notebook_cell_index=0, source=_RAM_ONLY_CELL)]
     session = new_cash_session(tmp_path)
 
-    first = run_notebook(cells, cash_enabled=True, cache_dir=tmp_path,
-                         session=session)
+    first = run_notebook(cells, cash_enabled=True, cache_dir=tmp_path, session=session)
     _require_ram_only(first)
 
-    second = run_notebook(cells, cash_enabled=True, cache_dir=tmp_path,
-                          session=session)
+    second = run_notebook(cells, cash_enabled=True, cache_dir=tmp_path, session=session)
     assert [m.status for m in _metric_for_z(second)] == ["RESTORED"], (
         "reusing the Cash session did not restore a RAM-tier value; "
         "warm-session is measuring the same thing as warm-restart"

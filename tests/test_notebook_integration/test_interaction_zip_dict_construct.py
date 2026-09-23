@@ -13,12 +13,14 @@ class TestZipDictConstruct:
 
     def test_zip_dict_basic(self, nb_runner):
         """Zip two lists into a dict, verify caching."""
-        nb_runner.create_notebook([
-            "keys = ['a', 'b', 'c']",
-            "values = [1, 2, 3]",
-            "mapping = dict(zip(keys, values))",
-            "result = ', '.join(f'{k}={v}' for k, v in sorted(mapping.items()))\nprint(result)",
-        ])
+        nb_runner.create_notebook(
+            [
+                "keys = ['a', 'b', 'c']",
+                "values = [1, 2, 3]",
+                "mapping = dict(zip(keys, values))",
+                "result = ', '.join(f'{k}={v}' for k, v in sorted(mapping.items()))\nprint(result)",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(4)
@@ -33,12 +35,14 @@ class TestZipDictConstruct:
 
     def test_zip_dict_edit_keys(self, nb_runner):
         """Edit keys list, verify dict reconstruction."""
-        nb_runner.create_notebook([
-            "keys = ['x', 'y']",
-            "vals = [10, 20]",
-            "d = dict(zip(keys, vals))",
-            "total = sum(d.values())\nprint(f'total={total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "keys = ['x', 'y']",
+                "vals = [10, 20]",
+                "d = dict(zip(keys, vals))",
+                "total = sum(d.values())\nprint(f'total={total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(4)
@@ -52,11 +56,13 @@ class TestZipDictConstruct:
 
     def test_zip_enumerate_pattern(self, nb_runner):
         """Zip with enumerate for indexed pairs."""
-        nb_runner.create_notebook([
-            "items = ['apple', 'banana', 'cherry']",
-            "indexed = dict(enumerate(items))",
-            "lines = [f'{i}: {v}' for i, v in sorted(indexed.items())]\nprint('\\n'.join(lines))",
-        ])
+        nb_runner.create_notebook(
+            [
+                "items = ['apple', 'banana', 'cherry']",
+                "indexed = dict(enumerate(items))",
+                "lines = [f'{i}: {v}' for i, v in sorted(indexed.items())]\nprint('\\n'.join(lines))",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(3)

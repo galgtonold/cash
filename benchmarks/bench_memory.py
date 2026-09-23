@@ -20,6 +20,7 @@ would miss the copy entirely, since it does not follow references.
 Usage:
     python benchmarks/bench_memory.py
 """
+
 from __future__ import annotations
 
 import gc
@@ -48,8 +49,7 @@ def large_values(proc, root) -> None:
     print("  LARGE VALUES -- multiple of the object's own size")
     print()
     print(f"  {'object':<26}{'own size':>11}{'RSS held':>12}{'ratio':>8}")
-    for label, n in (("64MB float64 array", 8 * 1024 * 1024),
-                     ("256MB float64 array", 32 * 1024 * 1024)):
+    for label, n in (("64MB float64 array", 8 * 1024 * 1024), ("256MB float64 array", 32 * 1024 * 1024)):
         d = tempfile.mkdtemp(dir=root)
         c = Cash(cache_dir=d, register_magic=False)
 
@@ -62,8 +62,7 @@ def large_values(proc, root) -> None:
         own = arr.nbytes
         _drain(c)
         held = _rss(proc) - base
-        print(f"  {label:<26}{own / MB:>9.0f}MB{held / MB:>10.0f}MB"
-              f"{held / own:>8.1f}x")
+        print(f"  {label:<26}{own / MB:>9.0f}MB{held / MB:>10.0f}MB{held / own:>8.1f}x")
         del arr
         c.shutdown()
 
@@ -82,12 +81,10 @@ def small_values(proc, root) -> None:
         n = 2000
         base = _rss(proc)
         for i in range(n):
-            c.backend.set(f"k{i}", blob,
-                          {"size": len(blob), "execution_time": 1.0})
+            c.backend.set(f"k{i}", blob, {"size": len(blob), "execution_time": 1.0})
         _drain(c)
         held = _rss(proc) - base
-        print(f"  {payload_kb}KB{'':<23}{n:>10}{held / MB:>10.1f}MB"
-              f"{held / n:>10.0f}B")
+        print(f"  {payload_kb}KB{'':<23}{n:>10}{held / MB:>10.1f}MB{held / n:>10.0f}B")
         c.shutdown()
 
 

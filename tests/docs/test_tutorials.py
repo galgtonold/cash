@@ -1,4 +1,4 @@
-"""Documentation feature-parity tests for Cash docs.
+r"""Documentation feature-parity tests for Cash docs.
 
 Auto-discovers every ``.md`` file under ``docs/``, ``examples/``, and the
 repository root, then runs its Python fences through the harness. New doc
@@ -48,7 +48,7 @@ _EXERCISE_REQUIRED = {
 
 
 def _discover_docs() -> list[Path]:
-    """Return all ``.md`` files worth parametrizing from docs/, examples/, and root.
+    r"""Return all ``.md`` files worth parametrizing from docs/, examples/, and root.
 
     Skips the ``superpowers/`` subtree (internal planning docs) and any
     file without a ``\`\`\`python`` fence (no test value).
@@ -103,11 +103,7 @@ def _get_namespace(doc_path: Path) -> dict | None:
     falls back to the file stem (e.g. ``"README"``).  This avoids collisions
     between files that share a stem but live in different directories.
     """
-    rel_key = (
-        str(doc_path.relative_to(REPO_ROOT))
-        .replace("\\", "/")
-        .removesuffix(".md")
-    )
+    rel_key = str(doc_path.relative_to(REPO_ROOT)).replace("\\", "/").removesuffix(".md")
     if rel_key in _DOC_NAMESPACES:
         return _DOC_NAMESPACES[rel_key]
     return _DOC_NAMESPACES.get(doc_path.stem)
@@ -119,14 +115,17 @@ def _get_namespace(doc_path: Path) -> dict | None:
 # elsewhere (e.g. in user application code).
 # ---------------------------------------------------------------------------
 
+
 class _MyPydanticModelStub:
     """Minimal stub satisfying custom-hashers.md fence 3 (hash_pydantic)."""
+
     def model_dump_json(self) -> str:
         return '{"stub": true}'
 
 
 class _DatasetConfigStub:
     """Minimal stub satisfying custom-hashers.md fence 4 (hash_dataset_config)."""
+
     def __init__(self) -> None:
         self.path = "/data/test.csv"
         self.split = "train"
@@ -134,9 +133,7 @@ class _DatasetConfigStub:
         self.features = ["f1", "f2"]
 
 
-_fake_sqlalchemy_engine = _types.SimpleNamespace(
-    Engine=type("Engine", (), {"url": "sqlite:///stub.db"})
-)
+_fake_sqlalchemy_engine = _types.SimpleNamespace(Engine=type("Engine", (), {"url": "sqlite:///stub.db"}))
 _fake_sqlalchemy = _types.SimpleNamespace(engine=_fake_sqlalchemy_engine)
 
 
@@ -223,6 +220,7 @@ def _make_purity_df():
     """
     try:
         import pandas as pd
+
         return pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
     except ImportError:
         return _StubDF(data={"a": [1, 2, 3], "b": [4, 5, 6]}, n=3)
@@ -230,12 +228,14 @@ def _make_purity_df():
 
 def _make_stub_model():
     """Generic ML model stub with .predict() returning zeros."""
+
     class _Model:
         def predict(self, x):
             try:
                 return [0] * len(x)
             except TypeError:
                 return [0]
+
     return _Model()
 
 
@@ -263,8 +263,10 @@ def _make_tobytes_array(values=(1.0, 2.0, 3.0)):
 # Stubs used by non-tutorial docs (decorator.md, annotations.md, API ref…).
 # ---------------------------------------------------------------------------
 
+
 class _FakeYaml:
     """Stub for yaml module references in decorator.md."""
+
     @staticmethod
     def safe_load(f):
         return {"stub": True}
@@ -272,6 +274,7 @@ class _FakeYaml:
 
 class _FakeDB:
     """Stub for `db.query(...)` in decorator.md depends_on fence."""
+
     @staticmethod
     def query(sql):
         return []
@@ -325,6 +328,7 @@ def _compute_something_small():
 
 class _FakeGenerator:
     """Stub for a ``np.random.default_rng()`` Generator (CAS-135)."""
+
     @staticmethod
     def standard_normal(*args):
         return [0.0] * (args[0] if args else 1)
@@ -340,6 +344,7 @@ class _FakeGenerator:
 
 class _FakeRandomState:
     """Stub for np.random.* calls in annotations.md / controlling-cache-behavior.md."""
+
     @staticmethod
     def randn(*args):
         return [0.0] * (args[0] if args else 1)
@@ -393,8 +398,10 @@ _COMMON_NONTUT = {
 
 class _StubPandasDF:
     """Minimal DataFrame-shaped stub for ``docs/index.md`` Quick Example."""
+
     def groupby(self, *a, **kw):
         return self
+
     def sum(self):
         return self
 
@@ -490,12 +497,8 @@ _DOC_NAMESPACES: dict[str, dict] = {
         **_COMMON_NONTUT,
         # decorator.md examples reference these undefined names
         "requests": _types.SimpleNamespace(
-            get=lambda *a, **kw: _types.SimpleNamespace(
-                json=lambda: {"stub": True}
-            ),
-            post=lambda *a, **kw: _types.SimpleNamespace(
-                json=lambda: {"stub": True}
-            ),
+            get=lambda *a, **kw: _types.SimpleNamespace(json=lambda: {"stub": True}),
+            post=lambda *a, **kw: _types.SimpleNamespace(json=lambda: {"stub": True}),
         ),
         "httpx": _types.SimpleNamespace(
             AsyncClient=lambda *a, **kw: _types.SimpleNamespace(),
@@ -544,7 +547,10 @@ _DOC_NAMESPACES: dict[str, dict] = {
         "ABC": __import__("abc").ABC,
         "abstractmethod": __import__("abc").abstractmethod,
         # For type hints
-        "Dict": dict, "Set": set, "List": list, "Tuple": tuple,
+        "Dict": dict,
+        "Set": set,
+        "List": list,
+        "Tuple": tuple,
         "Optional": __import__("typing").Optional,
         "Any": __import__("typing").Any,
         "CacheAnnotation": type("CacheAnnotation", (), {}),
@@ -561,7 +567,10 @@ _DOC_NAMESPACES: dict[str, dict] = {
     "notebook_caching_technical": {
         **_COMMON_NONTUT,
         "Magics": type("Magics", (), {"__init__": lambda self, *a, **kw: None}),
-        "Dict": dict, "Set": set, "List": list, "Tuple": tuple,
+        "Dict": dict,
+        "Set": set,
+        "List": list,
+        "Tuple": tuple,
         "Optional": __import__("typing").Optional,
         "Any": __import__("typing").Any,
         "ABC": __import__("abc").ABC,
@@ -592,17 +601,15 @@ _DOC_NAMESPACES: dict[str, dict] = {
     },
     "data_sources": {
         **_COMMON_NONTUT,
-        "conn": _types.SimpleNamespace(
-            execute=lambda sql: _types.SimpleNamespace(
-                fetchone=lambda: (1, 1)
-            )
-        ),
+        "conn": _types.SimpleNamespace(execute=lambda sql: _types.SimpleNamespace(fetchone=lambda: (1, 1))),
         "pd": _types.SimpleNamespace(read_csv=lambda p: {"stub": True}),
     },
     "purity": {
         **_COMMON_NONTUT,
         "pd": _types.SimpleNamespace(
-            DataFrame=type("DataFrame", (), {"merge": lambda self, *a, **kw: self, "to_sql": lambda self, *a, **kw: None}),
+            DataFrame=type(
+                "DataFrame", (), {"merge": lambda self, *a, **kw: self, "to_sql": lambda self, *a, **kw: None}
+            ),
         ),
         "my_function": lambda: None,
     },
@@ -639,9 +646,7 @@ _DOC_NAMESPACES: dict[str, dict] = {
 @pytest.mark.parametrize(
     "doc_path",
     ALL_DOCS,
-    ids=lambda p: (
-        str(p.relative_to(REPO_ROOT)).replace("\\", "/").removesuffix(".md")
-    ),
+    ids=lambda p: str(p.relative_to(REPO_ROOT)).replace("\\", "/").removesuffix(".md"),
 )
 def test_doc_page(doc_path: Path, docs_coverage_recorder) -> None:
     """Execute every python fence in the doc and assert documented cache claims."""
@@ -674,12 +679,14 @@ def test_doc_page(doc_path: Path, docs_coverage_recorder) -> None:
                 f"really is the whole point."
             )
 
-    docs_coverage_recorder.append({
-        "page": str(doc_path.relative_to(REPO_ROOT)),
-        "tested_fences": result.tested_fences,
-        "total_fences": result.total_fences,
-        "skipped_fences": result.skipped_fences,
-    })
+    docs_coverage_recorder.append(
+        {
+            "page": str(doc_path.relative_to(REPO_ROOT)),
+            "tested_fences": result.tested_fences,
+            "total_fences": result.total_fences,
+            "skipped_fences": result.skipped_fences,
+        }
+    )
     # Pages that are entirely nb-cell / IPython-magic / illustrative-only
     # may have 0 tested fences, which is expected (not a failure).
     auto_skips = sum(
@@ -693,6 +700,5 @@ def test_doc_page(doc_path: Path, docs_coverage_recorder) -> None:
     non_auto_total = result.total_fences - auto_skips
     if non_auto_total > 0:
         assert result.tested_fences >= 1, (
-            f"{doc_path}: no testable fences found "
-            f"({len(result.skipped_fences)} skipped, total {result.total_fences})"
+            f"{doc_path}: no testable fences found ({len(result.skipped_fences)} skipped, total {result.total_fences})"
         )

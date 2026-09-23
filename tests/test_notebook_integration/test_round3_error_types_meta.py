@@ -6,9 +6,10 @@ Tests how cash handles try/except, custom exceptions, type-annotated code,
 abstract base classes, metaclass-driven class creation, and exception
 propagation across cells.
 """
-import pytest
+
 import textwrap
 
+import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.stress]
 
@@ -17,29 +18,32 @@ pytestmark = [pytest.mark.integration, pytest.mark.stress]
 # Test Group 1: Error Handling Patterns
 # ============================================================
 
+
 class TestErrorHandlingPatterns:
     """Test try/except/finally patterns and their caching behavior."""
 
     def test_try_except_cached(self, nb_runner):
         """Try/except block with successful path should be cacheable."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 try:
                     result = int("42")
                 except ValueError:
                     result = -1
                 print(result)
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "42" in nb_runner.get_output(1)
 
-
     def test_try_except_finally(self, nb_runner):
         """Try/except/finally — finally always runs."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 cleanup_ran = False
                 try:
                     value = 100
@@ -49,16 +53,17 @@ class TestErrorHandlingPatterns:
                     cleanup_ran = True
                 print(value, cleanup_ran)
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "100 True" in nb_runner.get_output(1)
 
-
     def test_exception_chain(self, nb_runner):
         """Exception chaining with 'from'."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 try:
                     try:
                         x = 1 / 0
@@ -69,7 +74,8 @@ class TestErrorHandlingPatterns:
                     cause = str(e.__cause__)
                 print(result, "|", cause)
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         output = nb_runner.get_output(1)
@@ -78,8 +84,9 @@ class TestErrorHandlingPatterns:
 
     def test_nested_try_except(self, nb_runner):
         """Nested try/except blocks."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 results = []
                 for val in ["10", "abc", "20", "xyz"]:
                     try:
@@ -91,7 +98,8 @@ class TestErrorHandlingPatterns:
                         results.append(None)
                 print(len(results), results[0], results[2])
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         output = nb_runner.get_output(1)
@@ -104,28 +112,32 @@ class TestErrorHandlingPatterns:
 # Test Group 2: Type Annotations
 # ============================================================
 
+
 class TestTypeAnnotations:
     """Test that type-annotated code caches correctly."""
 
     def test_typed_function(self, nb_runner):
         """Function with type annotations."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 def add(x: int, y: int) -> int:
                     return x + y
 
                 result: int = add(3, 4)
                 print(result)
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "7" in nb_runner.get_output(1)
 
     def test_typed_variable_annotations(self, nb_runner):
         """Variable annotations without assignment."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from typing import List, Dict, Optional
 
                 scores: List[int] = [90, 85, 92]
@@ -133,15 +145,17 @@ class TestTypeAnnotations:
                 maybe: Optional[str] = None
                 print(len(scores), len(lookup), maybe)
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "3 2 None" in nb_runner.get_output(1)
 
     def test_typed_class(self, nb_runner):
         """Class with typed attributes."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from dataclasses import dataclass
 
                 @dataclass
@@ -155,15 +169,17 @@ class TestTypeAnnotations:
                 p = Point(3.0, 4.0)
                 print(f"{p.distance():.1f}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "5.0" in nb_runner.get_output(1)
 
     def test_generic_type_alias(self, nb_runner):
         """Generic type aliases (Python 3.12+ style and older)."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from typing import TypeVar, Generic
 
                 T = TypeVar('T')
@@ -177,7 +193,8 @@ class TestTypeAnnotations:
                 b = Box(42)
                 print(b.get())
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "42" in nb_runner.get_output(1)
@@ -187,13 +204,15 @@ class TestTypeAnnotations:
 # Test Group 3: Abstract Base Classes
 # ============================================================
 
+
 class TestAbstractBaseClasses:
     """Test ABC patterns and their caching behavior."""
 
     def test_abc_basic(self, nb_runner):
         """Basic ABC with abstract method."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from abc import ABC, abstractmethod
 
                 class Shape(ABC):
@@ -201,7 +220,7 @@ class TestAbstractBaseClasses:
                     def area(self) -> float:
                         pass
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 class Rectangle(Shape):
                     def __init__(self, w, h):
                         self.w = w
@@ -212,15 +231,17 @@ class TestAbstractBaseClasses:
                 r = Rectangle(3, 4)
                 print(r.area())
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "12" in nb_runner.get_output(2)
 
     def test_abc_cannot_instantiate(self, nb_runner):
         """Attempting to instantiate an ABC raises TypeError."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from abc import ABC, abstractmethod
 
                 class Base(ABC):
@@ -228,7 +249,7 @@ class TestAbstractBaseClasses:
                     def do(self):
                         pass
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 try:
                     b = Base()
                     msg = "no error"
@@ -236,15 +257,17 @@ class TestAbstractBaseClasses:
                     msg = "TypeError caught"
                 print(msg)
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "TypeError caught" in nb_runner.get_output(2)
 
     def test_abc_multiple_abstract_methods(self, nb_runner):
         """ABC with multiple abstract methods implemented in stages."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from abc import ABC, abstractmethod
 
                 class Serializable(ABC):
@@ -256,7 +279,7 @@ class TestAbstractBaseClasses:
                     def deserialize(self, data: str):
                         pass
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 class SimpleData(Serializable):
                     def __init__(self, value=0):
                         self.value = value
@@ -266,13 +289,14 @@ class TestAbstractBaseClasses:
                         self.value = int(data)
                         return self
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 sd = SimpleData(42)
                 serialized = sd.serialize()
                 sd2 = SimpleData().deserialize(serialized)
                 print(sd2.value)
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "42" in nb_runner.get_output(3)
@@ -282,13 +306,15 @@ class TestAbstractBaseClasses:
 # Test Group 4: Metaclass Interactions
 # ============================================================
 
+
 class TestMetaclassInteractions:
     """Test metaclass-driven class creation and caching."""
 
     def test_simple_metaclass(self, nb_runner):
         """Metaclass that modifies class creation."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class UpperAttrMeta(type):
                     def __new__(mcs, name, bases, namespace):
                         uppercase_attrs = {}
@@ -299,7 +325,7 @@ class TestMetaclassInteractions:
                                 uppercase_attrs[key] = val
                         return super().__new__(mcs, name, bases, uppercase_attrs)
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 class MyClass(metaclass=UpperAttrMeta):
                     greeting = "hello"
                     farewell = "goodbye"
@@ -307,7 +333,8 @@ class TestMetaclassInteractions:
                 obj = MyClass()
                 print(hasattr(obj, 'GREETING'), obj.GREETING)
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         output = nb_runner.get_output(2)
@@ -316,8 +343,9 @@ class TestMetaclassInteractions:
 
     def test_singleton_metaclass(self, nb_runner):
         """Singleton pattern via metaclass."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class SingletonMeta(type):
                     _instances = {}
                     def __call__(cls, *args, **kwargs):
@@ -325,7 +353,7 @@ class TestMetaclassInteractions:
                             cls._instances[cls] = super().__call__(*args, **kwargs)
                         return cls._instances[cls]
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 class Database(metaclass=SingletonMeta):
                     def __init__(self):
                         self.connection = "active"
@@ -334,15 +362,17 @@ class TestMetaclassInteractions:
                 db2 = Database()
                 print(db1 is db2, db1.connection)
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "True active" in nb_runner.get_output(2)
 
     def test_registry_metaclass(self, nb_runner):
         """Metaclass that auto-registers subclasses."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class PluginMeta(type):
                     registry = {}
                     def __new__(mcs, name, bases, namespace):
@@ -354,7 +384,7 @@ class TestMetaclassInteractions:
                 class Plugin(metaclass=PluginMeta):
                     pass
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 class AudioPlugin(Plugin):
                     kind = "audio"
 
@@ -363,7 +393,8 @@ class TestMetaclassInteractions:
 
                 print(sorted(PluginMeta.registry.keys()))
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         output = nb_runner.get_output(2)
@@ -375,22 +406,25 @@ class TestMetaclassInteractions:
 # Test Group 5: String Processing Patterns
 # ============================================================
 
+
 class TestStringProcessingPatterns:
     """Test complex string processing and regex patterns."""
 
     def test_regex_across_cells(self, nb_runner):
         """Regex pattern compiled in one cell, used in another."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 import re
                 email_pattern = re.compile(r'[\\w.]+@[\\w]+\\.[\\w]+')
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 text = "Contact alice@example.com or bob@test.org"
                 emails = email_pattern.findall(text)
                 print(emails)
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         output = nb_runner.get_output(2)
@@ -399,34 +433,38 @@ class TestStringProcessingPatterns:
 
     def test_string_template(self, nb_runner):
         """String template pattern across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from string import Template
                 tmpl = Template("Hello $name, you have $count items")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 msg = tmpl.substitute(name="Alice", count=5)
                 print(msg)
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "Hello Alice, you have 5 items" in nb_runner.get_output(2)
 
     def test_multiline_string_processing(self, nb_runner):
         """Processing multiline strings with splitlines."""
-        nb_runner.create_notebook([
-            textwrap.dedent('''\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent('''\
                 text = """line1
                 line2
                 line3
                 line4"""
             '''),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 lines = [l.strip() for l in text.splitlines() if l.strip()]
                 print(len(lines), lines[0], lines[-1])
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         output = nb_runner.get_output(2)
@@ -436,27 +474,30 @@ class TestStringProcessingPatterns:
 
     def test_json_processing_across_cells(self, nb_runner):
         """JSON encode in one cell, decode in another."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 import json
                 data = {"users": [{"name": "Alice", "age": 30}]}
                 encoded = json.dumps(data)
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 decoded = json.loads(encoded)
                 user_name = decoded['users'][0]['name']
                 print(user_name)
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "Alice" in nb_runner.get_output(2)
 
     def test_format_spec_patterns(self, nb_runner):
         """Various format spec patterns."""
-        nb_runner.create_notebook([
-            "value = 3.14159265",
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                "value = 3.14159265",
+                textwrap.dedent("""\
                 results = [
                     f"{value:.2f}",
                     f"{value:.4e}",
@@ -465,7 +506,8 @@ class TestStringProcessingPatterns:
                 ]
                 print(results)
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         output = nb_runner.get_output(2)

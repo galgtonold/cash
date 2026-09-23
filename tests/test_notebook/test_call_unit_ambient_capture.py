@@ -31,23 +31,20 @@ the store's validator, no local I/O), so that is where this file's
 propagation-specific test lives -- and per the task brief, remote deps are
 the channel most likely to be skipped by an incomplete implementation.
 """
+
 from __future__ import annotations
 
 import time
-from typing import Any
-
-import pytest
 
 import cash
 from cash.notebook.call_interception import CallCache, CallSite
-from cash.notebook.call_unit import CallUnit
 from cash.notebook.file_tracker import FileAccessTracker, _active_tracker
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
-
 
 # ---------------------------------------------------------------------------
 # Channel 1: file deps -- the call's OWN freshness must be re-checked.
 # ---------------------------------------------------------------------------
+
 
 def test_call_hit_recomputes_when_its_own_file_dependency_goes_stale(call_unit_harness, tmp_path):
     """A call's cache KEY never encodes file content, so a stored entry
@@ -74,23 +71,21 @@ def test_call_hit_recomputes_when_its_own_file_dependency_goes_stale(call_unit_h
 
     # First call: a real miss, inside an ambient tracker (as it would be
     # inside a statement's own execution window).
-    with FileAccessTracker() as tracker:
+    with FileAccessTracker():
         assert wrapped(2) == 20
     assert calls == [2]
 
     # Second call, same key -> HIT. The body must not re-run.
-    with FileAccessTracker() as tracker:
+    with FileAccessTracker():
         assert wrapped(2) == 20
     assert calls == [2], "a fresh hit re-ran the callee"
 
     # The file changes on disk. The call's key is UNCHANGED (same source,
     # same k), so only its own freshness re-check can catch this.
     data_path.write_text("100")
-    with FileAccessTracker() as tracker:
+    with FileAccessTracker():
         assert wrapped(2) == 200
-    assert calls == [2, 2], (
-        "a call whose file dependency went stale was still served the old value"
-    )
+    assert calls == [2, 2], "a call whose file dependency went stale was still served the old value"
 
 
 def test_replay_deps_registers_a_local_path_on_the_ambient_tracker(call_unit_harness):
@@ -167,8 +162,10 @@ def test_two_reads_of_the_same_path_in_one_tracker_window_both_stay_correct(call
 
     unit = call_unit_harness(lineage={}, user_ns={"expensive": expensive})
     site = CallSite(
-        source="expensive(k)", free_names=frozenset({"expensive", "k"}),
-        occurrence_index=0, computed_arg_positions=(0,),
+        source="expensive(k)",
+        free_names=frozenset({"expensive", "k"}),
+        occurrence_index=0,
+        computed_arg_positions=(0,),
     )
     wrapped = unit.wrap(expensive, site)
 
@@ -179,8 +176,8 @@ def test_two_reads_of_the_same_path_in_one_tracker_window_both_stay_correct(call
     # statement that reads a path directly and also calls a cached function
     # that reads it again (``hdr = read(p); total = expensive(k)``).
     with FileAccessTracker():
-        assert wrapped(10) == 100   # first read of data.csv this window
-        assert wrapped(20) == 200   # second read of the SAME path
+        assert wrapped(10) == 100  # first read of data.csv this window
+        assert wrapped(20) == 200  # second read of the SAME path
     assert calls == [10, 20]
 
     # The file changes. Re-run both calls, again sharing one window, as a
@@ -203,6 +200,7 @@ def test_two_reads_of_the_same_path_in_one_tracker_window_both_stay_correct(call
 # side effect to mask the propagation this task adds.
 # ---------------------------------------------------------------------------
 
+
 def test_call_hit_propagates_remote_dependency_through_resolve(tmp_path, monkeypatch):
     """A call that reads a remote object must carry that dependency onto the
     statement's ambient tracker on a HIT, and must recompute when the
@@ -218,7 +216,8 @@ def test_call_hit_propagates_remote_dependency_through_resolve(tmp_path, monkeyp
 
     token = {"value": "etag-v1"}
     monkeypatch.setattr(
-        remote_source.RemoteFileDataSource, "state_token",
+        remote_source.RemoteFileDataSource,
+        "state_token",
         lambda self: token["value"],
     )
 
@@ -238,7 +237,9 @@ def test_call_hit_propagates_remote_dependency_through_resolve(tmp_path, monkeyp
 
     call_cache = CallCache(cash.Cash(cache_dir=str(tmp_path / "cc")))
     site = CallSite(
-        source="fetch(u)", free_names=frozenset({"fetch", "u"}), occurrence_index=0,
+        source="fetch(u)",
+        free_names=frozenset({"fetch", "u"}),
+        occurrence_index=0,
         computed_arg_positions=(0,),
     )
 
@@ -264,11 +265,9 @@ def test_call_hit_propagates_remote_dependency_through_resolve(tmp_path, monkeyp
     token["value"] = "etag-v2"
     call_cache.set_sites([site])
     wrapped3 = call_cache.resolve(fetch)
-    with FileAccessTracker() as tracker3:
+    with FileAccessTracker():
         assert wrapped3(url) == "DATA-etag-v2"
-    assert calls == [url, url], (
-        "a call whose remote dependency changed was still served the old value"
-    )
+    assert calls == [url, url], "a call whose remote dependency changed was still served the old value"
 
 
 # ---------------------------------------------------------------------------
@@ -277,12 +276,14 @@ def test_call_hit_propagates_remote_dependency_through_resolve(tmp_path, monkeyp
 # statement path needing to know sub-call caching exists.
 # ---------------------------------------------------------------------------
 
+
 def test_call_hit_replays_stdout_reconstructing_interleaving(call_unit_harness, capsys):
     """One-line mutation: in ``wrap``'s hit branch, delete the
     ``self._replay_output(metadata)`` call. Applied and observed: the
     second capture is missing the callee's own line (``"inside=5"``) --
     verified below, then reverted.
     """
+
     def loud(x):
         time.sleep(ABOVE_PERSISTENCE_FLOOR_S)
         print(f"inside={x}")
@@ -290,7 +291,9 @@ def test_call_hit_replays_stdout_reconstructing_interleaving(call_unit_harness, 
 
     unit = call_unit_harness(lineage={}, user_ns={"loud": loud})
     site = CallSite(
-        source="loud(x)", free_names=frozenset({"loud", "x"}), occurrence_index=0,
+        source="loud(x)",
+        free_names=frozenset({"loud", "x"}),
+        occurrence_index=0,
         computed_arg_positions=(0,),
     )
     wrapped = unit.wrap(loud, site)
@@ -307,9 +310,7 @@ def test_call_hit_replays_stdout_reconstructing_interleaving(call_unit_harness, 
     assert wrapped(5) == 10
     print("after2")
     out2 = capsys.readouterr().out
-    assert out2 == "before2\ninside=5\nafter2\n", (
-        "the callee's stdout was not replayed on a cache hit"
-    )
+    assert out2 == "before2\ninside=5\nafter2\n", "the callee's stdout was not replayed on a cache hit"
 
 
 def test_forwarding_tee_records_writelines_not_just_write():

@@ -47,6 +47,7 @@ only changes when the underlying fact meaningfully has.
 the docs test suite runs so version/claim/platform drift is caught on every
 ordinary test run without paying for three collections.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -59,8 +60,7 @@ REPO = Path(__file__).resolve().parent.parent
 
 #: Files scanned for markers. Everything published, plus the README, which is
 #: the one page rendered by PyPI and GitHub rather than by mkdocs.
-SCANNED = ["README.md", *sorted(str(p.relative_to(REPO).as_posix())
-                                for p in (REPO / "docs").rglob("*.md"))]
+SCANNED = ["README.md", *sorted(str(p.relative_to(REPO).as_posix()) for p in (REPO / "docs").rglob("*.md"))]
 
 
 def _scanned(root: Path) -> list[str]:
@@ -74,8 +74,8 @@ def _scanned(root: Path) -> list[str]:
     """
     if root == REPO:
         return SCANNED
-    return ["README.md", *sorted(str(q.relative_to(root).as_posix())
-                                 for q in (root / "docs").rglob("*.md"))]
+    return ["README.md", *sorted(str(q.relative_to(root).as_posix()) for q in (root / "docs").rglob("*.md"))]
+
 
 MARKER = re.compile(
     r"<!--\s*docnum:(?P<name>[a-z0-9_]+)\s*-->(?P<value>.*?)<!--\s*/docnum\s*-->",
@@ -86,8 +86,12 @@ MARKER = re.compile(
 #: ``docs/how-it-works/testing.md`` tells a reader to run. If those diverge the
 #: page is describing a suite nobody can reproduce.
 SUITES = {
-    "tests_unit": ["tests/", "--ignore=tests/test_notebook_integration",
-                   "--ignore=tests/test_wheel_gate", "--ignore=tests/docs"],
+    "tests_unit": [
+        "tests/",
+        "--ignore=tests/test_notebook_integration",
+        "--ignore=tests/test_wheel_gate",
+        "--ignore=tests/docs",
+    ],
     "tests_integration": ["tests/test_notebook_integration"],
     "tests_docs": ["tests/docs"],
 }
@@ -98,6 +102,7 @@ _COLLECTED = re.compile(r"(\d+)\s+tests?\s+collected")
 # --------------------------------------------------------------------------
 # Deriving the facts
 # --------------------------------------------------------------------------
+
 
 def _read_version() -> str:
     """The single source of truth, per pyproject's own comment."""
@@ -111,9 +116,10 @@ def _read_version() -> str:
 def _collect(args: list[str]) -> int:
     """Count tests without running them."""
     proc = subprocess.run(
-        [sys.executable, "-m", "pytest", *args, "--collect-only", "-q",
-         "-p", "no:randomly"],
-        cwd=REPO, capture_output=True, text=True,
+        [sys.executable, "-m", "pytest", *args, "--collect-only", "-q", "-p", "no:randomly"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
     )
     hits = _COLLECTED.findall(proc.stdout)
     if not hits:
@@ -156,14 +162,17 @@ def _count_platforms() -> int:
 # Rendering
 # --------------------------------------------------------------------------
 
+
 def _approx(step: int):
     """Render a count rounded to *step*, prefixed with ``~``.
 
     Rounding is what keeps this gate from firing on every added test. Half a
     step is the worst the printed figure can be wrong by.
     """
+
     def render(value: int) -> str:
         return f"~{round(value / step) * step:,}"
+
     render.step = step  # type: ignore[attr-defined]
     return render
 
@@ -227,19 +236,22 @@ def _build_facts() -> dict[str, Fact]:
         Fact("test_files", _count_test_files, _approx(10)),
     ]
     for name, args in SUITES.items():
-        facts.append(Fact(name, lambda a=args: _collect(a), _approx(10),
-                          expensive=True))
-    facts.append(Fact(
-        "tests_total",
-        lambda: sum(_collect(a) for a in SUITES.values()),
-        _approx(50), expensive=True,
-    ))
+        facts.append(Fact(name, lambda a=args: _collect(a), _approx(10), expensive=True))
+    facts.append(
+        Fact(
+            "tests_total",
+            lambda: sum(_collect(a) for a in SUITES.values()),
+            _approx(50),
+            expensive=True,
+        )
+    )
     return {f.name: f for f in facts}
 
 
 # --------------------------------------------------------------------------
 # Applying
 # --------------------------------------------------------------------------
+
 
 def _resolve(facts, fast: bool) -> dict[str, str]:
     resolved = {}
@@ -272,8 +284,7 @@ def _rewrite(resolved: dict[str, str], root: Path = REPO) -> list[str]:
             name = match.group("name")
             if name not in resolved:
                 return match.group(0)
-            return (f"<!-- docnum:{name} -->{resolved[name]}"
-                    f"<!-- /docnum -->")
+            return f"<!-- docnum:{name} -->{resolved[name]}<!-- /docnum -->"
 
         new = MARKER.sub(sub, text)
         if new != text:
@@ -301,18 +312,19 @@ def _unknown_markers(resolved_names, root: Path = REPO) -> list[tuple[str, str]]
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--check", action="store_true",
-                      help="exit 1 if any marker is stale")
-    mode.add_argument("--update", action="store_true",
-                      help="rewrite markers in place")
-    mode.add_argument("--list", action="store_true",
-                      help="print every derived fact")
-    parser.add_argument("--fast", action="store_true",
-                        help="skip facts needing a pytest collection pass")
-    parser.add_argument("--docs-root", type=Path, default=REPO, metavar="DIR",
-                        help="read and write markers under DIR instead of the "
-                             "repository (facts are still derived from the "
-                             "repository; used by the drift test)")
+    mode.add_argument("--check", action="store_true", help="exit 1 if any marker is stale")
+    mode.add_argument("--update", action="store_true", help="rewrite markers in place")
+    mode.add_argument("--list", action="store_true", help="print every derived fact")
+    parser.add_argument("--fast", action="store_true", help="skip facts needing a pytest collection pass")
+    parser.add_argument(
+        "--docs-root",
+        type=Path,
+        default=REPO,
+        metavar="DIR",
+        help="read and write markers under DIR instead of the "
+        "repository (facts are still derived from the "
+        "repository; used by the drift test)",
+    )
     args = parser.parse_args()
     root = args.docs_root.resolve()
 
@@ -347,12 +359,13 @@ def main() -> int:
             print("Already up to date.")
         return 0
 
-    stale = [(rel, name, cur, want)
-             for rel, name, cur, want in _walk(resolved, root)
-             if cur != want and not _close_enough(facts[name], cur, want)]
+    stale = [
+        (rel, name, cur, want)
+        for rel, name, cur, want in _walk(resolved, root)
+        if cur != want and not _close_enough(facts[name], cur, want)
+    ]
     if stale:
-        print("Stale numbers in the docs "
-              "(run `python scripts/doc_numbers.py --update`):\n")
+        print("Stale numbers in the docs (run `python scripts/doc_numbers.py --update`):\n")
         for rel, name, cur, want in stale:
             print(f"  {rel}")
             print(f"    docnum:{name}: {cur!r} -> {want!r}")

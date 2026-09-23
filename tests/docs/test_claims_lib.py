@@ -1,4 +1,5 @@
 """Unit tests for the claim-anchor library."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -84,18 +85,15 @@ def test_anchor_inside_a_fence_is_ignored_but_one_outside_is_found():
     """
     anchors = _anchors("fenced.md")
     assert len(anchors) == 1
-    assert anchors[0].targets == (
-        Target("cash/config.py", "CashConfig.compress", None, None),
-    )
+    assert anchors[0].targets == (Target("cash/config.py", "CashConfig.compress", None, None),)
 
 
 def test_published_pages_excludes_superpowers_and_unbuilt_adr():
-    rels = {p.relative_to(Path(__file__).resolve().parents[2] / "docs").as_posix()
-            for p in published_pages()}
+    rels = {p.relative_to(Path(__file__).resolve().parents[2] / "docs").as_posix() for p in published_pages()}
     assert "architecture_decisions.md" not in rels
     assert not any(r.startswith("superpowers/") for r in rels)
     assert "index.md" in rels
-    assert len(rels) == 60      # +1: warnings.md, +1: testing-your-code.md
+    assert len(rels) == 60  # +1: warnings.md, +1: testing-your-code.md
 
 
 # --------------------------------------------------------------------------- #
@@ -165,7 +163,7 @@ def test_fingerprint_covers_every_overload_not_just_one():
 
 
 def test_normalize_strips_comments_blank_lines_and_trailing_space():
-    src = 'def f():\n    # a comment\n    x = 1  # trailing\n\n    return x   \n'
+    src = "def f():\n    # a comment\n    x = 1  # trailing\n\n    return x   \n"
     node = ast.parse(src).body[0]
     assert normalize(node, src) == "def f():\n    x = 1\n    return x"
 
@@ -176,20 +174,16 @@ def _fp(src: str) -> str:
 
 def test_comment_only_edits_do_not_change_the_fingerprint():
     """The whole point: churn must not fire, real change must."""
-    assert _fp('def f():\n    return 1\n') == _fp(
-        'def f():\n    # explain the 1\n    return 1   \n'
-    )
+    assert _fp("def f():\n    return 1\n") == _fp("def f():\n    # explain the 1\n    return 1   \n")
 
 
 def test_a_real_code_edit_does_change_the_fingerprint():
-    assert _fp('def f():\n    return 1\n') != _fp('def f():\n    return 2\n')
+    assert _fp("def f():\n    return 1\n") != _fp("def f():\n    return 2\n")
 
 
 def test_decorator_changes_are_inside_the_fingerprint():
     """A decorator decides behaviour; excluding it would hide a real change."""
-    assert _fp('@property\ndef f(self):\n    return 1\n') != _fp(
-        '@cached_property\ndef f(self):\n    return 1\n'
-    )
+    assert _fp("@property\ndef f(self):\n    return 1\n") != _fp("@cached_property\ndef f(self):\n    return 1\n")
 
 
 def test_hash_of_a_known_string_is_pinned():
@@ -268,7 +262,7 @@ def test_value_anchor_on_a_function_is_rejected():
         ("False", True, False),
         ('"sha256"', "sha256", True),
         ('"md5"', "sha256", False),
-        ("10", 10.0, True),      # int/float cross-compare is intentional
+        ("10", 10.0, True),  # int/float cross-compare is intentional
     ],
 )
 def test_values_match(documented, actual, expected):
@@ -384,9 +378,10 @@ def test_manifest_missing_a_published_page_is_a_problem(tmp_path, monkeypatch):
     problems = check_manifest()
     assert problems == [
         Problem(
-            "docs/page_a.md", 0, "manifest",
-            'not in claim_manifest.json; add {"audited": null, "anchors": 0} '
-            "and triage the page",
+            "docs/page_a.md",
+            0,
+            "manifest",
+            'not in claim_manifest.json; add {"audited": null, "anchors": 0} and triage the page',
         )
     ]
 
@@ -405,9 +400,10 @@ def test_manifest_entry_for_a_nonexistent_page_is_a_problem(tmp_path, monkeypatc
     problems = check_manifest()
     assert problems == [
         Problem(
-            "docs/does-not-exist.md", 0, "manifest",
-            "listed in claim_manifest.json but is not a published page; "
-            "remove the entry or restore the page",
+            "docs/does-not-exist.md",
+            0,
+            "manifest",
+            "listed in claim_manifest.json but is not a published page; remove the entry or restore the page",
         )
     ]
 
@@ -427,9 +423,10 @@ def test_manifest_anchor_count_regression_is_a_problem(tmp_path, monkeypatch):
     problems = check_manifest()
     assert problems == [
         Problem(
-            "docs/page_b.md", 0, "manifest",
-            "anchor count fell from 2 to 1; a claim was removed along with "
-            "its anchor",
+            "docs/page_b.md",
+            0,
+            "manifest",
+            "anchor count fell from 2 to 1; a claim was removed along with its anchor",
         )
     ]
 
@@ -543,9 +540,7 @@ def test_pin_matches_an_anchor_with_whitespace_around_the_colon(tmp_path, monkey
     src_root.mkdir()
     (src_root / "mod.py").write_text("def foo():\n    return 1\n", encoding="utf-8")
     page = tmp_path / "page.md"
-    page.write_text(
-        "<!-- claim: mod.py : foo @? -->\nA claim about foo.\n", encoding="utf-8"
-    )
+    page.write_text("<!-- claim: mod.py : foo @? -->\nA claim about foo.\n", encoding="utf-8")
 
     _patch_src_root(monkeypatch, src_root)
     monkeypatch.setattr(_cli, "published_pages", lambda: [page])
@@ -582,9 +577,7 @@ def test_accept_matches_an_anchor_with_whitespace_around_the_colon(tmp_path, mon
     assert f"mod.py : foo @{want}" in new_text
 
 
-def test_pin_raises_rather_than_silently_reporting_success_on_a_needle_mismatch(
-    tmp_path, monkeypatch
-):
+def test_pin_raises_rather_than_silently_reporting_success_on_a_needle_mismatch(tmp_path, monkeypatch):
     """The re.subn zero-match guard: if the needle EVER fails to match the
     on-disk text (whatever the reason), --pin must error rather than print
     "N placeholder(s) filled" while writing nothing. This is the safety net
@@ -608,9 +601,7 @@ def test_pin_raises_rather_than_silently_reporting_success_on_a_needle_mismatch(
     assert page.read_text(encoding="utf-8") == original
 
 
-def test_accept_raises_rather_than_silently_reporting_success_on_a_needle_mismatch(
-    tmp_path, monkeypatch
-):
+def test_accept_raises_rather_than_silently_reporting_success_on_a_needle_mismatch(tmp_path, monkeypatch):
     """Same guard, on the --accept --yes rewrite path."""
     src_root = tmp_path / "src"
     src_root.mkdir()
@@ -635,9 +626,7 @@ def test_accept_does_not_repin_a_broad_unjustified_anchor(tmp_path, monkeypatch)
     """
     src_root = tmp_path / "src"
     src_root.mkdir()
-    (src_root / "mod.py").write_text(
-        "class Foo:\n    def bar(self):\n        return 1\n", encoding="utf-8"
-    )
+    (src_root / "mod.py").write_text("class Foo:\n    def bar(self):\n        return 1\n", encoding="utf-8")
     page = tmp_path / "page.md"
     page.write_text(
         "<!-- claim: mod.py:Foo @00000000 -->\n"
@@ -660,9 +649,7 @@ def test_accept_does_not_repin_a_broad_unjustified_anchor(tmp_path, monkeypatch)
     assert "mod.py:Foo @00000000" in new_text
 
 
-def test_accept_prints_the_count_actually_rewritten_not_len_drifted(
-    tmp_path, monkeypatch, capsys
-):
+def test_accept_prints_the_count_actually_rewritten_not_len_drifted(tmp_path, monkeypatch, capsys):
     """MINOR 8: the printed count must reflect substitutions actually made.
 
     Without the breadth gate, this page's ``drifted`` (from check_page) has
@@ -673,9 +660,7 @@ def test_accept_prints_the_count_actually_rewritten_not_len_drifted(
     """
     src_root = tmp_path / "src"
     src_root.mkdir()
-    (src_root / "mod.py").write_text(
-        "class Foo:\n    def bar(self):\n        return 1\n", encoding="utf-8"
-    )
+    (src_root / "mod.py").write_text("class Foo:\n    def bar(self):\n        return 1\n", encoding="utf-8")
     page = tmp_path / "page.md"
     page.write_text(
         "<!-- claim: mod.py:Foo @00000000 -->\n"
@@ -707,8 +692,7 @@ def test_accept_rewrites_a_module_level_broad_anchor(tmp_path, monkeypatch):
     (src_root / "mod.py").write_text("X = 1\nY = 2\n", encoding="utf-8")
     page = tmp_path / "page.md"
     page.write_text(
-        '<!-- claim: mod.py @00000000 broad="whole module" -->\n'
-        "A claim about the whole module.\n",
+        '<!-- claim: mod.py @00000000 broad="whole module" -->\nA claim about the whole module.\n',
         encoding="utf-8",
     )
 
@@ -760,8 +744,7 @@ def test_pin_does_not_pin_a_fenced_example_anchor(tmp_path, monkeypatch):
 
     lines = page.read_text(encoding="utf-8").splitlines()
     assert lines[1] == "<!-- claim: mod.py:foo @? -->", (
-        "the fenced EXAMPLE anchor must stay byte-identical -- it is not a "
-        "live claim and must never be pinned"
+        "the fenced EXAMPLE anchor must stay byte-identical -- it is not a live claim and must never be pinned"
     )
     assert lines[5] == f"<!-- claim: mod.py:foo @{want} -->", (
         "the live anchor after the fence must be the one that gets pinned"
@@ -798,8 +781,7 @@ def test_accept_does_not_repin_a_fenced_example_anchor(tmp_path, monkeypatch):
 
     lines = page.read_text(encoding="utf-8").splitlines()
     assert lines[1] == "<!-- claim: mod.py:foo @00000000 -->", (
-        "the fenced EXAMPLE anchor must stay byte-identical -- it is not a "
-        "live claim and must never be re-pinned"
+        "the fenced EXAMPLE anchor must stay byte-identical -- it is not a live claim and must never be re-pinned"
     )
     assert lines[5] == f"<!-- claim: mod.py:foo @{want} -->", (
         "the live anchor after the fence must be the one that gets re-pinned"
@@ -1035,7 +1017,8 @@ def test_a_closed_enumeration_on_the_anchoring_page_is_surfaced(tmp_path):
 def test_a_mention_on_a_page_that_never_anchors_the_target_is_surfaced(tmp_path):
     """The plain case: another page talks about the code and pins nothing."""
     page = _page(
-        tmp_path, "faq.md",
+        tmp_path,
+        "faq.md",
         "# FAQ\n\nNo. `%thing_on` caches your existing cells as-is.\n",
     )
     hits = check_unanchored(THING_ON, [page])
@@ -1050,21 +1033,23 @@ def test_a_closed_enumeration_needs_the_page_to_anchor_the_target(tmp_path):
     corpus and get switched off within a week.
     """
     page = _page(
-        tmp_path, "loose.md",
+        tmp_path,
+        "loose.md",
         "# Loose\n\n**Google Colab is the exception**: it reads cells live.\n",
     )
     assert check_unanchored(THING_ON, [page]) == []
 
 
 def test_absolute_emphasis_is_not_a_closed_enumeration(tmp_path):
-    """"never" / "only" / "always" alone are ordinary emphasis, not a list.
+    """ "never" / "only" / "always" alone are ordinary emphasis, not a list.
 
     Measured on the pre-fix tree, admitting them added 23 lines to one target's
     triage and every one was still true. The failure class is prose that closes
     an enumeration a new code path then joins.
     """
     page = _page(
-        tmp_path, "emphasis.md",
+        tmp_path,
+        "emphasis.md",
         "# Emphasis\n\n"
         "The repair never fires, and only the cheap append happens; it always\n"
         "reproduces the value.\n\n"
@@ -1078,7 +1063,8 @@ def test_absolute_emphasis_is_not_a_closed_enumeration(tmp_path):
 def test_a_mention_inside_a_code_fence_is_not_surfaced(tmp_path):
     """An example is not a claim -- the same rule parse_anchors already applies."""
     page = _page(
-        tmp_path, "example.md",
+        tmp_path,
+        "example.md",
         "# Example\n\n```python\n%thing_on\n%thing_on ttl=60\n```\n",
     )
     assert check_unanchored(THING_ON, [page]) == []
@@ -1099,7 +1085,8 @@ def test_html_comments_are_not_prose(tmp_path):
       swallowed newline moves the number this reports.
     """
     page = _page(
-        tmp_path, "anchored.md",
+        tmp_path,
+        "anchored.md",
         "# Page\n\n"
         "<!--\nEditorial note: document `%thing_on`'s ttl handling\nhere.\n-->\n\n"
         "## Reference\n\n"
@@ -1110,9 +1097,7 @@ def test_html_comments_are_not_prose(tmp_path):
     )
     hits = check_unanchored(THING_ON, [page])
     assert [h.line for h in hits] == [15], hits
-    assert page.read_text(encoding="utf-8").splitlines()[14].strip() == (
-        "Run `%thing_on` first."
-    )
+    assert page.read_text(encoding="utf-8").splitlines()[14].strip() == ("Run `%thing_on` first.")
 
 
 def test_a_generic_final_component_is_not_searched_bare(tmp_path):
@@ -1123,7 +1108,8 @@ def test_a_generic_final_component_is_not_searched_bare(tmp_path):
     """
     assert mention_pattern(Target("cash/core.py", "Cash.cache")).search("Cash.cache")
     page = _page(
-        tmp_path, "prose.md",
+        tmp_path,
+        "prose.md",
         "# Prose\n\nThe cache is unbounded, and a cache entry is compressed.\n",
     )
     assert check_unanchored(Target("cash/core.py", "Cash.cache"), [page]) == []
@@ -1149,16 +1135,13 @@ def test_triage_never_becomes_a_gate(tmp_path):
     body = QUICKSTART_SHAPE.replace("@00000000", "@?")
     page = _page(tmp_path, "quickstart.md", body)
     nodes, source = resolve(Target("mod.py", "Magics.thing_on"), src_root=src_root)
-    page.write_text(
-        body.replace("@?", "@" + fingerprint(nodes, source)), encoding="utf-8"
-    )
+    page.write_text(body.replace("@?", "@" + fingerprint(nodes, source)), encoding="utf-8")
 
     assert check_unanchored(THING_ON, [page]), "fixture must have triage to report"
     assert check_page(page, src_root=src_root) == []
 
 
-def test_queue_lists_unpinned_prose_under_the_drifted_target(tmp_path, monkeypatch,
-                                                             capsys):
+def test_queue_lists_unpinned_prose_under_the_drifted_target(tmp_path, monkeypatch, capsys):
     """The whole point, end to end: drift, then the unpinned prose beside it."""
     src_root = tmp_path / "src"
     src_root.mkdir()
@@ -1167,13 +1150,13 @@ def test_queue_lists_unpinned_prose_under_the_drifted_target(tmp_path, monkeypat
         encoding="utf-8",
     )
     anchored = _page(
-        tmp_path, "anchored.md",
-        "# Anchored\n\n"
-        "<!-- claim: mod.py:Magics.thing_on @00000000 -->\n"
-        "Enable the thing.\n",
+        tmp_path,
+        "anchored.md",
+        "# Anchored\n\n<!-- claim: mod.py:Magics.thing_on @00000000 -->\nEnable the thing.\n",
     )
     loose = _page(
-        tmp_path, "loose.md",
+        tmp_path,
+        "loose.md",
         "# Loose\n\nRun `%thing_on` before anything else.\n",
     )
 

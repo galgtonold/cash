@@ -28,6 +28,7 @@ of cheap-ish work after a restart, which is why this is `cache-perf`.
 into a file dependency -- that changes the entry every run and disables the
 caching under test.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration]
@@ -46,9 +47,7 @@ def _defs(ticks, *, writes_global):
     leaving the call entry as the only thing cached -- the shape where `persist`
     had nothing to act on.
     """
-    body = (
-        "    LOG.append(n)\n" if writes_global else ""
-    )
+    body = "    LOG.append(n)\n" if writes_global else ""
     return (
         "import time, os\n"
         "LOG = []\n"
@@ -71,11 +70,13 @@ def _n(path):
 def _reexecutions_after_restart(nb_runner, tmp_path, annotation, label, *, writes_global):
     """Cold run, kernel restart, re-run. Returns re-executions of `work`."""
     ticks = tmp_path / f"{label}.log"
-    nb_runner.create_notebook([
-        SETUP,
-        _defs(ticks, writes_global=writes_global),
-        f"{annotation}\nv = work(21)\n" if annotation else "v = work(21)\n",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            _defs(ticks, writes_global=writes_global),
+            f"{annotation}\nv = work(21)\n" if annotation else "v = work(21)\n",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     cold = _n(ticks)
@@ -90,7 +91,11 @@ def _reexecutions_after_restart(nb_runner, tmp_path, annotation, label, *, write
 def test_persist_reaches_a_call_entry_when_the_statement_is_skip_cached(nb_runner, tmp_path):
     """The bug: the callee writes a global, so only the call entry is cached."""
     n = _reexecutions_after_restart(
-        nb_runner, tmp_path, "# @cash:persist", "impure_persist", writes_global=True,
+        nb_runner,
+        tmp_path,
+        "# @cash:persist",
+        "impure_persist",
+        writes_global=True,
     )
     assert n == 0, (
         "`# @cash:persist` did not reach the call entry: the statement is "
@@ -106,7 +111,11 @@ def test_control_persist_works_when_the_statement_itself_caches(nb_runner, tmp_p
     make the test above pass against an annotation that was never wired up.
     """
     n = _reexecutions_after_restart(
-        nb_runner, tmp_path, "# @cash:persist", "pure_persist", writes_global=False,
+        nb_runner,
+        tmp_path,
+        "# @cash:persist",
+        "pure_persist",
+        writes_global=False,
     )
     assert n == 0, (
         "`# @cash:persist` did not survive a restart even for a plain cacheable "
@@ -122,7 +131,11 @@ def test_control_without_the_annotation_the_work_re_runs(nb_runner, tmp_path, wr
     and both tests above are passing for free.
     """
     n = _reexecutions_after_restart(
-        nb_runner, tmp_path, "", f"bare_{writes_global}", writes_global=writes_global,
+        nb_runner,
+        tmp_path,
+        "",
+        f"bare_{writes_global}",
+        writes_global=writes_global,
     )
     assert n == 1, (
         f"expected the un-annotated {BODY_S}s body to be re-executed after a "

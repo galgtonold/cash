@@ -36,6 +36,7 @@ a different design, decided here rather than discovered late.
 The test plays the frontend itself, so it needs raw shell-channel access and
 manages its own kernel rather than using the ``nb_runner`` fixture.
 """
+
 from __future__ import annotations
 
 import json
@@ -64,7 +65,7 @@ TARGET = "cash_q2_probe"
 # negative result is "the kernel never saw it" and not "we gave up first".
 KERNEL_WAIT_S = 10.0
 
-_KERNEL_CODE = r'''
+_KERNEL_CODE = r"""
 import json, time
 from IPython import get_ipython
 
@@ -120,7 +121,7 @@ except Exception as exc:
 
 _R["waited"] = round(time.monotonic() - _t0, 3)
 print("PROBE_RESULT " + json.dumps(_R), flush=True)
-'''
+"""
 
 
 @pytest.fixture
@@ -158,9 +159,7 @@ def _stdout_until(kc, marker: str, timeout: float = 30.0) -> str:
         except queue.Empty:
             continue
         if msg["msg_type"] == "error":
-            raise AssertionError(
-                "kernel raised while probing:\n" + "\n".join(msg["content"]["traceback"])
-            )
+            raise AssertionError("kernel raised while probing:\n" + "\n".join(msg["content"]["traceback"]))
         if msg["msg_type"] != "stream":
             continue
         for line in msg["content"].get("text", "").splitlines():
@@ -195,7 +194,7 @@ def _run_probe(kc, *, send_while_busy: bool) -> dict:
         _send_comm_open(kc)
 
     line = _stdout_until(kc, "PROBE_RESULT", timeout=KERNEL_WAIT_S + 30)
-    return json.loads(line[len("PROBE_RESULT "):])
+    return json.loads(line[len("PROBE_RESULT ") :])
 
 
 @pytest.mark.xfail(
@@ -251,7 +250,7 @@ def test_the_comm_is_delivered_once_the_cell_finishes(kernel):
 
     # The probe's own loop has ended; the shell queue can now drain.
     kernel.execute('import json; print("AFTER " + json.dumps(_R))')
-    after = json.loads(_stdout_until(kernel, "AFTER ")[len("AFTER "):])
+    after = json.loads(_stdout_until(kernel, "AFTER ")[len("AFTER ") :])
 
     assert after["received"], (
         "the comm never reached the kernel at all, not even after the cell "
@@ -271,10 +270,7 @@ def test_the_probe_reports_nothing_received_when_no_comm_is_sent(kernel):
     """
     r = _run_probe(kernel, send_while_busy=False)
 
-    assert not r["received"], (
-        "the probe reported a comm it was never sent -- the positive test above "
-        "proves nothing"
-    )
+    assert not r["received"], "the probe reported a comm it was never sent -- the positive test above proves nothing"
     assert r["waited"] >= KERNEL_WAIT_S - 1, (
         f"the wait loop exited early ({r['waited']}s), so the positive result "
         "may just be a loop that never really waited"

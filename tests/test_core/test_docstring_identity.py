@@ -14,6 +14,7 @@ One exception is pinned at the end: a pydantic model's docstring is its
 schema's ``description``, which structured-output libraries send to the
 model as part of the prompt, so there it still counts.
 """
+
 from __future__ import annotations
 
 import sys
@@ -38,21 +39,24 @@ ONE = '''
         return n * 2
 '''
 REWORDED = ONE.replace("Double n.", "Return twice n, at greater length.")
-UNDOCUMENTED = '''
+UNDOCUMENTED = """
     def f(n):
         return n * 2
-'''
+"""
 CHANGED = ONE.replace("n * 2", "n * 3")
 
 
 class TestBytecodeIdentity:
-
     def test_a_reworded_docstring_keeps_it(self):
         assert bytecode_identity(_define(ONE, "f")) == bytecode_identity(_define(REWORDED, "f"))
 
-    @pytest.mark.skipif(sys.version_info >= (3, 14), reason=(
-        "3.14 stores a docstring only when there is one and shifts every "
-        "other constant's index to fit, which co_code shows"))
+    @pytest.mark.skipif(
+        sys.version_info >= (3, 14),
+        reason=(
+            "3.14 stores a docstring only when there is one and shifts every "
+            "other constant's index to fit, which co_code shows"
+        ),
+    )
     def test_adding_one_keeps_it(self):
         assert bytecode_identity(_define(ONE, "f")) == bytecode_identity(_define(UNDOCUMENTED, "f"))
 
@@ -78,8 +82,9 @@ class TestBytecodeIdentity:
                     return 1
                 return inner
         '''
-        assert (bytecode_identity(_define(outer, "outer"))
-                == bytecode_identity(_define(outer.replace("One.", "Two."), "outer")))
+        assert bytecode_identity(_define(outer, "outer")) == bytecode_identity(
+            _define(outer.replace("One.", "Two."), "outer")
+        )
 
     def test_the_mask_only_touches_the_docstring(self):
         code = _define(ONE, "f").__code__
@@ -104,7 +109,6 @@ def cash_instance(tmp_path):
 
 
 class TestClassSurface:
-
     def test_rewording_class_and_method_docstrings_keeps_it(self, cash_instance):
         a = _define(CLASS, "Box")
         b = _define(CLASS.replace("A box.", "A crate.").replace("How big it is.", "Its size."), "Box")

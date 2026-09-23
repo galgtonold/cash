@@ -1,5 +1,7 @@
 """Batch 72: Advanced enum patterns — cash caching with Enum, Flag, IntEnum."""
+
 import textwrap
+
 import pytest
 
 
@@ -9,8 +11,9 @@ class TestEnumAdvanced:
 
     def test_intflag_bitwise(self, nb_runner):
         """IntFlag with bitwise operations across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from enum import IntFlag
 
                 class Permission(IntFlag):
@@ -23,12 +26,13 @@ class TestEnumAdvanced:
                 admin_perms = Permission.ADMIN
                 print(f"user={user_perms.value} admin={admin_perms.value}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 can_execute = bool(user_perms & Permission.EXECUTE)
                 can_read = bool(user_perms & Permission.READ)
                 print(f"exec={can_execute} read={can_read}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "user=3 admin=7" in nb_runner.get_output(1)
@@ -37,8 +41,9 @@ class TestEnumAdvanced:
 
     def test_enum_with_methods(self, nb_runner):
         """Enum with custom methods across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from enum import Enum
 
                 class Season(Enum):
@@ -60,12 +65,13 @@ class TestEnumAdvanced:
                 next_season = current.next()
                 print(f"current={current.name} next={next_season.name}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 warm_seasons = [s for s in Season if s.is_warm]
                 names = [s.name for s in warm_seasons]
                 print(f"warm={names}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "current=AUTUMN next=WINTER" in nb_runner.get_output(1)
@@ -73,8 +79,9 @@ class TestEnumAdvanced:
 
     def test_enum_change_propagation(self, nb_runner):
         """Enum value change propagation."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from enum import Enum
 
                 class Color(Enum):
@@ -84,15 +91,18 @@ class TestEnumAdvanced:
 
                 selected = Color.RED
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 print(f"color={selected.name} hex={selected.value}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "color=RED hex=#FF0000" in nb_runner.get_output(2)
 
-        nb_runner.set_cell_source(1, textwrap.dedent("""\
+        nb_runner.set_cell_source(
+            1,
+            textwrap.dedent("""\
             from enum import Enum
 
             class Color(Enum):
@@ -101,7 +111,8 @@ class TestEnumAdvanced:
                 BLUE = '#0000FF'
 
             selected = Color.BLUE
-        """))
+        """),
+        )
         nb_runner.run_cells([1, 2])
         assert "color=BLUE hex=#0000FF" in nb_runner.get_output(2)
 
@@ -112,8 +123,9 @@ class TestEnumAutoAndFunctional:
 
     def test_auto_enum(self, nb_runner):
         """Enum with auto() values across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from enum import Enum, auto
 
                 class Priority(Enum):
@@ -129,12 +141,13 @@ class TestEnumAutoAndFunctional:
                     ('Test', Priority.MEDIUM),
                 ]
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 sorted_tasks = sorted(tasks, key=lambda t: t[1].value, reverse=True)
                 for name, prio in sorted_tasks:
                     print(f"  {prio.name}: {name}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -144,8 +157,9 @@ class TestEnumAutoAndFunctional:
 
     def test_functional_enum(self, nb_runner):
         """Functional Enum creation across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from enum import Enum
 
                 Status = Enum('Status', ['PENDING', 'ACTIVE', 'COMPLETED', 'ARCHIVED'])
@@ -156,11 +170,12 @@ class TestEnumAutoAndFunctional:
                 }
                 print(f"count={len(items)}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 active = [k for k, v in items.items() if v == Status.ACTIVE]
                 print(f"active={active}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "count=3" in nb_runner.get_output(1)

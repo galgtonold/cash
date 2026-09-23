@@ -41,7 +41,7 @@ anything change?" question:
 | `dynamic` | Dependencies declared at call time via `dynamic_depends_on` | …a runtime-declared dependency changes |
 | `args` | A hash of the call arguments | …you pass different arguments |
 
-<!-- claim: cash/dependency_state.py:DependencyStateHasher @e32497fe broad="the state digest is the hasher class as a whole - own source, graph deps, transitive helpers" -->
+<!-- claim: cash/dependency_state.py:DependencyStateHasher @b5c19f4a broad="the state digest is the hasher class as a whole - own source, graph deps, transitive helpers" -->
 The interesting one is `state`. It starts as a `DependencyStateHasher` digest
 that folds three things together: the node's own source hash, each graph
 dependency's state hash (recursively, in sorted order), and the **transitive
@@ -71,7 +71,7 @@ Modules, plain callables (already tracked as helpers) and classes are excluded
 from the globals fold. A capture or global that can't be hashed warns once and is
 skipped rather than silently pretending it doesn't exist.
 
-<!-- claim: cash/core.py:Cash._hash_arg_payload @c688c59c -->
+<!-- claim: cash/core.py:Cash._hash_arg_payload @6cf42ecf -->
 The `args` segment resolves each argument through its own ladder, and the order
 is deliberate:
 
@@ -100,7 +100,7 @@ gracefully: it emits a `CashCacheIneffectiveWarning` naming the offending
 argument type, and runs the function uncached.
 
 ??? question "Why is the `func` segment module-qualified?"
-    <!-- claim: cash/core.py:Cash._get_func_key @107f0807 -->
+    <!-- claim: cash/core.py:Cash._get_func_key @a2d2c7f8 -->
     Cash keys functions on `f"{func.__module__}.{func.__qualname__}"`, not
     `__qualname__` alone. Early on, bare qualnames collided: a notebook cell's
     `dep()` and a helper module's `dep()` produced the *same* key, so a call to
@@ -143,7 +143,7 @@ flowchart TD
     STMT --> SP --> WRAP --> DRAIN --> MERGE
 ```
 
-<!-- claim: cash/core.py:Cash._log_decorator_call @9cd86d9d -->
+<!-- claim: cash/core.py:Cash._log_decorator_call @929cb7ab -->
 Every `@cash.cache` call appends an entry to `Cash._decorator_call_log`:
 
 <!-- test:skip reason="illustrative dict literal at top level" -->

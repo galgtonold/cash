@@ -7,15 +7,14 @@ everything was restored". Their sweep cell read ``EXECUTED · 10.05s · saved
 recomputed ones. The headline now says how many of each ran, and leads with
 CACHED when the time it saved outweighs the time it spent.
 """
+
 from cash.notebook.badge_renderer.renderers.html import render_html
 from cash.notebook.badge_renderer.renderers.text import render_text
 from cash.notebook.badge_renderer.view_builder import build_interactive_badge
 
-MOSTLY_RESTORED = (
-    [{"status": "COMPUTED", "code": "sweep_rows = []", "execution_time": 0.01, "total_time": 0.01}]
-    + [{"status": "RESTORED", "code": f"r{i} = fit({i})", "saved_time": 20.0, "total_time": 0.3}
-       for i in range(12)]
-)
+MOSTLY_RESTORED = [{"status": "COMPUTED", "code": "sweep_rows = []", "execution_time": 0.01, "total_time": 0.01}] + [
+    {"status": "RESTORED", "code": f"r{i} = fit({i})", "saved_time": 20.0, "total_time": 0.3} for i in range(12)
+]
 MOSTLY_RUN = [
     {"status": "COMPUTED", "code": "model = fit(X)", "execution_time": 30.0, "total_time": 30.0},
     {"status": "RESTORED", "code": "X = load()", "saved_time": 1.0, "total_time": 0.1},

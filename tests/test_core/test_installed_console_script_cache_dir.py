@@ -20,6 +20,7 @@ venv, because the shape under test IS the installed entry point: a script run
 by path, or a function called in-process, does not reproduce it. That is slow
 (one install), so the arms share the venv.
 """
+
 from __future__ import annotations
 
 import json
@@ -46,7 +47,8 @@ def _write_distribution(root):
     src.mkdir(parents=True)
     (src / "__init__.py").write_text("", encoding="utf-8")
     (src / "__main__.py").write_text("from .cli import main\nmain()\n", encoding="utf-8")
-    (src / "cli.py").write_text(textwrap.dedent("""
+    (src / "cli.py").write_text(
+        textwrap.dedent("""
         import json
         import sys
         import time
@@ -69,8 +71,11 @@ def _write_distribution(root):
                 "cache_dir": str(get_config().cache_dir),
                 "argv0": sys.argv[0],
             }))
-    """), encoding="utf-8")
-    (root / "pyproject.toml").write_text(textwrap.dedent(f"""
+    """),
+        encoding="utf-8",
+    )
+    (root / "pyproject.toml").write_text(
+        textwrap.dedent(f"""
         [build-system]
         requires = ["hatchling<1.28"]
         build-backend = "hatchling.build"
@@ -84,7 +89,9 @@ def _write_distribution(root):
 
         [tool.hatch.build.targets.wheel]
         packages = ["src/{_PKG}"]
-    """), encoding="utf-8")
+    """),
+        encoding="utf-8",
+    )
     return root
 
 
@@ -93,8 +100,7 @@ def installed_tool(tmp_path_factory):
     """A venv with cash and a console-script package installed into it."""
     base = tmp_path_factory.mktemp("consolescript")
     venv = base / "venv"
-    subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True,
-                   capture_output=True)
+    subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True, capture_output=True)
     bindir = venv / ("Scripts" if os.name == "nt" else "bin")
     python = bindir / ("python.exe" if os.name == "nt" else "python")
 
@@ -108,7 +114,8 @@ def installed_tool(tmp_path_factory):
     extra = ["tomli"] if sys.version_info < (3, 11) else []
     install = subprocess.run(
         [str(python), "-m", "pip", "install", "-q", repo_root, str(dist), *extra],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     if install.returncode != 0:
         pytest.skip(f"could not build the probe distribution:\n{install.stderr[-2000:]}")
@@ -121,8 +128,7 @@ def installed_tool(tmp_path_factory):
 def _run(exe, cwd, env=None):
     environ = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
     environ.update(env or {})
-    out = subprocess.run([str(exe)], cwd=str(cwd), capture_output=True,
-                         text=True, env=environ)
+    out = subprocess.run([str(exe)], cwd=str(cwd), capture_output=True, text=True, env=environ)
     assert out.returncode == 0, out.stdout + out.stderr
     return json.loads(out.stdout.strip().splitlines()[-1])
 
@@ -166,8 +172,7 @@ def test_a_project_that_claims_the_run_still_wins(installed_tool, tmp_path):
     project = tmp_path / "project"
     project.mkdir()
     (project / "pyproject.toml").write_text(
-        '[project]\nname = "demo"\nversion = "0"\n\n'
-        '[tool.cash]\ncache_dir = "build/.cash"\n',
+        '[project]\nname = "demo"\nversion = "0"\n\n[tool.cash]\ncache_dir = "build/.cash"\n',
         encoding="utf-8",
     )
 
@@ -187,18 +192,14 @@ def test_a_plain_script_is_unaffected(installed_tool, tmp_path):
 
     project = tmp_path / "scripted"
     project.mkdir()
-    (project / "pyproject.toml").write_text(
-        '[project]\nname = "demo"\nversion = "0"\n', encoding="utf-8")
+    (project / "pyproject.toml").write_text('[project]\nname = "demo"\nversion = "0"\n', encoding="utf-8")
     script = project / "run.py"
-    script.write_text(
-        "from cash.config import get_config\nprint(get_config().cache_dir)\n",
-        encoding="utf-8")
+    script.write_text("from cash.config import get_config\nprint(get_config().cache_dir)\n", encoding="utf-8")
 
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     environ = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    out = subprocess.run([str(python), str(script)], cwd=str(elsewhere),
-                         capture_output=True, text=True, env=environ)
+    out = subprocess.run([str(python), str(script)], cwd=str(elsewhere), capture_output=True, text=True, env=environ)
     assert out.returncode == 0, out.stderr
 
     assert out.stdout.strip() == os.path.normpath(str(project / ".cash")), out.stdout
@@ -209,9 +210,9 @@ def _private_user_cache(tmp_path):
     root = tmp_path / "usercache"
     root.mkdir()
     return root, {
-        "LOCALAPPDATA": str(root),        # Windows
-        "XDG_CACHE_HOME": str(root),      # Linux
-        "HOME": str(root),                # macOS: ~/Library/Caches
+        "LOCALAPPDATA": str(root),  # Windows
+        "XDG_CACHE_HOME": str(root),  # Linux
+        "HOME": str(root),  # macOS: ~/Library/Caches
     }
 
 
@@ -221,8 +222,7 @@ def _cash_cli(base, *argv, cwd, env):
     exe = bindir / ("cash.exe" if os.name == "nt" else "cash")
     environ = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
     environ.update(env)
-    return subprocess.run([str(exe), *argv], cwd=str(cwd), capture_output=True,
-                          text=True, env=environ)
+    return subprocess.run([str(exe), *argv], cwd=str(cwd), capture_output=True, text=True, env=environ)
 
 
 def test_the_installed_cash_cli_agrees_with_python_m_cash(installed_tool, tmp_path):
@@ -230,17 +230,16 @@ def test_the_installed_cash_cli_agrees_with_python_m_cash(installed_tool, tmp_pa
     base, _ = installed_tool
     project = tmp_path / "project"
     (project / "sub").mkdir(parents=True)
-    (project / "pyproject.toml").write_text('[project]\nname = "p"\nversion = "0"\n',
-                                            encoding="utf-8")
+    (project / "pyproject.toml").write_text('[project]\nname = "p"\nversion = "0"\n', encoding="utf-8")
     _, env = _private_user_cache(tmp_path)
-    python = base / "venv" / ("Scripts" if os.name == "nt" else "bin") / (
-        "python.exe" if os.name == "nt" else "python")
+    python = base / "venv" / ("Scripts" if os.name == "nt" else "bin") / ("python.exe" if os.name == "nt" else "python")
 
     via_script = _cash_cli(base, "info", cwd=project / "sub", env=env)
     environ = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
     environ.update(env)
-    via_module = subprocess.run([str(python), "-m", "cash", "info"], cwd=str(project / "sub"),
-                                capture_output=True, text=True, env=environ)
+    via_module = subprocess.run(
+        [str(python), "-m", "cash", "info"], cwd=str(project / "sub"), capture_output=True, text=True, env=environ
+    )
 
     def cache_line(out):
         return [ln for ln in out.stdout.splitlines() if "Cache dir" in ln][0].split(":", 1)[1].strip()
@@ -259,8 +258,7 @@ def test_the_cli_reaches_a_tools_per_user_cache_by_name(installed_tool, tmp_path
 
     environ = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
     environ.update(env)
-    ran = subprocess.run([str(exe), "compute"], cwd=str(nowhere), capture_output=True,
-                         text=True, env=environ)
+    ran = subprocess.run([str(exe), "compute"], cwd=str(nowhere), capture_output=True, text=True, env=environ)
     assert ran.returncode == 0, ran.stdout + ran.stderr
     tool_dir = next(root.rglob(_PKG), None)
     assert tool_dir is not None and tool_dir.is_dir(), "the tool cached nowhere private"
@@ -283,8 +281,7 @@ def test_python_dash_m_of_the_installed_tool_uses_the_same_per_user_cache(instal
     while the console script used the per-user cache. Outside a project, the
     `-m` form of an installed tool is the same tool."""
     base, exe = installed_tool
-    python = base / "venv" / ("Scripts" if os.name == "nt" else "bin") / (
-        "python.exe" if os.name == "nt" else "python")
+    python = base / "venv" / ("Scripts" if os.name == "nt" else "bin") / ("python.exe" if os.name == "nt" else "python")
     root, env = _private_user_cache(tmp_path)
     a, b = tmp_path / "cron_a", tmp_path / "cron_b"
     a.mkdir()
@@ -293,8 +290,7 @@ def test_python_dash_m_of_the_installed_tool_uses_the_same_per_user_cache(instal
     environ.update(env)
 
     def run_m(cwd):
-        out = subprocess.run([str(python), "-m", _PKG], cwd=str(cwd), capture_output=True,
-                             text=True, env=environ)
+        out = subprocess.run([str(python), "-m", _PKG], cwd=str(cwd), capture_output=True, text=True, env=environ)
         assert out.returncode == 0, out.stdout + out.stderr
         return json.loads(out.stdout.strip().splitlines()[-1])["cache_dir"]
 

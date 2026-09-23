@@ -12,6 +12,7 @@ The notebook arm is
 ``tests/test_notebook_integration/test_a_rebuilt_cleaning_cell_keeps_every_column_write.py``;
 the tester's own repro (3 million rows) is the one that reached this state.
 """
+
 from __future__ import annotations
 
 import types
@@ -29,12 +30,12 @@ def _entry(stmt, outputs=(), inputs=()):
 
 
 CLEANING = [
-    _entry("sales = raw.drop_duplicates()", ("sales",), ("raw",)),                          # 0
+    _entry("sales = raw.drop_duplicates()", ("sales",), ("raw",)),  # 0
     _entry("sales['timestamp'] = pd.to_datetime(sales['timestamp'])", ("sales",), ("sales", "pd")),  # 1
     _entry("is_refund = (sales['refund'] == 1) | (sales['quantity'] < 0)", ("is_refund",), ("sales",)),  # 2
-    _entry("sales['refund'] = is_refund.astype(int)", ("sales",), ("sales", "is_refund")),   # 3
-    _entry("sales['quantity'] = sales['quantity'].abs()", ("sales",), ("sales",)),           # 4
-    _entry("weekly = sales.groupby('store').refund.sum()", ("weekly",), ("sales",)),          # 5
+    _entry("sales['refund'] = is_refund.astype(int)", ("sales",), ("sales", "is_refund")),  # 3
+    _entry("sales['quantity'] = sales['quantity'].abs()", ("sales",), ("sales",)),  # 4
+    _entry("weekly = sales.groupby('store').refund.sum()", ("weekly",), ("sales",)),  # 5
 ]
 
 
@@ -61,9 +62,9 @@ def _lineaged(stmt, outputs=(), inputs=(), produced=None):
 
 
 SWEEP_THEN_PICK = [
-    _lineaged("results = pd.DataFrame(rows)", ("results",), ("pd", "rows"), {"results": "L-sweep"}),        # 0
+    _lineaged("results = pd.DataFrame(rows)", ("results",), ("pd", "rows"), {"results": "L-sweep"}),  # 0
     _lineaged("results['f1'] = 2 * results.precision", ("results",), ("results",), {"results": "L-f1"}),  # 1
-    _lineaged("best = results.sort_values(['f1'])", ("best",), ("results",), {"best": "L-best"}),          # 2
+    _lineaged("best = results.sort_values(['f1'])", ("best",), ("results",), {"best": "L-best"}),  # 2
 ]
 
 
@@ -73,20 +74,17 @@ def _planner_with_lineage(user_ns, lineage):
 
 
 def test_a_live_input_that_is_not_what_its_latest_producer_made_gets_that_producer():
-    planner = _planner_with_lineage({"results": object(), "pd": object(), "rows": []},
-                                    {"results": "L-sweep"})
+    planner = _planner_with_lineage({"results": object(), "pd": object(), "rows": []}, {"results": "L-sweep"})
     assert planner._complete_inputs_produced_before([2], SWEEP_THEN_PICK) == [1, 2]
 
 
 def test_a_live_input_its_latest_producer_made_needs_nothing():
-    planner = _planner_with_lineage({"results": object(), "pd": object(), "rows": []},
-                                    {"results": "L-f1"})
+    planner = _planner_with_lineage({"results": object(), "pd": object(), "rows": []}, {"results": "L-f1"})
     assert planner._complete_inputs_produced_before([2], SWEEP_THEN_PICK) == [2]
 
 
 def test_a_live_input_matching_no_producer_keeps_the_old_answer():
     """A per-iteration loop's ``u = u + 0.01``: live ``u`` is none of the
     versions the trace recorded, which is no evidence it is behind."""
-    planner = _planner_with_lineage({"results": object(), "pd": object(), "rows": []},
-                                    {"results": "L-something-else"})
+    planner = _planner_with_lineage({"results": object(), "pd": object(), "rows": []}, {"results": "L-something-else"})
     assert planner._complete_inputs_produced_before([2], SWEEP_THEN_PICK) == [2]

@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 def get_version() -> str:
     try:
         from cash import __version__
+
         return __version__
     except (ImportError, AttributeError):
         return "unknown"
@@ -43,6 +44,7 @@ def resolved_cache_dir() -> str:
     """
     try:
         from cash.config import get_config
+
         return str(get_config().cache_dir)
     except Exception:  # noqa: BLE001 - a broken config must not break `clear`
         return ".cash"
@@ -57,6 +59,7 @@ def tool_cache_dir(name: str) -> str:
     names it.
     """
     from cash.config import _per_user_cache_root
+
     return str(_per_user_cache_root() / name)
 
 
@@ -82,6 +85,7 @@ def _sqlite_cache(cache_dir: str) -> tuple[int, int] | None:
         return None
     try:
         import sqlite3
+
         with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as conn:
             rows = conn.execute("SELECT COUNT(*) FROM cache_entries").fetchone()
         return int(rows[0]), os.path.getsize(path)
@@ -112,6 +116,7 @@ def _per_user_tool_caches() -> list[tuple[str, str, int, int]]:
     """``(tool, path, entries, bytes)`` for every per-user tool cache."""
     try:
         from cash.config import _per_user_cache_root
+
         root = _per_user_cache_root()
         children = sorted(p for p in root.iterdir() if p.is_dir())
     except (OSError, RuntimeError):
@@ -138,9 +143,11 @@ def cmd_version(args: argparse.Namespace) -> None:
 def cmd_info(args: argparse.Namespace) -> None:
     """Show cash configuration."""
     from cash.config import get_config
+
     config = get_config(config_path=getattr(args, "config", None))
 
     from cash.config import format_size
+
     origins = getattr(config, "_origins", {})
 
     print(f"Cash v{get_version()}")
@@ -151,8 +158,7 @@ def cmd_info(args: argparse.Namespace) -> None:
     database = _sqlite_cache(config.cache_dir)
     held = database if database is not None else _entry_totals(config.cache_dir)
     if database is not None:
-        print(f"  Holds:      {database[0]} entries, {_format_bytes(database[1])} "
-              f"(one sqlite database)")
+        print(f"  Holds:      {database[0]} entries, {_format_bytes(database[1])} (one sqlite database)")
     elif held is None:
         print("  Holds:      nothing yet (no cache written here)")
     else:
@@ -162,8 +168,7 @@ def cmd_info(args: argparse.Namespace) -> None:
         # always which entries, and whether they earn their space.
         print("              `cash inspect` lists them, with what each one saves")
     if config.disable:
-        print(f"  Disabled:   yes -- every cached function runs uncached "
-              f"({origins.get('disable', 'disable = true')})")
+        print(f"  Disabled:   yes -- every cached function runs uncached ({origins.get('disable', 'disable = true')})")
     # Resolved, not just configured. "auto (scaled per tier)" is true and
     # useless: a user asking what their cache is allowed to hold needs the two
     # numbers it actually resolves to, and the RAM one in particular appears
@@ -174,6 +179,7 @@ def cmd_info(args: argparse.Namespace) -> None:
         human_bytes,
         resolve_ram_cap,
     )
+
     if config.max_cache_size is None:
         # Sized the way the BACKEND sizes it: from free space plus what the
         # cache already holds. `resolve_disk_cap` uses free space alone, and
@@ -187,14 +193,15 @@ def cmd_info(args: argparse.Namespace) -> None:
         disk = human_bytes(adaptive_disk_cap_for(config.cache_dir, own))
         print(f"  Max size:   auto -- disk {disk}, RAM {human_bytes(resolve_ram_cap())}")
     else:
-        print(f"  Max size:   {format_size(config.max_cache_size)} "
-              f"({config.max_cache_size:,} bytes) on disk, "
-              f"RAM {human_bytes(resolve_ram_cap())}")
+        print(
+            f"  Max size:   {format_size(config.max_cache_size)} "
+            f"({config.max_cache_size:,} bytes) on disk, "
+            f"RAM {human_bytes(resolve_ram_cap())}"
+        )
     # Report what actually decides persistence — the serialization-aware cost
     # model — rather than a raw threshold number.
     if config.smart_persistence:
-        print("  Persist:    cost model (0.1s compute floor, "
-              f"{config.min_cache_savings_pct:.0%} savings required)")
+        print(f"  Persist:    cost model (0.1s compute floor, {config.min_cache_savings_pct:.0%} savings required)")
     else:
         print("  Persist:    cost model, conservative (1.0s compute floor)")
     if config.tiers:
@@ -204,8 +211,13 @@ def cmd_info(args: argparse.Namespace) -> None:
     # and a `disable = true` were each invisible here -- a Source line names
     # the layers, not which file, nor which setting came from where.
     from cash.config import TOML_FLAT, TOML_MISSING, TOML_NOT_CASH, TOML_SECTION
-    outcome = {TOML_SECTION: "read", TOML_FLAT: "read", TOML_MISSING: "not found",
-               TOML_NOT_CASH: "no [tool.cash] section"}
+
+    outcome = {
+        TOML_SECTION: "read",
+        TOML_FLAT: "read",
+        TOML_MISSING: "not found",
+        TOML_NOT_CASH: "no [tool.cash] section",
+    }
     files = getattr(config, "_files", [])
     if files:
         print("  Config files:")
@@ -238,6 +250,7 @@ def _tier_text(tier) -> str:
     import dataclasses
 
     from cash.config import format_size
+
     parts = []
     for f in dataclasses.fields(tier):
         value = getattr(tier, f.name, None)
@@ -256,6 +269,7 @@ def _tier_text(tier) -> str:
 def _setting_text(config, key: str) -> str:
     """One setting's effective value, as `cash info` prints it."""
     from cash.config import _SIZE_FIELDS, format_size
+
     value = getattr(config, key, None)
     if key == "tiers":
         return ", ".join(_tier_text(t) for t in value) or "[]"
@@ -281,6 +295,7 @@ def _format_bytes(size_bytes: int) -> str:
 @dataclass
 class _Entry:
     """One cache entry on disk: its file, its key, and who wrote it."""
+
     stem: str
     function: str
     key: str
@@ -301,9 +316,8 @@ class _Entry:
 # What a user may type instead of the literal ``(notebook statements)`` group
 # heading. The heading has to read as prose in a table; it should not have to
 # be typed with its brackets to be addressable.
-NOTEBOOK_GROUP = '(notebook statements)'
-_NOTEBOOK_ALIASES = frozenset({'notebook', 'notebooks', 'statements',
-                               'notebook statements'})
+NOTEBOOK_GROUP = "(notebook statements)"
+_NOTEBOOK_ALIASES = frozenset({"notebook", "notebooks", "statements", "notebook statements"})
 
 
 def _function_of(key: str, metadata: dict | None = None) -> str:
@@ -315,19 +329,20 @@ def _function_of(key: str, metadata: dict | None = None) -> str:
     and have no function to name, so they are collected under one heading
     rather than reported as a function called "stmt".
     """
-    if key.startswith('stmt:'):
-        return '(notebook statements)'
+    if key.startswith("stmt:"):
+        return "(notebook statements)"
     # An intercepted call's key is `call:<sha>`: its function is recorded in
     # the entry instead. Older entries without it still read "call".
-    if key.startswith('call:') and metadata and metadata.get('function'):
-        return str(metadata['function'])
-    return key.split(':', 1)[0] if ':' in key else '(unknown)'
+    if key.startswith("call:") and metadata and metadata.get("function"):
+        return str(metadata["function"])
+    return key.split(":", 1)[0] if ":" in key else "(unknown)"
 
 
 def _tier_default_ttl() -> int | None:
     """The ``default_ttl`` of the first configured tier that has one, now."""
     try:
         from cash.config import get_config
+
         for tier in get_config().tiers or ():
             if getattr(tier, "default_ttl", None) is not None:
                 return int(tier.default_ttl)
@@ -344,8 +359,8 @@ def _effective_ttl(metadata: dict, tier_default: int | None) -> int | None:
     lowered default shows here as it takes effect, rather than as the day the
     entry was written with (round 20).
     """
-    written = metadata.get('ttl')
-    if metadata.get('ttl_declared') or tier_default is None:
+    written = metadata.get("ttl")
+    if metadata.get("ttl_declared") or tier_default is None:
         return written
     return tier_default if written is None else min(written, tier_default)
 
@@ -359,28 +374,33 @@ def _scan_entries(cache_path: Path) -> list[_Entry]:
     """
     entries: list[_Entry] = []
     tier_default = _tier_default_ttl()
-    for entry_file in cache_path.glob(f'*{ENTRY_SUFFIX}'):
+    for entry_file in cache_path.glob(f"*{ENTRY_SUFFIX}"):
         try:
             metadata, _ = read_entry(str(entry_file), with_payload=False)
         except (OSError, pickle.UnpicklingError, EOFError, ValueError) as exc:
             logger.debug("Failed to read cache metadata from %s: %s", entry_file, exc)
             continue
-        key = metadata.get('key') or ''
+        key = metadata.get("key") or ""
         stat = entry_file.stat()
-        outputs = metadata.get('outputs') or ()
-        entries.append(_Entry(
-            stem=entry_file.stem,
-            function=_function_of(key, metadata),
-            key=key,
-            size=stat.st_size,
-            mtime=stat.st_mtime,
-            saves=float(metadata.get('execution_time') or 0.0),
-            uses=int(metadata.get('access_count') or 0),
-            outputs=tuple(str(o) for o in outputs),
-            reads=tuple(str(p) for p in (metadata.get('auto_file_deps') or {})),
-            expires=(float(metadata.get('created_at') or stat.st_mtime) + float(ttl)
-                     if (ttl := _effective_ttl(metadata, tier_default)) is not None else None),
-        ))
+        outputs = metadata.get("outputs") or ()
+        entries.append(
+            _Entry(
+                stem=entry_file.stem,
+                function=_function_of(key, metadata),
+                key=key,
+                size=stat.st_size,
+                mtime=stat.st_mtime,
+                saves=float(metadata.get("execution_time") or 0.0),
+                uses=int(metadata.get("access_count") or 0),
+                outputs=tuple(str(o) for o in outputs),
+                reads=tuple(str(p) for p in (metadata.get("auto_file_deps") or {})),
+                expires=(
+                    float(metadata.get("created_at") or stat.st_mtime) + float(ttl)
+                    if (ttl := _effective_ttl(metadata, tier_default)) is not None
+                    else None
+                ),
+            )
+        )
     return entries
 
 
@@ -419,8 +439,7 @@ def _resolve_entry(entries: list[_Entry], wanted: str) -> _Entry | None:
 
 def _age(mtime: float) -> str:
     seconds = max(0.0, time.time() - mtime)
-    for limit, divisor, unit in ((60, 1, "s"), (3600, 60, "min"),
-                                 (86400, 3600, "h")):
+    for limit, divisor, unit in ((60, 1, "s"), (3600, 60, "min"), (86400, 3600, "h")):
         if seconds < limit:
             return f"{int(seconds // divisor)}{unit} ago"
     return f"{int(seconds // 86400)}d ago"
@@ -441,8 +460,7 @@ def _resolve_function(entries: list[_Entry], wanted: str) -> str | None:
         return wanted
     if wanted.strip().lower() in _NOTEBOOK_ALIASES and NOTEBOOK_GROUP in names:
         return NOTEBOOK_GROUP
-    matches = [n for n in names if n.rsplit('.', 1)[-1] == wanted
-               or n.endswith('.' + wanted)]
+    matches = [n for n in names if n.rsplit(".", 1)[-1] == wanted or n.endswith("." + wanted)]
     if len(matches) == 1:
         return matches[0]
     if not matches:
@@ -471,7 +489,7 @@ def cmd_inspect(args: argparse.Namespace) -> None:
         print("cash inspect: --tool and a path are mutually exclusive.")
         sys.exit(2)
 
-    if target and os.path.isfile(target) and target.endswith('.ipynb'):
+    if target and os.path.isfile(target) and target.endswith(".ipynb"):
         if only_function:
             print("--function applies to a cache directory, not a notebook.")
             sys.exit(2)
@@ -484,8 +502,9 @@ def cmd_inspect(args: argparse.Namespace) -> None:
         # unrelated cache and exited 0, while `cash clear` refused the same
         # input (found attacking the decorator before round 26).
         print(f"Not found: {target}")
-        print("Pass a cache directory or a notebook, or leave it out to inspect "
-              "the cache `cash info` reports for here.")
+        print(
+            "Pass a cache directory or a notebook, or leave it out to inspect the cache `cash info` reports for here."
+        )
         sys.exit(1)
     cache_dir = target if (target and os.path.isdir(target)) else _target_dir(args)
     if not os.path.isdir(cache_dir):
@@ -505,6 +524,7 @@ def _inspect_notebook(notebook_path: str) -> None:
     # Read notebook
     try:
         import nbformat
+
         nb = nbformat.read(notebook_path, as_version=4)
     except ImportError:
         print("  nbformat not installed. Install with: pip install nbformat")
@@ -514,16 +534,13 @@ def _inspect_notebook(notebook_path: str) -> None:
         return
 
     # Count cells
-    code_cells = [c for c in nb.cells if c.cell_type == 'code']
-    md_cells = [c for c in nb.cells if c.cell_type == 'markdown']
+    code_cells = [c for c in nb.cells if c.cell_type == "code"]
+    md_cells = [c for c in nb.cells if c.cell_type == "markdown"]
     print(f"  Code cells: {len(code_cells)}")
     print(f"  Markdown cells: {len(md_cells)}")
 
     # Check if %cash_on is used
-    uses_cash = any(
-        '%cash_on' in c.source or '%%cash' in c.source
-        for c in code_cells
-    )
+    uses_cash = any("%cash_on" in c.source or "%%cash" in c.source for c in code_cells)
     print(f"  Uses cash: {'Yes' if uses_cash else 'No'}")
 
     # Check for associated cache directory
@@ -544,7 +561,7 @@ def _inspect_cache_dir(cache_dir: str, only_function: str | None = None) -> None
     histogram and had to go to the file explorer instead.
     """
     cache_path = Path(cache_dir)
-    total_size = sum(f.stat().st_size for f in cache_path.rglob('*') if f.is_file())
+    total_size = sum(f.stat().st_size for f in cache_path.rglob("*") if f.is_file())
     entries = _scan_entries(cache_path)
 
     print(f"Cache directory: {cache_path.resolve()}")
@@ -553,8 +570,10 @@ def _inspect_cache_dir(cache_dir: str, only_function: str | None = None) -> None
     if database is not None and not entries:
         # A sqlite cache is one file; the per-function table below reads entry
         # files and would report an empty cache over a working one.
-        print(f"  Total size: {_format_bytes(database[1])}    Entries: {database[0]}"
-              f"    (one sqlite database: {_SQLITE_DB_NAME})")
+        print(
+            f"  Total size: {_format_bytes(database[1])}    Entries: {database[0]}"
+            f"    (one sqlite database: {_SQLITE_DB_NAME})"
+        )
         print("\n  Per-function detail is not available for the sqlite backend.")
         return
 
@@ -562,8 +581,7 @@ def _inspect_cache_dir(cache_dir: str, only_function: str | None = None) -> None
         resolved = _resolve_function(entries, only_function)
         if resolved is None:
             sys.exit(1)
-        owned = sorted((e for e in entries if e.function == resolved),
-                       key=lambda e: e.size, reverse=True)
+        owned = sorted((e for e in entries if e.function == resolved), key=lambda e: e.size, reverse=True)
         owned_size = sum(e.size for e in owned)
         noun = "entry" if len(owned) == 1 else "entries"
         print(f"  {resolved} - {len(owned)} {noun}, {_format_bytes(owned_size)}\n")
@@ -575,42 +593,39 @@ def _inspect_cache_dir(cache_dir: str, only_function: str | None = None) -> None
         shows_outputs = any(e.outputs for e in owned)
         # EXPIRES: an entry with a ttl stops being served at a time the table
         # could not show, so an expired entry looked like a live one.
-        header = (f"  {'ENTRY':<14}{'SAVES':>9}{'SIZE':>11}{'USES':>7}"
-                  f"   {'LAST USED':<12}{'EXPIRES':<12}")
+        header = f"  {'ENTRY':<14}{'SAVES':>9}{'SIZE':>11}{'USES':>7}   {'LAST USED':<12}{'EXPIRES':<12}"
         print((header + "PRODUCES") if shows_outputs else header.rstrip())
         for entry in owned:
             saves = f"{entry.saves:.1f}s" if entry.saves else "-"
             produces = ", ".join(entry.outputs) if shows_outputs else ""
-            row = (f"  {entry.stem[:12]:<14}{saves:>9}"
-                   f"{_format_bytes(entry.size):>11}{str(entry.uses) + 'x':>7}"
-                   f"   {_age(entry.mtime):<12}{_expires(entry.expires):<12}{produces}")
+            row = (
+                f"  {entry.stem[:12]:<14}{saves:>9}"
+                f"{_format_bytes(entry.size):>11}{str(entry.uses) + 'x':>7}"
+                f"   {_age(entry.mtime):<12}{_expires(entry.expires):<12}{produces}"
+            )
             print(row.rstrip())
             if entry.reads:
                 shown = ", ".join(entry.reads[:3])
                 more = f" and {len(entry.reads) - 3} more" if len(entry.reads) > 3 else ""
                 print(f"      reads: {shown}{more}")
-        print("\n  cash clear --entry ID   to drop one of these "
-              "(any unambiguous prefix)")
+        print("\n  cash clear --entry ID   to drop one of these (any unambiguous prefix)")
         return
 
     functions: dict[str, list[_Entry]] = {}
     for entry in entries:
         functions.setdefault(entry.function, []).append(entry)
 
-    print(f"  Total size: {_format_bytes(total_size)}    "
-          f"Entries: {len(entries)}    Functions: {len(functions)}")
+    print(f"  Total size: {_format_bytes(total_size)}    Entries: {len(entries)}    Functions: {len(functions)}")
 
     if not functions:
         print("\n  (no readable entries)")
         return
 
-    ranked = sorted(functions.items(),
-                    key=lambda kv: sum(e.size for e in kv[1]), reverse=True)
+    ranked = sorted(functions.items(), key=lambda kv: sum(e.size for e in kv[1]), reverse=True)
     print(f"\n  {'FUNCTION':<40}{'ENTRIES':>9}{'SIZE':>12}   LAST USED")
     for name, owned in ranked:
         newest = max(e.mtime for e in owned)
-        print(f"  {name[:40]:<40}{len(owned):>9}"
-              f"{_format_bytes(sum(e.size for e in owned)):>12}   {_age(newest)}")
+        print(f"  {name[:40]:<40}{len(owned):>9}{_format_bytes(sum(e.size for e in owned)):>12}   {_age(newest)}")
     print("\n  cash inspect --function NAME   to list one function's entries")
     print("  cash clear   --function NAME   to drop them")
     if NOTEBOOK_GROUP in functions:
@@ -671,8 +686,7 @@ def _clear_entry(cache_dir: str, wanted: str) -> None:
         sys.exit(1)
     _remove_entry_files(cache_path, entry.stem)
     _bump_generation(cache_path)
-    print(f"Cleared entry {entry.stem[:12]} from {entry.function} "
-          f"({_format_bytes(entry.size)} freed)")
+    print(f"Cleared entry {entry.stem[:12]} from {entry.function} ({_format_bytes(entry.size)} freed)")
 
 
 def _clear_expired(cache_dir: str) -> None:
@@ -692,9 +706,11 @@ def _clear_expired(cache_dir: str) -> None:
         _remove_entry_files(cache_path, entry.stem)
     if expired:
         _bump_generation(cache_path)
-    print(f"Cleared {len(expired)} expired "
-          f"entr{'y' if len(expired) == 1 else 'ies'} from {cache_path} "
-          f"({_format_bytes(sum(e.size for e in expired))} freed)")
+    print(
+        f"Cleared {len(expired)} expired "
+        f"entr{'y' if len(expired) == 1 else 'ies'} from {cache_path} "
+        f"({_format_bytes(sum(e.size for e in expired))} freed)"
+    )
 
 
 def _bump_generation(cache_path: Path) -> None:
@@ -758,14 +774,20 @@ def _rmtree_cache(cache_dir: str, force: bool = False) -> None:
         # Never, even with --force: nobody means to delete the directory they
         # are standing in or anything above it, and on Windows the removal
         # cannot even complete -- it deletes the contents, then fails.
-        print(f"Refusing to clear {resolved}: it is the current directory or "
-              f"contains it. Change to another directory first.")
+        print(
+            f"Refusing to clear {resolved}: it is the current directory or "
+            f"contains it. Change to another directory first."
+        )
         sys.exit(1)
     if not force and not _looks_like_a_cache(resolved):
-        print(f"Refusing to clear {resolved}: it does not look like a cash "
-              f"cache (no CACHE_VERSION and no {ENTRY_SUFFIX} files).")
-        print("Check the path, CASH_CACHE_DIR and [tool.cash] cache_dir. If it "
-              "really is a cache that lost its marker, clear it with --force.")
+        print(
+            f"Refusing to clear {resolved}: it does not look like a cash "
+            f"cache (no CACHE_VERSION and no {ENTRY_SUFFIX} files)."
+        )
+        print(
+            "Check the path, CASH_CACHE_DIR and [tool.cash] cache_dir. If it "
+            "really is a cache that lost its marker, clear it with --force."
+        )
         sys.exit(1)
     if not force:
         # Looking like a cache is not enough: cash writes its stamp into
@@ -776,10 +798,11 @@ def _rmtree_cache(cache_dir: str, force: bool = False) -> None:
         foreign = _not_cash_files(resolved)
         if foreign:
             shown = ", ".join(foreign[:3]) + (", ..." if len(foreign) > 3 else "")
-            print(f"Refusing to clear {resolved}: it holds files cash did not "
-                  f"write ({shown}).")
-            print("Point cache_dir at a directory of its own, or clear it "
-                  "anyway with --force (which removes everything in it).")
+            print(f"Refusing to clear {resolved}: it holds files cash did not write ({shown}).")
+            print(
+                "Point cache_dir at a directory of its own, or clear it "
+                "anyway with --force (which removes everything in it)."
+            )
             sys.exit(1)
     shutil.rmtree(resolved)
     print(f"Cleared: {resolved}")
@@ -821,8 +844,7 @@ def cmd_clear(args: argparse.Namespace) -> None:
         # behaviour that cannot be right (CAS-83).
         print("cash clear: --all and a path are mutually exclusive.")
         print(f"  To clear that directory:   cash clear {args.path}")
-        print(f"  To clear the cache in use: cash clear --all "
-              f"  ({os.path.abspath(resolved_cache_dir())})")
+        print(f"  To clear the cache in use: cash clear --all   ({os.path.abspath(resolved_cache_dir())})")
         sys.exit(2)
 
     tool = getattr(args, "tool", None)
@@ -835,8 +857,9 @@ def cmd_clear(args: argparse.Namespace) -> None:
     if getattr(args, "expired", False):
         if only_entry or only_function:
             # --function would otherwise win and delete the live entries too.
-            print("cash clear: --expired clears across the whole cache; it cannot "
-                  "be combined with --function or --entry.")
+            print(
+                "cash clear: --expired clears across the whole cache; it cannot be combined with --function or --entry."
+            )
             sys.exit(2)
         target = args.path if (args.path and os.path.isdir(args.path)) else _target_dir(args)
         _clear_expired(target)
@@ -862,13 +885,16 @@ def cmd_clear(args: argparse.Namespace) -> None:
             # its whole cache while this reported success (round 18). Say
             # which directory was looked at, and the two ways a running
             # program's cache is somewhere else.
-            print(f"Nothing cleared: no cache at {os.path.abspath(cache_dir)}, "
-                  f"the directory `cash info` reports for here.")
-            print("  A script outside any project (no pyproject.toml, setup.py, "
-                  "setup.cfg or .git above it) caches in a .cash beside the script: "
-                  "cash clear <script dir>/.cash")
-            print("  A cache_dir that was changed leaves the old directory behind: "
-                  "cash clear <old path>")
+            print(
+                f"Nothing cleared: no cache at {os.path.abspath(cache_dir)}, "
+                f"the directory `cash info` reports for here."
+            )
+            print(
+                "  A script outside any project (no pyproject.toml, setup.py, "
+                "setup.cfg or .git above it) caches in a .cash beside the script: "
+                "cash clear <script dir>/.cash"
+            )
+            print("  A cache_dir that was changed leaves the old directory behind: cash clear <old path>")
         return
 
     target = args.path
@@ -884,7 +910,7 @@ def cmd_clear(args: argparse.Namespace) -> None:
 
     if os.path.isdir(target):
         _rmtree_cache(target, force=force)
-    elif os.path.isfile(target) and target.endswith('.ipynb'):
+    elif os.path.isfile(target) and target.endswith(".ipynb"):
         nb_dir = os.path.dirname(os.path.abspath(target))
         cache_dir = os.path.join(nb_dir, ".cash")
         if os.path.isdir(cache_dir):
@@ -899,13 +925,13 @@ def cmd_clear(args: argparse.Namespace) -> None:
 HOOK_FILENAME = "00-cash.py"
 HOOK_MARKER = "# cash-ipython-hook (managed by `cash autoload`)"
 
-HOOK_BODY_AVAILABLE = f'''{HOOK_MARKER}
+HOOK_BODY_AVAILABLE = f"""{HOOK_MARKER}
 # Mode: available — `%cash_on` (and `cash.cache`) ready to use in every session.
 # Remove with `cash autoload off`.
 import cash  # auto-registers cash IPython magics
-'''
+"""
 
-HOOK_BODY_ACTIVE = f'''{HOOK_MARKER}
+HOOK_BODY_ACTIVE = f"""{HOOK_MARKER}
 # Mode: active — caching is enabled automatically in every IPython/Jupyter
 # session.  Run %cash_off in any session you want to opt out of, or remove
 # this file with `cash autoload off`.
@@ -917,7 +943,7 @@ except NameError:
     _ip = None
 if _ip is not None:
     _ip.run_line_magic("cash_on", "")
-'''
+"""
 
 
 def _ipython_startup_dir(profile: str) -> Path:
@@ -930,6 +956,7 @@ def _ipython_startup_dir(profile: str) -> Path:
     """
     try:
         from IPython.paths import get_ipython_dir
+
         ipython_dir = Path(get_ipython_dir())
     except ImportError:
         ipython_dir = Path.home() / ".ipython"
@@ -1000,91 +1027,128 @@ def cmd_autoload(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        prog='cash',
-        description='A Python cache that re-runs only what changed.',
+        prog="cash",
+        description="A Python cache that re-runs only what changed.",
     )
-    subparsers = parser.add_subparsers(dest='command', help='Available commands')
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # version
-    sub_version = subparsers.add_parser('version', help='Show cash version')
+    sub_version = subparsers.add_parser("version", help="Show cash version")
     sub_version.set_defaults(func=cmd_version)
 
     # info
-    sub_info = subparsers.add_parser('info', help='Show cash configuration')
-    sub_info.add_argument('--config', default=None, metavar='PATH',
-                          help='Resolve as a program that passes Cash(config_path=PATH) '
-                               "would -- a packaged tool's own config file.")
+    sub_info = subparsers.add_parser("info", help="Show cash configuration")
+    sub_info.add_argument(
+        "--config",
+        default=None,
+        metavar="PATH",
+        help="Resolve as a program that passes Cash(config_path=PATH) would -- a packaged tool's own config file.",
+    )
     sub_info.set_defaults(func=cmd_info)
 
     # inspect
-    sub_inspect = subparsers.add_parser('inspect', help='Inspect cache for a notebook or directory')
-    sub_inspect.add_argument('path', nargs='?', default=None,
-                             help='Notebook (.ipynb) or cache directory path. '
-                                  'Defaults to the cache the library is using.')
-    sub_inspect.add_argument('--function', default=None, metavar='NAME',
-                             help="List one function's entries, with what each one saves. An unambiguous "
-                                  'trailing segment is enough ("work" finds "__main__.work").')
-    sub_inspect.add_argument('--tool', default=None, metavar='NAME',
-                             help='Inspect the per-user cache of the installed console '
-                                  'script NAME (listed by `cash info`).')
+    sub_inspect = subparsers.add_parser("inspect", help="Inspect cache for a notebook or directory")
+    sub_inspect.add_argument(
+        "path",
+        nargs="?",
+        default=None,
+        help="Notebook (.ipynb) or cache directory path. Defaults to the cache the library is using.",
+    )
+    sub_inspect.add_argument(
+        "--function",
+        default=None,
+        metavar="NAME",
+        help="List one function's entries, with what each one saves. An unambiguous "
+        'trailing segment is enough ("work" finds "__main__.work").',
+    )
+    sub_inspect.add_argument(
+        "--tool",
+        default=None,
+        metavar="NAME",
+        help="Inspect the per-user cache of the installed console script NAME (listed by `cash info`).",
+    )
     sub_inspect.set_defaults(func=cmd_inspect)
 
     # clear
-    sub_clear = subparsers.add_parser('clear', help='Clear cache')
-    sub_clear.add_argument('path', nargs='?', default=None, help='Notebook or cache directory to clear')
-    sub_clear.add_argument('--all', action='store_true',
-                           help='Clear the cache the library is using -- the same '
-                                'directory `cash info` reports. Cannot be combined '
-                                'with a path.')
-    sub_clear.add_argument('--function', default=None, metavar='NAME',
-                           help="Clear only this function's entries, leaving the rest "
-                                'of the cache intact. "notebook" selects the '
-                                'notebook statements.')
-    sub_clear.add_argument('--entry', default=None, metavar='ID',
-                           help='Clear one entry by id, as listed by '
-                                '`cash inspect --function NAME`. Any unambiguous '
-                                'prefix works. Takes precedence over --function.')
-    sub_clear.add_argument('--expired', action='store_true',
-                           help='Clear only the entries whose ttl has run out -- by '
-                                'the rule reads apply, a lowered default_ttl included. '
-                                'Frees the disk they hold; nothing else is touched.')
-    sub_clear.add_argument('--tool', default=None, metavar='NAME',
-                           help='Act on the per-user cache of the installed console '
-                                'script NAME instead of the cache in use. On its own it '
-                                'clears that whole cache; with --function or --entry, '
-                                'just those entries.')
-    sub_clear.add_argument('--force', action='store_true',
-                           help='Clear a directory even though it holds no CACHE_VERSION '
-                                'and no .entry files. Never clears the current directory '
-                                'or one that contains it.')
+    sub_clear = subparsers.add_parser("clear", help="Clear cache")
+    sub_clear.add_argument("path", nargs="?", default=None, help="Notebook or cache directory to clear")
+    sub_clear.add_argument(
+        "--all",
+        action="store_true",
+        help="Clear the cache the library is using -- the same "
+        "directory `cash info` reports. Cannot be combined "
+        "with a path.",
+    )
+    sub_clear.add_argument(
+        "--function",
+        default=None,
+        metavar="NAME",
+        help="Clear only this function's entries, leaving the rest "
+        'of the cache intact. "notebook" selects the '
+        "notebook statements.",
+    )
+    sub_clear.add_argument(
+        "--entry",
+        default=None,
+        metavar="ID",
+        help="Clear one entry by id, as listed by "
+        "`cash inspect --function NAME`. Any unambiguous "
+        "prefix works. Takes precedence over --function.",
+    )
+    sub_clear.add_argument(
+        "--expired",
+        action="store_true",
+        help="Clear only the entries whose ttl has run out -- by "
+        "the rule reads apply, a lowered default_ttl included. "
+        "Frees the disk they hold; nothing else is touched.",
+    )
+    sub_clear.add_argument(
+        "--tool",
+        default=None,
+        metavar="NAME",
+        help="Act on the per-user cache of the installed console "
+        "script NAME instead of the cache in use. On its own it "
+        "clears that whole cache; with --function or --entry, "
+        "just those entries.",
+    )
+    sub_clear.add_argument(
+        "--force",
+        action="store_true",
+        help="Clear a directory even though it holds no CACHE_VERSION "
+        "and no .entry files. Never clears the current directory "
+        "or one that contains it.",
+    )
     sub_clear.set_defaults(func=cmd_clear, clear_parser=sub_clear)
 
     # autoload on|off
     sub_autoload = subparsers.add_parser(
-        'autoload',
-        help='Toggle whether cash auto-loads in every new IPython/Jupyter kernel',
+        "autoload",
+        help="Toggle whether cash auto-loads in every new IPython/Jupyter kernel",
         description=(
-            'Install or remove an IPython startup hook so cash is loaded (and optionally '
-            'enabled) automatically in every new kernel - no `import cash` needed per notebook.'
+            "Install or remove an IPython startup hook so cash is loaded (and optionally "
+            "enabled) automatically in every new kernel - no `import cash` needed per notebook."
         ),
     )
     sub_autoload.add_argument(
-        'state', choices=['on', 'off'],
-        help='on: install the startup hook. off: remove it.',
+        "state",
+        choices=["on", "off"],
+        help="on: install the startup hook. off: remove it.",
     )
     sub_autoload.add_argument(
-        '--mode',
-        choices=['available', 'active'],
-        default='active',
-        help='(on only) available: just `import cash`. active (default): also run %%cash_on so caching is on by default.',
+        "--mode",
+        choices=["available", "active"],
+        default="active",
+        help="(on only) available: just `import cash`. active (default): also run %%cash_on so caching is on by default.",
     )
     sub_autoload.add_argument(
-        '--profile', default='default',
+        "--profile",
+        default="default",
         help='IPython profile to target (default: "default")',
     )
     sub_autoload.add_argument(
-        '--force', action='store_true',
-        help='(on) overwrite a different file at this path. (off) remove a file lacking the cash marker.',
+        "--force",
+        action="store_true",
+        help="(on) overwrite a different file at this path. (off) remove a file lacking the cash marker.",
     )
     sub_autoload.set_defaults(func=cmd_autoload)
 
@@ -1097,5 +1161,5 @@ def main() -> None:
     args.func(args)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

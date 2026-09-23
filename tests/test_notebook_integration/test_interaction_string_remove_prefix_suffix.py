@@ -1,4 +1,5 @@
 """Batch 446: string removeprefix and removesuffix (3.9+)."""
+
 import pytest
 
 pytestmark = [pytest.mark.stress, pytest.mark.timeout(90)]
@@ -6,21 +7,24 @@ pytestmark = [pytest.mark.stress, pytest.mark.timeout(90)]
 
 class TestStringRemovePrefixSuffix:
     def test_removeprefix(self, nb_runner):
-        nb_runner.create_notebook([
-            "text = 'TestCaseExample'",
-            "no_prefix = text.removeprefix('Test')\nno_miss = text.removeprefix('Foo')\nprint(f'no_prefix={no_prefix} no_miss={no_miss}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "text = 'TestCaseExample'",
+                "no_prefix = text.removeprefix('Test')\nno_miss = text.removeprefix('Foo')\nprint(f'no_prefix={no_prefix} no_miss={no_miss}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "no_prefix=CaseExample" in nb_runner.get_output(2)
         assert "no_miss=TestCaseExample" in nb_runner.get_output(2)
 
-
     def test_remove_edit(self, nb_runner):
-        nb_runner.create_notebook([
-            "s = 'prefix_content_suffix'",
-            "r = s.removeprefix('prefix_').removesuffix('_suffix')\nprint(f'r={r}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "s = 'prefix_content_suffix'",
+                "r = s.removeprefix('prefix_').removesuffix('_suffix')\nprint(f'r={r}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "r=content" in nb_runner.get_output(2)

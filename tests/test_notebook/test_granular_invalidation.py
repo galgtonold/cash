@@ -1,4 +1,5 @@
 from cash.notebook.cache_status import CacheStatus
+
 """
 Tests for granular per-symbol module invalidation.
 
@@ -21,15 +22,16 @@ import hashlib
 import importlib
 import sys
 import time
-import pytest
 from unittest.mock import MagicMock
 
+import pytest
+from traitlets.config.configurable import Configurable
+
+from cash.backends import InMemoryBackend
+from cash.core import Cash
+from cash.notebook.annotations import CacheAnnotation
 from cash.notebook.function_tracker import FunctionTracker
 from cash.notebook.ipython.magics import CashMagics
-from cash.notebook.annotations import CacheAnnotation
-from cash.core import Cash
-from cash.backends import InMemoryBackend
-from traitlets.config.configurable import Configurable
 
 # Force caching regardless of the 10 ms min-execution-time floor.
 _PERSIST = CacheAnnotation(persist=True)
@@ -42,6 +44,7 @@ _PERSIST = CacheAnnotation(persist=True)
 
 class MockShell(Configurable):
     """Mock IPython shell for testing."""
+
     def __init__(self):
         super().__init__()
         self.user_ns = {}
@@ -50,7 +53,7 @@ class MockShell(Configurable):
         self.events = MagicMock()
         self.ast_transformers = []
         self.user_global_ns = self.user_ns
-        self.display_pub = type('MockDisplayPub', (), {'publish': MagicMock()})()
+        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
 
 
 @pytest.fixture
@@ -103,29 +106,26 @@ class TestComputeSymbolHashes:
     def test_functions_hashed(self, tmp_path):
         """Each function should get its own hash."""
         f = tmp_path / "mod.py"
-        f.write_text(
-            "def foo():\n    return 1\n\n"
-            "def bar():\n    return 2\n"
-        )
+        f.write_text("def foo():\n    return 1\n\ndef bar():\n    return 2\n")
         hashes = FunctionTracker.compute_symbol_hashes(str(f))
-        assert 'foo' in hashes
-        assert 'bar' in hashes
-        assert hashes['foo'] != hashes['bar']
+        assert "foo" in hashes
+        assert "bar" in hashes
+        assert hashes["foo"] != hashes["bar"]
 
     def test_classes_hashed(self, tmp_path):
         """Classes should get their own hash."""
         f = tmp_path / "mod.py"
         f.write_text("class MyClass:\n    x = 1\n")
         hashes = FunctionTracker.compute_symbol_hashes(str(f))
-        assert 'MyClass' in hashes
+        assert "MyClass" in hashes
 
     def test_constants_hashed(self, tmp_path):
         """Top-level assignments should be hashed."""
         f = tmp_path / "mod.py"
         f.write_text("VERSION = '1.0'\nDEBUG = False\n")
         hashes = FunctionTracker.compute_symbol_hashes(str(f))
-        assert 'VERSION' in hashes
-        assert 'DEBUG' in hashes
+        assert "VERSION" in hashes
+        assert "DEBUG" in hashes
 
     def test_changing_function_changes_hash(self, tmp_path):
         """Modifying a function should change its hash."""
@@ -136,7 +136,7 @@ class TestComputeSymbolHashes:
         f.write_text("def foo():\n    return 999\n")
         h2 = FunctionTracker.compute_symbol_hashes(str(f))
 
-        assert h1['foo'] != h2['foo']
+        assert h1["foo"] != h2["foo"]
 
     def test_unchanged_function_same_hash(self, tmp_path):
         """Unchanged function produces same hash."""
@@ -148,8 +148,8 @@ class TestComputeSymbolHashes:
         f.write_text("def foo():\n    return 1\n\ndef bar():\n    return 999\n")
         h2 = FunctionTracker.compute_symbol_hashes(str(f))
 
-        assert h1['foo'] == h2['foo']  # foo unchanged
-        assert h1['bar'] != h2['bar']  # bar changed
+        assert h1["foo"] == h2["foo"]  # foo unchanged
+        assert h1["bar"] != h2["bar"]  # bar changed
 
     def test_comment_only_change_same_hash(self, tmp_path):
         """Adding/changing comments doesn't change symbol hashes (AST-based)."""
@@ -160,7 +160,7 @@ class TestComputeSymbolHashes:
         f.write_text("# This is a comment\ndef foo():\n    return 1\n")
         h2 = FunctionTracker.compute_symbol_hashes(str(f))
 
-        assert h1['foo'] == h2['foo']
+        assert h1["foo"] == h2["foo"]
 
     def test_nonexistent_file_returns_empty(self):
         """Non-existent file returns empty dict."""
@@ -177,30 +177,30 @@ class TestComputeSymbolHashes:
         f = tmp_path / "mod.py"
         f.write_text("async def fetch():\n    return 42\n")
         hashes = FunctionTracker.compute_symbol_hashes(str(f))
-        assert 'fetch' in hashes
+        assert "fetch" in hashes
 
     def test_annotated_assignment_hashed(self, tmp_path):
         """Annotated assignments should be hashed."""
         f = tmp_path / "mod.py"
         f.write_text("name: str = 'hello'\n")
         hashes = FunctionTracker.compute_symbol_hashes(str(f))
-        assert 'name' in hashes
+        assert "name" in hashes
 
     def test_tuple_unpacking_hashed(self, tmp_path):
         """Tuple unpacking assignments should hash each name."""
         f = tmp_path / "mod.py"
         f.write_text("x, y = 1, 2\n")
         hashes = FunctionTracker.compute_symbol_hashes(str(f))
-        assert 'x' in hashes
-        assert 'y' in hashes
+        assert "x" in hashes
+        assert "y" in hashes
 
     def test_import_statements_tracked(self, tmp_path):
         """Import statements are tracked as __import__ symbols."""
         f = tmp_path / "mod.py"
         f.write_text("import os\nfrom sys import path\n")
         hashes = FunctionTracker.compute_symbol_hashes(str(f))
-        assert '__import__os' in hashes
-        assert '__import__path' in hashes
+        assert "__import__os" in hashes
+        assert "__import__path" in hashes
 
 
 # ============================================================================
@@ -239,7 +239,7 @@ class TestGetChangedSymbols:
 
         # Change compute() only
         time.sleep(0.05)
-        with open(module_file, 'w') as f:
+        with open(module_file, "w") as f:
             f.write(
                 "VERSION = '1.0'\n\n"
                 "def compute(x):\n    return x * 100\n\n"  # Changed!
@@ -249,10 +249,10 @@ class TestGetChangedSymbols:
 
         result = ft.get_changed_symbols(module_name)
         assert result is not None
-        assert 'compute' in result
-        assert 'format_result' not in result
-        assert 'VERSION' not in result
-        assert 'Config' not in result
+        assert "compute" in result
+        assert "format_result" not in result
+        assert "VERSION" not in result
+        assert "Config" not in result
 
     def test_added_symbol_detected(self, temp_module):
         """Adding a new symbol should be detected."""
@@ -263,7 +263,7 @@ class TestGetChangedSymbols:
 
         # Add new_func
         time.sleep(0.05)
-        with open(module_file, 'w') as f:
+        with open(module_file, "w") as f:
             f.write(
                 "VERSION = '1.0'\n\n"
                 "def compute(x):\n    return x * 2\n\n"
@@ -273,10 +273,10 @@ class TestGetChangedSymbols:
             )
 
         result = ft.get_changed_symbols(module_name)
-        assert 'new_func' in result
+        assert "new_func" in result
         # Existing unchanged symbols should NOT be in the result
-        assert 'compute' not in result
-        assert 'VERSION' not in result
+        assert "compute" not in result
+        assert "VERSION" not in result
 
     def test_removed_symbol_detected(self, temp_module):
         """Removing a symbol should be detected."""
@@ -287,16 +287,12 @@ class TestGetChangedSymbols:
 
         # Remove format_result
         time.sleep(0.05)
-        with open(module_file, 'w') as f:
-            f.write(
-                "VERSION = '1.0'\n\n"
-                "def compute(x):\n    return x * 2\n\n"
-                "class Config:\n    debug = False\n"
-            )
+        with open(module_file, "w") as f:
+            f.write("VERSION = '1.0'\n\ndef compute(x):\n    return x * 2\n\nclass Config:\n    debug = False\n")
 
         result = ft.get_changed_symbols(module_name)
-        assert 'format_result' in result
-        assert 'compute' not in result
+        assert "format_result" in result
+        assert "compute" not in result
 
     def test_constant_change_detected(self, temp_module):
         """Changing a constant should be detected."""
@@ -307,7 +303,7 @@ class TestGetChangedSymbols:
 
         # Change VERSION
         time.sleep(0.05)
-        with open(module_file, 'w') as f:
+        with open(module_file, "w") as f:
             f.write(
                 "VERSION = '2.0'\n\n"  # Changed!
                 "def compute(x):\n    return x * 2\n\n"
@@ -316,8 +312,8 @@ class TestGetChangedSymbols:
             )
 
         result = ft.get_changed_symbols(module_name)
-        assert 'VERSION' in result
-        assert 'compute' not in result
+        assert "VERSION" in result
+        assert "compute" not in result
 
     def test_snapshot_updates_after_reload(self, temp_module):
         """After snapshot_module_symbols, subsequent get_changed_symbols should use new baseline."""
@@ -328,7 +324,7 @@ class TestGetChangedSymbols:
 
         # Change compute
         time.sleep(0.05)
-        with open(module_file, 'w') as f:
+        with open(module_file, "w") as f:
             f.write(
                 "VERSION = '1.0'\n\n"
                 "def compute(x):\n    return x * 100\n\n"
@@ -337,7 +333,7 @@ class TestGetChangedSymbols:
             )
 
         result1 = ft.get_changed_symbols(module_name)
-        assert 'compute' in result1
+        assert "compute" in result1
 
         # Take new snapshot
         ft.snapshot_module_symbols(module_name)
@@ -358,39 +354,39 @@ class TestExtractModuleAttributeAccesses:
     def test_simple_attribute_access(self):
         """mod.attr should be detected."""
         accesses = FunctionTracker.extract_module_attribute_accesses("x = mod.compute(5)")
-        assert 'mod' in accesses
-        assert 'compute' in accesses['mod']
+        assert "mod" in accesses
+        assert "compute" in accesses["mod"]
 
     def test_multiple_attributes(self):
         """Multiple attributes of same module should all be tracked."""
         code = "a = mod.compute(5)\nb = mod.format_result(a)"
         accesses = FunctionTracker.extract_module_attribute_accesses(code)
-        assert 'mod' in accesses
-        assert accesses['mod'] == {'compute', 'format_result'}
+        assert "mod" in accesses
+        assert accesses["mod"] == {"compute", "format_result"}
 
     def test_constant_access(self):
         """mod.CONST should be detected."""
         accesses = FunctionTracker.extract_module_attribute_accesses("v = mod.VERSION")
-        assert 'mod' in accesses
-        assert 'VERSION' in accesses['mod']
+        assert "mod" in accesses
+        assert "VERSION" in accesses["mod"]
 
     def test_mixed_function_and_constant(self):
         """Both function calls and constant access tracked."""
         code = "v = mod.VERSION\nr = mod.compute(5)"
         accesses = FunctionTracker.extract_module_attribute_accesses(code)
-        assert accesses['mod'] == {'VERSION', 'compute'}
+        assert accesses["mod"] == {"VERSION", "compute"}
 
     def test_getattr_with_constant_string(self):
         """getattr(mod, 'attr') with string constant should track attr."""
         accesses = FunctionTracker.extract_module_attribute_accesses("getattr(mod, 'compute')")
-        assert 'mod' in accesses
-        assert 'compute' in accesses['mod']
+        assert "mod" in accesses
+        assert "compute" in accesses["mod"]
 
     def test_getattr_with_dynamic_attr(self):
         """getattr(mod, var) with dynamic second arg cannot be tracked."""
         accesses = FunctionTracker.extract_module_attribute_accesses("getattr(mod, name)")
         # Should still have 'mod' but with bare use flagged
-        assert 'mod' in accesses
+        assert "mod" in accesses
 
     def test_no_module_access(self):
         """Code without module access returns empty."""
@@ -405,15 +401,15 @@ class TestExtractModuleAttributeAccesses:
     def test_chained_attribute_access(self):
         """mod.sub.attr should track 'sub' on mod."""
         accesses = FunctionTracker.extract_module_attribute_accesses("mod.sub.attr")
-        assert 'mod' in accesses
-        assert 'sub' in accesses['mod']
+        assert "mod" in accesses
+        assert "sub" in accesses["mod"]
 
     def test_multiple_modules(self):
         """Multiple different modules tracked separately."""
         code = "a = m1.func()\nb = m2.other()"
         accesses = FunctionTracker.extract_module_attribute_accesses(code)
-        assert 'm1' in accesses and 'func' in accesses['m1']
-        assert 'm2' in accesses and 'other' in accesses['m2']
+        assert "m1" in accesses and "func" in accesses["m1"]
+        assert "m2" in accesses and "other" in accesses["m2"]
 
 
 # ============================================================================
@@ -431,8 +427,8 @@ class TestComputeModuleSymbolHash:
         importlib.import_module(module_name)
         ft.track_module(module_name)
 
-        h1 = ft.compute_module_symbol_hash(module_name, {'compute'})
-        h2 = ft.compute_module_symbol_hash(module_name, {'format_result'})
+        h1 = ft.compute_module_symbol_hash(module_name, {"compute"})
+        h2 = ft.compute_module_symbol_hash(module_name, {"format_result"})
         assert h1 != h2
 
     def test_same_attrs_same_hash(self, temp_module):
@@ -442,8 +438,8 @@ class TestComputeModuleSymbolHash:
         importlib.import_module(module_name)
         ft.track_module(module_name)
 
-        h1 = ft.compute_module_symbol_hash(module_name, {'compute'})
-        h2 = ft.compute_module_symbol_hash(module_name, {'compute'})
+        h1 = ft.compute_module_symbol_hash(module_name, {"compute"})
+        h2 = ft.compute_module_symbol_hash(module_name, {"compute"})
         assert h1 == h2
 
     def test_no_attrs_falls_back_to_full_hash(self, temp_module):
@@ -457,7 +453,7 @@ class TestComputeModuleSymbolHash:
         h_empty = ft.compute_module_symbol_hash(module_name, set())
 
         # Both should be the full file hash
-        with open(module_file, 'rb') as f:
+        with open(module_file, "rb") as f:
             expected_full = hashlib.sha256(f.read()).hexdigest()
         assert h_none == expected_full
         assert h_empty == expected_full
@@ -469,11 +465,11 @@ class TestComputeModuleSymbolHash:
         importlib.import_module(module_name)
         ft.track_module(module_name)
 
-        h_version_before = ft.compute_module_symbol_hash(module_name, {'VERSION'})
+        h_version_before = ft.compute_module_symbol_hash(module_name, {"VERSION"})
 
         # Change compute() — leave VERSION unchanged
         time.sleep(0.05)
-        with open(module_file, 'w') as f:
+        with open(module_file, "w") as f:
             f.write(
                 "VERSION = '1.0'\n\n"
                 "def compute(x):\n    return x * 100\n\n"
@@ -484,7 +480,7 @@ class TestComputeModuleSymbolHash:
         # Re-snapshot to update symbol hashes
         ft.snapshot_module_symbols(module_name)
 
-        h_version_after = ft.compute_module_symbol_hash(module_name, {'VERSION'})
+        h_version_after = ft.compute_module_symbol_hash(module_name, {"VERSION"})
         assert h_version_before == h_version_after
 
     def test_changed_symbol_different_hash(self, temp_module):
@@ -494,11 +490,11 @@ class TestComputeModuleSymbolHash:
         importlib.import_module(module_name)
         ft.track_module(module_name)
 
-        h_compute_before = ft.compute_module_symbol_hash(module_name, {'compute'})
+        h_compute_before = ft.compute_module_symbol_hash(module_name, {"compute"})
 
         # Change compute()
         time.sleep(0.05)
-        with open(module_file, 'w') as f:
+        with open(module_file, "w") as f:
             f.write(
                 "VERSION = '1.0'\n\n"
                 "def compute(x):\n    return x * 100\n\n"
@@ -507,7 +503,7 @@ class TestComputeModuleSymbolHash:
             )
 
         ft.snapshot_module_symbols(module_name)
-        h_compute_after = ft.compute_module_symbol_hash(module_name, {'compute'})
+        h_compute_after = ft.compute_module_symbol_hash(module_name, {"compute"})
         assert h_compute_before != h_compute_after
 
 
@@ -533,20 +529,20 @@ class TestGranularInvalidation:
         # Setup: variable 'result' depends on module.compute
         old_lineage = hashlib.sha256(b"old").hexdigest()
         sp.variable_lineage[module_name] = old_lineage
-        sp.variable_lineage['result'] = "result_hash"
-        sp.executed_cell_codes['result'] = f"result = {module_name}.compute(5)"
-        sp.executed_input_lineages['result'] = {module_name: old_lineage}
-        sp._tracking_state.module_attribute_deps['result'] = {module_name: {'compute'}}
+        sp.variable_lineage["result"] = "result_hash"
+        sp.executed_cell_codes["result"] = f"result = {module_name}.compute(5)"
+        sp.executed_input_lineages["result"] = {module_name: old_lineage}
+        sp._tracking_state.module_attribute_deps["result"] = {module_name: {"compute"}}
 
         # Setup: variable 'version_str' depends on module.VERSION
-        sp.variable_lineage['version_str'] = "version_hash"
-        sp.executed_cell_codes['version_str'] = f"version_str = {module_name}.VERSION"
-        sp.executed_input_lineages['version_str'] = {module_name: old_lineage}
-        sp._tracking_state.module_attribute_deps['version_str'] = {module_name: {'VERSION'}}
+        sp.variable_lineage["version_str"] = "version_hash"
+        sp.executed_cell_codes["version_str"] = f"version_str = {module_name}.VERSION"
+        sp.executed_input_lineages["version_str"] = {module_name: old_lineage}
+        sp._tracking_state.module_attribute_deps["version_str"] = {module_name: {"VERSION"}}
 
         # Only 'compute' changed
         changed_modules = {module_name: module_file}
-        per_module_changed_symbols = {module_name: {'compute'}}
+        per_module_changed_symbols = {module_name: {"compute"}}
 
         magics._module_invalidator.invalidate(
             changed_modules,
@@ -555,13 +551,13 @@ class TestGranularInvalidation:
         )
 
         # 'result' should be invalidated (uses compute)
-        assert 'result' not in sp.variable_lineage
-        assert 'result' not in sp.executed_cell_codes
+        assert "result" not in sp.variable_lineage
+        assert "result" not in sp.executed_cell_codes
 
         # 'version_str' should be PRESERVED (uses VERSION, which didn't change)
-        assert 'version_str' in sp.variable_lineage
-        assert sp.variable_lineage['version_str'] == "version_hash"
-        assert 'version_str' in sp.executed_cell_codes
+        assert "version_str" in sp.variable_lineage
+        assert sp.variable_lineage["version_str"] == "version_hash"
+        assert "version_str" in sp.executed_cell_codes
 
     def test_no_granular_info_full_invalidation(self, magics_fixture, temp_module):
         """When per_module_changed_symbols is None, full invalidation happens."""
@@ -571,15 +567,15 @@ class TestGranularInvalidation:
 
         old_lineage = hashlib.sha256(b"old").hexdigest()
         sp.variable_lineage[module_name] = old_lineage
-        sp.variable_lineage['result'] = "result_hash"
-        sp.executed_cell_codes['result'] = f"result = {module_name}.compute(5)"
-        sp.executed_input_lineages['result'] = {module_name: old_lineage}
-        sp._tracking_state.module_attribute_deps['result'] = {module_name: {'compute'}}
+        sp.variable_lineage["result"] = "result_hash"
+        sp.executed_cell_codes["result"] = f"result = {module_name}.compute(5)"
+        sp.executed_input_lineages["result"] = {module_name: old_lineage}
+        sp._tracking_state.module_attribute_deps["result"] = {module_name: {"compute"}}
 
-        sp.variable_lineage['version_str'] = "version_hash"
-        sp.executed_cell_codes['version_str'] = f"version_str = {module_name}.VERSION"
-        sp.executed_input_lineages['version_str'] = {module_name: old_lineage}
-        sp._tracking_state.module_attribute_deps['version_str'] = {module_name: {'VERSION'}}
+        sp.variable_lineage["version_str"] = "version_hash"
+        sp.executed_cell_codes["version_str"] = f"version_str = {module_name}.VERSION"
+        sp.executed_input_lineages["version_str"] = {module_name: old_lineage}
+        sp._tracking_state.module_attribute_deps["version_str"] = {module_name: {"VERSION"}}
 
         # No granular info (None)
         changed_modules = {module_name: module_file}
@@ -592,8 +588,8 @@ class TestGranularInvalidation:
         )
 
         # Both should be invalidated
-        assert 'result' not in sp.variable_lineage
-        assert 'version_str' not in sp.variable_lineage
+        assert "result" not in sp.variable_lineage
+        assert "version_str" not in sp.variable_lineage
 
     def test_no_attribute_deps_full_invalidation(self, magics_fixture, temp_module):
         """When module_attribute_deps is not set for a var, full invalidation for safety."""
@@ -603,13 +599,13 @@ class TestGranularInvalidation:
 
         old_lineage = hashlib.sha256(b"old").hexdigest()
         sp.variable_lineage[module_name] = old_lineage
-        sp.variable_lineage['result'] = "result_hash"
-        sp.executed_cell_codes['result'] = f"result = {module_name}.compute(5)"
-        sp.executed_input_lineages['result'] = {module_name: old_lineage}
+        sp.variable_lineage["result"] = "result_hash"
+        sp.executed_cell_codes["result"] = f"result = {module_name}.compute(5)"
+        sp.executed_input_lineages["result"] = {module_name: old_lineage}
         # No module_attribute_deps set for 'result'
 
         changed_modules = {module_name: module_file}
-        per_module_changed_symbols = {module_name: {'compute'}}
+        per_module_changed_symbols = {module_name: {"compute"}}
 
         magics._module_invalidator.invalidate(
             changed_modules,
@@ -618,7 +614,7 @@ class TestGranularInvalidation:
         )
 
         # Should still be invalidated (no granular info about which attrs are used)
-        assert 'result' not in sp.variable_lineage
+        assert "result" not in sp.variable_lineage
 
     def test_empty_changed_symbols_preserves_all(self, magics_fixture, temp_module):
         """If no symbols actually changed (e.g., whitespace only), preserve all vars."""
@@ -628,10 +624,10 @@ class TestGranularInvalidation:
 
         old_lineage = hashlib.sha256(b"old").hexdigest()
         sp.variable_lineage[module_name] = old_lineage
-        sp.variable_lineage['result'] = "result_hash"
-        sp.executed_cell_codes['result'] = f"result = {module_name}.compute(5)"
-        sp.executed_input_lineages['result'] = {module_name: old_lineage}
-        sp._tracking_state.module_attribute_deps['result'] = {module_name: {'compute'}}
+        sp.variable_lineage["result"] = "result_hash"
+        sp.executed_cell_codes["result"] = f"result = {module_name}.compute(5)"
+        sp.executed_input_lineages["result"] = {module_name: old_lineage}
+        sp._tracking_state.module_attribute_deps["result"] = {module_name: {"compute"}}
 
         # Empty set = module mtime changed but no AST-level symbol changes
         changed_modules = {module_name: module_file}
@@ -644,7 +640,7 @@ class TestGranularInvalidation:
         )
 
         # 'result' should be preserved (nothing actually changed)
-        assert 'result' in sp.variable_lineage
+        assert "result" in sp.variable_lineage
 
     def test_backward_compat_without_per_module_symbols(self, magics_fixture, temp_module):
         """Calling without per_module_changed_symbols falls back to full invalidation."""
@@ -654,9 +650,9 @@ class TestGranularInvalidation:
 
         old_lineage = hashlib.sha256(b"old").hexdigest()
         sp.variable_lineage[module_name] = old_lineage
-        sp.variable_lineage['result'] = "result_hash"
-        sp.executed_cell_codes['result'] = f"result = {module_name}.compute(5)"
-        sp.executed_input_lineages['result'] = {module_name: old_lineage}
+        sp.variable_lineage["result"] = "result_hash"
+        sp.executed_cell_codes["result"] = f"result = {module_name}.compute(5)"
+        sp.executed_input_lineages["result"] = {module_name: old_lineage}
 
         changed_modules = {module_name: module_file}
         # Don't pass per_module_changed_symbols
@@ -666,7 +662,7 @@ class TestGranularInvalidation:
         )
 
         # Should still invalidate (backward compatible)
-        assert 'result' not in sp.variable_lineage
+        assert "result" not in sp.variable_lineage
 
     def test_multiple_modules_granular(self, magics_fixture, tmp_path):
         """Granular invalidation works across multiple changed modules."""
@@ -688,22 +684,22 @@ class TestGranularInvalidation:
         sp.variable_lineage[mod_b_name] = old_lineage_b
 
         # var_x uses mod_a.func_a
-        sp.variable_lineage['var_x'] = "x_hash"
-        sp.executed_cell_codes['var_x'] = f"var_x = {mod_a_name}.func_a()"
-        sp.executed_input_lineages['var_x'] = {mod_a_name: old_lineage_a}
-        sp._tracking_state.module_attribute_deps['var_x'] = {mod_a_name: {'func_a'}}
+        sp.variable_lineage["var_x"] = "x_hash"
+        sp.executed_cell_codes["var_x"] = f"var_x = {mod_a_name}.func_a()"
+        sp.executed_input_lineages["var_x"] = {mod_a_name: old_lineage_a}
+        sp._tracking_state.module_attribute_deps["var_x"] = {mod_a_name: {"func_a"}}
 
         # var_y uses mod_a.CONST_A
-        sp.variable_lineage['var_y'] = "y_hash"
-        sp.executed_cell_codes['var_y'] = f"var_y = {mod_a_name}.CONST_A"
-        sp.executed_input_lineages['var_y'] = {mod_a_name: old_lineage_a}
-        sp._tracking_state.module_attribute_deps['var_y'] = {mod_a_name: {'CONST_A'}}
+        sp.variable_lineage["var_y"] = "y_hash"
+        sp.executed_cell_codes["var_y"] = f"var_y = {mod_a_name}.CONST_A"
+        sp.executed_input_lineages["var_y"] = {mod_a_name: old_lineage_a}
+        sp._tracking_state.module_attribute_deps["var_y"] = {mod_a_name: {"CONST_A"}}
 
         # var_z uses mod_b.func_b
-        sp.variable_lineage['var_z'] = "z_hash"
-        sp.executed_cell_codes['var_z'] = f"var_z = {mod_b_name}.func_b()"
-        sp.executed_input_lineages['var_z'] = {mod_b_name: old_lineage_b}
-        sp._tracking_state.module_attribute_deps['var_z'] = {mod_b_name: {'func_b'}}
+        sp.variable_lineage["var_z"] = "z_hash"
+        sp.executed_cell_codes["var_z"] = f"var_z = {mod_b_name}.func_b()"
+        sp.executed_input_lineages["var_z"] = {mod_b_name: old_lineage_b}
+        sp._tracking_state.module_attribute_deps["var_z"] = {mod_b_name: {"func_b"}}
 
         # Only func_a changed in mod_a, only CONST_B changed in mod_b
         changed_modules = {
@@ -711,8 +707,8 @@ class TestGranularInvalidation:
             mod_b_name: str(mod_b_file),
         }
         per_module_changed_symbols = {
-            mod_a_name: {'func_a'},
-            mod_b_name: {'CONST_B'},
+            mod_a_name: {"func_a"},
+            mod_b_name: {"CONST_B"},
         }
 
         magics._module_invalidator.invalidate(
@@ -722,13 +718,13 @@ class TestGranularInvalidation:
         )
 
         # var_x uses func_a which changed → invalidated
-        assert 'var_x' not in sp.variable_lineage
+        assert "var_x" not in sp.variable_lineage
 
         # var_y uses CONST_A which didn't change → preserved
-        assert 'var_y' in sp.variable_lineage
+        assert "var_y" in sp.variable_lineage
 
         # var_z uses func_b which didn't change → preserved
-        assert 'var_z' in sp.variable_lineage
+        assert "var_z" in sp.variable_lineage
 
 
 # ============================================================================
@@ -751,9 +747,7 @@ class TestGranularEndToEnd:
         module_name = f"_test_e2e_gran_{id(tmp_path)}"
         module_file = tmp_path / f"{module_name}.py"
         module_file.write_text(
-            "VERSION = '1.0'\n\n"
-            "def compute(x):\n    return x * 2\n\n"
-            "def format_result(x):\n    return f'Result: {x}'\n"
+            "VERSION = '1.0'\n\ndef compute(x):\n    return x * 2\n\ndef format_result(x):\n    return f'Result: {x}'\n"
         )
 
         sys.path.insert(0, str(tmp_path))
@@ -768,28 +762,28 @@ class TestGranularEndToEnd:
 
             # Execute: use compute
             metrics1 = sp.process_statement(f"result = {module_name}.compute(5)", silent=True, annotation=_PERSIST)
-            assert metrics1['status'] == CacheStatus.COMPUTED
-            assert shell.user_ns.get('result') == 10
+            assert metrics1["status"] == CacheStatus.COMPUTED
+            assert shell.user_ns.get("result") == 10
 
             # Execute: use VERSION
             metrics2 = sp.process_statement(f"v = {module_name}.VERSION", silent=True, annotation=_PERSIST)
-            assert metrics2['status'] == CacheStatus.COMPUTED
-            assert shell.user_ns.get('v') == '1.0'
+            assert metrics2["status"] == CacheStatus.COMPUTED
+            assert shell.user_ns.get("v") == "1.0"
 
             # Execute: use format_result
             metrics3 = sp.process_statement(f"fmt = {module_name}.format_result(42)", silent=True, annotation=_PERSIST)
-            assert metrics3['status'] == CacheStatus.COMPUTED
-            assert shell.user_ns.get('fmt') == 'Result: 42'
+            assert metrics3["status"] == CacheStatus.COMPUTED
+            assert shell.user_ns.get("fmt") == "Result: 42"
 
             # Re-run all — should be SKIPPED/RESTORED
             metrics1b = sp.process_statement(f"result = {module_name}.compute(5)", silent=True, annotation=_PERSIST)
-            assert metrics1b['status'] in (CacheStatus.SKIPPED, CacheStatus.RESTORED)
+            assert metrics1b["status"] in (CacheStatus.SKIPPED, CacheStatus.RESTORED)
 
             metrics2b = sp.process_statement(f"v = {module_name}.VERSION", silent=True, annotation=_PERSIST)
-            assert metrics2b['status'] in (CacheStatus.SKIPPED, CacheStatus.RESTORED)
+            assert metrics2b["status"] in (CacheStatus.SKIPPED, CacheStatus.RESTORED)
 
             metrics3b = sp.process_statement(f"fmt = {module_name}.format_result(42)", silent=True, annotation=_PERSIST)
-            assert metrics3b['status'] in (CacheStatus.SKIPPED, CacheStatus.RESTORED)
+            assert metrics3b["status"] in (CacheStatus.SKIPPED, CacheStatus.RESTORED)
 
             # Now change ONLY compute()
             time.sleep(0.05)
@@ -806,31 +800,31 @@ class TestGranularEndToEnd:
             # Verify granular detection
             changed_syms = per_mod_syms.get(module_name)
             assert changed_syms is not None
-            assert 'compute' in changed_syms
+            assert "compute" in changed_syms
 
             # Invalidate with granular info
             magics._module_invalidator.invalidate(
-            changed_modules,
-            magics._statement_processor,
-            per_mod_syms,
-        )
+                changed_modules,
+                magics._statement_processor,
+                per_mod_syms,
+            )
 
             # Re-run import
             sp.process_statement(f"import {module_name}", silent=True)
 
             # Re-run compute — should be COMPUTED (invalidated)
             metrics1c = sp.process_statement(f"result = {module_name}.compute(5)", silent=True, annotation=_PERSIST)
-            assert metrics1c['status'] == CacheStatus.COMPUTED
-            assert shell.user_ns.get('result') == 500  # 5 * 100
+            assert metrics1c["status"] == CacheStatus.COMPUTED
+            assert shell.user_ns.get("result") == 500  # 5 * 100
 
             # VERSION didn't change → may still be SKIPPED/RESTORED or COMPUTED
             # (module reload changes module lineage which can affect cache keys)
             metrics2c = sp.process_statement(f"v = {module_name}.VERSION", silent=True, annotation=_PERSIST)
-            assert metrics2c['status'] in (CacheStatus.SKIPPED, CacheStatus.RESTORED, CacheStatus.COMPUTED)
+            assert metrics2c["status"] in (CacheStatus.SKIPPED, CacheStatus.RESTORED, CacheStatus.COMPUTED)
 
             # format_result didn't change → may still be SKIPPED/RESTORED or COMPUTED
             metrics3c = sp.process_statement(f"fmt = {module_name}.format_result(42)", silent=True, annotation=_PERSIST)
-            assert metrics3c['status'] in (CacheStatus.SKIPPED, CacheStatus.RESTORED, CacheStatus.COMPUTED)
+            assert metrics3c["status"] in (CacheStatus.SKIPPED, CacheStatus.RESTORED, CacheStatus.COMPUTED)
 
         finally:
             sys.path.remove(str(tmp_path))
@@ -845,10 +839,7 @@ class TestGranularEndToEnd:
 
         module_name = f"_test_e2e_const_{id(tmp_path)}"
         module_file = tmp_path / f"{module_name}.py"
-        module_file.write_text(
-            "VERSION = '1.0'\n\n"
-            "def compute(x):\n    return x * 2\n"
-        )
+        module_file.write_text("VERSION = '1.0'\n\ndef compute(x):\n    return x * 2\n")
 
         sys.path.insert(0, str(tmp_path))
         try:
@@ -859,9 +850,9 @@ class TestGranularEndToEnd:
 
             # Use both
             sp.process_statement(f"result = {module_name}.compute(5)", silent=True)
-            assert shell.user_ns['result'] == 10
+            assert shell.user_ns["result"] == 10
             sp.process_statement(f"v = {module_name}.VERSION", silent=True)
-            assert shell.user_ns['v'] == '1.0'
+            assert shell.user_ns["v"] == "1.0"
 
             # Change only VERSION
             time.sleep(0.05)
@@ -872,21 +863,21 @@ class TestGranularEndToEnd:
 
             changed_modules, per_mod_syms = ft.check_and_reload_changed_modules(shell.user_ns)
             magics._module_invalidator.invalidate(
-            changed_modules,
-            magics._statement_processor,
-            per_mod_syms,
-        )
+                changed_modules,
+                magics._statement_processor,
+                per_mod_syms,
+            )
             sp.process_statement(f"import {module_name}", silent=True)
 
             # compute didn't change → may be SKIPPED/RESTORED or COMPUTED
             # (module reload changes module lineage which can affect cache keys)
             m1 = sp.process_statement(f"result = {module_name}.compute(5)", silent=True)
-            assert m1['status'] in (CacheStatus.SKIPPED, CacheStatus.RESTORED, CacheStatus.COMPUTED)
+            assert m1["status"] in (CacheStatus.SKIPPED, CacheStatus.RESTORED, CacheStatus.COMPUTED)
 
             # VERSION changed → should be COMPUTED
             m2 = sp.process_statement(f"v = {module_name}.VERSION", silent=True)
-            assert m2['status'] == CacheStatus.COMPUTED
-            assert shell.user_ns['v'] == '2.0'
+            assert m2["status"] == CacheStatus.COMPUTED
+            assert shell.user_ns["v"] == "2.0"
 
         finally:
             sys.path.remove(str(tmp_path))
@@ -911,7 +902,7 @@ class TestGranularEdgeCases:
 
         # Add comments only
         time.sleep(0.05)
-        with open(module_file, 'w') as f:
+        with open(module_file, "w") as f:
             f.write(
                 "# New comment added\n"
                 "VERSION = '1.0'\n\n"
@@ -933,7 +924,7 @@ class TestGranularEdgeCases:
 
         # Add blank lines
         time.sleep(0.05)
-        with open(module_file, 'w') as f:
+        with open(module_file, "w") as f:
             f.write(
                 "\n\nVERSION = '1.0'\n\n\n\n"
                 "def compute(x):\n    return x * 2\n\n\n"
@@ -954,20 +945,20 @@ class TestGranularEdgeCases:
         sp.variable_lineage[module_name] = old_lineage
 
         # Both a and b use compute
-        for var in ['a', 'b']:
+        for var in ["a", "b"]:
             sp.variable_lineage[var] = f"{var}_hash"
             sp.executed_cell_codes[var] = f"{var} = {module_name}.compute(1)"
             sp.executed_input_lineages[var] = {module_name: old_lineage}
-            sp._tracking_state.module_attribute_deps[var] = {module_name: {'compute'}}
+            sp._tracking_state.module_attribute_deps[var] = {module_name: {"compute"}}
 
         # c uses format_result (unchanged)
-        sp.variable_lineage['c'] = "c_hash"
-        sp.executed_cell_codes['c'] = f"c = {module_name}.format_result(1)"
-        sp.executed_input_lineages['c'] = {module_name: old_lineage}
-        sp._tracking_state.module_attribute_deps['c'] = {module_name: {'format_result'}}
+        sp.variable_lineage["c"] = "c_hash"
+        sp.executed_cell_codes["c"] = f"c = {module_name}.format_result(1)"
+        sp.executed_input_lineages["c"] = {module_name: old_lineage}
+        sp._tracking_state.module_attribute_deps["c"] = {module_name: {"format_result"}}
 
         changed_modules = {module_name: module_file}
-        per_module_changed_symbols = {module_name: {'compute'}}
+        per_module_changed_symbols = {module_name: {"compute"}}
 
         magics._module_invalidator.invalidate(
             changed_modules,
@@ -975,9 +966,9 @@ class TestGranularEdgeCases:
             per_module_changed_symbols,
         )
 
-        assert 'a' not in sp.variable_lineage
-        assert 'b' not in sp.variable_lineage
-        assert 'c' in sp.variable_lineage
+        assert "a" not in sp.variable_lineage
+        assert "b" not in sp.variable_lineage
+        assert "c" in sp.variable_lineage
 
     def test_variable_using_multiple_attrs_including_changed(self, magics_fixture, temp_module):
         """If a variable uses both changed and unchanged attrs, it should be invalidated."""
@@ -989,14 +980,14 @@ class TestGranularEdgeCases:
         sp.variable_lineage[module_name] = old_lineage
 
         # Variable uses both compute AND VERSION
-        sp.variable_lineage['mixed'] = "mixed_hash"
-        sp.executed_cell_codes['mixed'] = f"mixed = {module_name}.compute(int({module_name}.VERSION))"
-        sp.executed_input_lineages['mixed'] = {module_name: old_lineage}
-        sp._tracking_state.module_attribute_deps['mixed'] = {module_name: {'compute', 'VERSION'}}
+        sp.variable_lineage["mixed"] = "mixed_hash"
+        sp.executed_cell_codes["mixed"] = f"mixed = {module_name}.compute(int({module_name}.VERSION))"
+        sp.executed_input_lineages["mixed"] = {module_name: old_lineage}
+        sp._tracking_state.module_attribute_deps["mixed"] = {module_name: {"compute", "VERSION"}}
 
         # Only compute changed
         changed_modules = {module_name: module_file}
-        per_module_changed_symbols = {module_name: {'compute'}}
+        per_module_changed_symbols = {module_name: {"compute"}}
 
         magics._module_invalidator.invalidate(
             changed_modules,
@@ -1005,7 +996,7 @@ class TestGranularEdgeCases:
         )
 
         # Should be invalidated because one of its deps (compute) changed
-        assert 'mixed' not in sp.variable_lineage
+        assert "mixed" not in sp.variable_lineage
 
     def test_module_attribute_deps_cleared_on_invalidation(self, magics_fixture, temp_module):
         """module_attribute_deps should be cleared for invalidated variables."""
@@ -1015,13 +1006,13 @@ class TestGranularEdgeCases:
 
         old_lineage = hashlib.sha256(b"old").hexdigest()
         sp.variable_lineage[module_name] = old_lineage
-        sp.variable_lineage['result'] = "result_hash"
-        sp.executed_cell_codes['result'] = f"result = {module_name}.compute(5)"
-        sp.executed_input_lineages['result'] = {module_name: old_lineage}
-        sp._tracking_state.module_attribute_deps['result'] = {module_name: {'compute'}}
+        sp.variable_lineage["result"] = "result_hash"
+        sp.executed_cell_codes["result"] = f"result = {module_name}.compute(5)"
+        sp.executed_input_lineages["result"] = {module_name: old_lineage}
+        sp._tracking_state.module_attribute_deps["result"] = {module_name: {"compute"}}
 
         changed_modules = {module_name: module_file}
-        per_module_changed_symbols = {module_name: {'compute'}}
+        per_module_changed_symbols = {module_name: {"compute"}}
 
         magics._module_invalidator.invalidate(
             changed_modules,
@@ -1029,7 +1020,7 @@ class TestGranularEdgeCases:
             per_module_changed_symbols,
         )
 
-        assert 'result' not in sp._tracking_state.module_attribute_deps
+        assert "result" not in sp._tracking_state.module_attribute_deps
 
     def test_class_change_detected(self, tmp_path):
         """Changing a class body should be detected as a symbol change."""
@@ -1041,4 +1032,4 @@ class TestGranularEdgeCases:
         f.write_text("class Config:\n    debug = True\n    verbose = True\n")
         h2 = ft.compute_symbol_hashes(str(f))
 
-        assert h1['Config'] != h2['Config']
+        assert h1["Config"] != h2["Config"]

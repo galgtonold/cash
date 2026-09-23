@@ -15,11 +15,13 @@ class TestDecoratorEdits:
 
     def test_edit_decorator_logic(self, nb_runner):
         """Edit decorator logic, verify function behavior changes."""
-        nb_runner.create_notebook([
-            "def double_result(fn):\n    def wrapper(*args):\n        return fn(*args) * 2\n    return wrapper",
-            "@double_result\ndef add(a, b):\n    return a + b",
-            "result = add(3, 4)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def double_result(fn):\n    def wrapper(*args):\n        return fn(*args) * 2\n    return wrapper",
+                "@double_result\ndef add(a, b):\n    return a + b",
+                "result = add(3, 4)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 14" in nb_runner.get_output(3)
@@ -34,29 +36,31 @@ class TestDecoratorEdits:
 
     def test_edit_decorated_function(self, nb_runner):
         """Edit the decorated function itself."""
-        nb_runner.create_notebook([
-            "def negate(fn):\n    def wrapper(*args):\n        return -fn(*args)\n    return wrapper",
-            "@negate\ndef compute(x):\n    return x * 2",
-            "result = compute(5)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def negate(fn):\n    def wrapper(*args):\n        return -fn(*args)\n    return wrapper",
+                "@negate\ndef compute(x):\n    return x * 2",
+                "result = compute(5)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = -10" in nb_runner.get_output(3)
 
         # Edit the base function
-        nb_runner.set_cell_source(
-            2, "@negate\ndef compute(x):\n    return x ** 2"
-        )
+        nb_runner.set_cell_source(2, "@negate\ndef compute(x):\n    return x ** 2")
         nb_runner.run_all()
         assert "result = -25" in nb_runner.get_output(3)
 
     def test_remove_decorator(self, nb_runner):
         """Remove decorator from function."""
-        nb_runner.create_notebook([
-            "def add_ten(fn):\n    def wrapper(*args):\n        return fn(*args) + 10\n    return wrapper",
-            "@add_ten\ndef square(x):\n    return x * x",
-            "result = square(3)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def add_ten(fn):\n    def wrapper(*args):\n        return fn(*args) + 10\n    return wrapper",
+                "@add_ten\ndef square(x):\n    return x * x",
+                "result = square(3)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 19" in nb_runner.get_output(3)
@@ -72,18 +76,18 @@ class TestDecoratorWithArgs:
 
     def test_edit_decorator_argument(self, nb_runner):
         """Edit the argument to a decorator factory."""
-        nb_runner.create_notebook([
-            "def multiply_by(n):\n    def decorator(fn):\n        def wrapper(*args):\n            return fn(*args) * n\n        return wrapper\n    return decorator",
-            "@multiply_by(2)\ndef add(a, b):\n    return a + b",
-            "result = add(3, 4)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def multiply_by(n):\n    def decorator(fn):\n        def wrapper(*args):\n            return fn(*args) * n\n        return wrapper\n    return decorator",
+                "@multiply_by(2)\ndef add(a, b):\n    return a + b",
+                "result = add(3, 4)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 14" in nb_runner.get_output(3)
 
         # Change multiplier
-        nb_runner.set_cell_source(
-            2, "@multiply_by(5)\ndef add(a, b):\n    return a + b"
-        )
+        nb_runner.set_cell_source(2, "@multiply_by(5)\ndef add(a, b):\n    return a + b")
         nb_runner.run_all()
         assert "result = 35" in nb_runner.get_output(3)

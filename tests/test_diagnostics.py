@@ -3,6 +3,7 @@
 Codes are permanent once released — a rename breaks a link that exists in
 someone's terminal scrollback forever — so their shape is pinned here.
 """
+
 from __future__ import annotations
 
 import re
@@ -15,8 +16,7 @@ SLUG = re.compile(r"^[A-Z]+(?:-[A-Z]+)+$")
 #: The area a code may start with. Closed on purpose -- a typo ("CHACE-")
 #: or a one-off prefix nobody else uses should fail here rather than ship.
 #: Adding an area is a deliberate act; adding one by accident is not.
-AREAS = {"ANNOT", "CACHE", "CONFIG", "IMPURE", "KEY", "NOTEBOOK", "RANDOM",
-         "REMOTE", "STORE"}
+AREAS = {"ANNOT", "CACHE", "CONFIG", "IMPURE", "KEY", "NOTEBOOK", "RANDOM", "REMOTE", "STORE"}
 
 
 def test_the_registry_is_not_empty():
@@ -32,9 +32,7 @@ def test_every_code_follows_the_slug_rule(code):
 
 def test_doc_url_points_at_the_stable_docs():
     url = doc_url("CACHE-THRASH")
-    assert url == (
-        "https://cash-lib.readthedocs.io/en/stable/warnings/#cache-thrash"
-    )
+    assert url == ("https://cash-lib.readthedocs.io/en/stable/warnings/#cache-thrash")
 
 
 def test_doc_url_rejects_an_unregistered_code():
@@ -50,14 +48,10 @@ from cash.exceptions import CashCacheIneffectiveWarning
 
 
 def test_the_rendered_message_carries_code_fix_and_link():
-    text = format_diagnostic(
-        "CACHE-THRASH", "the cache is full at its 500 MB cap.", "raise max_cache_size."
-    )
+    text = format_diagnostic("CACHE-THRASH", "the cache is full at its 500 MB cap.", "raise max_cache_size.")
     assert text.startswith("[CACHE-THRASH] the cache is full at its 500 MB cap.")
     assert "\n  Fix: raise max_cache_size." in text
-    assert text.endswith(
-        "\n  https://cash-lib.readthedocs.io/en/stable/warnings/#cache-thrash"
-    )
+    assert text.endswith("\n  https://cash-lib.readthedocs.io/en/stable/warnings/#cache-thrash")
 
 
 def test_the_code_reaches_the_handler_as_an_attribute():
@@ -65,9 +59,7 @@ def test_the_code_reaches_the_handler_as_an_attribute():
     substring-matching prose, which is not a stable interface."""
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        warn_diagnostic(
-            CashCacheIneffectiveWarning, "CACHE-THRASH", "the cache is full.", "raise it."
-        )
+        warn_diagnostic(CashCacheIneffectiveWarning, "CACHE-THRASH", "the cache is full.", "raise it.")
     assert len(caught) == 1
     assert caught[0].message.code == "CACHE-THRASH"
     assert isinstance(caught[0].message, CashCacheIneffectiveWarning)
@@ -77,9 +69,7 @@ def test_an_unregistered_code_raises_rather_than_warning():
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         with pytest.raises(KeyError):
-            warn_diagnostic(
-                CashCacheIneffectiveWarning, "CACHE-NOPE", "something.", "do a thing."
-            )
+            warn_diagnostic(CashCacheIneffectiveWarning, "CACHE-NOPE", "something.", "do a thing.")
     assert caught == [], "nothing should have been emitted for a bad code"
 
 
@@ -89,8 +79,13 @@ def test_the_explicit_variant_keeps_the_caller_s_location():
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         warn_diagnostic_explicit(
-            CashCacheIneffectiveWarning, "CACHE-THRASH", "the cache is full.",
-            "raise it.", filename="<cash>", lineno=42, registry=None,
+            CashCacheIneffectiveWarning,
+            "CACHE-THRASH",
+            "the cache is full.",
+            "raise it.",
+            filename="<cash>",
+            lineno=42,
+            registry=None,
         )
     assert len(caught) == 1
     assert caught[0].filename == "<cash>"
@@ -196,8 +191,7 @@ def _bound_method_state():
 
 
 def _cache_if_bypassed():
-    c = Cash(backend=FileBackend(tempfile.mkdtemp(), flush_interval=0),
-             register_magic=False)
+    c = Cash(backend=FileBackend(tempfile.mkdtemp(), flush_interval=0), register_magic=False)
 
     @c.cache(chunk_max_items=3, cache_if=lambda r: True)
     def gen():
@@ -220,6 +214,5 @@ def test_no_warning_blames_a_frame_inside_cash(trigger):
     """
     for filename in _blamed_files(trigger):
         assert not filename.startswith(CASH_ROOT), (
-            f"{trigger.__name__} blamed {filename}, which is inside Cash — "
-            "the reader cannot act on that"
+            f"{trigger.__name__} blamed {filename}, which is inside Cash — the reader cannot act on that"
         )

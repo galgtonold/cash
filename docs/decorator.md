@@ -149,7 +149,7 @@ A notebook shows a badge on every statement. A script shows nothing by
 default, which makes it easy to assume caching is working when it isn't — so
 there are several ways to look.
 
-<!-- claim: cash/core.py:Cash.run_summary @325d5774, cash/core.py:Cash._summary_reasons @44027910, cash/core.py:Cash._print_run_summary @54975534 -->
+<!-- claim: cash/core.py:Cash.run_summary @5e2a67c4, cash/core.py:Cash._summary_reasons @0d5a6d85, cash/core.py:Cash._print_run_summary @8e96e43d -->
 **What recomputed just now, and why?** Set `CASH_SUMMARY=1` and a
 per-function table prints to **stderr** when the process exits — stderr, so it
 never lands in a report, a pipe or a JSON response your program writes to
@@ -208,7 +208,7 @@ The id in brackets is the one `cash inspect --function` lists and
 `CASH_VERBOSE=1` or `verbose = true` give these lines without the other debug
 records.
 
-<!-- claim: cash/core.py:Cash._absent_entry_reason @977d0aa9, cash/core.py:Cash._remember_ram_only @17341e53 -->
+<!-- claim: cash/core.py:Cash._absent_entry_reason @6316cce8, cash/core.py:Cash._remember_ram_only @17341e53 -->
 A reason is not limited to what this process saw: each function's recently
 stored keys are recorded beside the cache (in `.keys/`), so the first call of a
 new run can still say that the code changed, that the arguments are new, that
@@ -220,7 +220,7 @@ arguments new. After a code edit, every call says `code or state changed`, not
 just the first — including after a changed parameter default, which moves the
 arguments as well because they are keyed with defaults applied.
 
-<!-- claim: cash/core.py:_describe_state_change @5cb0cb4e, cash/core.py:Cash._flat_ledger @1a0c7d70 -->
+<!-- claim: cash/core.py:_describe_state_change @351dbc89, cash/core.py:Cash._flat_ledger @ed63a092 -->
 After `--` it says *what* changed: `its own source changed`, `global
 THRESHOLD changed`, `helper model._rank changed`, `cached function
 model.load changed`, `it now uses global DATA_DIR`, or `helper model._smooth
@@ -237,7 +237,7 @@ says so — `-- trusts the timestamps of big.npy (sampled: ...)` — because onl
 three regions of such a file are hashed and the rest is trusted to its
 timestamps ([why](known-limitations.md)).
 
-<!-- claim: cash/core.py:_StandDownWhenTheAppLogs.filter @1f08254a, cash/core.py:Cash._print_run_summary @54975534 -->
+<!-- claim: cash/core.py:_StandDownWhenTheAppLogs.filter @1f08254a, cash/core.py:Cash._print_run_summary @8e96e43d -->
 With `CASH_DEBUG` they come with cash's other debug records. If your program configures `logging`
 itself, those records go to your handlers in your format instead, and no
 stderr handler is added. That holds when it configures logging *after*
@@ -291,7 +291,7 @@ Worth understanding before any parameter. With a bare `@cash.cache` and nothing
 configured, a cached result is discarded and recomputed when **any** of these
 change:
 
-<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @f2914199, cash/core.py:Cash._analyze_dependencies @d32aeb90 -->
+<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @f4e5c88e, cash/core.py:Cash._analyze_dependencies @d32aeb90 -->
 | What changed | How it's detected |
 |---|---|
 | The **arguments** | Hashed by *content* — so DataFrames and arrays work, and two equal-but-distinct objects share one entry |
@@ -314,7 +314,7 @@ for the cases this model *can't* see.
 
 ### What else is in the key — the ones that cost a recompute
 
-<!-- claim: cash/core.py:Cash._fold_defaults @6339036d, cash/core.py:Cash._hash_arg_payload @c688c59c, cash/dependency_state.py:DependencyStateHasher.compute @f2914199 -->
+<!-- claim: cash/core.py:Cash._fold_defaults @5760bcd5, cash/core.py:Cash._hash_arg_payload @6cf42ecf, cash/dependency_state.py:DependencyStateHasher.compute @f4e5c88e -->
 None of these gives a wrong answer. Each one costs a recompute you might not
 expect, measured across fresh processes:
 
@@ -351,7 +351,7 @@ def features(x):  return clean(x) + ...
 def pipeline(x):  return features(x)       # ...and pipeline's cache invalidates
 ```
 
-<!-- claim: cash/core.py:Cash._hash_callable_source @92e81388, cash/core.py:Cash._ensure_closure_analyzed @ecd28b28 -->
+<!-- claim: cash/core.py:Cash._hash_callable_source @0ea9711c, cash/core.py:Cash._ensure_closure_analyzed @ecd28b28 -->
 The analyzer captures helper source hashes and folds them into the cache key, so
 both cross-process edits and in-process redefinitions (notebook cell rerun, REPL)
 are picked up automatically. Overhead is ~3μs *per helper*, paid once for each helper in the
@@ -393,7 +393,7 @@ cached function counts as your code even after `pip install .`, so a changed
 checkout. If you do need a third-party function's identity in the key, name it
 with [`depends_on=`](#depends_on-explicit-dependency-graph).
 
-<!-- claim: cash/core.py:Cash._local_binding_parts @d2c4673e, cash/purity_analyzer.py:_resolve_local_import @e82fd5a2 -->
+<!-- claim: cash/core.py:Cash._local_binding_parts @d2c4673e, cash/purity_analyzer.py:_resolve_local_import @6a618af2 -->
 An import written **inside** the function (`from .models import auc`, the usual
 way out of an import cycle) is followed the same way as one at the top of the
 file -- a function it imports, a constant (`from .settings import ROUNDING`),
@@ -403,7 +403,7 @@ read by the wrapper. If the first call reaches cash before the body has made tha
 imports a module of *yours* itself to read it; a library you deliberately import
 inside a function to defer its cost is never imported early.
 
-<!-- claim: cash/notebook/analysis.py:CodeAnalyzer.find_called_functions @61e7b6cb, cash/notebook/analysis.py:CodeAnalyzer._referenced_function @639a43a5 -->
+<!-- claim: cash/notebook/analysis.py:CodeAnalyzer.find_called_functions @46fe2c58, cash/notebook/analysis.py:CodeAnalyzer._referenced_function @54c5c19c -->
 **Another cached function counts whether you call it or hand it on.** Calling
 `inner(n)` makes `inner` part of the caller's key, and so does passing it as a
 value — `map(inner, xs)`, `pool.map(inner, xs)`, `joblib.delayed(inner)`,
@@ -414,7 +414,7 @@ used to count.
 
 ### File reads are tracked automatically
 
-<!-- claim: cash/notebook/file_tracker.py:_install_module_patches @4cabaa21, cash/notebook/file_tracker.py:FileDependencyRegistry @ded8108e broad="the claim is that a family of reader calls is intercepted, which is the registry's whole job" -->
+<!-- claim: cash/notebook/file_tracker.py:_install_module_patches @511c9f1e, cash/notebook/file_tracker.py:FileDependencyRegistry @8e2e6255 broad="the claim is that a family of reader calls is intercepted, which is the registry's whole job" -->
 You usually don't need to declare files at all: cash intercepts file reads
 *inside* a cached function — `pd.read_csv`, `np.load`, `open()`, `joblib.load`,
 … — and folds each file's fingerprint into the entry, so changing the file on
@@ -443,7 +443,7 @@ yourself with `threading.Thread(target=...)` begins with nothing cash can see,
 so a file read only there is not tracked; read it in the function, hand the work
 to a `ThreadPoolExecutor`, or name the file with `file_depends_on=`.
 
-<!-- claim: cash/notebook/file_tracker.py:_patch_process_pool_submit @9e495aaf, cash/notebook/file_tracker.py:_ReadsInWorker.__call__ @979f59d5 -->
+<!-- claim: cash/notebook/file_tracker.py:_patch_process_pool_submit @9e495aaf, cash/notebook/file_tracker.py:_ReadsInWorker.__call__ @288a0a53 -->
 A **`ProcessPoolExecutor`** the function starts reads in other processes, and
 cash brings those reads back: each task runs in its worker under a tracker of
 its own and returns what it read with its result, so `ex.map(read_region,
@@ -453,7 +453,7 @@ import of cash's file tracker. `multiprocessing.Pool` and joblib's workers are
 not wrapped: files read only there are not seen, so name them with
 `file_depends_on=`.
 
-<!-- claim: cash/core.py:Cash._credit_remembered_reads @a2e433e7, cash/notebook/file_tracker.py:_credit_read_to_stack @a47279d7 -->
+<!-- claim: cash/core.py:Cash._credit_remembered_reads @f2df187b, cash/notebook/file_tracker.py:_credit_read_to_stack @a47279d7 -->
 A read your code **memoises** counts for every call that uses it. With
 `parse = functools.lru_cache()(parse_csv)` — or a module-level dict of parsed
 files — only the first cached function to call `parse(path)` actually opens
@@ -493,7 +493,7 @@ TAX_RATE = 0.5
 net(100)          # 50.0 — recomputed, not the stale 80.0
 ```
 
-<!-- claim: cash/core.py:Cash._fold_read_globals @60850329, cash/core.py:Cash._fold_dependency_read_globals @fbbbd0b2 -->
+<!-- claim: cash/core.py:Cash._fold_read_globals @eef8d90d, cash/core.py:Cash._fold_dependency_read_globals @29b6151a -->
 Only globals that are **read** participate — and that includes globals read
 on someone else's behalf: by a **helper**, so a helper returning a module-level
 `CONFIG` invalidates its caller when that config changes, and by another
@@ -524,7 +524,7 @@ normally.
 The same rule applies to variables a closure captures, not just module
 globals.
 
-<!-- claim: cash/core.py:Cash._carried_global_hash @c44af544 -->
+<!-- claim: cash/core.py:Cash._carried_global_hash @bf87b143 -->
 **A callable built from data counts as that data.** A global that is a
 library callable carrying values — `SMOOTH = partial(ndimage.gaussian_filter,
 sigma=SIGMA)`, `POLY = np.poly1d(COEFFS)`, `CAL = interp1d(X, Y)`,
@@ -633,7 +633,7 @@ def build(schema):
 build(Schema)                    # edit Schema, call again -> used to return the old answer
 ```
 
-<!-- claim: cash/core.py:Cash._fold_code_args @0ffbe91f, cash/core.py:Cash._iter_code_carriers @92eb245c -->
+<!-- claim: cash/core.py:Cash._fold_code_args @db74fec4, cash/core.py:Cash._iter_code_carriers @ef2a0021 -->
 Your code reached through the arguments now folds into `state_hash`, so editing
 it invalidates. cash finds it in a class, a function, an instance (through its
 class), any of those nested in a list/tuple/set/dict, and an instance whose
@@ -723,7 +723,7 @@ flowchart TD
     F -->|Yes| G[Return cached value]
 ```
 
-<!-- claim: cash/core.py:Cash._compute_cache_key @a3272962, cash/core.py:Cash._fold_code_args @0ffbe91f -->
+<!-- claim: cash/core.py:Cash._compute_cache_key @a3272962, cash/core.py:Cash._fold_code_args @db74fec4 -->
 The cache key is `f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"`.
 
 - `state_hash` folds in the function's own source hash + every
@@ -781,7 +781,7 @@ parameters below. And when a miss (or a suspicious hit) mystifies you,
 For the cases the automatic model above can't see — plus
 expiry, opt-outs, and the purity gates. All keyword-only and optional.
 
-<!-- claim: cash/core.py:Cash.cache @dfdf76ac -->
+<!-- claim: cash/core.py:Cash.cache @11310b71 -->
 | Param | What it does |
 |---|---|
 | `depends_on=` | List of `Callable` or `DataSource` that contributes to the cache key |
@@ -832,7 +832,7 @@ After the TTL elapses, the next call recomputes and replaces the entry.
 Entries whose calls never come back stay on disk until you reclaim them —
 call `cash.cleanup()`, or run `python -m cash clear` from the CLI.
 
-<!-- claim: cash/core.py:Cash._entry_ttl @3cf07e88, cash/core.py:Cash._absent_entry_reason @977d0aa9 -->
+<!-- claim: cash/core.py:Cash._entry_ttl @4df547f6, cash/core.py:Cash._absent_entry_reason @6316cce8 -->
 An entry remembers the `ttl` it was written with, and the decorator's
 current `ttl` applies too, so the **shorter** of the two wins. Lengthening
 `ttl=60` to `ttl=3600` does not rescue entries already written under 60 s:
@@ -919,7 +919,7 @@ def load_user(user_id):
     return json.load(open(f"/data/users/{user_id}.json"))
 ```
 
-<!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies @8ba1651b -->
+<!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies @c065234b -->
 The resolver runs with the same `args/kwargs` as the function on every call.
 
 !!! warning "A resolver exception is only *sometimes* survivable"
@@ -963,7 +963,7 @@ business invariants — its job is purely "should this be cached".
 result fits in a single chunk. For multi-chunk results, the predicate
 is bypassed (warning fires) — see the iterator section below.
 
-<!-- claim: cash/core.py:Cash._store_refusal @c3dac710 -->
+<!-- claim: cash/core.py:Cash._store_refusal @3815fd67 -->
 **It decides what is written, not what is served.** `cache_if` is not part of
 the key, so adding it to a function that already has entries changes nothing
 about those entries: a `None` stored before you added
@@ -973,7 +973,7 @@ adding or tightening a predicate, drop what was stored under the old rule with
 
 ### `strict=` and `assume_safe=` — purity gates
 
-<!-- claim: cash/core.py:Cash._surface_purity @f30def74, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/core.py:Cash._surface_purity @a4fc3aae, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 By default, `@cash.cache` runs a static analyzer on the function body
 (and module-bounded helpers) on first call. What it does depends on what it finds:
 
@@ -998,7 +998,7 @@ By default, `@cash.cache` runs a static analyzer on the function body
   `globals()[name]()` → a warning, and the function is **still cached**.
   Editing the callable such a table holds does not invalidate; name it with
   `depends_on=[...]` and it will. A **module-level** table (`HANDLERS[key]()`)
-  needs none of this — <!-- claim: cash/core.py:Cash._data_callable_identity_of @5ea6e8a7 -->cash hashes it as a global already, and each function
+  needs none of this — <!-- claim: cash/core.py:Cash._data_callable_identity_of @b50af9c2 -->cash hashes it as a global already, and each function
   in it counts as what calling it runs: its source, the helpers it calls, and
   for a `@cash.cache` function its whole dependency state, so an edit to a
   step's helper, or to a cached step's own body, recomputes the function that
@@ -1049,7 +1049,7 @@ callables.
 
 ### `allow_random=` — unseeded randomness
 
-<!-- claim: cash/core.py:Cash._warn_unseeded_randomness @b0a31134 -->
+<!-- claim: cash/core.py:Cash._warn_unseeded_randomness @2ddb43ca -->
 At decoration time, `@cash.cache` scans the function's source for draws
 from an unseeded RNG and emits a one-shot `CashRandomnessWarning`:
 
@@ -1130,7 +1130,7 @@ for line in read_lines("huge.log"):
 # Second run: chunks are read lazily from disk; RAM bounded by chunk size.
 ```
 
-<!-- claim: cash/core.py:_ChunkedCachedIterator @a8386fff broad="the claim is about the replay iterator's whole supported protocol" -->
+<!-- claim: cash/core.py:_ChunkedCachedIterator @db978956 broad="the claim is about the replay iterator's whole supported protocol" -->
 The cached iterator supports `iter()`, `__next__`, `close()`. Generator
 methods `.send()` and `.throw()` are not supported — call them and you
 get an `AttributeError` reminding you the iterator is a replay.
@@ -1185,7 +1185,7 @@ f.cache_info()
 #  'warnings': []}
 ```
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_info @5ecbb192 -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_info @4765fb6e -->
 Keys:
 
 - **`hits`**, **`misses`**, **`hit_rate`** — counters since the wrapper
@@ -1225,14 +1225,14 @@ Keys:
 
 ### `func.cache_clear()`
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_clear @af0faafb -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_clear @4ef05293 -->
 Wipe backend entries whose key starts with this function's name. Also
 resets stats, drops the warnings log, and forgets the `_warn_once`
 dedup marks (so the next misbehavior re-warns instead of being silent).
 
 ### `func.explain(*args, **kwargs)`
 
-<!-- claim: cash/core.py:Cash._explain_call @69e9c98d -->
+<!-- claim: cash/core.py:Cash._explain_call @53d8e7d6 -->
 Pure introspection — returns a `CacheExplanation` describing whether
 the next call with these args would hit or miss the cache, and why:
 
@@ -1286,7 +1286,7 @@ bypass caching entirely.
 
 ## Passing large objects between cached functions
 
-<!-- claim: cash/core.py:Cash._frame_signature @5a1b17a7, cash/core.py:Cash._frame_memo_store @99f98c8a -->
+<!-- claim: cash/core.py:Cash._frame_signature @28a3f549, cash/core.py:Cash._frame_memo_store @99f98c8a -->
 An argument is keyed by what it holds **at the time of the call**, so a result
 you mutate in place and pass on is keyed by its new contents:
 
@@ -1339,7 +1339,7 @@ When the object comes from another cached function and nothing modifies it
 afterwards — a trained model, a lookup table, a feature matrix — say so on the
 function that makes it:
 
-<!-- claim: cash/core.py:Cash._audit_frozen @b081f1b5, cash/core.py:Cash._frozen_array_hash @5352bc8e -->
+<!-- claim: cash/core.py:Cash._audit_frozen @be3add82, cash/core.py:Cash._frozen_array_hash @5352bc8e -->
 ```python
 @cash.cache(frozen=True)
 def train(data):
@@ -1350,7 +1350,7 @@ def score(model, batch):            # keys `model` by train()'s identity:
     return model.predict(batch)     # no hash per call, same key in every process
 ```
 
-<!-- claim: cash/core.py:Cash._remember_frozen_container @b292fc7e, cash/core.py:Cash._warn_frozen_has_no_effect @a4865188 -->
+<!-- claim: cash/core.py:Cash._remember_frozen_container @b292fc7e, cash/core.py:Cash._warn_frozen_has_no_effect @f605e5d3 -->
 A cached function receiving a frozen result keys it by the call that produced
 it: microseconds, the same in every process, and it works for an object that
 cannot be pickled. That covers a numpy array, a pandas / polars / modin frame, a
@@ -1387,7 +1387,7 @@ frozen, so a call receiving one runs uncached
 
 ### When a cached function changes what it was given
 
-<!-- claim: cash/core.py:Cash._argument_identities @a5383878, cash/_plain_data.py:identity_changed @7f213b41 -->
+<!-- claim: cash/core.py:Cash._argument_identities @4f205dbb, cash/_plain_data.py:identity_changed @81cc40e5 -->
 A call that sorts, appends to or rewrites an argument in place makes a change
 the caller sees — and a hit would not make it. Cash checks for that after each
 miss, and a call it catches is not stored: it runs every time, as it would
@@ -1438,7 +1438,7 @@ keyed by path, it was 18× faster.
 
 ### Cheap results are written too
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @22fb5bae -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @60151d9b -->
 A decorated result goes to disk whatever it cost to produce. A millisecond
 aggregate over rows another call already parsed is written like anything else,
 because a new process would have to parse that file again to recompute it, and
@@ -1576,7 +1576,7 @@ A `requests.get` is not a file read, and is never checked.
 
 ### A function returning a matplotlib `Figure` is never cached
 
-<!-- claim: cash/core.py:Cash._refuses_identity_coupled @27e72e7a -->
+<!-- claim: cash/core.py:Cash._refuses_identity_coupled @4a7abbf6 -->
 `@cash.cache` refuses to store a result that is — or contains — a matplotlib
 `Figure` or `Axes`, and warns once saying so.
 
@@ -1614,7 +1614,7 @@ exhaust). For very large finite iterators, tune `chunk_max_items=` /
 
 ### `cache_clear()` clears more than you'd expect on iterators
 
-<!-- claim: cash/core.py:Cash._delete_backend_entries @6f7d8f2e -->
+<!-- claim: cash/core.py:Cash._delete_backend_entries @8ecb341e -->
 For chunked iterator caches, `cache_clear()` removes the manifest entry
 but the individual chunk entries (keyed
 `f"{cache_key}:chunk_{i}"`) are also caught by the

@@ -8,8 +8,7 @@ from cash.notebook.cache_status import CacheStatus
 
 
 def test_cached_summary_header() -> None:
-    metrics = [{"code": "x=1", "status": str(CacheStatus.RESTORED),
-                "total_time": 0.01, "saved_time": 0.5}]
+    metrics = [{"code": "x=1", "status": str(CacheStatus.RESTORED), "total_time": 0.01, "saved_time": 0.5}]
     text = render_text(build_interactive_badge(metrics))
     assert text.startswith("[Cash]")
     # The header and the row under it use the SAME word for the same state.
@@ -28,17 +27,23 @@ def test_restored_row_saved_is_avoided_compute_not_restore_time() -> None:
     restore of a statement whose true saving was 0.44s read as "saved 0.02s".
     total_time and saved_time are made distinct here to catch that regression.
     """
-    metrics = [{"code": "df = make_frame()", "status": str(CacheStatus.RESTORED),
-                "total_time": 0.02, "saved_time": 0.44}]
+    metrics = [
+        {"code": "df = make_frame()", "status": str(CacheStatus.RESTORED), "total_time": 0.02, "saved_time": 0.44}
+    ]
     text = render_text(build_interactive_badge(metrics))
-    assert "saved 0.44s" in text            # header AND the statement row
-    assert "saved 0.02s" not in text        # the restore time is never "saved"
+    assert "saved 0.44s" in text  # header AND the statement row
+    assert "saved 0.02s" not in text  # the restore time is never "saved"
 
 
 def test_upstream_section_label_and_indent() -> None:
     metrics = [
-        {"code": "setup()", "status": str(CacheStatus.RESTORED), "is_upstream": True,
-         "total_time": 0.01, "saved_time": 0.5},
+        {
+            "code": "setup()",
+            "status": str(CacheStatus.RESTORED),
+            "is_upstream": True,
+            "total_time": 0.01,
+            "saved_time": 0.5,
+        },
         {"code": "compute()", "status": str(CacheStatus.COMPUTED), "total_time": 0.3},
     ]
     text = render_text(build_interactive_badge(metrics))
@@ -52,10 +57,13 @@ def test_upstream_section_label_and_indent() -> None:
 
 
 def test_iteration_context_stripped() -> None:
-    metrics = [{
-        "code": "# __iteration_context__: deadbeef\nprocess(x)",
-        "status": str(CacheStatus.COMPUTED), "total_time": 0.1,
-    }]
+    metrics = [
+        {
+            "code": "# __iteration_context__: deadbeef\nprocess(x)",
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 0.1,
+        }
+    ]
     text = render_text(build_interactive_badge(metrics))
     assert "process(x)" in text
     assert "deadbeef" not in text
@@ -63,13 +71,17 @@ def test_iteration_context_stripped() -> None:
 
 
 def test_decorator_summary_section() -> None:
-    metrics = [{
-        "code": "f()", "status": str(CacheStatus.COMPUTED), "total_time": 0.1,
-        "decorator_calls": [
-            {"func_name": "myf", "cache_hit": True, "execution_time": 0.001},
-            {"func_name": "myf", "cache_hit": False, "execution_time": 0.05},
-        ],
-    }]
+    metrics = [
+        {
+            "code": "f()",
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 0.1,
+            "decorator_calls": [
+                {"func_name": "myf", "cache_hit": True, "execution_time": 0.001},
+                {"func_name": "myf", "cache_hit": False, "execution_time": 0.05},
+            ],
+        }
+    ]
     text = render_text(build_interactive_badge(metrics))
     assert "@cash.cache:" in text
     assert "myf(): 1/2 cached" in text
@@ -91,19 +103,21 @@ def test_text_badge_is_ascii_across_every_status():
 
     metrics = []
     for i, status in enumerate(BadgeStatus):
-        metrics.append({
-            "code": f"stmt_{i}()",
-            "status": str(status.value),
-            "total_time": 0.25,
-            "time_saved": 0.5,
-            "storage_tiers": ["RAM", "DISK"],
-        })
+        metrics.append(
+            {
+                "code": f"stmt_{i}()",
+                "status": str(status.value),
+                "total_time": 0.25,
+                "time_saved": 0.5,
+                "storage_tiers": ["RAM", "DISK"],
+            }
+        )
     text = render_text(build_interactive_badge(metrics))
     assert text, "expected badge output"
     try:
         text.encode("cp1252")
     except UnicodeEncodeError as exc:
-        bad = text[exc.start:exc.end]
+        bad = text[exc.start : exc.end]
         raise AssertionError(
             f"text badge emitted {bad!r} (U+{ord(bad[0]):04X}), which crashes a "
             f"cp1252 reader. The text renderer must stay ASCII -- put the glyph "
@@ -119,12 +133,14 @@ def test_a_multiline_statement_stays_one_line_in_the_text_badge() -> None:
     form on purpose; `_agent_guide.py` reproduces this shape verbatim and
     `test_agent_guide_sync` pins it.
     """
-    metrics = [{
-        "code": "x = a + 1",
-        "display_code": "x = (\n    a\n    + 1\n)",
-        "status": str(CacheStatus.COMPUTED),
-        "total_time": 0.5,
-    }]
+    metrics = [
+        {
+            "code": "x = a + 1",
+            "display_code": "x = (\n    a\n    + 1\n)",
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 0.5,
+        }
+    ]
     text = render_text(build_interactive_badge(metrics))
     body = [ln for ln in text.splitlines() if "x = " in ln]
     assert len(body) == 1, f"expected one statement line, got {body}"

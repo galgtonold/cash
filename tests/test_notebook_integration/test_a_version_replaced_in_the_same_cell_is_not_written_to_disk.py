@@ -7,6 +7,7 @@ pickled to disk as it was made -- 3.8 s of a cold run -- though the next
 statement replaced it and nothing restores it: the end-of-cell pass writes
 the cell's final version for the cells below.
 """
+
 from pathlib import Path
 
 import pytest

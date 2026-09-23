@@ -22,6 +22,7 @@ Correctness containment (a downstream cell that does not depend on the broken
 cell still RESTORES from cache) is proven end-to-end against a real kernel in
 ``tests/test_notebook_integration/test_cas173_upstream_syntax_error.py``.
 """
+
 from __future__ import annotations
 
 import json

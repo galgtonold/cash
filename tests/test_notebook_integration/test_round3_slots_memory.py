@@ -1,5 +1,7 @@
 """Batch 75: __slots__, memory optimization & class patterns — cash caching."""
+
 import textwrap
+
 import pytest
 
 
@@ -9,8 +11,9 @@ class TestSlotsPatterns:
 
     def test_slots_class(self, nb_runner):
         """Class with __slots__ across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class Point:
                     __slots__ = ('x', 'y')
                     def __init__(self, x, y):
@@ -24,12 +27,13 @@ class TestSlotsPatterns:
                 has_dict = hasattr(p, '__dict__')
                 print(f"has_dict={has_dict}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 import math
                 dist = math.sqrt(p.x ** 2 + p.y ** 2)
                 print(f"distance={dist}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "point=Point(3, 4)" in nb_runner.get_output(1)
@@ -38,8 +42,9 @@ class TestSlotsPatterns:
 
     def test_slots_inheritance(self, nb_runner):
         """Slots with inheritance across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class Base:
                     __slots__ = ('x',)
                     def __init__(self, x):
@@ -56,11 +61,12 @@ class TestSlotsPatterns:
                 d = Derived(10, 20)
                 print(f"derived={d}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 total = d.x + d.y
                 print(f"total={total}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "derived=D(10, 20)" in nb_runner.get_output(1)
@@ -68,8 +74,9 @@ class TestSlotsPatterns:
 
     def test_slots_many_instances(self, nb_runner):
         """Many slotted instances across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class Record:
                     __slots__ = ('id', 'value')
                     def __init__(self, id, value):
@@ -79,13 +86,14 @@ class TestSlotsPatterns:
                 records = [Record(i, i * 10) for i in range(1000)]
                 print(f"created={len(records)}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 total = sum(r.value for r in records)
                 print(f"total={total}")
                 first5 = [(r.id, r.value) for r in records[:5]]
                 print(f"first5={first5}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "created=1000" in nb_runner.get_output(1)
@@ -100,8 +108,9 @@ class TestMemoryOptimization:
 
     def test_intern_strings(self, nb_runner):
         """sys.intern for string optimization across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 import sys
 
                 # Create interned strings
@@ -109,12 +118,13 @@ class TestMemoryOptimization:
                 unique = set(categories)
                 print(f"total={len(categories)} unique={len(unique)}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 from collections import Counter
                 counts = Counter(categories)
                 print(f"counts={dict(sorted(counts.items()))}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total=100 unique=5" in nb_runner.get_output(1)
@@ -124,11 +134,12 @@ class TestMemoryOptimization:
 
     def test_slots_change_propagation(self, nb_runner):
         """Slots class — value extraction propagates changes."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 multiplier = 2
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 class Config:
                     __slots__ = ('debug', 'level')
                     def __init__(self, debug, level):
@@ -139,13 +150,17 @@ class TestMemoryOptimization:
                 level_val = cfg.level
                 print(f"level={level_val}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "level=20" in nb_runner.get_output(2)
 
-        nb_runner.set_cell_source(1, textwrap.dedent("""\
+        nb_runner.set_cell_source(
+            1,
+            textwrap.dedent("""\
             multiplier = 5
-        """))
+        """),
+        )
         nb_runner.run_cells([1, 2])
         assert "level=50" in nb_runner.get_output(2)

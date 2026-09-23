@@ -4,6 +4,7 @@
 It has to be a real file on disk: the writer analysis reads the callee's
 source with ``inspect``, so a synthesised module object would not do.
 """
+
 from __future__ import annotations
 
 import json

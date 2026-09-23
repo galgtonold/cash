@@ -11,11 +11,11 @@ in-process history reads it: the same key stored before is "ttl expired" or
 Every step is a fresh process on one cache; the child prints its
 `cache_info()["miss_reasons"]`.
 """
+
 from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import sys
 import textwrap
@@ -25,7 +25,7 @@ import pytest
 
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
 
-JOB = textwrap.dedent('''
+JOB = textwrap.dedent("""
     import json, sys, time
     import cash
 
@@ -41,7 +41,7 @@ JOB = textwrap.dedent('''
     f(arg)
     print(json.dumps({{"reasons": f.cache_info()["miss_reasons"],
                        "explain": explanation.details.get("why", explanation.reason)}}))
-''')
+""")
 
 
 def _write(proj, factor=2, ttl=None):
@@ -51,8 +51,9 @@ def _write(proj, factor=2, ttl=None):
 def _run(proj, arg=1):
     env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
     env.update(PYTHONDONTWRITEBYTECODE="1", CASH_CACHE_DIR=str(proj / ".cash"))
-    p = subprocess.run([sys.executable, "job.py", str(arg)], cwd=str(proj), env=env,
-                       capture_output=True, text=True, timeout=120)
+    p = subprocess.run(
+        [sys.executable, "job.py", str(arg)], cwd=str(proj), env=env, capture_output=True, text=True, timeout=120
+    )
     assert p.returncode == 0, p.stderr[-2000:]
     return json.loads(p.stdout.strip().splitlines()[-1])
 

@@ -5,12 +5,17 @@ The notebook calls this at the end of a cell with a value's whole rebuild
 cost -- its statement and the entries not on disk it came through -- where
 ``set`` could only see the statement's own compute time.
 """
+
 from cash.backends import FileBackend, InMemoryBackend
 from cash.backends.tiered_backend import TieredBackend
 
 # A notebook value: it carries a cost-model family, as the statement processor writes it.
-NOTEBOOK = {"execution_time": 0.02, "cost_model_family": "_GENERIC",
-            "cost_model_type_name": "int", "cost_model_size_bytes": 28}
+NOTEBOOK = {
+    "execution_time": 0.02,
+    "cost_model_family": "_GENERIC",
+    "cost_model_type_name": "int",
+    "cost_model_size_bytes": 28,
+}
 
 
 def _tiered(tmp_path):

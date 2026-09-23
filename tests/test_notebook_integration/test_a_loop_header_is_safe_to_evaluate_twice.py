@@ -18,6 +18,7 @@ only at the header's RESULT, and `sorted` returns a list.
 
 The unit twin is ``tests/test_notebook/test_a_loop_header_is_safe_to_evaluate_twice.py``.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
@@ -46,8 +47,7 @@ print("iterations=" + str(len(share)))
 
 def test_a_loop_bounded_by_len_runs_as_one_unit(nb_runner):
     """r27s3's cell. Structural, not timed: which path did it take?"""
-    nb_runner.create_notebook(["import cash\n%cash_on\n%cash_badge print",
-                               SETUP, LOOP])
+    nb_runner.create_notebook(["import cash\n%cash_on\n%cash_badge print", SETUP, LOOP])
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -62,12 +62,13 @@ def test_a_loop_bounded_by_len_runs_as_one_unit(nb_runner):
 @pytest.mark.parametrize("wrapper", ["sorted", "list"])
 def test_a_generator_inside_the_header_is_not_drained_twice(nb_runner, wrapper):
     """The wrong answer, and the reason the fix is not just 'add len'."""
-    nb_runner.create_notebook([
-        "import cash\n%cash_on\n%cash_badge print",
-        "g = (i for i in range(400))",
-        "OUT = []\nfor x in " + wrapper + "(g):\n    OUT.append(x * 2)\n"
-        "print('N', len(OUT))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import cash\n%cash_on\n%cash_badge print",
+            "g = (i for i in range(400))",
+            "OUT = []\nfor x in " + wrapper + "(g):\n    OUT.append(x * 2)\nprint('N', len(OUT))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 

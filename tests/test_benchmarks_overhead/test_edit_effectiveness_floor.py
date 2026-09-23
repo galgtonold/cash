@@ -34,6 +34,7 @@ Design notes, both deliberate:
   ``Cash``, which is what re-running a cell in a live kernel gets you. It is
   the faithful shape for an edit-and-rerun test.
 """
+
 from __future__ import annotations
 
 import json
@@ -83,19 +84,16 @@ def _write_chain_notebook(path: Path) -> None:
     cells = ["import math"]
     previous = "0.0"
     for i, function in enumerate(functions):
-        cells.append(
-            f"s{i} = sum(math.{function}(i) for i in range(1_500_000)) + {previous}")
+        cells.append(f"s{i} = sum(math.{function}(i) for i in range(1_500_000)) + {previous}")
         previous = f"s{i}"
     cells.append(f"total = {previous}")
     cells.append("print(f'{total:.3f}')")
     nb = {
         "cells": [
-            {"cell_type": "code", "execution_count": None, "metadata": {},
-             "outputs": [], "source": src}
+            {"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [], "source": src}
             for src in cells
         ],
-        "metadata": {"kernelspec": {"name": "python3",
-                                    "display_name": "Python 3"}},
+        "metadata": {"kernelspec": {"name": "python3", "display_name": "Python 3"}},
         "nbformat": 4,
         "nbformat_minor": 5,
     }
@@ -113,8 +111,11 @@ def edit_report(tmp_path_factory):
     nb = tmp_path / "chain.ipynb"
     _write_chain_notebook(nb)
     return run_notebook_edit_benchmark(
-        nb, tmp_path / "work",
-        max_sites=2, session_mode="live", log=lambda *a, **k: None,
+        nb,
+        tmp_path / "work",
+        max_sites=2,
+        session_mode="live",
+        log=lambda *a, **k: None,
     )
 
 

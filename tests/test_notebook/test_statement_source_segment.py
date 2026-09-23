@@ -18,6 +18,7 @@ the unparsed form, same as before. See that function's docstring (in
 ``cell_executor.py``, not this test module) for the def/class case, which
 this file does not cover.
 """
+
 from __future__ import annotations
 
 import ast
@@ -27,11 +28,11 @@ from cash.notebook.ipython.cell_executor import _statement_source
 
 def test_a_top_level_statement_comes_back_verbatim():
     cell = (
-        'category_stats = (\n'
-        '    transactions\n'
+        "category_stats = (\n"
+        "    transactions\n"
         '    .groupby("category")\n'
         '    .sort_values("total_spend", ascending=False)\n'
-        ')\n'
+        ")\n"
     )
     node = ast.parse(cell).body[0]
     assert _statement_source(cell, node) == cell.rstrip("\n")
@@ -44,24 +45,13 @@ def test_a_nested_statement_is_dedented_relative_to_itself():
     ``textwrap.dedent`` cannot fix it: the first line shares no common prefix
     with the others.
     """
-    cell = (
-        'for k in keys:\n'
-        '    total = (\n'
-        '        df[df.k == k]\n'
-        '        .amount.sum()\n'
-        '    )\n'
-    )
+    cell = "for k in keys:\n    total = (\n        df[df.k == k]\n        .amount.sum()\n    )\n"
     inner = ast.parse(cell).body[0].body[0]
 
     raw = ast.get_source_segment(cell, inner)
     assert raw.splitlines()[1].startswith("        "), "premise: raw is ragged"
 
-    assert _statement_source(cell, inner) == (
-        'total = (\n'
-        '    df[df.k == k]\n'
-        '    .amount.sum()\n'
-        ')'
-    )
+    assert _statement_source(cell, inner) == ("total = (\n    df[df.k == k]\n    .amount.sum()\n)")
 
 
 def test_a_single_line_statement_is_unchanged():
@@ -127,13 +117,7 @@ def test_a_top_level_match_statement_is_captured_verbatim():
     so its full source IS "the code that ran". It must NOT be excluded the
     way def/class are.
     """
-    cell = (
-        'match command:\n'
-        '    case "go":\n'
-        '        result = 1\n'
-        '    case _:\n'
-        '        result = 0\n'
-    )
+    cell = 'match command:\n    case "go":\n        result = 1\n    case _:\n        result = 0\n'
     node = ast.parse(cell).body[0]
     assert _statement_source(cell, node) == cell.rstrip("\n")
 
@@ -189,12 +173,8 @@ def test_the_fast_path_agrees_with_get_source_segment_for_every_parser_incompati
     Built with chr() rather than escape literals so the exact code points
     are unambiguous on the page.
     """
-    offenders = "".join(
-        chr(c) for c in (0x0B, 0x0C, 0x1C, 0x1D, 0x1E, 0x85, 0x2028, 0x2029)
-    )
-    cell = "\n".join(
-        f"x{i} = 'A{ch}B'" for i, ch in enumerate(offenders)
-    ) + "\n"
+    offenders = "".join(chr(c) for c in (0x0B, 0x0C, 0x1C, 0x1D, 0x1E, 0x85, 0x2028, 0x2029))
+    cell = "\n".join(f"x{i} = 'A{ch}B'" for i, ch in enumerate(offenders)) + "\n"
     tree = ast.parse(cell)
     assert len(tree.body) == len(offenders), "premise: one statement per offender"
     for node in tree.body:

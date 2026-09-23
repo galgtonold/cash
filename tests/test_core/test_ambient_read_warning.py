@@ -17,6 +17,7 @@ there.
 Not routed through the unseeded-randomness detector, whose whole mechanism is a
 seed ledger: no ``seed()`` makes ``datetime.now()`` reproducible.
 """
+
 from __future__ import annotations
 
 import warnings
@@ -48,10 +49,12 @@ def _kinds(fn) -> list[str]:
 
 # --- the reads themselves -------------------------------------------------
 
+
 def _clock(c):
     @c.cache
     def stamp():
         return datetime.now().year
+
     return stamp
 
 
@@ -59,6 +62,7 @@ def _today(c):
     @c.cache
     def stamp():
         return date.today().year
+
     return stamp
 
 
@@ -68,6 +72,7 @@ def _env_subscript(c):
     @c.cache
     def which_tenant():
         return os.environ["PATH"][:1]
+
     return which_tenant
 
 
@@ -77,6 +82,7 @@ def _env_getenv(c):
     @c.cache
     def which_tenant():
         return os.getenv("PATH", "")[:1]
+
     return which_tenant
 
 
@@ -86,6 +92,7 @@ def _cwd(c):
     @c.cache
     def where():
         return len(os.getcwd())
+
     return where
 
 
@@ -95,6 +102,7 @@ def _fresh_uuid(c):
     @c.cache
     def ident():
         return str(uuid.uuid4())
+
     return ident
 
 
@@ -104,13 +112,23 @@ def _wall_clock(c):
     @c.cache
     def t():
         return int(time.time())
+
     return t
 
 
-@pytest.mark.parametrize("factory", [
-    _clock, _today, _env_subscript, _env_getenv, _cwd, _fresh_uuid, _wall_clock,
-], ids=["datetime.now", "date.today", "os.environ[]", "os.getenv",
-        "os.getcwd", "uuid4", "time.time"])
+@pytest.mark.parametrize(
+    "factory",
+    [
+        _clock,
+        _today,
+        _env_subscript,
+        _env_getenv,
+        _cwd,
+        _fresh_uuid,
+        _wall_clock,
+    ],
+    ids=["datetime.now", "date.today", "os.environ[]", "os.getenv", "os.getcwd", "uuid4", "time.time"],
+)
 def test_each_ambient_read_is_announced(cash_instance, factory):
     got = _warnings_for(cash_instance, factory)
     assert got, "the ambient read was cached with no warning at all"
@@ -155,11 +173,13 @@ def test_the_frozen_value_is_what_the_warning_is_about(cash_instance, monkeypatc
 
 # --- controls -------------------------------------------------------------
 
+
 def test_a_pure_body_says_nothing(cash_instance):
     def factory(c):
         @c.cache
         def add():
             return 1 + 1
+
         return add
 
     assert _warnings_for(cash_instance, factory) == []
@@ -167,6 +187,7 @@ def test_a_pure_body_says_nothing(cash_instance):
 
 def test_a_method_named_now_on_the_users_own_object_is_not_this(cash_instance):
     """Matched dotted, always: `self.clock.now()` is not `datetime.now()`."""
+
     class Clock:
         def now(self):
             return 7
@@ -177,6 +198,7 @@ def test_a_method_named_now_on_the_users_own_object_is_not_this(cash_instance):
         @c.cache
         def read():
             return clock.now()
+
         return read
 
     text = "\n".join(str(w.message) for w in _warnings_for(cash_instance, factory))
@@ -185,10 +207,12 @@ def test_a_method_named_now_on_the_users_own_object_is_not_this(cash_instance):
 
 def test_an_argument_carrying_the_time_is_silent(cash_instance):
     """The fix the warning recommends must actually silence it."""
+
     def factory(c):
         @c.cache
         def report(as_of):
             return as_of.year
+
         return lambda: report(date.today())
 
     text = "\n".join(str(w.message) for w in _warnings_for(cash_instance, factory))
@@ -208,11 +232,13 @@ def test_writing_the_environment_is_not_an_ambient_read():
 
 # --- waivers --------------------------------------------------------------
 
+
 def test_assume_safe_flag_silences_it(cash_instance):
     def factory(c):
         @c.cache(assume_safe=True)
         def stamp():
             return datetime.now().year
+
         return stamp
 
     assert _warnings_for(cash_instance, factory) == []
@@ -220,8 +246,10 @@ def test_assume_safe_flag_silences_it(cash_instance):
 
 def test_strict_mode_raises_on_it(cash_instance):
     with pytest.raises(CashImpureFunctionError) as exc:
+
         @cash_instance.cache(strict=True)
         def stamp():
             return datetime.now().year
+
         stamp()
     assert "ambient" in str(exc.value).lower()

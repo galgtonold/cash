@@ -9,6 +9,7 @@ the fitted intercept to ~10 ms, which is the error the module documents.
 with every sample printed. A step that survives is a real cost; one that moves
 around is noise the fit should not be shaped by.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -22,16 +23,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from benchmarks._object_generators import estimate_in_memory_size, make_object  # noqa: E402
 
-CELLS = [("list_flat", 10_000), ("list_flat", 100_000), ("list_flat", 1_000_000),
-         ("dict_shallow", 10_000), ("dict_shallow", 100_000),
-         ("dataframe_numeric", 10_000), ("dataframe_numeric", 100_000)]
+CELLS = [
+    ("list_flat", 10_000),
+    ("list_flat", 100_000),
+    ("list_flat", 1_000_000),
+    ("dict_shallow", 10_000),
+    ("dict_shallow", 100_000),
+    ("dataframe_numeric", 10_000),
+    ("dataframe_numeric", 100_000),
+]
 
 
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--repeats", type=int, default=15)
-    p.add_argument("--cache-root", type=Path,
-                   default=Path("benchmarks/results/_spread_cache"))
+    p.add_argument("--cache-root", type=Path, default=Path("benchmarks/results/_spread_cache"))
     args = p.parse_args()
 
     from cash.backends.file_backend import FileBackend
@@ -50,10 +56,12 @@ def main() -> int:
             t0 = time.perf_counter()
             backend.get(key)
             samples.append((time.perf_counter() - t0) * 1000)
-        samples = samples[1:]                       # drop the warmup, as the matrix does
-        print(f"{family:>18} {size:>12,} {statistics.median(samples):>7.2f}ms "
-              f"{min(samples):>6.2f}ms {max(samples):>6.2f}ms  "
-              f"{' '.join(f'{s:.1f}' for s in samples[:12])}")
+        samples = samples[1:]  # drop the warmup, as the matrix does
+        print(
+            f"{family:>18} {size:>12,} {statistics.median(samples):>7.2f}ms "
+            f"{min(samples):>6.2f}ms {max(samples):>6.2f}ms  "
+            f"{' '.join(f'{s:.1f}' for s in samples[:12])}"
+        )
     return 0
 
 

@@ -10,6 +10,7 @@ then keyed alike -- a call on one file was served another file's result
 functions are therefore never tagged, and a tag is only ever read from the
 object's own ``__dict__``.
 """
+
 from __future__ import annotations
 
 import inspect

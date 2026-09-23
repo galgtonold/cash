@@ -34,6 +34,7 @@ Attack surface (each test = one distinct mechanism):
         queue.Queue drained in a later cell; isolated re-run of the drain
         cell should reprint the drained items (stateful-consumable channel).
 """
+
 import textwrap
 
 import pytest
@@ -45,40 +46,44 @@ pytestmark = [pytest.mark.timeout(90)]
 # 1. top-level await, self-modifying reassignment, isolated re-run
 # ---------------------------------------------------------------------------
 
+
 def test_toplevel_await_selfmod_isolated_rerun_idempotent(nb_runner):
-    nb_runner.create_notebook([
-        textwrap.dedent("""\
+    nb_runner.create_notebook(
+        [
+            textwrap.dedent("""\
             import asyncio
             x = 1
             async def bump(v):
                 await asyncio.sleep(0)
                 return v + 1
         """),
-        "x = await bump(x)\nprint(f'x={x}')",
-    ])
+            "x = await bump(x)\nprint(f'x={x}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "x=2" in nb_runner.get_output(2), f"first run: {nb_runner.get_output(2)!r}"
     nb_runner.run_cell(2)
-    assert "x=2" in nb_runner.get_output(2), (
-        f"isolated re-run not idempotent: {nb_runner.get_output(2)!r}"
-    )
+    assert "x=2" in nb_runner.get_output(2), f"isolated re-run not idempotent: {nb_runner.get_output(2)!r}"
 
 
 # ---------------------------------------------------------------------------
 # 2. top-level await result: cached at all?
 # ---------------------------------------------------------------------------
 
+
 def test_toplevel_await_cache_hit_second_run(nb_runner):
-    nb_runner.create_notebook([
-        "import asyncio",
-        textwrap.dedent("""\
+    nb_runner.create_notebook(
+        [
+            "import asyncio",
+            textwrap.dedent("""\
             async def compute():
                 await asyncio.sleep(0)
                 return sum(range(300000))
         """),
-        "result = await compute()\nprint(f'result={result}')",
-    ])
+            "result = await compute()\nprint(f'result={result}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_debug()
     nb_runner.enable_persist()
@@ -89,26 +94,27 @@ def test_toplevel_await_cache_hit_second_run(nb_runner):
     assert "result=44999850000" in nb_runner.get_output(3)
     raw = nb_runner.get_raw_output(3)
     has_cache = "CACHE_HIT" in raw or "Cache hit: True" in raw
-    assert has_cache, (
-        f"top-level-await cell shows no cache activity on identical 2nd run: {raw[:500]}"
-    )
+    assert has_cache, f"top-level-await cell shows no cache activity on identical 2nd run: {raw[:500]}"
 
 
 # ---------------------------------------------------------------------------
 # 3. editing the await cell invalidates downstream
 # ---------------------------------------------------------------------------
 
+
 def test_await_cell_edit_invalidates_downstream(nb_runner):
-    nb_runner.create_notebook([
-        "import asyncio",
-        textwrap.dedent("""\
+    nb_runner.create_notebook(
+        [
+            "import asyncio",
+            textwrap.dedent("""\
             async def compute(x):
                 await asyncio.sleep(0)
                 return x + 1
         """),
-        "result = await compute(10)",
-        "print(f'double={result * 2}')",
-    ])
+            "result = await compute(10)",
+            "print(f'double={result * 2}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "double=22" in nb_runner.get_output(4)
@@ -124,25 +130,31 @@ def test_await_cell_edit_invalidates_downstream(nb_runner):
 # 4. edit async def, then isolated re-run of ONLY the awaiting cell
 # ---------------------------------------------------------------------------
 
+
 def test_async_def_edit_then_isolated_rerun_of_await_cell(nb_runner):
-    nb_runner.create_notebook([
-        "import asyncio",
-        textwrap.dedent("""\
+    nb_runner.create_notebook(
+        [
+            "import asyncio",
+            textwrap.dedent("""\
             async def compute(x):
                 await asyncio.sleep(0)
                 return x + 1
         """),
-        "result = await compute(10)\nprint(f'result={result}')",
-    ])
+            "result = await compute(10)\nprint(f'result={result}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "result=11" in nb_runner.get_output(3)
 
-    nb_runner.set_cell_source(2, textwrap.dedent("""\
+    nb_runner.set_cell_source(
+        2,
+        textwrap.dedent("""\
         async def compute(x):
             await asyncio.sleep(0)
             return x + 100
-    """))
+    """),
+    )
     nb_runner.run_cell(3)
     assert "result=110" in nb_runner.get_output(3), (
         f"await cell used stale async def after upstream edit: {nb_runner.get_output(3)!r}"
@@ -153,48 +165,52 @@ def test_async_def_edit_then_isolated_rerun_of_await_cell(nb_runner):
 # 5. asyncio.run via thread bridge, self-modifying, isolated re-run
 # ---------------------------------------------------------------------------
 
+
 def test_asyncio_run_bridge_selfmod_rerun(nb_runner):
-    nb_runner.create_notebook([
-        textwrap.dedent("""\
+    nb_runner.create_notebook(
+        [
+            textwrap.dedent("""\
             import asyncio
             from concurrent.futures import ThreadPoolExecutor
             total = 5
             async def add_ten(v):
                 return v + 10
         """),
-        textwrap.dedent("""\
+            textwrap.dedent("""\
             with ThreadPoolExecutor(max_workers=1) as _ex:
                 total = _ex.submit(asyncio.run, add_ten(total)).result()
             print(f'total={total}')
         """),
-    ])
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "total=15" in nb_runner.get_output(2), f"first run: {nb_runner.get_output(2)!r}"
     nb_runner.run_cell(2)
-    assert "total=15" in nb_runner.get_output(2), (
-        f"isolated re-run not idempotent: {nb_runner.get_output(2)!r}"
-    )
+    assert "total=15" in nb_runner.get_output(2), f"isolated re-run not idempotent: {nb_runner.get_output(2)!r}"
 
 
 # ---------------------------------------------------------------------------
 # 6. ThreadPoolExecutor.map: cache hit + unrelated-edit stability
 # ---------------------------------------------------------------------------
 
+
 def test_threadpool_map_cache_hit_and_unrelated_edit(nb_runner):
-    nb_runner.create_notebook([
-        textwrap.dedent("""\
+    nb_runner.create_notebook(
+        [
+            textwrap.dedent("""\
             from concurrent.futures import ThreadPoolExecutor
             def sq(x):
                 return x * x
         """),
-        textwrap.dedent("""\
+            textwrap.dedent("""\
             with ThreadPoolExecutor(max_workers=4) as ex:
                 total = sum(ex.map(sq, range(100)))
             print(f'total={total}')
         """),
-        "z = 1",
-    ])
+            "z = 1",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_debug()
     nb_runner.enable_persist()
@@ -206,38 +222,37 @@ def test_threadpool_map_cache_hit_and_unrelated_edit(nb_runner):
     assert "total=328350" in nb_runner.get_output(2)
     raw = nb_runner.get_raw_output(2)
     has_cache = "CACHE_HIT" in raw or "Cache hit: True" in raw
-    assert has_cache, (
-        f"executor cell shows no cache activity on identical 2nd run: {raw[:500]}"
-    )
+    assert has_cache, f"executor cell shows no cache activity on identical 2nd run: {raw[:500]}"
 
     # unrelated edit must not invalidate the pool cell
     nb_runner.set_cell_source(3, "z = 2")
     nb_runner.run_all()
     assert "total=328350" in nb_runner.get_output(2)
     raw = nb_runner.get_raw_output(2)
-    assert "[CELL_CHANGED]" not in raw, (
-        f"unrelated edit marked executor cell as changed: {raw[:500]}"
-    )
+    assert "[CELL_CHANGED]" not in raw, f"unrelated edit marked executor cell as changed: {raw[:500]}"
 
 
 # ---------------------------------------------------------------------------
 # 7. self-modifying accumulator through executor map, isolated re-run
 # ---------------------------------------------------------------------------
 
+
 def test_threadpool_selfmod_accumulator_isolated_rerun(nb_runner):
-    nb_runner.create_notebook([
-        textwrap.dedent("""\
+    nb_runner.create_notebook(
+        [
+            textwrap.dedent("""\
             from concurrent.futures import ThreadPoolExecutor
             def sq(x):
                 return x * x
             acc = 0
         """),
-        textwrap.dedent("""\
+            textwrap.dedent("""\
             with ThreadPoolExecutor(max_workers=2) as ex:
                 acc = acc + sum(ex.map(sq, range(5)))
             print(f'acc={acc}')
         """),
-    ])
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "acc=30" in nb_runner.get_output(2), f"first run: {nb_runner.get_output(2)!r}"
@@ -251,9 +266,11 @@ def test_threadpool_selfmod_accumulator_isolated_rerun(nb_runner):
 # 8. background thread mutates a global list only when a LATER cell fires it
 # ---------------------------------------------------------------------------
 
+
 def test_background_thread_event_gated_list_isolated_rerun(nb_runner):
-    nb_runner.create_notebook([
-        textwrap.dedent("""\
+    nb_runner.create_notebook(
+        [
+            textwrap.dedent("""\
             import threading
             data = []
             ev = threading.Event()
@@ -263,9 +280,10 @@ def test_background_thread_event_gated_list_isolated_rerun(nb_runner):
             t = threading.Thread(target=worker, daemon=True)
             t.start()
         """),
-        "snap = len(data)\nprint(f'snap={snap}')",
-        "ev.set()\nt.join()\nprint(f'n={len(data)}')",
-    ])
+            "snap = len(data)\nprint(f'snap={snap}')",
+            "ev.set()\nt.join()\nprint(f'n={len(data)}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "snap=0" in nb_runner.get_output(2), f"first run: {nb_runner.get_output(2)!r}"
@@ -296,19 +314,22 @@ def test_background_thread_event_gated_list_isolated_rerun(nb_runner):
 # 9. threading.Lock crossing cells + restart under persist
 # ---------------------------------------------------------------------------
 
+
 def test_lock_unpicklable_restart_persist_graceful(nb_runner):
-    nb_runner.create_notebook([
-        textwrap.dedent("""\
+    nb_runner.create_notebook(
+        [
+            textwrap.dedent("""\
             import threading
             lock = threading.Lock()
             base = sum(range(100000))
         """),
-        textwrap.dedent("""\
+            textwrap.dedent("""\
             with lock:
                 val = base % 97
             print(f'val={val}')
         """),
-    ])
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_persist()
     nb_runner.run_all()
@@ -320,9 +341,7 @@ def test_lock_unpicklable_restart_persist_graceful(nb_runner):
     nb_runner.start_kernel()
     nb_runner.enable_persist()
     nb_runner.run_all()
-    assert "val=28" in nb_runner.get_output(2), (
-        f"wrong value after restart: {nb_runner.get_output(2)!r}"
-    )
+    assert "val=28" in nb_runner.get_output(2), f"wrong value after restart: {nb_runner.get_output(2)!r}"
     assert "Traceback" not in nb_runner.get_output(1), (
         f"restore of unpicklable lock crashed: {nb_runner.get_output(1)[:400]}"
     )
@@ -335,34 +354,33 @@ def test_lock_unpicklable_restart_persist_graceful(nb_runner):
 # 10. Future stored in a variable, crossing cells; re-run + restart
 # ---------------------------------------------------------------------------
 
+
 def test_future_var_crossing_cells_restart(nb_runner):
-    nb_runner.create_notebook([
-        textwrap.dedent("""\
+    nb_runner.create_notebook(
+        [
+            textwrap.dedent("""\
             from concurrent.futures import ThreadPoolExecutor
             def _work():
                 return 21 * 2
             ex = ThreadPoolExecutor(max_workers=1)
             fut = ex.submit(_work)
         """),
-        "print(f'res={fut.result()}')",
-    ])
+            "print(f'res={fut.result()}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_persist()
     nb_runner.run_all()
     assert "res=42" in nb_runner.get_output(2)
 
     nb_runner.run_cell(2)
-    assert "res=42" in nb_runner.get_output(2), (
-        f"re-run of fut.result() wrong: {nb_runner.get_output(2)!r}"
-    )
+    assert "res=42" in nb_runner.get_output(2), f"re-run of fut.result() wrong: {nb_runner.get_output(2)!r}"
 
     nb_runner.shutdown()
     nb_runner.start_kernel()
     nb_runner.enable_persist()
     nb_runner.run_all()
-    assert "res=42" in nb_runner.get_output(2), (
-        f"wrong value after restart: {nb_runner.get_output(2)!r}"
-    )
+    assert "res=42" in nb_runner.get_output(2), f"wrong value after restart: {nb_runner.get_output(2)!r}"
     assert "Traceback" not in nb_runner.get_output(1), (
         f"restore of unpicklable future/executor crashed: {nb_runner.get_output(1)[:400]}"
     )
@@ -375,21 +393,24 @@ def test_future_var_crossing_cells_restart(nb_runner):
 # 11. queue.Queue drained across cells; isolated re-run of the drain cell
 # ---------------------------------------------------------------------------
 
+
 def test_queue_drain_isolated_rerun_idempotent(nb_runner):
-    nb_runner.create_notebook([
-        textwrap.dedent("""\
+    nb_runner.create_notebook(
+        [
+            textwrap.dedent("""\
             from queue import Queue
             q = Queue()
             for i in range(3):
                 q.put(i)
         """),
-        textwrap.dedent("""\
+            textwrap.dedent("""\
             got = []
             while not q.empty():
                 got.append(q.get())
             print(f'got={got}')
         """),
-    ])
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "got=[0, 1, 2]" in nb_runner.get_output(2), f"first run: {nb_runner.get_output(2)!r}"

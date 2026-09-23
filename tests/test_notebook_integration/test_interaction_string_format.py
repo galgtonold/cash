@@ -3,6 +3,7 @@ Batch 295: String formatting and template interaction tests.
 Tests various string formatting patterns (f-strings, format(), Template)
 with cache invalidation when underlying data changes.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.interaction, pytest.mark.stress, pytest.mark.timeout(90)]
@@ -13,12 +14,14 @@ class TestStringFormattingInteraction:
 
     def test_format_method_edit(self, nb_runner):
         """Editing data used in str.format() should propagate."""
-        nb_runner.create_notebook([
-            "name = 'Alice'\nage = 30",
-            "template = '{name} is {age} years old'",
-            "msg = template.format(name=name, age=age)",
-            "print(f'msg={msg}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "name = 'Alice'\nage = 30",
+                "template = '{name} is {age} years old'",
+                "msg = template.format(name=name, age=age)",
+                "print(f'msg={msg}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(4)
@@ -31,12 +34,14 @@ class TestStringFormattingInteraction:
 
     def test_string_template_edit(self, nb_runner):
         """Editing data used in string.Template should propagate."""
-        nb_runner.create_notebook([
-            "from string import Template\nproduct = 'Widget'\nprice = 9.99",
-            "t = Template('Buy $product for $$$price')",
-            "msg = t.substitute(product=product, price=price)",
-            "print(f'msg={msg}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from string import Template\nproduct = 'Widget'\nprice = 9.99",
+                "t = Template('Buy $product for $$$price')",
+                "msg = t.substitute(product=product, price=price)",
+                "print(f'msg={msg}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(4)
@@ -49,12 +54,14 @@ class TestStringFormattingInteraction:
 
     def test_multiline_format_edit(self, nb_runner):
         """Editing data used in multiline formatting should propagate."""
-        nb_runner.create_notebook([
-            "items = [('Apple', 3), ('Banana', 5)]",
-            "lines = []\nfor name, qty in items:\n    lines.append(f'{name}: {qty}')",
-            "report = '\\n'.join(lines)",
-            "print(report)",
-        ])
+        nb_runner.create_notebook(
+            [
+                "items = [('Apple', 3), ('Banana', 5)]",
+                "lines = []\nfor name, qty in items:\n    lines.append(f'{name}: {qty}')",
+                "report = '\\n'.join(lines)",
+                "print(report)",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(4)

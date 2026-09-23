@@ -18,12 +18,12 @@ import logging
 import sys
 from typing import Any
 
-from ..compiled_source import is_cash_filename
 from ..annotations import (
     CacheAnnotation,
     get_statement_annotations,
     parse_annotations_in_range,
 )
+from ..compiled_source import is_cash_filename
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ def resolve_header_annotation(
     """
     if raw_cell is None:
         return inherited
-    lineno = getattr(node, 'lineno', None)
+    lineno = getattr(node, "lineno", None)
     if lineno is None:
         return inherited
     header = parse_annotations_in_range(raw_cell.splitlines(), lineno, lineno)
@@ -114,6 +114,7 @@ def resolve_unit_annotation(
 # Output flushing
 # ---------------------------------------------------------------------------
 
+
 def flush_metrics_output(metrics: dict[str, Any]) -> None:
     """Immediately print stdout/stderr from a metrics dict.
 
@@ -123,22 +124,20 @@ def flush_metrics_output(metrics: dict[str, Any]) -> None:
     ``_output_flushed=True`` so that the caller in ``magics.py``
     does not replay the same output a second time.
     """
-    if metrics.get('stdout'):
-        print(metrics['stdout'], end='', flush=True)
-    if metrics.get('stderr'):
-        print(metrics['stderr'], end='', file=sys.stderr, flush=True)
-    metrics['_output_flushed'] = True
+    if metrics.get("stdout"):
+        print(metrics["stdout"], end="", flush=True)
+    if metrics.get("stderr"):
+        print(metrics["stderr"], end="", file=sys.stderr, flush=True)
+    metrics["_output_flushed"] = True
 
 
-def tag_control_metrics(
-    result: Any, ctx_hash: str, ctx_label: str, all_metrics: list
-) -> None:
+def tag_control_metrics(result: Any, ctx_hash: str, ctx_label: str, all_metrics: list) -> None:
     """Tag and flush metrics from a nested control-structure result."""
     for m in result.metrics:
-        if 'control_context' not in m:
-            m['control_context'] = ctx_hash
-            m['branch_label'] = ctx_label
-        if not m.get('_output_flushed'):
+        if "control_context" not in m:
+            m["control_context"] = ctx_hash
+            m["branch_label"] = ctx_label
+        if not m.get("_output_flushed"):
             flush_metrics_output(m)
     all_metrics.extend(result.metrics)
 
@@ -147,6 +146,7 @@ def tag_control_metrics(
 # Error helpers
 # ---------------------------------------------------------------------------
 
+
 def extract_cash_frame_lineno(exc: Exception) -> int | None:
     """Extract the line number from the cash-compiled frame in the traceback.
 
@@ -154,7 +154,7 @@ def extract_cash_frame_lineno(exc: Exception) -> int | None:
     a bare ``<cash>``: each statement now compiles under its own
     ``<cash-{digest}>`` name so its source resolves in linecache.
     """
-    tb = getattr(exc, '__traceback__', None)
+    tb = getattr(exc, "__traceback__", None)
     while tb is not None:
         if is_cash_filename(tb.tb_frame.f_code.co_filename):
             return tb.tb_lineno
@@ -166,8 +166,13 @@ def extract_cash_frame_lineno(exc: Exception) -> int | None:
 # Lineage management
 # ---------------------------------------------------------------------------
 
+
 def update_lineage_after_execution(
-    shell, statement_processor, node: ast.AST, code: str, debug: bool = False,
+    shell,
+    statement_processor,
+    node: ast.AST,
+    code: str,
+    debug: bool = False,
     body_files: set[str] | None = None,
 ) -> None:
     """
@@ -186,6 +191,7 @@ def update_lineage_after_execution(
     # Exclude loop target variables — they are not mutations
     if isinstance(node, ast.For):
         from .processor import extract_target_names
+
         target_names = set(extract_target_names(node.target))
         mutated_vars -= target_names
 
@@ -196,19 +202,27 @@ def update_lineage_after_execution(
         if isinstance(node, ast.For):
             iterable_lineage = get_iterable_lineage(shell, statement_processor, node.iter)
             from .processor import extract_target_names
+
             target_names = set(extract_target_names(node.target))
 
         update_mutated_variable_lineages(
-            shell, statement_processor, mutated_vars, iterable_lineage, code,
+            shell,
+            statement_processor,
+            mutated_vars,
+            iterable_lineage,
+            code,
             debug=debug,
             input_lineages=collect_body_input_lineages(
-                statement_processor, body_nodes, mutated_vars | target_names,
+                statement_processor,
+                body_nodes,
+                mutated_vars | target_names,
             ),
         )
 
 
-def inherit_body_file_deps(shell, statement_processor, body_nodes: list, mutated_vars: set[str],
-                           body_files: set[str] | None = None) -> None:
+def inherit_body_file_deps(
+    shell, statement_processor, body_nodes: list, mutated_vars: set[str], body_files: set[str] | None = None
+) -> None:
     """Give each variable the loop mutated the files its body read.
 
     ``for f in files: d = pd.read_csv(f); parts.append(d)`` recorded each file
@@ -225,11 +239,10 @@ def inherit_body_file_deps(shell, statement_processor, body_nodes: list, mutated
     *body_files* is what a per-iteration loop gathered as it ran: a name the
     body rebinds holds only the last iteration's files by now.
     """
-    executed_file_deps = getattr(statement_processor, 'executed_file_deps', None)
+    executed_file_deps = getattr(statement_processor, "executed_file_deps", None)
     if executed_file_deps is None:
         return
-    used = {sub.id for body_node in body_nodes for sub in ast.walk(body_node)
-            if isinstance(sub, ast.Name)}
+    used = {sub.id for body_node in body_nodes for sub in ast.walk(body_node) if isinstance(sub, ast.Name)}
     files: set[str] = set(body_files or ())
     for name in used:
         files.update(executed_file_deps.get(name, ()))
@@ -243,7 +256,9 @@ def inherit_body_file_deps(shell, statement_processor, body_nodes: list, mutated
 
 
 def collect_body_input_lineages(
-    statement_processor, body_nodes: list, exclude: set[str],
+    statement_processor,
+    body_nodes: list,
+    exclude: set[str],
 ) -> dict[str, str]:
     """Current lineage of every variable the control-structure body READS.
 
@@ -276,14 +291,14 @@ def collect_body_input_lineages(
 def get_body_nodes(node: ast.AST) -> list[ast.AST]:
     """Get all body nodes from a control structure."""
     body = []
-    if hasattr(node, 'body'):
+    if hasattr(node, "body"):
         body.extend(node.body)
-    if hasattr(node, 'orelse'):
+    if hasattr(node, "orelse"):
         body.extend(node.orelse)
-    if hasattr(node, 'handlers'):
+    if hasattr(node, "handlers"):
         for handler in node.handlers:
             body.extend(handler.body)
-    if hasattr(node, 'finalbody'):
+    if hasattr(node, "finalbody"):
         body.extend(node.finalbody)
     return body
 
@@ -291,6 +306,7 @@ def get_body_nodes(node: ast.AST) -> list[ast.AST]:
 def get_expression_iterable_lineage(shell, statement_processor, iter_node: ast.AST) -> str | None:
     """Compute lineage for a complex iterable expression by analyzing its inputs."""
     from ..analysis import CodeAnalyzer
+
     iter_code = ast.unparse(iter_node)
     try:
         inputs, _ = CodeAnalyzer.analyze_code_block(iter_code)
@@ -300,13 +316,11 @@ def get_expression_iterable_lineage(shell, statement_processor, iter_node: ast.A
                 lineage_parts.append(statement_processor.variable_lineage[var_name])
             elif var_name in shell.user_ns:
                 try:
-                    lineage_parts.append(
-                        statement_processor.compute_hash(shell.user_ns[var_name])
-                    )
+                    lineage_parts.append(statement_processor.compute_hash(shell.user_ns[var_name]))
                 except (TypeError, ValueError, AttributeError) as exc:
                     logger.debug("[CONTROL] Failed to hash input variable '%s' for iterable lineage: %s", var_name, exc)
         if lineage_parts:
-            return hashlib.sha256(':'.join(lineage_parts).encode()).hexdigest()
+            return hashlib.sha256(":".join(lineage_parts).encode()).hexdigest()
     except (SyntaxError, ValueError, AttributeError, TypeError) as exc:
         logger.debug("[CONTROL] Failed to analyze iterable code for lineage: %s", exc)
     return None
@@ -338,8 +352,8 @@ def find_potentially_mutated_variables(body_nodes: list) -> set[str]:
     (subscript assignment, method calls like ``.append()``, augmented
     assigns, attribute assignments).
     """
-    from .processor import is_control_structure
     from ..cacheability import analyze_statement, selfref_reassignment_targets
+    from .processor import is_control_structure
 
     mutated_vars: set = set()
     for body_node in body_nodes:
@@ -363,16 +377,45 @@ def find_potentially_mutated_variables(body_nodes: list) -> set[str]:
             mutated_vars.update(selfref_reassignment_targets(body_node))
 
     # Filter out built-ins
-    built_ins = {'print', 'len', 'range', 'enumerate', 'zip', 'map', 'filter',
-                 'sum', 'min', 'max', 'sorted', 'reversed', 'list', 'dict', 'set',
-                 'str', 'int', 'float', 'bool', 'type', 'isinstance', 'hasattr',
-                 'getattr', 'setattr', 'open', 'get_ipython', '__builtins__'}
+    built_ins = {
+        "print",
+        "len",
+        "range",
+        "enumerate",
+        "zip",
+        "map",
+        "filter",
+        "sum",
+        "min",
+        "max",
+        "sorted",
+        "reversed",
+        "list",
+        "dict",
+        "set",
+        "str",
+        "int",
+        "float",
+        "bool",
+        "type",
+        "isinstance",
+        "hasattr",
+        "getattr",
+        "setattr",
+        "open",
+        "get_ipython",
+        "__builtins__",
+    }
     return mutated_vars - built_ins
 
 
 def update_mutated_variable_lineages(
-    shell, statement_processor, mutated_vars: set[str],
-    iterable_lineage: str | None, loop_code: str, debug: bool = False,
+    shell,
+    statement_processor,
+    mutated_vars: set[str],
+    iterable_lineage: str | None,
+    loop_code: str,
+    debug: bool = False,
     input_lineages: dict[str, str] | None = None,
 ) -> None:
     """
@@ -456,22 +499,21 @@ def update_mutated_variable_lineages(
             prior_lineage = statement_processor.variable_lineage.get(var_name)
             lineage_components = [loop_code_hash, value_hash]
             if prior_lineage:
-                lineage_components.append(f'prev={prior_lineage}')
+                lineage_components.append(f"prev={prior_lineage}")
             if iterable_lineage:
                 lineage_components.append(iterable_lineage)
             for name, lin in sorted((input_lineages or {}).items()):
                 lineage_components.append(f"{name}={lin}")
 
-            new_lineage = hashlib.sha256(':'.join(lineage_components).encode()).hexdigest()
+            new_lineage = hashlib.sha256(":".join(lineage_components).encode()).hexdigest()
 
             statement_processor.lineage.record(var_name, new_lineage, value=val)
 
-            if hasattr(statement_processor, 'vars_with_mutation_lineage'):
+            if hasattr(statement_processor, "vars_with_mutation_lineage"):
                 statement_processor.vars_with_mutation_lineage.add(var_name)
 
             if debug:
-                logger.debug("[CONTROL] Updated lineage for mutated var '%s': %s...",
-                             var_name, new_lineage[:20])
+                logger.debug("[CONTROL] Updated lineage for mutated var '%s': %s...", var_name, new_lineage[:20])
 
         except (TypeError, ValueError, AttributeError) as e:
             if debug:
@@ -481,6 +523,7 @@ def update_mutated_variable_lineages(
 # ---------------------------------------------------------------------------
 # Badge / body-statements extraction
 # ---------------------------------------------------------------------------
+
 
 def extract_while_stmts(node: ast.While) -> list[str]:
     """Extract while/else statements for badge display."""
@@ -494,7 +537,7 @@ def extract_while_stmts(node: ast.While) -> list[str]:
 
 def extract_with_stmts(node: ast.With) -> list[str]:
     """Extract with-block statements for badge display."""
-    items_str = ', '.join(ast.unparse(item) for item in node.items)
+    items_str = ", ".join(ast.unparse(item) for item in node.items)
     stmts = [f"with {items_str}:"]
     stmts.extend(f"  {ast.unparse(s)}" for s in node.body)
     return stmts
@@ -504,7 +547,7 @@ def extract_try_stmts(node: ast.Try) -> list[str]:
     """Extract try/except/else/finally statements for badge display."""
     stmts = ["try:"]
     stmts.extend(f"  {ast.unparse(s)}" for s in node.body)
-    for handler in getattr(node, 'handlers', []):
+    for handler in getattr(node, "handlers", []):
         if handler.type:
             hdr = f"except {ast.unparse(handler.type)}"
             if handler.name:
@@ -516,7 +559,7 @@ def extract_try_stmts(node: ast.Try) -> list[str]:
     if node.orelse:
         stmts.append("else:")
         stmts.extend(f"  {ast.unparse(s)}" for s in node.orelse)
-    if getattr(node, 'finalbody', None):
+    if getattr(node, "finalbody", None):
         stmts.append("finally:")
         stmts.extend(f"  {ast.unparse(s)}" for s in node.finalbody)
     return stmts
@@ -541,8 +584,7 @@ def extract_body_statements(node: ast.AST) -> list[str]:
     return statements
 
 
-def extract_if_body_statements(node: ast.If, statements: list[str],
-                               is_elif: bool = False) -> None:
+def extract_if_body_statements(node: ast.If, statements: list[str], is_elif: bool = False) -> None:
     """Recursively extract if/elif/else branch statements."""
     keyword = "elif" if is_elif else "if"
     statements.append(f"{keyword} {ast.unparse(node.test)}:")

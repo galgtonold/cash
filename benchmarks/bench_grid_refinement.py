@@ -23,6 +23,7 @@ executed, so "reused" is observed rather than inferred from a clock.
 Usage:
     python benchmarks/bench_grid_refinement.py [--modes 200000] [--points 800]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -73,8 +74,7 @@ def chunked(cached_chunk, axis, chunk_points):
     Blocks are cut by INDEX, so this only finds old work when the new axis
     starts with the old one -- see the arms below.
     """
-    pieces = [cached_chunk(axis[i:i + chunk_points])
-              for i in range(0, len(axis), chunk_points)]
+    pieces = [cached_chunk(axis[i : i + chunk_points]) for i in range(0, len(axis), chunk_points)]
     return np.concatenate(pieces)
 
 
@@ -123,10 +123,9 @@ def main() -> int:
             print(f"  {label:<44} {seconds:6.2f}s   {share}{note}")
 
         print("REVISITING a resolution you have run before")
-        timed(whole, build_axis_linspace(n // 2))          # detour
-        t, calls = timed(whole, build_axis_linspace(n))    # back again
-        report("linspace(n) -> linspace(n/2) -> linspace(n)", t, calls,
-               "  <- already free, no technique needed")
+        timed(whole, build_axis_linspace(n // 2))  # detour
+        t, calls = timed(whole, build_axis_linspace(n))  # back again
+        report("linspace(n) -> linspace(n/2) -> linspace(n)", t, calls, "  <- already free, no technique needed")
 
         print("\nREFINING, whole-axis caching")
         t, calls = timed(whole, build_axis_linspace(n + 40))
@@ -136,34 +135,29 @@ def main() -> int:
 
         print("\nREFINING, index-chunked caching")
         base = build_axis_arange(1.0, dx)
-        timed(chunked, chunk, base, args.chunk)            # prime
+        timed(chunked, chunk, base, args.chunk)  # prime
         t, calls = timed(chunked, chunk, build_axis_arange(2.0, dx), args.chunk)
-        report("arange(0,1,dx) -> arange(0,2,dx)  (prefix)", t, calls,
-               "  <- only the new half")
+        report("arange(0,1,dx) -> arange(0,2,dx)  (prefix)", t, calls, "  <- only the new half")
         t, calls = timed(chunked, chunk, build_axis_linspace(n + 40), args.chunk)
-        report("linspace(n) -> linspace(n+40)", t, calls,
-               "  <- chunking cannot save this")
-        timed(chunked, chunk, build_axis_linspace(n), args.chunk)   # prime
+        report("linspace(n) -> linspace(n+40)", t, calls, "  <- chunking cannot save this")
+        timed(chunked, chunk, build_axis_linspace(n), args.chunk)  # prime
         t, calls = timed(chunked, chunk, build_axis_linspace(2 * n - 1), args.chunk)
-        report("linspace(n) -> linspace(2n-1)  (contains old)", t, calls,
-               "  <- old points interleave, so blocks miss them")
+        report(
+            "linspace(n) -> linspace(2n-1)  (contains old)", t, calls, "  <- old points interleave, so blocks miss them"
+        )
 
         print("\nREFINING, split into (the axis I had) + (what is new)")
         split = c.cache(assume_safe=True)(field)
         coarse = build_axis_linspace(n)
-        timed(split, coarse)                                        # prime
+        timed(split, coarse)  # prime
         t, calls = timed(set_split, split, build_axis_linspace(2 * n - 1), coarse)
-        report("linspace(n) -> linspace(2n-1)  (contains old)", t, calls,
-               "  <- only the new points")
+        report("linspace(n) -> linspace(2n-1)  (contains old)", t, calls, "  <- only the new points")
 
         print("\nWhy: does the refined axis bitwise contain the coarse one?")
         for label, a, b in [
-            ("linspace(n) in linspace(n+40)", build_axis_linspace(n),
-             build_axis_linspace(n + 40)),
-            ("linspace(n) in linspace(2n-1)", build_axis_linspace(n),
-             build_axis_linspace(2 * n - 1)),
-            ("arange(0,1,dx) in arange(0,2,dx)", build_axis_arange(1.0, dx),
-             build_axis_arange(2.0, dx)),
+            ("linspace(n) in linspace(n+40)", build_axis_linspace(n), build_axis_linspace(n + 40)),
+            ("linspace(n) in linspace(2n-1)", build_axis_linspace(n), build_axis_linspace(2 * n - 1)),
+            ("arange(0,1,dx) in arange(0,2,dx)", build_axis_arange(1.0, dx), build_axis_arange(2.0, dx)),
         ]:
             shared = len(np.intersect1d(a, b))
             print(f"  {label:<38} {shared:5d}/{len(a)} points survive")

@@ -34,7 +34,8 @@ from typing import Any
 # helper taking a kwarg. Reset to ``()`` at the start of each render to
 # prevent leakage between successive renders in the same thread.
 _CONFIGURED_TIERS: ContextVar[tuple[str, ...]] = ContextVar(
-    "_CONFIGURED_TIERS", default=(),
+    "_CONFIGURED_TIERS",
+    default=(),
 )
 
 from .. import theme
@@ -918,16 +919,14 @@ def _code_html(code: str) -> str:
     n_extra = max(0, len(code.splitlines()) - 1)
     if n_extra > 0:
         plural = "s" if n_extra != 1 else ""
-        highlighted += (
-            f'<span class="c3-com" style="margin-left:6px;">'
-            f'… +{n_extra} line{plural}</span>'
-        )
+        highlighted += f'<span class="c3-com" style="margin-left:6px;">… +{n_extra} line{plural}</span>'
     return highlighted
 
 
 # ---------------------------------------------------------------------------
 # Tier-dots — semantic derivation from a StatementRow (or pseudo-row).
 # ---------------------------------------------------------------------------
+
 
 def _dots(
     *,
@@ -955,34 +954,45 @@ def _dots(
 
     if uncacheable_reasons:
         kind = "warn"
+
         def state_for(_tier: str) -> str:
             return "blocked"
+
         aggregate_title = "Uncacheable: " + ", ".join(uncacheable_reasons)
     elif status is BadgeStatus.RESTORED:
         kind = "cached"
+
         def state_for(tier: str) -> str:
             return "ring" if tier.upper() == src_upper else "empty"
+
         aggregate_title = f"Restored from {source or 'cache'}"
     elif status is BadgeStatus.SKIPPED:
         kind = "exec"
+
         def state_for(_tier: str) -> str:
             return "empty"
+
         aggregate_title = "Not re-run — downstream value was satisfied by cache"
-    elif status in (BadgeStatus.WARNING, BadgeStatus.FUNCTION_CHANGED,
-                    BadgeStatus.MODULE_RELOADED, BadgeStatus.ERROR):
+    elif status in (BadgeStatus.WARNING, BadgeStatus.FUNCTION_CHANGED, BadgeStatus.MODULE_RELOADED, BadgeStatus.ERROR):
         kind = "warn"
+
         def state_for(_tier: str) -> str:
             return "empty"
+
         aggregate_title = "—"
     elif storage_tiers:
         kind = "exec"
+
         def state_for(tier: str) -> str:
             return "solid" if tier.upper() in written else "empty"
+
         aggregate_title = "Cached to: " + "+".join(storage_tiers)
     else:
         kind = "exec"
+
         def state_for(_tier: str) -> str:
             return "empty"
+
         aggregate_title = "no storage info"
 
     # Tier list resolution:
@@ -1006,9 +1016,7 @@ def _dots(
         return f"{tier} — not stored"
 
     dots_html = "".join(
-        f'<span class="c3-dot c3-dot-{state_for(t)}" '
-        f'title="{_esc(_dot_title(t, state_for(t)))}"></span>'
-        for t in tiers
+        f'<span class="c3-dot c3-dot-{state_for(t)}" title="{_esc(_dot_title(t, state_for(t)))}"></span>' for t in tiers
     )
     return (
         f'<span class="c3-dots-cell"><span class="c3-dots c3-dots-{kind}" '
@@ -1019,6 +1027,7 @@ def _dots(
 # ---------------------------------------------------------------------------
 # Per-cell maximum time (for timing-bar scaling)
 # ---------------------------------------------------------------------------
+
 
 def _max_time(badge: InteractiveBadge) -> float:
     """Largest single row time across the whole badge, including overhead.
@@ -1056,6 +1065,7 @@ def _item_total_time(item: SectionItem) -> float:
 # Timing bar + time chip
 # ---------------------------------------------------------------------------
 
+
 def _tbar(time_s: float, max_time: float, kind: str) -> str:
     """Render a per-row timing bar.
 
@@ -1068,7 +1078,7 @@ def _tbar(time_s: float, max_time: float, kind: str) -> str:
     if max_time <= 0 or time_s < theme.MIN_TIME_DISPLAY_S:
         return '<span class="c3-tbar-cell"><span class="c3-tbar"></span></span>'
     ratio = min(1.0, time_s / max_time)
-    pct = (ratio ** 0.5) * 100  # square-root scaling
+    pct = (ratio**0.5) * 100  # square-root scaling
     return (
         f'<span class="c3-tbar-cell"><span class="c3-tbar">'
         f'<span class="c3-tbar-fill c3-tbar-fill-{kind}" '
@@ -1078,18 +1088,12 @@ def _tbar(time_s: float, max_time: float, kind: str) -> str:
 
 def _time_chip(time_s: float, saved_s: float, kind: str) -> str:
     main = f"<span>{_fmt_time(time_s)}</span>"
-    sub = (
-        f'<span class="c3-time-sub">↑{saved_s:.2f}s</span>'
-        if saved_s > theme.MIN_TIME_DISPLAY_S else ""
-    )
+    sub = f'<span class="c3-time-sub">↑{saved_s:.2f}s</span>' if saved_s > theme.MIN_TIME_DISPLAY_S else ""
     return f'<span class="c3-time-chip c3-time-chip-{kind}">{main}{sub}</span>'
 
 
 def _notif_chip(label: str) -> str:
-    return (
-        '<span class="c3-time-chip c3-time-chip-warn">'
-        f'<span class="c3-notif-pill">{_esc(label)}</span></span>'
-    )
+    return f'<span class="c3-time-chip c3-time-chip-warn"><span class="c3-notif-pill">{_esc(label)}</span></span>'
 
 
 def _rng_pill(row: StatementRow) -> str:
@@ -1106,7 +1110,7 @@ def _rng_pill(row: StatementRow) -> str:
     if row.random_effect == "draw" and row.random_unseeded:
         return (
             '<span class="c3-rng-pill c3-rng-warn" title="Unseeded randomness — the '
-            'cached value is a frozen replay, not a fresh draw. Seed the RNG or '
+            "cached value is a frozen replay, not a fresh draw. Seed the RNG or "
             'use @cash:no-cache to redraw.">unseeded</span>'
         )
     if row.random_effect == "draw":
@@ -1117,6 +1121,7 @@ def _rng_pill(row: StatementRow) -> str:
 # ---------------------------------------------------------------------------
 # Statement row
 # ---------------------------------------------------------------------------
+
 
 def _rowtip_html(row: StatementRow) -> str:
     """Pure-CSS click-to-expand tooltip body for a :class:`StatementRow`.
@@ -1136,8 +1141,7 @@ def _rowtip_html(row: StatementRow) -> str:
     # the raw enum value, so an HTML row read RESTORED under a CACHED header.
     label = (
         theme.LABEL_UNCACHEABLE
-        if row.status is BadgeStatus.COMPUTED
-        and (row.uncacheable_reasons or row.skipped_reason)
+        if row.status is BadgeStatus.COMPUTED and (row.uncacheable_reasons or row.skipped_reason)
         else theme.label_of(row.status.value)
     )
     status_pill = (
@@ -1146,16 +1150,18 @@ def _rowtip_html(row: StatementRow) -> str:
         f"{_esc(label)}</span>"
     )
     is_notif = row.status in (
-        BadgeStatus.WARNING, BadgeStatus.FUNCTION_CHANGED, BadgeStatus.MODULE_RELOADED,
+        BadgeStatus.WARNING,
+        BadgeStatus.FUNCTION_CHANGED,
+        BadgeStatus.MODULE_RELOADED,
     )
     time_html = "—" if is_notif else f"{row.time_s:.3f}s"
     if row.saved_time_s > theme.MIN_TIME_DISPLAY_S:
         time_html += f' <span class="c3-rt-saved">· saved {row.saved_time_s:.2f}s</span>'
 
     code_block = (
-        '<div class="c3-rt-code-label">as keyed</div>'
-        f'<pre class="c3-rt-code">{highlight_python(row.code)}</pre>'
-        if row.code else ""
+        f'<div class="c3-rt-code-label">as keyed</div><pre class="c3-rt-code">{highlight_python(row.code)}</pre>'
+        if row.code
+        else ""
     )
 
     dl_parts: list[str] = []
@@ -1174,22 +1180,17 @@ def _rowtip_html(row: StatementRow) -> str:
             f"<dt>Reason</dt><dd>{_esc(', '.join(row.uncacheable_reasons))}</dd>"
         )
     elif row.status is BadgeStatus.RESTORED and row.source:
-        dl_parts.append(
-            f"<dt>Storage</dt><dd>{tier_dot_pair} ← {_esc(row.source)}</dd>"
-        )
+        dl_parts.append(f"<dt>Storage</dt><dd>{tier_dot_pair} ← {_esc(row.source)}</dd>")
     elif row.storage_tiers:
         label = " · ".join(_esc(t) for t in row.storage_tiers)
         dl_parts.append(f"<dt>Storage</dt><dd>{tier_dot_pair} {label}</dd>")
     elif row.status is BadgeStatus.SKIPPED:
-        dl_parts.append(
-            f"<dt>Storage</dt><dd>{tier_dot_pair} not re-run (cache covered downstream)</dd>"
-        )
+        dl_parts.append(f"<dt>Storage</dt><dd>{tier_dot_pair} not re-run (cache covered downstream)</dd>")
     elif row.skipped_reason:
         dl_parts.append(f"<dt>Skipped</dt><dd>{_esc(row.skipped_reason)}</dd>")
     if row.output_text:
         # What a re-run upstream step printed (round 29, r29s3).
-        dl_parts.append(f"<dt>Printed</dt><dd><pre class=\"c3-rt-code\">"
-                        f"{_esc(row.output_text[:4000])}</pre></dd>")
+        dl_parts.append(f'<dt>Printed</dt><dd><pre class="c3-rt-code">{_esc(row.output_text[:4000])}</pre></dd>')
         if row.guard_cause:
             # What kept changing the key (round 29, r29s1).
             dl_parts.append(f"<dt>Key changed by</dt><dd>{_esc(row.guard_cause)}</dd>")
@@ -1222,9 +1223,7 @@ def _rowtip_html(row: StatementRow) -> str:
                 detail += " · condensed"
             if g.miss_reason:
                 detail += f" · {_esc(g.miss_reason)}"
-            dl_parts.append(
-                f"<dt class='cash-subunit'>{_esc(g.call_source)}</dt><dd>{detail}</dd>"
-            )
+            dl_parts.append(f"<dt class='cash-subunit'>{_esc(g.call_source)}</dt><dd>{detail}</dd>")
     if row.changed_functions:
         dl_parts.append(f"<dt>Fn changed</dt><dd>{_esc(', '.join(row.changed_functions))}</dd>")
     if row.changed_modules:
@@ -1233,7 +1232,7 @@ def _rowtip_html(row: StatementRow) -> str:
         # Short prefix of the statement's cache key — same prefix across
         # re-runs means cash landed in the same slot; different prefix means
         # the inputs/code/file deps changed enough to force a new key.
-        dl_parts.append(f'<dt>Key</dt><dd><code>{_esc(row.cache_key_short)}</code></dd>')
+        dl_parts.append(f"<dt>Key</dt><dd><code>{_esc(row.cache_key_short)}</code></dd>")
     if row.miss_reason and row.status is BadgeStatus.COMPUTED:
         # One-line attribution: why did this cell recompute instead of
         # restoring from cache? Populated by statement_processor on the
@@ -1281,10 +1280,7 @@ def _row_code_html(row: StatementRow) -> str:
     ``_code_html``'s first-line + "... +N lines" summary IS the intended
     treatment, not a compromise to route around.
     """
-    return (
-        highlight_python(row.display_code) if row.display_code
-        else _code_html(row.code)
-    )
+    return highlight_python(row.display_code) if row.display_code else _code_html(row.code)
 
 
 def _statement_row_html(row: StatementRow, max_time: float) -> str:
@@ -1324,10 +1320,7 @@ def _statement_row_html(row: StatementRow, max_time: float) -> str:
         # BOX, not once for the whole (possibly multi-line) <pre>, so a
         # multi-line statement's earlier lines are never affected by this.
         names = row.restored_vars or row.output_vars
-        suffix = (
-            f'<span class="c3-row-vars">← {", ".join(_esc(n) for n in names)}</span>'
-            if names else ""
-        )
+        suffix = f'<span class="c3-row-vars">← {", ".join(_esc(n) for n in names)}</span>' if names else ""
         code_html = f'<pre class="c3-code">{_row_code_html(row)}{suffix}</pre>'
         bar = _tbar(row.time_s, max_time, kind)
         chip = _time_chip(row.time_s, row.saved_time_s, kind)
@@ -1376,6 +1369,7 @@ def _statement_row_html(row: StatementRow, max_time: float) -> str:
 # Iteration histogram (loop body marginalia)
 # ---------------------------------------------------------------------------
 
+
 def _iter_histogram_html(iterations: tuple[IterationRow, ...]) -> str:
     if not iterations:
         return '<span class="c3-iter-cell"></span>'
@@ -1388,15 +1382,9 @@ def _iter_histogram_html(iterations: tuple[IterationRow, ...]) -> str:
         bindings = ", ".join(f"{name}={value!r}" for name, value in it.loop_bindings)
         title = f"{bindings} · {it.status.value} · {it.time_s:.3f}s"
         bars.append(
-            f'<span class="c3-iter-bar" '
-            f'style="height:{h}px;background:{bar_color};" '
-            f'title="{_esc(title)}"></span>'
+            f'<span class="c3-iter-bar" style="height:{h}px;background:{bar_color};" title="{_esc(title)}"></span>'
         )
-    return (
-        '<span class="c3-iter-cell"><span class="c3-iter-strip">'
-        + "".join(bars)
-        + "</span></span>"
-    )
+    return '<span class="c3-iter-cell"><span class="c3-iter-strip">' + "".join(bars) + "</span></span>"
 
 
 _ITER_VALUE_MAX = 40
@@ -1440,13 +1428,10 @@ def _iter_drilldown_html(
     # Multi-var loops use Python tuple syntax: ``(cat, stats) = ('A', {...})``.
     # Reads like the loop's actual `for cat, stats in ...:` line.
     is_tuple = len(loop_var_names) > 1
-    var_label = (
-        f"({', '.join(loop_var_names)})" if is_tuple
-        else (loop_var_names[0] if loop_var_names else "i")
-    )
+    var_label = f"({', '.join(loop_var_names)})" if is_tuple else (loop_var_names[0] if loop_var_names else "i")
     bound_iters = [it for it in iterations if it.loop_bindings]
     total = len(bound_iters)
-    visible = bound_iters[: max_rows] if max_rows and total > max_rows else bound_iters
+    visible = bound_iters[:max_rows] if max_rows and total > max_rows else bound_iters
     omitted = total - len(visible)
     rows = []
     for it in visible:
@@ -1475,9 +1460,9 @@ def _iter_drilldown_html(
     if omitted > 0:
         rows.append(
             f'<div class="c3-iter-row c3-iter-more">'
-            f'<span></span>'
+            f"<span></span>"
             f'<span class="c3-iter-key">… +{omitted} more iteration{"s" if omitted != 1 else ""}</span>'
-            f'<span></span><span></span>'
+            f"<span></span><span></span>"
             f"</div>"
         )
     return f'<div class="c3-iter-table">{"".join(rows)}</div>'
@@ -1514,15 +1499,14 @@ def _loop_stmt_sub_units_html(sub_units: tuple[SubUnitGroup, ...]) -> str:
         )
     return (
         '<div class="c3-iter-table c3-subunit-table">'
-        f'<div class="c3-iter-row c3-subunit-summary">Sub-calls: {hits}/{n} hit</div>'
-        + "".join(rows)
-        + "</div>"
+        f'<div class="c3-iter-row c3-subunit-summary">Sub-calls: {hits}/{n} hit</div>' + "".join(rows) + "</div>"
     )
 
 
 # ---------------------------------------------------------------------------
 # Loop / control / skipped renderers
 # ---------------------------------------------------------------------------
+
 
 def _loop_tip_html(
     *,
@@ -1536,11 +1520,7 @@ def _loop_tip_html(
     trips: int | None = None,
 ) -> str:
     """Hover tooltip for an aggregate loop row (head or body line)."""
-    status_label = (
-        "MIXED" if cached and computed
-        else "CACHED" if cached and not computed
-        else "EXECUTED"
-    )
+    status_label = "MIXED" if cached and computed else "CACHED" if cached and not computed else "EXECUTED"
     pill = (
         f'<span class="c3-rt-status" '
         f'style="color:{theme.chip_fg(kind)};background:{theme.chip_bg(kind)};">'
@@ -1697,15 +1677,21 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float) -> str:
         loop_header = f"for {var_decl} in [{values_preview}]:"
 
     head_meta = (
-        f"{iters_per_stmt}× cached" if cached == total and total > 0
-        else f"{cached}/{total} cached" if cached > 0
+        f"{iters_per_stmt}× cached"
+        if cached == total and total > 0
+        else f"{cached}/{total} cached"
+        if cached > 0
         else f"{iters_per_stmt} iters"
     )
 
     head_tip = _loop_tip_html(
         title_code=loop_header,
-        total=total, cached=cached, computed=(total - cached),
-        total_time=head_total_time, total_saved=head_total_saved, kind=head_kind,
+        total=total,
+        cached=cached,
+        computed=(total - cached),
+        total_time=head_total_time,
+        total_saved=head_total_saved,
+        kind=head_kind,
         trips=iters_per_stmt,
     )
     head_rid = _uid("rx")
@@ -1757,9 +1743,8 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float) -> str:
             # Show every iteration when the count fits comfortably in a
             # cell; cap to the first N + a "… +M more" row beyond that.
             cap = 0 if stmt_total <= _ITER_INLINE_LIMIT else _ITER_INLINE_LIMIT
-            expansion = (
-                _iter_drilldown_html(iters, g.loop_var_names, max_rows=cap)
-                + _loop_stmt_sub_units_html(item.sub_units)
+            expansion = _iter_drilldown_html(iters, g.loop_var_names, max_rows=cap) + _loop_stmt_sub_units_html(
+                item.sub_units
             )
             body_rid = _uid("rx")
             body_pieces.append(
@@ -1848,7 +1833,10 @@ def _control_group_html(cg: ControlGroup, max_time: float) -> str:
 
 
 def _static_statement_row_html(
-    row: StatementRow, max_time: float, *, indented: bool = False,
+    row: StatementRow,
+    max_time: float,
+    *,
+    indented: bool = False,
 ) -> str:
     """A row with no click-to-expand wrapper — used inside control bodies
     where the body is always visible. ``indented`` is preserved as a
@@ -1917,7 +1905,7 @@ def _multiline_control_html(row: StatementRow, max_time: float) -> str:
             f'<div class="c3-row" data-kind="{kind}">'
             f'<span class="c3-rail c3-rail-soft" style="background:{theme.INK_5};"></span>'
             f'<pre class="c3-code c3-code-body">{_code_html(line)}</pre>'
-            f'<span></span><span></span><span></span>'
+            f"<span></span><span></span><span></span>"
             f"</div>"
         )
     return head + f'<div class="c3-ctrl-body">{"".join(body_rows)}</div>'
@@ -1932,8 +1920,9 @@ def _skipped_bucket_html(sb: SkippedBucket, max_time: float) -> str:
     ``virtual_lineage._collect_skipped_statement_metrics`` for the
     dependency-walk that flags them.
     """
-    stale = "".join(f'<div class="c3-stale-export">{_esc(stale_export_text(code, paths))}</div>'
-                    for code, paths in sb.stale_exports)
+    stale = "".join(
+        f'<div class="c3-stale-export">{_esc(stale_export_text(code, paths))}</div>' for code, paths in sb.stale_exports
+    )
     if not sb.items:
         return stale
     n = len(sb.items)
@@ -1943,15 +1932,12 @@ def _skipped_bucket_html(sb: SkippedBucket, max_time: float) -> str:
         "are only needed by downstream values that Cash restored from cache. "
         "Running them again would do work the cache already covered."
     )
-    saved = (
-        f"saved {sb.total_saved_time_s:.2f}s"
-        if sb.total_saved_time_s > theme.MIN_TIME_DISPLAY_S else "—"
-    )
+    saved = f"saved {sb.total_saved_time_s:.2f}s" if sb.total_saved_time_s > theme.MIN_TIME_DISPLAY_S else "—"
     body = "".join(_render_section_item(i, max_time) for i in sb.items)
     return (
         f'<details class="c3-skipped">'
         f'<summary title="{_esc(title)}">'
-        f'<span>{_esc(label)}</span>'
+        f"<span>{_esc(label)}</span>"
         f'<span class="c3-skipped-meta">{_esc(saved)}</span>'
         f"</summary>"
         f"{body}"
@@ -1978,20 +1964,17 @@ _INTERCEPTED_TITLE = "cached automatically via call interception -- disable with
 
 def _cache_tag_html(intercepted: bool) -> str:
     if intercepted:
-        return (f'<span class="c3-cache-tag" title="{_INTERCEPTED_TITLE}">'
-                f'{_INTERCEPTED_TAG}</span>')
+        return f'<span class="c3-cache-tag" title="{_INTERCEPTED_TITLE}">{_INTERCEPTED_TAG}</span>'
     return '<span class="c3-cache-tag">@cache</span>'
 
 
-def _decorator_call_row_html(
-    c: DecoratorCall, max_time: float, *, intercepted: bool = False
-) -> str:
+def _decorator_call_row_html(c: DecoratorCall, max_time: float, *, intercepted: bool = False) -> str:
     kind = theme.kind_of(c.status.value)
     rail = theme.rail_color(c.status.value)
     short_name = c.func_name.split(".")[-1] if "." in c.func_name else c.func_name
     status_text = "HIT" if c.status is BadgeStatus.RESTORED else "MISS"
     code = (
-        f'{_cache_tag_html(intercepted)} '
+        f"{_cache_tag_html(intercepted)} "
         f'<span class="c3-kw">{_esc(short_name)}</span>() '
         f'<span class="c3-com">{status_text}</span>'
     )
@@ -2008,10 +1991,7 @@ def _decorator_call_row_html(
 
 def _decorator_group_html(g: DecoratorCallGroup, max_time: float) -> str:
     if not g.condensed:
-        return "".join(
-            _decorator_call_row_html(c, max_time, intercepted=g.intercepted)
-            for c in g.calls
-        )
+        return "".join(_decorator_call_row_html(c, max_time, intercepted=g.intercepted) for c in g.calls)
     n = len(g.calls)
     hits = sum(1 for c in g.calls if c.status is BadgeStatus.RESTORED)
     misses = n - hits
@@ -2020,8 +2000,10 @@ def _decorator_group_html(g: DecoratorCallGroup, max_time: float) -> str:
     rail = theme.RAIL_CACHED if misses == 0 else theme.RAIL_EXEC
     short = g.func_name.split(".")[-1] if "." in g.func_name else g.func_name
     summary_label = (
-        f"all {n} cached" if misses == 0
-        else f"{n} calls, all computed" if hits == 0
+        f"all {n} cached"
+        if misses == 0
+        else f"{n} calls, all computed"
+        if hits == 0
         else f"{hits}/{n} cached, {misses} computed"
     )
     # Per-call mini-strip for the breakdown
@@ -2061,6 +2043,7 @@ def _decorator_group_html(g: DecoratorCallGroup, max_time: float) -> str:
 # ---------------------------------------------------------------------------
 # Overhead section
 # ---------------------------------------------------------------------------
+
 
 def _overhead_html(ob: OverheadBreakdown, max_time: float) -> str:
     """Render the whole overhead breakdown as a single dim row.
@@ -2102,6 +2085,7 @@ def _overhead_html(ob: OverheadBreakdown, max_time: float) -> str:
 # ---------------------------------------------------------------------------
 # Section dispatch
 # ---------------------------------------------------------------------------
+
 
 def _render_section_item(item: SectionItem, max_time: float) -> str:
     if isinstance(item, StatementRow):
@@ -2159,9 +2143,7 @@ def _summary_meta(header: BadgeHeader) -> tuple[str, str, str]:
     """
     # RUNNING is now carried on the header itself, so a progress badge stays a
     # progress badge even when it has no step information to show.
-    if header.status is BadgeStatus.RUNNING or (
-        header.current_step or header.total_steps or header.current_code
-    ):
+    if header.status is BadgeStatus.RUNNING or (header.current_step or header.total_steps or header.current_code):
         if header.total_steps:
             sub = f"({header.current_step}/{header.total_steps})"
         elif header.current_step:
@@ -2186,7 +2168,8 @@ def _summary_meta(header: BadgeHeader) -> tuple[str, str, str]:
             label = "CACHED"
             sub = (
                 f"saved {header.total_saved_s:.2f}s"
-                if header.total_saved_s > theme.MIN_TIME_DISPLAY_S else f"{header.total_exec_s:.2f}s"
+                if header.total_saved_s > theme.MIN_TIME_DISPLAY_S
+                else f"{header.total_exec_s:.2f}s"
             )
         else:
             label = "SKIPPED"
@@ -2196,8 +2179,11 @@ def _summary_meta(header: BadgeHeader) -> tuple[str, str, str]:
     if header.restored_count and header.computed_count:
         # See `_headline.mixed_headline` (round 29, r29s4).
         label, counts = mixed_headline(header)
-        return ("cached" if label == "CACHED" else "exec", label,
-                f"{counts} · {header.total_exec_s:.2f}s · saved {header.total_saved_s:.2f}s")
+        return (
+            "cached" if label == "CACHED" else "exec",
+            label,
+            f"{counts} · {header.total_exec_s:.2f}s · saved {header.total_saved_s:.2f}s",
+        )
     label = "EXECUTED"
     if header.total_saved_s > theme.MIN_TIME_DISPLAY_S:
         sub = f"{header.total_exec_s:.2f}s · saved {header.total_saved_s:.2f}s"
@@ -2234,14 +2220,8 @@ def _sparkline_html(badge: InteractiveBadge) -> str:
     max_t = max(t for t, _ in times) or 0.001
     for t, kind in times:
         h = max(2, int((t / max_t) * 16))
-        bars.append(
-            f'<span class="c3-spark-bar" style="height:{h}px;background:{theme.bar_color(kind)};"></span>'
-        )
-    return (
-        '<span class="c3-summary-spark"><span class="c3-spark">'
-        + "".join(bars)
-        + "</span></span>"
-    )
+        bars.append(f'<span class="c3-spark-bar" style="height:{h}px;background:{theme.bar_color(kind)};"></span>')
+    return '<span class="c3-summary-spark"><span class="c3-spark">' + "".join(bars) + "</span></span>"
 
 
 def _filter_chips_html(header: BadgeHeader) -> str:
@@ -2266,7 +2246,7 @@ def _filter_chips_html(header: BadgeHeader) -> str:
         parts.append(
             f'<span class="c3-fchip c3-fchip-warn"><span class="c3-fchip-dot"></span>'
             f'not cached<span class="c3-fchip-count">{header.uncacheable_count}'
-            f'</span></span>'
+            f"</span></span>"
         )
     if header.restored_count or header.skipped_count:
         cached = header.restored_count + header.skipped_count
@@ -2288,6 +2268,7 @@ def _filter_chips_html(header: BadgeHeader) -> str:
 # Footer
 # ---------------------------------------------------------------------------
 
+
 def _footer_html(footer: BugReportLink | None) -> str:
     bug = ""
     if footer is not None:
@@ -2296,17 +2277,13 @@ def _footer_html(footer: BugReportLink | None) -> str:
             f'title="Open a pre-filled GitHub issue to report incorrect caching behaviour">'
             f'Report incorrect caching<span class="c3-bug-arrow"> →</span></a>'
         )
-    return (
-        f'<div class="c3-footer">'
-        f'<span class="c3-hint">click a row for detail</span>'
-        f"{bug}"
-        f"</div>"
-    )
+    return f'<div class="c3-footer"><span class="c3-hint">click a row for detail</span>{bug}</div>'
 
 
 # ---------------------------------------------------------------------------
 # Top-level
 # ---------------------------------------------------------------------------
+
 
 def render_html(badge: InteractiveBadge) -> str:
     """Render an :class:`InteractiveBadge` to v3-design HTML."""
@@ -2366,10 +2343,7 @@ def _render_html_impl(badge: InteractiveBadge) -> str:
         else:
             chip_display = "—"
             chip_kind = up_kind
-        chip_html = (
-            f'<span class="c3-time-chip c3-time-chip-{chip_kind}">'
-            f'<span>{chip_display}</span></span>'
-        )
+        chip_html = f'<span class="c3-time-chip c3-time-chip-{chip_kind}"><span>{chip_display}</span></span>'
         plural = "s" if n != 1 else ""
         up_rid = _uid("rx-up")
         body_html += (
@@ -2382,10 +2356,10 @@ def _render_html_impl(badge: InteractiveBadge) -> str:
             # &nbsp; hard-codes the separator so notebook hosts that strip
             # span margins (VS Code) still render visible spacing.
             f'<span class="c3-upstream-meta">&nbsp;{n} step{plural}</span>'
-            f'</div>'
+            f"</div>"
             f'<span class="c3-dots-cell"></span>'
-            f'{bar_html}'
-            f'{chip_html}'
+            f"{bar_html}"
+            f"{chip_html}"
             f"</label>"
             f'<div class="c3-upstream-body">{rows}</div>'
             f"</div>"

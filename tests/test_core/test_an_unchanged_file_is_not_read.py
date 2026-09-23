@@ -12,6 +12,7 @@ What this gives up, on Windows, is an edit that keeps the size and puts the
 modification time back, and a write that moves no timestamp (np.memmap): see
 known-limitations.
 """
+
 from __future__ import annotations
 
 import os
@@ -38,6 +39,7 @@ def reads(monkeypatch):
     def counting(path, *a, **k):
         seen.append(path)
         return real(path, *a, **k)
+
     monkeypatch.setattr(file_dep_snapshot, "file_content_hash", counting)
     return seen
 
@@ -74,7 +76,7 @@ def test_an_edit_is_caught(tmp_path):
     path = _settled(tmp_path)
     stored = snapshot_file_deps({path})[path]
     with open(path, "w") as fh:
-        fh.write("a,b\n9,9\n")                     # same size, a new mtime
+        fh.write("a,b\n9,9\n")  # same size, a new mtime
 
     assert file_dep_is_fresh(path, stored)[0] is False
 

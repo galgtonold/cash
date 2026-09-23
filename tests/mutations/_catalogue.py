@@ -14,6 +14,7 @@ harness can tell "the suite tolerated a broken engine" apart from "the mutation
 never actually ran" -- those look identical from outside and mean opposite
 things.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -23,11 +24,11 @@ from typing import Callable
 @dataclass(frozen=True)
 class Mutation:
     name: str
-    target: str          #: module that must be loaded before ``apply`` runs
-    probe: str           #: attribute whose presence means the module is ready
-    replaces: tuple      #: ("Class.method", ...) this overwrites -- each MUST exist
+    target: str  #: module that must be loaded before ``apply`` runs
+    probe: str  #: attribute whose presence means the module is ready
+    replaces: tuple  #: ("Class.method", ...) this overwrites -- each MUST exist
     description: str
-    apply: Callable      #: (module, record) -> None
+    apply: Callable  #: (module, record) -> None
 
 
 def _upstream_dead(mod, record) -> None:
@@ -36,6 +37,7 @@ def _upstream_dead(mod, record) -> None:
     Kills cell-to-cell invalidation outright: after this, editing an upstream
     cell can no longer cause a downstream statement to re-run.
     """
+
     def dead(self, simulation_trace, broken_vars, *a, **kw):
         record()
         return [], [], 0.0
@@ -67,6 +69,7 @@ def _file_deps_always_fresh(mod, record) -> None:
     ``cached_data`` unchanged is this method's "still fresh" answer; returning
     None is how it signals invalidation.
     """
+
     def never_invalidates(self, metadata, cached_data, *a, **kw):
         record()
         return cached_data
@@ -81,6 +84,7 @@ def _statement_cache_always_misses(mod, record) -> None:
     Splitting them is the point: a suite can assert hard on one and be blind to
     the other, and only two separate mutations can tell you which.
     """
+
     def always_miss(self, tracking_state, cache_key, ttl, inputs=None, *a, **kw):
         record()
         self.last_miss_reason = None
@@ -90,7 +94,8 @@ def _statement_cache_always_misses(mod, record) -> None:
 
 
 CATALOGUE: dict[str, Mutation] = {
-    m.name: m for m in (
+    m.name: m
+    for m in (
         Mutation(
             name="upstream-dead",
             target="cash.notebook.upstream.mismatch_classifier",

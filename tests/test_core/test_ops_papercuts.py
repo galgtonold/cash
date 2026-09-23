@@ -8,6 +8,7 @@
   in a synced folder that re-uploads the whole file each time.
 * `.cash` sat next to the project and went into git with it.
 """
+
 from __future__ import annotations
 
 import os
@@ -28,7 +29,8 @@ def test_python_dash_m_and_an_import_share_one_entry(tmp_path):
     pkg = tmp_path / "pkg"
     pkg.mkdir()
     (pkg / "__init__.py").write_text("", encoding="utf-8")
-    (pkg / "mod.py").write_text(textwrap.dedent('''
+    (pkg / "mod.py").write_text(
+        textwrap.dedent("""
         import sys, time
         import cash
 
@@ -40,13 +42,22 @@ def test_python_dash_m_and_an_import_share_one_entry(tmp_path):
 
         if __name__ == "__main__":
             print(f(3))
-    '''), encoding="utf-8")
+    """),
+        encoding="utf-8",
+    )
     env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
     env.update(CASH_CACHE_DIR=str(tmp_path / ".cash"), PYTHONDONTWRITEBYTECODE="1")
-    first = subprocess.run([sys.executable, "-m", "pkg.mod"], cwd=str(tmp_path), env=env,
-                           capture_output=True, text=True, timeout=120)
-    second = subprocess.run([sys.executable, "-c", "import pkg.mod as m; print(m.f(3))"],
-                            cwd=str(tmp_path), env=env, capture_output=True, text=True, timeout=120)
+    first = subprocess.run(
+        [sys.executable, "-m", "pkg.mod"], cwd=str(tmp_path), env=env, capture_output=True, text=True, timeout=120
+    )
+    second = subprocess.run(
+        [sys.executable, "-c", "import pkg.mod as m; print(m.f(3))"],
+        cwd=str(tmp_path),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
     assert first.stdout.strip() == second.stdout.strip() == "6"
     assert "[RUN]" in first.stderr
     assert "[RUN]" not in second.stderr, "the import did not find the -m run's entry"
@@ -62,7 +73,7 @@ def test_a_clear_under_a_running_process_empties_its_ram_tier(tmp_path, monkeypa
     @c.cache
     def f(x):
         calls.append(x)
-        time.sleep(0.15)          # past the persistence floor, so it reaches disk
+        time.sleep(0.15)  # past the persistence floor, so it reaches disk
         return x * 2
 
     f(1)
@@ -70,11 +81,12 @@ def test_a_clear_under_a_running_process_empties_its_ram_tier(tmp_path, monkeypa
     assert calls == [1]
     if how == "all":
         c.backend.backends[-1]._writes.wait_all()
-        shutil.rmtree(cache_dir)                   # what `cash clear --all` does
+        shutil.rmtree(cache_dir)  # what `cash clear --all` does
     else:
         from types import SimpleNamespace
 
         from cash.__main__ import cmd_clear
+
         c.backend.backends[-1]._writes.wait_all()
         cmd_clear(SimpleNamespace(path=str(cache_dir), all=False, function="f"))
     f(1)
@@ -110,8 +122,9 @@ def test_a_clear_reaches_a_process_that_started_with_no_cache(tmp_path, monkeypa
         from types import SimpleNamespace
 
         from cash.__main__ import cmd_clear
+
         cmd_clear(SimpleNamespace(path=str(cache_dir), all=False, function="f"))
-    monkeypatch.setattr(type(c.backend), "_GENERATION_CHECK_EVERY", 0.0)   # the second has passed
+    monkeypatch.setattr(type(c.backend), "_GENERATION_CHECK_EVERY", 0.0)  # the second has passed
     f(1)
     assert calls == [1, 1], "the RAM tier served a result cleared from disk"
 
@@ -143,12 +156,12 @@ def test_a_clear_during_a_call_begun_inside_the_check_window_is_seen(tmp_path, m
         @c.cache
         def long_report(x):
             disk._writes.wait_all()
-            shutil.rmtree(cache_dir)             # the operator's clear, mid-call
+            shutil.rmtree(cache_dir)  # the operator's clear, mid-call
             time.sleep(0.15)
             return x
 
         rate(1)
-        long_report(1)                           # its store re-creates the directory
+        long_report(1)  # its store re-creates the directory
         disk._writes.wait_all()
         monkeypatch.setattr(type(c.backend), "_GENERATION_CHECK_EVERY", 0.0)
         rate(1)
@@ -181,15 +194,15 @@ def test_the_access_stamp_of_a_hot_entry_is_not_rewritten_on_every_flush(tmp_pat
     backend._writes.wait_all()
     writes = []
     import cash.backends.file_backend as fb
+
     real = fb.update_metadata_in_place
-    monkeypatch.setattr(fb, "update_metadata_in_place",
-                        lambda path, meta: (writes.append(path), real(path, meta))[1])
+    monkeypatch.setattr(fb, "update_metadata_in_place", lambda path, meta: (writes.append(path), real(path, meta))[1])
     for _ in range(3):
         backend.get("k")
         backend._flush_metadata(periodic=True)
     assert len(writes) == 1, "every periodic flush rewrote the entry"
     backend.get("k")
-    backend._flush_metadata()                      # shutdown: everything outstanding
+    backend._flush_metadata()  # shutdown: everything outstanding
     assert len(writes) == 2
 
 

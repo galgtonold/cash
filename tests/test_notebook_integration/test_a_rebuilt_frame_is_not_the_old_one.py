@@ -24,8 +24,8 @@ moved.
 The test keeps the same shape at a size that runs in seconds, and checks the
 cached consumer against the same computation done live in the same kernel.
 """
-PIN = ("cash.configure(call_cost_floor_seconds=0.0, "
-       "min_execution_time_to_cache_seconds=0.0)\n")
+
+PIN = "cash.configure(call_cost_floor_seconds=0.0, min_execution_time_to_cache_seconds=0.0)\n"
 SETUP = "import cash\n%load_ext cash\n%cash_badge print\n" + PIN + "%cash_on"
 
 DEFS = (
@@ -74,10 +74,12 @@ CONSUMER = "aged = totals(status_all)\nprint('AGED %.2f' % aged)"
 # went stale the same way, agreed with the stale `aged`, and the test passed
 # while every number in it was wrong. An oracle inside the cached notebook is
 # not an oracle unless it is exempt from the cache.
-LIVE = ("# @cash:no-cache\n"
-        "live = float(status_all.loc[status_all['outstanding'] > 0.01, 'outstanding_eur'].sum())\n"
-        "print('LIVE %.2f' % live)\n"
-        "print('VERDICT', 'MATCH' if abs(live - aged) < 0.01 else 'STALE')")
+LIVE = (
+    "# @cash:no-cache\n"
+    "live = float(status_all.loc[status_all['outstanding'] > 0.01, 'outstanding_eur'].sum())\n"
+    "print('LIVE %.2f' % live)\n"
+    "print('VERDICT', 'MATCH' if abs(live - aged) < 0.01 else 'STALE')"
+)
 
 
 def _value(out: str, label: str) -> float:
@@ -100,7 +102,8 @@ def test_the_consumer_sees_the_rebuilt_frame(nb_runner):
     aged, live = _value(consumer, "AGED"), _value(check, "LIVE")
     assert "VERDICT MATCH" in check, (
         f"cached {aged:.2f} against a live {live:.2f} -- the consumer kept the "
-        f"value from before the upstream fix:\n{consumer}\n{check}")
+        f"value from before the upstream fix:\n{consumer}\n{check}"
+    )
 
 
 def test_the_two_builds_really_do_differ(nb_runner):

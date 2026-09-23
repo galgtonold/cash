@@ -53,12 +53,14 @@ def test_plain_literal_default_edit_recomputes_consumer(nb_runner):
     changes. This is the ordinary case CAS-186 predicted the statement-text hash
     would mask -- confirm it does.
     """
-    nb_runner.create_notebook([
-        SETUP,                                          # 1
-        "def f(x, t=100):\n    return x + t",           # 2
-        "# @cash:persist\nresult = f(10)",              # 3  (forced to cache)
-        "# @cash:no-cache\nprint('R', result)",         # 4  (reads live value)
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,  # 1
+            "def f(x, t=100):\n    return x + t",  # 2
+            "# @cash:persist\nresult = f(10)",  # 3  (forced to cache)
+            "# @cash:no-cache\nprint('R', result)",  # 4  (reads live value)
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert shows_executed(nb_runner.get_output(3)), nb_runner.get_output(3)
@@ -80,9 +82,7 @@ def test_plain_literal_default_edit_recomputes_consumer(nb_runner):
     assert not shows_cached(consumer), (
         f"consumer served the literal-default result from cache (CAS-186 leak): {consumer!r}"
     )
-    assert "R 210" in out, (
-        f"consumer served a STALE literal-default result (CAS-186 leak): {out!r}"
-    )
+    assert "R 210" in out, f"consumer served a STALE literal-default result (CAS-186 leak): {out!r}"
 
 
 def test_enclosing_value_default_change_recomputes_consumer(nb_runner):
@@ -96,13 +96,15 @@ def test_enclosing_value_default_change_recomputes_consumer(nb_runner):
     failure. The masking channel under test: the analyzer counts ``THRESHOLD`` as an
     input of the ``def`` statement, so ``f``'s output lineage folds it in.
     """
-    nb_runner.create_notebook([
-        SETUP,                                          # 1
-        "THRESHOLD = 0.5",                              # 2
-        "def f(x, t=THRESHOLD):\n    return x + t",     # 3  (text is invariant)
-        "# @cash:persist\nresult = f(10)",              # 4  (forced to cache)
-        "# @cash:no-cache\nprint('R', result)",         # 5  (reads live value)
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,  # 1
+            "THRESHOLD = 0.5",  # 2
+            "def f(x, t=THRESHOLD):\n    return x + t",  # 3  (text is invariant)
+            "# @cash:persist\nresult = f(10)",  # 4  (forced to cache)
+            "# @cash:no-cache\nprint('R', result)",  # 5  (reads live value)
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert shows_executed(nb_runner.get_output(4)), nb_runner.get_output(4)
@@ -119,12 +121,10 @@ def test_enclosing_value_default_change_recomputes_consumer(nb_runner):
     consumer = nb_runner.get_output(4)
     out = nb_runner.get_output(5)
     assert not shows_cached(consumer), (
-        f"consumer served the enclosing-value default from cache (CAS-186 leak, "
-        f"the CAS-183 twin): {consumer!r}"
+        f"consumer served the enclosing-value default from cache (CAS-186 leak, the CAS-183 twin): {consumer!r}"
     )
     assert "R 110.0" in out, (
-        f"consumer served a STALE enclosing-value default (CAS-186 leak, the "
-        f"CAS-183 twin): {out!r}"
+        f"consumer served a STALE enclosing-value default (CAS-186 leak, the CAS-183 twin): {out!r}"
     )
 
 
@@ -137,12 +137,14 @@ def test_unchanged_default_still_hits(nb_runner):
     bug it guards. Pins the enclosing-value shape (the more fragile one) to a cache
     HIT when nothing changed.
     """
-    nb_runner.create_notebook([
-        SETUP,                                          # 1
-        "THRESHOLD = 0.5",                              # 2
-        "def f(x, t=THRESHOLD):\n    return x + t",     # 3
-        "# @cash:persist\nresult = f(10)",              # 4
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,  # 1
+            "THRESHOLD = 0.5",  # 2
+            "def f(x, t=THRESHOLD):\n    return x + t",  # 3
+            "# @cash:persist\nresult = f(10)",  # 4
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     # First run computes and writes the entry (RAM+DISK).
@@ -151,6 +153,4 @@ def test_unchanged_default_still_hits(nb_runner):
     # Re-run the consumer in isolation with nothing changed -> must be a cache HIT.
     nb_runner.run_cell(4)
     out = nb_runner.get_output(4)
-    assert shows_cached(out), (
-        f"unchanged default failed to HIT -- over-invalidation regression: {out!r}"
-    )
+    assert shows_cached(out), f"unchanged default failed to HIT -- over-invalidation regression: {out!r}"

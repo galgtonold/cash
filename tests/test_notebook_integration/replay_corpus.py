@@ -10,10 +10,10 @@ re-delivery, a new weekly file, a parameter, a leak fix, a chart tweak.
 Every notebook also has an unedited ``control`` scenario: if that one fails,
 the harness is wrong, not cash.
 """
+
 from __future__ import annotations
 
 import numpy as np
-
 from replay_harness import Edit, scenarios_from
 
 SETUP = "import cash\n%cash_on\n"
@@ -22,6 +22,7 @@ SETUP = "import cash\n%cash_on\n"
 # ---------------------------------------------------------------------------
 # sales -- r21s2's shape
 # ---------------------------------------------------------------------------
+
 
 def _weekly_csv(week: str, seed: int, bump: int = 0) -> str:
     rs = np.random.RandomState(seed)
@@ -35,8 +36,12 @@ _WEEKS = ["2025-01-06", "2025-01-13", "2025-01-20", "2025-01-27", "2025-02-03", 
 
 SALES_FILES = tuple(
     [(f"data/weekly/sales_{w}.csv", _weekly_csv(w, i)) for i, w in enumerate(_WEEKS)]
-    + [("data/products.csv", "sku,category,price\nA1,alpha,2.5\nA2,alpha,3.0\nB1,beta,1.2\n"
-                             "B2,beta,4.1\nC1,gamma,9.9\n")]
+    + [
+        (
+            "data/products.csv",
+            "sku,category,price\nA1,alpha,2.5\nA2,alpha,3.0\nB1,beta,1.2\nB2,beta,4.1\nC1,gamma,9.9\n",
+        )
+    ]
 )
 
 SALES = (
@@ -103,8 +108,7 @@ SALES = (
     "bt_metrics = bt.groupby('sku')['err'].mean().rename('mae')\n"
     "print('backtest', len(bt), round(bt['err'].mean(), 4))\n",
     # 8 -- forecast
-    "forecast = run_forecast(series, H)\n"
-    "print('forecast', forecast.shape, round(forecast['forecast'].sum(), 3))\n",
+    "forecast = run_forecast(series, H)\nprint('forecast', forecast.shape, round(forecast['forecast'].sum(), 3))\n",
     # 9 -- export
     "table = forecast.groupby('sku')['forecast'].sum().to_frame('fc').join(bt_metrics).round(4)\n"
     "table.to_csv(OUT / 'table.csv')\n"
@@ -145,6 +149,7 @@ SALES_TARGETS = {
 # ---------------------------------------------------------------------------
 # churn -- r21s1's shape
 # ---------------------------------------------------------------------------
+
 
 def _customers(n: int = 120, seed: int = 0, fix_row: bool = False) -> str:
     rs = np.random.RandomState(seed)
@@ -233,8 +238,7 @@ CHURN = (
     "fig.savefig(OUT / 'importance.png', dpi=40)\n"
     "plt.close(fig)\n",
     # 8 -- summary for the one-pager
-    "top = imp.iloc[-1]['feature']\n"
-    "print('summary', report, 'top driver:', top, 'rows:', len(data))\n",
+    "top = imp.iloc[-1]['feature']\nprint('summary', report, 'top driver:', top, 'rows:', len(data))\n",
     # 9 -- a second chart that REBINDS fig/ax (r21s1's last cell: re-running it
     # alone re-ran 9 statements of other cells)
     "fig, ax = plt.subplots(figsize=(4, 3))\n"
@@ -279,7 +283,7 @@ def expected_recompute(scenario) -> list[str]:
     the notebook path slower than no cache in round 21.
     """
     if scenario.notebook == "churn":
-        return []                       # the events file never changes
+        return []  # the events file never changes
     done = set().union(*(_sales_needs(scenario.name, c) for c in scenario.first))
     return sorted(_sales_needs(scenario.name, scenario.target) - done)
 
@@ -293,9 +297,8 @@ def _sales_needs(edit: str, cell: int) -> set[str]:
     return set()
 
 
-SCENARIOS = (
-    scenarios_from("sales", SALES, SALES_FILES, SALES_EDITS, SALES_TARGETS,
-                   restart=("corrected_file", "new_week"))
-    + scenarios_from("churn", CHURN, CHURN_FILES, CHURN_EDITS, CHURN_TARGETS,
-                     restart=("corrected_file", "region", "eval_rows"))
+SCENARIOS = scenarios_from(
+    "sales", SALES, SALES_FILES, SALES_EDITS, SALES_TARGETS, restart=("corrected_file", "new_week")
+) + scenarios_from(
+    "churn", CHURN, CHURN_FILES, CHURN_EDITS, CHURN_TARGETS, restart=("corrected_file", "region", "eval_rows")
 )

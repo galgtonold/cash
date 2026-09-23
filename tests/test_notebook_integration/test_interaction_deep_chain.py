@@ -14,13 +14,15 @@ class TestDeepChainPropagation:
 
     def test_edit_head_of_chain(self, nb_runner):
         """5-cell chain, edit the first cell."""
-        nb_runner.create_notebook([
-            "a = 1  # head",
-            "b = a + 1  # step 2",
-            "c = b * 2  # step 3",
-            "d = c + 10  # step 4",
-            "result = d * 3\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 1  # head",
+                "b = a + 1  # step 2",
+                "c = b * 2  # step 3",
+                "d = c + 10  # step 4",
+                "result = d * 3\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         # a=1, b=2, c=4, d=14, result=42
@@ -34,13 +36,15 @@ class TestDeepChainPropagation:
 
     def test_edit_middle_of_chain(self, nb_runner):
         """5-cell chain, edit the middle cell."""
-        nb_runner.create_notebook([
-            "x = 2  # start",
-            "y = x * 3  # middle1",
-            "z = y + 1  # middle2",
-            "w = z ** 2  # step4",
-            "out = w - 1\nprint(f'out = {out}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 2  # start",
+                "y = x * 3  # middle1",
+                "z = y + 1  # middle2",
+                "w = z ** 2  # step4",
+                "out = w - 1\nprint(f'out = {out}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         # x=2, y=6, z=7, w=49, out=48
@@ -54,13 +58,15 @@ class TestDeepChainPropagation:
 
     def test_edit_tail_of_chain(self, nb_runner):
         """5-cell chain, edit the last cell."""
-        nb_runner.create_notebook([
-            "p = 5  # start",
-            "q = p * 2  # step2",
-            "r = q + 3  # step3",
-            "s = r - 1  # step4",
-            "final = s\nprint(f'final = {final}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "p = 5  # start",
+                "q = p * 2  # step2",
+                "r = q + 3  # step3",
+                "s = r - 1  # step4",
+                "final = s\nprint(f'final = {final}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         # p=5, q=10, r=13, s=12, final=12
@@ -73,13 +79,15 @@ class TestDeepChainPropagation:
 
     def test_edit_two_points_in_chain(self, nb_runner):
         """Edit two non-adjacent cells in a chain simultaneously."""
-        nb_runner.create_notebook([
-            "a = 1  # chain start",
-            "b = a + 10  # chain step2",
-            "c = b * 2  # chain step3",
-            "d = c + 5  # chain step4",
-            "e = d * 3\nprint(f'e = {e}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 1  # chain start",
+                "b = a + 10  # chain step2",
+                "c = b * 2  # chain step3",
+                "d = c + 5  # chain step4",
+                "e = d * 3\nprint(f'e = {e}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         # a=1, b=11, c=22, d=27, e=81
@@ -98,12 +106,14 @@ class TestChainWithFunctions:
 
     def test_function_chain_edit(self, nb_runner):
         """Chain where each cell defines a function using the previous."""
-        nb_runner.create_notebook([
-            "def step1(x):\n    return x + 1",
-            "def step2(x):\n    return step1(x) * 2",
-            "def step3(x):\n    return step2(x) + 10",
-            "result = step3(5)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def step1(x):\n    return x + 1",
+                "def step2(x):\n    return step1(x) * 2",
+                "def step3(x):\n    return step2(x) + 10",
+                "result = step3(5)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         # step1(5)=6, step2(5)=12, step3(5)=22
@@ -117,12 +127,14 @@ class TestChainWithFunctions:
 
     def test_lambda_chain_edit(self, nb_runner):
         """Chain of lambda functions with edits."""
-        nb_runner.create_notebook([
-            "fn1 = lambda x: x * 2",
-            "fn2 = lambda x: fn1(x) + 3",
-            "fn3 = lambda x: fn2(x) ** 2",
-            "out = fn3(4)\nprint(f'out = {out}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "fn1 = lambda x: x * 2",
+                "fn2 = lambda x: fn1(x) + 3",
+                "fn3 = lambda x: fn2(x) ** 2",
+                "out = fn3(4)\nprint(f'out = {out}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         # fn1(4)=8, fn2(4)=11, fn3(4)=121

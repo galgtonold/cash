@@ -17,7 +17,7 @@ The CRITICAL guard here is ``test_changed_file_feeding_loop_reruns``: a loop
 that GENUINELY consumes the file's data MUST still re-execute when the file
 changes. If that regresses, the fix under-invalidates.
 """
-import json
+
 import os
 import time
 
@@ -51,11 +51,13 @@ def test_file_touch_does_not_rerun_unrelated_loop(nb_runner, tmp_path):
     """
     params = tmp_path / "params.json"
     params.write_text('{"k": 1}', encoding="utf-8")
-    nb_runner.create_notebook([
-        "import json\ncfg = json.load(open('params.json'))",
-        "results = []\nfor i in range(6):\n    results.append(i * i)",
-        "print('s=' + str(sum(results)) + ' k=' + str(cfg['k']))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import json\ncfg = json.load(open('params.json'))",
+            "results = []\nfor i in range(6):\n    results.append(i * i)",
+            "print('s=' + str(sum(results)) + ' k=' + str(cfg['k']))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_debug()
     nb_runner.enable_persist()
@@ -73,8 +75,7 @@ def test_file_touch_does_not_rerun_unrelated_loop(nb_runner, tmp_path):
     raw = nb_runner.get_raw_output(3)
     assert "s=55 k=1" in out, out
     assert not _loop_reran(raw), (
-        "mtime touch of an unrelated file re-executed the loop chain "
-        f"(markers: {_markers(raw)})"
+        f"mtime touch of an unrelated file re-executed the loop chain (markers: {_markers(raw)})"
     )
 
 
@@ -88,11 +89,13 @@ def test_changed_unrelated_file_does_not_rerun_loop(nb_runner, tmp_path):
     """
     params = tmp_path / "params.json"
     params.write_text('{"k": 1}', encoding="utf-8")
-    nb_runner.create_notebook([
-        "import json\ncfg = json.load(open('params.json'))",
-        "results = []\nfor i in range(6):\n    results.append(i * i)",
-        "print('s=' + str(sum(results)) + ' k=' + str(cfg['k']))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import json\ncfg = json.load(open('params.json'))",
+            "results = []\nfor i in range(6):\n    results.append(i * i)",
+            "print('s=' + str(sum(results)) + ' k=' + str(cfg['k']))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_debug()
     nb_runner.enable_persist()
@@ -109,10 +112,7 @@ def test_changed_unrelated_file_does_not_rerun_loop(nb_runner, tmp_path):
     # New file data must be reflected (the reader re-ran)...
     assert "s=55 k=2" in out, out
     # ...but the unrelated loop chain must NOT have re-executed.
-    assert not _loop_reran(raw), (
-        "changed unrelated file re-executed the loop chain "
-        f"(markers: {_markers(raw)})"
-    )
+    assert not _loop_reran(raw), f"changed unrelated file re-executed the loop chain (markers: {_markers(raw)})"
 
 
 def test_changed_file_feeding_loop_reruns(nb_runner, tmp_path):
@@ -126,12 +126,14 @@ def test_changed_file_feeding_loop_reruns(nb_runner, tmp_path):
     """
     params = tmp_path / "params.json"
     params.write_text('{"vals": [1, 2, 3]}', encoding="utf-8")
-    nb_runner.create_notebook([
-        "import json",
-        "data = json.load(open('params.json'))['vals']",
-        "acc = []\nfor v in data:\n    acc.append(v * 2)",
-        "print('acc=' + str(acc))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import json",
+            "data = json.load(open('params.json'))['vals']",
+            "acc = []\nfor v in data:\n    acc.append(v * 2)",
+            "print('acc=' + str(acc))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_debug()
     nb_runner.enable_persist()
@@ -147,12 +149,8 @@ def test_changed_file_feeding_loop_reruns(nb_runner, tmp_path):
     out = nb_runner.get_output(4)
     raw = nb_runner.get_raw_output(4)
     # Ground truth for the NEW data [10, 20]: each doubled.
-    assert "acc=[20, 40]" in out, (
-        "loop consuming changed file data served STALE result (under-invalidation): "
-        f"{out!r}"
-    )
+    assert "acc=[20, 40]" in out, f"loop consuming changed file data served STALE result (under-invalidation): {out!r}"
     # And the loop chain must have actually re-executed to produce it.
     assert _loop_reran(raw), (
-        "loop consuming changed file data did not re-execute per cash's markers "
-        f"(markers: {_markers(raw)})"
+        f"loop consuming changed file data did not re-execute per cash's markers (markers: {_markers(raw)})"
     )

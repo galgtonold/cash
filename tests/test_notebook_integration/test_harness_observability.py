@@ -21,6 +21,7 @@ Three instrument failures, each of which has already cost real work:
 These tests pin the instruments themselves. If they fail, every conclusion drawn
 with the harness is suspect.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.timeout(240)]
@@ -63,9 +64,11 @@ def test_notebook_path_injection_can_be_disabled(nb_runner):
     With injection off, ``__vsc_ipynb_file__`` must genuinely be absent — that
     absence is the whole point, and it is what CAS-205 needed to reproduce.
     """
-    nb_runner.create_notebook([
-        "print('HAS_PATH=' + str('__vsc_ipynb_file__' in dir()))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "print('HAS_PATH=' + str('__vsc_ipynb_file__' in dir()))",
+        ]
+    )
     nb_runner.start_kernel(with_cash=True, inject_notebook_path=False)
     nb_runner.run_all()
     assert "HAS_PATH=False" in nb_runner.get_output(1)
@@ -73,9 +76,11 @@ def test_notebook_path_injection_can_be_disabled(nb_runner):
 
 def test_notebook_path_is_injected_by_default(nb_runner):
     """Control for the above: the default really does inject."""
-    nb_runner.create_notebook([
-        "print('HAS_PATH=' + str('__vsc_ipynb_file__' in dir()))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "print('HAS_PATH=' + str('__vsc_ipynb_file__' in dir()))",
+        ]
+    )
     nb_runner.start_kernel(with_cash=True)
     nb_runner.run_all()
     assert "HAS_PATH=True" in nb_runner.get_output(1)
@@ -83,10 +88,12 @@ def test_notebook_path_is_injected_by_default(nb_runner):
 
 def test_cash_survives_restart_and_state_is_cleared(nb_runner):
     """``restart()`` really restarts: in-kernel state is gone afterwards."""
-    nb_runner.create_notebook([
-        "marker = 'before'",
-        "print('MARKER=' + globals().get('marker', 'ABSENT'))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "marker = 'before'",
+            "print('MARKER=' + globals().get('marker', 'ABSENT'))",
+        ]
+    )
     nb_runner.start_kernel(with_cash=True)
     nb_runner.run_all()
     assert "MARKER=before" in nb_runner.get_output(2)
@@ -103,9 +110,11 @@ def test_restart_preserves_the_no_injection_choice(nb_runner):
     Re-injecting on restart would silently repair the very environment the test
     is trying to reproduce — the failure would vanish mid-test.
     """
-    nb_runner.create_notebook([
-        "print('HAS_PATH=' + str('__vsc_ipynb_file__' in dir()))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "print('HAS_PATH=' + str('__vsc_ipynb_file__' in dir()))",
+        ]
+    )
     nb_runner.start_kernel(with_cash=True, inject_notebook_path=False)
     nb_runner.run_all()
     assert "HAS_PATH=False" in nb_runner.get_output(1)

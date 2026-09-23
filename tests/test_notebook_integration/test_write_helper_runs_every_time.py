@@ -7,13 +7,14 @@ without the chart, 3/3. Whether it happened depended on whether the save
 took long enough to be persisted; persistence is forced here so the
 failure does not depend on the machine.
 """
+
 from pathlib import Path
 
 import pytest
 
 pytestmark = [pytest.mark.integration]
 
-SETUP = '''import numpy as np
+SETUP = """import numpy as np
 import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
@@ -30,12 +31,12 @@ def save(fig, name):
 
 def log(msg):
     open(OUT / "log.txt", "a").write(msg + "\\n")
-'''
-CHART = '''fig, axes = plt.subplots(2, 3, figsize=(8, 5))
+"""
+CHART = """fig, axes = plt.subplots(2, 3, figsize=(8, 5))
 for ax, col in zip(axes.flat, df.columns):
     df[col].plot(ax=ax)
 save(fig, "grid.png")
-'''
+"""
 
 
 def test_warm_restart_and_run_all_writes_the_chart(nb_runner):
@@ -56,16 +57,14 @@ def test_warm_restart_and_run_all_writes_the_chart(nb_runner):
 def test_a_helper_that_only_appends_still_caches(nb_runner):
     """Control: an append is a skippable side effect, like a print -- a
     function that logs keeps caching."""
-    nb_runner.create_notebook([
-        "import cash\n%cash_on", SETUP,
-        "import time\n"
-        "def slow(v):\n"
-        "    log('slow')\n"
-        "    time.sleep(0.3)\n"
-        "    return v * 2\n"
-        "x = slow(21)",
-        "print('x =', x)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import cash\n%cash_on",
+            SETUP,
+            "import time\ndef slow(v):\n    log('slow')\n    time.sleep(0.3)\n    return v * 2\nx = slow(21)",
+            "print('x =', x)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_persist()
     nb_runner.run_all()

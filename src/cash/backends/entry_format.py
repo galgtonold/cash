@@ -61,6 +61,7 @@ of writing or reading the payload it covers. It detects damage, not forgery:
 nothing here defends against someone who can write the cache directory, and
 nothing needs to.
 """
+
 from __future__ import annotations
 
 import pickle
@@ -86,7 +87,7 @@ __all__ = [
 
 MAGIC = b"CSH2"
 HEADER = struct.Struct("<4sII")
-HEADER_SIZE = HEADER.size          # 12
+HEADER_SIZE = HEADER.size  # 12
 META_SLACK = 64
 ENTRY_SUFFIX = ".entry"
 
@@ -119,12 +120,14 @@ def pack_entry(metadata: dict[str, Any], payload: bytes) -> bytes:
     """Serialize one entry. *payload* is stored verbatim -- compress before."""
     meta_bytes = pickle.dumps({**metadata, CHECKSUM_FIELD: _checksum(payload)})
     cap = len(meta_bytes) + META_SLACK
-    return b"".join((
-        HEADER.pack(MAGIC, len(meta_bytes), cap),
-        meta_bytes,
-        bytes(cap - len(meta_bytes)),
-        payload,
-    ))
+    return b"".join(
+        (
+            HEADER.pack(MAGIC, len(meta_bytes), cap),
+            meta_bytes,
+            bytes(cap - len(meta_bytes)),
+            payload,
+        )
+    )
 
 
 def packed_size(metadata: dict[str, Any], payload_len: int) -> int:
@@ -159,13 +162,12 @@ def unpack_entry(blob: bytes, *, with_payload: bool) -> tuple[dict[str, Any], by
         raise CorruptEntry(f"meta_len {meta_len} > cap {meta_cap}")
     end = HEADER_SIZE + meta_len
     if len(blob) < end:
-        raise CorruptEntry(
-            f"have {len(blob)} bytes, metadata needs {end}")
+        raise CorruptEntry(f"have {len(blob)} bytes, metadata needs {end}")
     metadata = pickle.loads(blob[HEADER_SIZE:end])
     expected = metadata.pop(CHECKSUM_FIELD, None)
     if not with_payload:
         return metadata, None
-    payload = blob[HEADER_SIZE + meta_cap:]
+    payload = blob[HEADER_SIZE + meta_cap :]
     _verify(payload, expected, "entry")
     return metadata, payload
 
@@ -223,7 +225,8 @@ def _verify(payload: bytes, expected: bytes | None, where: str) -> None:
     if found != expected:
         raise CorruptEntry(
             f"{where}: payload checksum {found.hex()} != stored {expected.hex()} "
-            f"({len(payload)} bytes) -- the value will be recomputed")
+            f"({len(payload)} bytes) -- the value will be recomputed"
+        )
 
 
 def update_metadata_in_place(path: str, metadata: dict[str, Any]) -> bool:

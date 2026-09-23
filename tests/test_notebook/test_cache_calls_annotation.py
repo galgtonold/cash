@@ -15,7 +15,6 @@ from cash.notebook.annotations import CacheAnnotation, parse_annotation_line
 
 
 class TestCacheCallsAnnotation(unittest.TestCase):
-
     def test_parse_cache_calls(self):
         """``@cash:cache-calls`` sets cache_calls=True and nothing else."""
         ann = parse_annotation_line("# @cash:cache-calls")

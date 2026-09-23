@@ -43,8 +43,8 @@ tester and five by the maintainer all came out clean:
 4. another consumer asked for FIRST, so the repair re-runs the loop for its sake
    and consumes the pending edit, leaving the derived value stale in memory.
 """
-PIN = ("cash.configure(call_cost_floor_seconds=0.0, "
-       "min_execution_time_to_cache_seconds=0.0)\n")
+
+PIN = "cash.configure(call_cost_floor_seconds=0.0, min_execution_time_to_cache_seconds=0.0)\n"
 SETUP = "import cash\n%load_ext cash\n%cash_badge print\n" + PIN + "%cash_on"
 IMPORTS = "import numpy as np, pandas as pd, time, sys"
 
@@ -73,8 +73,7 @@ LOOP = (
 CONSUMER_A = "print('PER_KEY %.4f' % sum(per_key.values()))"
 CONSUMER_B = "print('EXPORT %.4f' % summary['rate'].sum())"
 # Exempt from the cache: an oracle that caches is not an oracle.
-LIVE = ("# @cash:no-cache\n"
-        "print('LIVE %.4f' % sum(round(score_one(k), 4) for k in KEYS))")
+LIVE = "# @cash:no-cache\nprint('LIVE %.4f' % sum(round(score_one(k), 4) for k in KEYS))"
 
 CELLS = [SETUP, IMPORTS, CUTOFF_BEFORE, HELPERS, LOOP, CONSUMER_A, CONSUMER_B, LIVE]
 
@@ -91,12 +90,12 @@ def _drive(nb_runner) -> tuple[str, str, str]:
     nb_runner.run_all()
 
     nb_runner.restart()
-    nb_runner.run_cells([1, 2, 3, 4, 5])          # 1-based: setup .. the loop
+    nb_runner.run_cells([1, 2, 3, 4, 5])  # 1-based: setup .. the loop
     after_restart = nb_runner.get_output(5)
 
-    nb_runner.set_cell_source(3, CUTOFF_AFTER)    # the upstream edit
-    nb_runner.run_cells([6])                      # consumer A first: repairs the loop
-    nb_runner.run_cells([7, 8])                   # then the consumer of `summary`
+    nb_runner.set_cell_source(3, CUTOFF_AFTER)  # the upstream edit
+    nb_runner.run_cells([6])  # consumer A first: repairs the loop
+    nb_runner.run_cells([7, 8])  # then the consumer of `summary`
     return after_restart, nb_runner.get_output(7), nb_runner.get_output(8)
 
 
@@ -106,7 +105,8 @@ def test_a_restored_derived_value_is_rebuilt_when_its_loop_re_runs(nb_runner):
     assert abs(export - live) < 1e-9, (
         f"exported {export:.4f} against a live {live:.4f} -- the value restored "
         f"before the edit was trusted from memory after its loop re-ran:\n"
-        f"{export_out}")
+        f"{export_out}"
+    )
 
 
 def test_the_derived_value_really_was_restored(nb_runner):
@@ -118,5 +118,5 @@ def test_the_derived_value_really_was_restored(nb_runner):
     """
     after_restart, _export, _live = _drive(nb_runner)
     assert "CACHED: summary = summarise(rows)" in after_restart, (
-        "the derived statement was not restored from cache, so this notebook "
-        f"cannot exhibit the bug:\n{after_restart}")
+        f"the derived statement was not restored from cache, so this notebook cannot exhibit the bug:\n{after_restart}"
+    )

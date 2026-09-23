@@ -32,6 +32,7 @@ This test asserts that exit code, so a scenario flipping either way fails CI:
 The direction matters less than the mismatch -- the point is that this file and
 the harness's baseline must never disagree about what is currently true.
 """
+
 import os
 import shlex
 import subprocess

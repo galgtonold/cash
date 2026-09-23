@@ -36,6 +36,7 @@ pass a naive version of the staleness tests:
   would recompute AND write a fresh entry on every call, unbounded.
 * `test_an_unrelated_global_does_not_invalidate` — over-invalidation control.
 """
+
 from __future__ import annotations
 
 import warnings
@@ -52,6 +53,7 @@ def c(tmp_path):
 
 
 # --- the four spellings that were broken ---------------------------------- #
+
 
 def test_a_global_passed_to_a_builtin_invalidates(c):
     """The CAS-270 repro: `sum(G)` put G beyond the argument rule."""
@@ -97,6 +99,7 @@ def test_a_global_passed_to_len_invalidates(c):
 
 # --- controls: these worked BEFORE the fix and must still work ------------- #
 
+
 def test_a_subscript_read_still_invalidates(c):
     ns = _make_module_ns()
     ns["G"] = [1, 2, 3]
@@ -134,6 +137,7 @@ def test_an_unrelated_global_does_not_invalidate(c):
 
 # --- the regression the old exclusion existed to prevent ------------------- #
 
+
 def test_an_accumulator_converges_instead_of_missing_forever(c):
     """A callee that MUTATES the global must not miss forever.
 
@@ -155,14 +159,17 @@ def test_an_accumulator_converges_instead_of_missing_forever(c):
 
     assert vals[2:] == [vals[2]] * 3, f"never converged: {vals}"
     assert len(ns["ACC"]) <= 2, f"accumulator kept growing: {ns['ACC']}"
-    ours = [w for w in caught
-            if issubclass(w.category, CashImpurityWarning)
-            and "modifies the module global" in str(w.message)]
+    ours = [
+        w
+        for w in caught
+        if issubclass(w.category, CashImpurityWarning) and "modifies the module global" in str(w.message)
+    ]
     assert len(ours) == 1, f"expected exactly one warning, got {len(ours)}"
     assert "'ACC'" in str(ours[0].message)
 
 
 # --- helpers --------------------------------------------------------------- #
+
 
 def _make_module_ns() -> dict:
     """A fresh module-like namespace with the callees the tests reference.
@@ -171,6 +178,7 @@ def _make_module_ns() -> dict:
     (the demotion is keyed on the code object, and `_define` compiles a new one
     per call).
     """
+
     class _M:
         def predict(self, x):
             return sum(x)
@@ -182,8 +190,7 @@ def _make_module_ns() -> dict:
         x.append(len(x))
         return len(x)
 
-    return {"__name__": "cash_test_ns", "helper": helper,
-            "model": _M(), "mutate": mutate, "sum": sum, "len": len}
+    return {"__name__": "cash_test_ns", "helper": helper, "model": _M(), "mutate": mutate, "sum": sum, "len": len}
 
 
 def _define(c, ns: dict, src: str):
@@ -219,18 +226,22 @@ def _make_closure(c, kind: str):
             return sum(x)
 
     if kind == "bare":
+
         @c.cache
         def inner():
             return sum(data)
     elif kind == "method":
+
         @c.cache
         def inner():
             return _M().predict(data)
     elif kind == "subscript":
+
         @c.cache
         def inner():
             return data[0] + data[1]
     else:
+
         @c.cache
         def inner():
             return sum(v for v in data)
@@ -277,9 +288,9 @@ def test_a_mutated_capture_converges_instead_of_missing_forever(c):
 
     assert vals[2:] == [vals[2]] * 3, f"never converged: {vals}"
     assert len(acc) <= 2, f"capture kept growing: {acc}"
-    ours = [w for w in caught
-            if issubclass(w.category, CashImpurityWarning)
-            and "variable it captures" in str(w.message)]
+    ours = [
+        w for w in caught if issubclass(w.category, CashImpurityWarning) and "variable it captures" in str(w.message)
+    ]
     assert len(ours) == 1, f"expected exactly one warning, got {len(ours)}"
 
 
@@ -289,10 +300,12 @@ def test_two_closures_from_one_factory_do_not_collide(c):
     Two closures from the same factory share source AND qualname, so without
     the capture fold they collide on one key and return each other's results.
     """
+
     def factory(n):
         @c.cache
         def f():
             return sum([n, n])
+
         return f
 
     assert factory(2)() == 4

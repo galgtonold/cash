@@ -24,6 +24,7 @@ Counted, never timed. `next_seq()` sleeps past the ~10ms cost floor so it is
 actually eligible for caching -- a callee cheaper than that floor is never
 stored at all, and "frozen" and "not cached" would be indistinguishable.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.loops]
@@ -40,12 +41,15 @@ def next_seq():
 
 
 def test_both_spellings_agree(nb_runner):
-    nb_runner.create_notebook([
-        SETUP, DEFS,
-        "a = next_seq()\nprint('A', a)",
-        "seen = []",
-        "seen.append(next_seq())\nprint('B', seen)",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            DEFS,
+            "a = next_seq()\nprint('A', a)",
+            "seen = []",
+            "seen.append(next_seq())\nprint('B', seen)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -85,12 +89,15 @@ def test_both_spellings_agree_with_the_no_cash_oracle_showing_they_would_differ(
     spelling shows the same thing more simply, since ``a`` is overwritten
     rather than accumulated (``'A 3'`` after the second run).
     """
-    nb_runner.create_notebook([
-        "import cash\n", DEFS,
-        "a = next_seq()\nprint('A', a)",
-        "seen = []",
-        "seen.append(next_seq())\nprint('B', seen)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import cash\n",
+            DEFS,
+            "a = next_seq()\nprint('A', a)",
+            "seen = []",
+            "seen.append(next_seq())\nprint('B', seen)",
+        ]
+    )
     nb_runner.start_kernel(with_cash=False)
     nb_runner.run_all()
 
@@ -98,9 +105,5 @@ def test_both_spellings_agree_with_the_no_cash_oracle_showing_they_would_differ(
     assert "B [2]" in nb_runner.get_output(5)
 
     nb_runner.run_cells([3, 5])
-    assert "A 3" in nb_runner.get_output(3), (
-        "the assignment spelling should keep advancing with cash off"
-    )
-    assert "B [2, 4]" in nb_runner.get_output(5), (
-        "the append spelling should keep advancing with cash off"
-    )
+    assert "A 3" in nb_runner.get_output(3), "the assignment spelling should keep advancing with cash off"
+    assert "B [2, 4]" in nb_runner.get_output(5), "the append spelling should keep advancing with cash off"

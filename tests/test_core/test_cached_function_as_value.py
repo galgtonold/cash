@@ -7,6 +7,7 @@ old sum. The same held for ``pool.map(inner, ...)``, ``delayed(inner)``, a
 ``partial(inner)``: only a CALL written in the body made a graph edge. That is
 the ordinary way to parallelise a cached step.
 """
+
 from __future__ import annotations
 
 import os
@@ -19,7 +20,7 @@ pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
 
 HELPERS = "def helper(i):\n    return i * {K}\n"
 
-INNER = '''\
+INNER = """\
 import cash
 from helpers import helper
 
@@ -31,9 +32,9 @@ def inner(n):
 
 def plain_step(n):
     return sum(helper(i) for i in range(n))
-'''
+"""
 
-JOB = '''\
+JOB = """\
 import functools, sys, time
 import cash
 from inner import inner, plain_step
@@ -92,7 +93,7 @@ def by_plain_table(n):
 
 print(by_map(10), by_partial_global(10), by_list(10), by_default(10), by_call(10),
       by_cached_table(10), by_plain_table(10))
-'''
+"""
 
 FORMS = {"map", "partial-global", "list", "default", "call", "cached-table", "plain-table"}
 
@@ -100,11 +101,9 @@ FORMS = {"map", "partial-global", "list", "default", "call", "cached-table", "pl
 def _run(proj):
     env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
     env.update(PYTHONDONTWRITEBYTECODE="1", CASH_CACHE_DIR=str(proj / ".cash"))
-    p = subprocess.run([sys.executable, "job.py"], cwd=str(proj), env=env,
-                       capture_output=True, text=True, timeout=120)
+    p = subprocess.run([sys.executable, "job.py"], cwd=str(proj), env=env, capture_output=True, text=True, timeout=120)
     assert p.returncode == 0, p.stderr[-2000:]
-    ran = {line.split(maxsplit=1)[1] for line in p.stderr.splitlines()
-           if line.startswith("[RUN] ")}
+    ran = {line.split(maxsplit=1)[1] for line in p.stderr.splitlines() if line.startswith("[RUN] ")}
     return p.stdout.strip(), ran
 
 
@@ -126,8 +125,9 @@ def test_editing_the_body_of_a_cached_function_in_a_registry_invalidates_its_use
     (tmp_path / "inner.py").write_text(INNER, encoding="utf-8")
     (tmp_path / "helpers.py").write_text(HELPERS.format(K=2), encoding="utf-8")
     assert _run(tmp_path)[0] == "90 90 90 90 90 90 90"
-    edited = INNER.replace("    return sum(helper(i) for i in range(n))",
-                           "    return sum(helper(i) for i in range(n)) + 1", 1)
+    edited = INNER.replace(
+        "    return sum(helper(i) for i in range(n))", "    return sum(helper(i) for i in range(n)) + 1", 1
+    )
     assert edited != INNER
     (tmp_path / "inner.py").write_text(edited, encoding="utf-8")
     out, ran = _run(tmp_path)

@@ -16,6 +16,7 @@ the same seven steps on a quiet machine stays at 9-12 s throughout
 Every reading here carries ``total``, as psutil's always does; a reading
 without one takes the old path, and ``test_memory_eviction.py`` covers that.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -42,9 +43,10 @@ def machine(monkeypatch):
     """A 16 GB machine whose memory reading the test sets."""
     state = SimpleNamespace(percent=50.0, total=16 * GB)
     monkeypatch.setattr(
-        memory_backend, "psutil",
-        SimpleNamespace(virtual_memory=lambda: SimpleNamespace(
-            percent=state.percent, total=state.total)))
+        memory_backend,
+        "psutil",
+        SimpleNamespace(virtual_memory=lambda: SimpleNamespace(percent=state.percent, total=state.total)),
+    )
     return state
 
 
@@ -63,14 +65,15 @@ class TestPressureThatIsNotOurs:
             _put(b, "k%03d" % i, MB, 1.0)
         assert len(b._store) == 100
 
-        machine.percent = 95.0            # 15.2 GB in use; this tier holds 100 MB
+        machine.percent = 95.0  # 15.2 GB in use; this tier holds 100 MB
         b._check_and_evict()
 
         # Its share of a 2.24 GB overshoot is 2.24 GB * 100 MB / 15.2 GB ~ 15 MB.
         held = len(b._store)
         assert held >= 80, (
             "a tier holding 0.7% of the memory in use gave back %d of 100 "
-            "entries to pressure it cannot relieve" % (100 - held))
+            "entries to pressure it cannot relieve" % (100 - held)
+        )
         assert held < 100, "it should still give back its share"
 
     def test_sustained_pressure_holds_the_tier_flat_instead_of_draining_it(self, machine):
@@ -80,12 +83,13 @@ class TestPressureThatIsNotOurs:
             _put(b, "k%03d" % i, MB, 1.0)
 
         machine.percent = 95.0
-        for i in range(400):                # a check on every one of these writes
+        for i in range(400):  # a check on every one of these writes
             _put(b, "new%03d" % i, MB, 1.0)
 
         assert len(b._store) >= 70, (
             "400 writes under sustained external pressure drained the tier to "
-            "%d entries; each check took its share again" % len(b._store))
+            "%d entries; each check took its share again" % len(b._store)
+        )
 
     def test_new_writes_displace_the_least_valuable_old_ones(self, machine):
         b = _tier()
@@ -104,19 +108,19 @@ class TestPressureThatIsOurs:
     """This tier IS most of the memory in use."""
 
     def test_it_still_gives_back_nearly_the_whole_overshoot(self, machine):
-        machine.total = 1 * GB             # a small machine this tier fills
+        machine.total = 1 * GB  # a small machine this tier fills
         b = _tier()
         for i in range(900):
             _put(b, "k%03d" % i, MB, 1.0)  # 900 MB of a 950 MB footprint
 
-        machine.percent = 95.0            # 950 MB in use; target is 81%, 810 MB
+        machine.percent = 95.0  # 950 MB in use; target is 81%, 810 MB
         b._check_and_evict()
 
         freed = (900 - len(b._store)) * MB
         # Overshoot 140 MB; its share is 140 MB * 900/950 ~ 133 MB.
-        assert freed >= 120 * MB, (
-            "a tier that is 95%% of the pressure freed only %d MB of a 140 MB "
-            "overshoot" % (freed // MB))
+        assert freed >= 120 * MB, "a tier that is 95%% of the pressure freed only %d MB of a 140 MB overshoot" % (
+            freed // MB
+        )
 
 
 class TestEpisodes:
@@ -136,14 +140,13 @@ class TestEpisodes:
         b._check_and_evict()
         after_first = len(b._store)
 
-        machine.percent = 91.5            # steady: jitter, not worsening
+        machine.percent = 91.5  # steady: jitter, not worsening
         b._check_and_evict()
         assert len(b._store) == after_first, "steady pressure must hold the tier flat"
 
-        machine.percent = 97.0            # worse by 6 points
+        machine.percent = 97.0  # worse by 6 points
         b._check_and_evict()
-        assert len(b._store) < after_first, (
-            "pressure climbed from 91% to 97% and the tier gave back nothing more")
+        assert len(b._store) < after_first, "pressure climbed from 91% to 97% and the tier gave back nothing more"
 
     def test_an_episode_ends_when_the_pressure_does(self, machine):
         b = _tier()

@@ -29,16 +29,12 @@ The badge output IS the artifact under test here, so capturing it verbatim is
 the correct evidence (unlike caching claims, which need an external counter).
 Non-ASCII is stripped before printing to survive the Windows console.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.timeout(400)]
 
-SETUP = (
-    "import cash\n"
-    "%cash_on\n"
-    "%cash_badge print\n"
-    "import time"
-)
+SETUP = "import cash\n%cash_on\n%cash_badge print\nimport time"
 
 CRASH = "AttributeError"
 
@@ -57,6 +53,7 @@ def _check(nb_runner, label: str, cell_num: int) -> str:
 # THE BUG: a control structure nested inside another one.
 # ---------------------------------------------------------------------------
 
+
 def test_for_nested_in_if_badge_print_crashes(nb_runner):
     """``for`` inside ``if`` -> ControlGroup.rows holds a ForLoopGroup, which
     is handed straight to ``_row_line``.
@@ -71,15 +68,12 @@ def test_for_nested_in_if_badge_print_crashes(nb_runner):
 
     and the execute_reply never arrives (client times out at 120s).
     """
-    nb_runner.create_notebook([
-        SETUP,
-        "flag = True\n"
-        "total = 0\n"
-        "if flag:\n"
-        "    for i in range(4):\n"
-        "        time.sleep(0.02)\n"
-        "        total += i",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            "flag = True\ntotal = 0\nif flag:\n    for i in range(4):\n        time.sleep(0.02)\n        total += i",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -91,16 +85,12 @@ def test_nested_if_in_if_badge_print(nb_runner):
     """``if`` inside ``if`` with a single-statement inner body -- the shape
     most likely to put a ControlGroupSingle in ControlGroup.rows (the ticket's
     original static hypothesis)."""
-    nb_runner.create_notebook([
-        SETUP,
-        "flag = True\n"
-        "n = 4\n"
-        "total = 0\n"
-        "if flag:\n"
-        "    if n > 2:\n"
-        "        time.sleep(0.05)\n"
-        "        total = n * 10",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            "flag = True\nn = 4\ntotal = 0\nif flag:\n    if n > 2:\n        time.sleep(0.05)\n        total = n * 10",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -113,16 +103,16 @@ def test_nested_if_in_if_badge_print(nb_runner):
 # repro is not the trigger, so a fix must not be validated against them.
 # ---------------------------------------------------------------------------
 
+
 def test_flat_loop_cell_badge_print_is_fine(nb_runner):
     """The ticket's claimed minimal repro. Renders cleanly -- ticket is wrong
     about the trigger."""
-    nb_runner.create_notebook([
-        SETUP,
-        "acc = 0\n"
-        "for i in range(4):\n"
-        "    time.sleep(0.02)\n"
-        "    acc += i",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            "acc = 0\nfor i in range(4):\n    time.sleep(0.02)\n    acc += i",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -136,14 +126,12 @@ def test_flat_loop_cell_badge_print_is_fine(nb_runner):
 def test_if_nested_in_for_badge_print_is_fine(nb_runner):
     """``if`` inside ``for`` -- the body groups per-iteration, so no
     ControlGroup wraps a group. Renders cleanly."""
-    nb_runner.create_notebook([
-        SETUP,
-        "total = 0\n"
-        "for i in range(4):\n"
-        "    if i % 2 == 0:\n"
-        "        time.sleep(0.02)\n"
-        "        total += i",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            "total = 0\nfor i in range(4):\n    if i % 2 == 0:\n        time.sleep(0.02)\n        total += i",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 

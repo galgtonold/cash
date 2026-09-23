@@ -27,6 +27,7 @@ on what else is running.
 
 The unit twin is ``tests/test_backends/test_ram_tier_sheds_its_share.py``.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(600)]
@@ -64,6 +65,7 @@ print("SUM", round(sum(res.values()), 3))
 def _sum(out):
     """The printed SUM alone; the output also carries the badge."""
     import re
+
     m = re.search(r"SUM (\S+)", out or "")
     return m.group(1) if m else None
 
@@ -83,6 +85,5 @@ def test_a_ten_iteration_loop_restores_all_ten_under_pressure(nb_runner):
 
     assert _sum(nb_runner.get_output(3)) == _sum(first), raw
     assert "10 cached" in raw, (
-        "an identical re-run under memory pressure re-ran iterations of the "
-        "loop instead of restoring all ten:\n" + raw
+        "an identical re-run under memory pressure re-ran iterations of the loop instead of restoring all ten:\n" + raw
     )

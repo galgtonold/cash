@@ -26,6 +26,7 @@ time", but it only switched off caching — which was not what froze the value �
 so the statement re-executed, got rewound, and redrew the identical number.
 Following cash's own advice changed nothing and produced no further signal.
 """
+
 import pytest
 
 pytestmark = pytest.mark.libraries
@@ -50,9 +51,7 @@ def _two_run_alls(nb_runner, draw_cell: str) -> tuple[str, str]:
 @pytest.mark.timeout(180)
 def test_plain_unseeded_draw_is_frozen_across_runs(nb_runner):
     first, second = _two_run_alls(nb_runner, "r = random.random()\nprint('r=', r)")
-    assert first == second, (
-        "an unseeded draw must reprint the same value on re-run (frozen, not redrawn)"
-    )
+    assert first == second, "an unseeded draw must reprint the same value on re-run (frozen, not redrawn)"
 
 
 @pytest.mark.timeout(180)
@@ -83,7 +82,8 @@ def test_frozen_draw_tells_the_user(nb_runner):
 def test_no_cache_redraws_every_run(nb_runner):
     """The escape hatch the warning names must actually produce a fresh draw."""
     first, second = _two_run_alls(
-        nb_runner, "# @cash:no-cache\nr = random.random()\nprint('r=', r)",
+        nb_runner,
+        "# @cash:no-cache\nr = random.random()\nprint('r=', r)",
     )
     assert first != second, (
         "# @cash:no-cache must redraw each run — it has to switch off the RNG "
@@ -95,7 +95,8 @@ def test_no_cache_redraws_every_run(nb_runner):
 def test_allow_random_stays_frozen_and_silent(nb_runner):
     """allow-random suppresses the warning; it does not change the value."""
     first, second = _two_run_alls(
-        nb_runner, "# @cash:allow-random\nr = random.random()\nprint('r=', r)",
+        nb_runner,
+        "# @cash:allow-random\nr = random.random()\nprint('r=', r)",
     )
     assert first == second, "allow-random must not change the frozen behaviour"
 

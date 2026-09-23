@@ -14,10 +14,12 @@ class TestPropertyEdits:
 
     def test_edit_property_getter(self, nb_runner):
         """Edit a property getter."""
-        nb_runner.create_notebook([
-            "class Temp:\n    def __init__(self, c):\n        self._c = c\n    @property\n    def fahrenheit(self):\n        return self._c * 9/5 + 32",
-            "t = Temp(100)\nprint(f'f = {t.fahrenheit}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "class Temp:\n    def __init__(self, c):\n        self._c = c\n    @property\n    def fahrenheit(self):\n        return self._c * 9/5 + 32",
+                "t = Temp(100)\nprint(f'f = {t.fahrenheit}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "f = 212.0" in nb_runner.get_output(2)
@@ -32,10 +34,12 @@ class TestPropertyEdits:
 
     def test_add_property_setter(self, nb_runner):
         """Add a property setter to an existing class."""
-        nb_runner.create_notebook([
-            "class Box:\n    def __init__(self, w, h):\n        self._w = w\n        self._h = h\n    @property\n    def area(self):\n        return self._w * self._h",
-            "b = Box(3, 4)\nprint(f'area = {b.area}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "class Box:\n    def __init__(self, w, h):\n        self._w = w\n        self._h = h\n    @property\n    def area(self):\n        return self._w * self._h",
+                "b = Box(3, 4)\nprint(f'area = {b.area}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "area = 12" in nb_runner.get_output(2)
@@ -55,10 +59,12 @@ class TestClassMethodEdits:
 
     def test_edit_classmethod(self, nb_runner):
         """Edit a classmethod."""
-        nb_runner.create_notebook([
-            "class Counter:\n    _count = 0\n    @classmethod\n    def increment(cls):\n        cls._count += 1\n        return cls._count",
-            "a = Counter.increment()\nb = Counter.increment()\nprint(f'a={a} b={b}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "class Counter:\n    _count = 0\n    @classmethod\n    def increment(cls):\n        cls._count += 1\n        return cls._count",
+                "a = Counter.increment()\nb = Counter.increment()\nprint(f'a={a} b={b}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "a=1 b=2" in nb_runner.get_output(2)
@@ -70,4 +76,3 @@ class TestClassMethodEdits:
         )
         nb_runner.run_all()
         assert "a=10 b=20" in nb_runner.get_output(2)
-

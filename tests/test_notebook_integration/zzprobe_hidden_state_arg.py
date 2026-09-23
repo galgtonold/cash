@@ -17,8 +17,8 @@ correct.
 If A and B agree, today is correct and any divergence under lineage keying is
 a REGRESSION introduced by the design change, not a pre-existing bug.
 """
-import json
 
+import json
 
 SETUP_ON = "import cash\n%cash_on\n"
 SETUP_OFF = "import cash\n"

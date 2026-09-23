@@ -21,6 +21,7 @@ so each rule is exercised on every platform in milliseconds. The real-venv
 tests in ``test_installed_console_script_cache_dir.py`` cover the installed
 shapes end to end.
 """
+
 from __future__ import annotations
 
 import os
@@ -40,6 +41,7 @@ _SCRIPTS = "Scripts" if os.name == "nt" else "bin"
 @pytest.fixture
 def launched_as(monkeypatch):
     """Pretend this process is an installed console script called *name*."""
+
     def _launch(name: str):
         exe = Path(sys.prefix) / _SCRIPTS / (name + (".exe" if os.name == "nt" else ""))
         monkeypatch.setattr(sys, "argv", [str(exe)])
@@ -47,13 +49,12 @@ def launched_as(monkeypatch):
         monkeypatch.setitem(sys.modules, "__main__", types.ModuleType("__main__"))
         monkeypatch.setattr(config, "_interactive_shell_is_running", lambda: False)
         monkeypatch.delenv("CASH_CACHE_DIR", raising=False)
+
     return _launch
 
 
 def _no_project_above(path: Path) -> bool:
-    return not any(
-        (d / m).exists() for d in [path, *path.parents] for m in config._PROJECT_MARKERS
-    )
+    return not any((d / m).exists() for d in [path, *path.parents] for m in config._PROJECT_MARKERS)
 
 
 def _config_cache_dir() -> str:
@@ -83,8 +84,7 @@ def test_a_launcher_inside_a_project_anchors_to_the_project(launched_as, tmp_pat
     """
     project = tmp_path / "proj"
     (project / "tests").mkdir(parents=True)
-    (project / "pyproject.toml").write_text('[project]\nname = "p"\nversion = "0"\n',
-                                            encoding="utf-8")
+    (project / "pyproject.toml").write_text('[project]\nname = "p"\nversion = "0"\n', encoding="utf-8")
     monkeypatch.chdir(project / "tests")
     launched_as("pytest")
 
@@ -97,8 +97,7 @@ def test_cash_inside_a_project_sees_the_projects_cache(launched_as, tmp_path, mo
     """`cash inspect` from a project subdirectory finds the project's cache."""
     project = tmp_path / "proj"
     (project / "src").mkdir(parents=True)
-    (project / "pyproject.toml").write_text('[project]\nname = "p"\nversion = "0"\n',
-                                            encoding="utf-8")
+    (project / "pyproject.toml").write_text('[project]\nname = "p"\nversion = "0"\n', encoding="utf-8")
     monkeypatch.chdir(project / "src")
     launched_as("cash")
 
@@ -120,8 +119,7 @@ def test_a_repl_keeps_the_cwd(tmp_path, monkeypatch):
     """The other control: no running program at all is not installed code."""
     project = tmp_path / "proj"
     (project / "sub").mkdir(parents=True)
-    (project / "pyproject.toml").write_text('[project]\nname = "p"\nversion = "0"\n',
-                                            encoding="utf-8")
+    (project / "pyproject.toml").write_text('[project]\nname = "p"\nversion = "0"\n', encoding="utf-8")
     monkeypatch.chdir(project / "sub")
     monkeypatch.setattr(sys, "argv", [""])
     monkeypatch.setitem(sys.modules, "__main__", types.ModuleType("__main__"))

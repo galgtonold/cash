@@ -13,10 +13,12 @@ class TestLambdaHigherOrder:
 
     def test_lambda_in_map(self, nb_runner):
         """Edit lambda used in map."""
-        nb_runner.create_notebook([
-            "transform = lambda x: x * 2",
-            "data = [1, 2, 3, 4, 5]\nresult = list(map(transform, data))\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "transform = lambda x: x * 2",
+                "data = [1, 2, 3, 4, 5]\nresult = list(map(transform, data))\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = [2, 4, 6, 8, 10]" in nb_runner.get_output(2)
@@ -27,10 +29,12 @@ class TestLambdaHigherOrder:
 
     def test_filter_lambda_edit(self, nb_runner):
         """Edit filter criteria lambda."""
-        nb_runner.create_notebook([
-            "is_valid = lambda x: x > 0",
-            "nums = [-3, -1, 0, 2, 5, -4, 8]\nvalid = list(filter(is_valid, nums))\nprint(f'valid = {valid}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "is_valid = lambda x: x > 0",
+                "nums = [-3, -1, 0, 2, 5, -4, 8]\nvalid = list(filter(is_valid, nums))\nprint(f'valid = {valid}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "valid = [2, 5, 8]" in nb_runner.get_output(2)
@@ -41,10 +45,12 @@ class TestLambdaHigherOrder:
 
     def test_reduce_with_edit(self, nb_runner):
         """Edit reduce function, downstream updates."""
-        nb_runner.create_notebook([
-            "from functools import reduce\ncombiner = lambda a, b: a + b",
-            "data = [1, 2, 3, 4, 5]\nresult = reduce(combiner, data)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from functools import reduce\ncombiner = lambda a, b: a + b",
+                "data = [1, 2, 3, 4, 5]\nresult = reduce(combiner, data)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 15" in nb_runner.get_output(2)
@@ -58,10 +64,12 @@ class TestLambdaHigherOrder:
 
     def test_sorted_key_lambda_edit(self, nb_runner):
         """Edit sort key lambda."""
-        nb_runner.create_notebook([
-            "key_fn = lambda item: item[1]",
-            "records = [('a', 3), ('b', 1), ('c', 2)]\nordered = sorted(records, key=key_fn)\nprint(f'ordered = {ordered}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "key_fn = lambda item: item[1]",
+                "records = [('a', 3), ('b', 1), ('c', 2)]\nordered = sorted(records, key=key_fn)\nprint(f'ordered = {ordered}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "ordered = [('b', 1), ('c', 2), ('a', 3)]" in nb_runner.get_output(2)

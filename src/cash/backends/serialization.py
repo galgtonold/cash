@@ -14,6 +14,7 @@ from typing import Any
 
 __all__ = ["Serializer", "PickleSerializer", "CloudPickleSerializer", "ParquetSerializer"]
 
+
 class Serializer(ABC):
     """Abstract base class for serializers."""
 
@@ -24,6 +25,7 @@ class Serializer(ABC):
     @abstractmethod
     def deserialize(self, data: bytes) -> Any:
         """Deserialize bytes to data."""
+
 
 class PickleSerializer(Serializer):
     """Serializer using Python's built-in pickle module."""
@@ -45,6 +47,7 @@ class CloudPickleSerializer(Serializer):
     def serialize(self, data: Any) -> bytes:
         try:
             import cloudpickle
+
             return cloudpickle.dumps(data)
         except ImportError:
             return pickle.dumps(data)
@@ -52,6 +55,7 @@ class CloudPickleSerializer(Serializer):
     def deserialize(self, data: bytes) -> Any:
         # cloudpickle-serialized data can be deserialized with standard pickle
         return pickle.loads(data)
+
 
 class ParquetSerializer(Serializer):
     """Serializer for pandas DataFrames using Parquet."""
@@ -68,6 +72,7 @@ class ParquetSerializer(Serializer):
             raise ImportError("ParquetSerializer requires pandas: pip install pandas") from exc
         buffer = io.BytesIO(data)
         return pd.read_parquet(buffer)
+
 
 def get_serializer(data: Any) -> Serializer:
     """Factory to get the appropriate serializer for the data.
@@ -90,10 +95,12 @@ def get_serializer(data: Any) -> Serializer:
         if isinstance(data, getattr(pd, "DataFrame", ())):
             try:
                 import pyarrow  # noqa: F401
+
                 return ParquetSerializer()
             except ImportError:
                 try:
                     import fastparquet  # noqa: F401
+
                     return ParquetSerializer()
                 except ImportError:
                     pass

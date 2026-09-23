@@ -5,6 +5,7 @@ Round 23 (r23s2): ``raw`` was read from 1,200 CSVs. Every statement reading
 with ``backend.get`` once PER FILE -- which deep-copies the cached frame. A
 0.4 s cell took 42 s when served from the cache.
 """
+
 import types
 
 from cash.notebook.file_dep_snapshot import snapshot_file_deps

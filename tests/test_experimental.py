@@ -1,7 +1,10 @@
 """Tests for experimental namespace and DependencyGraph."""
-import pytest
-import unittest.mock
+
 import importlib
+import unittest.mock
+
+import pytest
+
 from cash.experimental import __getattr__ as exp_getattr
 from cash.graph import DependencyGraph
 
@@ -12,26 +15,31 @@ class TestUIInit:
     def test_import_dependency_graph(self):
         """DependencyGraph is directly importable from cash.ui."""
         from cash.ui import DependencyGraph as DG
+
         assert DG is not None
 
     def test_lazy_import_cache_explorer(self):
         """CacheExplorer can be lazy-imported from cash.ui."""
         from cash.ui import CacheExplorer
+
         assert CacheExplorer is not None
 
     def test_lazy_import_cache_debugger(self):
         """CacheDebugger can be lazy-imported from cash.ui."""
         from cash.ui import CacheDebugger
+
         assert CacheDebugger is not None
 
     def test_lazy_import_visualize_notebook(self):
         """visualize_notebook can be lazy-imported from cash.ui."""
         from cash.ui import visualize_notebook
+
         assert visualize_notebook is not None
 
     def test_lazy_import_invalid(self):
         """Invalid attribute raises AttributeError."""
         import cash.ui
+
         with pytest.raises(AttributeError):
             _ = cash.ui.nonexistent_thing  # noqa: B018
 
@@ -42,23 +50,35 @@ class TestBackendsInit:
     def test_import_core_backends(self):
         """Core backends are importable from cash.backends."""
         from cash.backends import (
-            CacheBackend, InMemoryBackend, FileBackend,
-            CascadingBackend, TieredBackend,
+            CacheBackend,
+            CascadingBackend,
+            FileBackend,
+            InMemoryBackend,
+            TieredBackend,
         )
-        assert all(cls is not None for cls in [
-            CacheBackend, InMemoryBackend, FileBackend,
-            CascadingBackend, TieredBackend,
-        ])
+
+        assert all(
+            cls is not None
+            for cls in [
+                CacheBackend,
+                InMemoryBackend,
+                FileBackend,
+                CascadingBackend,
+                TieredBackend,
+            ]
+        )
 
     def test_serializers_importable(self):
         """Serializers are importable from cash.backends."""
-        from cash.backends import Serializer, PickleSerializer
+        from cash.backends import PickleSerializer, Serializer
+
         assert Serializer is not None
         assert PickleSerializer is not None
 
     def test_redis_backend_is_none_without_redis(self):
         """RedisBackend is None when redis is not installed."""
         from cash.backends import RedisBackend
+
         # May be None if redis not installed, or a class if it is
         # Just check it doesn't crash
         assert RedisBackend is None or RedisBackend is not None
@@ -66,6 +86,7 @@ class TestBackendsInit:
     def test_s3_backend_is_none_without_boto3(self):
         """S3Backend is None when boto3 is not installed."""
         from cash.backends import S3Backend
+
         assert S3Backend is None or S3Backend is not None
 
 
@@ -75,21 +96,25 @@ class TestExperimentalNamespace:
     def test_import_cache_explorer(self):
         """CacheExplorer can be imported from experimental."""
         from cash.experimental import CacheExplorer
+
         assert CacheExplorer is not None
 
     def test_import_analytics_manager(self):
         """AnalyticsManager can be imported from experimental."""
         from cash.experimental import AnalyticsManager
+
         assert AnalyticsManager is not None
 
     def test_import_tiered_backend(self):
         """TieredBackend can be imported from experimental."""
         from cash.experimental import TieredBackend
+
         assert TieredBackend is not None
 
     def test_import_dependency_graph(self):
         """DependencyGraph can be imported from experimental."""
         from cash.experimental import DependencyGraph
+
         assert DependencyGraph is not None
 
     def test_invalid_attribute_raises(self):
@@ -101,6 +126,7 @@ class TestExperimentalNamespace:
         """RedisBackend raises ImportError if redis not installed."""
         try:
             from cash.experimental import RedisBackend
+
             # If redis is installed, this should work
             assert RedisBackend is not None
         except ImportError:
@@ -110,6 +136,7 @@ class TestExperimentalNamespace:
         """S3Backend raises ImportError if boto3 not installed."""
         try:
             from cash.experimental import S3Backend
+
             assert S3Backend is not None
         except ImportError:
             pass  # Expected if boto3 not installed
@@ -176,7 +203,7 @@ class TestDependencyGraph:
         """visualize prints install message when pyvis is not available."""
         g = DependencyGraph()
         g.add_dependency("a", "b")
-        with unittest.mock.patch.dict('sys.modules', {'pyvis': None, 'pyvis.network': None}):
+        with unittest.mock.patch.dict("sys.modules", {"pyvis": None, "pyvis.network": None}):
             result = g.visualize()
         captured = capsys.readouterr()
         assert "pip install pyvis" in captured.out
@@ -192,10 +219,16 @@ class TestDependencyGraph:
         mock_net.generate_html.return_value = "<html>graph</html>"
         unittest.mock.MagicMock()
 
-        with unittest.mock.patch.dict('sys.modules', {
-            'pyvis': unittest.mock.MagicMock(),
-            'pyvis.network': unittest.mock.MagicMock(),
-        }), unittest.mock.patch('cash.graph.Network', return_value=mock_net, create=True):
+        with (
+            unittest.mock.patch.dict(
+                "sys.modules",
+                {
+                    "pyvis": unittest.mock.MagicMock(),
+                    "pyvis.network": unittest.mock.MagicMock(),
+                },
+            ),
+            unittest.mock.patch("cash.graph.Network", return_value=mock_net, create=True),
+        ):
             # Need to patch at the point of use
             import cash.graph as graph_mod  # noqa: F811
 
@@ -211,14 +244,18 @@ class TestDependencyGraph:
         mock_network_cls = unittest.mock.MagicMock(return_value=mock_net)
         mock_ipython = unittest.mock.MagicMock()
 
-        with unittest.mock.patch.dict('sys.modules', {
-            'pyvis': unittest.mock.MagicMock(),
-            'pyvis.network': unittest.mock.MagicMock(Network=mock_network_cls),
-            'IPython': mock_ipython,
-            'IPython.display': mock_ipython.display,
-        }):
+        with unittest.mock.patch.dict(
+            "sys.modules",
+            {
+                "pyvis": unittest.mock.MagicMock(),
+                "pyvis.network": unittest.mock.MagicMock(Network=mock_network_cls),
+                "IPython": mock_ipython,
+                "IPython.display": mock_ipython.display,
+            },
+        ):
             # Re-import to pick up mocks
             import cash.graph as graph_mod
+
             importlib.reload(graph_mod)
             g2 = graph_mod.DependencyGraph()
             g2.add_dependency("a", "b")

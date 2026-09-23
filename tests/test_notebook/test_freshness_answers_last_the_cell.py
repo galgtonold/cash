@@ -5,6 +5,7 @@ re-checked every document for every statement lookup -- 120,000 checks, 1.1 s,
 in a cell served entirely from the cache. The answer for a file holds until a
 statement executes (it may write the file) or the next cell begins.
 """
+
 import types
 
 import cash.notebook.statement.freshness as freshness
@@ -60,7 +61,7 @@ def test_the_next_cell_checks_again(tmp_path, monkeypatch):
 def test_a_statement_that_runs_makes_the_next_lookup_check_again(tmp_path, monkeypatch):
     paths, checks, checker, state = _setup(tmp_path, monkeypatch)
     checker.check_cache(state, "stmt:a", None, epoch=7)
-    checker.forget_file_answers(7)            # what executing a statement does
+    checker.forget_file_answers(7)  # what executing a statement does
     with open(paths[5], "w") as fh:
         fh.write("written by the statement that ran\n")
     _, data, _ = checker.check_cache(state, "stmt:b", None, epoch=7)
@@ -87,14 +88,15 @@ def test_a_set_already_found_fresh_is_not_walked_again(tmp_path, monkeypatch):
     paths, checks, checker, state = _setup(tmp_path, monkeypatch, n=100)
     walked = []
     real = CacheFreshnessChecker._resolve_and_check
-    monkeypatch.setattr(CacheFreshnessChecker, "_resolve_and_check",
-                        lambda self, *a, **k: walked.append(a[0]) or real(self, *a, **k))
+    monkeypatch.setattr(
+        CacheFreshnessChecker, "_resolve_and_check", lambda self, *a, **k: walked.append(a[0]) or real(self, *a, **k)
+    )
     for key in ("stmt:a", "stmt:b", "stmt:c"):
         _, data, _ = checker.check_cache(state, key, None, epoch=7)
         assert data == "value"
     assert len(walked) == len(paths), f"walked {len(walked)} answers for {len(paths)} files"
 
-    checker.forget_file_answers(7)            # a statement ran: check again
+    checker.forget_file_answers(7)  # a statement ran: check again
     with open(paths[42], "w") as fh:
         fh.write("written by the statement that ran\n")
     _, data, _ = checker.check_cache(state, "stmt:d", None, epoch=7)

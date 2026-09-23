@@ -10,6 +10,7 @@ These tests pin the contract:
   * the cache invalidates the moment the file changes (mtime/size), so a quick
     edit-then-run never serves stale cell sources.
 """
+
 from __future__ import annotations
 
 import json as _json

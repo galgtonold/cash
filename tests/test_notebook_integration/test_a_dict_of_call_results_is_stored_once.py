@@ -6,6 +6,7 @@ project's cache grew 1.5 GB a day. The statement's entry now refers to the call
 entries. It must still restore on its own after a restart -- that entry is what
 spares rebuilding the calls' arguments.
 """
+
 import os
 
 import pytest
@@ -33,7 +34,9 @@ def test_the_dict_restores_after_a_restart_without_a_second_copy(nb_runner):
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert EXPECTED in nb_runner.get_output(5)
-    nb_runner.peek("__import__('cash').get_default_cash().backend.flush() if hasattr(__import__('cash').get_default_cash().backend, 'flush') else None")
+    nb_runner.peek(
+        "__import__('cash').get_default_cash().backend.flush() if hasattr(__import__('cash').get_default_cash().backend, 'flush') else None"
+    )
     size = _cache_bytes(nb_runner)
     # Three 3 MB results, stored under their call keys, and not again in the dict.
     assert size < 3 * 3_000_000 * 1.5, f"{size / 1e6:.1f} MB on disk"

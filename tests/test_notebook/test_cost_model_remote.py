@@ -4,12 +4,12 @@ These are *estimated* values, not benchmarked the way RAM/DISK are.
 The tests pin the rough order-of-magnitude shape so the model stays
 self-consistent under refactoring; they do NOT pin exact constants.
 """
+
 from __future__ import annotations
 
 import pytest
 
 from cash.notebook import cost_model
-
 
 # Representative data families for the matrix.
 FAMILIES = ["ndarray_dense", "dataframe_numeric", "dict_shallow", "bytes"]
@@ -43,7 +43,7 @@ class TestRedisShape:
     def test_small_object_dominated_by_latency(self):
         # 1 KB object: should be in the sub-millisecond range, not in disk's ~10 ms range.
         t = cost_model.estimated_serialize_time("DataFrame", 1024, "redis")
-        assert 1e-4 < t < 5e-3, f"1 KB Redis serialize was {t*1000:.2f} ms — expected 0.1–5 ms"
+        assert 1e-4 < t < 5e-3, f"1 KB Redis serialize was {t * 1000:.2f} ms — expected 0.1–5 ms"
 
     def test_large_object_dominated_by_bandwidth(self):
         # 100 MB object on Redis at ~50 MB/s should land in the 1-3 s range.
@@ -55,7 +55,9 @@ class TestRedisShape:
         ram = cost_model.estimated_serialize_time("DataFrame", size, "ram")
         redis = cost_model.estimated_serialize_time("DataFrame", size, "redis")
         s3 = cost_model.estimated_serialize_time("DataFrame", size, "s3")
-        assert ram < redis < s3, f"ordering wrong: ram={ram*1000:.1f}ms redis={redis*1000:.1f}ms s3={s3*1000:.1f}ms"
+        assert ram < redis < s3, (
+            f"ordering wrong: ram={ram * 1000:.1f}ms redis={redis * 1000:.1f}ms s3={s3 * 1000:.1f}ms"
+        )
 
 
 class TestS3Shape:
@@ -69,8 +71,8 @@ class TestS3Shape:
     def test_small_object_dominated_by_request_latency(self):
         # S3's per-request overhead dwarfs 1 KB transfer. Predict >= 30 ms.
         t = cost_model.estimated_serialize_time("DataFrame", 1024, "s3")
-        assert t >= 0.03, f"1 KB S3 serialize was {t*1000:.2f} ms — expected ≥ 30 ms"
-        assert t < 0.5, f"1 KB S3 serialize was {t*1000:.2f} ms — expected < 500 ms"
+        assert t >= 0.03, f"1 KB S3 serialize was {t * 1000:.2f} ms — expected ≥ 30 ms"
+        assert t < 0.5, f"1 KB S3 serialize was {t * 1000:.2f} ms — expected < 500 ms"
 
     def test_large_object_dominated_by_bandwidth(self):
         # 100 MB on S3 at ~20 MB/s ≈ 5 s

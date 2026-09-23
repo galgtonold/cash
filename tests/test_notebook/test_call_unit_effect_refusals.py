@@ -9,10 +9,10 @@ but silently loses on a served hit -- so the refusal is permanent per site.
 Every test states the ONE-LINE change that would break it, in a comment
 right above the assertion it protects.
 """
+
 import time
 
 from cash.notebook.call_interception import CallCache, CallSite
-from cash.notebook.call_unit import CallUnit
 
 
 def _site(source="f(d)", names=("f", "d"), computed_arg_positions=()):
@@ -25,7 +25,9 @@ def _site(source="f(d)", names=("f", "d"), computed_arg_positions=()):
     mask a broken (non-permanent) refusal rather than expose it.
     """
     return CallSite(
-        source=source, free_names=frozenset(names), occurrence_index=0,
+        source=source,
+        free_names=frozenset(names),
+        occurrence_index=0,
         computed_arg_positions=computed_arg_positions,
     )
 
@@ -37,7 +39,9 @@ def _computed_site(source="f(d)", names=("f", "d")):
     variable lineage to resolve a bare Name against.
     """
     return CallSite(
-        source=source, free_names=frozenset(names), occurrence_index=0,
+        source=source,
+        free_names=frozenset(names),
+        occurrence_index=0,
         computed_arg_positions=(0,),
     )
 
@@ -66,7 +70,7 @@ def test_a_callee_that_mutates_its_argument_is_never_cached(call_unit_harness):
     unit = call_unit_harness(lineage={"d": "hash-d"}, user_ns={"d": payload, "clean": clean})
 
     unit.wrap(clean, _site())(payload)
-    payload["dirty"] = True          # reset, as a fresh cold run would find it
+    payload["dirty"] = True  # reset, as a fresh cold run would find it
     unit.wrap(clean, _site())(payload)
 
     # Asserting only on the return value (`len(d)`) would pass even if the
@@ -146,10 +150,10 @@ def test_mutation_refusal_is_permanent_across_wrap_calls(call_unit_harness):
     payload = {"dirty": True}
     unit = call_unit_harness(lineage={"d": "hash-d"}, user_ns={"d": payload, "clean": clean})
 
-    unit.wrap(clean, _site())(payload)          # call 1: dirty True->False, detected, refused
-    unit.wrap(clean, _site())(payload)          # call 2: already clean -- no visible mutation THIS round
-    payload["dirty"] = True                     # a fresh cold run would find it dirty again
-    unit.wrap(clean, _site())(payload)          # call 3: must still recompute, never a cache hit
+    unit.wrap(clean, _site())(payload)  # call 1: dirty True->False, detected, refused
+    unit.wrap(clean, _site())(payload)  # call 2: already clean -- no visible mutation THIS round
+    payload["dirty"] = True  # a fresh cold run would find it dirty again
+    unit.wrap(clean, _site())(payload)  # call 3: must still recompute, never a cache hit
 
     assert calls == [1, 1, 1], "the site must stay refused even once a call looks clean"
     assert payload["dirty"] is False
@@ -180,14 +184,14 @@ def test_a_callee_that_mutates_an_unpicklable_argument_is_never_cached(call_unit
 
     class Carrier:
         def __init__(self):
-            self.lock = threading.Lock()   # unpicklable -> forces the id-based tier
+            self.lock = threading.Lock()  # unpicklable -> forces the id-based tier
             self.value = 1
 
     def bump(c):
         calls.append(1)
         time.sleep(0.05)
         c.value += 100
-        return "ok"          # the return value is unrelated to what mutated
+        return "ok"  # the return value is unrelated to what mutated
 
     carrier = Carrier()
     unit = call_unit_harness(lineage={"c": "hash-c"}, user_ns={"c": carrier, "bump": bump})
@@ -219,7 +223,7 @@ def test_a_refused_call_is_never_stored_through_the_production_dispatch_path(tmp
 
     def clean(d):
         calls.append(1)
-        time.sleep(0.2)   # above the cost-model floor
+        time.sleep(0.2)  # above the cost-model floor
         d["dirty"] = False
         return len(d)
 

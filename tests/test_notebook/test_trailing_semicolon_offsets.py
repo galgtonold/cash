@@ -19,6 +19,7 @@ Both are silent: no exception, so nothing falls back. The oracle here is
 ``ast.get_source_segment`` — whatever text really follows the node — which
 makes these tests a property of the function rather than a pin on six inputs.
 """
+
 import ast
 
 import pytest
@@ -34,7 +35,7 @@ def semicolon_follows(source: str, node: ast.stmt) -> bool:
     """What the answer must be, derived from the parser's own segment."""
     segment = ast.get_source_segment(source, node, padded=True)
     assert segment is not None, "oracle needs a locatable node"
-    tail = source[source.index(segment) + len(segment):]
+    tail = source[source.index(segment) + len(segment) :]
     return tail.lstrip().startswith(";")
 
 
@@ -59,9 +60,7 @@ def semicolon_follows(source: str, node: ast.stmt) -> bool:
 )
 def test_matches_the_parsers_own_coordinates(label, source):
     node = ast.parse(source).body[-1]
-    assert CellExecutor._expr_has_trailing_semicolon(
-        source, node
-    ) == semicolon_follows(source, node), label
+    assert CellExecutor._expr_has_trailing_semicolon(source, node) == semicolon_follows(source, node), label
 
 
 def test_a_non_expression_statement_is_never_suppressed():

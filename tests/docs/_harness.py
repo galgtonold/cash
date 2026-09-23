@@ -37,9 +37,7 @@ from tests.docs._annotations import (
 # it's "expected under papermill / nbconvert / CI". Matched by class name so the
 # harness needn't import an internal notebook module. Excluding it keeps the
 # check focused on the doc-quality family (ineffective-cache, impurity, randomness).
-_ENV_ARTIFACT_WARNING_NAMES: frozenset[str] = frozenset(
-    {"CashNotebookDiscoveryWarning"}
-)
+_ENV_ARTIFACT_WARNING_NAMES: frozenset[str] = frozenset({"CashNotebookDiscoveryWarning"})
 
 
 _FENCE_RE = re.compile(
@@ -55,7 +53,7 @@ class Fence:
 
     code: str
     line_start: int  # 1-based, the line containing ```python
-    line_end: int    # 1-based, the line containing the closing ```
+    line_end: int  # 1-based, the line containing the closing ```
     attrs: str = ""  # raw attrs string, e.g. "{ .nb-cell }"
     skip: bool = False
     skip_reason: str | None = None
@@ -232,8 +230,8 @@ def _run_page_ipy(
     # The plain-exec conftest fixture patches Cash.register_magic to a no-op,
     # so we bypass that by importing and registering directly here.
     try:
-        from cash.notebook.ipython.magics import CashMagics
         import cash as _cash_mod
+        from cash.notebook.ipython.magics import CashMagics
 
         _cash_instance = _cash_mod.Cash()
         magics = CashMagics(shell, _cash_instance)
@@ -266,9 +264,7 @@ def _run_page_ipy(
 
         for f in fences:
             if f.skip:
-                result.skipped_fences.append(
-                    (f.line_start, f.skip_reason or "<no reason>")
-                )
+                result.skipped_fences.append((f.line_start, f.skip_reason or "<no reason>"))
                 continue
             # Note: nb-cell fences are NOT skipped here — they run through IPython.
 
@@ -283,23 +279,18 @@ def _run_page_ipy(
                 warnings.simplefilter("always", CashWarning)
                 cell_result = shell.run_cell(code, store_history=False)
 
-            if (
-                cell_result.error_before_exec is not None
-                or cell_result.error_in_exec is not None
-            ):
+            if cell_result.error_before_exec is not None or cell_result.error_in_exec is not None:
                 if not f.expect_raises:
                     err = cell_result.error_before_exec or cell_result.error_in_exec
                     raise PageExecutionError(
-                        f"{md_path}: cell at line {f.line_start} failed: "
-                        f"{type(err).__name__}: {err}"
+                        f"{md_path}: cell at line {f.line_start} failed: {type(err).__name__}: {err}"
                     )
 
             cash_warns = _cash_warnings(caught)
             if cash_warns and not f.expect_warning:
                 raise PageWarningError(
                     f"{md_path}: cell at line {f.line_start} emitted cash "
-                    f"warning(s) with no test:expect-warning annotation:\n  "
-                    + "\n  ".join(cash_warns)
+                    f"warning(s) with no test:expect-warning annotation:\n  " + "\n  ".join(cash_warns)
                 )
 
             result.tested_fences += 1
@@ -322,9 +313,7 @@ def _run_page_ipy(
         # Strip magic-command lines so ast.parse() doesn't choke on `%foo` / `%%foo`.
         script_for_claims = _strip_magic_lines(script_with_injects)
         try:
-            claims = infer_claims(
-                script_for_claims, exclude_line_ranges=expect_raises_ranges
-            )
+            claims = infer_claims(script_for_claims, exclude_line_ranges=expect_raises_ranges)
         except SyntaxError:
             # If we still can't parse (e.g. some odd magic-laden cell), skip
             # claim inference rather than abort the whole page.
@@ -339,10 +328,7 @@ def _run_page_ipy(
                 info = fn.cache_info()
                 actual_hits = info.get("hits", 0)
                 actual_misses = info.get("misses", 0)
-                matched = (
-                    actual_hits == claim.expected_hits
-                    and actual_misses == claim.expected_misses
-                )
+                matched = actual_hits == claim.expected_hits and actual_misses == claim.expected_misses
             result.claim_results.append(
                 ClaimResult(
                     claim=claim,
@@ -426,6 +412,7 @@ def run_page(
             _ipy_available = False
 
         if _ipy_available:
+
             def _fence_needs_ipy(f: Fence) -> bool:
                 if f.skip:
                     return False
@@ -466,9 +453,7 @@ def run_page(
             result.skipped_fences.append((f.line_start, f.skip_reason or "<no reason>"))
             continue
         if f.is_nb_cell:
-            result.skipped_fences.append(
-                (f.line_start, "nb-cell: requires IPython kernel (PR2+ scope)")
-            )
+            result.skipped_fences.append((f.line_start, "nb-cell: requires IPython kernel (PR2+ scope)"))
             continue
         pad = max(0, f.line_start - sum(p.count("\n") + 2 for p in pieces) - 1)
         # Compute the start line of this fence's body in the assembled script.
@@ -522,7 +507,10 @@ def run_page(
     # page. ``None`` in the mtime slot is the documented convention for exec'd
     # code — it stops ``linecache.checkcache`` reloading the .md over the top.
     linecache.cache[str(md_path)] = (
-        len(script), None, script.splitlines(keepends=True), str(md_path),
+        len(script),
+        None,
+        script.splitlines(keepends=True),
+        str(md_path),
     )
 
     try:
@@ -539,9 +527,7 @@ def run_page(
             if asyncio.iscoroutine(maybe_coro):
                 asyncio.run(maybe_coro)
     except Exception as e:
-        raise PageExecutionError(
-            f"{md_path}: exec failed with {type(e).__name__}: {e}"
-        ) from e
+        raise PageExecutionError(f"{md_path}: exec failed with {type(e).__name__}: {e}") from e
 
     cash_warns = _cash_warnings(caught)
     if cash_warns and not page_allows_warning:
@@ -568,10 +554,7 @@ def run_page(
             info = fn.cache_info()
             actual_hits = info.get("hits", 0)
             actual_misses = info.get("misses", 0)
-            matched = (
-                actual_hits == claim.expected_hits
-                and actual_misses == claim.expected_misses
-            )
+            matched = actual_hits == claim.expected_hits and actual_misses == claim.expected_misses
         result.claim_results.append(
             ClaimResult(
                 claim=claim,
@@ -665,18 +648,22 @@ def _find_main_guard_nodes(tree: ast.AST) -> set[int]:
             test = node.test
             is_main_guard = False
             if isinstance(test, ast.Compare):
-                if (len(test.ops) == 1 and isinstance(test.ops[0], ast.Eq)
-                        and len(test.comparators) == 1):
+                if len(test.ops) == 1 and isinstance(test.ops[0], ast.Eq) and len(test.comparators) == 1:
                     # Canonical: __name__ == "__main__"
-                    if (isinstance(test.left, ast.Name) and test.left.id == "__name__"
-                            and isinstance(test.comparators[0], ast.Constant)
-                            and test.comparators[0].value == "__main__"):
+                    if (
+                        isinstance(test.left, ast.Name)
+                        and test.left.id == "__name__"
+                        and isinstance(test.comparators[0], ast.Constant)
+                        and test.comparators[0].value == "__main__"
+                    ):
                         is_main_guard = True
                     # Reversed: "__main__" == __name__
-                    elif (isinstance(test.left, ast.Constant)
-                            and test.left.value == "__main__"
-                            and isinstance(test.comparators[0], ast.Name)
-                            and test.comparators[0].id == "__name__"):
+                    elif (
+                        isinstance(test.left, ast.Constant)
+                        and test.left.value == "__main__"
+                        and isinstance(test.comparators[0], ast.Name)
+                        and test.comparators[0].id == "__name__"
+                    ):
                         is_main_guard = True
             if is_main_guard:
                 for child in ast.walk(node):
@@ -696,9 +683,7 @@ def _enclosing_functions(tree: ast.AST) -> dict[int, list[ast.AST]]:
     def visit(node: ast.AST, stack: list[ast.AST]) -> None:
         for child in ast.iter_child_nodes(node):
             chains[id(child)] = list(stack)
-            if isinstance(
-                child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
-            ):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
                 visit(child, [child, *stack])
             else:
                 visit(child, stack)
@@ -707,9 +692,7 @@ def _enclosing_functions(tree: ast.AST) -> dict[int, list[ast.AST]]:
     return chains
 
 
-def _top_level_invocation_counts(
-    tree: ast.AST, ancestors: dict[int, set], main_guard_ids: set[int]
-) -> dict[str, int]:
+def _top_level_invocation_counts(tree: ast.AST, ancestors: dict[int, set], main_guard_ids: set[int]) -> dict[str, int]:
     """How many times each name is called from module scope.
 
     Module scope only: a call nested in another body is counted for *that*
@@ -786,8 +769,12 @@ def _runs_exactly_once(
 # range, not to interpret Python. Anything outside this set makes the whole
 # loop unexpandable, which returns the old skip-the-loop behaviour.
 _SAFE_BINOPS = {
-    ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
-    ast.FloorDiv: operator.floordiv, ast.Mod: operator.mod, ast.Pow: operator.pow,
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
 }
 
 
@@ -818,8 +805,7 @@ def _literal_iter_values(node: ast.AST) -> list[Any] | None:
                 return None
             out.append(elt.value)
         return out
-    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-            and node.func.id == "range" and not node.keywords):
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "range" and not node.keywords:
         args = []
         for a in node.args:
             if not isinstance(a, ast.Constant) or not isinstance(a.value, int):
@@ -868,9 +854,7 @@ def _eval_literal(node: ast.AST, bindings: dict[str, Any]) -> tuple[bool, Any]:
     return False, None
 
 
-def _expand_loop_call(
-    call: ast.Call, loops: list[ast.For]
-) -> list[str] | None:
+def _expand_loop_call(call: ast.Call, loops: list[ast.For]) -> list[str] | None:
     """The per-iteration ``args_repr`` for *call*, or ``None`` if unknowable.
 
     A loop was previously skipped outright because the iteration count is
@@ -879,10 +863,10 @@ def _expand_loop_call(
     both known — which is what a claim needs, since hits depend on argument
     *uniqueness*, not merely on how many calls happen.
     """
-    if not loops or len(loops) > 2:      # deeper nesting: not worth the risk
+    if not loops or len(loops) > 2:  # deeper nesting: not worth the risk
         return None
     axes: list[tuple[str, list[Any]]] = []
-    for loop in reversed(loops):         # outermost first
+    for loop in reversed(loops):  # outermost first
         if not isinstance(loop.target, ast.Name):
             return None
         values = _literal_iter_values(loop.iter)
@@ -941,9 +925,7 @@ def called_but_uninferable(md_path: Path) -> dict[str, str]:
     """
     try:
         fences = extract_fences(md_path)
-        script = _strip_magic_lines(_apply_inject_comments(
-            "\n\n".join(f.code for f in fences if not f.skip)
-        ))
+        script = _strip_magic_lines(_apply_inject_comments("\n\n".join(f.code for f in fences if not f.skip)))
         tree = ast.parse(script)
     except (OSError, SyntaxError, ValueError):
         return {}
@@ -971,16 +953,16 @@ def called_but_uninferable(md_path: Path) -> dict[str, str]:
         if not isinstance(node, ast.Call):
             continue
         name = (
-            node.func.id if isinstance(node.func, ast.Name)
-            else node.func.attr if isinstance(node.func, ast.Attribute)
+            node.func.id
+            if isinstance(node.func, ast.Name)
+            else node.func.attr
+            if isinstance(node.func, ast.Attribute)
             else None
         )
         if name not in defs:
             continue
         anc = ancestors.get(id(node), set())
-        in_body = bool(
-            {ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef} & anc
-        )
+        in_body = bool({ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef} & anc)
         if in_body and _runs_exactly_once(node, enclosing, top_level_calls):
             in_body = False
         elif in_body and _never_runs(node, enclosing, top_level_calls):
@@ -1017,8 +999,7 @@ def called_but_uninferable(md_path: Path) -> dict[str, str]:
             continue  # at least one usable call site: inference sees this one
         if not after:
             out[name] = (
-                f"shadowed - {len(linenos)} definitions, all {len(sites)} call(s) "
-                f"above the last one (line {last_def})"
+                f"shadowed - {len(linenos)} definitions, all {len(sites)} call(s) above the last one (line {last_def})"
             )
         elif all(in_body for _, in_body, _ in after):
             out[name] = f"every call ({len(after)}) is inside a function or class body"
@@ -1104,10 +1085,9 @@ def infer_claims(
             # a helper called twice, or not called at all) still skips, because
             # then the run count is not one and the inferred claim would be
             # wrong in a way that is worse than absent.
-            if (ast.Lambda in node_ancestors or ast.ClassDef in node_ancestors):
+            if ast.Lambda in node_ancestors or ast.ClassDef in node_ancestors:
                 continue
-            if (ast.FunctionDef in node_ancestors
-                    or ast.AsyncFunctionDef in node_ancestors):
+            if ast.FunctionDef in node_ancestors or ast.AsyncFunctionDef in node_ancestors:
                 if not _runs_exactly_once(node, enclosing, top_level_calls):
                     continue
             # Skip calls inside if __name__ == "__main__" guards
@@ -1133,9 +1113,7 @@ def infer_claims(
                 for args_repr in loop_expansion:
                     calls.setdefault(target_name, []).append((args_repr, node.lineno))
                 continue
-            args_repr = ",".join(
-                ast.unparse(a) if hasattr(ast, "unparse") else repr(a) for a in node.args
-            )
+            args_repr = ",".join(ast.unparse(a) if hasattr(ast, "unparse") else repr(a) for a in node.args)
             calls.setdefault(target_name, []).append((args_repr, node.lineno))
 
     claims: list[CacheClaim] = []
@@ -1145,9 +1123,7 @@ def infer_claims(
         if func in stateful_funcs and func not in cached_funcs:
             continue
         if func in stateful_funcs:
-            claims.append(
-                CacheClaim(function=func, expected_hits=0, expected_misses=len(sites))
-            )
+            claims.append(CacheClaim(function=func, expected_hits=0, expected_misses=len(sites)))
             continue
         # Count comment-tagged misses/hits and infer the rest from arg uniqueness.
         explicit_miss = 0

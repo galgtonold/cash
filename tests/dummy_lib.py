@@ -1,4 +1,3 @@
-
 # We need a shared Cash instance if we want them to share the registry?
 # Or does each module have its own Cash instance?
 # Usually users create one 'app = Cash()' and import it, or create it in main.
@@ -14,6 +13,7 @@
 
 # For testing, let's define a function that takes an app?
 # Or just expose a function and let the test decorate it?
+
 
 def lib_func(x):
     return x + 10

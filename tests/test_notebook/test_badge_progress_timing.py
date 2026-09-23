@@ -10,6 +10,7 @@ worse than the traffic. So the render is deferred instead: armed on a timer,
 cancelled if the statement finishes first, and published only if it is still
 running -- naming the statement that is actually running.
 """
+
 from __future__ import annotations
 
 import threading
@@ -29,7 +30,7 @@ def progress_probe(monkeypatch):
     magics._badge_mode = "html"
     magics._debug = False
     magics._last_badge_render_time = 0.0
-    magics._BADGE_MIN_RENDER_INTERVAL = 0.05   # keep the tests quick
+    magics._BADGE_MIN_RENDER_INTERVAL = 0.05  # keep the tests quick
     magics._progress_timer = None
     magics._progress_lock = threading.Lock()
     magics._progress_generation = 0
@@ -45,8 +46,15 @@ def progress_probe(monkeypatch):
     # tests. The build fake hands the publish fake everything it captured, so
     # `published` ends up with the same shape the old single-fake-render
     # fixture recorded.
-    def fake_build(metrics_list, status="DONE", current_step=0, total_steps=0,
-                    current_code=None, cell_total_time=None, timing_breakdown=None):
+    def fake_build(
+        metrics_list,
+        status="DONE",
+        current_step=0,
+        total_steps=0,
+        current_code=None,
+        cell_total_time=None,
+        timing_breakdown=None,
+    ):
         # This runs INSIDE `fire()`, on the timer thread, standing in for the
         # expensive half of a render -- the whole reason it must run outside
         # `_progress_lock` (see the comment in `fire()`). Record a violation
@@ -65,8 +73,7 @@ def progress_probe(monkeypatch):
             "current_code": current_code,
         }
 
-    def fake_publish(html, display_id=None, update_existing=True, _from_thread=False,
-                     publisher=None):
+    def fake_publish(html, display_id=None, update_existing=True, _from_thread=False, publisher=None):
         published.append({**html, "display_id": display_id})
 
     magics._build_badge_html = fake_build  # type: ignore[assignment]

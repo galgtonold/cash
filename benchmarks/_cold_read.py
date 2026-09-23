@@ -18,6 +18,7 @@ its reads here, one process per sample.
 The cost is a process start per sample (~0.8 s), which is why the process does
 nothing else: it opens a backend, reads one key, and prints the seconds.
 """
+
 from __future__ import annotations
 
 import json
@@ -28,7 +29,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-_READER = '''
+_READER = """
 import json, sys, time
 sys.path.insert(0, %(src)r)
 # Pre-imported on purpose: unpickling a frame imports pandas, and in a fresh
@@ -47,7 +48,7 @@ value = backend.get(%(key)r)
 elapsed = time.perf_counter() - start
 ok = value is not None and (not isinstance(value, tuple) or value[0] is not None)
 print("@@" + json.dumps({"seconds": elapsed, "hit": bool(ok)}))
-'''
+"""
 
 _SRC = str(Path(__file__).resolve().parent.parent / "src")
 
@@ -61,16 +62,11 @@ def cold_read_seconds(cache_root: Path | str, key: str, repeats: int = 3) -> flo
     samples: list[float] = []
     with tempfile.TemporaryDirectory() as work:
         script = Path(work) / "read_one.py"
-        script.write_text(
-            _READER % {"src": _SRC, "cache": str(cache_root), "key": key},
-            encoding="utf-8")
+        script.write_text(_READER % {"src": _SRC, "cache": str(cache_root), "key": key}, encoding="utf-8")
         for _ in range(repeats):
-            done = subprocess.run([sys.executable, str(script)],
-                                  capture_output=True, text=True, timeout=900)
+            done = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=900)
             if "@@" not in done.stdout:
-                raise RuntimeError(
-                    f"cold read failed for {key!r}: {done.stdout[-400:]} "
-                    f"{done.stderr[-400:]}")
+                raise RuntimeError(f"cold read failed for {key!r}: {done.stdout[-400:]} {done.stderr[-400:]}")
             payload = json.loads(done.stdout.split("@@")[1].strip())
             if not payload["hit"]:
                 raise RuntimeError(f"cold read missed for {key!r} in {cache_root}")

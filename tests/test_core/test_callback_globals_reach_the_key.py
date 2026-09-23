@@ -20,6 +20,7 @@ is what made the gap easy to trust.
 Each shape the tester found: a plain function, a bound method, and a
 callable instance (whose code lives on its class). Fresh process per run.
 """
+
 from __future__ import annotations
 
 import json
@@ -32,7 +33,7 @@ import pytest
 
 pytestmark = pytest.mark.core
 
-POTENTIALS = textwrap.dedent('''
+POTENTIALS = textwrap.dedent("""
     TILT = {tilt}
 
     def double_well(x):
@@ -45,9 +46,9 @@ POTENTIALS = textwrap.dedent('''
     class Callable:
         def __call__(self, x):
             return TILT * x * 2
-''')
+""")
 
-MAIN = textwrap.dedent('''
+MAIN = textwrap.dedent("""
     import json, sys, time
     import cash
     import potentials
@@ -63,7 +64,7 @@ MAIN = textwrap.dedent('''
         integrate(potentials.Well().force, 100),
         integrate(potentials.Callable(), 100),
     ]))
-''')
+""")
 
 
 def _project(tmp_path, tilt):
@@ -78,17 +79,18 @@ def _run(tmp_path, proj):
     env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
     env["CASH_CACHE_DIR"] = str(tmp_path / "cache")
     env["PYTHONDONTWRITEBYTECODE"] = "1"
-    out = subprocess.run([sys.executable, "main.py"], cwd=str(proj),
-                         capture_output=True, text=True, env=env)
+    out = subprocess.run([sys.executable, "main.py"], cwd=str(proj), capture_output=True, text=True, env=env)
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout.strip().splitlines()[-1]), out.stderr.count("RAN")
 
 
 def _oracle(tilt):
     xs = [i / 100 for i in range(100)]
-    return [round(sum(x ** 4 - x ** 2 + tilt * x for x in xs), 6),
-            round(sum(tilt * x for x in xs), 6),
-            round(sum(tilt * x * 2 for x in xs), 6)]
+    return [
+        round(sum(x**4 - x**2 + tilt * x for x in xs), 6),
+        round(sum(tilt * x for x in xs), 6),
+        round(sum(tilt * x * 2 for x in xs), 6),
+    ]
 
 
 def test_every_callback_shape_sees_the_constant_change(tmp_path):

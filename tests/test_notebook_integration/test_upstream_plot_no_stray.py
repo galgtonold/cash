@@ -10,27 +10,26 @@ getting a usable ``ax``.
 """
 
 SETUP = "%matplotlib inline\nimport matplotlib.pyplot as plt"
-def DATA(n): return f"n = {n}"
-PLOT = (
-    "fig, ax = plt.subplots()\n"
-    "ax.bar(range(n), range(n))\n"
-    "ax.set_title('bars')\n"
-    "plt.show()"
-)
+
+
+def DATA(n):
+    return f"n = {n}"
+
+
+PLOT = "fig, ax = plt.subplots()\nax.bar(range(n), range(n))\nax.set_title('bars')\nplt.show()"
 DOWN = "print('AXTITLE', ax.get_title(), 'N', n)"
 
 
 def _plot_count(cell):
     return sum(
-        1 for o in cell.get("outputs", [])
+        1
+        for o in cell.get("outputs", [])
         if o.get("output_type") == "display_data" and "image/png" in o.get("data", {})
     )
 
 
 def _text(cell):
-    return "".join(
-        o.get("text", "") for o in cell.get("outputs", []) if o.get("output_type") == "stream"
-    )
+    return "".join(o.get("text", "") for o in cell.get("outputs", []) if o.get("output_type") == "stream")
 
 
 def test_upstream_plot_not_leaked_into_downstream(nb_runner):
@@ -49,16 +48,14 @@ def test_upstream_plot_not_leaked_into_downstream(nb_runner):
     down_text = _text(nb_runner.get_cell(4))
     assert "N 8" in down_text and "bars" in down_text, down_text
     # ...without the reconstructed figure leaking in as a stray plot.
-    assert _plot_count(nb_runner.get_cell(4)) == 0, (
-        "the reconstructed upstream figure leaked into the downstream cell"
-    )
+    assert _plot_count(nb_runner.get_cell(4)) == 0, "the reconstructed upstream figure leaked into the downstream cell"
 
 
 def _figure_count(cell):
     return sum(
-        1 for o in cell.get("outputs", [])
-        if o.get("output_type") in ("display_data", "execute_result")
-        and "image/png" in o.get("data", {})
+        1
+        for o in cell.get("outputs", [])
+        if o.get("output_type") in ("display_data", "execute_result") and "image/png" in o.get("data", {})
     )
 
 
@@ -72,7 +69,7 @@ def test_downstream_can_redisplay_reconstructed_figure(nb_runner):
     assert _figure_count(nb_runner.get_cell(4)) == 1
 
     nb_runner.set_cell_source(2, DATA(9))
-    nb_runner.run_cell(4)   # run ONLY the redisplay cell
+    nb_runner.run_cell(4)  # run ONLY the redisplay cell
     assert _figure_count(nb_runner.get_cell(4)) == 1, (
         "closing the reconstructed figure broke the downstream `fig` redisplay"
     )

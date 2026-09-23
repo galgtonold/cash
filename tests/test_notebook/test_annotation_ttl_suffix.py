@@ -16,6 +16,7 @@ non-negative integer, with a `CashCacheIneffectiveWarning`. Silently ignoring it
 (the ticket's minimum option) would still leave a reader believing they had set
 a TTL when they had not; the point of failure here is the silence.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -24,22 +25,24 @@ from cash.exceptions import CashCacheIneffectiveWarning
 from cash.notebook.annotations import parse_annotation_line
 
 
-@pytest.mark.parametrize("line, shown", [
-    ("# @cash:ttl=5m", "5m"),
-    ("# @cash:ttl=2h", "2h"),
-    ("# @cash:ttl=5min", "5min"),
-    ("# @cash:ttl=1d", "1d"),
-    ("# @cash:ttl=1.5", "1.5"),
-    ("# @cash:ttl=-30", "-30"),
-    ("# @cash:ttl=abc", "abc"),
-])
+@pytest.mark.parametrize(
+    "line, shown",
+    [
+        ("# @cash:ttl=5m", "5m"),
+        ("# @cash:ttl=2h", "2h"),
+        ("# @cash:ttl=5min", "5min"),
+        ("# @cash:ttl=1d", "1d"),
+        ("# @cash:ttl=1.5", "1.5"),
+        ("# @cash:ttl=-30", "-30"),
+        ("# @cash:ttl=abc", "abc"),
+    ],
+)
 def test_a_ttl_that_is_not_whole_seconds_is_ignored_and_warns(line, shown):
     with pytest.warns(CashCacheIneffectiveWarning, match=r"ttl"):
         ann = parse_annotation_line(line)
 
     assert ann is None, (
-        f"{line!r} produced an annotation instead of being rejected -- the "
-        "value was truncated to its leading digits"
+        f"{line!r} produced an annotation instead of being rejected -- the value was truncated to its leading digits"
     )
 
 
@@ -55,12 +58,15 @@ def test_the_warning_shows_the_value_and_the_correct_form():
     assert "IGNORED" in message, "the reader must know the annotation did nothing"
 
 
-@pytest.mark.parametrize("line, expected", [
-    ("# @cash:ttl=300", 300),
-    ("# @cash:ttl=0", 0),
-    ("# @cash: ttl = 300", 300),
-    ("# @cash:ttl=3600  # one hour", 3600),
-])
+@pytest.mark.parametrize(
+    "line, expected",
+    [
+        ("# @cash:ttl=300", 300),
+        ("# @cash:ttl=0", 0),
+        ("# @cash: ttl = 300", 300),
+        ("# @cash:ttl=3600  # one hour", 3600),
+    ],
+)
 def test_a_valid_ttl_still_parses_and_stays_quiet(line, expected, recwarn):
     """Positive control. A fix that rejected everything would satisfy the
     tests above and break every annotated notebook.
@@ -71,9 +77,7 @@ def test_a_valid_ttl_still_parses_and_stays_quiet(line, expected, recwarn):
     ann = parse_annotation_line(line)
 
     assert ann is not None and ann.ttl == expected
-    assert not [w for w in recwarn if issubclass(w.category, CashCacheIneffectiveWarning)], (
-        "a valid ttl must not warn"
-    )
+    assert not [w for w in recwarn if issubclass(w.category, CashCacheIneffectiveWarning)], "a valid ttl must not warn"
 
 
 def test_other_directives_are_unaffected_by_the_value_group_change(recwarn):

@@ -47,7 +47,7 @@ First run: 12 simulations (4 alphas × 3 seeds) execute and get cached. Re-runni
 
 For an embarrassingly parallel sweep you can dispatch the same loop across worker processes — see [across processes](../feature-guides/thread-safety.md#across-processes-pool-processpoolexecutor-joblib) for what the workers share and what each keeps to itself.
 
-<!-- claim: cash/notebook/randomness.py:RNG_CARRIER_CONSTRUCTORS @3248b870 -->
+<!-- claim: cash/notebook/randomness.py:RNG_CARRIER_CONSTRUCTORS @cec10494 -->
 ## Determinism: always seed the RNG
 
 The hard rule for cacheable simulations: **the seed is an argument, not a global**.

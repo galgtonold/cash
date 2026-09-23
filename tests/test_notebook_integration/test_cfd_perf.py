@@ -9,11 +9,13 @@ exec wrapper — NOT the TeeWriter or cache I/O.
 
 These tests catch performance regressions before they reach production.
 """
+
 import json
 import os
-import pytest
 import re
 import time
+
+import pytest
 
 pytestmark = [pytest.mark.timeout(120)]
 
@@ -141,9 +143,10 @@ print(f"Final residual: {residual_history[-1]:.2e}")
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _extract_inner_time(output: str, fallback: float) -> float:
     """Extract 'Simulation complete in X.XXs' from cell output."""
-    match = re.search(r'Simulation complete in (\d+\.\d+)s', output)
+    match = re.search(r"Simulation complete in (\d+\.\d+)s", output)
     return float(match.group(1)) if match else fallback
 
 
@@ -157,7 +160,7 @@ def _extract_cpu_time(output: str, fallback: float) -> float:
     so contention cancels out and the difference is the caching overhead we
     actually mean to measure (CAS-212).
     """
-    match = re.search(r'Simulation CPU time (\d+\.\d+)s', output)
+    match = re.search(r"Simulation CPU time (\d+\.\d+)s", output)
     return float(match.group(1)) if match else fallback
 
 
@@ -174,12 +177,10 @@ def _statements_processed(nb_runner, stats_cell: int) -> int | None:
     """
     out = nb_runner.get_output(stats_cell)
     try:
-        blob = json.loads(out[out.index("{"):out.rindex("}") + 1])
+        blob = json.loads(out[out.index("{") : out.rindex("}") + 1])
     except (ValueError, json.JSONDecodeError):
         return None
-    return (blob.get("statements_computed", 0)
-            + blob.get("statements_restored", 0)
-            + blob.get("statements_skipped", 0))
+    return blob.get("statements_computed", 0) + blob.get("statements_restored", 0) + blob.get("statements_skipped", 0)
 
 
 def _run_cfd(nb_runner, *, with_cash: bool) -> tuple[float, float, str, int | None]:
@@ -200,8 +201,7 @@ def _run_cfd(nb_runner, *, with_cash: bool) -> tuple[float, float, str, int | No
 
     output = nb_runner.get_output(loop_cell)
     assert "Simulation complete" in output, (
-        f"Loop cell didn't complete (cash={'ON' if with_cash else 'OFF'}). "
-        f"Output: {output[:500]}"
+        f"Loop cell didn't complete (cash={'ON' if with_cash else 'OFF'}). Output: {output[:500]}"
     )
 
     statements = None
@@ -218,6 +218,7 @@ def _run_cfd(nb_runner, *, with_cash: bool) -> tuple[float, float, str, int | No
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 def test_cfd_loop_overhead(nb_runner):
     """Caching overhead for the CFD loop must stay within budget.
@@ -246,15 +247,16 @@ def test_cfd_loop_overhead(nb_runner):
     cpu_overhead = cpu_with - cpu_without
     cpu_pct = (cpu_overhead / cpu_without * 100) if cpu_without > 0 else 0
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("CFD LOOP PERFORMANCE (5000 steps, N=41)")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"  WITH caching:    {wall_with:.2f}s wall, {cpu_with:.2f}s cpu")
     print(f"  WITHOUT caching: {wall_without:.2f}s wall, {cpu_without:.2f}s cpu")
     print(f"  CPU overhead:    {cpu_overhead:.2f}s ({cpu_pct:.1f}%)")
-    print(f"  Wall overhead:   {wall_overhead:.2f}s "
-          f"{'(not asserted -- parallel run)' if _running_in_parallel() else ''}")
-    print(f"{'='*60}")
+    print(
+        f"  Wall overhead:   {wall_overhead:.2f}s {'(not asserted -- parallel run)' if _running_in_parallel() else ''}"
+    )
+    print(f"{'=' * 60}")
 
     if _running_in_parallel():
         pytest.skip(
@@ -273,8 +275,7 @@ def test_cfd_loop_overhead(nb_runner):
     # two runs are scheduled against a dozen competing workers and are not
     # comparable in the first place.
     assert wall_overhead < max(wall_without * 0.20, 2.0), (
-        f"Caching wall-clock overhead too high! {wall_overhead:.2f}s on "
-        f"{wall_without:.2f}s base. Must be <20% or <2s."
+        f"Caching wall-clock overhead too high! {wall_overhead:.2f}s on {wall_without:.2f}s base. Must be <20% or <2s."
     )
 
 
@@ -304,9 +305,7 @@ def test_cfd_loop_statement_count(nb_runner):
     """
     _, _, _, statements = _run_cfd(nb_runner, with_cash=True)
 
-    assert statements is not None, (
-        "could not read %cash_stats json -- the assertion below would be vacuous"
-    )
+    assert statements is not None, "could not read %cash_stats json -- the assertion below would be vacuous"
     assert statements < MAX_STATEMENTS, (
         f"cash processed {statements} statements for this notebook (ceiling "
         f"{MAX_STATEMENTS}). The 5000-step loop is uncacheable and should be "
@@ -347,19 +346,17 @@ def test_cfd_loop_rerun_no_regression(nb_runner):
     cpu1 = _extract_cpu_time(out1, first_run)
     cpu2 = _extract_cpu_time(out2, second_run)
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("CFD LOOP RE-RUN (5000 steps, N=41)")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"  First run:  {first_run:.2f}s wall, {cpu1:.2f}s cpu")
     print(f"  Second run: {second_run:.2f}s wall, {cpu2:.2f}s cpu")
     print(f"  CPU delta:  {cpu2 - cpu1:.2f}s")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     # Compared in CPU time for the same reason as the overhead test (CAS-212):
     # both runs share this kernel, but under -n 16 they do not share the same
     # external load, so a wall-clock ratio drifts with whatever else is running.
-    assert cpu2 < cpu1 * 1.5 + 1.0, (
-        f"Second run regressed: {cpu2:.2f}s cpu vs first {cpu1:.2f}s cpu"
-    )
+    assert cpu2 < cpu1 * 1.5 + 1.0, f"Second run regressed: {cpu2:.2f}s cpu vs first {cpu1:.2f}s cpu"
 
     nb_runner.shutdown()

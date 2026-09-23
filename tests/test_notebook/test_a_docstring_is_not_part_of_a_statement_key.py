@@ -10,9 +10,10 @@ without docstrings (``cache_key.statement_source_hash``).
 A bare string statement in a cell is NOT a docstring: it is the cell's
 displayed value, and editing it must still count.
 """
-import pytest
+
 from unittest.mock import MagicMock
 
+import pytest
 from traitlets.config.configurable import Configurable
 
 from cash.backends import InMemoryBackend
@@ -52,7 +53,7 @@ def magics_fixture():
 
 DOUBLE = 'def double(n):\n    """Double n."""\n    return n * 2'
 REWORDED = 'def double(n):\n    """Return twice n.\n\n    Longer now."""\n    return n * 2'
-UNDOCUMENTED = 'def double(n):\n    return n * 2'
+UNDOCUMENTED = "def double(n):\n    return n * 2"
 TRIPLE = 'def double(n):\n    """Double n."""\n    return n * 3'
 
 CLASS = 'class Box:\n    """A box."""\n\n    def size(self):\n        """How big."""\n        return 3'
@@ -65,26 +66,26 @@ def _run_call(processor, definition, call="y = double(21)"):
 
 
 class TestTheCallerIsServedFromCache:
-
     def test_after_rewording_the_docstring(self, magics_fixture):
         _, shell, _, processor = magics_fixture
-        assert _run_call(processor, DOUBLE)['status'] == CacheStatus.COMPUTED
+        assert _run_call(processor, DOUBLE)["status"] == CacheStatus.COMPUTED
         metrics = _run_call(processor, REWORDED)
-        assert metrics['status'] == CacheStatus.RESTORED, (
-            "only the docstring of `double` changed, and its caller re-ran")
-        assert shell.user_ns['y'] == 42
+        assert metrics["status"] == CacheStatus.RESTORED, (
+            "only the docstring of `double` changed, and its caller re-ran"
+        )
+        assert shell.user_ns["y"] == 42
 
     def test_after_removing_the_docstring(self, magics_fixture):
         _, _, _, processor = magics_fixture
         _run_call(processor, DOUBLE)
-        assert _run_call(processor, UNDOCUMENTED)['status'] == CacheStatus.RESTORED
+        assert _run_call(processor, UNDOCUMENTED)["status"] == CacheStatus.RESTORED
 
     def test_after_rewording_a_class_and_its_methods(self, magics_fixture):
         _, shell, _, processor = magics_fixture
         call = "z = Box().size()"
-        assert _run_call(processor, CLASS, call)['status'] == CacheStatus.COMPUTED
-        assert _run_call(processor, CLASS_REWORDED, call)['status'] == CacheStatus.RESTORED
-        assert shell.user_ns['z'] == 3
+        assert _run_call(processor, CLASS, call)["status"] == CacheStatus.COMPUTED
+        assert _run_call(processor, CLASS_REWORDED, call)["status"] == CacheStatus.RESTORED
+        assert shell.user_ns["z"] == 3
 
 
 def test_a_real_edit_still_re_runs_the_caller(magics_fixture):
@@ -92,12 +93,11 @@ def test_a_real_edit_still_re_runs_the_caller(magics_fixture):
     never invalidates at all."""
     _, shell, _, processor = magics_fixture
     _run_call(processor, DOUBLE)
-    assert _run_call(processor, TRIPLE)['status'] == CacheStatus.COMPUTED
-    assert shell.user_ns['y'] == 63
+    assert _run_call(processor, TRIPLE)["status"] == CacheStatus.COMPUTED
+    assert shell.user_ns["y"] == 63
 
 
 class TestTheStatementDigest:
-
     def test_ignores_a_def_s_docstring(self):
         assert statement_source_hash(DOUBLE) == statement_source_hash(REWORDED)
         assert statement_source_hash(DOUBLE) == statement_source_hash(UNDOCUMENTED)
@@ -112,5 +112,6 @@ class TestTheStatementDigest:
     def test_leaves_a_statement_without_one_byte_identical(self):
         """Keys that never had a docstring in them must not move."""
         import hashlib
+
         for code in ("x = 1", "y = f('a')", UNDOCUMENTED):
             assert statement_source_hash(code) == hashlib.sha256(code.encode()).hexdigest()

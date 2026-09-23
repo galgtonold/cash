@@ -31,7 +31,6 @@ from ..view import (
     StatementRow,
 )
 
-
 # This renderer is ASCII-ONLY, deliberately. ``%cash_badge print`` exists for
 # headless / agent runs, so its output is read by a DIFFERENT process than the
 # one that wrote it: nbconvert, a log scraper, an agent parsing the .ipynb. The
@@ -61,11 +60,13 @@ def _header_line(h: BadgeHeader) -> str:
         label, counts = mixed_headline(h)
         line = f"{label} ({counts}; {h.total_exec_s:.2f}s, saved {h.total_saved_s:.2f}s)"
     elif h.total_saved_s > 0:
-        line = (f"EXECUTED ({h.total_exec_s:.2f}s, saved {h.total_saved_s:.2f}s)"
-                if h.total_exec_s else f"EXECUTED (saved {h.total_saved_s:.2f}s)")
+        line = (
+            f"EXECUTED ({h.total_exec_s:.2f}s, saved {h.total_saved_s:.2f}s)"
+            if h.total_exec_s
+            else f"EXECUTED (saved {h.total_saved_s:.2f}s)"
+        )
     else:
-        line = (f"EXECUTED ({h.total_exec_s:.2f}s)"
-                if h.total_exec_s else "EXECUTED")
+        line = f"EXECUTED ({h.total_exec_s:.2f}s)" if h.total_exec_s else "EXECUTED"
     return line + _uncacheable_suffix(h)
 
 
@@ -122,7 +123,7 @@ def _rng_suffix(row: StatementRow) -> str:
 
 
 def _row_line(row: StatementRow, *, is_upstream: bool) -> str:
-    code = row.code.splitlines()[0][:theme.HEADER_MAX_LEN] if row.code else ""
+    code = row.code.splitlines()[0][: theme.HEADER_MAX_LEN] if row.code else ""
     code = code + _rng_suffix(row)
     tag = _row_tag(row, is_upstream=is_upstream)
     if row.status is BadgeStatus.RESTORED:
@@ -142,8 +143,7 @@ def _row_line_computed(row: StatementRow, tag: str, code: str) -> str:
     # The statement ran, but what it exists for may have come from the cache:
     # "EXECUTED (0.03s)" read like a suspiciously fast re-fit, with only the
     # footer saying otherwise (round 25, r25s1).
-    saved = sum(c.time_s for g in (row.sub_units or ()) for c in g.calls
-                if c.status is BadgeStatus.RESTORED)
+    saved = sum(c.time_s for g in (row.sub_units or ()) for c in g.calls if c.status is BadgeStatus.RESTORED)
     timing = f"({row.time_s:.2f}s, saved {saved:.2f}s by cached calls)" if saved else f"({row.time_s:.2f}s)"
     if row.uncacheable_reasons:
         return f"  {tag}: {code}  {timing} - {', '.join(row.uncacheable_reasons)}"
@@ -237,20 +237,23 @@ def _loop_statement_summary(stmt: LoopStatement, pad: str, *, is_upstream: bool)
     restored = [it for it in its if it.status is BadgeStatus.RESTORED]
     ran = [it for it in its if it.status is not BadgeStatus.RESTORED]
     code = (stmt.base_code or (its[0].code if its else "")).splitlines()
-    code = (code[0] if code else "")[:theme.HEADER_MAX_LEN]
+    code = (code[0] if code else "")[: theme.HEADER_MAX_LEN]
     parts = []
     if restored:
         parts.append(f"{len(restored)} cached (saved {sum(it.saved_time_s for it in restored):.2f}s)")
     if ran:
         parts.append(f"{len(ran)} ran ({sum(it.time_s for it in ran):.2f}s)")
-    reasons = list(dict.fromkeys(
-        shorten_skipped_reason(it.skipped_reason) for it in ran if it.skipped_reason))
+    reasons = list(dict.fromkeys(shorten_skipped_reason(it.skipped_reason) for it in ran if it.skipped_reason))
     lead = "^" if is_upstream else ""
     line = f"{pad}  {lead}LOOP x{len(its)}: {code}  - {', '.join(parts)}"
     if reasons:
         line += " - not cached: " + "; ".join(reasons[:2])
-    return [line, *_sub_unit_lines(StatementRow(status=BadgeStatus.COMPUTED, code=code, time_s=0.0,
-                                                sub_units=stmt.sub_units), pad)]
+    return [
+        line,
+        *_sub_unit_lines(
+            StatementRow(status=BadgeStatus.COMPUTED, code=code, time_s=0.0, sub_units=stmt.sub_units), pad
+        ),
+    ]
 
 
 def _loop_body(item: ForLoopGroup) -> tuple:
@@ -291,8 +294,7 @@ def _item_lines(item: SectionItem, *, is_upstream: bool, indent: int = 0) -> lis
     """
     pad = _INDENT * indent
     if isinstance(item, StatementRow):
-        return [pad + _row_line(item, is_upstream=is_upstream), *_sub_unit_lines(item, pad),
-                *_output_lines(item, pad)]
+        return [pad + _row_line(item, is_upstream=is_upstream), *_sub_unit_lines(item, pad), *_output_lines(item, pad)]
     if isinstance(item, ForLoopGroup):
         out: list[str] = []
         for sub in _loop_body(item):
@@ -303,17 +305,13 @@ def _item_lines(item: SectionItem, *, is_upstream: bool, indent: int = 0) -> lis
                 for it in sub.iterations:
                     out.extend(_iteration_lines(it, pad, is_upstream=is_upstream))
             else:
-                out.extend(
-                    _item_lines(sub, is_upstream=is_upstream, indent=indent + 1)
-                )
+                out.extend(_item_lines(sub, is_upstream=is_upstream, indent=indent + 1))
         return out
     if isinstance(item, ControlGroup):
         out = []
         for r in item.rows:
             step = 0 if isinstance(r, _LEAF_ITEMS) else 1
-            out.extend(
-                _item_lines(r, is_upstream=is_upstream, indent=indent + step)
-            )
+            out.extend(_item_lines(r, is_upstream=is_upstream, indent=indent + step))
         return out
     if isinstance(item, ControlGroupSingle):
         return [pad + _row_line(item.row, is_upstream=is_upstream), *_sub_unit_lines(item.row, pad)]
@@ -323,8 +321,11 @@ def _item_lines(item: SectionItem, *, is_upstream: bool, indent: int = 0) -> lis
         # style rows into a report cell's badge (round 25, r25s1).
         n = len(item.items)
         lead = "^" if is_upstream else ""
-        out = [f"{pad}  {lead}{n} upstream step{'s' if n != 1 else ''} not re-run "
-               f"(what they built is already current)"] if n else []
+        out = (
+            [f"{pad}  {lead}{n} upstream step{'s' if n != 1 else ''} not re-run (what they built is already current)"]
+            if n
+            else []
+        )
         # A write the repair left alone although its data changed: the file
         # is out of date, and "already current" would say otherwise (r28s3).
         for code, paths in item.stale_exports:
@@ -343,10 +344,14 @@ _FOLD_MIN_ROWS = 3
 
 
 def _foldable(item: SectionItem) -> bool:
-    return (isinstance(item, StatementRow) and item.status is BadgeStatus.COMPUTED
-            and bool(item.uncacheable_reasons or item.skipped_reason)
-            and not is_guard_reason(item.skipped_reason)
-            and not item.sub_units and item.time_s < _FOLD_BELOW_S)
+    return (
+        isinstance(item, StatementRow)
+        and item.status is BadgeStatus.COMPUTED
+        and bool(item.uncacheable_reasons or item.skipped_reason)
+        and not is_guard_reason(item.skipped_reason)
+        and not item.sub_units
+        and item.time_s < _FOLD_BELOW_S
+    )
 
 
 def _items_lines(items, *, is_upstream: bool) -> list[str]:
@@ -369,8 +374,10 @@ def _items_lines(items, *, is_upstream: bool) -> list[str]:
             names = [(r.code or "").splitlines()[0].split("(")[0].strip()[:40] for r in run]
             shown = ", ".join(names[:6]) + (", ..." if len(names) > 6 else "")
             lead = "^" if is_upstream else ""
-            out.append(f"  {lead}re-ran {len(run)} quick steps that are never cached "
-                       f"({sum(r.time_s for r in run):.2f}s): {shown}")
+            out.append(
+                f"  {lead}re-ran {len(run)} quick steps that are never cached "
+                f"({sum(r.time_s for r in run):.2f}s): {shown}"
+            )
             i = j
             continue
         out.extend(_item_lines(items[i], is_upstream=is_upstream))

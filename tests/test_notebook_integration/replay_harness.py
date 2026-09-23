@@ -16,6 +16,7 @@ process. Two properties are checked:
 What was re-run for other cells is recorded, not asserted: it is the cost
 side, reported next to the correctness verdict.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -35,9 +36,10 @@ Content = Union[str, bytes]
 @dataclass(frozen=True)
 class Edit:
     """What the user changes between the first run and the target run."""
-    cell: int | None = None                        # 1-based cell whose source is replaced
-    source: str | None = None                      # ... by this
-    files: tuple[tuple[str, Content | None], ...] = ()   # relpath -> new content (None = delete)
+
+    cell: int | None = None  # 1-based cell whose source is replaced
+    source: str | None = None  # ... by this
+    files: tuple[tuple[str, Content | None], ...] = ()  # relpath -> new content (None = delete)
 
     def apply_to_cells(self, cells: list[str]) -> list[str]:
         out = list(cells)
@@ -66,11 +68,11 @@ class Edit:
 class Scenario:
     notebook: str
     name: str
-    cells: tuple[str, ...]                        # cell 1 must turn cash on
+    cells: tuple[str, ...]  # cell 1 must turn cash on
     files: tuple[tuple[str, Content], ...]
     edit: Edit
-    target: int                                   # 1-based
-    restart: bool = False                         # restart + run cell 1 before the edit
+    target: int  # 1-based
+    restart: bool = False  # restart + run cell 1 before the edit
     # Cells run after the edit and before the target: the user looks at
     # another cell first. Its replay refreshes part of what the target needs
     # and must not make the rest look fresh (round 22, r22s1).
@@ -87,11 +89,11 @@ class Result:
     scenario: str
     stdout: str
     oracle_stdout: str
-    written: dict[str, str] = field(default_factory=dict)          # relpath -> sha (cash)
-    oracle_files: dict[str, str] = field(default_factory=dict)     # relpath -> sha (oracle)
+    written: dict[str, str] = field(default_factory=dict)  # relpath -> sha (cash)
+    oracle_files: dict[str, str] = field(default_factory=dict)  # relpath -> sha (oracle)
     rerun: list[str] = field(default_factory=list)
     seconds: float = 0.0
-    recomputed: list[str] = field(default_factory=list)   # expensive steps that really ran
+    recomputed: list[str] = field(default_factory=list)  # expensive steps that really ran
 
     @property
     def stdout_ok(self) -> bool:
@@ -99,21 +101,29 @@ class Result:
 
     @property
     def bad_files(self) -> dict[str, str]:
-        return {rel: ("not written by a real run" if rel not in self.oracle_files
-                      else "differs from a real run")
-                for rel, sha in self.written.items() if self.oracle_files.get(rel) != sha}
+        return {
+            rel: ("not written by a real run" if rel not in self.oracle_files else "differs from a real run")
+            for rel, sha in self.written.items()
+            if self.oracle_files.get(rel) != sha
+        }
 
     @property
     def ok(self) -> bool:
         return self.stdout_ok and not self.bad_files
 
     def explain(self) -> str:
-        lines = [f"{self.scenario}: {'OK' if self.ok else 'WRONG'}  ({self.seconds:.1f}s, "
-                 f"{len(self.rerun)} statements re-run for other cells, "
-                 f"recomputed: {', '.join(self.recomputed) or 'nothing expensive'})"]
+        lines = [
+            f"{self.scenario}: {'OK' if self.ok else 'WRONG'}  ({self.seconds:.1f}s, "
+            f"{len(self.rerun)} statements re-run for other cells, "
+            f"recomputed: {', '.join(self.recomputed) or 'nothing expensive'})"
+        ]
         if not self.stdout_ok:
-            lines += ["  stdout (cash):", *("    " + x for x in self.stdout.splitlines()),
-                      "  stdout (no cash):", *("    " + x for x in self.oracle_stdout.splitlines())]
+            lines += [
+                "  stdout (cash):",
+                *("    " + x for x in self.stdout.splitlines()),
+                "  stdout (no cash):",
+                *("    " + x for x in self.oracle_stdout.splitlines()),
+            ]
         for rel, why in self.bad_files.items():
             lines.append(f"  file {rel}: {why}")
         if self.rerun:
@@ -164,8 +174,7 @@ def _write_files(work: Path, files) -> None:
 
 
 def _strip_cash(source: str) -> str:
-    keep = [ln for ln in source.splitlines()
-            if not ln.lstrip().startswith("%") and ln.strip() != "import cash"]
+    keep = [ln for ln in source.splitlines() if not ln.lstrip().startswith("%") and ln.strip() != "import cash"]
     return "\n".join(keep)
 
 
@@ -180,19 +189,22 @@ def oracle(scenario: Scenario) -> tuple[str, dict[str, str]]:
         _write_files(work, scenario.files)
         scenario.edit.apply_to_dir(work)
         before = _snapshot(work)
-        script = "\n".join(f"print({_MARK + str(i)!r}, flush=True)\n{_strip_cash(c)}"
-                           for i, c in enumerate(cells, start=1))
+        script = "\n".join(
+            f"print({_MARK + str(i)!r}, flush=True)\n{_strip_cash(c)}" for i, c in enumerate(cells, start=1)
+        )
         env = {**os.environ, "MPLBACKEND": "Agg", "PYTHONHASHSEED": "0"}
         env.pop("CASH_TRACE_FILE", None)
-        run = subprocess.run([sys.executable, "-c", script], cwd=work, env=env,
-                             capture_output=True, text=True, timeout=600)
+        run = subprocess.run(
+            [sys.executable, "-c", script], cwd=work, env=env, capture_output=True, text=True, timeout=600
+        )
         if run.returncode != 0:
             raise RuntimeError(f"oracle for {scenario.id} failed:\n{run.stderr[-3000:]}")
         target = run.stdout.split(f"{_MARK}{scenario.target}\n", 1)[1]
         after = _snapshot(work)
         keep = os.environ.get("CASH_REPLAY_KEEP")
-        if keep:                                  # for looking at what differs
+        if keep:  # for looking at what differs
             import shutil
+
             shutil.copytree(work, Path(keep) / "oracle", dirs_exist_ok=True)
         files = {rel: v[2] for rel, v in after.items() if before.get(rel) != v}
         return target.rstrip("\n"), files
@@ -200,8 +212,11 @@ def oracle(scenario: Scenario) -> tuple[str, dict[str, str]]:
 
 def _cell_stdout(runner, cell: int) -> str:
     outs = runner.nb.cells[cell - 1].get("outputs", [])
-    text = "".join("".join(o.get("text", "")) if isinstance(o.get("text"), list) else o.get("text", "")
-                   for o in outs if o.get("output_type") == "stream" and o.get("name") == "stdout")
+    text = "".join(
+        "".join(o.get("text", "")) if isinstance(o.get("text"), list) else o.get("text", "")
+        for o in outs
+        if o.get("output_type") == "stream" and o.get("name") == "stdout"
+    )
     return text.rstrip("\n")
 
 
@@ -245,8 +260,9 @@ def run_with_cash(scenario: Scenario, runner, trace_path: str) -> Result:
     rerun = [r["stmt"] for r in records[split:] if r.get("event") == "schedule_reexec"]
     written = {rel: v[2] for rel, v in after.items() if before.get(rel) != v}
     o_stdout, o_files = oracle(scenario)
-    return Result(scenario.id, _cell_stdout(runner, scenario.target), o_stdout,
-                  written, o_files, rerun, seconds, recomputed)
+    return Result(
+        scenario.id, _cell_stdout(runner, scenario.target), o_stdout, written, o_files, rerun, seconds, recomputed
+    )
 
 
 def fresh_trace_file() -> str:
@@ -255,9 +271,14 @@ def fresh_trace_file() -> str:
     return path
 
 
-def scenarios_from(notebook: str, cells, files, edits: dict[str, Edit],
-                   targets: dict[str, tuple[int | tuple[int, ...], ...]],
-                   restart: tuple[str, ...] = ()) -> list[Scenario]:
+def scenarios_from(
+    notebook: str,
+    cells,
+    files,
+    edits: dict[str, Edit],
+    targets: dict[str, tuple[int | tuple[int, ...], ...]],
+    restart: tuple[str, ...] = (),
+) -> list[Scenario]:
     """One scenario per (edit, target); edits named in *restart* also get a
     variant that restarts the kernel between the first run and the edit.
 
@@ -268,11 +289,13 @@ def scenarios_from(notebook: str, cells, files, edits: dict[str, Edit],
     for name, edit in edits.items():
         for path in targets[name]:
             *first, target = path if isinstance(path, tuple) else (path,)
-            for again in ((False, True) if name in restart else (False,)):
-                out.append(Scenario(notebook, name, tuple(cells), tuple(files), edit, target,
-                                    restart=again, first=tuple(first)))
+            for again in (False, True) if name in restart else (False,):
+                out.append(
+                    Scenario(
+                        notebook, name, tuple(cells), tuple(files), edit, target, restart=again, first=tuple(first)
+                    )
+                )
     return out
 
 
-__all__ = ["Edit", "Scenario", "Result", "oracle", "run_with_cash", "fresh_trace_file",
-           "scenarios_from"]
+__all__ = ["Edit", "Scenario", "Result", "oracle", "run_with_cash", "fresh_trace_file", "scenarios_from"]

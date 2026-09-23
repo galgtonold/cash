@@ -1,10 +1,7 @@
 import json
 from pathlib import Path
 
-import pytest
-
 from benchmarks._overhead_io import (
-    CodeCell,
     load_code_cells,
     write_synthetic_micro,
 )
@@ -32,12 +29,15 @@ def _make_nb(tmp_path: Path, cells: list[tuple[str, list[str]]]) -> Path:
 
 
 def test_load_code_cells_returns_only_code_cells(tmp_path):
-    path = _make_nb(tmp_path, [
-        ("markdown", ["# title\n"]),
-        ("code", ["x = 1\n", "y = 2\n"]),
-        ("markdown", ["nope"]),
-        ("code", ["z = x + y\n"]),
-    ])
+    path = _make_nb(
+        tmp_path,
+        [
+            ("markdown", ["# title\n"]),
+            ("code", ["x = 1\n", "y = 2\n"]),
+            ("markdown", ["nope"]),
+            ("code", ["z = x + y\n"]),
+        ],
+    )
     cells = load_code_cells(path)
     assert [c.index for c in cells] == [0, 1]  # zero-based among code cells
     assert cells[0].source == "x = 1\ny = 2\n"
@@ -45,12 +45,15 @@ def test_load_code_cells_returns_only_code_cells(tmp_path):
 
 
 def test_load_code_cells_preserves_original_cell_index(tmp_path):
-    path = _make_nb(tmp_path, [
-        ("markdown", ["a"]),
-        ("code", ["x = 1"]),
-        ("markdown", ["b"]),
-        ("code", ["y = 2"]),
-    ])
+    path = _make_nb(
+        tmp_path,
+        [
+            ("markdown", ["a"]),
+            ("code", ["x = 1"]),
+            ("markdown", ["b"]),
+            ("code", ["y = 2"]),
+        ],
+    )
     cells = load_code_cells(path)
     assert cells[0].notebook_cell_index == 1
     assert cells[1].notebook_cell_index == 3

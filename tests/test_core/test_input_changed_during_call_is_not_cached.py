@@ -22,6 +22,7 @@ The concurrent writer is a thread sequenced with Events, not a sleep race: the
 body reads, signals, and waits until the write has landed. Deterministic on a
 loaded box.
 """
+
 from __future__ import annotations
 
 import threading
@@ -77,7 +78,7 @@ def test_a_file_rewritten_during_the_call_is_not_cached(c, tmp_path):
     data = tmp_path / "data.txt"
     _write(data, "1\n2\n3\n")
     runs = []
-    writer = _Writer(data, "1\n2\n9\n")           # sync job lands mid-call
+    writer = _Writer(data, "1\n2\n9\n")  # sync job lands mid-call
 
     @c.cache(assume_safe=True)
     def total(path):
@@ -85,7 +86,7 @@ def test_a_file_rewritten_during_the_call_is_not_cached(c, tmp_path):
         with open(path, encoding="utf-8") as fh:
             value = sum(int(x) for x in fh.read().split())
         writer.after_read()
-        time.sleep(0.2)                           # over the persistence floor
+        time.sleep(0.2)  # over the persistence floor
         return value
 
     with warnings.catch_warnings(record=True) as rec:
@@ -105,7 +106,7 @@ def test_the_nested_form_is_not_cached_either(c, tmp_path):
     a, b = tmp_path / "a.txt", tmp_path / "b.txt"
     _write(a, "1\n")
     _write(b, "2\n")
-    writer = _Writer(a, "5\n")                    # lands while inner(b) runs
+    writer = _Writer(a, "5\n")  # lands while inner(b) runs
     outer_runs = []
 
     @c.cache(assume_safe=True)
@@ -177,7 +178,7 @@ def test_writing_into_a_listed_directory_still_caches(c, tmp_path):
         runs.append(1)
         names = sorted(os.path.basename(p) for p in glob.glob(os.path.join(path, "*.csv")))
         time.sleep(0.2)
-        (folder / "summary.parquet").write_bytes(b"x")    # output into the same folder
+        (folder / "summary.parquet").write_bytes(b"x")  # output into the same folder
         return names
 
     summarise(str(folder))

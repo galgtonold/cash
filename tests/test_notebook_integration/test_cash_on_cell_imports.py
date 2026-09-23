@@ -14,13 +14,14 @@ second's, as the runtime had before the restart. Every helper reading
 Counted, not timed: a tee on ``CallUnit._record`` in the kernel records every
 intercepted call and whether it hit.
 """
+
 import ast
 
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(600)]
 
-_TEE = '''
+_TEE = """
 import cash.notebook.call_unit as _cu
 C = _cu.CallUnit
 if not hasattr(C, "_test_orig"):
@@ -30,18 +31,17 @@ if not hasattr(C, "_test_orig"):
         return C._test_orig(self, func_name, site, key, cache_hit=cache_hit, **k)
     C._record = _tee
 C._test_calls = []
-'''
-_UNTEE = '''
+"""
+_UNTEE = """
 import cash.notebook.call_unit as _cu
 C = _cu.CallUnit
 if hasattr(C, "_test_orig"):
     C._record = C._test_orig
     del C._test_orig
-'''
+"""
 _CALLS = "__import__('cash.notebook.call_unit', fromlist=['_']).CallUnit._test_calls"
 
-SLOW = ("def slow(k):\n    print('RUN slow', k, file=sys.__stderr__)\n"
-        "    time.sleep(0.3)\n    return k * 10")
+SLOW = "def slow(k):\n    print('RUN slow', k, file=sys.__stderr__)\n    time.sleep(0.3)\n    return k * 10"
 VALUE = "v = slow(3)"
 #: Replayed after a restart (nothing stores what a loop builds), so ``def slow``
 #: runs again, and each ``slow(k)`` is looked up under a key that holds the
@@ -73,10 +73,13 @@ def _restart_and_run(nb_runner, cell: int) -> list[tuple[str, bool]]:
     return ast.literal_eval(nb_runner.peek(_CALLS))
 
 
-@pytest.mark.parametrize("first, second", [
-    ("import os, sys", "import sys\nimport time"),          # r23s3's two cells
-    ("import sys", "import os, sys\nimport time"),
-])
+@pytest.mark.parametrize(
+    "first, second",
+    [
+        ("import os, sys", "import sys\nimport time"),  # r23s3's two cells
+        ("import sys", "import os, sys\nimport time"),
+    ],
+)
 def test_a_restart_restores_what_a_helper_reading_a_module_computed(nb_runner, _teed, first, second):
     cells = ["import cash\n%cash_on\n" + first, second, SLOW, VALUE, LOOP, REPORT]
     nb_runner.create_notebook(cells)

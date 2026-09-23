@@ -18,6 +18,7 @@ producer's snapshot, so every consumer of such a variable missed on every run,
 forever (CAS-171's ``make_classification`` chain). A path that never existed
 cannot have *changed*.
 """
+
 import types
 
 import pytest
@@ -93,6 +94,7 @@ def test_snapshotted_file_that_disappears_still_invalidates(real_file, tmp_path)
     state = _state({real_file})
 
     import os
+
     os.remove(real_file)
 
     assert checker._input_file_changed(state, "X", real_file) is True

@@ -3,9 +3,12 @@
 Covers promotion policy, read-repair, multi-tier operations,
 cleanup, and edge cases.
 """
-import pytest
+
 from unittest.mock import MagicMock
-from cash.backends import InMemoryBackend, FileBackend
+
+import pytest
+
+from cash.backends import FileBackend, InMemoryBackend
 from cash.backends.tiered_backend import TieredBackend
 
 
@@ -79,11 +82,15 @@ class TestPromotionPolicy:
 
     def test_force_persist_overrides_policy(self, tiered, file_backend):
         """force_persist=True should always promote regardless of policy."""
-        tiered.set("forced", "data", {
-            "execution_time": 0.01,
-            "size": 100,
-            "force_persist": True,
-        })
+        tiered.set(
+            "forced",
+            "data",
+            {
+                "execution_time": 0.01,
+                "size": 100,
+                "force_persist": True,
+            },
+        )
         meta, val = file_backend.get("forced")
         assert val == "data"  # Force-persisted
 
@@ -131,8 +138,8 @@ class TestCAS141LargeFramePersistence:
     """
 
     def _smart_tiered(self, tmp_path):
-        from cash.config import CashConfig
         from cash.backends.factory import build_backend_from_config
+        from cash.config import CashConfig
 
         cfg = CashConfig(
             cache_dir=str(tmp_path / ".cash"),

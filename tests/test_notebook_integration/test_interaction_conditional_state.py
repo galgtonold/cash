@@ -15,11 +15,13 @@ class TestConditionalStateEdits:
 
     def test_edit_condition_value(self, nb_runner):
         """Edit the condition variable, verify different branch taken."""
-        nb_runner.create_notebook([
-            "mode = 'fast'  # processing mode",
-            "if mode == 'fast':\n    factor = 10\nelse:\n    factor = 1",
-            "result = 42 * factor\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "mode = 'fast'  # processing mode",
+                "if mode == 'fast':\n    factor = 10\nelse:\n    factor = 1",
+                "result = 42 * factor\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 420" in nb_runner.get_output(3)
@@ -30,29 +32,31 @@ class TestConditionalStateEdits:
 
     def test_edit_branch_body(self, nb_runner):
         """Edit a branch body."""
-        nb_runner.create_notebook([
-            "flag = True  # branch flag",
-            "if flag:\n    val = 'YES'\nelse:\n    val = 'NO'",
-            "print(f'val = {val}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "flag = True  # branch flag",
+                "if flag:\n    val = 'YES'\nelse:\n    val = 'NO'",
+                "print(f'val = {val}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "val = YES" in nb_runner.get_output(3)
 
         # Edit the true branch
-        nb_runner.set_cell_source(
-            2, "if flag:\n    val = 'AFFIRMATIVE'\nelse:\n    val = 'NEGATIVE'"
-        )
+        nb_runner.set_cell_source(2, "if flag:\n    val = 'AFFIRMATIVE'\nelse:\n    val = 'NEGATIVE'")
         nb_runner.run_all()
         assert "val = AFFIRMATIVE" in nb_runner.get_output(3)
 
     def test_add_elif_branch(self, nb_runner):
         """Add an elif branch to existing if/else."""
-        nb_runner.create_notebook([
-            "level = 5  # level value",
-            "if level > 10:\n    label = 'high'\nelse:\n    label = 'low'",
-            "print(f'label = {label}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "level = 5  # level value",
+                "if level > 10:\n    label = 'high'\nelse:\n    label = 'low'",
+                "print(f'label = {label}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "label = low" in nb_runner.get_output(3)
@@ -71,28 +75,30 @@ class TestMultiCellBranching:
 
     def test_config_driven_pipeline(self, nb_runner):
         """Config cell drives processing in multiple downstream cells."""
-        nb_runner.create_notebook([
-            "config = {'scale': 2, 'offset': 10}  # config dict",
-            "scaled = 5 * config['scale']",
-            "result = scaled + config['offset']\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "config = {'scale': 2, 'offset': 10}  # config dict",
+                "scaled = 5 * config['scale']",
+                "result = scaled + config['offset']\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 20" in nb_runner.get_output(3)
 
         # Edit config
-        nb_runner.set_cell_source(
-            1, "config = {'scale': 5, 'offset': 100}  # config dict updated"
-        )
+        nb_runner.set_cell_source(1, "config = {'scale': 5, 'offset': 100}  # config dict updated")
         nb_runner.run_all()
         assert "result = 125" in nb_runner.get_output(3)
 
     def test_flag_toggle_multiple_cells(self, nb_runner):
         """Toggle a flag that affects multiple downstream cells."""
-        nb_runner.create_notebook([
-            "use_prefix = True  # flag for prefix",
-            "if use_prefix:\n    label = 'ENABLED'\nelse:\n    label = 'DISABLED'\nprint(f'label = {label}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "use_prefix = True  # flag for prefix",
+                "if use_prefix:\n    label = 'ENABLED'\nelse:\n    label = 'DISABLED'\nprint(f'label = {label}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "label = ENABLED" in nb_runner.get_output(2)
@@ -103,11 +109,13 @@ class TestMultiCellBranching:
 
     def test_switch_case_pattern(self, nb_runner):
         """Dictionary-based switch/case pattern with edits."""
-        nb_runner.create_notebook([
-            "action = 'add'  # action selector",
-            "ops = {'add': lambda a, b: a + b, 'mul': lambda a, b: a * b}",
-            "result = ops[action](3, 4)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "action = 'add'  # action selector",
+                "ops = {'add': lambda a, b: a + b, 'mul': lambda a, b: a * b}",
+                "result = ops[action](3, 4)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 7" in nb_runner.get_output(3)

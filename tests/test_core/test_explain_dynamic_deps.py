@@ -5,6 +5,7 @@ so the miss surfaces as ``no_entry`` rather than ``file_changed``. The
 explanation must say so and list the tracked dynamic dependencies, instead of
 only "first call with these arguments".
 """
+
 from __future__ import annotations
 
 import time
@@ -51,6 +52,6 @@ def test_no_dynamic_section_when_not_used(tmp_path):
     def f(x):
         return x * 2
 
-    e = f.explain(5)            # first call -> no_entry, but no dynamic deps
+    e = f.explain(5)  # first call -> no_entry, but no dynamic deps
     assert e.reason == "no_entry"
     assert "dynamic_dependencies" not in e.details

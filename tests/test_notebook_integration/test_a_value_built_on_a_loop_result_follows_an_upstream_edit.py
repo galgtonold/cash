@@ -7,21 +7,23 @@ re-running that cell and the sweep, the analysis cell printed the old episode
 count and precision: the cell between the sweep and the analysis was never
 re-run, and nothing on screen said so.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.loops]
 
-SWEEP = ("rows = []\n"
-         "for w in [1, 2, 3]:\n"
-         "    rows.append(w * N)\n"
-         "total = sum(rows)")
+SWEEP = "rows = []\nfor w in [1, 2, 3]:\n    rows.append(w * N)\ntotal = sum(rows)"
 
 
-@pytest.mark.parametrize("pick, shown", [
-    ("best = total + 1", "print('BEST', best)"),
-    ("best = total + 1\nscores = [best * k for k in range(2)]", "print('BEST', scores[1])"),
-    ("def score(k):\n    return k * sum(rows)\nbest = score(1) + 1", "print('BEST', best)"),
-], ids=["direct", "via_comprehension", "via_function_global"])
+@pytest.mark.parametrize(
+    "pick, shown",
+    [
+        ("best = total + 1", "print('BEST', best)"),
+        ("best = total + 1\nscores = [best * k for k in range(2)]", "print('BEST', scores[1])"),
+        ("def score(k):\n    return k * sum(rows)\nbest = score(1) + 1", "print('BEST', best)"),
+    ],
+    ids=["direct", "via_comprehension", "via_function_global"],
+)
 def test_a_cell_below_the_pick_shows_the_new_sweep(nb_runner, pick, shown):
     nb_runner.create_notebook(["import cash\n%cash_on", "N = 1", SWEEP, pick, shown])
     nb_runner.start_kernel()

@@ -8,6 +8,7 @@ Use cases:
 - Advanced users who want to discard accumulated lineage state mid-
   session (e.g. before re-running a notebook against new inputs).
 """
+
 from __future__ import annotations
 
 import cash
@@ -70,5 +71,5 @@ class TestResetSession:
 
     def test_reset_session_is_in_module_all(self):
         """``reset_session`` is part of the public API."""
-        assert 'reset_session' in cash.__all__
+        assert "reset_session" in cash.__all__
         assert callable(cash.reset_session)

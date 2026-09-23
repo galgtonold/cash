@@ -5,6 +5,7 @@ tell which function each one belongs to". Call-cache keys are `call:<sha>`,
 and `inspect` names an entry by the key's first segment, which for every
 intercepted call is the literal `call`. The entry now records its function.
 """
+
 import time
 
 from cash.__main__ import _function_of
@@ -17,13 +18,11 @@ def test_a_call_entry_records_its_function(call_unit_harness):
         return k * 2
 
     unit = call_unit_harness(lineage={"k": "h"}, user_ns={"k": 2, "net_returns": net_returns})
-    site = CallSite(source="net_returns(k)", free_names=frozenset({"net_returns", "k"}),
-                    occurrence_index=0)
+    site = CallSite(source="net_returns(k)", free_names=frozenset({"net_returns", "k"}), occurrence_index=0)
     unit.wrap(net_returns, site)(2)
     backend = unit._cash.backend
     stores = [getattr(t, "_store", {}) for t in getattr(backend, "backends", [backend])]
-    metas = [meta for store in stores for key, (meta, _v) in store.items()
-             if str(key).startswith("call:")]
+    metas = [meta for store in stores for key, (meta, _v) in store.items() if str(key).startswith("call:")]
     assert metas, "the call was not stored"
     assert any("net_returns" in str(m.get("function", "")) for m in metas), metas
 

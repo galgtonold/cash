@@ -20,6 +20,7 @@ whose ``run_cell_async`` lacks ``cell_id``), which no dev environment pins, so a
 real kernel here cannot be made to hang. The parity assertion is what makes the
 defect observable on any IPython — see the unit test's module docstring.
 """
+
 import os
 import textwrap
 
@@ -64,15 +65,15 @@ def test_patched_hooks_do_not_lie_to_ipykernel_in_a_real_kernel(nb_runner, tmp_p
                   else f'PARITY_FAIL before={{_before}} after={{_after}}')
     """).format(probe=PROBE)
 
-    nb_runner.create_notebook([
-        "import cash, os; print(os.path.dirname(cash.__file__))",
-        "%cash_on",
-        # A magic-containing cell whose real work is observable off-badge.
-        "%cash_on\n"
-        f"open({str(side_effect)!r}, 'w').write('RAN')\n"
-        "print('side effect written')",
-        verdict_cell,
-    ])
+    nb_runner.create_notebook(
+        [
+            "import cash, os; print(os.path.dirname(cash.__file__))",
+            "%cash_on",
+            # A magic-containing cell whose real work is observable off-badge.
+            f"%cash_on\nopen({str(side_effect)!r}, 'w').write('RAN')\nprint('side effect written')",
+            verdict_cell,
+        ]
+    )
     nb_runner.start_kernel()
 
     if not _kernel_runs_cash_under_test(nb_runner):

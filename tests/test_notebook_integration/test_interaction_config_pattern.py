@@ -14,26 +14,28 @@ class TestConfigPatternEdits:
 
     def test_edit_config_value(self, nb_runner):
         """Edit a config value and check downstream."""
-        nb_runner.create_notebook([
-            "CONFIG = {'width': 800, 'height': 600, 'title': 'App'}",
-            "area = CONFIG['width'] * CONFIG['height']\nprint(f'area = {area}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "CONFIG = {'width': 800, 'height': 600, 'title': 'App'}",
+                "area = CONFIG['width'] * CONFIG['height']\nprint(f'area = {area}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "area = 480000" in nb_runner.get_output(2)
 
-        nb_runner.set_cell_source(
-            1, "CONFIG = {'width': 1920, 'height': 1080, 'title': 'App'}"
-        )
+        nb_runner.set_cell_source(1, "CONFIG = {'width': 1920, 'height': 1080, 'title': 'App'}")
         nb_runner.run_all()
         assert "area = 2073600" in nb_runner.get_output(2)
 
     def test_edit_config_toggle(self, nb_runner):
         """Toggle a config value and check downstream."""
-        nb_runner.create_notebook([
-            "flag_value = 1  # config toggle val",
-            "result_mode = str(flag_value * 100)\nprint(f'result_mode = {result_mode}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "flag_value = 1  # config toggle val",
+                "result_mode = str(flag_value * 100)\nprint(f'result_mode = {result_mode}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result_mode = 100" in nb_runner.get_output(2)
@@ -44,11 +46,13 @@ class TestConfigPatternEdits:
 
     def test_multi_cell_config_cascade(self, nb_runner):
         """Config cascading through multiple cells."""
-        nb_runner.create_notebook([
-            "base = {'rate': 0.05}  # cascade config base",
-            "principal = 1000  # cascade principal",
-            "interest = principal * base['rate']\ntotal = principal + interest\nprint(f'total = {total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "base = {'rate': 0.05}  # cascade config base",
+                "principal = 1000  # cascade principal",
+                "interest = principal * base['rate']\ntotal = principal + interest\nprint(f'total = {total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total = 1050.0" in nb_runner.get_output(3)

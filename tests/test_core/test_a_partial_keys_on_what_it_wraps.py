@@ -8,17 +8,17 @@ identity-based fallback", which held for builtins but not for a partial over a
 Python function.) The doubled `functools.functools.` in the name came from the
 same repr.
 """
+
 from __future__ import annotations
 
 import functools
-import os
 import subprocess
 import sys
 import textwrap
 
 import pytest
 
-PROGRAM = textwrap.dedent('''
+PROGRAM = textwrap.dedent("""
     import functools, json, time
     import cash
     cash.configure(cache_dir=CACHE)
@@ -30,7 +30,7 @@ PROGRAM = textwrap.dedent('''
     cached = cash.cache(functools.partial(slow, 1))
     value = cached(2)
     print(json.dumps({"value": value, "misses": cached.cache_info()["misses"]}))
-''')
+""")
 
 
 @pytest.mark.timeout(300)
@@ -40,8 +40,10 @@ def test_a_second_process_hits(tmp_path):
 
     def run():
         import json
-        done = subprocess.run([sys.executable, str(script)], capture_output=True, text=True,
-                              timeout=180, cwd=str(tmp_path))
+
+        done = subprocess.run(
+            [sys.executable, str(script)], capture_output=True, text=True, timeout=180, cwd=str(tmp_path)
+        )
         assert done.returncode == 0, done.stderr
         return json.loads(done.stdout.strip().splitlines()[-1])
 

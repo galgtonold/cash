@@ -7,6 +7,7 @@ Usage:
     python benchmarks/bench_notebook_overhead.py <notebook> --mode {off,cold,warm}
         [--profile] [--repeats N] [--results-dir DIR] [--cache-root DIR]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -58,6 +59,7 @@ def _dir_size_bytes(path: Path) -> int:
 def _cash_version() -> str:
     try:
         from cash import __version__
+
         return __version__
     except Exception:  # noqa: BLE001
         return "unknown"
@@ -76,6 +78,7 @@ def _run_once(
     profiler = None
     if profile_path is not None:
         from pyinstrument import Profiler
+
         profiler = Profiler(interval=0.001)
         profiler.start()
 
@@ -132,36 +135,46 @@ def main(argv: list[str] | None = None) -> int:
     _force_utf8_stdio()
     p = argparse.ArgumentParser(description="Notebook overhead benchmark")
     p.add_argument("notebook", type=Path)
-    p.add_argument("--mode", required=True,
-                   choices=["off", "cold", "warm-session", "warm-restart",
-                            "warm"],
-                   help="'warm' is a deprecated alias for warm-restart; it "
-                        "only ever measured disk-tier restores.")
-    p.add_argument("--profile", action="store_true",
-                   help="Wrap the run in pyinstrument and emit HTML")
-    p.add_argument("--repeats", type=int, default=3,
-                   help="Number of repeats; the first is reported but typical "
-                        "analysis discards it as warmup (default: 3)")
-    p.add_argument("--results-dir", type=Path,
-                   default=Path("benchmarks/results"))
-    p.add_argument("--cache-root", type=Path,
-                   help="Parent dir for per-repeat cache dirs (cold/warm only)")
-    p.add_argument("--single-repeat", type=int, default=None,
-                   help="Internal: run only this single repeat index and exit "
-                        "(used by --subprocess-per-repeat to fork the workload).")
-    p.add_argument("--subprocess-per-repeat", action="store_true",
-                   help="Fork a fresh subprocess per repeat. Necessary for "
-                        "notebooks that use cash machinery internally (e.g. "
-                        "%%load_ext cash), because cash's monkey-patches "
-                        "and module-level state leak across repeats in one "
-                        "process and contaminate cold-mode measurements.")
+    p.add_argument(
+        "--mode",
+        required=True,
+        choices=["off", "cold", "warm-session", "warm-restart", "warm"],
+        help="'warm' is a deprecated alias for warm-restart; it only ever measured disk-tier restores.",
+    )
+    p.add_argument("--profile", action="store_true", help="Wrap the run in pyinstrument and emit HTML")
+    p.add_argument(
+        "--repeats",
+        type=int,
+        default=3,
+        help="Number of repeats; the first is reported but typical analysis discards it as warmup (default: 3)",
+    )
+    p.add_argument("--results-dir", type=Path, default=Path("benchmarks/results"))
+    p.add_argument("--cache-root", type=Path, help="Parent dir for per-repeat cache dirs (cold/warm only)")
+    p.add_argument(
+        "--single-repeat",
+        type=int,
+        default=None,
+        help="Internal: run only this single repeat index and exit "
+        "(used by --subprocess-per-repeat to fork the workload).",
+    )
+    p.add_argument(
+        "--subprocess-per-repeat",
+        action="store_true",
+        help="Fork a fresh subprocess per repeat. Necessary for "
+        "notebooks that use cash machinery internally (e.g. "
+        "%%load_ext cash), because cash's monkey-patches "
+        "and module-level state leak across repeats in one "
+        "process and contaminate cold-mode measurements.",
+    )
     args = p.parse_args(argv)
 
     if args.mode in _MODE_ALIASES:
         resolved = _MODE_ALIASES[args.mode]
-        print(f"note: --mode {args.mode} is deprecated; running "
-              f"{resolved}. It measures kernel-restart survival (disk tier "
-              f"only). For the same-kernel iteration loop use warm-session.")
+        print(
+            f"note: --mode {args.mode} is deprecated; running "
+            f"{resolved}. It measures kernel-restart survival (disk tier "
+            f"only). For the same-kernel iteration loop use warm-session."
+        )
         args.mode = resolved
 
     if args.mode != "off" and args.cache_root is None:
@@ -201,12 +214,23 @@ def main(argv: list[str] | None = None) -> int:
             warm_shared.mkdir(parents=True, exist_ok=True)
             env = {**os.environ, "CASH_CACHE_DIR": str(warm_shared)}
             subprocess.run(
-                [sys.executable, __file__, str(args.notebook),
-                 "--mode", "cold", "--repeats", "1",
-                 "--results-dir", str(args.results_dir / "_warm_prepop"),
-                 "--cache-root", str(warm_shared),
-                 "--single-repeat", "0"],
-                check=True, env=env,
+                [
+                    sys.executable,
+                    __file__,
+                    str(args.notebook),
+                    "--mode",
+                    "cold",
+                    "--repeats",
+                    "1",
+                    "--results-dir",
+                    str(args.results_dir / "_warm_prepop"),
+                    "--cache-root",
+                    str(warm_shared),
+                    "--single-repeat",
+                    "0",
+                ],
+                check=True,
+                env=env,
             )
 
         for repeat in range(args.repeats):
@@ -219,7 +243,7 @@ def main(argv: list[str] | None = None) -> int:
             elif args.mode in WARM_MODES:
                 cash_dir = global_cash_root / "warm-shared"
             else:  # off — isolate per repeat so any in-notebook cash use
-                   # doesn't accumulate state
+                # doesn't accumulate state
                 per_repeat_dir = global_cash_root / f"off-{repeat}"
                 if per_repeat_dir.exists():
                     shutil.rmtree(per_repeat_dir, ignore_errors=True)
@@ -228,12 +252,23 @@ def main(argv: list[str] | None = None) -> int:
 
             env = {**os.environ, "CASH_CACHE_DIR": str(cash_dir)}
             subprocess.run(
-                [sys.executable, __file__, str(args.notebook),
-                 "--mode", args.mode, "--repeats", str(args.repeats),
-                 "--results-dir", str(args.results_dir),
-                 "--cache-root", str(args.cache_root),
-                 "--single-repeat", str(repeat)],
-                check=True, env=env,
+                [
+                    sys.executable,
+                    __file__,
+                    str(args.notebook),
+                    "--mode",
+                    args.mode,
+                    "--repeats",
+                    str(args.repeats),
+                    "--results-dir",
+                    str(args.results_dir),
+                    "--cache-root",
+                    str(args.cache_root),
+                    "--single-repeat",
+                    str(repeat),
+                ],
+                check=True,
+                env=env,
             )
         return 0
 
@@ -264,8 +299,7 @@ def main(argv: list[str] | None = None) -> int:
             shutil.rmtree(warm_dir, ignore_errors=True)
         warm_dir.mkdir(parents=True, exist_ok=True)
         warm_session = new_cash_session(warm_dir)
-        _run_once(args.notebook, "cold", -1, warm_dir, profile_path=None,
-                  session=warm_session)
+        _run_once(args.notebook, "cold", -1, warm_dir, profile_path=None, session=warm_session)
     elif args.mode == "warm-restart" and args.single_repeat is None:
         warm_dir = args.cache_root / "warm-shared"
         if warm_dir.exists():
@@ -273,11 +307,7 @@ def main(argv: list[str] | None = None) -> int:
         warm_dir.mkdir(parents=True, exist_ok=True)
         _run_once(args.notebook, "cold", -1, warm_dir, profile_path=None)
 
-    repeat_range = (
-        [args.single_repeat]
-        if args.single_repeat is not None
-        else range(args.repeats)
-    )
+    repeat_range = [args.single_repeat] if args.single_repeat is not None else range(args.repeats)
     for repeat in repeat_range:
         if args.mode == "cold":
             cache_dir = args.cache_root / f"repeat-{repeat}"
@@ -305,12 +335,13 @@ def main(argv: list[str] | None = None) -> int:
             # overhead that distorts the wall-clock comparison.
             profile_path = args.results_dir / f"{stem}-{args.mode}-profile.html"
 
-        result = _run_once(args.notebook, args.mode, repeat, cache_dir,
-                           profile_path, session=warm_session)
+        result = _run_once(args.notebook, args.mode, repeat, cache_dir, profile_path, session=warm_session)
         out = args.results_dir / f"{stem}-{args.mode}-{repeat}.json"
         write_results(out, result)
-        print(f"[{args.mode}] repeat={repeat} cells={len(result.cells)} "
-              f"wall={result.total_wall_seconds*1000:.1f}ms -> {out}")
+        print(
+            f"[{args.mode}] repeat={repeat} cells={len(result.cells)} "
+            f"wall={result.total_wall_seconds * 1000:.1f}ms -> {out}"
+        )
 
     return 0
 

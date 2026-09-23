@@ -51,7 +51,11 @@ from typing import Any
 from .cache_key import CacheKeyContext
 
 __all__ = [
-    "eligible_call_nodes", "wrap_eligible_calls", "CallCache", "CallSite", "HELPER_NAME",
+    "eligible_call_nodes",
+    "wrap_eligible_calls",
+    "CallCache",
+    "CallSite",
+    "HELPER_NAME",
 ]
 
 #: Name bound in ``user_ns`` that resolves a callee to its cached counterpart.
@@ -184,10 +188,12 @@ def interceptable(fn) -> bool:
     cache a file handle (CAS-246). The sentinel is the one ``cache_key.py``
     already reads (CAS-214), and every install site sets it.
     """
-    return (isinstance(fn, types.FunctionType)
-            and not getattr(fn, '_cash_cached', False)
-            and not getattr(fn, '_cash_stateful', False)
-            and not getattr(fn, '_is_file_tracker_patch', False))
+    return (
+        isinstance(fn, types.FunctionType)
+        and not getattr(fn, "_cash_cached", False)
+        and not getattr(fn, "_cash_stateful", False)
+        and not getattr(fn, "_is_file_tracker_patch", False)
+    )
 
 
 _NOT_FOUND = object()
@@ -203,6 +209,7 @@ def _static_callee(node: ast.AST, namespace) -> object:
     """
     import builtins
     import inspect
+
     if isinstance(node, ast.Name):
         if node.id in namespace:
             return namespace[node.id]
@@ -241,6 +248,7 @@ def _is_storable(result) -> bool:
     """
     try:
         from .cacheability_decision import identity_coupled_reason
+
         return identity_coupled_reason("<intercepted call>", result) is None
     except Exception:  # noqa: BLE001 - never let the predicate break the call
         return True
@@ -323,6 +331,7 @@ class CallCache:
         # module, so a module-level import here would be a circular import at
         # load time. Deferred to first construction instead.
         from .call_unit import CallUnit
+
         self._call_unit = CallUnit(
             cash_instance,
             ctx_provider or self._default_ctx,
@@ -486,8 +495,9 @@ def wrap_eligible_calls(
     the key holds their values (``CallSite.local_arg_positions``).
     """
     import inspect
+
     try:
-        gate_takes_local = gate is not None and 'local' in inspect.signature(gate).parameters
+        gate_takes_local = gate is not None and "local" in inspect.signature(gate).parameters
     except (TypeError, ValueError):
         gate_takes_local = False
 
@@ -562,9 +572,7 @@ def _call_has_unpacking(call: ast.Call) -> bool:
     flag tells the runtime half to refuse the site outright rather than trust
     that static, possibly-wrong count -- see CAS-243 review C2).
     """
-    return any(isinstance(a, ast.Starred) for a in call.args) or any(
-        kw.arg is None for kw in call.keywords
-    )
+    return any(isinstance(a, ast.Starred) for a in call.args) or any(kw.arg is None for kw in call.keywords)
 
 
 def _local_arg_positions(call: ast.Call, local: frozenset[str]) -> tuple[int, ...]:
@@ -697,7 +705,8 @@ def eligible_call_nodes(stmt: ast.stmt) -> list[ast.Call]:
 
 
 def _eligible_calls_in_scope(
-    stmt: ast.stmt, skip: Callable[[ast.Call, frozenset[str]], bool] | None = None,
+    stmt: ast.stmt,
+    skip: Callable[[ast.Call, frozenset[str]], bool] | None = None,
     namespace: Mapping[str, object] | None = None,
 ) -> list[tuple[ast.Call, frozenset[str]]]:
     """:func:`eligible_call_nodes`, each call paired with the names an enclosing
@@ -718,7 +727,8 @@ def _eligible_calls_in_scope(
 
 
 def _eligible_calls_in_loop(
-    loop: ast.For, skip: Callable[[ast.Call, frozenset[str]], bool] | None,
+    loop: ast.For,
+    skip: Callable[[ast.Call, frozenset[str]], bool] | None,
     namespace: Mapping[str, object],
 ) -> list[tuple[ast.Call, frozenset[str]]]:
     """The eligible calls of each simple statement in a loop cached as ONE unit.
@@ -786,8 +796,7 @@ def _loop_argument_names(loop: ast.For, namespace: Mapping[str, object]) -> set[
         for value in [*node.args, *(kw.value for kw in node.keywords)]:
             for name in _names_read(value):
                 bound = namespace.get(name, _NOT_FOUND)
-                if isinstance(bound, (types.ModuleType, type, types.FunctionType,
-                                      types.BuiltinFunctionType)):
+                if isinstance(bound, (types.ModuleType, type, types.FunctionType, types.BuiltinFunctionType)):
                     continue
                 names.add(name)
     return names
@@ -845,16 +854,24 @@ def _bound_names(node: ast.AST) -> set[str]:
     return {n.id for gen in node.generators for n in ast.walk(gen.target) if isinstance(n, ast.Name)}
 
 
-def _collect(node: ast.AST, targets: set[str], found: list, local: frozenset[str],
-             skip: Callable[[ast.Call, frozenset[str]], bool] | None = None) -> None:
+def _collect(
+    node: ast.AST,
+    targets: set[str],
+    found: list,
+    local: frozenset[str],
+    skip: Callable[[ast.Call, frozenset[str]], bool] | None = None,
+) -> None:
     if isinstance(node, _LOCAL_SCOPES):
         local = local | _bound_names(node)
-    if (isinstance(node, ast.Call) and not (_names_read(node) & targets)
-            # A callee that reads a comprehension's own variable is a different
-            # callable per element (`m.predict(X)` over `models.items()`), and
-            # nothing in the key can see which: never intercepted.
-            and not (_names_read(node.func) & local)
-            and not (skip is not None and skip(node, local))):
+    if (
+        isinstance(node, ast.Call)
+        and not (_names_read(node) & targets)
+        # A callee that reads a comprehension's own variable is a different
+        # callable per element (`m.predict(X)` over `models.items()`), and
+        # nothing in the key can see which: never intercepted.
+        and not (_names_read(node.func) & local)
+        and not (skip is not None and skip(node, local))
+    ):
         found.append((node, local))
         # Accepted -- its callee expression is now this site's, so nothing
         # there may be taken again. Its ARGUMENTS are a different matter:

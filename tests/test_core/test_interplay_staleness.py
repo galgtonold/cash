@@ -7,6 +7,7 @@
   cache key, so it must NOT carry a lineage hash; otherwise a downstream cached
   function returns a stale result after the upstream's TTL refresh.
 """
+
 from __future__ import annotations
 
 import time
@@ -28,7 +29,7 @@ def test_cached_generator_invalidates_on_file_change(tmp_path):
 
     data.write_text("a\nb\nc\n")
     assert list(stream(str(data))) == ["a", "b", "c"]
-    assert list(stream(str(data))) == ["a", "b", "c"]   # replay from chunks
+    assert list(stream(str(data))) == ["a", "b", "c"]  # replay from chunks
 
     time.sleep(0.02)
     data.write_text("x\ny\nz\n")
@@ -78,7 +79,7 @@ def test_downstream_not_stale_after_ttl_refresh():
 
     assert double(fetch()) == 2
     state["v"] = 100
-    time.sleep(1.1)                       # expire fetch's TTL
+    time.sleep(1.1)  # expire fetch's TTL
     assert int(fetch()["x"].sum()) == 100  # upstream refreshed
     assert double(fetch()) == 200, "downstream returned a stale lineage-keyed result"
 
@@ -100,7 +101,7 @@ def test_depends_on_inherits_dependency_ttl():
 
     assert price(100) == 10
     state["rate"] = 0.5
-    time.sleep(1.1)                       # live_rate's TTL (and price's inherited TTL) expire
+    time.sleep(1.1)  # live_rate's TTL (and price's inherited TTL) expire
     assert price(100) == 50, "downstream stale after dependency TTL refresh"
 
 
@@ -116,6 +117,6 @@ def test_ttl_not_propagated_without_ttld_dependency():
     def derived(x):
         return plain(x) + 1
 
-    derived(5)                            # trigger analysis -> graph populated
+    derived(5)  # trigger analysis -> graph populated
     key = c._get_func_key(derived.__wrapped__)
-    assert c._effective_ttl(key, None) is None   # never expires
+    assert c._effective_ttl(key, None) is None  # never expires

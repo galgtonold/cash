@@ -129,7 +129,10 @@ def detect_derivation_edges(
 
 
 def _detect_matplotlib_figure_edge(
-    derivation_edges: dict[str, set[str]], out: str, value: Any, user_ns: dict,
+    derivation_edges: dict[str, set[str]],
+    out: str,
+    value: Any,
+    user_ns: dict,
 ) -> None:
     """``out`` is part of a named Figure (an Axes, or an array of them):
     drawing on it draws on the figure, so a mutation of ``out`` bumps it.
@@ -146,7 +149,7 @@ def _detect_matplotlib_figure_edge(
     probe = value
     np = _imported("numpy")
     if np is not None and isinstance(value, np.ndarray) and value.dtype == object and value.size:
-        probe = value.flat[0]              # plt.subplots(1, 2) -> array of Axes
+        probe = value.flat[0]  # plt.subplots(1, 2) -> array of Axes
     if not isinstance(probe, artist_mod.Artist):
         return
     fig = getattr(probe, "figure", None)
@@ -155,7 +158,6 @@ def _detect_matplotlib_figure_edge(
     nm = _find_name_by_identity(user_ns, fig)
     if nm is not None and nm != out:
         derivation_edges.setdefault(out, set()).add(nm)
-
 
 
 def _imported(name: str):
@@ -177,7 +179,10 @@ def _imported(name: str):
 
 
 def _detect_numpy_view_edge(
-    derivation_edges: dict[str, set[str]], out: str, value: Any, user_ns: dict,
+    derivation_edges: dict[str, set[str]],
+    out: str,
+    value: Any,
+    user_ns: dict,
 ) -> None:
     """``out`` is a numpy view; a future mutation of ``out`` must bump
     the root base (and any intermediate NAMED view along the ``.base`` chain)."""
@@ -224,21 +229,25 @@ def _pandas_refholder_types() -> tuple[type, ...]:
     types_list: list[type] = []
     try:
         from pandas.core.groupby.generic import DataFrameGroupBy, SeriesGroupBy
+
         types_list += [DataFrameGroupBy, SeriesGroupBy]
     except ImportError:
         pass
     try:
         from pandas.core.window.rolling import Rolling
+
         types_list.append(Rolling)
     except ImportError:
         pass
     try:
         from pandas.core.window.expanding import Expanding
+
         types_list.append(Expanding)
     except ImportError:
         pass
     try:
         from pandas.core.window.ewm import ExponentialMovingWindow
+
         types_list.append(ExponentialMovingWindow)
     except ImportError:
         pass
@@ -247,7 +256,10 @@ def _pandas_refholder_types() -> tuple[type, ...]:
 
 
 def _detect_pandas_refholder_edge(
-    derivation_edges: dict[str, set[str]], out: str, value: Any, user_ns: dict,
+    derivation_edges: dict[str, set[str]],
+    out: str,
+    value: Any,
+    user_ns: dict,
 ) -> None:
     """``out`` is a groupby/rolling/... that holds a live reference to
     a source frame; a future mutation of that FRAME must bump ``out``."""
@@ -324,9 +336,7 @@ def bump_derived_lineages(
             if not present(target):
                 continue
             old = lineage_map.get(target, "")
-            new_hash = hashlib.sha256(
-                f"{old}:{src_lineage}".encode("utf-8")
-            ).hexdigest()
+            new_hash = hashlib.sha256(f"{old}:{src_lineage}".encode("utf-8")).hexdigest()
             if new_hash == old:
                 continue
             record(target, new_hash)

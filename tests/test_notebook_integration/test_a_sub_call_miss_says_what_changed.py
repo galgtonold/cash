@@ -11,6 +11,7 @@ A statement already gets this ("input changed: x, y", from the backward
 scan). A call now gets the same, from the components of its own key: what
 the site was keyed on last time against what it is keyed on now.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
@@ -35,8 +36,7 @@ def test_the_badge_names_the_input_that_moved(nb_runner):
     nb_runner.run_cell(3)
     nb_runner.run_cell(4)
     raw = nb_runner.get_raw_output(4)
-    assert "rows" in raw and "changed" in raw, (
-        "the sweep re-ran and the badge did not say what changed:\n" + raw)
+    assert "rows" in raw and "changed" in raw, "the sweep re-ran and the badge did not say what changed:\n" + raw
 
 
 def test_an_unchanged_re_run_says_nothing(nb_runner):

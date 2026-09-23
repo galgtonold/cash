@@ -27,6 +27,7 @@ The subprocess arm is the load-bearing one. An in-process test can pass while
 interpreter shutdown still hangs, because it never reaches interpreter
 shutdown.
 """
+
 from __future__ import annotations
 
 import os
@@ -46,6 +47,7 @@ from cash.backends.file_backend import _TEMP_NAME_ATTEMPTS, FileBackend, _create
 # Making a directory unwritable, on either platform                           #
 # --------------------------------------------------------------------------- #
 
+
 def _deny_writes(path: str) -> "callable":
     """Deny this account write access to *path*; return the undo.
 
@@ -57,14 +59,15 @@ def _deny_writes(path: str) -> "callable":
         user = f"{os.environ.get('USERDOMAIN', '')}\\{os.environ['USERNAME']}"
         result = subprocess.run(
             ["icacls", path, "/deny", f"{user}:(W,AD,WD,WEA,WA)"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         if result.returncode != 0:
             pytest.skip(f"could not deny writes with icacls: {result.stderr.strip()}")
 
         def undo() -> None:
-            subprocess.run(["icacls", path, "/remove:d", user],
-                           capture_output=True, text=True)
+            subprocess.run(["icacls", path, "/remove:d", user], capture_output=True, text=True)
+
         return undo
 
     if hasattr(os, "geteuid") and os.geteuid() == 0:
@@ -74,6 +77,7 @@ def _deny_writes(path: str) -> "callable":
 
     def undo() -> None:
         os.chmod(path, previous)
+
     return undo
 
 
@@ -92,6 +96,7 @@ def unwritable_dir(tmp_path):
 # --------------------------------------------------------------------------- #
 # The temp-file creation itself                                               #
 # --------------------------------------------------------------------------- #
+
 
 def test_a_permission_error_is_not_retried(tmp_path, monkeypatch):
     """One attempt, then out. Retrying it is what produced the hang.
@@ -161,6 +166,7 @@ def test_two_temp_files_do_not_collide(tmp_path):
 # The backend against a genuinely unwritable directory                        #
 # --------------------------------------------------------------------------- #
 
+
 @pytest.mark.expects_failed_writes
 def test_a_write_to_an_unwritable_directory_gives_up_quickly(unwritable_dir):
     """The reported hang, at its source: a bounded write, on real permissions."""
@@ -175,9 +181,7 @@ def test_a_write_to_an_unwritable_directory_gives_up_quickly(unwritable_dir):
         elapsed = time.monotonic() - started
 
     assert elapsed < 20, f"the write took {elapsed:.1f}s; it used to never finish"
-    assert len(discarded_writes()) > before, (
-        "the write neither succeeded nor was recorded as discarded"
-    )
+    assert len(discarded_writes()) > before, "the write neither succeeded nor was recorded as discarded"
 
 
 def test_the_unwritable_directory_is_announced(unwritable_dir):
@@ -215,6 +219,7 @@ def test_the_probe_leaves_nothing_behind(tmp_path):
 # --------------------------------------------------------------------------- #
 # Shutdown must not be able to block forever                                  #
 # --------------------------------------------------------------------------- #
+
 
 def test_shutdown_abandons_a_write_that_will_not_finish():
     """The second cause, isolated: a task that never returns.
@@ -300,18 +305,16 @@ def test_the_process_exits_with_an_unwritable_cache_dir(unwritable_dir, tmp_path
     started = time.monotonic()
     try:
         proc = subprocess.run(
-            [sys.executable, str(script)], env=env, capture_output=True,
-            text=True, timeout=120,
+            [sys.executable, str(script)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
     except subprocess.TimeoutExpired:
-        pytest.fail(
-            "the child never exited with an unwritable cache directory -- this "
-            "is the reported hang"
-        )
+        pytest.fail("the child never exited with an unwritable cache directory -- this is the reported hang")
     elapsed = time.monotonic() - started
 
-    assert "WORK-DONE" in proc.stdout, (
-        f"the child did not even finish its work:\n{proc.stdout}\n{proc.stderr}"
-    )
+    assert "WORK-DONE" in proc.stdout, f"the child did not even finish its work:\n{proc.stdout}\n{proc.stderr}"
     assert proc.returncode == 0, f"child exited {proc.returncode}:\n{proc.stderr}"
     assert elapsed < 90, f"the child took {elapsed:.1f}s to exit"

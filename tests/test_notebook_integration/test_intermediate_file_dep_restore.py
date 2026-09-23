@@ -8,8 +8,10 @@ not propagated on upstream virtual restore, causing the cost model to
 produce metadata-only entries for fast-but-large DataFrames -- permanently
 preventing disk restore of those intermediate steps.
 """
-import pytest
+
 import time
+
+import pytest
 
 pytestmark = [pytest.mark.files, pytest.mark.upstream]
 
@@ -31,9 +33,7 @@ for _k in _to_del:
         pass
 del _to_del, _keep, _k, _sys
 """
-    nb_runner._run_async(
-        nb_runner.client.kc._async_execute_interactive(clear_code, store_history=False)
-    )
+    nb_runner._run_async(nb_runner.client.kc._async_execute_interactive(clear_code, store_history=False))
 
 
 class TestIntermediateFileDependencyRestore:
@@ -50,11 +50,13 @@ class TestIntermediateFileDependencyRestore:
         csv_path = str(csv).replace("\\", "/")
         csv.write_text("val\n30\n10\n20\n")
 
-        nb_runner.create_notebook([
-            f"import pandas as pd\ndf = pd.read_csv('{csv_path}')",
-            "df = df.sort_values('val')\nprint('sorted:', df['val'].tolist())",
-            "total = df['val'].sum()\nprint('total =', total)",
-        ])
+        nb_runner.create_notebook(
+            [
+                f"import pandas as pd\ndf = pd.read_csv('{csv_path}')",
+                "df = df.sort_values('val')\nprint('sorted:', df['val'].tolist())",
+                "total = df['val'].sum()\nprint('total =', total)",
+            ]
+        )
         nb_runner.start_kernel()
 
         # Populate cache
@@ -80,12 +82,14 @@ class TestIntermediateFileDependencyRestore:
         csv_path = str(csv).replace("\\", "/")
         csv.write_text("date,val\n2024-01-03,30\n2024-01-01,10\n2024-01-02,20\n")
 
-        nb_runner.create_notebook([
-            f"import pandas as pd\ndf = pd.read_csv('{csv_path}')",
-            "df['date'] = pd.to_datetime(df['date'])",
-            "df = df.sort_values('date')\nprint('sorted:', df['val'].tolist())",
-            "total = df['val'].sum()\nprint('total =', total)",
-        ])
+        nb_runner.create_notebook(
+            [
+                f"import pandas as pd\ndf = pd.read_csv('{csv_path}')",
+                "df['date'] = pd.to_datetime(df['date'])",
+                "df = df.sort_values('date')\nprint('sorted:', df['val'].tolist())",
+                "total = df['val'].sum()\nprint('total =', total)",
+            ]
+        )
         nb_runner.start_kernel()
 
         # Populate cache
@@ -108,10 +112,12 @@ class TestIntermediateFileDependencyRestore:
         csv_path = str(csv).replace("\\", "/")
         csv.write_text("val\n10\n20\n30\n")
 
-        nb_runner.create_notebook([
-            f"import pandas as pd\ndf = pd.read_csv('{csv_path}')",
-            "df = df.sort_values('val')\ntotal = df['val'].sum()\nprint('total =', total)",
-        ])
+        nb_runner.create_notebook(
+            [
+                f"import pandas as pd\ndf = pd.read_csv('{csv_path}')",
+                "df = df.sort_values('val')\ntotal = df['val'].sum()\nprint('total =', total)",
+            ]
+        )
         nb_runner.start_kernel()
 
         # Populate cache
@@ -136,11 +142,13 @@ class TestIntermediateFileDependencyRestore:
         csv_path = str(csv).replace("\\", "/")
         csv.write_text("val\n5\n15\n25\n")
 
-        nb_runner.create_notebook([
-            f"import pandas as pd\ndf = pd.read_csv('{csv_path}')",
-            "df = df.sort_values('val')",
-            "total = df['val'].sum()\nprint('total =', total)",
-        ])
+        nb_runner.create_notebook(
+            [
+                f"import pandas as pd\ndf = pd.read_csv('{csv_path}')",
+                "df = df.sort_values('val')",
+                "total = df['val'].sum()\nprint('total =', total)",
+            ]
+        )
         nb_runner.start_kernel()
 
         # Initial run

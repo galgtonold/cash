@@ -6,6 +6,7 @@ that matched the sample collided into a wrong cache hit - a silent
 data-corruption bug for exactly the large arrays a data/ML cache targets.
 These tests pin full-content hashing.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -28,10 +29,10 @@ def _counter_fn(c):
 def test_large_numpy_middle_difference_does_not_collide(tmp_path):
     c = Cash(backend=FileBackend(cache_dir=str(tmp_path)))
     f, calls = _counter_fn(c)
-    base = np.ones(4_000_000)              # 32 MB -> old sampling path
+    base = np.ones(4_000_000)  # 32 MB -> old sampling path
     a = f(base)
     other = base.copy()
-    other[2_000_000] = 999_999.0           # differs only in the middle
+    other[2_000_000] = 999_999.0  # differs only in the middle
     b = f(other)
     assert calls["n"] == 2, "different arrays must not share a cache entry"
     assert a == base.sum()
@@ -47,7 +48,7 @@ def test_numpy_reshape_does_not_collide(tmp_path):
         return tuple(a.shape)
 
     assert shape_of(np.ones(4)) == (4,)
-    assert shape_of(np.ones((2, 2))) == (2, 2)   # same bytes, different shape
+    assert shape_of(np.ones((2, 2))) == (2, 2)  # same bytes, different shape
 
 
 def test_equal_numpy_arrays_still_hit(tmp_path):
@@ -55,7 +56,7 @@ def test_equal_numpy_arrays_still_hit(tmp_path):
     f, calls = _counter_fn(c)
     arr = np.arange(1000.0)
     f(arr)
-    f(arr.copy())                          # equal value, fresh object -> must hit
+    f(arr.copy())  # equal value, fresh object -> must hit
     assert calls["n"] == 1
 
 
@@ -85,7 +86,7 @@ def test_numpy_layout_is_part_of_the_key(tmp_path):
         return float(a.sum())
 
     A = np.arange(20.0).reshape(4, 5)
-    non_contig = np.ascontiguousarray(A.T).T   # same values, non-C-contiguous
+    non_contig = np.ascontiguousarray(A.T).T  # same values, non-C-contiguous
     assert np.array_equal(A, non_contig)
     assert s.explain(A).cache_key != s.explain(non_contig).cache_key
 
@@ -113,8 +114,8 @@ def test_large_pyarrow_different_data_does_not_collide(tmp_path):
         return t.num_rows
 
     n = 2_000_000
-    t1 = pa.table({"a": np.zeros(n), "b": np.ones(n)})        # >10 MB
-    t2 = pa.table({"a": np.zeros(n), "b": np.full(n, 2.0)})   # same schema/rows, diff data
+    t1 = pa.table({"a": np.zeros(n), "b": np.ones(n)})  # >10 MB
+    t2 = pa.table({"a": np.zeros(n), "b": np.full(n, 2.0)})  # same schema/rows, diff data
     rows(t1)
     rows(t2)
     assert calls["n"] == 2, "tables with different data must not collide"
@@ -122,19 +123,25 @@ def test_large_pyarrow_different_data_does_not_collide(tmp_path):
 
 # -- CAS-123: the layout that keys is memory ORDER, not stride size ----------
 
+
 def _key(c, value):
     @c.cache
     def s(a):
         return float(a.sum())
+
     return s.explain(value).cache_key
 
 
-@pytest.mark.parametrize("make_view", [
-    lambda a: a[:, 0],                      # a column: 1-D, strided
-    lambda a: a[::2, :],                    # every other row
-    lambda a: a[:, ::-1],                   # reversed columns
-    lambda a: np.broadcast_to(a[0], a.shape),   # zero-stride axis
-], ids=["column", "row-step", "reversed", "broadcast"])
+@pytest.mark.parametrize(
+    "make_view",
+    [
+        lambda a: a[:, 0],  # a column: 1-D, strided
+        lambda a: a[::2, :],  # every other row
+        lambda a: a[:, ::-1],  # reversed columns
+        lambda a: np.broadcast_to(a[0], a.shape),  # zero-stride axis
+    ],
+    ids=["column", "row-step", "reversed", "broadcast"],
+)
 def test_a_view_and_its_restored_copy_share_a_key(tmp_path, make_view):
     """A cached function returning a view hands its caller a view once and a
     contiguous copy on every restore. Keying on raw strides made the caller's
@@ -143,6 +150,7 @@ def test_a_view_and_its_restored_copy_share_a_key(tmp_path, make_view):
     c = Cash(backend=FileBackend(cache_dir=str(tmp_path)))
     view = make_view(np.arange(20.0).reshape(4, 5))
     import pickle
+
     restored = pickle.loads(pickle.dumps(view))
     assert np.array_equal(view, restored)
     assert _key(c, view) == _key(c, restored)
@@ -210,22 +218,27 @@ def test_arrays_share_a_key_only_when_every_order_reading_agrees():
     names = sorted(forms)
     for i, a_name in enumerate(names):
         a = forms[a_name]
-        for b_name in names[i + 1:]:
+        for b_name in names[i + 1 :]:
             b = forms[b_name]
             if a.shape != b.shape or a.dtype != b.dtype or not np.array_equal(a, b):
                 continue
             if Cash._try_hash_numpy(a) == Cash._try_hash_numpy(b):
                 assert _order_readings(a) == _order_readings(b), (
-                    f"{a_name} and {b_name} share a key but a callee reads them differently")
+                    f"{a_name} and {b_name} share a key but a callee reads them differently"
+                )
 
 
-@pytest.mark.parametrize("pair", [
-    ("C", "C strided copy", lambda f: (f["C strided"], f["C strided copy"])),
-    ("reversed", lambda f: (f["reversed"], f["reversed copy"])),
-    ("F view", lambda f: (f["F view"], f["F view F-copy"])),
-    ("column", lambda f: (f["col"], f["col copy"])),
-    ("broadcast", lambda f: (f["broadcast"], f["broadcast copy"])),
-], ids=lambda p: p[0])
+@pytest.mark.parametrize(
+    "pair",
+    [
+        ("C", "C strided copy", lambda f: (f["C strided"], f["C strided copy"])),
+        ("reversed", lambda f: (f["reversed"], f["reversed copy"])),
+        ("F view", lambda f: (f["F view"], f["F view F-copy"])),
+        ("column", lambda f: (f["col"], f["col copy"])),
+        ("broadcast", lambda f: (f["broadcast"], f["broadcast copy"])),
+    ],
+    ids=lambda p: p[0],
+)
 def test_forms_no_callee_can_tell_apart_still_share_a_key(pair):
     """The other direction, which the fix above must not undo (CAS-123): a view
     and its copy that every order reading agrees on share one entry, or a
@@ -241,7 +254,9 @@ def test_a_returned_view_does_not_rerun_its_caller(tmp_path):
     import subprocess
     import sys
     import textwrap
-    (tmp_path / "job.py").write_text(textwrap.dedent("""
+
+    (tmp_path / "job.py").write_text(
+        textwrap.dedent("""
         import sys, time
         import numpy as np
         import cash
@@ -259,13 +274,16 @@ def test_a_returned_view_does_not_rerun_its_caller(tmp_path):
             return float(t @ v)
 
         downstream(*upstream(1000))
-    """), encoding="utf-8")
+    """),
+        encoding="utf-8",
+    )
     env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
     env["CASH_CACHE_DIR"] = str(tmp_path / ".cash")
     runs = []
     for _ in range(3):
-        out = subprocess.run([sys.executable, "-W", "ignore", str(tmp_path / "job.py")],
-                             capture_output=True, text=True, env=env)
+        out = subprocess.run(
+            [sys.executable, "-W", "ignore", str(tmp_path / "job.py")], capture_output=True, text=True, env=env
+        )
         assert out.returncode == 0, out.stderr
         runs.append(out.stderr.count("RAN"))
     assert runs == [1, 0, 0], runs

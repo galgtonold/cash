@@ -8,8 +8,10 @@ Verifies that:
 4. Exception handling correctly routes to the matching handler
 5. else/finally bodies execute at the right time
 """
-import pytest
+
 import textwrap
+
+import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.control, pytest.mark.timeout(90)]
 
@@ -17,12 +19,12 @@ pytestmark = [pytest.mark.integration, pytest.mark.control, pytest.mark.timeout(
 def get_html_output(cell) -> str:
     """Extract HTML output from a cell's outputs."""
     html_parts = []
-    for output in cell.get('outputs', []):
-        if output.output_type in ('display_data', 'execute_result'):
-            data = output.get('data', {})
-            if 'text/html' in data:
-                html_parts.append(data['text/html'])
-    return '\n'.join(html_parts)
+    for output in cell.get("outputs", []):
+        if output.output_type in ("display_data", "execute_result"):
+            data = output.get("data", {})
+            if "text/html" in data:
+                html_parts.append(data["text/html"])
+    return "\n".join(html_parts)
 
 
 class TestTryExceptPrintNotSuppressed:
@@ -30,8 +32,9 @@ class TestTryExceptPrintNotSuppressed:
 
     def test_print_in_try_runs_every_time(self, nb_runner):
         """Re-running a try block with print() must show output each time."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 try:
                     print("hello from try")
                     x = 42
@@ -39,7 +42,8 @@ class TestTryExceptPrintNotSuppressed:
                     print("hello from except")
                     x = -1
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
 
         # First run
@@ -59,8 +63,9 @@ class TestTryExceptPrintNotSuppressed:
 
     def test_print_in_try_with_assignment(self, nb_runner):
         """Try block with print AND assignment — assignment should be cached."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 try:
                     print("hi")
                     result = 100 + 200
@@ -68,8 +73,9 @@ class TestTryExceptPrintNotSuppressed:
                     print(f"error: {e}")
                     result = -1
             """),
-            "print(f'result = {result}')",
-        ])
+                "print(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
 
         # First run
@@ -84,15 +90,17 @@ class TestTryExceptPrintNotSuppressed:
 
     def test_print_in_except_handler(self, nb_runner):
         """Print in except handler runs when exception is caught."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 try:
                     x = int("not_a_number")
                 except ValueError:
                     print("caught ValueError")
                     x = -1
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
 
         nb_runner.run_cell(1)
@@ -105,8 +113,9 @@ class TestTryExceptBadgeContent:
 
     def test_badge_shows_try_body_only_on_success(self, nb_runner):
         """When try succeeds, badge should show try body, NOT except body."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 try:
                     result = 42
                     status = 'ok'
@@ -114,7 +123,8 @@ class TestTryExceptBadgeContent:
                     result = 0
                     status = 'error'
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -132,15 +142,17 @@ class TestTryExceptBadgeContent:
 
     def test_badge_shows_except_body_on_error(self, nb_runner):
         """When try raises, badge should show the except handler body."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 try:
                     val = 1 / 0
                 except ZeroDivisionError:
                     val = -999
                     print("handled")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -153,8 +165,9 @@ class TestTryExceptCaching:
 
     def test_try_body_cached_on_second_run(self, nb_runner):
         """Pure assignments in try body should be cached/skipped on re-run."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 try:
                     x = 42
                     y = x * 2
@@ -162,8 +175,9 @@ class TestTryExceptCaching:
                     x = -1
                     y = -2
             """),
-            "print(f'{x}, {y}')",
-        ])
+                "print(f'{x}, {y}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "42, 84" in nb_runner.get_output(2)
@@ -175,15 +189,17 @@ class TestTryExceptCaching:
 
     def test_except_path_cached_on_second_run(self, nb_runner):
         """When except handler runs, its assignments should be cached."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 try:
                     val = int("not_a_number")
                 except ValueError:
                     val = -1
             """),
-            "print(f'val = {val}')",
-        ])
+                "print(f'val = {val}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "val = -1" in nb_runner.get_output(2)
@@ -195,8 +211,9 @@ class TestTryExceptCaching:
 
     def test_try_with_else(self, nb_runner):
         """Try/else — else runs when no exception and its stmts are cached."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 try:
                     x = 10
                 except Exception:
@@ -204,16 +221,18 @@ class TestTryExceptCaching:
                 else:
                     y = x + 5
             """),
-            "print(f'x={x}, y={y}')",
-        ])
+                "print(f'x={x}, y={y}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "x=10, y=15" in nb_runner.get_output(2)
 
     def test_try_with_finally(self, nb_runner):
         """Try/finally — finally always runs and its stmts are cached."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 try:
                     x = 10
                 except Exception:
@@ -221,16 +240,18 @@ class TestTryExceptCaching:
                 finally:
                     cleanup = True
             """),
-            "print(f'x={x}, cleanup={cleanup}')",
-        ])
+                "print(f'x={x}, cleanup={cleanup}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "x=10, cleanup=True" in nb_runner.get_output(2)
 
     def test_try_except_else_finally(self, nb_runner):
         """Full try/except/else/finally — all branches execute correctly."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 try:
                     result = 42
                 except Exception:
@@ -240,49 +261,57 @@ class TestTryExceptCaching:
                 finally:
                     done = True
             """),
-            "print(f'result={result}, bonus={bonus}, done={done}')",
-        ])
+                "print(f'result={result}, bonus={bonus}, done={done}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result=42, bonus=10, done=True" in nb_runner.get_output(2)
 
     def test_edit_try_body_invalidates(self, nb_runner):
         """Editing code inside a try body should invalidate cached values."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 try:
                     x = 10
                 except Exception:
                     x = -1
             """),
-            "print(f'x = {x}')",
-        ])
+                "print(f'x = {x}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "x = 10" in nb_runner.get_output(2)
 
         # Edit the try body
-        nb_runner.set_cell_source(1, textwrap.dedent("""\
+        nb_runner.set_cell_source(
+            1,
+            textwrap.dedent("""\
             try:
                 x = 99
             except Exception:
                 x = -1
-        """))
+        """),
+        )
         nb_runner.run_all()
         assert "x = 99" in nb_runner.get_output(2)
 
     def test_try_body_multiple_statements_partial_error(self, nb_runner):
         """If first stmt in try succeeds but second raises, handler should run."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 try:
                     a = 100
                     b = 1 / 0
                 except ZeroDivisionError:
                     b = -1
             """),
-            "print(f'a={a}, b={b}')",
-        ])
+                "print(f'a={a}, b={b}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         output = nb_runner.get_output(2)
@@ -295,15 +324,17 @@ class TestTryExceptExceptionBinding:
 
     def test_except_as_variable(self, nb_runner):
         """except ValueError as e — e should be bound in namespace."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 try:
                     x = int("abc")
                 except ValueError as e:
                     error_msg = str(e)
             """),
-            "print(f'error: {error_msg}')",
-        ])
+                "print(f'error: {error_msg}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         output = nb_runner.get_output(2)
@@ -312,15 +343,17 @@ class TestTryExceptExceptionBinding:
 
     def test_bare_except(self, nb_runner):
         """Bare except catches everything."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 try:
                     x = 1 / 0
                 except:
                     x = 0
             """),
-            "print(f'x = {x}')",
-        ])
+                "print(f'x = {x}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "x = 0" in nb_runner.get_output(2)

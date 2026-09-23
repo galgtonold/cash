@@ -11,6 +11,7 @@ structured, mechanically-checkable claims that tend to drift:
 They read the docs as text and compare against the code, so a copy-pasteable
 error — a wrong env-var name, a dead ``#anchor`` — fails CI instead of shipping.
 """
+
 from __future__ import annotations
 
 import re
@@ -34,6 +35,7 @@ def slugify(value: str, separator: str = "-") -> str:
     value = re.sub(r"[^\w\s-]", "", value).strip().lower()
     return re.sub(rf"[{re.escape(separator)}\s]+", separator, value)
 
+
 DOCS_ROOT = Path(__file__).resolve().parents[2] / "docs"
 # The set of pages mkdocs actually builds -- ``superpowers/`` internal
 # planning docs and mkdocs.yml's ``exclude_docs`` entries are out of scope.
@@ -50,9 +52,7 @@ def _is_autodoc(path: Path) -> bool:
     at build time and are invisible in the source, so we can't verify a link's
     ``#anchor`` into such a page — only that the file exists.
     """
-    return any(
-        line.startswith(":::") for line in path.read_text(encoding="utf-8").splitlines()
-    )
+    return any(line.startswith(":::") for line in path.read_text(encoding="utf-8").splitlines())
 
 
 # --------------------------------------------------------------------------- #
@@ -77,11 +77,7 @@ _ENV_ALLOWLIST: frozenset[str] = frozenset(
 
 
 def _valid_top_level_env_vars() -> set[str]:
-    return {
-        f"CASH_{f.name.upper()}"
-        for f in fields(CashConfig)
-        if not f.name.startswith("_")
-    }
+    return {f"CASH_{f.name.upper()}" for f in fields(CashConfig) if not f.name.startswith("_")}
 
 
 def test_env_vars_in_docs_are_real() -> None:
@@ -200,6 +196,7 @@ def test_internal_anchors_resolve() -> None:
 # Config default values quoted in docs                                        #
 # --------------------------------------------------------------------------- #
 
+
 def _config_defaults() -> dict[str, object]:
     import dataclasses
 
@@ -223,7 +220,7 @@ def _parse_doc_default(cell: str):
     we can compare (so the row is skipped rather than falsely failing).
     """
     cell = cell.strip()
-    cell = re.sub(r"\([^)]*\)", "", cell)      # drop "(auto)" / "(unlimited)"
+    cell = re.sub(r"\([^)]*\)", "", cell)  # drop "(auto)" / "(unlimited)"
     cell = cell.replace("**", "").strip()
     m = _CODE_SPAN_RE.search(cell)
     token = (m.group(1) if m else cell).strip()
@@ -236,9 +233,7 @@ def _parse_doc_default(cell: str):
         return True, True
     if low == "false":
         return False, True
-    if (token.startswith('"') and token.endswith('"')) or (
-        token.startswith("'") and token.endswith("'")
-    ):
+    if (token.startswith('"') and token.endswith('"')) or (token.startswith("'") and token.endswith("'")):
         return token[1:-1], True
     try:
         return int(token), True
@@ -257,9 +252,7 @@ def _tables(text: str):
     i = 0
     while i < len(lines):
         line = lines[i]
-        if line.lstrip().startswith("|") and i + 1 < len(lines) and re.match(
-            r"^\s*\|?[\s:|-]+\|?\s*$", lines[i + 1]
-        ):
+        if line.lstrip().startswith("|") and i + 1 < len(lines) and re.match(r"^\s*\|?[\s:|-]+\|?\s*$", lines[i + 1]):
             header = [c.strip() for c in line.strip().strip("|").split("|")]
             rows = []
             j = i + 2
@@ -307,9 +300,7 @@ def test_config_defaults_in_docs_match_source() -> None:
                         f"but CashConfig default is {want!r}"
                     )
 
-    assert not problems, "Documented config defaults disagree with CashConfig:\n" + "\n".join(
-        problems
-    )
+    assert not problems, "Documented config defaults disagree with CashConfig:\n" + "\n".join(problems)
 
 
 # --------------------------------------------------------------------------- #
@@ -349,9 +340,7 @@ def _registered_magics() -> set[str]:
                 # ``@line_magic("cash_foo")`` renames; bare ``@line_magic`` does not.
                 named = (
                     dec.args[0].value
-                    if isinstance(dec, ast.Call)
-                    and dec.args
-                    and isinstance(dec.args[0], ast.Constant)
+                    if isinstance(dec, ast.Call) and dec.args and isinstance(dec.args[0], ast.Constant)
                     else node.name
                 )
                 found.add(("%%" if "cell_magic" in text else "%") + named)
@@ -372,9 +361,7 @@ def test_every_registered_magic_is_documented() -> None:
             problems.append(f"  {name} is registered in source but has no {label}")
         for name in sorted(documented - registered):
             problems.append(f"  {name} has a {label} but is not registered in source")
-    assert not problems, "docs/magics.md is out of sync with the registered magics:\n" + "\n".join(
-        problems
-    )
+    assert not problems, "docs/magics.md is out of sync with the registered magics:\n" + "\n".join(problems)
 
 
 def test_magics_page_states_the_right_count() -> None:
@@ -383,9 +370,7 @@ def test_magics_page_states_the_right_count() -> None:
     m = re.search(r"canonical\s+reference\s+for\s+all\s+\*\*(\d+)\*\*\s+magics", doc)
     assert m, "could not find the 'all **N** magics' claim -- did the wording change?"
     claimed, actual = int(m.group(1)), len(_registered_magics())
-    assert claimed == actual, (
-        f"docs/magics.md claims {claimed} magics; source registers {actual}"
-    )
+    assert claimed == actual, f"docs/magics.md claims {claimed} magics; source registers {actual}"
 
 
 # --------------------------------------------------------------------------- #
@@ -425,9 +410,7 @@ def test_magics_page_states_the_right_count() -> None:
 # number in SEPARATE code spans -- ``(`…/memory_backend.py`, `:210-221`)``.
 # A pattern anchored on ``.py`` cannot see it, so the second alternative
 # matches a bare ``:NNN`` / ``:NNN-MMM`` span, which has no other use in prose.
-_LINE_PIN_RE = re.compile(
-    r"`[\w./-]+\.py[:,]\d[\d,-]*(?:@[0-9a-f]{7,40})?`|`:\d+(?:-\d+)?(?:@[0-9a-f]{7,40})?`"
-)
+_LINE_PIN_RE = re.compile(r"`[\w./-]+\.py[:,]\d[\d,-]*(?:@[0-9a-f]{7,40})?`|`:\d+(?:-\d+)?(?:@[0-9a-f]{7,40})?`")
 
 # The exempt form: the same pin with the commit it was read at appended. Matched
 # against the WHOLE span so ``core.py:12@deadbee`` counts as commit-pinned while
@@ -452,7 +435,8 @@ def test_no_line_pinned_source_references() -> None:
         for span in bare:
             problems.append(f"  {md.relative_to(DOCS_ROOT).as_posix()}: {span}")
     assert not problems, (
-        "Line-pinned source references in the docs:\n" + "\n".join(problems)
+        "Line-pinned source references in the docs:\n"
+        + "\n".join(problems)
         + "\n\nName the SYMBOL instead -- it moves with the code, and a claim "
         "anchor can re-verify it. A line number rots on any edit above it and "
         "still reads as authoritative. If the claim is genuinely about a "
@@ -475,7 +459,10 @@ def _repo_is_shallow(repo: Path) -> bool:
     try:
         r = subprocess.run(
             ["git", "rev-parse", "--is-shallow-repository"],
-            cwd=repo, capture_output=True, text=True, timeout=30,
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
     except (OSError, subprocess.SubprocessError):
         return True  # can't tell -> assume the weaker claim
@@ -512,7 +499,10 @@ def test_commit_pinned_references_resolve() -> None:
             try:
                 blob = subprocess.run(
                     ["git", "show", f"{sha}:{path}"],
-                    cwd=repo, capture_output=True, text=True, timeout=30,
+                    cwd=repo,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
                 )
             except (OSError, subprocess.SubprocessError):
                 continue  # no git at all -- format check already passed
@@ -525,12 +515,8 @@ def test_commit_pinned_references_resolve() -> None:
                 continue
             n_lines = len(blob.stdout.splitlines())
             if line_no > n_lines:
-                problems.append(
-                    f"{where} -- {path} had only {n_lines} lines at {sha}"
-                )
-    assert not problems, (
-        "Commit-pinned references that don't resolve:\n" + "\n".join(problems)
-    )
+                problems.append(f"{where} -- {path} had only {n_lines} lines at {sha}")
+    assert not problems, "Commit-pinned references that don't resolve:\n" + "\n".join(problems)
 
 
 # --------------------------------------------------------------------------- #
@@ -575,7 +561,8 @@ def test_every_cited_test_name_exists() -> None:
             if name not in defined:
                 missing.append(f"  {md.relative_to(DOCS_ROOT).as_posix()}: `{name}`")
     assert not missing, (
-        "Docs cite test names that no longer exist:\n" + "\n".join(missing)
+        "Docs cite test names that no longer exist:\n"
+        + "\n".join(missing)
         + "\n\nA 'Test reference:' claiming a guard that isn't there is worse "
         "than no citation. Rename the reference or drop it."
     )
@@ -594,9 +581,7 @@ def test_every_cited_test_name_exists() -> None:
 # aliases the parser accepts, not directives a page has to advertise).
 
 _DIRECTIVE_RE = re.compile(r"directive == '([a-z][a-z-]+)'")
-_ANNOTATIONS_SRC = (
-    Path(__file__).resolve().parents[2] / "src" / "cash" / "notebook" / "annotations.py"
-)
+_ANNOTATIONS_SRC = Path(__file__).resolve().parents[2] / "src" / "cash" / "notebook" / "annotations.py"
 # Pages that claim to cover the directive set, and so must cover all of it.
 _DIRECTIVE_PAGES = (
     "annotations.md",
@@ -675,14 +660,9 @@ def test_autodoc_targets_resolve() -> None:
             checked += 1
             reason = _resolve_dotted(m.group(1))
             if reason:
-                problems.append(
-                    f"  {md.relative_to(DOCS_ROOT).as_posix()}: ::: {m.group(1)} -- {reason}"
-                )
+                problems.append(f"  {md.relative_to(DOCS_ROOT).as_posix()}: ::: {m.group(1)} -- {reason}")
     assert checked, "found no ::: directives -- the scan pattern has drifted"
-    assert not problems, (
-        "Autodoc targets that don't resolve (the section renders EMPTY):\n"
-        + "\n".join(problems)
-    )
+    assert not problems, "Autodoc targets that don't resolve (the section renders EMPTY):\n" + "\n".join(problems)
 
 
 # --------------------------------------------------------------------------- #
@@ -745,9 +725,7 @@ def test_documented_install_extras_exist() -> None:
             for name in m.group(1).split(","):
                 name = name.strip()
                 if name and name not in real:
-                    problems.append(
-                        f"  {md.relative_to(DOCS_ROOT).as_posix()}: cash-lib[{name}]"
-                    )
+                    problems.append(f"  {md.relative_to(DOCS_ROOT).as_posix()}: cash-lib[{name}]")
     assert not problems, (
         "Docs tell users to install extras that pyproject.toml doesn't define:\n"
         + "\n".join(sorted(set(problems)))

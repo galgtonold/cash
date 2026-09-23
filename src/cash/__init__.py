@@ -13,6 +13,7 @@ part of the public API and are re-exported here from ``cash.notebook.purity``
 for convenience.  Either import path is valid for those symbols; prefer
 ``from cash import pure`` in application code.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -22,9 +23,8 @@ from typing import Any
 from .backends import CascadingBackend, FileBackend, InMemoryBackend
 from .backends.sqlite_backend import SQLiteBackend
 from .config import CashConfig, create_default_config, get_config
-from .core import Cash, CacheExplanation
+from .core import CacheExplanation, Cash
 from .data_source import DataSource, FileDataSource
-from .remote_source import RemoteFileDataSource
 from .exceptions import (
     AmbiguousCellError,
     CacheBackendError,
@@ -44,10 +44,12 @@ from .exceptions import (
 )
 from .notebook.purity import analyze_function_purity, is_pure, is_stateful, pure, stateful
 from .notebook.randomness import CashRandomnessWarning
+from .remote_source import RemoteFileDataSource
 
 # ---------------------------------------------------------------------------
 # Annotation helpers for third-party callables
 # ---------------------------------------------------------------------------
+
 
 def mark_pure(func: Any) -> Any:
     """Mark *func* as pure for cash's purity analyzer.
@@ -75,7 +77,7 @@ def mark_pure(func: Any) -> Any:
         attribute setting.
     """
     try:
-        setattr(func, '_cash_pure', True)
+        setattr(func, "_cash_pure", True)
     except (AttributeError, TypeError):
         pass
     return func
@@ -105,7 +107,7 @@ def mark_stateful(func: Any) -> Any:
         attribute setting.
     """
     try:
-        setattr(func, '_cash_stateful', True)
+        setattr(func, "_cash_stateful", True)
     except (AttributeError, TypeError):
         pass
     return func
@@ -151,6 +153,7 @@ __version__ = "0.11.0"
 
 # Lazy-initialized global instance (created on first access)
 _global_cash = None
+
 
 def _get_global_cash():
     """Return the global ``Cash`` singleton, creating it on first call.
@@ -209,6 +212,7 @@ def reset_session() -> None:
     # existing ``%cash_*`` references resolve to the new singleton.
     try:
         from IPython import get_ipython  # type: ignore[import-not-found]
+
         if get_ipython() is not None:
             _get_global_cash().register_magic()
     except ImportError:
@@ -248,33 +252,40 @@ def configure(**overrides: Any) -> None:
     if not overrides:
         return
     from dataclasses import fields
+
     from .config import CashConfig
 
     valid_fields = {f.name for f in fields(CashConfig) if not f.name.startswith("_")}
     unknown = set(overrides) - valid_fields
     if unknown:
-        raise ValueError(
-            f"{sorted(unknown)!r} is not a configurable field. "
-            f"Valid keys: {sorted(valid_fields)!r}"
-        )
+        raise ValueError(f"{sorted(unknown)!r} is not a configurable field. Valid keys: {sorted(valid_fields)!r}")
 
     # Checked before anything is applied, so a bad value leaves the running
     # configuration exactly as it was -- see `config.validate_value`.
     from .config import validate_value
-    overrides = {
-        key: (val if key == "tiers" else validate_value(key, val))
-        for key, val in overrides.items()
-    }
+
+    overrides = {key: (val if key == "tiers" else validate_value(key, val)) for key, val in overrides.items()}
 
     c = _get_global_cash()
 
     # Hot vs backend-affecting fields. Anything that influences which
     # concrete backend(s) get constructed needs a rebuild.
     BACKEND_AFFECTING = {
-        "cache_dir", "compress", "max_cache_size", "max_memory_entries",
-        "flush_interval", "backend", "tiers",
-        "redis_host", "redis_port", "redis_db", "redis_password", "redis_prefix",
-        "s3_bucket", "s3_region", "s3_prefix",
+        "cache_dir",
+        "compress",
+        "max_cache_size",
+        "max_memory_entries",
+        "flush_interval",
+        "backend",
+        "tiers",
+        "redis_host",
+        "redis_port",
+        "redis_db",
+        "redis_password",
+        "redis_prefix",
+        "s3_bucket",
+        "s3_region",
+        "s3_prefix",
     }
 
     needs_rebuild = bool(set(overrides) & BACKEND_AFFECTING)
@@ -299,6 +310,7 @@ def configure(**overrides: Any) -> None:
             import logging
 
             from .core import _enable_cash_logging
+
             _enable_cash_logging(logging.DEBUG)
     if "verbose" in overrides:
         c.verbose = bool(overrides["verbose"])
@@ -306,18 +318,22 @@ def configure(**overrides: Any) -> None:
             import logging
 
             from .core import _enable_cash_logging
+
             _enable_cash_logging(logging.INFO)
 
     if needs_rebuild:
         from .backends.factory import build_backend_from_config
+
         old_backend = c._backend
         if old_backend is not None:
             try:
                 old_backend.shutdown()
             except Exception as e:  # noqa: BLE001 — best-effort drain
                 import logging
+
                 logging.getLogger(__name__).warning(
-                    "Old backend shutdown failed during configure(): %s", e,
+                    "Old backend shutdown failed during configure(): %s",
+                    e,
                 )
         c._backend = build_backend_from_config(c.config)
 
@@ -373,8 +389,13 @@ def _change_affects_active_backend(c: Cash, changed: set[str]) -> bool:
     """
     # Fields that always force rebuild when changed.
     UNCONDITIONAL = {
-        "cache_dir", "compress", "max_cache_size", "max_memory_entries",
-        "flush_interval", "backend", "tiers",
+        "cache_dir",
+        "compress",
+        "max_cache_size",
+        "max_memory_entries",
+        "flush_interval",
+        "backend",
+        "tiers",
     }
     if changed & UNCONDITIONAL:
         return True
@@ -414,13 +435,14 @@ def __getattr__(name):
     Supported attributes: ``cache``, ``show_stats``, ``register_hasher``.
     These are created lazily on first access via `_get_global_cash`.
     """
-    if name == 'cache':
+    if name == "cache":
         return _get_global_cash().cache
-    if name == 'show_stats':
+    if name == "show_stats":
         return _get_global_cash().show_stats
-    if name == 'register_hasher':
+    if name == "register_hasher":
         return _get_global_cash().register_hasher
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     # Core API (stable)

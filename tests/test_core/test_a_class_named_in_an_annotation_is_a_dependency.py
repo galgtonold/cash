@@ -11,6 +11,7 @@ served the result from before the edit.
 Each case runs in fresh interpreters on one cache: the edit must recompute,
 and a run without an edit must hit.
 """
+
 from __future__ import annotations
 
 import os
@@ -22,7 +23,7 @@ import pytest
 
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
 
-PYDANTIC_MODELS = textwrap.dedent('''
+PYDANTIC_MODELS = textwrap.dedent("""
     from pydantic import BaseModel, field_validator
 
     class B(BaseModel):
@@ -35,9 +36,9 @@ PYDANTIC_MODELS = textwrap.dedent('''
 
     class A(BaseModel):
         b: B
-''')
+""")
 
-PYDANTIC_MAIN = textwrap.dedent('''
+PYDANTIC_MAIN = textwrap.dedent("""
     import sys, time
     import cash
     from models import A
@@ -49,9 +50,9 @@ PYDANTIC_MAIN = textwrap.dedent('''
         return A.model_validate(d).b.v
 
     print(parse({"b": {"v": 2}}))
-''')
+""")
 
-HINTS_MODELS = textwrap.dedent('''
+HINTS_MODELS = textwrap.dedent("""
     import dataclasses
     import typing
 
@@ -70,9 +71,9 @@ HINTS_MODELS = textwrap.dedent('''
         hints = typing.get_type_hints(cls)
         return cls(**{{k: build(hints[k], v) if dataclasses.is_dataclass(hints[k]) else v
                        for k, v in data.items()}})
-''')
+""")
 
-HINTS_MAIN = textwrap.dedent('''
+HINTS_MAIN = textwrap.dedent("""
     import sys, time
     import cash
     from models import A, build
@@ -84,24 +85,27 @@ HINTS_MAIN = textwrap.dedent('''
         return build(A, d).b.v
 
     print(parse({"b": {"v": 2}}))
-''')
+""")
 
 
 def _run(tmp_path, models, main, factor):
-    (tmp_path / "models.py").write_text(models.replace("{FACTOR}", str(factor))
-                                        .replace("{{", "{").replace("}}", "}"))
+    (tmp_path / "models.py").write_text(models.replace("{FACTOR}", str(factor)).replace("{{", "{").replace("}}", "}"))
     (tmp_path / "main.py").write_text(main)
     env = dict(os.environ, CASH_CACHE_DIR=str(tmp_path / ".cash"), PYTHONWARNINGS="ignore")
-    proc = subprocess.run([sys.executable, "main.py"], cwd=tmp_path, env=env,
-                          capture_output=True, text=True, timeout=120)
+    proc = subprocess.run(
+        [sys.executable, "main.py"], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120
+    )
     assert proc.returncode == 0, proc.stderr
     return proc.stdout.strip(), proc.stderr
 
 
-@pytest.mark.parametrize("models, main", [
-    pytest.param(PYDANTIC_MODELS, PYDANTIC_MAIN, id="pydantic_nested_model"),
-    pytest.param(HINTS_MODELS, HINTS_MAIN, id="get_type_hints_builder"),
-])
+@pytest.mark.parametrize(
+    "models, main",
+    [
+        pytest.param(PYDANTIC_MODELS, PYDANTIC_MAIN, id="pydantic_nested_model"),
+        pytest.param(HINTS_MODELS, HINTS_MAIN, id="get_type_hints_builder"),
+    ],
+)
 def test_editing_a_class_reached_through_an_annotation_recomputes(tmp_path, models, main):
     if "pydantic" in models:
         pytest.importorskip("pydantic")

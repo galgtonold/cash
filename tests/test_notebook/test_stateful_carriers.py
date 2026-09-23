@@ -1,4 +1,5 @@
 """Unit tests for the stateful-carrier classifier (CAS-175/178)."""
+
 import pytest
 
 from cash.notebook.upstream.stateful_carriers import stateful_carrier_kind
@@ -7,31 +8,34 @@ from cash.notebook.upstream.stateful_carriers import stateful_carrier_kind
 class TestCarriersDetected:
     def test_numpy_generator(self):
         np = pytest.importorskip("numpy")
-        assert stateful_carrier_kind(np.random.default_rng(7)) == 'numpy Generator'
+        assert stateful_carrier_kind(np.random.default_rng(7)) == "numpy Generator"
 
     def test_numpy_random_state(self):
         np = pytest.importorskip("numpy")
-        assert stateful_carrier_kind(np.random.RandomState(0)) == 'numpy RandomState'
+        assert stateful_carrier_kind(np.random.RandomState(0)) == "numpy RandomState"
 
     def test_numpy_bit_generator_matches_via_base(self):
         """PCG64 leafs in ``_pcg64`` but inherits ``BitGenerator`` -- we match bases."""
         np = pytest.importorskip("numpy")
         bg = np.random.default_rng(7).bit_generator
-        assert stateful_carrier_kind(bg) == 'numpy BitGenerator'
+        assert stateful_carrier_kind(bg) == "numpy BitGenerator"
 
     def test_stdlib_random(self):
         import random
-        assert stateful_carrier_kind(random.Random(1)) == 'random.Random'
+
+        assert stateful_carrier_kind(random.Random(1)) == "random.Random"
 
     def test_matplotlib_figure_and_axes(self):
         pytest.importorskip("matplotlib")
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+
         fig, ax = plt.subplots()
         try:
-            assert stateful_carrier_kind(fig) == 'matplotlib Figure'
-            assert stateful_carrier_kind(ax) == 'matplotlib Axes'
+            assert stateful_carrier_kind(fig) == "matplotlib Figure"
+            assert stateful_carrier_kind(ax) == "matplotlib Axes"
         finally:
             plt.close(fig)
 
@@ -42,13 +46,25 @@ class TestCarriersDetected:
         class MyRandom(random.Random):
             pass
 
-        assert stateful_carrier_kind(MyRandom()) == 'random.Random'
+        assert stateful_carrier_kind(MyRandom()) == "random.Random"
 
 
 class TestNonCarriersIgnored:
-    @pytest.mark.parametrize("value", [
-        None, 1, 1.5, "s", b"b", [1, 2], {"a": 1}, {1, 2}, (1, 2), range(3),
-    ])
+    @pytest.mark.parametrize(
+        "value",
+        [
+            None,
+            1,
+            1.5,
+            "s",
+            b"b",
+            [1, 2],
+            {"a": 1},
+            {1, 2},
+            (1, 2),
+            range(3),
+        ],
+    )
     def test_plain_values(self, value):
         assert stateful_carrier_kind(value) is None
 
@@ -68,6 +84,7 @@ class TestNonCarriersIgnored:
         its own -- the CAS-144 table draws the same line."""
         pytest.importorskip("matplotlib")
         from matplotlib.lines import Line2D
+
         assert stateful_carrier_kind(Line2D([0, 1], [0, 1])) is None
 
     def test_consumables_are_left_to_their_own_channel(self):

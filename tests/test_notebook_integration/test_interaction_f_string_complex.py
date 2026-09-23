@@ -14,10 +14,12 @@ class TestFStringComplexEdits:
 
     def test_edit_fstring_expression(self, nb_runner):
         """Edit data used in f-string with embedded expression."""
-        nb_runner.create_notebook([
-            "price = 19.99\nqty = 3",
-            "total = price * qty\nprint(f'Total: ${total:.2f}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "price = 19.99\nqty = 3",
+                "total = price * qty\nprint(f'Total: ${total:.2f}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "Total: $59.97" in nb_runner.get_output(2)
@@ -29,10 +31,12 @@ class TestFStringComplexEdits:
 
     def test_edit_fstring_conditional(self, nb_runner):
         """Edit data used in f-string with conditional."""
-        nb_runner.create_notebook([
-            "score = 85",
-            "grade = 'A' if score >= 90 else 'B' if score >= 80 else 'C'\nprint(f'Score {score} => grade {grade}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "score = 85",
+                "grade = 'A' if score >= 90 else 'B' if score >= 80 else 'C'\nprint(f'Score {score} => grade {grade}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "Score 85 => grade B" in nb_runner.get_output(2)
@@ -44,10 +48,12 @@ class TestFStringComplexEdits:
 
     def test_edit_fstring_multiline(self, nb_runner):
         """Edit data used in multi-line f-string output."""
-        nb_runner.create_notebook([
-            "name = 'Alice'\nage = 30\ncity = 'NYC'",
-            "info = f'Name: {name}, Age: {age}, City: {city}'\nprint(info)",
-        ])
+        nb_runner.create_notebook(
+            [
+                "name = 'Alice'\nage = 30\ncity = 'NYC'",
+                "info = f'Name: {name}, Age: {age}, City: {city}'\nprint(info)",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "Name: Alice, Age: 30, City: NYC" in nb_runner.get_output(2)
@@ -59,10 +65,12 @@ class TestFStringComplexEdits:
 
     def test_edit_fstring_nested_access(self, nb_runner):
         """Edit dict data used in f-string with nested access."""
-        nb_runner.create_notebook([
-            "user = {'name': 'Alice', 'scores': [90, 85, 78]}",
-            "avg = sum(user['scores']) / len(user['scores'])\nprint(f'{user[\"name\"]}: avg={avg:.1f}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "user = {'name': 'Alice', 'scores': [90, 85, 78]}",
+                "avg = sum(user['scores']) / len(user['scores'])\nprint(f'{user[\"name\"]}: avg={avg:.1f}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "Alice: avg=84.3" in nb_runner.get_output(2)

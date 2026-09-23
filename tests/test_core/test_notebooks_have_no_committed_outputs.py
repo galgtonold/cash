@@ -19,6 +19,7 @@ Checked against `git ls-files` rather than a directory walk, deliberately:
 `.ipynb_checkpoints/` and `.claude/worktrees/` are full of outputs and are
 correctly git-ignored. Walking the tree would fail on files nobody committed.
 """
+
 from __future__ import annotations
 
 import json
@@ -33,7 +34,10 @@ REPO = Path(__file__).resolve().parents[2]
 def _tracked_notebooks() -> list[str]:
     out = subprocess.run(
         ["git", "ls-files", "*.ipynb"],
-        cwd=REPO, capture_output=True, text=True, check=False,
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     return [line for line in out.stdout.split() if line]
 
@@ -48,9 +52,9 @@ def test_the_repo_has_tracked_notebooks_to_check():
 def test_a_tracked_notebook_carries_no_outputs(name):
     nb = json.loads((REPO / name).read_text(encoding="utf-8"))
     dirty = [
-        i for i, cell in enumerate(nb.get("cells", []))
-        if cell.get("cell_type") == "code"
-        and (cell.get("outputs") or cell.get("execution_count") is not None)
+        i
+        for i, cell in enumerate(nb.get("cells", []))
+        if cell.get("cell_type") == "code" and (cell.get("outputs") or cell.get("execution_count") is not None)
     ]
     assert not dirty, (
         f"{name} has committed outputs in cell(s) {dirty}. Clear them before "

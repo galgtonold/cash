@@ -18,6 +18,7 @@ The controls matter as much as the cases. A detector that warns about
 everything is not a detector, so a pure function must stay silent, and cash's
 own cache write must never be reported as the user's effect.
 """
+
 from __future__ import annotations
 
 import socket
@@ -49,6 +50,7 @@ def _call_capturing(c, fn, *args):
 # ---------------------------------------------------------------------------
 # Controls -- without these, every assertion below is worthless
 # ---------------------------------------------------------------------------
+
 
 def test_a_pure_function_is_silent(tmp_path):
     """The detector has to discriminate, or "it warned" means nothing."""
@@ -95,14 +97,14 @@ def test_cash_own_cache_write_is_not_reported_as_the_users_effect(tmp_path):
 
     _result, warned = _call_capturing(c, pure_but_stored, 5)
     assert not warned, (
-        "cash's own cache write was attributed to the user's function: "
-        f"{[str(w.message) for w in warned]}"
+        f"cash's own cache write was attributed to the user's function: {[str(w.message) for w in warned]}"
     )
 
 
 # ---------------------------------------------------------------------------
 # Tier 1 -- the widened name list, statically
 # ---------------------------------------------------------------------------
+
 
 class _Client:
     """Stands in for a requests Session / db cursor / bus producer."""
@@ -156,10 +158,17 @@ def _uses_publish(payload):
     return _CLIENT.publish(payload)["ok"]
 
 
-@pytest.mark.parametrize("verb, fn", [
-    ("post", _uses_post), ("put", _uses_put), ("patch", _uses_patch),
-    ("execute", _uses_execute), ("commit", _uses_commit), ("publish", _uses_publish),
-])
+@pytest.mark.parametrize(
+    "verb, fn",
+    [
+        ("post", _uses_post),
+        ("put", _uses_put),
+        ("patch", _uses_patch),
+        ("execute", _uses_execute),
+        ("commit", _uses_commit),
+        ("publish", _uses_publish),
+    ],
+)
 def test_effect_shaped_method_names_are_flagged_on_any_receiver(tmp_path, verb, fn):
     """A client object's write verb is the only static handle on a library effect.
 
@@ -179,6 +188,7 @@ def test_effect_shaped_method_names_are_flagged_on_any_receiver(tmp_path, verb, 
 # Tier 3 -- observed at runtime, where no name could have reached
 # ---------------------------------------------------------------------------
 
+
 def test_a_file_write_inside_an_unnamed_call_is_observed(tmp_path):
     """The effect is real, the callee is not name-matched, the return is used.
 
@@ -196,6 +206,7 @@ def test_a_file_write_inside_an_unnamed_call_is_observed(tmp_path):
     # combination that was silent.
     def uses_stdlib_writer():
         import shutil
+
         return str(shutil.copyfile(source, target))
 
     result, warned = _call_capturing(c, uses_stdlib_writer)
@@ -261,14 +272,12 @@ def test_no_second_warning_when_the_static_pass_already_flagged(tmp_path):
         # `write_text` IS in the static name list, so the analyzer flags this
         # AND the observer sees the write. The user should hear it once.
         import pathlib
+
         pathlib.Path(target).write_text("x")
         return 1
 
     _result, warned = _call_capturing(c, writes_by_name)
-    assert len(warned) == 1, (
-        f"expected exactly one warning, got {len(warned)}: "
-        f"{[str(w.message) for w in warned]}"
-    )
+    assert len(warned) == 1, f"expected exactly one warning, got {len(warned)}: {[str(w.message) for w in warned]}"
 
 
 def test_a_cache_hit_does_not_re_warn_or_repeat_the_effect(tmp_path):
@@ -307,6 +316,7 @@ def test_a_cache_hit_does_not_re_warn_or_repeat_the_effect(tmp_path):
 # leaves no trace the caller can see and stays out of reach.
 # ---------------------------------------------------------------------------
 
+
 def test_a_library_mutating_the_callers_argument_is_observed(tmp_path):
     """`heapq.heappushpop` mutates the caller's heap AND returns a value.
 
@@ -319,6 +329,7 @@ def test_a_library_mutating_the_callers_argument_is_observed(tmp_path):
 
     def uses_stdlib_mutator(rows):
         import heapq
+
         return heapq.heappushpop(rows, 7)
 
     rows = [1, 3, 5, 9]
@@ -346,12 +357,15 @@ def test_a_function_that_leaves_its_arguments_alone_is_silent(tmp_path):
     assert not warned, f"reading a list warned: {[str(w.message) for w in warned]}"
 
 
-@pytest.mark.parametrize("value", [
-    {"b", "a", "c"},                     # set: iteration order
-    frozenset({3, 1, 2}),
-    {"x": [1, 2], "y": {"z": 3}},        # nested containers
-    b"\x00\xff" * 8,
-])
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"b", "a", "c"},  # set: iteration order
+        frozenset({3, 1, 2}),
+        {"x": [1, 2], "y": {"z": 3}},  # nested containers
+        b"\x00\xff" * 8,
+    ],
+)
 def test_unmutated_arguments_of_awkward_types_do_not_look_mutated(tmp_path, value):
     """The check compares two argument hashes taken around the call.
 
@@ -376,16 +390,14 @@ def test_the_mutation_check_retires_itself_when_re_hashing_is_expensive(tmp_path
     still checked, and only then is the function retired.
     """
     c = _cash(tmp_path)
-    c._MUTATION_CHECK_BUDGET_S = 0.0        # make any re-hash "too expensive"
+    c._MUTATION_CHECK_BUDGET_S = 0.0  # make any re-hash "too expensive"
 
     def reads(rows):
         return len(rows)
 
     _call_capturing(c, reads, [1, 2, 3])
     name = next(n for n in c.functions if n.endswith("reads"))
-    assert name in c._mutation_check_too_costly, (
-        "an over-budget re-hash did not retire the check for that function"
-    )
+    assert name in c._mutation_check_too_costly, "an over-budget re-hash did not retire the check for that function"
 
 
 def test_an_argument_over_budget_for_the_key_is_not_hashed_again(tmp_path, monkeypatch):
@@ -394,11 +406,10 @@ def test_an_argument_over_budget_for_the_key_is_not_hashed_again(tmp_path, monke
     the key build had already emptied, so a miss on two million rows hashed
     them a second time after the body, every run (round 19)."""
     c = _cash(tmp_path)
-    c._MUTATION_CHECK_BUDGET_S = 0.0        # any key's cost is over it
+    c._MUTATION_CHECK_BUDGET_S = 0.0  # any key's cost is over it
     hashes = []
     real = c._serialize_args
-    monkeypatch.setattr(c, "_serialize_args",
-                        lambda *a, **k: hashes.append(1) or real(*a, **k))
+    monkeypatch.setattr(c, "_serialize_args", lambda *a, **k: hashes.append(1) or real(*a, **k))
 
     def reads(rows):
         return len(rows)

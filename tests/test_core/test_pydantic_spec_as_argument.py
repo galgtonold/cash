@@ -21,6 +21,7 @@ declarations, stable digest. `model_fields` is a property on the class, so
 adding it would have made descriptions invisible instead, the stale-answer bug
 in `test_dataclass_spec_as_argument.py` all over again.
 """
+
 from __future__ import annotations
 
 import warnings
@@ -70,8 +71,7 @@ def test_two_identical_models_get_the_same_surface(tmp_path):
     second = c._class_surface_parts(_model())
 
     names = [n for _, n, _ in first]
-    assert not any(n.startswith("__pydantic_core") or n.startswith("__pydantic_valid")
-                   for n in names), names
+    assert not any(n.startswith("__pydantic_core") or n.startswith("__pydantic_valid") for n in names), names
     assert any(n.startswith("__pydantic_field__:") for n in names), names
     assert first == second, "identical declarations must give an identical surface"
 
@@ -98,6 +98,7 @@ def test_a_class_with_a_hostile_model_fields_property_does_not_break(tmp_path):
     non-pydantic class that happens to define it -- as a property, raising --
     must not take the call down with it. Hashing is never allowed to be the
     thing that breaks caching."""
+
     class Hostile:
         @property
         def model_fields(self):

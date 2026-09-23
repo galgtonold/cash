@@ -1,20 +1,18 @@
 """Unit tests for the PurityAnalyzer (no decorator wiring)."""
-from __future__ import annotations
 
-import textwrap
+from __future__ import annotations
 
 import pytest
 
+from cash.notebook.purity import pure, stateful
 from cash.purity_analyzer import (
     ISSUE_DISCARDED_CALL,
     ISSUE_DYNAMIC_PATTERN,
-    ISSUE_UNTRACKABLE_DEP,
     ISSUE_IMPURE_CALL,
     ISSUE_SCOPE_MUTATION,
+    ISSUE_UNTRACKABLE_DEP,
     PurityAnalyzer,
-    PurityReport,
 )
-from cash.notebook.purity import pure, stateful
 
 
 @pytest.fixture
@@ -35,6 +33,7 @@ def test_explicit_pure_short_circuits(analyzer):
     @pure
     def f():
         import os
+
         os.system("ls")  # would normally be impure
         return 1
 
@@ -55,6 +54,7 @@ def test_explicit_stateful_flags(analyzer):
 def test_requests_post_flagged(analyzer):
     def f(url, data):
         import requests
+
         return requests.post(url, json=data)
 
     r = analyzer.analyze(f)
@@ -66,6 +66,7 @@ def test_requests_post_flagged(analyzer):
 def test_os_system_flagged(analyzer):
     def f():
         import os
+
         os.system("echo hi")
         return 1
 
@@ -129,26 +130,24 @@ def test_calling_a_parameter_is_not_flagged(analyzer):
     """Callables passed as arguments are hashed by source, so calling one is
     not a dynamic-dispatch hazard. See the control arm in
     tests/test_core/test_purity_decorator.py for the case cash cannot hash."""
+
     def f(cb, x):
         return cb(x)
 
     r = analyzer.analyze(f)
-    assert not any(i.kind == ISSUE_DYNAMIC_PATTERN for i in r.issues), [
-        i.description for i in r.issues
-    ]
+    assert not any(i.kind == ISSUE_DYNAMIC_PATTERN for i in r.issues), [i.description for i in r.issues]
 
 
 def test_a_table_built_in_the_body_IS_flagged(analyzer):
     """The shape that measurably goes stale, kept as the positive arm so the
     test above cannot pass merely because the rule stopped existing."""
+
     def f(key):
         table = {"a": len}
         return table[key]("xy")
 
     r = analyzer.analyze(f)
-    assert any(i.kind == ISSUE_DYNAMIC_PATTERN for i in r.issues), [
-        i.description for i in r.issues
-    ]
+    assert any(i.kind == ISSUE_DYNAMIC_PATTERN for i in r.issues), [i.description for i in r.issues]
 
 
 def test_discarded_call_to_unknown_flagged(analyzer):
@@ -160,10 +159,7 @@ def test_discarded_call_to_unknown_flagged(analyzer):
         return x * 2
 
     r = analyzer.analyze(f)
-    assert any(
-        i.kind == ISSUE_DISCARDED_CALL and "helper" in i.description
-        for i in r.issues
-    )
+    assert any(i.kind == ISSUE_DISCARDED_CALL and "helper" in i.description for i in r.issues)
 
 
 def test_discarded_call_to_known_pure_not_flagged(analyzer):
@@ -176,7 +172,6 @@ def test_discarded_call_to_known_pure_not_flagged(analyzer):
 
 
 def test_global_flagged(analyzer):
-    GLOBAL_X = 0
 
     def f():
         global GLOBAL_X
@@ -208,6 +203,7 @@ def test_attribute_assign_flagged(analyzer):
 def test_helper_source_hashes_captured(analyzer):
     """When recursion walks into a same-module helper, its source hash
     is captured for cache-key invalidation."""
+
     # Define both in the test module so they share __module__.
     def helper(x):
         return x * 2
@@ -224,8 +220,10 @@ def test_helper_source_hashes_captured(analyzer):
 
 def test_opaque_leaves_not_in_issues_by_default(analyzer):
     """Calling a stdlib/library function (no source) doesn't flag."""
+
     def f(x):
         import math
+
         return math.sqrt(x)
 
     r = analyzer.analyze(f)
@@ -245,6 +243,7 @@ def test_cache_by_source_hash(analyzer):
 
 def test_recursion_terminates(analyzer):
     """A self-referencing function doesn't loop the analyzer."""
+
     def fact(n):
         return 1 if n == 0 else n * fact(n - 1)
 
@@ -259,6 +258,7 @@ def _marked_pure_callee(x):
     variables are not visible. Real-world usage (top-level
     @cash.cache + helpers in the same module) follows this pattern."""
     import os
+
     os.system("ls")  # would normally flag impure_call
     return x
 
@@ -278,6 +278,7 @@ _cash.mark_stateful(_marked_stateful_callee)
 def test_mark_pure_short_circuits(analyzer):
     """A callee marked pure (via _cash_pure attribute) is not recursed
     into and does not contribute to issues."""
+
     def main(x):
         return _marked_pure_callee(x)
 
@@ -301,9 +302,11 @@ def test_mark_stateful_propagates(analyzer):
 # parameter, an alias of one, or module/enclosing state still must flag.
 # ---------------------------------------------------------------------------
 
+
 def test_local_array_subscript_mutation_is_pure(analyzer):
     def signals(n):
         import numpy as np
+
         pos = np.zeros(n, dtype="int8")
         for i in range(n):
             pos[i] = 1
@@ -344,7 +347,7 @@ def test_local_dict_literal_is_pure(analyzer):
 
 def test_mutating_parameter_still_flags(analyzer):
     def f(data):
-        data.append(1)          # mutates caller's list
+        data.append(1)  # mutates caller's list
         return data
 
     r = analyzer.analyze(f)
@@ -354,7 +357,7 @@ def test_mutating_parameter_still_flags(analyzer):
 
 def test_mutating_parameter_subscript_still_flags(analyzer):
     def f(data):
-        data[0] = 1             # mutates caller's container
+        data[0] = 1  # mutates caller's container
         return data
 
     r = analyzer.analyze(f)
@@ -363,7 +366,7 @@ def test_mutating_parameter_subscript_still_flags(analyzer):
 
 def test_aliased_parameter_mutation_still_flags(analyzer):
     def f(data):
-        x = data                # x is an alias, NOT a fresh allocation
+        x = data  # x is an alias, NOT a fresh allocation
         x.append(1)
         return x
 
@@ -374,7 +377,7 @@ def test_global_container_mutation_still_flags(analyzer):
     def f():
         global _ESC_G
         _ESC_G = {}
-        _ESC_G["k"] = 1         # global escapes the function
+        _ESC_G["k"] = 1  # global escapes the function
         return _ESC_G
 
     r = analyzer.analyze(f)
@@ -383,8 +386,8 @@ def test_global_container_mutation_still_flags(analyzer):
 
 def test_rebinding_to_nonfresh_disqualifies_local(analyzer):
     def f(other):
-        d = {}                  # fresh...
-        d = other               # ...but later aliased to a parameter
+        d = {}  # fresh...
+        d = other  # ...but later aliased to a parameter
         d["k"] = 1
         return d
 
@@ -395,9 +398,9 @@ def test_rebinding_to_nonfresh_disqualifies_local(analyzer):
 def test_local_purity_does_not_mask_real_impurity(analyzer):
     def f(rows, path):
         lines = []
-        lines.append("x")       # pure local mutation
+        lines.append("x")  # pure local mutation
         with open(path, "w") as fh:
-            fh.write("\n".join(lines))   # real I/O - must still flag
+            fh.write("\n".join(lines))  # real I/O - must still flag
         return path
 
     r = analyzer.analyze(f)
@@ -407,8 +410,9 @@ def test_local_purity_does_not_mask_real_impurity(analyzer):
 def test_inplace_on_fresh_dataframe_is_pure(analyzer):
     def f(data):
         import pandas as pd
+
         df = pd.DataFrame(data)
-        df.sort_values("a", inplace=True)   # inplace on a FRESH local frame
+        df.sort_values("a", inplace=True)  # inplace on a FRESH local frame
         return df
 
     assert analyzer.analyze(f).is_clean

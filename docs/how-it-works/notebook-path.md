@@ -21,7 +21,7 @@ The shape of every statement's journey is the same:
 
 ## What happens when you run a cell
 
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics._execute_cell @6944c822, cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell @db5faa5d, cash/notebook/ipython/cell_executor.py:CellExecutor._execute_cell_pipeline @f2fa76c8 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics._execute_cell @6944c822, cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell @db5faa5d, cash/notebook/ipython/cell_executor.py:CellExecutor._execute_cell_pipeline @ad0f7177 -->
 `CashMagics` stands in front of IPython's `run_cell`, and hands the cell to
 `CellExecutor.execute_cell()`. Steps 2-7 below are that method's own
 seven phases (in `_execute_cell_pipeline`, inside one cell run); step 1 (interception) and step 8 (badge render) happen in
@@ -50,7 +50,7 @@ A few of these steps deserve a closer look:
   [Staying correct: invalidation](invalidation.md). This page and that one
   describe the same engine from two angles: here it's "how a cell runs," there
   it's "how a cell knows it's stale."
-<!-- claim: cash/notebook/cacheability_decision.py:decide_cacheability @be2e3981, cash/notebook/statement/processor.py:StatementProcessor.process_statement @98a5a61b -->
+<!-- claim: cash/notebook/cacheability_decision.py:decide_cacheability @e9c27ac0, cash/notebook/statement/processor.py:StatementProcessor.process_statement @23877f4c -->
 - **Step 7 — the per-statement decision.** Each statement passes the detector
   pre-checks from [Safety](safety.md) — merged into one verdict by
   `decide_cacheability` — before the cache is consulted at all. If the verdict
@@ -101,7 +101,7 @@ flowchart TD
     I3 --> K3
 ```
 
-<!-- claim: cash/notebook/control_structures/processor.py:compute_context_hash @589aad3c, cash/notebook/control_structures/for_handler.py:ForLoopHandler.process @fc5542d1 -->
+<!-- claim: cash/notebook/control_structures/processor.py:compute_context_hash @49280d7a, cash/notebook/control_structures/for_handler.py:ForLoopHandler.process @400a4a49 -->
 The mechanism is deliberately plain: the context hash is prepended to the body
 statement as a *comment*, so it flows into the ordinary statement cache key
 through the source hash — no special key format is needed.
@@ -167,13 +167,13 @@ one of them can change on its own and the rest still hit, at the statement
 level as well as the call level. See
 [Reordering a loop's items](../known-limitations.md#reordering-a-loops-items-re-runs-the-tail).
 
-<!-- claim: cash/notebook/control_structures/if_handler.py:IfHandler.process @ec614352, cash/notebook/control_structures/try_handler.py:TryHandler.process @38bf0473 -->
+<!-- claim: cash/notebook/control_structures/if_handler.py:IfHandler.process @05332caa, cash/notebook/control_structures/try_handler.py:TryHandler.process @22e3e208 -->
 Conditionals work the same way with a different marker: `if`/`elif`/`else` and
 `try`/`except` bodies are decomposed per statement and tagged with a
 `# control_context:` branch hash, so only the branch that actually ran is
 cached and unused branches never pollute the key space.
 
-<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @75711466, cash/notebook/control_structures/processor.py:get_control_structure_type @eb40f97d -->
+<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @347a78c0, cash/notebook/control_structures/processor.py:get_control_structure_type @a07b3e05 -->
 `while` and `with` are the exception — they are executed as a **single cacheable
 unit** through the statement processor rather than decomposed, because neither
 has an enumerable iteration space to key on.
@@ -220,7 +220,7 @@ final value straight from cache:
 # Cash restores the final 'df' directly:  ~0.1s (deserialization only)
 ```
 
-<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor._persistable_callees @a6159e9b -->
+<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor._persistable_callees @000a4d6a -->
 That holds for values computed *from* a loop too. A loop's outputs get lineages
 derived from the values it built, which the upstream simulation cannot derive
 from code, so Cash writes down what a loop left behind when it runs, and the
@@ -234,7 +234,7 @@ else, and the loop runs again. The loop's own variables (`parts`, `d` in
 `for f in files: d = read(f); parts.append(d)`) are not stored anywhere a
 restart can bring them back from: a cell that reads them runs the loop.
 
-<!-- claim: cash/notebook/cacheability.py:module_setting_receivers @ea97b798 -->
+<!-- claim: cash/notebook/cacheability.py:module_setting_receivers @8c05daa7 -->
 A setting kept on a module, such as `plt.rcParams.update({...})`, `plt.style.use("ggplot")`,
 `pd.set_option(...)`, `np.seterr(...)` or `warnings.filterwarnings(...)`, lives
 in the library and not in any variable Cash stores. A top-level call like these
@@ -242,7 +242,7 @@ counts as a change to the module, so after a restart a cell that uses the
 module runs the setting line again before it draws or prints. Before this, a
 chart drawn after a restart silently lost the notebook's style.
 
-<!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._writer_output_already_fresh @7d9f7246, cash/notebook/write_observer.py:observe_writes @cb18a8f7, cash/notebook/carrier_history.py:carrier_history_fingerprint @82562d46 -->
+<!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._writer_output_already_fresh @34f917c2, cash/notebook/write_observer.py:observe_writes @cb18a8f7, cash/notebook/carrier_history.py:carrier_history_fingerprint @82562d46 -->
 A cell that writes files (`df.to_csv(...)`, a loop saving one chart per kind)
 is not re-run after a restart just because it ran in an earlier kernel. When it
 runs, Cash records the files it actually wrote, whether the path is in the code or
@@ -261,7 +261,7 @@ line of the chart, or an upstream edit to the data it writes. Writes a C
 extension makes without going through Python's `open` are not seen; such a
 writer is re-run as before.
 
-<!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._find_stale_file_writer_indices @707c07d8, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._note_stale_exports @32f95ad2 -->
+<!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._find_stale_file_writer_indices @95e0ba1a, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._note_stale_exports @0025d4be -->
 A writer whose file the cell you run does not read is left alone, as a plain
 kernel leaves a cell you did not run. "Does not read" has to be provable: a
 path in the code, a name bound to one, or a list of paths a loop or

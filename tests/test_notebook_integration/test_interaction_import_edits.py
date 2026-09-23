@@ -14,10 +14,12 @@ class TestImportAndCellEdits:
 
     def test_import_then_edit_usage_cell(self, nb_runner):
         """Import a module, edit the cell that uses it."""
-        nb_runner.create_notebook([
-            "import math",
-            "val = math.sqrt(16)\nprint(f'val = {val}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import math",
+                "val = math.sqrt(16)\nprint(f'val = {val}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "val = 4.0" in nb_runner.get_output(2)
@@ -28,10 +30,12 @@ class TestImportAndCellEdits:
 
     def test_add_import_then_use(self, nb_runner):
         """Edit a cell to add an import, then use it downstream."""
-        nb_runner.create_notebook([
-            "x = 42",
-            "print(f'x = {x}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 42",
+                "print(f'x = {x}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "x = 42" in nb_runner.get_output(2)
@@ -44,10 +48,12 @@ class TestImportAndCellEdits:
 
     def test_from_import_edit(self, nb_runner):
         """from X import Y, then edit to import different name."""
-        nb_runner.create_notebook([
-            "from math import sqrt",
-            "val = sqrt(9)\nprint(f'val = {val}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from math import sqrt",
+                "val = sqrt(9)\nprint(f'val = {val}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "val = 3.0" in nb_runner.get_output(2)
@@ -59,10 +65,12 @@ class TestImportAndCellEdits:
 
     def test_import_rerun_idempotent(self, nb_runner):
         """Re-running import cell should be idempotent."""
-        nb_runner.create_notebook([
-            "import json",
-            "data = json.dumps({'a': 1})\nprint(f'data = {data}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import json",
+                "data = json.dumps({'a': 1})\nprint(f'data = {data}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert 'data = {"a": 1}' in nb_runner.get_output(2)
@@ -73,10 +81,12 @@ class TestImportAndCellEdits:
 
     def test_import_after_restart(self, nb_runner):
         """After restart, imports should be re-executed."""
-        nb_runner.create_notebook([
-            "import os",
-            "cwd = os.getcwd()\nprint(f'has_cwd = {bool(cwd)}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import os",
+                "cwd = os.getcwd()\nprint(f'has_cwd = {bool(cwd)}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "has_cwd = True" in nb_runner.get_output(2)
@@ -88,10 +98,12 @@ class TestImportAndCellEdits:
 
     def test_import_alias_edit(self, nb_runner):
         """Import with alias, then edit alias."""
-        nb_runner.create_notebook([
-            "import math as m",
-            "val = m.floor(3.7)\nprint(f'val = {val}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import math as m",
+                "val = m.floor(3.7)\nprint(f'val = {val}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "val = 3" in nb_runner.get_output(2)
@@ -107,37 +119,37 @@ class TestMultipleImports:
 
     def test_two_imports_edit_one(self, nb_runner):
         """Two import cells, edit one and re-run."""
-        nb_runner.create_notebook([
-            "import math",
-            "import json",
-            "val = math.sqrt(json.loads('4'))\nprint(f'val = {val}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import math",
+                "import json",
+                "val = math.sqrt(json.loads('4'))\nprint(f'val = {val}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "val = 2.0" in nb_runner.get_output(3)
 
         # Change from math to different usage
-        nb_runner.set_cell_source(
-            3, "val = math.sqrt(json.loads('9'))\nprint(f'val = {val}')"
-        )
+        nb_runner.set_cell_source(3, "val = math.sqrt(json.loads('9'))\nprint(f'val = {val}')")
         nb_runner.run_all()
         assert "val = 3.0" in nb_runner.get_output(3)
 
     def test_import_and_function_def(self, nb_runner):
         """Import used inside a function definition."""
-        nb_runner.create_notebook([
-            "import math",
-            "def circle_area(r):\n    return math.pi * r ** 2",
-            "area = circle_area(1)\nprint(f'area = {area:.4f}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import math",
+                "def circle_area(r):\n    return math.pi * r ** 2",
+                "area = circle_area(1)\nprint(f'area = {area:.4f}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "area = 3.1416" in nb_runner.get_output(3)
 
         # Redefine function
-        nb_runner.set_cell_source(
-            2, "def circle_area(r):\n    return math.pi * r ** 2 * 2"
-        )
+        nb_runner.set_cell_source(2, "def circle_area(r):\n    return math.pi * r ** 2 * 2")
         nb_runner.run_all()
         assert "area = 6.2832" in nb_runner.get_output(3)
 
@@ -151,10 +163,12 @@ class TestCustomModuleReload:
         mod_path.write_text("VALUE = 10\n")
         mod_path_str = str(mod_path.parent).replace("\\", "/")
 
-        nb_runner.create_notebook([
-            f"import sys\nsys.path.insert(0, '{mod_path_str}')",
-            "import mymod\nval = mymod.VALUE\nprint(f'val = {val}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                f"import sys\nsys.path.insert(0, '{mod_path_str}')",
+                "import mymod\nval = mymod.VALUE\nprint(f'val = {val}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "val = 10" in nb_runner.get_output(2)
@@ -174,10 +188,12 @@ class TestCustomModuleReload:
         mod_path.write_text("def compute(x):\n    return x * 2\n")
         mod_path_str = str(mod_path.parent).replace("\\", "/")
 
-        nb_runner.create_notebook([
-            f"import sys\nsys.path.insert(0, '{mod_path_str}')",
-            "from helpers import compute\nresult = compute(5)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                f"import sys\nsys.path.insert(0, '{mod_path_str}')",
+                "from helpers import compute\nresult = compute(5)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 10" in nb_runner.get_output(2)

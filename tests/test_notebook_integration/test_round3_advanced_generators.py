@@ -1,6 +1,8 @@
 """Batch 84 – advanced generators: send(), throw(), close(), yield from."""
 
-import textwrap, pytest
+import textwrap
+
+import pytest
 
 pytestmark = [pytest.mark.stress, pytest.mark.integration]
 
@@ -10,8 +12,9 @@ class TestGeneratorProtocol:
 
     def test_generator_send(self, nb_runner):
         """Generator with send() for two-way communication."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 def accumulator():
                     total = 0
                     while True:
@@ -27,8 +30,9 @@ class TestGeneratorProtocol:
                 r3 = gen.send(5)
                 results = [r1, r2, r3]
             """),
-            "print(f'results={results}')",
-        ])
+                "print(f'results={results}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -38,8 +42,9 @@ class TestGeneratorProtocol:
 
     def test_generator_yield_from(self, nb_runner):
         """yield from delegation."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 def inner():
                     yield 'a'
                     yield 'b'
@@ -52,8 +57,9 @@ class TestGeneratorProtocol:
 
                 values = list(outer())
             """),
-            "print(f'values={values}')",
-        ])
+                "print(f'values={values}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -64,8 +70,9 @@ class TestGeneratorProtocol:
 
     def test_generator_pipeline(self, nb_runner):
         """Coroutine-style generator pipeline."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 def producer(n):
                     for i in range(n):
                         yield i * i
@@ -82,8 +89,9 @@ class TestGeneratorProtocol:
                 pipe = mapper(filterer(producer(10), lambda x: x % 2 == 0), lambda x: x + 1)
                 output = list(pipe)
             """),
-            "print(f'output={output}')",
-        ])
+                "print(f'output={output}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -94,17 +102,19 @@ class TestGeneratorProtocol:
 
     def test_generator_propagation(self, nb_runner):
         """Generator that depends on upstream variable, change propagation."""
-        nb_runner.create_notebook([
-            "multiplier = 2",
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                "multiplier = 2",
+                textwrap.dedent("""\
                 def scaled_range(n, scale):
                     for i in range(n):
                         yield i * scale
 
                 collected = list(scaled_range(5, multiplier))
             """),
-            "print(f'collected={collected}')",
-        ])
+                "print(f'collected={collected}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "[0, 2, 4, 6, 8]" in nb_runner.get_output(3)
@@ -115,8 +125,9 @@ class TestGeneratorProtocol:
 
     def test_infinite_generator_islice(self, nb_runner):
         """Infinite generator consumed via islice."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from itertools import islice
 
                 def fibonacci():
@@ -127,8 +138,9 @@ class TestGeneratorProtocol:
 
                 fibs = list(islice(fibonacci(), 10))
             """),
-            "print(f'fibs={fibs}')",
-        ])
+                "print(f'fibs={fibs}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)

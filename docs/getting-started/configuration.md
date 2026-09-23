@@ -108,7 +108,7 @@ configure(debug=True, min_cache_savings_pct=0.30)
 Every field below is settable via every layer. The env-var column shows
 the `CASH_*` binding; the TOML key matches the field name.
 
-<!-- claim: cash/config.py:validate_value @3d107380, cash/config.py:parse_size @11b4b371, cash/config.py:_validated_layer @e4ba9596 -->
+<!-- claim: cash/config.py:validate_value @f5a33c04, cash/config.py:parse_size @11b4b371, cash/config.py:_validated_layer @ad9630b5 -->
 Every value is checked against the field's type — and, for `backend` and a
 tier's `type`, against the set of names cash has — whichever layer it comes
 from. A string is read the way an environment variable is — `"true"`, `"8"` —
@@ -260,7 +260,7 @@ a *promotion hint*. A value larger than the cap quietly skips that tier but
 still writes to the unconstrained ones. Most caps are static class-level
 values; the file tier's is *dynamic* — its whole (machine-scaled) cap.
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend._warn_oversize_not_persisted @80a5a388, cash/backends/redis_backend.py:RedisBackend.max_size_bytes == 10485760, cash/backends/sqlite_backend.py:SQLiteBackend.max_size_bytes == 104857600 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend._warn_oversize_not_persisted @67c1f69d, cash/backends/redis_backend.py:RedisBackend.max_size_bytes == 10485760, cash/backends/sqlite_backend.py:SQLiteBackend.max_size_bytes == 104857600 -->
 | Backend | `max_size_bytes` cap | Rationale |
 |---|---|---|
 | `InMemoryBackend` | unbounded | RAM eviction handles pressure separately. |
@@ -335,7 +335,7 @@ additionally overridable element-by-element with `CASH_TIER_<N>_<FIELD>`.
 cash = Cash(config_path="./my_special_config.toml")
 ```
 
-<!-- claim: cash/config.py:_resolve_config @1454eab2 -->
+<!-- claim: cash/config.py:_resolve_config @2a9beb1e -->
 Loads the named TOML above the user and project files — a file named in code
 outranks the `pyproject.toml` found by walking up from wherever the process
 started — and below environment variables and constructor kwargs. That is how
@@ -349,7 +349,7 @@ top-level keys. A relative `cache_dir` in it is resolved against the file's
 own directory, and a leading `~` is your home directory — so a tool that wants
 its cache outside site-packages writes `cache_dir = "~/.cache/mytool"`.
 
-<!-- claim: cash/config.py:_resolve_config @1454eab2 -->
+<!-- claim: cash/config.py:_resolve_config @2a9beb1e -->
 A path that does not exist is not silently skipped: cash warns
 [`CONFIG-FILE-MISSING`](../warnings.md#config-file-missing) and runs on the
 other layers. The usual cause is a wheel that did not include the file — list
@@ -370,7 +370,7 @@ configures a tool — a `tests/pyproject.toml` holding `[tool.ruff]` — does no
 so running from `tests/` still finds the repository's project and its
 `[tool.cash]`.
 
-<!-- claim: cash/__init__.py:configure @ccd2f4be -->
+<!-- claim: cash/__init__.py:configure @03abf751 -->
 ## Runtime mutation: `cash.configure()`
 
 Change the active configuration of the default singleton at runtime

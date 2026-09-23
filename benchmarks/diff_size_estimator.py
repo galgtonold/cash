@@ -9,6 +9,7 @@ improvement table, cell-level decision-flip table, aggregate summary.
 Usage:
     python benchmarks/diff_size_estimator.py
 """
+
 from __future__ import annotations
 
 import argparse
@@ -58,10 +59,7 @@ def _cell_decisions(runs: list[dict]) -> dict[int, str]:
     out: dict[int, str] = {}
     for cell in r["cells"]:
         cell_idx = cell["notebook_cell_index"]
-        with_pred = [
-            sm for sm in cell["statement_metrics"]
-            if sm.get("cost_model_family") is not None
-        ]
+        with_pred = [sm for sm in cell["statement_metrics"] if sm.get("cost_model_family") is not None]
         if not with_pred:
             out[cell_idx] = "skip-floor"
             continue
@@ -85,10 +83,7 @@ def _cell_family(runs: list[dict], cell_idx: int) -> str | None:
     for cell in r["cells"]:
         if cell["notebook_cell_index"] != cell_idx:
             continue
-        with_pred = [
-            sm for sm in cell["statement_metrics"]
-            if sm.get("cost_model_family") is not None
-        ]
+        with_pred = [sm for sm in cell["statement_metrics"] if sm.get("cost_model_family") is not None]
         if not with_pred:
             return None
         winner = max(with_pred, key=lambda sm: sm.get("cost_model_size_bytes") or 0)
@@ -116,9 +111,7 @@ def render_report(before: dict, after: dict) -> str:
         b = _median_wall_ms(before.get((stem, mode), []))
         a = _median_wall_ms(after.get((stem, mode), []))
         if b is None or a is None:
-            lines.append(f"| {stem} | {mode} | "
-                         f"{b if b is not None else '-'} | "
-                         f"{a if a is not None else '-'} | - | - |")
+            lines.append(f"| {stem} | {mode} | {b if b is not None else '-'} | {a if a is not None else '-'} | - | - |")
             continue
         delta = a - b
         pct = (delta / b * 100.0) if b > 0 else 0.0
@@ -136,9 +129,7 @@ def render_report(before: dict, after: dict) -> str:
     # Section 2: cold regression watch
     lines.append("## Cold-mode regression watch (gate: any > +5% is a red flag)\n")
     cold_regressions = [
-        (stem, pct) for (stem, mode), pct in zip(
-            ((s, m) for s, m in keys if m == "cold"), cold_deltas_pct
-        ) if pct > 5.0
+        (stem, pct) for (stem, mode), pct in zip(((s, m) for s, m in keys if m == "cold"), cold_deltas_pct) if pct > 5.0
     ]
     if cold_regressions:
         lines.append("| notebook | cold delta % |")
@@ -153,9 +144,9 @@ def render_report(before: dict, after: dict) -> str:
     # Section 3: warm improvement table
     lines.append("## Warm-mode improvement table (gate: <= -10% on at least one)\n")
     warm_improvements = [
-        (stem, pct) for (stem, mode), pct in zip(
-            ((s, m) for s, m in keys if m == "warm"), warm_deltas_pct
-        ) if pct < -10.0
+        (stem, pct)
+        for (stem, mode), pct in zip(((s, m) for s, m in keys if m == "warm"), warm_deltas_pct)
+        if pct < -10.0
     ]
     if warm_improvements:
         lines.append("| notebook | warm delta % |")
@@ -163,13 +154,15 @@ def render_report(before: dict, after: dict) -> str:
         for stem, pct in warm_improvements:
             lines.append(f"| {stem} | **{pct:+.1f}%** |")
     else:
-        lines.append("No notebook improved by >=10% in warm mode. This is the warm gate; investigate before declaring the change successful.")
+        lines.append(
+            "No notebook improved by >=10% in warm mode. This is the warm gate; investigate before declaring the change successful."
+        )
     lines.append("")
 
     # Section 4: cell-level decision flips
     lines.append("## Cell-level decision flips (per notebook)\n")
     any_flips = False
-    for (stem, mode) in keys:
+    for stem, mode in keys:
         if mode != "warm":
             continue
         b_decisions = _cell_decisions(before.get((stem, mode), []))
@@ -196,22 +189,22 @@ def render_report(before: dict, after: dict) -> str:
     lines.append("## Aggregate summary\n")
     if cold_total_before > 0:
         cold_net = (cold_total_after - cold_total_before) / cold_total_before * 100.0
-        lines.append(f"- **Cold total**: {cold_total_before:.0f} ms -> {cold_total_after:.0f} ms "
-                     f"(**{cold_net:+.1f}%** net)")
+        lines.append(
+            f"- **Cold total**: {cold_total_before:.0f} ms -> {cold_total_after:.0f} ms (**{cold_net:+.1f}%** net)"
+        )
     if warm_total_before > 0:
         warm_net = (warm_total_after - warm_total_before) / warm_total_before * 100.0
-        lines.append(f"- **Warm total**: {warm_total_before:.0f} ms -> {warm_total_after:.0f} ms "
-                     f"(**{warm_net:+.1f}%** net)")
+        lines.append(
+            f"- **Warm total**: {warm_total_before:.0f} ms -> {warm_total_after:.0f} ms (**{warm_net:+.1f}%** net)"
+        )
     lines.append("")
     return "\n".join(lines)
 
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Diff before/after size-estimator runs")
-    p.add_argument("--root", type=Path, default=ROOT,
-                   help="Parent of the before/ and after/ subdirs.")
-    p.add_argument("--out", type=Path,
-                   help="Where to write report.md. Defaults to <root>/report.md.")
+    p.add_argument("--root", type=Path, default=ROOT, help="Parent of the before/ and after/ subdirs.")
+    p.add_argument("--out", type=Path, help="Where to write report.md. Defaults to <root>/report.md.")
     args = p.parse_args(argv)
 
     before = _load_runs(args.root / "before")

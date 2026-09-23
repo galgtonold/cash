@@ -22,6 +22,7 @@ The tier turns itself off instead, says so once, and the process carries on
 computing uncached. In a tiered stack the RAM tier is untouched, so an
 in-process repeat still hits — which is the control at the bottom of this file.
 """
+
 from __future__ import annotations
 
 import os
@@ -40,7 +41,7 @@ def _unusable_dirs(tmp_path):
     """The three shapes, as (label, path) pairs, on any platform."""
     a_file = tmp_path / "notadir.txt"
     a_file.write_text("x", encoding="utf-8")
-    under_a_file = a_file / "cache"          # a path whose parent is a file
+    under_a_file = a_file / "cache"  # a path whose parent is a file
     if sys.platform == "win32":
         missing_volume = "Z:\\cash_missing_volume"
     else:
@@ -52,8 +53,7 @@ def _unusable_dirs(tmp_path):
     ]
 
 
-@pytest.mark.parametrize("label", ["path is a file", "parent is a file",
-                                   "volume is not there"])
+@pytest.mark.parametrize("label", ["path is a file", "parent is a file", "volume is not there"])
 def test_the_backend_degrades_instead_of_raising(tmp_path, label):
     """A miss and a warning, not an exception, whatever is wrong with the path."""
     path = dict(_unusable_dirs(tmp_path))[label]
@@ -120,8 +120,9 @@ def test_the_process_still_produces_its_answer(tmp_path):
     a_file.write_text("x", encoding="utf-8")
 
     env = dict(os.environ, CASH_CACHE_DIR=str(a_file))
-    proc = subprocess.run([sys.executable, str(script)], env=env, cwd=str(tmp_path),
-                          capture_output=True, text=True, timeout=300)
+    proc = subprocess.run(
+        [sys.executable, str(script)], env=env, cwd=str(tmp_path), capture_output=True, text=True, timeout=300
+    )
 
     assert proc.returncode == 0, f"the job died:\n{proc.stderr[-2000:]}"
     assert "RESULT 42" in proc.stdout, proc.stdout

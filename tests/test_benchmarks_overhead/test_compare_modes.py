@@ -1,22 +1,27 @@
-import json
 from pathlib import Path
 
 from benchmarks._overhead_results import (
-    CellTiming, RunResult, StatementMetric, write_results,
+    CellTiming,
+    RunResult,
+    write_results,
 )
 from benchmarks.compare_modes import build_table
 
 
 def _result(mode: str, repeat: int, wall_per_cell: list[float], tmp_path: Path) -> Path:
     result = RunResult(
-        notebook="nb.ipynb", mode=mode, repeat=repeat,
-        python_version="3.12", cash_version="0.5", platform="x",
+        notebook="nb.ipynb",
+        mode=mode,
+        repeat=repeat,
+        python_version="3.12",
+        cash_version="0.5",
+        platform="x",
         cells=[
-            CellTiming(index=i, notebook_cell_index=i,
-                       wall_seconds=w, source_chars=10, statement_metrics=[])
+            CellTiming(index=i, notebook_cell_index=i, wall_seconds=w, source_chars=10, statement_metrics=[])
             for i, w in enumerate(wall_per_cell)
         ],
-        total_wall_seconds=sum(wall_per_cell), cache_dir_bytes=0,
+        total_wall_seconds=sum(wall_per_cell),
+        cache_dir_bytes=0,
     )
     out = tmp_path / f"nb-{mode}-{repeat}.json"
     write_results(out, result)

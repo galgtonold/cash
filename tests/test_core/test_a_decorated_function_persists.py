@@ -15,6 +15,7 @@ a decision the caller has already made; cash's job is to honour it, not to
 second-guess it with a number it cannot measure reliably. The per-tier size caps
 still apply: a value with nowhere to fit still has nowhere to fit.
 """
+
 from __future__ import annotations
 
 import json
@@ -24,7 +25,7 @@ import textwrap
 
 import pytest
 
-PROGRAM = textwrap.dedent('''
+PROGRAM = textwrap.dedent("""
     import json
     import cash
     cash.configure(cache_dir=CACHE)
@@ -41,14 +42,13 @@ PROGRAM = textwrap.dedent('''
     value = quick(21)
     print(json.dumps({"value": value, "ran": len(calls),
                       "misses": quick.cache_info()["misses"]}))
-''')
+""")
 
 
 def _run(tmp_path):
     script = tmp_path / "run.py"
     script.write_text(PROGRAM.replace("CACHE", repr(str(tmp_path / ".cash"))), encoding="utf-8")
-    done = subprocess.run([sys.executable, str(script)], capture_output=True, text=True,
-                          timeout=180, cwd=str(tmp_path))
+    done = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=180, cwd=str(tmp_path))
     assert done.returncode == 0, done.stderr[-1500:]
     return json.loads(done.stdout.strip().splitlines()[-1])
 
@@ -62,11 +62,10 @@ def test_a_quick_function_survives_a_second_process(tmp_path):
 @pytest.mark.timeout(300)
 def test_the_entry_is_on_disk(tmp_path):
     _run(tmp_path)
-    assert list((tmp_path / ".cash").glob("*.entry")), sorted(
-        p.name for p in (tmp_path / ".cash").iterdir())
+    assert list((tmp_path / ".cash").glob("*.entry")), sorted(p.name for p in (tmp_path / ".cash").iterdir())
 
 
-RESTORE_IS_SLOWER = textwrap.dedent('''
+RESTORE_IS_SLOWER = textwrap.dedent("""
     import json
     import cash
     cash.configure(cache_dir=CACHE)
@@ -77,7 +76,7 @@ RESTORE_IS_SLOWER = textwrap.dedent('''
 
     wide(1)
     print(json.dumps({"ok": True}))
-''')
+""")
 
 
 @pytest.mark.timeout(300)
@@ -96,15 +95,13 @@ def test_a_result_slower_to_restore_than_to_rebuild_is_still_stored(tmp_path):
     who does not want that removes the decorator.
     """
     script = tmp_path / "wide.py"
-    script.write_text(RESTORE_IS_SLOWER.replace("CACHE", repr(str(tmp_path / ".cash"))),
-                      encoding="utf-8")
-    done = subprocess.run([sys.executable, str(script)], capture_output=True, text=True,
-                          timeout=180, cwd=str(tmp_path))
+    script.write_text(RESTORE_IS_SLOWER.replace("CACHE", repr(str(tmp_path / ".cash"))), encoding="utf-8")
+    done = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=180, cwd=str(tmp_path))
     assert done.returncode == 0, done.stderr[-1500:]
     assert list((tmp_path / ".cash").glob("*.entry")), "a decorated result was not stored"
 
 
-QUICK = textwrap.dedent('''
+QUICK = textwrap.dedent("""
     import json
     import cash
     cash.configure(cache_dir=CACHE)
@@ -128,14 +125,13 @@ QUICK = textwrap.dedent('''
     small = barely_anything(1)
     bulky = quick_but_bulky(50_000)
     print(json.dumps({"small": small, "bulky": len(bulky), "ran": len(calls)}))
-''')
+""")
 
 
 def _run_quick(tmp_path):
     script = tmp_path / "quick.py"
     script.write_text(QUICK.replace("CACHE", repr(str(tmp_path / ".cash"))), encoding="utf-8")
-    done = subprocess.run([sys.executable, str(script)], capture_output=True, text=True,
-                          timeout=180, cwd=str(tmp_path))
+    done = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=180, cwd=str(tmp_path))
     assert done.returncode == 0, done.stderr[-1500:]
     return json.loads(done.stdout.strip().splitlines()[-1])
 

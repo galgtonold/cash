@@ -42,19 +42,20 @@ def __getattr__(name: str):
 def __dir__() -> list[str]:
     return sorted(set(globals()) | set(_OPTIONAL_BACKENDS))
 
+
 __all__ = [
-    'CacheBackend',
-    'CacheMetadata',
-    'MetadataDict',
-    'InMemoryBackend',
-    'FileBackend',
-    'SQLiteBackend',
-    'CascadingBackend',
-    'TieredBackend',
-    'RedisBackend',
-    'S3Backend',
-    'Serializer',
-    'PickleSerializer',
-    'ParquetSerializer',
-    'get_serializer',
+    "CacheBackend",
+    "CacheMetadata",
+    "MetadataDict",
+    "InMemoryBackend",
+    "FileBackend",
+    "SQLiteBackend",
+    "CascadingBackend",
+    "TieredBackend",
+    "RedisBackend",
+    "S3Backend",
+    "Serializer",
+    "PickleSerializer",
+    "ParquetSerializer",
+    "get_serializer",
 ]

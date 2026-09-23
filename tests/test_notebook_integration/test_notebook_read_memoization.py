@@ -10,6 +10,7 @@ This test pins the fix: across a ``run_all`` after an edit, the notebook is
 actually read (the cache-miss path, which is the only place
 ``_wait_for_notebook_save`` runs) only a small bounded number of times.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.upstream]
@@ -19,44 +20,50 @@ def _exec(nb_runner, code: str) -> str:
     out = {}
 
     def hook(msg):
-        if msg['msg_type'] == 'stream':
-            out['t'] = out.get('t', '') + msg['content']['text']
+        if msg["msg_type"] == "stream":
+            out["t"] = out.get("t", "") + msg["content"]["text"]
 
     nb_runner._run_async(
         nb_runner.client.kc._async_execute_interactive(
-            code, store_history=False, output_hook=hook,
+            code,
+            store_history=False,
+            output_hook=hook,
         )
     )
-    return out.get('t', '')
+    return out.get("t", "")
 
 
 def test_edit_does_not_trigger_notebook_read_storm(nb_runner):
-    nb_runner.create_notebook([
-        "a = 1",
-        "b = a + 1",
-        "c = b + 1\nprint(c)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "a = 1",
+            "b = a + 1",
+            "c = b + 1\nprint(c)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
     # Instrument the actual-read path (the cache MISS path) in the kernel.
-    _exec(nb_runner, (
-        "from cash.notebook import server_discovery as _sd\n"
-        "_sd._READS = 0\n"
-        "_orig = _sd._wait_for_notebook_save\n"
-        "def _w(p):\n    _sd._READS += 1\n    return _orig(p)\n"
-        "_sd._wait_for_notebook_save = _w\n"
-    ))
+    _exec(
+        nb_runner,
+        (
+            "from cash.notebook import server_discovery as _sd\n"
+            "_sd._READS = 0\n"
+            "_orig = _sd._wait_for_notebook_save\n"
+            "def _w(p):\n    _sd._READS += 1\n    return _orig(p)\n"
+            "_sd._wait_for_notebook_save = _w\n"
+        ),
+    )
 
     try:
         # Edit one cell and re-run everything.
         nb_runner.set_cell_source(1, "a = 100")
         nb_runner.run_all()
 
-        reads = _exec(nb_runner, (
-            "from cash.notebook import server_discovery as _sd\n"
-            "print(getattr(_sd, '_READS', -1))"
-        ))
+        reads = _exec(
+            nb_runner, ("from cash.notebook import server_discovery as _sd\nprint(getattr(_sd, '_READS', -1))")
+        )
         n = int(reads.strip().splitlines()[-1])
     finally:
         # RESTORE, and that is not tidiness. The patch above replaces a
@@ -68,10 +75,7 @@ def test_edit_does_not_trigger_notebook_read_storm(nb_runner):
         # tests in test_numpy_out_rerun.py ("306.0" not in "36.0" -- the edit
         # to an upstream cell never reached the downstream one), reproduced in
         # 5s from a two-file run.
-        _exec(nb_runner, (
-            "from cash.notebook import server_discovery as _sd\n"
-            "_sd._wait_for_notebook_save = _orig\n"
-        ))
+        _exec(nb_runner, ("from cash.notebook import server_discovery as _sd\n_sd._wait_for_notebook_save = _orig\n"))
 
     # Per file state we parse at most twice (the plain + include_ids variants).
     # A small bound (<= 4) leaves slack while still catching the ~30x storm.

@@ -13,6 +13,7 @@ COUNT rather than a boolean: "applied" only says the patch was installed, while
 "calls" says the mutated code actually ran. A result built on the first without
 the second means nothing.
 """
+
 from __future__ import annotations
 
 import json
@@ -54,8 +55,12 @@ def _run_kernelless_probe(tmp_path, mutation: str | None):
         "print('PATCHED' if C._backward_scan_pass.__name__ == 'dead' else 'ORIGINAL')\n"
     )
     proc = subprocess.run(
-        [sys.executable, "-c", code], env=env, capture_output=True, text=True,
-        timeout=180, cwd=str(REPO_ROOT),
+        [sys.executable, "-c", code],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+        cwd=str(REPO_ROOT),
     )
     assert proc.returncode == 0, f"probe failed: {proc.stderr[-2000:]}"
     found = sorted(tmp_path.glob("marker.*.json"))
@@ -90,8 +95,7 @@ def test_an_unknown_mutation_is_loud_and_harmless(tmp_path):
     assert stdout == "ORIGINAL", stdout
 
 
-@pytest.mark.parametrize("name", ["upstream-dead", "restore-dead",
-                                 "file-deps-blind", "statement-cache-dead"])
+@pytest.mark.parametrize("name", ["upstream-dead", "restore-dead", "file-deps-blind", "statement-cache-dead"])
 def test_every_catalogued_mutation_names_a_real_target(name):
     """Guards against a mutation that can never apply because its target moved.
 
@@ -123,7 +127,7 @@ def test_every_catalogued_mutation_names_a_real_target(name):
         )
 
 
-@pytest.mark.fresh_kernel      # a pooled kernel predates the env change below
+@pytest.mark.fresh_kernel  # a pooled kernel predates the env change below
 def test_the_mutation_actually_runs_inside_a_notebook_kernel(nb_runner, tmp_path):
     """End to end: a real kernel, a real notebook, a non-zero call count.
 
@@ -138,15 +142,17 @@ def test_the_mutation_actually_runs_inside_a_notebook_kernel(nb_runner, tmp_path
     old_pp = os.environ.get("PYTHONPATH", "")
     os.environ["PYTHONPATH"] = str(MUTATIONS_DIR) + os.pathsep + old_pp
     try:
-        nb_runner.create_notebook([
-            "import time\n%load_ext cash\n%cash_on",
-            "# @cash:persist\na = 1",
-            "# @cash:persist\ntime.sleep(0.05)\nb = a + 1\nprint('b =', b)",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import time\n%load_ext cash\n%cash_on",
+                "# @cash:persist\na = 1",
+                "# @cash:persist\ntime.sleep(0.05)\nb = a + 1\nprint('b =', b)",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         nb_runner.set_cell_source(2, "# @cash:persist\na = 2")
-        nb_runner.run_cell(3)          # forces the upstream decision to run
+        nb_runner.run_cell(3)  # forces the upstream decision to run
     finally:
         os.environ.pop("CASH_MUTATION", None)
         os.environ.pop("CASH_MUTATION_MARKER", None)

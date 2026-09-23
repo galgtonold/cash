@@ -39,9 +39,7 @@ def parse_skip_annotation(comment: str) -> SkipAnnotation:
     attrs = m.group("attrs")
     reason_m = _REASON_RE.search(attrs)
     if not reason_m:
-        raise MissingSkipReason(
-            f"test:skip annotation missing reason= attribute: {comment!r}"
-        )
+        raise MissingSkipReason(f"test:skip annotation missing reason= attribute: {comment!r}")
     return SkipAnnotation(reason=reason_m.group("reason"))
 
 
@@ -115,9 +113,7 @@ def find_allow_unexercised(text: str) -> str | None:
         return None
     reason_m = _REASON_RE.search(m.group("attrs"))
     if not reason_m:
-        raise MissingSkipReason(
-            "test:allow-unexercised marker missing reason= attribute"
-        )
+        raise MissingSkipReason("test:allow-unexercised marker missing reason= attribute")
     return reason_m.group("reason")
 
 
@@ -144,9 +140,7 @@ def find_expect_warning_for_fence(lines: list[str], fence_start_line: int) -> bo
         if line.startswith("<!--") and "test:expect-warning" in line:
             return bool(_EXPECT_WARNING_RE.search(line))
         # Allow walking past other annotations (so order doesn't matter).
-        if line.startswith("<!--") and (
-            "test:skip" in line or "test:expect-raises" in line
-        ):
+        if line.startswith("<!--") and ("test:skip" in line or "test:expect-raises" in line):
             i -= 1
             continue
         # Non-blank, non-annotation line: stop.

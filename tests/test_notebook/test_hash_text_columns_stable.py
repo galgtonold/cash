@@ -8,6 +8,7 @@ reassign, so after every restart such a frame looked new, and nothing
 downstream of an untaken ``if FLAG:`` ever restored (r21s1, 4/4). An integer
 frame was always stable, which is why it went unnoticed.
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -34,13 +35,16 @@ PROBE = textwrap.dedent("""
 
 def _frame():
     rs = np.random.RandomState(0)
-    return pd.DataFrame({"id": np.arange(1000), "region": rs.choice(["NA", "OCE", "EU"], 1000),
-                         "amount": rs.rand(1000)})
+    return pd.DataFrame(
+        {"id": np.arange(1000), "region": rs.choice(["NA", "OCE", "EU"], 1000), "amount": rs.rand(1000)}
+    )
 
 
 def test_a_text_frame_hashes_the_same_in_every_process():
-    runs = {subprocess.run([sys.executable, "-c", PROBE], capture_output=True, text=True,
-                           check=True).stdout.strip() for _ in range(2)}
+    runs = {
+        subprocess.run([sys.executable, "-c", PROBE], capture_output=True, text=True, check=True).stdout.strip()
+        for _ in range(2)
+    }
     assert len(runs) == 1, runs
 
 
@@ -65,6 +69,7 @@ def test_different_text_still_hashes_differently():
 def test_a_numeric_frame_hash_is_unchanged():
     """Keys of numeric frames already on disk must not move."""
     import hashlib
+
     frame = pd.DataFrame({"a": np.arange(10), "b": np.arange(10) * 0.5})
     legacy = hashlib.sha256(
         f"{frame.shape}:{frame.dtypes.to_dict()}:{frame.head(5).values.tobytes()}".encode()
@@ -80,6 +85,7 @@ def test_a_small_collection_of_large_frames_is_not_pickled_whole():
     their "hits" cost more than the compute they saved."""
     import pickle
     import time
+
     big = pd.DataFrame({"a": np.arange(2_000_000, dtype=float), "b": np.arange(2_000_000, dtype=float)})
     blocks = {4: big, 8: big + 1}
     t0 = time.perf_counter()
@@ -96,5 +102,6 @@ def test_a_plain_small_collection_hash_is_unchanged():
     """Keys of plain collections already on disk must not move."""
     import hashlib
     import pickle
+
     value = {"a": [1, 2, 3], "b": "text", "c": 2.5}
     assert compute_hash(value) == hashlib.sha256(pickle.dumps(value)).hexdigest()

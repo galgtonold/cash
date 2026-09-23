@@ -6,6 +6,7 @@ none of it evicted, because the byte cap is a quarter of the free disk. The
 integration arm is
 ``tests/test_notebook_integration/test_superseded_versions_are_pruned.py``.
 """
+
 from __future__ import annotations
 
 import os
@@ -28,6 +29,7 @@ def _versions(n, size, cost):
 
 # -- the policy ---------------------------------------------------------------
 
+
 def test_a_big_cheap_value_keeps_only_the_newest_superseded_version():
     # r24s1's X_all: 700 MB for 1.4 s of compute, nine versions
     versions = _versions(9, 700 * MB, 1.4)
@@ -44,7 +46,7 @@ def test_a_costly_small_result_keeps_many_versions():
 
 def test_what_a_version_affords_scales_with_its_compute():
     size = 100 * MB
-    cost = 3 * size / BYTES_PER_COMPUTE_SECOND        # affords three superseded
+    cost = 3 * size / BYTES_PER_COMPUTE_SECOND  # affords three superseded
     versions = _versions(6, size, cost)
     assert sorted(superseded_to_drop(versions, "k5")) == ["k0", "k1"]
 
@@ -61,14 +63,16 @@ def test_the_newest_superseded_version_stays_however_cheap():
 
 def test_recency_decides_which_is_newest_not_the_write_order():
     versions = _versions(3, 700 * MB, 1.0)
-    versions["k0"].used = 99.0              # read after the others were written
+    versions["k0"].used = 99.0  # read after the others were written
     assert superseded_to_drop(versions, "k2") == ["k1"]
 
 
 # -- the index ------------------------------------------------------------------
 
+
 def _untracked():
     import contextlib
+
     return contextlib.nullcontext()
 
 
@@ -92,6 +96,7 @@ def test_a_torn_or_foreign_line_is_skipped(tmp_path):
 
 
 # -- the disk tier ----------------------------------------------------------------
+
 
 def _set(backend, key, slot, size=2 * MB, cost=0.05):
     meta = {"execution_time": cost}

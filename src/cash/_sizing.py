@@ -12,6 +12,7 @@ objects is walked value by value, seconds for millions of strings. Those are
 sampled here instead -- the callers want the order of magnitude, not the byte.
 Arrow-backed strings (pandas 3's default) report their real size as ``nbytes``.
 """
+
 from __future__ import annotations
 
 import pickle
@@ -114,7 +115,7 @@ def _pickled_item_cost(item: Any) -> int:
     """What one Python object adds to a pickle, the first time it is written."""
     if type(item) is str:
         n = len(item.encode("utf-8", "surrogatepass"))
-        return n + (2 if n < 256 else 5) + 1          # opcode, length, memo
+        return n + (2 if n < 256 else 5) + 1  # opcode, length, memo
     if type(item) in (int, float, bool) or item is None:
         return 9
     try:
@@ -158,8 +159,7 @@ def _array_estimate(arr: Any, seen: set[int]) -> int:
         return 0
     seen.add(id(arr))
     if str(getattr(arr, "dtype", "")) == "category":
-        return _array_estimate(arr.codes, seen) + _array_estimate(
-            arr.categories.to_numpy(dtype=object), seen)
+        return _array_estimate(arr.codes, seen) + _array_estimate(arr.categories.to_numpy(dtype=object), seen)
     if type(arr).__name__ == "ndarray":
         if arr.dtype.kind != "O":
             return int(arr.nbytes)
@@ -168,7 +168,7 @@ def _array_estimate(arr: Any, seen: set[int]) -> int:
         return _objects_estimate(arr.reshape(-1) if arr.ndim != 1 else arr, seen)
     if _holds_python_objects(getattr(arr, "dtype", None)):
         return _objects_estimate(arr.to_numpy(dtype=object), seen)
-    nbytes = getattr(arr, "nbytes", None)              # Arrow and other extension arrays
+    nbytes = getattr(arr, "nbytes", None)  # Arrow and other extension arrays
     return int(nbytes) if isinstance(nbytes, int) else 0
 
 
@@ -192,8 +192,7 @@ def pickled_size_estimate(value: Any, _depth: int = 0, _seen: set[int] | None = 
     kind = type(value).__name__
     try:
         if kind == "DataFrame":
-            return (sum(_array_estimate(arr, seen) for arr in value._mgr.arrays)
-                    + _index_estimate(value.index, seen))
+            return sum(_array_estimate(arr, seen) for arr in value._mgr.arrays) + _index_estimate(value.index, seen)
         if kind == "Series":
             # ``_values``: the ndarray itself for a numpy dtype, else the extension array.
             return _array_estimate(value._values, seen) + _index_estimate(value.index, seen)

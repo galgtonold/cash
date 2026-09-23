@@ -8,21 +8,21 @@ This module provides fixtures for running notebook integration tests with:
 4. Cell modification support via file updates
 """
 
-import pytest
-import nbformat
-from nbclient import NotebookClient
-import shutil
-from pathlib import Path
-from typing import List, Optional, Union, Dict, Any
-import hashlib
 import asyncio
-import concurrent.futures
-import threading
-from queue import Queue, Empty
 import atexit
+import hashlib
 import os
+import shutil
 import signal
 import sys
+import threading
+from pathlib import Path
+from queue import Empty, Queue
+from typing import Any, Dict, List, Optional, Union
+
+import nbformat
+import pytest
+from nbclient import NotebookClient
 
 # Crash visibility (faulthandler) is installed in the ROOT conftest
 # (tests/conftest.py) so it covers every worker, not just notebook workers.
@@ -44,7 +44,7 @@ import sys
 # opts out for the remainder of a test that shut its kernel down mid-way.
 _REUSE_KERNEL = os.environ.get("CASH_TEST_REUSE_KERNEL", "1") != "0"
 
-DEFAULT_KERNEL_NAME = 'python3'
+DEFAULT_KERNEL_NAME = "python3"
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -70,6 +70,7 @@ def assert_kernelspec_is_this_interpreter():
     """
     try:
         from jupyter_client.kernelspec import KernelSpecManager
+
         argv = KernelSpecManager().get_kernel_spec(DEFAULT_KERNEL_NAME).argv
     except Exception:  # noqa: BLE001 - no spec / unreadable -> stay out of the way
         return
@@ -125,13 +126,14 @@ def kernelspec_mismatch(argv, executable) -> str | None:
 # a slot is never lost permanently. Cap = CASH_TEST_BOOT_THROTTLE (default 8);
 # set 0 to disable.
 # ---------------------------------------------------------------------------
-import time
 import json
 import tempfile
+import time
 import warnings
 from contextlib import contextmanager
 
 _BOOT_CAP = int(os.environ.get("CASH_TEST_BOOT_THROTTLE", "8"))
+
 
 # Pin cash's cost thresholds so a caching DECISION stops depending on how busy
 # the machine is. Paste into a test's SETUP CELL -- a normal cell, not an
@@ -196,14 +198,13 @@ CASH_TEST_PIN_THRESHOLDS = (
 # _WarmKernel._recycle_if_bloated: a reused kernel's RSS only climbs, and 16 of
 # them growing across a 4000-test unchunked run filled a 64 GB machine and
 # stalled every worker at once.
-_WARM_MAX_RSS_BYTES = int(os.environ.get(
-    "CASH_TEST_WARM_MAX_RSS_MB", "1200")) * 2**20
+_WARM_MAX_RSS_BYTES = int(os.environ.get("CASH_TEST_WARM_MAX_RSS_MB", "1200")) * 2**20
 _WARM_MAX_TESTS = int(os.environ.get("CASH_TEST_WARM_MAX_TESTS", "250"))
 _BOOT_DIR = os.path.join(tempfile.gettempdir(), "cash_kernel_boot_throttle")
 _BOOT_STATE = os.path.join(_BOOT_DIR, "active.json")
 _BOOT_LOCK = os.path.join(_BOOT_DIR, "lock.d")
 _BOOT_ENTRY_TTL = 90.0  # a boot never takes this long; older entry = dead worker
-_BOOT_LOCK_TTL = 15.0   # lock is held only for a quick RMW; older = dead holder
+_BOOT_LOCK_TTL = 15.0  # lock is held only for a quick RMW; older = dead holder
 # Hard deadlines so neither wait here can spin forever. Both are far above any
 # legitimate wait (the lock is held for milliseconds; a slot frees within a
 # kernel boot), so hitting one means something is wrong -- and proceeding
@@ -259,7 +260,8 @@ def _boot_lock_acquire() -> bool:
                 f"{_BOOT_LOCK_WAIT_MAX:.0f}s ({_BOOT_LOCK}); proceeding without "
                 f"it. Throttling may be briefly inaccurate. This is a guard "
                 f"against an unbounded spin, not a test failure.",
-                RuntimeWarning, stacklevel=2,
+                RuntimeWarning,
+                stacklevel=2,
             )
             return False
 
@@ -303,8 +305,7 @@ def _boot_throttle():
         held = _boot_lock_acquire()
         try:
             now = time.time()
-            active = {k: v for k, v in _boot_state_read().items()
-                      if now - v < _BOOT_ENTRY_TTL}
+            active = {k: v for k, v in _boot_state_read().items() if now - v < _BOOT_ENTRY_TTL}
             if len(active) < _BOOT_CAP:
                 active[token] = now
                 _boot_state_write(active)
@@ -320,7 +321,8 @@ def _boot_throttle():
                 f"cash test harness: no kernel-boot slot for "
                 f"{_BOOT_SLOT_WAIT_MAX:.0f}s (cap {_BOOT_CAP}); booting anyway. "
                 f"Guard against an unbounded wait, not a test failure.",
-                RuntimeWarning, stacklevel=2,
+                RuntimeWarning,
+                stacklevel=2,
             )
             break
         time.sleep(0.2)
@@ -455,15 +457,16 @@ def _run_async(coro):
 # KERNEL POOL - Pre-create kernels for faster test execution
 # =============================================================================
 
+
 class KernelPool:
     """
     A pool of pre-warmed Jupyter kernels for faster test execution.
-    
+
     Creates kernels asynchronously in the background so tests don't wait
     for kernel startup.
     """
-    
-    def __init__(self, pool_size: int = 4, kernel_name: str = 'python3'):
+
+    def __init__(self, pool_size: int = 4, kernel_name: str = "python3"):
         self.pool_size = pool_size
         self.kernel_name = kernel_name
         self._pool: Queue = Queue()
@@ -471,19 +474,19 @@ class KernelPool:
         self._lock = threading.Lock()
         self._shutdown = False
         self._fill_thread: Optional[threading.Thread] = None
-        
+
     def start(self):
         """Start filling the pool with kernels in background."""
         self._fill_thread = threading.Thread(target=self._fill_pool, daemon=True)
         self._fill_thread.start()
-    
+
     def _fill_pool(self):
         """Background thread that keeps the pool full."""
         while not self._shutdown:
             try:
                 with self._lock:
                     current_size = self._pool.qsize()
-                
+
                 if current_size < self.pool_size:
                     kernel = self._create_kernel()
                     if kernel and not self._shutdown:
@@ -493,37 +496,39 @@ class KernelPool:
                 else:
                     # Pool is full, wait a bit
                     import time
+
                     time.sleep(0.1)
             except Exception:
                 pass
-    
+
     def _create_kernel(self):
         """Create a new kernel manager and client with cash pre-initialized."""
         try:
             from jupyter_client import KernelManager
+
             km = KernelManager(kernel_name=self.kernel_name)
             km.start_kernel()
             kc = km.client()
             kc.start_channels()
-            
+
             # Wait for ready
             async def wait_ready():
                 await kc._async_wait_for_ready(timeout=30)
-            
+
             _run_async(wait_ready())
-            
+
             # Pre-initialize cash so it's ready to use
             self._init_cash_in_kernel(kc)
-            
-            return {'km': km, 'kc': kc, 'cash_initialized': True}
+
+            return {"km": km, "kc": kc, "cash_initialized": True}
         except Exception as e:
             print(f"Error creating kernel: {e}")
             return None
-    
+
     def get_kernel(self, timeout: float = 30.0):
         """
         Get a kernel from the pool, or create one if pool is empty.
-        
+
         Returns:
             Dict with 'km' (KernelManager) and 'kc' (KernelClient)
         """
@@ -532,30 +537,30 @@ class KernelPool:
         except Empty:
             # Pool empty, create on demand
             return self._create_kernel()
-    
+
     def return_kernel(self, kernel: Dict):
         """Return a kernel to the pool for reuse after full restart."""
         if not self._shutdown and kernel:
             # Restart kernel completely to get fresh state
             # This ensures no stale cash state between tests
             try:
-                kernel['km'].restart_kernel(now=True)
-                kernel['kc'].start_channels()
-                
+                kernel["km"].restart_kernel(now=True)
+                kernel["kc"].start_channels()
+
                 async def wait_ready():
-                    await kernel['kc']._async_wait_for_ready(timeout=10)
-                
+                    await kernel["kc"]._async_wait_for_ready(timeout=10)
+
                 _run_async(wait_ready())
-                
+
                 # Pre-initialize cash in the fresh kernel
-                self._init_cash_in_kernel(kernel['kc'])
-                kernel['cash_initialized'] = True
-                
+                self._init_cash_in_kernel(kernel["kc"])
+                kernel["cash_initialized"] = True
+
                 self._pool.put(kernel)
             except Exception:
                 # Kernel is broken, shut it down
                 self._shutdown_kernel(kernel)
-    
+
     def _init_cash_in_kernel(self, kc):
         """Initialize cash in a kernel."""
         cash_setup = """
@@ -563,27 +568,28 @@ class KernelPool:
 from cash import Cash
 %cash_on
 """
+
         async def run_setup():
             return await kc._async_execute_interactive(cash_setup, store_history=False)
-        
+
         reply = _run_async(run_setup())
-        if reply['content']['status'] != 'ok':
+        if reply["content"]["status"] != "ok":
             raise RuntimeError(f"Failed to init cash: {reply['content'].get('evalue', 'unknown error')}")
-    
+
     def _shutdown_kernel(self, kernel: Dict):
         """Shutdown a single kernel."""
         try:
-            if kernel.get('kc'):
-                kernel['kc'].stop_channels()
-            if kernel.get('km') and kernel['km'].has_kernel:
-                kernel['km'].shutdown_kernel(now=True)
+            if kernel.get("kc"):
+                kernel["kc"].stop_channels()
+            if kernel.get("km") and kernel["km"].has_kernel:
+                kernel["km"].shutdown_kernel(now=True)
         except Exception:
             pass
-    
+
     def shutdown(self):
         """Shutdown the pool and all kernels."""
         self._shutdown = True
-        
+
         # Drain the pool
         while True:
             try:
@@ -591,7 +597,7 @@ from cash import Cash
                 self._shutdown_kernel(kernel)
             except Empty:
                 break
-        
+
         # Shutdown any tracked kernels
         with self._lock:
             for kernel in self._created_kernels:
@@ -617,29 +623,30 @@ def get_kernel_pool() -> KernelPool:
 # HELPER FUNCTIONS
 # =============================================================================
 
+
 def get_text_output(cell, filter_debug: bool = True) -> str:
     """
     Extracts text output from a cell, ignoring HTML/Badge outputs and debug logs.
-    
+
     Args:
         cell: The notebook cell to extract output from
         filter_debug: If True, filter out debug/timing lines (default: True)
-    
+
     Returns:
         str: The extracted text output
     """
     # (kind, text) so adjacent stream chunks can be rejoined without inserting a
     # separator that was never in the output.
     parts: list[tuple[str, str]] = []
-    for output in cell.get('outputs', []):
-        if output.output_type == 'stream':
-            parts.append(('stream', output.text))
-        elif output.output_type in ('execute_result', 'display_data'):
-            data = output.get('data', {})
-            if 'text/plain' in data:
-                val = data['text/plain']
-                if '<IPython.core.display.HTML object>' not in val:
-                    parts.append(('value', val))
+    for output in cell.get("outputs", []):
+        if output.output_type == "stream":
+            parts.append(("stream", output.text))
+        elif output.output_type in ("execute_result", "display_data"):
+            data = output.get("data", {})
+            if "text/plain" in data:
+                val = data["text/plain"]
+                if "<IPython.core.display.HTML object>" not in val:
+                    parts.append(("value", val))
 
     # A stream output is a slice of a BYTE STREAM, not a line: its own text
     # already carries whatever newlines the code printed. Two consecutive
@@ -657,11 +664,11 @@ def get_text_output(cell, filter_debug: bool = True) -> str:
     # test -- fresh kernels hid it by being slow enough never to split.
     buf: list[str] = []
     for i, (kind, text) in enumerate(parts):
-        if i and not (kind == 'stream' and parts[i - 1][0] == 'stream'):
+        if i and not (kind == "stream" and parts[i - 1][0] == "stream"):
             buf.append("\n")
         buf.append(text)
     raw_text = "".join(buf)
-    
+
     if filter_debug:
         # '[cash.' catches every line emitted by the %cash_debug console
         # handler — it formats records as "[<logger name>] <message>" and all
@@ -674,11 +681,26 @@ def get_text_output(cell, filter_debug: bool = True) -> str:
         # '[cash.' prefix already strips them. User output legitimately contains
         # things like "[DEBUG] Hello" (e.g. a logging decorator), which a bare
         # match would wrongly drop.
-        debug_markers = ['[cash.', '[TIMING', '[UPSTREAM', '[LINEAGE', '[ALREADY', '[CACHE',
-                         '[CONTROL',
-                         '_DEBUG]', '[PROXY_CELL_ID]', '[CELL_CHANGED]', '[CELL_UNCHANGED]',
-                         '[CELL_ID]', '[STATE]', '[ENSURE_STATE', '[SKIP_',
-                         'Cash:', 'cache_key: stmt:', '| source_hash:']
+        debug_markers = [
+            "[cash.",
+            "[TIMING",
+            "[UPSTREAM",
+            "[LINEAGE",
+            "[ALREADY",
+            "[CACHE",
+            "[CONTROL",
+            "_DEBUG]",
+            "[PROXY_CELL_ID]",
+            "[CELL_CHANGED]",
+            "[CELL_UNCHANGED]",
+            "[CELL_ID]",
+            "[STATE]",
+            "[ENSURE_STATE",
+            "[SKIP_",
+            "Cash:",
+            "cache_key: stmt:",
+            "| source_hash:",
+        ]
 
         # cash's own WARNINGS, which reach stderr and therefore land in the
         # cell's outputs. They have to go for the same reason the debug lines
@@ -695,21 +717,23 @@ def get_text_output(cell, filter_debug: bool = True) -> str:
         # marker catches some and misses others, while a bare 'cash' would
         # drop legitimate user output the way a bare '[DEBUG]' would.
         cash_warning_markers = [
-            'CashWarning:', 'CashCacheIneffectiveWarning:',
-            'CashUpstreamSyntaxWarning:', 'CashCacheStoreFailedWarning:',
-            'CashImpurityWarning:',
+            "CashWarning:",
+            "CashCacheIneffectiveWarning:",
+            "CashUpstreamSyntaxWarning:",
+            "CashCacheStoreFailedWarning:",
+            "CashImpurityWarning:",
         ]
 
         filtered_lines = []
         drop_continuation = False
-        for line in raw_text.split('\n'):
+        for line in raw_text.split("\n"):
             # Python prints a warning as two lines: the location + category +
             # message, then the offending source line, indented. Dropping only
             # the first leaves a stray '  warnings.warn(' behind, which
             # diverges from the oracle just as loudly.
             if drop_continuation:
                 drop_continuation = False
-                if line[:1] in (' ', '\t') and line.strip():
+                if line[:1] in (" ", "\t") and line.strip():
                     continue
             if any(marker in line for marker in debug_markers):
                 continue
@@ -718,13 +742,14 @@ def get_text_output(cell, filter_debug: bool = True) -> str:
                 continue
             filtered_lines.append(line)
         return "\n".join(filtered_lines).strip()
-    
+
     return raw_text.strip()
 
 
 # =============================================================================
 # WARM KERNEL (opt-in reuse) - one persistent kernel per xdist worker
 # =============================================================================
+
 
 class _WarmKernel:
     """A single long-lived kernel reused across tests within one worker process.
@@ -736,7 +761,7 @@ class _WarmKernel:
     and cash state look fresh without re-registering anything.
     """
 
-    def __init__(self, kernel_name: str = 'python3'):
+    def __init__(self, kernel_name: str = "python3"):
         self.kernel_name = kernel_name
         self.km = None
         self.kc = None
@@ -754,6 +779,7 @@ class _WarmKernel:
 
     def boot(self) -> None:
         from jupyter_client import KernelManager
+
         km = KernelManager(kernel_name=self.kernel_name)
         # Throttle holds a slot through wait-for-ready (the whole startup window
         # is where the resource pressure lives), so only _BOOT_CAP kernels boot
@@ -800,9 +826,9 @@ class _WarmKernel:
         if not over:
             try:
                 import psutil
+
                 prov = getattr(self.km, "provisioner", None)
-                pid = getattr(prov, "pid", None) or getattr(
-                    getattr(self.km, "kernel", None), "pid", None)
+                pid = getattr(prov, "pid", None) or getattr(getattr(self.km, "kernel", None), "pid", None)
                 if pid:
                     rss = psutil.Process(pid).memory_info().rss
                     over = rss >= _WARM_MAX_RSS_BYTES
@@ -825,11 +851,7 @@ class _WarmKernel:
         # same on a freshly booted kernel as on a reused one.
 
     def _exec(self, code: str) -> None:
-        self.run_async(
-            self.kc._async_execute_interactive(
-                code, store_history=False, output_hook=lambda msg: None
-            )
-        )
+        self.run_async(self.kc._async_execute_interactive(code, store_history=False, output_hook=lambda msg: None))
 
     def prepare_for_test(self, work_dir: Path, nb_path: Path) -> None:
         """Reset the kernel so it behaves like a freshly booted one.
@@ -841,8 +863,8 @@ class _WarmKernel:
         prior test's same-named module can't shadow this test's). Then ensures
         cash is loaded + enabled (idempotent).
         """
-        path_str = str(nb_path).replace('\\', '\\\\')
-        dir_str = str(work_dir).replace('\\', '\\\\')
+        path_str = str(nb_path).replace("\\", "\\\\")
+        dir_str = str(work_dir).replace("\\", "\\\\")
         # Clear the namespace in its OWN execution. reset() rebinds user_ns to a
         # fresh dict; if we assigned __vsc_ipynb_file__ in the same cell the
         # assignment would land in the old (captured) globals dict and be
@@ -912,10 +934,7 @@ class _WarmKernel:
             "try:\n"
             "    get_ipython().run_line_magic('cash_persist', 'off')\n"
             "except Exception:\n"
-            "    pass\n"
-            + _REUSE_RESET_WARNING_REGISTRIES
-            + _REUSE_CLOSE_FIGURES
-            + _REUSE_PURGE_TEST_MODULES
+            "    pass\n" + _REUSE_RESET_WARNING_REGISTRIES + _REUSE_CLOSE_FIGURES + _REUSE_PURGE_TEST_MODULES
         )
         # Same shape, different flag: `%cash_persist on` sets `_persist_all` on
         # the CashMagics INSTANCE (and mirrors it onto the statement
@@ -1137,10 +1156,10 @@ except Exception:
 
 
 # One warm kernel per worker process (module-level singleton).
-_warm_kernel: Optional['_WarmKernel'] = None
+_warm_kernel: Optional["_WarmKernel"] = None
 
 
-def _get_warm_kernel(kernel_name: str = 'python3') -> '_WarmKernel':
+def _get_warm_kernel(kernel_name: str = "python3") -> "_WarmKernel":
     global _warm_kernel
     if _warm_kernel is None:
         wk = _WarmKernel(kernel_name)
@@ -1160,34 +1179,34 @@ REFERENCE_NOTEBOOKS_DIR = Path(__file__).parent / "reference_notebooks"
 class NotebookTestRunner:
     """
     A test runner for notebooks that supports selective cell execution.
-    
+
     Key design principles:
     1. Uses REAL notebook files - cash reads the file naturally, no mocking
     2. Copies notebooks to work_dir so modifications don't affect originals
     3. Modifies cells by rewriting the file - cash sees the changes
     4. Optionally uses kernel pool for faster execution
-    
+
     Example:
         runner = NotebookTestRunner(work_dir=tmp_path)
         runner.create_notebook([
             "x = 10",
-            "y = x * 2", 
+            "y = x * 2",
             "print(f'Result: {y}')"
         ])
         runner.start_kernel()
         runner.run_all()
         assert "Result: 20" in runner.get_output(3)
-        
+
         # Modify a cell and re-run
         runner.set_cell_source(1, "x = 100")
         runner.run_cells([1, 2, 3])
         assert "Result: 200" in runner.get_output(3)
     """
-    
+
     def __init__(
         self,
         work_dir: Path,
-        kernel_name: str = 'python3',
+        kernel_name: str = "python3",
         timeout: int = 120,
         use_pool: bool = True,
     ):
@@ -1195,7 +1214,7 @@ class NotebookTestRunner:
         self.kernel_name = kernel_name
         self.timeout = timeout
         self.use_pool = use_pool
-        
+
         self.nb: Optional[nbformat.NotebookNode] = None
         self.nb_path: Optional[Path] = None
         self.client: Optional[NotebookClient] = None
@@ -1203,36 +1222,36 @@ class NotebookTestRunner:
         self._cash_initialized = False
         self._pooled_kernel: Optional[Dict] = None
         self._force_fresh_kernel = False
-        self._warm: Optional['_WarmKernel'] = None
+        self._warm: Optional["_WarmKernel"] = None
         # Each runner gets its own event loop to avoid cross-test contamination.
         # Created lazily in start_kernel() (and torn down in shutdown()) so a
         # runner that is never started - or one using the shared warm loop -
         # doesn't create and leak a loop + thread.
         self._loop = None
         self._run_async = None
-    
+
     # Whether start_kernel() injected __vsc_ipynb_file__; restart() mirrors it so
     # a no-path run stays a no-path run across a restart.
     _inject_path: bool = True
 
-    def load(self, notebook_path: Union[str, Path]) -> 'NotebookTestRunner':
+    def load(self, notebook_path: Union[str, Path]) -> "NotebookTestRunner":
         """
         Load a notebook by copying it to the work directory.
         """
         src_path = Path(notebook_path)
         if not src_path.exists():
             raise FileNotFoundError(f"Notebook not found: {src_path}")
-        
+
         name_hash = hashlib.md5(str(src_path).encode()).hexdigest()[:8]
         self.nb_path = self.work_dir / f"test_{src_path.stem}_{name_hash}.ipynb"
         shutil.copy2(src_path, self.nb_path)
-        
-        with open(self.nb_path, 'r', encoding='utf-8') as f:
+
+        with open(self.nb_path, "r", encoding="utf-8") as f:
             self.nb = nbformat.read(f, as_version=4)
-        
+
         return self
-    
-    def create_notebook(self, cells: List[str]) -> 'NotebookTestRunner':
+
+    def create_notebook(self, cells: List[str]) -> "NotebookTestRunner":
         """
         Create a new notebook with the given cells.
         """
@@ -1241,22 +1260,22 @@ class NotebookTestRunner:
             cell = nbformat.v4.new_code_cell(source)
             cell.id = f"cell_{i}"
             self.nb.cells.append(cell)
-        
+
         self.nb_path = self.work_dir / "test_notebook.ipynb"
         self._save_notebook()
-        
+
         return self
-    
+
     def _save_notebook(self) -> None:
         """Save the notebook to disk."""
-        with open(self.nb_path, 'w', encoding='utf-8') as f:
+        with open(self.nb_path, "w", encoding="utf-8") as f:
             nbformat.write(self.nb, f)
-    
+
     def start_kernel(
         self,
         with_cash: bool = True,
         inject_notebook_path: bool = True,
-    ) -> 'NotebookTestRunner':
+    ) -> "NotebookTestRunner":
         """
         Start the kernel and optionally initialize cash.
 
@@ -1283,12 +1302,12 @@ class NotebookTestRunner:
 
         # Remembered so restart() re-injects (or keeps NOT injecting) to match.
         self._inject_path = inject_notebook_path
-        
+
         self.client = NotebookClient(
             self.nb,
             timeout=self.timeout,
             kernel_name=self.kernel_name,
-            resources={'metadata': {'path': str(self.work_dir)}}
+            resources={"metadata": {"path": str(self.work_dir)}},
         )
 
         cash_already_initialized = False
@@ -1300,8 +1319,7 @@ class NotebookTestRunner:
         # injection: prepare_for_test() always defines __vsc_ipynb_file__, which
         # would silently defeat the no-path environment the test is trying to
         # reproduce (CAS-205).
-        if (_REUSE_KERNEL and with_cash and inject_notebook_path
-                and not self._force_fresh_kernel):
+        if _REUSE_KERNEL and with_cash and inject_notebook_path and not self._force_fresh_kernel:
             wk = _get_warm_kernel(self.kernel_name)
             self._warm = wk
             # Drive ALL kernel I/O on the warm kernel's own loop so the async
@@ -1329,24 +1347,24 @@ class NotebookTestRunner:
             # Try to get a pre-warmed kernel from the pool
             pool = get_kernel_pool()
             self._pooled_kernel = pool.get_kernel(timeout=5.0)
-            
+
             if self._pooled_kernel:
-                self.client.km = self._pooled_kernel['km']
-                self.client.kc = self._pooled_kernel['kc']
-                cash_already_initialized = self._pooled_kernel.get('cash_initialized', False)
+                self.client.km = self._pooled_kernel["km"]
+                self.client.kc = self._pooled_kernel["kc"]
+                cash_already_initialized = self._pooled_kernel.get("cash_initialized", False)
             else:
                 # Fall back to creating new kernel
                 self._start_new_kernel()
         else:
             self._start_new_kernel()
-        
+
         self._kernel_started = True
-        
+
         # Inject notebook path so cash can find the notebook file
         # This is required for upstream detection to work
         if inject_notebook_path:
             self._inject_notebook_path()
-        
+
         # Only init cash if requested AND not already initialized in pooled kernel
         if with_cash and not cash_already_initialized:
             self._init_cash()
@@ -1372,21 +1390,18 @@ class NotebookTestRunner:
         effort: if the magics were never registered there is nothing to turn
         off, which is the state we wanted anyway.
         """
-        snippet = (
-            "try:\n"
-            "    get_ipython().run_line_magic('cash_off', '')\n"
-            "except Exception:\n"
-            "    pass\n"
-        )
+        snippet = "try:\n    get_ipython().run_line_magic('cash_off', '')\nexcept Exception:\n    pass\n"
         try:
             self._run_async(
                 self.client.kc._async_execute_interactive(
-                    snippet, store_history=False, output_hook=lambda _m: None,
+                    snippet,
+                    store_history=False,
+                    output_hook=lambda _m: None,
                 )
             )
         except Exception:  # noqa: BLE001 - a control that can't be forced off
-            pass          # is caught by assert_cash_active, not hidden here
-    
+            pass  # is caught by assert_cash_active, not hidden here
+
     def _start_new_kernel(self) -> None:
         """Start a new kernel (not from pool), retrying a flaky boot.
 
@@ -1428,10 +1443,8 @@ class NotebookTestRunner:
                     _force_kill_kernel(km)
                     self.client.kc = None
                     self.client.km = None
-        raise RuntimeError(
-            f"kernel failed to boot after 3 attempts: {last_exc!r}"
-        ) from last_exc
-    
+        raise RuntimeError(f"kernel failed to boot after 3 attempts: {last_exc!r}") from last_exc
+
     def probe_cash_active(self) -> bool:
         """Whether cash auto-caching is ACTUALLY live in the kernel right now.
 
@@ -1472,17 +1485,19 @@ class NotebookTestRunner:
         seen = []
 
         def _hook(msg):
-            if msg['msg_type'] == 'stream':
-                seen.append(msg['content'].get('text', ''))
+            if msg["msg_type"] == "stream":
+                seen.append(msg["content"].get("text", ""))
 
         self._run_async(
             self.client.kc._async_execute_interactive(
-                probe, store_history=False, output_hook=_hook,
+                probe,
+                store_history=False,
+                output_hook=_hook,
             )
         )
-        return 'CASH_ACTIVE=1' in ''.join(seen)
+        return "CASH_ACTIVE=1" in "".join(seen)
 
-    def assert_cash_active(self, expected: bool) -> 'NotebookTestRunner':
+    def assert_cash_active(self, expected: bool) -> "NotebookTestRunner":
         """Fail loudly if the kernel's real cash state isn't *expected*.
 
         Use this to validate a control arm BEFORE trusting its numbers.
@@ -1498,7 +1513,7 @@ class NotebookTestRunner:
             )
         return self
 
-    def restart(self) -> 'NotebookTestRunner':
+    def restart(self) -> "NotebookTestRunner":
         """Restart the kernel in place, preserving the runner's wiring.
 
         Restart behaviour is a whole class of bug the suite was blind to
@@ -1541,11 +1556,14 @@ class NotebookTestRunner:
         fresh kernel (already there) and keeps the two modes' post-restart
         state identical, which is the property the suite actually depends on.
         """
-        dir_str = str(self.work_dir).replace('\\', '\\\\')
-        self._run_async(self.client.kc._async_execute_interactive(
-            f"import os as _os; _os.chdir(r'{dir_str}')",
-            store_history=False, output_hook=lambda msg: None,
-        ))
+        dir_str = str(self.work_dir).replace("\\", "\\\\")
+        self._run_async(
+            self.client.kc._async_execute_interactive(
+                f"import os as _os; _os.chdir(r'{dir_str}')",
+                store_history=False,
+                output_hook=lambda msg: None,
+            )
+        )
         if not _REUSE_KERNEL:
             return
         # Re-point the cache directory, which the chdir above does NOT move.
@@ -1573,10 +1591,13 @@ class NotebookTestRunner:
         # already applies, which is why its construction is the correct one.
         # Gated on the warm path: a fresh kernel is already right, and dropping
         # its singleton would discard state a test may be mid-way through.
-        self._run_async(self.client.kc._async_execute_interactive(
-            "# @cash:no-cache\nimport cash as _c; _c.reset_session()",
-            store_history=False, output_hook=lambda msg: None,
-        ))
+        self._run_async(
+            self.client.kc._async_execute_interactive(
+                "# @cash:no-cache\nimport cash as _c; _c.reset_session()",
+                store_history=False,
+                output_hook=lambda msg: None,
+            )
+        )
 
     def _inject_notebook_path(self) -> None:
         """Inject the notebook path into the kernel namespace.
@@ -1586,19 +1607,17 @@ class NotebookTestRunner:
         """
         if self.nb_path is None:
             return
-        
+
         # Use the same variable name that VS Code uses
         # This is checked first in get_notebook_path()
-        path_str = str(self.nb_path).replace('\\', '\\\\')
+        path_str = str(self.nb_path).replace("\\", "\\\\")
         inject_code = f"__vsc_ipynb_file__ = r'{path_str}'"
-        
-        reply = self._run_async(
-            self.client.kc._async_execute_interactive(inject_code, store_history=False)
-        )
-        if reply['content']['status'] != 'ok':
+
+        reply = self._run_async(self.client.kc._async_execute_interactive(inject_code, store_history=False))
+        if reply["content"]["status"] != "ok":
             # Non-fatal - just log and continue
             pass
-    
+
     def _init_cash(self) -> None:
         """Initialize cash in the kernel by running setup code directly."""
         cash_setup = """
@@ -1612,41 +1631,41 @@ from cash import Cash
         reply = self._run_async(
             self.client.kc._async_execute_interactive(cash_setup, store_history=False, output_hook=lambda msg: None)
         )
-        if reply['content']['status'] != 'ok':
-            error_name = reply['content'].get('ename', 'Unknown')
-            error_value = reply['content'].get('evalue', '')
+        if reply["content"]["status"] != "ok":
+            error_name = reply["content"].get("ename", "Unknown")
+            error_value = reply["content"].get("evalue", "")
             raise RuntimeError(f"Failed to initialize cash: {error_name}: {error_value}")
         self._cash_initialized = True
-    
-    def set_cell_source(self, cell_num: int, source: str) -> 'NotebookTestRunner':
+
+    def set_cell_source(self, cell_num: int, source: str) -> "NotebookTestRunner":
         """
         Modify a cell's source code and save the notebook.
-        
+
         This rewrites the notebook file so cash can see the changes.
         """
         idx = cell_num - 1
         if idx < 0 or idx >= len(self.nb.cells):
             raise IndexError(f"Cell {cell_num} out of range (1-{len(self.nb.cells)})")
-        
+
         self.nb.cells[idx].source = source
         self.nb.cells[idx].outputs = []
         self._save_notebook()
-        
+
         return self
-    
+
     def get_cell_source(self, cell_num: int) -> str:
         """Get a cell's source code."""
         idx = cell_num - 1
         return self.nb.cells[idx].source
 
-    def add_cell(self, source: str, save: bool = False) -> 'NotebookTestRunner':
+    def add_cell(self, source: str, save: bool = False) -> "NotebookTestRunner":
         """
         Add a new code cell to the end of the notebook (in memory).
-        
+
         By default, the cell is NOT saved to disk, simulating an unsaved cell
         in VS Code. This is useful for testing that cash handles cells that
         exist in the kernel but not yet in the .ipynb file.
-        
+
         Args:
             source: The cell source code
             save: If True, also save to disk. If False (default), only in memory.
@@ -1658,34 +1677,34 @@ from cash import Cash
             self._save_notebook()
         return self
 
-    def run_cell(self, cell_num: int) -> 'NotebookTestRunner':
+    def run_cell(self, cell_num: int) -> "NotebookTestRunner":
         """Execute a single cell (1-based indexing)."""
         if not self._kernel_started:
             raise RuntimeError("Kernel not started. Call start_kernel() first.")
-        
+
         idx = cell_num - 1
         cell = self.nb.cells[idx]
         cell.outputs = []
-        
+
         self._run_async(self.client.async_execute_cell(cell, idx))
-        
+
         return self
-    
-    def run_cells(self, cell_nums: List[int]) -> 'NotebookTestRunner':
+
+    def run_cells(self, cell_nums: List[int]) -> "NotebookTestRunner":
         """Execute multiple cells in order."""
         for num in cell_nums:
             self.run_cell(num)
         return self
-    
-    def run_all(self) -> 'NotebookTestRunner':
+
+    def run_all(self) -> "NotebookTestRunner":
         """Execute all cells in the notebook."""
         return self.run_cells(list(range(1, len(self.nb.cells) + 1)))
-    
+
     def get_output(self, cell_num: int, filter_debug: bool = True) -> str:
         """Get the text output from a cell."""
         idx = cell_num - 1
         return get_text_output(self.nb.cells[idx], filter_debug=filter_debug)
-    
+
     def get_raw_output(self, cell_num: int) -> str:
         """Get the raw output from a cell (no filtering)."""
         return self.get_output(cell_num, filter_debug=False)
@@ -1729,69 +1748,71 @@ from cash import Cash
         seen: List[str] = []
 
         def _hook(msg):
-            if msg['msg_type'] == 'stream' and msg['content'].get('name') == 'stdout':
-                seen.append(msg['content']['text'])
+            if msg["msg_type"] == "stream" and msg["content"].get("name") == "stdout":
+                seen.append(msg["content"]["text"])
 
-        self._run_async(self.client.kc._async_execute_interactive(
-            f"print('__CASH_PEEK__', repr({expr}))",
-            store_history=False, output_hook=_hook,
-        ))
+        self._run_async(
+            self.client.kc._async_execute_interactive(
+                f"print('__CASH_PEEK__', repr({expr}))",
+                store_history=False,
+                output_hook=_hook,
+            )
+        )
         for line in "".join(seen).splitlines():
-            if '__CASH_PEEK__' in line:
-                return line.split('__CASH_PEEK__', 1)[1].strip()
+            if "__CASH_PEEK__" in line:
+                return line.split("__CASH_PEEK__", 1)[1].strip()
         return "?"
-
 
     def get_status(self) -> Dict[str, Any]:
         """
         Get machine-readable cash status from the last cell execution.
-        
+
         Returns a dict with:
             - last_cell: Metrics from the last cell execution
-            - lineage: Current variable lineage state  
+            - lineage: Current variable lineage state
             - executed_codes: Variable to code mapping
             - auto_cache_enabled: Whether auto-caching is on
             - cache_stats: Backend statistics
         """
         import json
-        
+
         status_code = "_cash_status_result = get_ipython().run_line_magic('cash_status', 'dict')"
-        self._run_async(
-            self.client.kc._async_execute_interactive(status_code, store_history=False)
-        )
-        
+        self._run_async(self.client.kc._async_execute_interactive(status_code, store_history=False))
+
         # Get the result from the kernel
         get_result_code = """
 import json as _json
 print(_json.dumps(_cash_status_result, default=str))
 """
         self._run_async(
-            self.client.kc._async_execute_interactive(get_result_code, store_history=False, output_hook=lambda msg: None)
+            self.client.kc._async_execute_interactive(
+                get_result_code, store_history=False, output_hook=lambda msg: None
+            )
         )
-        
+
         # Extract result from iopub messages
         try:
             # Find the stream output
             for msg in self.client.kc.iopub_channel.get_msgs():
-                if msg['msg_type'] == 'stream' and msg['content'].get('name') == 'stdout':
-                    return json.loads(msg['content']['text'].strip())
+                if msg["msg_type"] == "stream" and msg["content"].get("name") == "stdout":
+                    return json.loads(msg["content"]["text"].strip())
         except Exception:
             pass
-        
+
         return {}
-    
+
     def get_cell(self, cell_num: int):
         """Get the cell object."""
         return self.nb.cells[cell_num - 1]
-    
+
     def cell_count(self) -> int:
         """Return the number of cells."""
         return len(self.nb.cells)
-    
-    def reset_cash_state(self) -> 'NotebookTestRunner':
+
+    def reset_cash_state(self) -> "NotebookTestRunner":
         """
         Reset cash's internal state to simulate a fresh session.
-        
+
         Clears all lineage tracking, executed code records, and file tracking
         state. Variables remain in user_ns but their provenance is lost.
         """
@@ -1822,20 +1843,16 @@ except Exception:
     pass
 """
         # Run directly via kernel client to avoid overwriting notebook cells
-        self._run_async(
-            self.client.kc._async_execute_interactive(reset_code, store_history=False)
-        )
-        return self
-    
-    def enable_debug(self) -> 'NotebookTestRunner':
-        """Enable cash debug output."""
-        # Run directly via kernel client to avoid overwriting notebook cells
-        self._run_async(
-            self.client.kc._async_execute_interactive("%cash_debug on", store_history=False)
-        )
+        self._run_async(self.client.kc._async_execute_interactive(reset_code, store_history=False))
         return self
 
-    def enable_persist(self) -> 'NotebookTestRunner':
+    def enable_debug(self) -> "NotebookTestRunner":
+        """Enable cash debug output."""
+        # Run directly via kernel client to avoid overwriting notebook cells
+        self._run_async(self.client.kc._async_execute_interactive("%cash_debug on", store_history=False))
+        return self
+
+    def enable_persist(self) -> "NotebookTestRunner":
         """Enable cash 'persist everything' mode.
 
         Bypasses the cost-aware floors (the 10 ms 'too cheap to cache' floor
@@ -1845,9 +1862,7 @@ except Exception:
         statement that is otherwise too cheap to cache by default.
         """
         # Run directly via kernel client to avoid overwriting notebook cells
-        self._run_async(
-            self.client.kc._async_execute_interactive("%cash_persist on", store_history=False)
-        )
+        self._run_async(self.client.kc._async_execute_interactive("%cash_persist on", store_history=False))
         return self
 
     def shutdown(self) -> None:
@@ -1917,17 +1932,17 @@ except Exception:
             # save the kernel's coverage data while the channels are still
             # alive, before the kill.
             if os.environ.get("COVERAGE_PROCESS_START") and self.client.kc:
+
                 async def _save_cov():
                     save_code = (
-                        "import coverage as _cov\n"
-                        "_c = _cov.Coverage.current()\n"
-                        "if _c is not None:\n"
-                        "    _c.save()\n"
+                        "import coverage as _cov\n_c = _cov.Coverage.current()\nif _c is not None:\n    _c.save()\n"
                     )
                     await self.client.kc._async_execute_interactive(
-                        save_code, store_history=False,
+                        save_code,
+                        store_history=False,
                         output_hook=lambda msg: None,
                     )
+
                 try:
                     self._run_async(_save_cov())
                 except Exception:
@@ -1949,10 +1964,10 @@ except Exception:
         _close_async_runner(self._loop)
         self._loop = None
         self._run_async = None
-    
-    def __enter__(self) -> 'NotebookTestRunner':
+
+    def __enter__(self) -> "NotebookTestRunner":
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.shutdown()
 
@@ -1961,17 +1976,18 @@ except Exception:
 # PYTEST FIXTURES
 # =============================================================================
 
+
 @pytest.fixture
 def nb_runner(tmp_path, request):
     """
     Primary fixture for notebook integration tests.
-    
+
     Provides a NotebookTestRunner instance that:
     - Uses real notebook files (no mocking)
     - Copies notebooks to tmp_path for isolation
     - Supports cell modification via file rewrites
     - Uses kernel pool for faster execution (kernels have cash pre-initialized)
-    
+
     Example:
         def test_example(nb_runner):
             nb_runner.create_notebook([
@@ -1982,7 +1998,7 @@ def nb_runner(tmp_path, request):
             nb_runner.start_kernel()  # with_cash=True by default (already done by pool)
             nb_runner.run_all()
             assert "Result: 20" in nb_runner.get_output(3)
-            
+
             # Modify a cell and re-run
             nb_runner.set_cell_source(1, "x = 100")
             nb_runner.run_cells([1, 2, 3])
@@ -1994,8 +2010,7 @@ def nb_runner(tmp_path, request):
     # reuse, shutdown()+start_kernel() is a namespace reset on the SAME
     # process -- measured, pid unchanged -- so a test whose subject IS the
     # restart stops testing anything and passes vacuously.
-    runner._force_fresh_kernel = (
-        request.node.get_closest_marker('fresh_kernel') is not None)
+    runner._force_fresh_kernel = request.node.get_closest_marker("fresh_kernel") is not None
     yield runner
     runner.shutdown()
 
@@ -2039,6 +2054,7 @@ def pytest_sessionfinish(session, exitstatus):
 # (CASH_TEST_REUSE_KERNEL=1) boots once per worker before the env is set, so it
 # will not pick up CASH_TRACE_FILE.
 
+
 class TraceResult:
     """Queryable view over the captured trace records.
 
@@ -2048,10 +2064,9 @@ class TraceResult:
 
     def __init__(self, records: list[dict]):
         self.records = records
-        split = next((i for i, r in enumerate(records)
-                      if r.get("event") == "__run_all_done__"), len(records))
+        split = next((i for i, r in enumerate(records) if r.get("event") == "__run_all_done__"), len(records))
         self.run_all = records[:split]
-        self.rerun = records[split + 1:]
+        self.rerun = records[split + 1 :]
 
     def events(self, name: str, *, phase: str = "rerun") -> list[dict]:
         recs = {"rerun": self.rerun, "run_all": self.run_all, "all": self.records}[phase]
@@ -2101,7 +2116,7 @@ def upstream_trace(nb_runner):
     # the requirement with the fixture that has it.
     nb_runner._force_fresh_kernel = True
 
-    def _capture(cells, actions, *, with_cash: bool = True) -> 'TraceResult':
+    def _capture(cells, actions, *, with_cash: bool = True) -> "TraceResult":
         fd, path = tempfile.mkstemp(suffix=".cashtrace.jsonl")
         os.close(fd)
         created.append(path)

@@ -27,17 +27,12 @@ onto a frame created in an upstream cell recomputes (warm=1) where the
 same cell also restores, so the trigger is in-place mutation of an upstream
 object, not subscript-assignment.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.timeout(300)]
 
-SETUP = (
-    "import cash\n"
-    "%cash_on\n"
-    "%cash_badge print\n"
-    "import time\n"
-    "import pandas as pd"
-)
+SETUP = "import cash\n%cash_on\n%cash_badge print\nimport time\nimport pandas as pd"
 
 FRAME = "df = pd.DataFrame({'a': [1, 2, 3, 4, 5]})\nN = 5"
 
@@ -55,8 +50,7 @@ def _expensive_def(counter):
 def _warm_runalls(nb_runner, tmp_path, mutate_src, reader, n=12):
     """Cold run, then N unchanged run_alls. Returns (cold, warm, tail, badge)."""
     counter = tmp_path / "calls.log"
-    nb_runner.create_notebook(
-        [SETUP, _expensive_def(counter), FRAME, mutate_src, reader])
+    nb_runner.create_notebook([SETUP, _expensive_def(counter), FRAME, mutate_src, reader])
     nb_runner.start_kernel()
     nb_runner.run_all()
     cold = len(counter.read_bytes()) if counter.exists() else 0
@@ -71,8 +65,7 @@ def _warm_runalls(nb_runner, tmp_path, mutate_src, reader, n=12):
 def _warm_isolated(nb_runner, tmp_path, mutate_src, reader):
     """Cold run, then re-run ONLY the mutating cell."""
     counter = tmp_path / "calls.log"
-    nb_runner.create_notebook(
-        [SETUP, _expensive_def(counter), FRAME, mutate_src, reader])
+    nb_runner.create_notebook([SETUP, _expensive_def(counter), FRAME, mutate_src, reader])
     nb_runner.start_kernel()
     nb_runner.run_all()
     cold = len(counter.read_bytes()) if counter.exists() else 0
@@ -92,24 +85,22 @@ EXPECT = "b=[0, 10, 20, 30, 40]"
 # The ticket's headline claim: 12 unchanged repetitions of the whole notebook.
 # ---------------------------------------------------------------------------
 
+
 def test_setitem_caches_across_12_unchanged_runalls(nb_runner, tmp_path):
-    cold, warm, tail, badge = _warm_runalls(
-        nb_runner, tmp_path, "df['b'] = expensive(N)", READ_DF)
+    cold, warm, tail, badge = _warm_runalls(nb_runner, tmp_path, "df['b'] = expensive(N)", READ_DF)
     assert EXPECT in tail, tail
     assert cold == 1, f"cold={cold}"
     assert warm == 0, (
         f"CAS-179 REPRODUCES: df['b'] = ... recomputed {warm} times over 12 "
-        f"unchanged run_alls (cold={cold})\nbadge: {badge!r}")
+        f"unchanged run_alls (cold={cold})\nbadge: {badge!r}"
+    )
 
 
 def test_assign_caches_across_12_unchanged_runalls(nb_runner, tmp_path):
-    cold, warm, tail, badge = _warm_runalls(
-        nb_runner, tmp_path, "df = df.assign(b=expensive(N))", READ_DF)
+    cold, warm, tail, badge = _warm_runalls(nb_runner, tmp_path, "df = df.assign(b=expensive(N))", READ_DF)
     assert EXPECT in tail, tail
     assert cold == 1, f"cold={cold}"
-    assert warm == 0, (
-        f".assign() recomputed {warm} times over 12 unchanged run_alls "
-        f"(cold={cold})\nbadge: {badge!r}")
+    assert warm == 0, f".assign() recomputed {warm} times over 12 unchanged run_alls (cold={cold})\nbadge: {badge!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +108,7 @@ def test_assign_caches_across_12_unchanged_runalls(nb_runner, tmp_path):
 # same ``df`` they read, so both are expected to run-from-start for idempotency.
 # If the ticket is right, setitem recomputes here and .assign() does not.
 # ---------------------------------------------------------------------------
+
 
 def test_setitem_isolated_rerun(nb_runner, tmp_path):
     """CAS-179's narrow surviving half -- FIXED, marker lifted 2026-08-02.
@@ -136,20 +128,17 @@ def test_setitem_isolated_rerun(nb_runner, tmp_path):
     was off. That is the concrete reason strict is now the default -- see
     ``pyproject.toml``.
     """
-    cold, warm, tail, badge = _warm_isolated(
-        nb_runner, tmp_path, "df['b'] = expensive(N)", READ_DF)
+    cold, warm, tail, badge = _warm_isolated(nb_runner, tmp_path, "df['b'] = expensive(N)", READ_DF)
     assert EXPECT in tail, tail
-    assert (cold, warm) == (1, 0), (
-        f"setitem isolated re-run: cold={cold} warm={warm}\nbadge: {badge!r}")
+    assert (cold, warm) == (1, 0), f"setitem isolated re-run: cold={cold} warm={warm}\nbadge: {badge!r}"
 
 
 def test_assign_isolated_rerun_self_referential(nb_runner, tmp_path):
-    cold, warm, tail, badge = _warm_isolated(
-        nb_runner, tmp_path, "df = df.assign(b=expensive(N))", READ_DF)
+    cold, warm, tail, badge = _warm_isolated(nb_runner, tmp_path, "df = df.assign(b=expensive(N))", READ_DF)
     assert EXPECT in tail, tail
     assert (cold, warm) == (1, 0), (
-        f".assign() self-referential isolated re-run: cold={cold} warm={warm}\n"
-        f"badge: {badge!r}")
+        f".assign() self-referential isolated re-run: cold={cold} warm={warm}\nbadge: {badge!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -158,20 +147,16 @@ def test_assign_isolated_rerun_self_referential(nb_runner, tmp_path):
 # "setitem is uncacheable".
 # ---------------------------------------------------------------------------
 
+
 def test_assign_isolated_rerun_new_name(nb_runner, tmp_path):
-    cold, warm, tail, badge = _warm_isolated(
-        nb_runner, tmp_path, "df2 = df.assign(b=expensive(N))", READ_DF2)
+    cold, warm, tail, badge = _warm_isolated(nb_runner, tmp_path, "df2 = df.assign(b=expensive(N))", READ_DF2)
     assert EXPECT in tail, tail
-    assert (cold, warm) == (1, 0), (
-        f".assign() to a new name: cold={cold} warm={warm}\nbadge: {badge!r}")
+    assert (cold, warm) == (1, 0), f".assign() to a new name: cold={cold} warm={warm}\nbadge: {badge!r}"
 
 
 def test_setitem_on_a_copy_isolated_rerun(nb_runner, tmp_path):
     """The nearest setitem equivalent of the new-name .assign(): build a fresh
     frame in the same cell, then setitem onto it."""
-    cold, warm, tail, badge = _warm_isolated(
-        nb_runner, tmp_path,
-        "df2 = df.copy()\ndf2['b'] = expensive(N)", READ_DF2)
+    cold, warm, tail, badge = _warm_isolated(nb_runner, tmp_path, "df2 = df.copy()\ndf2['b'] = expensive(N)", READ_DF2)
     assert EXPECT in tail, tail
-    assert (cold, warm) == (1, 0), (
-        f"setitem on a fresh copy: cold={cold} warm={warm}\nbadge: {badge!r}")
+    assert (cold, warm) == (1, 0), f"setitem on a fresh copy: cold={cold} warm={warm}\nbadge: {badge!r}"

@@ -14,10 +14,12 @@ class TestMethodChainingEdits:
 
     def test_edit_string_method_chain(self, nb_runner):
         """Edit input to a string method chain."""
-        nb_runner.create_notebook([
-            "text = '  Hello, World!  '",
-            "result = text.strip().lower().replace(',', '')\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "text = '  Hello, World!  '",
+                "result = text.strip().lower().replace(',', '')\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = hello world!" in nb_runner.get_output(2)
@@ -29,10 +31,12 @@ class TestMethodChainingEdits:
 
     def test_edit_list_method_chain(self, nb_runner):
         """Edit list operations chain."""
-        nb_runner.create_notebook([
-            "data = [3, 1, 4, 1, 5, 9, 2, 6]",
-            "result = sorted(set(data))\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = [3, 1, 4, 1, 5, 9, 2, 6]",
+                "result = sorted(set(data))\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = [1, 2, 3, 4, 5, 6, 9]" in nb_runner.get_output(2)
@@ -44,10 +48,12 @@ class TestMethodChainingEdits:
 
     def test_edit_chain_middle_step(self, nb_runner):
         """Edit the middle step of a processing chain."""
-        nb_runner.create_notebook([
-            "words = ['hello', 'world', 'foo', 'bar', 'baz']",
-            "result = [w.upper() for w in words if len(w) > 3]\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "words = ['hello', 'world', 'foo', 'bar', 'baz']",
+                "result = [w.upper() for w in words if len(w) > 3]\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = ['HELLO', 'WORLD']" in nb_runner.get_output(2)
@@ -61,10 +67,12 @@ class TestMethodChainingEdits:
 
     def test_edit_dict_chain(self, nb_runner):
         """Edit dict used in chained transformations."""
-        nb_runner.create_notebook([
-            "inventory = {'apple': 5, 'banana': 2, 'cherry': 8, 'date': 1}",
-            "available = {k: v for k, v in inventory.items() if v > 2}\nnames = sorted(available.keys())\nprint(f'names = {names}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "inventory = {'apple': 5, 'banana': 2, 'cherry': 8, 'date': 1}",
+                "available = {k: v for k, v in inventory.items() if v > 2}\nnames = sorted(available.keys())\nprint(f'names = {names}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "names = ['apple', 'cherry']" in nb_runner.get_output(2)

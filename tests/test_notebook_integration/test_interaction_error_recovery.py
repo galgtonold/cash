@@ -18,10 +18,12 @@ class TestSyntaxErrorRecovery:
 
     def test_fix_syntax_error(self, nb_runner):
         """Cell has syntax error, fix it and re-run."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "y = x *",  # Syntax error (incomplete expression)
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "y = x *",  # Syntax error (incomplete expression)
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_cell(1)  # Cell 1 should work
 
@@ -36,10 +38,12 @@ class TestSyntaxErrorRecovery:
 
     def test_syntax_error_does_not_corrupt_state(self, nb_runner):
         """Syntax error in one cell shouldn't corrupt other cached values."""
-        nb_runner.create_notebook([
-            "x = 42",
-            "y = x + 1\nprint(f'y = {y}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 42",
+                "y = x + 1\nprint(f'y = {y}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "y = 43" in nb_runner.get_output(2)
@@ -60,26 +64,28 @@ class TestRuntimeErrorRecovery:
 
     def test_fix_name_error(self, nb_runner):
         """NameError due to undefined variable, fix by defining it."""
-        nb_runner.create_notebook([
-            "y = undefined_var + 1",
-        ])
+        nb_runner.create_notebook(
+            [
+                "y = undefined_var + 1",
+            ]
+        )
         nb_runner.start_kernel()
         with pytest.raises(CellExecutionError):
             nb_runner.run_cell(1)
 
         # Fix: define the variable first
-        nb_runner.set_cell_source(
-            1, "undefined_var = 10\ny = undefined_var + 1\nprint(f'y = {y}')"
-        )
+        nb_runner.set_cell_source(1, "undefined_var = 10\ny = undefined_var + 1\nprint(f'y = {y}')")
         nb_runner.run_cell(1)
         assert "y = 11" in nb_runner.get_output(1)
 
     def test_fix_type_error(self, nb_runner):
         """TypeError, fix by correcting the operation."""
-        nb_runner.create_notebook([
-            "x = 'hello'",
-            "y = x + 1",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 'hello'",
+                "y = x + 1",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_cell(1)
         with pytest.raises(CellExecutionError):
@@ -92,10 +98,12 @@ class TestRuntimeErrorRecovery:
 
     def test_fix_zero_division(self, nb_runner):
         """ZeroDivisionError, fix by changing divisor."""
-        nb_runner.create_notebook([
-            "x = 10\ny = 0",
-            "z = x / y",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10\ny = 0",
+                "z = x / y",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_cell(1)
         with pytest.raises(CellExecutionError):
@@ -109,10 +117,12 @@ class TestRuntimeErrorRecovery:
 
     def test_fix_index_error(self, nb_runner):
         """IndexError, fix by using valid index."""
-        nb_runner.create_notebook([
-            "data = [1, 2, 3]",
-            "val = data[10]",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = [1, 2, 3]",
+                "val = data[10]",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_cell(1)
         with pytest.raises(CellExecutionError):
@@ -129,10 +139,12 @@ class TestErrorThenSuccess:
 
     def test_error_then_fix_sequence(self, nb_runner):
         """Error -> fix -> success sequence."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "y = x / 0",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "y = x / 0",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_cell(1)
         with pytest.raises(CellExecutionError):
@@ -145,10 +157,12 @@ class TestErrorThenSuccess:
 
     def test_success_then_error_then_fix(self, nb_runner):
         """Success -> introduce error -> fix -> success."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "y = x * 2\nprint(f'y = {y}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "y = x * 2\nprint(f'y = {y}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "y = 20" in nb_runner.get_output(2)
@@ -165,11 +179,13 @@ class TestErrorThenSuccess:
 
     def test_error_in_middle_of_chain(self, nb_runner):
         """Error in middle cell, fix it, downstream should work."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "y = 1 / 0",  # Error
-            "z = 999\nprint(f'z = {z}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "y = 1 / 0",  # Error
+                "z = 999\nprint(f'z = {z}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_cell(1)
         with pytest.raises(CellExecutionError):
@@ -186,10 +202,12 @@ class TestErrorAfterRestart:
 
     def test_restart_after_error(self, nb_runner):
         """Error, restart, run clean."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "y = x * 2\nprint(f'y = {y}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "y = x * 2\nprint(f'y = {y}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "y = 20" in nb_runner.get_output(2)

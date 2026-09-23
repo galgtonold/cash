@@ -8,12 +8,12 @@ built it was served its calls from the cache, so it recorded only what was left
 over, and a later hit credited that. Cash's own time comes off; what the calls
 it served would have cost goes on.
 """
-from __future__ import annotations
 
-import pytest
+from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
 from traitlets.config import Configurable
 
 from cash.backends import InMemoryBackend
@@ -58,7 +58,7 @@ def test_calls_served_from_the_cache_count_toward_the_statements_cost(magics_fix
     magics, shell, backend = magics_fixture
     magics.cash("", DEFS)
     magics.cash("", "r = [slow(i) for i in range(3)]")
-    magics.cash("", "r2 = [slow(i) for i in range(3)] + []")   # a new statement; its calls hit
+    magics.cash("", "r2 = [slow(i) for i in range(3)] + []")  # a new statement; its calls hit
     assert shell.user_ns["r2"] == [0, 1, 2]
     assert _cost_of(backend, "+ []") >= 0.5, "the served calls' compute was left out"
 
@@ -75,6 +75,7 @@ def test_cash_tracking_time_is_not_counted_as_the_statements(magics_fixture, mon
     def tracked():
         clock[0] += 0.45
         return clock[0]
+
     monkeypatch.setattr(file_tracker, "tracking_seconds", tracked)
     magics.cash("", "import time\nx = (time.sleep(0.5), 7)[1]")
     assert shell.user_ns["x"] == 7

@@ -28,8 +28,8 @@ from .entry_format import (
     update_metadata_in_place,
 )
 from .rank_index import RankIndex
-from .versions import VersionIndex, superseded_to_drop
 from .serialization import PickleSerializer, Serializer
+from .versions import VersionIndex, superseded_to_drop
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,9 @@ _TEMP_NAME_ATTEMPTS = 8
 
 
 def _create_temp_file(
-    directory: str, prefix: str = '.tmp-', suffix: str = '.part',
+    directory: str,
+    prefix: str = ".tmp-",
+    suffix: str = ".part",
 ) -> tuple[int, str]:
     """Create a new file in *directory* and return ``(fd, path)``.
 
@@ -91,7 +93,7 @@ def _create_temp_file(
     and would push a deep cache directory over Windows' 260-character path limit
     that used to fit.
     """
-    flags = os.O_CREAT | os.O_EXCL | os.O_RDWR | getattr(os, 'O_BINARY', 0)
+    flags = os.O_CREAT | os.O_EXCL | os.O_RDWR | getattr(os, "O_BINARY", 0)
     last: OSError | None = None
     for _ in range(_TEMP_NAME_ATTEMPTS):
         candidate = os.path.join(directory, f"{prefix}{os.urandom(6).hex()}{suffix}")
@@ -101,8 +103,7 @@ def _create_temp_file(
             last = exc
             continue
     raise FileExistsError(
-        f"could not find an unused temporary name in {directory!r} after "
-        f"{_TEMP_NAME_ATTEMPTS} attempts"
+        f"could not find an unused temporary name in {directory!r} after {_TEMP_NAME_ATTEMPTS} attempts"
     ) from last
 
 
@@ -110,7 +111,7 @@ def _write_all(fd: int, data: bytes) -> None:
     """``os.write`` until every byte is out; it may write fewer than asked."""
     view = memoryview(data)
     while view:
-        view = view[os.write(fd, view):]
+        view = view[os.write(fd, view) :]
 
 
 def _writer_scope(cache_dir: str) -> str:
@@ -135,10 +136,10 @@ def _register_writer(cache_dir: str, writes: PendingWrites) -> str:
     # must stay importable without the notebook layer.
     try:
         from cash.notebook.file_tracker import register_cache_dir
+
         register_cache_dir(cache_dir)
     except Exception:  # noqa: BLE001 - tracking is best-effort, storage is not
-        logger.debug("Could not register %s with the file tracker", cache_dir,
-                     exc_info=True)
+        logger.debug("Could not register %s with the file tracker", cache_dir, exc_info=True)
     with _WRITERS_LOCK:
         bucket = _WRITERS_BY_DIR.get(scope)
         if bucket is None:
@@ -162,6 +163,7 @@ def _sibling_writers(scope: str, own: PendingWrites) -> list[PendingWrites]:
     with _WRITERS_LOCK:
         bucket = _WRITERS_BY_DIR.get(scope)
         return [w for w in bucket if w is not own] if bucket else []
+
 
 __all__ = ["FileBackend", "CACHE_FORMAT_VERSION"]
 
@@ -197,6 +199,7 @@ def _untracked() -> Any:
     `cache_dir` may also be, so the scan says so where it happens.
     """
     from cash.notebook.file_tracker import untracked
+
     return untracked()
 
 
@@ -262,9 +265,18 @@ class FileBackend(CacheBackend):
        point this at a cache directory from an untrusted source.  See the
        Security section of the Backends documentation.
     """
+
     source_label: str = "DISK"
 
-    def __init__(self, cache_dir: str, compress: bool = False, max_size_bytes: int | None = None, flush_interval: int = 5, default_ttl: int | None = None, adaptive_cap: bool = False) -> None:
+    def __init__(
+        self,
+        cache_dir: str,
+        compress: bool = False,
+        max_size_bytes: int | None = None,
+        flush_interval: int = 5,
+        default_ttl: int | None = None,
+        adaptive_cap: bool = False,
+    ) -> None:
         """
         Args:
             cache_dir: Directory for cache files.
@@ -403,7 +415,8 @@ class FileBackend(CacheBackend):
             self._warn_if_unwritable()
             if self._flush_interval > 0:
                 self._flusher_thread = threading.Thread(
-                    target=self._flush_periodically, daemon=True,
+                    target=self._flush_periodically,
+                    daemon=True,
                 )
                 self._flusher_thread.start()
             self._initialized = True
@@ -411,9 +424,10 @@ class FileBackend(CacheBackend):
     def _disable(self, exc: BaseException) -> None:
         """Turn this tier off for the rest of the process, and say why once."""
         self._unusable = True
-        self._initialized = True          # never retried; the answer will not change
+        self._initialized = True  # never retried; the answer will not change
         from cash.diagnostics import warn_diagnostic
         from cash.exceptions import CashCacheStoreFailedWarning
+
         try:
             warn_diagnostic(
                 CashCacheStoreFailedWarning,
@@ -445,10 +459,11 @@ class FileBackend(CacheBackend):
         writes nothing else at startup, so nothing else would find out.
         """
         try:
-            fd, probe = _create_temp_file(self.cache_dir, prefix='.probe-', suffix='.tmp')
+            fd, probe = _create_temp_file(self.cache_dir, prefix=".probe-", suffix=".tmp")
         except OSError as exc:
             from cash.diagnostics import warn_diagnostic
             from cash.exceptions import CashCacheStoreFailedWarning
+
             warn_diagnostic(
                 CashCacheStoreFailedWarning,
                 "CACHE-DIR-UNWRITABLE",
@@ -493,9 +508,7 @@ class FileBackend(CacheBackend):
 
         if stored != CACHE_FORMAT_VERSION:
             entry_files = [
-                f
-                for pattern in _ALL_ENTRY_GLOBS
-                for f in _glob_untracked(os.path.join(self.cache_dir, pattern))
+                f for pattern in _ALL_ENTRY_GLOBS for f in _glob_untracked(os.path.join(self.cache_dir, pattern))
             ]
             if stored is None and self._entries_are_current_format(entry_files):
                 # Unstamped, but the entries say what they are. A directory
@@ -517,8 +530,9 @@ class FileBackend(CacheBackend):
                         os.remove(f)
                     except OSError:
                         logger.debug(
-                            "Could not remove stale cache file %s during format "
-                            "migration", f, exc_info=True,
+                            "Could not remove stale cache file %s during format migration",
+                            f,
+                            exc_info=True,
                         )
             self._stamp_format_version()
 
@@ -568,7 +582,8 @@ class FileBackend(CacheBackend):
                 fh.write(str(CACHE_FORMAT_VERSION))
         except OSError:
             logger.debug(
-                "Could not write cache format marker at %s", version_path,
+                "Could not write cache format marker at %s",
+                version_path,
                 exc_info=True,
             )
             return
@@ -677,9 +692,11 @@ class FileBackend(CacheBackend):
         if not force and now - self._cap_derived_at < self._CAP_REFRESH_INTERVAL:
             return
         from .adaptive_caps import adaptive_disk_cap_for
+
         self._cap_derived_at = now
         self._max_size_bytes = adaptive_disk_cap_for(
-            self.cache_dir, self._current_size_bytes,
+            self.cache_dir,
+            self._current_size_bytes,
         )
 
     def _ignore_in_git(self) -> None:
@@ -741,7 +758,8 @@ class FileBackend(CacheBackend):
                 return
             if periodic:
                 keys_to_flush = [
-                    k for k in self._dirty_metadata
+                    k
+                    for k in self._dirty_metadata
                     if now - self._access_flushed.get(k, 0.0) >= self._ACCESS_FLUSH_MIN_INTERVAL
                 ]
                 self._dirty_metadata.difference_update(keys_to_flush)
@@ -762,12 +780,12 @@ class FileBackend(CacheBackend):
                 path = self._get_path(key)
                 if meta and not update_metadata_in_place(path, meta):
                     logger.debug(
-                        "Metadata for %r no longer fits its reserved region; "
-                        "access stats not flushed", key,
+                        "Metadata for %r no longer fits its reserved region; access stats not flushed",
+                        key,
                     )
                 self._access_flushed[key] = now
-                if meta and meta.get('version_slot'):
-                    self._versions.touch(key, meta.get('last_access', now))
+                if meta and meta.get("version_slot"):
+                    self._versions.touch(key, meta.get("last_access", now))
                 if meta and ranked:
                     with self._lock:
                         base = self._gdsf_base.get(key)
@@ -793,8 +811,10 @@ class FileBackend(CacheBackend):
 
     def _get_path(self, key: str) -> str:
         import hashlib
-        safe_name = hashlib.sha256(key.encode('utf-8')).hexdigest()
+
+        safe_name = hashlib.sha256(key.encode("utf-8")).hexdigest()
         return os.path.join(self.cache_dir, f"{safe_name}{ENTRY_SUFFIX}")
+
     def get_metadata(self, key: str) -> dict | None:
         """Get only metadata for a cache key without deserializing the value.
 
@@ -833,9 +853,9 @@ class FileBackend(CacheBackend):
                 metadata, _ = read_entry(path, with_payload=False)
                 self._remember(key, metadata)
 
-            ttl = metadata.get('ttl', self._default_ttl)
+            ttl = metadata.get("ttl", self._default_ttl)
             if ttl is not None:
-                created_at = metadata.get('created_at', 0)
+                created_at = metadata.get("created_at", 0)
                 if time.time() - created_at > ttl:
                     return None
 
@@ -845,6 +865,7 @@ class FileBackend(CacheBackend):
         except UNREADABLE_ENTRY:
             logger.debug("Unreadable metadata for key %s; treating as absent", key, exc_info=True)
             return None
+
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
         self._ensure_initialized()
         if self._unusable:
@@ -884,20 +905,20 @@ class FileBackend(CacheBackend):
             # execution time and lineages, and a MISS here, because there is
             # nothing to restore. With two files that fell out of requiring
             # both to exist; with one it has to be asked explicitly.
-            if metadata.get('metadata_only'):
+            if metadata.get("metadata_only"):
                 return None, None
 
-            ttl = metadata.get('ttl', self._default_ttl)
+            ttl = metadata.get("ttl", self._default_ttl)
             if ttl is not None:
-                created_at = metadata.get('created_at', 0)
+                created_at = metadata.get("created_at", 0)
                 if time.time() - created_at > ttl:
                     # Entry expired - delete it
                     self.delete(key)
                     return None, None
 
             # Update Access Time (Async)
-            metadata['last_access'] = time.time()
-            metadata['access_count'] = metadata.get('access_count', 0) + 1
+            metadata["last_access"] = time.time()
+            metadata["access_count"] = metadata.get("access_count", 0) + 1
 
             with self._lock:
                 self._dirty_metadata.add(key)
@@ -907,7 +928,7 @@ class FileBackend(CacheBackend):
                 # caller's thread.
                 self._gdsf_base[key] = None
 
-            if metadata.get('compressed', False):
+            if metadata.get("compressed", False):
                 try:
                     payload = gzip.decompress(payload)
                 except (OSError, gzip.BadGzipFile, EOFError):
@@ -915,13 +936,12 @@ class FileBackend(CacheBackend):
                     # with the raw bytes, as the two-file path did.
                     logger.debug("Entry for %r flagged compressed but is not", key)
 
-            serializer_cls = metadata.get('serializer_cls', PickleSerializer)
+            serializer_cls = metadata.get("serializer_cls", PickleSerializer)
             value = serializer_cls().deserialize(payload)
 
-            metadata.setdefault('source', self.source_label)
+            metadata.setdefault("source", self.source_label)
             return metadata, value
-        except (OSError, pickle.PickleError, ValueError, AttributeError,
-                ImportError, EOFError) as exc:
+        except (OSError, pickle.PickleError, ValueError, AttributeError, ImportError, EOFError) as exc:
             # AttributeError/ImportError: the pickled value references a
             # binding that doesn't exist in this process (e.g. a __main__
             # class from a previous kernel session). The entry is
@@ -936,6 +956,7 @@ class FileBackend(CacheBackend):
             # caller with "Ran out of input" instead of degrading to a miss.
             logger.debug("Cache get failed for key %r: %s", key, exc)
             return None, None
+
     def _wait_for_writes(self, key: str) -> None:
         """Wait for every live write to *key* in this cache directory.
 
@@ -994,7 +1015,7 @@ class FileBackend(CacheBackend):
         readable without inflating anything, or a metadata read would have to
         decompress the value it exists to avoid touching.
         """
-        directory = os.path.dirname(path) or '.'
+        directory = os.path.dirname(path) or "."
         # A temp file in the target directory; the leading dot keeps the
         # partial out of the ``*.entry`` glob the backend scans.
         fd, tmp_path = _create_temp_file(directory)
@@ -1051,9 +1072,9 @@ class FileBackend(CacheBackend):
         try:
             fd = os.open(path, flags)
         except FileExistsError:
-            return False            # something is there; it must survive a failure
+            return False  # something is there; it must survive a failure
         except OSError:
-            return False            # no directory, no permission -- let the safe path report it
+            return False  # no directory, no permission -- let the safe path report it
 
         split = metadata_span(blob)
         try:
@@ -1073,9 +1094,9 @@ class FileBackend(CacheBackend):
             # payload and the header reach the page cache in program order
             # without depending on when a BufferedWriter chooses to flush.
             os.lseek(fd, split, os.SEEK_SET)
-            _write_all(fd, blob[split:])        # payload
+            _write_all(fd, blob[split:])  # payload
             os.lseek(fd, 0, os.SEEK_SET)
-            _write_all(fd, blob[:split])        # header + metadata, last
+            _write_all(fd, blob[:split])  # header + metadata, last
             os.close(fd)
         except BaseException:
             try:
@@ -1091,8 +1112,7 @@ class FileBackend(CacheBackend):
             raise
         return True
 
-    def _write_cache_files(self, key: str, path: str, metadata: dict,
-                           serialized_value: bytes) -> None:
+    def _write_cache_files(self, key: str, path: str, metadata: dict, serialized_value: bytes) -> None:
         """Write one entry -- metadata and payload -- and update size tracking.
 
         One file, one atomic rename. The two-file version had to write the
@@ -1106,7 +1126,7 @@ class FileBackend(CacheBackend):
         # ``size`` means the bytes the value occupies, post-compression --
         # what the old code learned by stat-ing the data file it had just
         # written. We already know it, so the stat is gone.
-        metadata['size'] = len(payload)
+        metadata["size"] = len(payload)
         blob = pack_entry(metadata, payload)
 
         # Exact, and one syscall: what this entry costs today, so a rewrite
@@ -1157,7 +1177,9 @@ class FileBackend(CacheBackend):
         if self._max_size_bytes:
             self._record_rank(key, path, metadata, len(blob))
 
-    def set(self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None) -> None:
+    def set(
+        self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None
+    ) -> None:
         """Serialize the value on the calling thread, then write to disk
         in the background. ``set()`` returns once the bytes are captured;
         a subsequent ``get(key)`` waits for the write."""
@@ -1169,8 +1191,8 @@ class FileBackend(CacheBackend):
         metadata = self._init_metadata(metadata, key)
 
         # Set TTL if not already specified and we have a default
-        if 'ttl' not in metadata and self._default_ttl is not None:
-            metadata['ttl'] = self._default_ttl
+        if "ttl" not in metadata and self._default_ttl is not None:
+            metadata["ttl"] = self._default_ttl
 
         if serializer is None:
             serializer = PickleSerializer()
@@ -1179,28 +1201,36 @@ class FileBackend(CacheBackend):
         # mutation of `value` can't corrupt the cached bytes.
         serialized_value = serializer.serialize(value)
 
-        metadata['compressed'] = self.compress
+        metadata["compressed"] = self.compress
         # Pre-compute size from the serialized bytes; the on-disk size
         # may differ slightly under compression but the user-facing
         # metadata needs to be populated synchronously for the badge.
-        metadata['size'] = len(serialized_value)
-        if 'storage' not in metadata:
-            metadata['storage'] = [self.source_label]
+        metadata["size"] = len(serialized_value)
+        if "storage" not in metadata:
+            metadata["storage"] = [self.source_label]
 
         # Freeze a copy of metadata for the background write — the caller
         # can mutate the original after we return without affecting the
         # written entry.
         meta_for_write = dict(metadata)
         self._writes.submit(
-            key, self._do_set_sync,
-            key, path, meta_for_write, serialized_value,
+            key,
+            self._do_set_sync,
+            key,
+            path,
+            meta_for_write,
+            serialized_value,
         )
-        slot = metadata.get('version_slot')
+        slot = metadata.get("version_slot")
         if slot:
             # A version whose values are references to call entries weighs
             # what those hold too (``cash.notebook.call_refs``).
-            self._prune_versions(slot, key, len(serialized_value) + int(metadata.get('call_ref_bytes') or 0),
-                                 metadata.get('execution_time') or 0.0)
+            self._prune_versions(
+                slot,
+                key,
+                len(serialized_value) + int(metadata.get("call_ref_bytes") or 0),
+                metadata.get("execution_time") or 0.0,
+            )
 
     def _prune_versions(self, slot: str, key: str, size: int, cost: float) -> None:
         """Remove the superseded versions of *key*'s statement that are not
@@ -1208,8 +1238,7 @@ class FileBackend(CacheBackend):
         failure here leaves entries for the byte cap, never loses the new one."""
         try:
             versions = self._versions.record(slot, key, size, cost, time.time())
-            gone = [k for k in versions
-                    if k != key and not os.path.exists(self._get_path(k))]
+            gone = [k for k in versions if k != key and not os.path.exists(self._get_path(k))]
             for k in gone:
                 versions.pop(k)
             drop = superseded_to_drop(versions, key, self._read_keys)
@@ -1232,11 +1261,10 @@ class FileBackend(CacheBackend):
         refs: set[str] = set()
         for k in keys:
             meta = self.get_metadata(k) or {}
-            refs.update(meta.get('call_refs') or ())
+            refs.update(meta.get("call_refs") or ())
         return refs
 
-    def _do_set_sync(self, key: str, path: str, metadata: dict,
-                     serialized_value: bytes) -> None:
+    def _do_set_sync(self, key: str, path: str, metadata: dict, serialized_value: bytes) -> None:
         """The actual disk write — runs in the PendingWrites worker thread.
 
         A failure re-raises and touches nothing. The exception is stored on
@@ -1287,23 +1315,23 @@ class FileBackend(CacheBackend):
         # has put a full entry there since, this overwrites it -- a later miss,
         # never a wrong value.
         known = self._metadata_cache.get(key)
-        if known is not None and known.get('metadata_only'):
+        if known is not None and known.get("metadata_only"):
             existing = known
         else:
             try:
                 existing, _ = read_entry(path, with_payload=False)
             except UNREADABLE_ENTRY:
                 existing = None
-        if existing is not None and not existing.get('metadata_only'):
+        if existing is not None and not existing.get("metadata_only"):
             return
 
         metadata = dict(metadata)  # Don't mutate caller's dict
-        metadata['key'] = key
-        metadata['metadata_only'] = True
-        metadata.setdefault('created_at', time.time())
-        metadata.setdefault('last_access', time.time())
-        metadata.setdefault('access_count', 0)
-        metadata.setdefault('size', 0)
+        metadata["key"] = key
+        metadata["metadata_only"] = True
+        metadata.setdefault("created_at", time.time())
+        metadata.setdefault("last_access", time.time())
+        metadata.setdefault("access_count", 0)
+        metadata.setdefault("size", 0)
 
         try:
             blob = pack_entry(metadata, b"")
@@ -1402,7 +1430,7 @@ class FileBackend(CacheBackend):
                 ranked_at = os.path.getmtime(path)
             except OSError:
                 ranked_at = time.time()
-            last_access = metadata.get('last_access')
+            last_access = metadata.get("last_access")
             if last_access is not None and last_access > ranked_at:
                 ranked_at = last_access
         with self._lock:
@@ -1410,9 +1438,16 @@ class FileBackend(CacheBackend):
             self._gdsf_base[key] = clock
             priority = self._priority(metadata, size, clock)
             if self._ranked and ranked_at is not None:
-                heapq.heappush(self._evict_fresh, (
-                    priority, self._write_seq_by_key.get(key, 0), path, size, ranked_at,
-                ))
+                heapq.heappush(
+                    self._evict_fresh,
+                    (
+                        priority,
+                        self._write_seq_by_key.get(key, 0),
+                        path,
+                        size,
+                        ranked_at,
+                    ),
+                )
         self._rank_index.append([(self._stem(path), priority)])
 
     def _rebuild_evict_queue(self) -> None:
@@ -1474,8 +1509,7 @@ class FileBackend(CacheBackend):
                         continue
                     ranks[entry.path] = (st.st_mtime, st.st_size)
         except OSError:
-            logger.debug("Could not scan %s to rank evictions", self.cache_dir,
-                         exc_info=True)
+            logger.debug("Could not scan %s to rank evictions", self.cache_dir, exc_info=True)
 
         indexed, index_clock, index_lines = self._rank_index.load()
 
@@ -1492,7 +1526,7 @@ class FileBackend(CacheBackend):
                 key = self._paths.get(path)
                 meta = self._metadata_cache.get(key) if key is not None else None
                 if meta is not None:
-                    last_access = meta.get('last_access')
+                    last_access = meta.get("last_access")
                     if last_access is not None and last_access > mtime:
                         # What `_touched_since` compares against later, so a
                         # ``last_access`` already known here never reads as
@@ -1535,9 +1569,15 @@ class FileBackend(CacheBackend):
         # sequence only covers this process's writes, and only decides when
         # the index could not be written.
         recorded_at = {stem: i for i, stem in enumerate(indexed)}
-        ordered = sorted(ranks, key=lambda p: (
-            prio[p], recency[p], recorded_at.get(self._stem(p), -1), seqs.get(p, 0),
-        ))
+        ordered = sorted(
+            ranks,
+            key=lambda p: (
+                prio[p],
+                recency[p],
+                recorded_at.get(self._stem(p), -1),
+                seqs.get(p, 0),
+            ),
+        )
         # A deque: drained from the front across many passes, and list.pop(0)
         # would make that quadratic in a large cache. Each item carries the
         # recency it was RANKED at, so `_touched_since` can tell whether the
@@ -1586,7 +1626,7 @@ class FileBackend(CacheBackend):
         other.
         """
         meta = self._metadata_cache.get(key) if key else None
-        last_access = meta.get('last_access') if meta else None
+        last_access = meta.get("last_access") if meta else None
         if last_access is not None and last_access > ranked_at:
             return True
         try:
@@ -1803,17 +1843,19 @@ class FileBackend(CacheBackend):
 
         from cash.diagnostics import warn_diagnostic
         from cash.exceptions import CashCacheIneffectiveWarning
+
         from .adaptive_caps import _free_bytes_on_volume, human_bytes
 
         cap = human_bytes(self._max_size_bytes)
         free = _free_bytes_on_volume(self.cache_dir)
         if free >= (self._max_size_bytes or 0):
-            room = (f"raise max_cache_size -- there is {human_bytes(free)} free "
-                    f"on that volume, so there is room for it.")
+            room = f"raise max_cache_size -- there is {human_bytes(free)} free on that volume, so there is room for it."
         else:
-            room = (f"cache fewer or smaller results, or point cache_dir at a "
-                    f"roomier volume: only {human_bytes(free)} is free on this "
-                    f"one, so raising max_cache_size may not help.")
+            room = (
+                f"cache fewer or smaller results, or point cache_dir at a "
+                f"roomier volume: only {human_bytes(free)} is free on this "
+                f"one, so raising max_cache_size may not help."
+            )
 
         shape = ""
         dominant = self._dominant_entry_size()
@@ -1821,10 +1863,12 @@ class FileBackend(CacheBackend):
             fits = max(1, self._max_size_bytes // dominant)
             if fits < self._FEW_ENTRIES_FIT:
                 how_many = "only one fits" if fits == 1 else f"only about {fits} fit"
-                shape = (f" Most of it is entries of around {human_bytes(dominant)}, "
-                         f"so {how_many} at once; if what you need downstream is a "
-                         f"summary of those results rather than the results "
-                         f"themselves, caching that instead would fit far more.")
+                shape = (
+                    f" Most of it is entries of around {human_bytes(dominant)}, "
+                    f"so {how_many} at once; if what you need downstream is a "
+                    f"summary of those results rather than the results "
+                    f"themselves, caching that instead would fit far more."
+                )
 
         warn_diagnostic(
             CashCacheIneffectiveWarning,
@@ -1871,7 +1915,7 @@ class FileBackend(CacheBackend):
         # otherwise we could lose the metadata for a not-yet-written entry.
         self._writes.shutdown(wait=True)
         self._stop_event.set()
-        if hasattr(self, '_flusher_thread'):
+        if hasattr(self, "_flusher_thread"):
             self._flusher_thread.join(timeout=1.0)
         if self._initialized:
             self._flush_metadata()

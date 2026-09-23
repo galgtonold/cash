@@ -15,6 +15,7 @@ written as JSON. Nothing is edited between runs, so every disagreement is a
 defect -- the ``lineage_disagreement`` trace lists all of them, whether or not
 the cell being run reads them.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -24,7 +25,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.upstream]
 pytest.importorskip("matplotlib")
 pytest.importorskip("sklearn")
 
-HELPERS = '''\
+HELPERS = """\
 THRESHOLD = 3
 
 
@@ -32,7 +33,7 @@ def clean(df):
     df = df.dropna()
     df["region"] = df["region"].str.upper()
     return df
-'''
+"""
 
 CELLS = [
     "import cash\n%cash_on\n",
@@ -109,8 +110,7 @@ CSV = """id,region,spend,churn
 
 
 def _disagreements(records):
-    return [(r["cell_idx"], r["vars"]) for r in records
-            if r.get("event") == "lineage_disagreement" and r["vars"]]
+    return [(r["cell_idx"], r["vars"]) for r in records if r.get("event") == "lineage_disagreement" and r["vars"]]
 
 
 def _scheduled(records):
@@ -135,14 +135,22 @@ def _oracle(work, cells):
     """The report the same cells print without cash, in a fresh process."""
     import subprocess
     import sys
+
     script = "\n".join(cells[1:])
-    out = subprocess.run([sys.executable, "-c", script], cwd=work, capture_output=True,
-                         text=True, check=True, env={**__import__("os").environ, "MPLBACKEND": "Agg"}).stdout
+    out = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=work,
+        capture_output=True,
+        text=True,
+        check=True,
+        env={**__import__("os").environ, "MPLBACKEND": "Agg"},
+    ).stdout
     return next(line for line in out.splitlines() if line.startswith("REPORT"))
 
 
 def test_a_top_to_bottom_run_has_no_disagreement(project, upstream_trace, nb_runner):
     """Cold run, then Restart & Run All, then the report cell alone."""
+
     def after(r):
         r.restart()
         r.run_all()
@@ -168,6 +176,7 @@ def test_a_top_to_bottom_run_has_no_disagreement(project, upstream_trace, nb_run
 
 
 # --- control arms: agreement must not come from ignoring real changes ----------
+
 
 def test_edited_data_is_still_seen_by_the_report_cell(project, upstream_trace, nb_runner):
     def edit_and_report(r):

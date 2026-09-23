@@ -22,6 +22,7 @@ beat GDSF, the unsafe one is not worth building.
 
     python benchmarks/eviction_sim/decorator_workload.py --seeds 5
 """
+
 from __future__ import annotations
 
 import argparse
@@ -39,12 +40,12 @@ class DParams:
     days: int = 60
     jobs_per_day: tuple = (2, 6)
     p_sweep_job: float = 0.3
-    working_set: tuple = (5, 200)       # args a pipeline job calls
+    working_set: tuple = (5, 200)  # args a pipeline job calls
     sweep_calls: tuple = (50, 400)
-    arg_space: int = 50_000             # sweep draws Zipf over this
+    arg_space: int = 50_000  # sweep draws Zipf over this
     zipf_s: float = 1.1
-    p_edit_per_day: float = 0.08        # per function
-    p_drift: float = 0.05               # per working-set arg per day
+    p_edit_per_day: float = 0.08  # per function
+    p_drift: float = 0.05  # per working-set arg per day
     compute_median: float = 0.4
     compute_sigma: float = 1.6
     size_small_median: float = 5e3
@@ -65,10 +66,15 @@ class DProject:
             large = rng.random() < p.p_large
             size = (p.size_large_median if large else p.size_small_median) * math.exp(1.2 * rng.gauss(0, 1))
             ws = rng.randint(*p.working_set)
-            self.fn.append({
-                "compute": compute, "size": int(max(64, size)), "version": 0,
-                "working": list(range(ws)), "next_arg": ws,
-            })
+            self.fn.append(
+                {
+                    "compute": compute,
+                    "size": int(max(64, size)),
+                    "version": 0,
+                    "working": list(range(ws)),
+                    "next_arg": ws,
+                }
+            )
         # Zipf CDF over the sweep arg space, shared
         weights = [1 / (i + 1) ** p.zipf_s for i in range(p.arg_space)]
         total = sum(weights)
@@ -79,6 +85,7 @@ class DProject:
 
     def zipf(self, rng):
         import bisect
+
         return bisect.bisect_left(self.cdf, rng.random())
 
     def entry(self, f, arg, rng_jitter=None):
@@ -98,8 +105,10 @@ def session(proj: DProject):
         for f, fn in enumerate(proj.fn):
             if rng.random() < p.p_edit_per_day:
                 fn["version"] += 1
-            fn["working"] = [a if rng.random() > p.p_drift else (fn.__setitem__("next_arg", fn["next_arg"] + 1) or fn["next_arg"])
-                             for a in fn["working"]]
+            fn["working"] = [
+                a if rng.random() > p.p_drift else (fn.__setitem__("next_arg", fn["next_arg"] + 1) or fn["next_arg"])
+                for a in fn["working"]
+            ]
         for _job in range(rng.randint(*p.jobs_per_day)):
             f = rng.randrange(p.n_functions)
             if rng.random() < p.p_sweep_job:
@@ -155,6 +164,7 @@ def main():
     a = ap.parse_args()
     base = DParams()
     import ast
+
     for kv in a.set:
         k, v = kv.split("=", 1)
         base = replace(base, **{k: type(getattr(base, k))(ast.literal_eval(v))})
@@ -170,8 +180,10 @@ def main():
             for n, mk in POL.items():
                 t, _pol = run(prm, mk(int(live * f)))
                 res[n][f].append((t - t_inf) / max(1e-9, t_none - t_inf))
-    print(f"[decorator workload] lost savings, mean over {a.seeds} seeds; cap = multiple of live bytes "
-          f"(uncapped footprint {statistics.mean(fps):.1f}x live)")
+    print(
+        f"[decorator workload] lost savings, mean over {a.seeds} seeds; cap = multiple of live bytes "
+        f"(uncapped footprint {statistics.mean(fps):.1f}x live)"
+    )
     print(f"{'policy':<38}" + "".join(f"{str(f) + 'x':>9}" for f in fracs))
     for n in POL:
         print(f"{n:<38}" + "".join(f"{statistics.mean(res[n][f]) * 100:8.1f}%" for f in fracs))

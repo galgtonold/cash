@@ -18,6 +18,7 @@ never touch playwright.
 
 Usage:  python scripts/build_badge_images.py [--only NAME ...]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -69,9 +70,7 @@ def render(names: list[str]) -> int:
             # The badge is a <details>, collapsed by default. A static image
             # of a collapsed badge shows one summary line and none of the
             # per-statement rows -- which are the whole point.
-            page.evaluate(
-                "document.querySelectorAll('details').forEach(d => d.open = true)"
-            )
+            page.evaluate("document.querySelectorAll('details').forEach(d => d.open = true)")
             card = page.locator(".c3-wrap")
             card.wait_for(state="visible")
             out = BADGE_DIR / f"{name}.png"

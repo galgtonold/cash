@@ -7,6 +7,7 @@ of a notebook that runs in 30 s uncached (round 23). An answer holds for the
 rest of the cell run -- the trust whole entries already had -- until a
 statement of the run writes files.
 """
+
 from __future__ import annotations
 
 import os
@@ -53,6 +54,7 @@ def checks(monkeypatch):
     def counting(path, *a, **k):
         calls.append(path)
         return real(path, *a, **k)
+
     monkeypatch.setattr(virtual_lineage, "file_dep_is_fresh", counting)
     return calls
 
@@ -66,12 +68,16 @@ def _edit_keeping_size_and_time(path):
 
 def test_entries_sharing_files_check_them_once_per_run(tmp_path, checks):
     deps = _inputs(tmp_path)
-    for key in ("stmt:a", "stmt:b", "stmt:c"):          # three entries, one set of files
+    for key in ("stmt:a", "stmt:b", "stmt:c"):  # three entries, one set of files
         assert VirtualLineage._validate_file_freshness(deps, memo_key=key)
     assert len(checks) == N, f"{len(checks)} checks of {N} files for three entries"
 
 
-@pytest.mark.xfail(os.name == "nt", strict=True, reason="Windows: an edit that keeps the size and puts the mtime back is not seen once the file had settled -- a documented limitation (known-limitations: an edit that keeps size and timestamps); Linux and macOS catch it through the inode change time")
+@pytest.mark.xfail(
+    os.name == "nt",
+    strict=True,
+    reason="Windows: an edit that keeps the size and puts the mtime back is not seen once the file had settled -- a documented limitation (known-limitations: an edit that keeps size and timestamps); Linux and macOS catch it through the inode change time",
+)
 def test_the_next_run_looks_again(tmp_path, checks):
     deps = _inputs(tmp_path)
     assert VirtualLineage._validate_file_freshness(deps, memo_key="stmt:a")
@@ -88,7 +94,7 @@ def test_a_write_in_the_run_is_seen_by_what_is_checked_after_it(tmp_path, checks
     assert VirtualLineage._validate_file_freshness(deps, memo_key="stmt:a")
     with open(next(iter(deps)), "a") as fh:
         fh.write("appended\n")
-    forget_file_state_this_run()                         # a file-writing statement ran
+    forget_file_state_this_run()  # a file-writing statement ran
     assert not VirtualLineage._validate_file_freshness(deps, memo_key="stmt:b")
 
 

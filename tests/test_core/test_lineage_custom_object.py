@@ -9,6 +9,7 @@ Plain ``list``/``dict``/``tuple``/scalar returns still cannot - builtins reject
 attribute assignment - so those keep content-hashing (a hard Python limit, not
 a regression).
 """
+
 from __future__ import annotations
 
 import tempfile
@@ -53,7 +54,7 @@ def test_custom_object_short_circuits_downstream():
 
     r = produce(5)
     assert consume(r) == 10
-    assert consume(r) == 10            # same object -> lineage hit
+    assert consume(r) == 10  # same object -> lineage hit
     assert calls["n"] == 1
 
 
@@ -70,8 +71,8 @@ def test_custom_object_lineage_distinguishes_producers():
         calls["n"] += 1
         return sum(r.payload)
 
-    consume(produce(3))               # 0+1+2 = 3
-    consume(produce(4))               # 0+1+2+3 = 6 -> different lineage, recompute
+    consume(produce(3))  # 0+1+2 = 3
+    consume(produce(4))  # 0+1+2+3 = 6 -> different lineage, recompute
     assert calls["n"] == 2
 
 
@@ -84,7 +85,7 @@ def test_custom_object_lineage_survives_disk_restore():
 
     r1 = produce(5)
     assert hasattr(r1, "_cash_lineage_hash")
-    r2 = produce(5)                   # restored from disk
+    r2 = produce(5)  # restored from disk
     assert hasattr(r2, "_cash_lineage_hash"), "lineage lost on disk restore"
     assert r1._cash_lineage_hash == r2._cash_lineage_hash
 

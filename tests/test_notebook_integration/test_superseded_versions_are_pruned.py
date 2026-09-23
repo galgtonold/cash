@@ -9,6 +9,7 @@ older version, for an undo; a small one that took long keeps many.
 The unit arm, with the budget arithmetic, is
 ``tests/test_backends/test_superseded_versions.py``.
 """
+
 from pathlib import Path
 
 import pytest
@@ -47,7 +48,7 @@ CELLS = [
     # write-time ceiling now refuses outright: nothing reaches disk, so there
     # is no superseded version to prune and nothing here measured anything.
     "X = build(N)",
-    "score = fit(N)",        # small for its cost: a few bytes in 0.3 s
+    "score = fit(N)",  # small for its cost: a few bytes in 0.3 s
     "print('X', X[0], 'score', score)",
 ]
 

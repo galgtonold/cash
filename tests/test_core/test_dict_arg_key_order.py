@@ -6,6 +6,7 @@ a set was present), so logically-identical calls missed the cache and recomputed
 Dict ordering is now canonicalised (recursively) whenever a dict argument value
 is present, while list/tuple order stays semantic and set handling is untouched.
 """
+
 from __future__ import annotations
 
 from cash import Cash, FileBackend

@@ -20,6 +20,7 @@ is what a promotion decision needs: "is restoring this cheaper than recomputing
 it" is a comparison of magnitudes, and being 20x wrong about 0.5 ms matters
 exactly as much as being 20x wrong about 5 s.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -140,13 +141,19 @@ def fit_all(csv_path: Path, objective: str = "relative") -> list[FitRow]:
         pts.sort()
         xs = [p[0] for p in pts]
         ys = [p[1] for p in pts]
-        a, b, r2 = (fit_relative(xs, ys) if objective == "relative"
-                    else fit_linear(xs, ys))
-        fits.append(FitRow(
-            family=family, backend_kind=backend, operation=op,
-            a=a, b=b, r_squared=r2, n_points=len(pts),
-            worst_ratio=worst_ratio(a, b, xs, ys),
-        ))
+        a, b, r2 = fit_relative(xs, ys) if objective == "relative" else fit_linear(xs, ys)
+        fits.append(
+            FitRow(
+                family=family,
+                backend_kind=backend,
+                operation=op,
+                a=a,
+                b=b,
+                r_squared=r2,
+                n_points=len(pts),
+                worst_ratio=worst_ratio(a, b, xs, ys),
+            )
+        )
     return fits
 
 
@@ -167,12 +174,18 @@ def _derive(fits: list[FitRow]) -> list[FitRow]:
         if f.backend_kind != "disk":
             continue
         for backend, rule in _DERIVED.items():
-            out.append(FitRow(
-                family=f.family, backend_kind=backend, operation=f.operation,
-                a=f.a * rule["a_scale"] + rule["a_add"],
-                b=max(f.b, rule["b_floor"]),
-                r_squared=float("nan"), n_points=0, worst_ratio=float("nan"),
-            ))
+            out.append(
+                FitRow(
+                    family=f.family,
+                    backend_kind=backend,
+                    operation=f.operation,
+                    a=f.a * rule["a_scale"] + rule["a_add"],
+                    b=max(f.b, rule["b_floor"]),
+                    r_squared=float("nan"),
+                    n_points=0,
+                    worst_ratio=float("nan"),
+                )
+            )
     return out
 
 
@@ -190,10 +203,19 @@ def _generic(fits: list[FitRow]) -> list[FitRow]:
         prev = slowest.get((f.backend_kind, f.operation))
         if prev is None or f.a + f.b * at > prev.a + prev.b * at:
             slowest[(f.backend_kind, f.operation)] = f
-    return [FitRow(family="_GENERIC", backend_kind=backend, operation=op,
-                   a=f.a, b=f.b, r_squared=float("nan"), n_points=0,
-                   worst_ratio=float("nan"))
-            for (backend, op), f in slowest.items()]
+    return [
+        FitRow(
+            family="_GENERIC",
+            backend_kind=backend,
+            operation=op,
+            a=f.a,
+            b=f.b,
+            r_squared=float("nan"),
+            n_points=0,
+            worst_ratio=float("nan"),
+        )
+        for (backend, op), f in slowest.items()
+    ]
 
 
 def render_python_constants(fits: list[FitRow], derived: bool = True) -> str:
@@ -204,12 +226,12 @@ def render_python_constants(fits: list[FitRow], derived: bool = True) -> str:
         rows += _generic(rows)
     lines = ["{"]
     for f in sorted(rows, key=lambda x: (x.family, x.backend_kind, x.operation)):
-        note = ("  # derived, not measured" if not f.n_points else
-                f"  # R2={f.r_squared:.3f} n={f.n_points} worst={f.worst_ratio:.1f}x")
-        lines.append(
-            f'    ("{f.family}", "{f.backend_kind}", "{f.operation}"): '
-            f"({f.a:.6e}, {f.b:.6e}),{note}"
+        note = (
+            "  # derived, not measured"
+            if not f.n_points
+            else f"  # R2={f.r_squared:.3f} n={f.n_points} worst={f.worst_ratio:.1f}x"
         )
+        lines.append(f'    ("{f.family}", "{f.backend_kind}", "{f.operation}"): ({f.a:.6e}, {f.b:.6e}),{note}')
     lines.append("}")
     return "\n".join(lines)
 
@@ -217,10 +239,13 @@ def render_python_constants(fits: list[FitRow], derived: bool = True) -> str:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Fit cost model from matrix CSV")
     p.add_argument("csv_path", type=Path)
-    p.add_argument("--min-r2", type=float, default=0.8,
-                   help="Warn if any fit has R² below this threshold")
-    p.add_argument("--objective", choices=("relative", "absolute"), default="relative",
-                   help="what the fit minimises: error as a ratio (default) or in seconds")
+    p.add_argument("--min-r2", type=float, default=0.8, help="Warn if any fit has R² below this threshold")
+    p.add_argument(
+        "--objective",
+        choices=("relative", "absolute"),
+        default="relative",
+        help="what the fit minimises: error as a ratio (default) or in seconds",
+    )
     args = p.parse_args(argv)
 
     fits = fit_all(args.csv_path, args.objective)
@@ -228,15 +253,19 @@ def main(argv: list[str] | None = None) -> int:
     print("# Fit summary (sorted by R² ascending):")
     for f in sorted(fits, key=lambda x: x.r_squared):
         flag = "  [LOW R2]" if f.r_squared < args.min_r2 else ""
-        print(f"  {f.family:18s} {f.backend_kind:4s} {f.operation:11s}  "
-              f"a={f.a:.3e} b={f.b:.3e} R2={f.r_squared:.3f} n={f.n_points} "
-              f"worst={f.worst_ratio:.1f}x{flag}")
+        print(
+            f"  {f.family:18s} {f.backend_kind:4s} {f.operation:11s}  "
+            f"a={f.a:.3e} b={f.b:.3e} R2={f.r_squared:.3f} n={f.n_points} "
+            f"worst={f.worst_ratio:.1f}x{flag}"
+        )
 
     bad = [f for f in fits if f.r_squared < args.min_r2]
     if bad:
-        print(f"\n[WARN] {len(bad)} fits below R2={args.min_r2} threshold -- linear model "
-              "may be wrong shape for these (family, backend, op) tuples. "
-              "Investigate before pasting constants.")
+        print(
+            f"\n[WARN] {len(bad)} fits below R2={args.min_r2} threshold -- linear model "
+            "may be wrong shape for these (family, backend, op) tuples. "
+            "Investigate before pasting constants."
+        )
 
     print("\n# COEFFS dict (paste into src/cash/notebook/cost_model.py):")
     print(render_python_constants(fits))

@@ -3,6 +3,7 @@
 A code in a message with no section here is a dead link in someone's terminal,
 so the page's structure is pinned rather than trusted.
 """
+
 from __future__ import annotations
 
 import ast
@@ -43,12 +44,7 @@ def test_every_anchor_is_the_lowercased_code(code):
 def test_every_section_answers_all_four_questions():
     text = PAGE.read_text("utf-8")
     bodies = text.split("\n## ")[1:]
-    missing = [
-        (body.split(" ")[0], heading)
-        for body in bodies
-        for heading in REQUIRED
-        if heading not in body
-    ]
+    missing = [(body.split(" ")[0], heading) for body in bodies for heading in REQUIRED if heading not in body]
     assert not missing, f"sections missing required headings: {missing}"
 
 
@@ -73,11 +69,13 @@ SRC = Path(__file__).resolve().parents[2] / "src" / "cash"
 #: ``exceptions.py`` beside it, and one defined in a notebook submodule far
 #: from it. Asserted separately so a derivation that quietly returns nothing
 #: fails loudly instead of making ``_raw_cash_warns`` vacuously empty.
-_DERIVATION_MUST_FIND = frozenset({
-    "CashWarning",
-    "CashCacheIneffectiveWarning",
-    "CashNotebookDiscoveryWarning",
-})
+_DERIVATION_MUST_FIND = frozenset(
+    {
+        "CashWarning",
+        "CashCacheIneffectiveWarning",
+        "CashNotebookDiscoveryWarning",
+    }
+)
 
 
 def _class_defs() -> list[tuple[str, set[str]]]:
@@ -184,6 +182,5 @@ def test_no_cash_warning_is_emitted_without_a_code():
     """Without this, the next warning added silently has no code and the
     bijection test still passes -- it only checks codes that exist."""
     assert not _raw_cash_warns(), (
-        "these emit a Cash warning directly; route them through "
-        f"warn_diagnostic instead: {_raw_cash_warns()}"
+        f"these emit a Cash warning directly; route them through warn_diagnostic instead: {_raw_cash_warns()}"
     )

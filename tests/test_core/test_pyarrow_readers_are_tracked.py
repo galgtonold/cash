@@ -12,6 +12,7 @@ first cached call, so from then on ``pd.read_csv(filepath_or_buffer=p)``,
 ``np.load(file=p)`` or ``pq.read_table(source=p)`` raised TypeError anywhere
 in the process -- inside cached code or not.
 """
+
 from __future__ import annotations
 
 import time
@@ -39,6 +40,7 @@ def _reader_suite():
     import pyarrow.feather as feather
     import pyarrow.json as pajson
     import pyarrow.parquet as pq
+
     return {
         "pyarrow.csv.read_csv": (".csv", lambda p: pacsv.read_csv(p)),
         "pyarrow.parquet.read_table": (".parquet", lambda p: pq.read_table(p)),
@@ -50,6 +52,7 @@ def _reader_suite():
 def _write(path, suffix, values):
     import pyarrow.feather as feather
     import pyarrow.parquet as pq
+
     table = pa.table({"v": values})
     if suffix == ".csv":
         _write_csv(path, values)
@@ -99,7 +102,7 @@ def test_a_reader_called_by_keyword_works_everywhere(c, tmp_path):
         time.sleep(0.2)
         return int(pd.read_csv(p)["v"].sum())
 
-    warm(str(csv))                                    # installs the wrappers
+    warm(str(csv))  # installs the wrappers
 
     assert int(pd.read_csv(filepath_or_buffer=str(csv))["v"].sum()) == 3
     assert pq.read_table(source=str(parquet)).num_rows == 2

@@ -16,6 +16,7 @@ The end-to-end bug is not reproducible under ``NotebookClient`` (see
 ``tests/test_notebook_integration/test_loop_draw_not_cached.py``), so the
 mechanism is pinned here and the behaviour by the real-server reproducer.
 """
+
 from __future__ import annotations
 
 import ast
@@ -54,49 +55,49 @@ def axes():
 def test_a_bare_draw_on_an_axes_is_caught(axes):
     """The regression: the exact statement that went missing inside the loop."""
     _fig, ax = axes
-    assert _receivers("ax.bar(['a'], [1])", {'ax': ax}) == {'ax'}
+    assert _receivers("ax.bar(['a'], [1])", {"ax": ax}) == {"ax"}
 
 
 def test_a_figure_receiver_is_caught(axes):
     """``fig.savefig(...)`` is identity-coupled too, per CAS-194's reasoning."""
     fig, _ax = axes
-    assert _receivers("fig.savefig('x.png')", {'fig': fig}) == {'fig'}
+    assert _receivers("fig.savefig('x.png')", {"fig": fig}) == {"fig"}
 
 
 def test_a_captured_return_draw_is_caught(axes):
     """``counts, bins, patches = ax.hist(...)`` draws AND binds (CAS-199 shape)."""
     _fig, ax = axes
-    assert _receivers("counts, bins, patches = ax.hist([1, 2])", {'ax': ax}) == {'ax'}
+    assert _receivers("counts, bins, patches = ax.hist([1, 2])", {"ax": ax}) == {"ax"}
 
 
 def test_an_axes_handed_to_a_plain_function_is_caught(axes):
     """``draw_panel(ax, kind, y, s)`` has no method-call receiver at all, yet
     draws on ``ax`` (round 23: every chart of a loop saved blank on re-run)."""
     _fig, ax = axes
-    assert _receivers("draw_panel(ax, 'roc', y)", {'ax': ax, 'y': [1]}) == {'ax'}
+    assert _receivers("draw_panel(ax, 'roc', y)", {"ax": ax, "y": [1]}) == {"ax"}
 
 
 def test_a_plain_argument_is_not_caught():
     """The same widening must leave ordinary loops caching: ``score(c, a)``."""
-    assert _receivers("rows.append(score(c, a))", {'c': 1, 'a': [2], 'rows': []}) == set()
+    assert _receivers("rows.append(score(c, a))", {"c": 1, "a": [2], "rows": []}) == set()
 
 
 def test_a_dataframe_receiver_is_not_caught():
     """The discriminator that keeps ordinary loops caching: ``df.head()`` is pure."""
     pd = pytest.importorskip("pandas")
-    df = pd.DataFrame({'v': [1, 2, 3]})
-    assert _receivers("df.head()", {'df': df}) == set()
+    df = pd.DataFrame({"v": [1, 2, 3]})
+    assert _receivers("df.head()", {"df": df}) == set()
 
 
 def test_a_list_accumulator_is_not_caught():
     """``out.append(rec)`` is the commonest loop body there is; it must be untouched."""
-    assert _receivers("out.append(3)", {'out': []}) == set()
+    assert _receivers("out.append(3)", {"out": []}) == set()
 
 
 def test_a_module_call_is_not_caught():
     """``plt.savefig()`` is a module function call, not a receiver draw."""
     plt = pytest.importorskip("matplotlib.pyplot")
-    assert _receivers("plt.savefig('x.png')", {'plt': plt}) == set()
+    assert _receivers("plt.savefig('x.png')", {"plt": plt}) == set()
 
 
 def test_an_unbound_receiver_is_not_caught():

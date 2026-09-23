@@ -1,10 +1,10 @@
-
 import unittest
 from unittest.mock import MagicMock, patch
+
 import pytest
 
-from cash.notebook.ipython.magics import CashMagics
 from cash.notebook.cache_status import CacheStatus
+from cash.notebook.ipython.magics import CashMagics
 
 
 class TestOutputOrdering(unittest.TestCase):
@@ -22,7 +22,7 @@ class TestOutputOrdering(unittest.TestCase):
         self.magics._global_ttl = None
         self.magics._original_run_cell = MagicMock()
         self.magics._current_cell_id = None
-        self.magics._badge_mode = 'html'
+        self.magics._badge_mode = "html"
 
         # Mock StatementProcessor
         self.magics._statement_processor = MagicMock()
@@ -37,27 +37,29 @@ class TestOutputOrdering(unittest.TestCase):
         self.magics._last_cell_metrics = None
         # Mock _session_stats for session tracking
         self.magics._session_stats = {
-            'cells_executed': 0,
-            'statements_computed': 0,
-            'statements_restored': 0,
-            'statements_skipped': 0,
-            'total_compute_time': 0.0,
-            'total_restored_time': 0.0,
-            'total_time_saved': 0.0,
+            "cells_executed": 0,
+            "statements_computed": 0,
+            "statements_restored": 0,
+            "statements_skipped": 0,
+            "total_compute_time": 0.0,
+            "total_restored_time": 0.0,
+            "total_time_saved": 0.0,
         }
         # Mock provenance tracker and its dependencies
         from cash.notebook.provenance import ProvenanceTracker
+
         self.magics._session.provenance = ProvenanceTracker()
         self.magics._tracking_state.variable_lineage.clear()
         self.magics._tracking_state.executed_file_deps.clear()
         # Mock audit logger
         from cash.notebook.audit import AuditLogger
+
         self.magics._session.audit = AuditLogger()
 
-    @patch('cash.notebook.ipython.magics.publish_display_data')
-    @patch('builtins.print')
+    @patch("cash.notebook.ipython.magics.publish_display_data")
+    @patch("builtins.print")
     @pytest.mark.skip(reason="Pre-existing failure: deeply mocked test needs updating for current _execute_cell flow")
-    @patch('uuid.uuid4', return_value='TEST-UUID')
+    @patch("uuid.uuid4", return_value="TEST-UUID")
     def test_execute_cell_ordering(self, mock_uuid, mock_print, mock_publish_data):
         """Test that stdout is replayed and rich outputs are handled correctly."""
         raw_cell = "a = 1\nb = 2"
@@ -65,22 +67,22 @@ class TestOutputOrdering(unittest.TestCase):
 
         # Mock statement processing returns
         metrics1 = {
-            'stdout': 'Start 1\n',
-            'stderr': '',
-            'outputs': [{'data': {'text/plain': '1'}, 'metadata': {}}],
-            'status': CacheStatus.COMPUTED,
-            'execution_time': 0.1,
-            'total_time': 0.1,
-            'code': 'a = 1',
+            "stdout": "Start 1\n",
+            "stderr": "",
+            "outputs": [{"data": {"text/plain": "1"}, "metadata": {}}],
+            "status": CacheStatus.COMPUTED,
+            "execution_time": 0.1,
+            "total_time": 0.1,
+            "code": "a = 1",
         }
         metrics2 = {
-            'stdout': 'Start 2\n',
-            'stderr': '',
-            'outputs': [{'data': {'text/plain': '2'}, 'metadata': {}}],
-            'status': CacheStatus.COMPUTED,
-            'execution_time': 0.1,
-            'total_time': 0.1,
-            'code': 'b = 2',
+            "stdout": "Start 2\n",
+            "stderr": "",
+            "outputs": [{"data": {"text/plain": "2"}, "metadata": {}}],
+            "status": CacheStatus.COMPUTED,
+            "execution_time": 0.1,
+            "total_time": 0.1,
+            "code": "b = 2",
         }
 
         self.magics._statement_processor.process_statement.side_effect = [metrics1, metrics2]
@@ -88,7 +90,7 @@ class TestOutputOrdering(unittest.TestCase):
         self.magics._execute_cell(raw_cell)
 
         # Verify stdout replay: print should have been called with both stdout outputs
-        stdout_prints = [c for c in mock_print.mock_calls if c[1] and 'Start' in str(c[1][0])]
+        stdout_prints = [c for c in mock_print.mock_calls if c[1] and "Start" in str(c[1][0])]
         assert len(stdout_prints) >= 2, f"Expected stdout replay for both statements, got: {mock_print.mock_calls}"
 
         # Verify badge was rendered (initial + progress + final)
@@ -100,5 +102,5 @@ class TestOutputOrdering(unittest.TestCase):
         assert mock_publish_data.call_count >= 1, "Expected publish_display_data for non-last statement output"
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

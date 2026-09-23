@@ -46,7 +46,7 @@ ANNOTATION_PATTERN = re.compile(r'#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\S*))?')
 
 It's applied with `re.search` (not `re.match`), so the directive can appear **anywhere on the line** — including trailing on a normal code line.
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._opts_out_of_rng_rewind @00e6c078 -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._opts_out_of_rng_rewind @ad08f32d -->
 !!! warning "One consumer reads own-line comments only"
     That is true of the *parser*. It is not true of everything downstream of it.
     `UpstreamChecker._opts_out_of_rng_rewind` — the check that decides whether
@@ -70,7 +70,7 @@ name. A `\d+` group would simply not match the bad part — `ttl=5m` would captu
 
 A few details that bite people:
 
-<!-- claim: cash/notebook/annotations.py:ANNOTATION_PATTERN @95980cce, cash/notebook/annotations.py:parse_annotation_line @f843a7c6 -->
+<!-- claim: cash/notebook/annotations.py:ANNOTATION_PATTERN @412c3ce1, cash/notebook/annotations.py:parse_annotation_line @4e940712 -->
 - **`@cash:` is case-sensitive.** `# @Cash:persist` is silently ignored. Only the directive *name* after the colon is lower-cased ([`annotations.py` — `ANNOTATION_PATTERN`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)), so `# @cash:PERSIST` works.
 - **A space after the colon is fine.** `# @cash: persist` and `# @cash:persist` both match (the pattern allows `\s*` after the colon), as does spacing around `=` — `# @cash:ttl = 60` works.
 - **Whitespace before `@cash:` is fine.** `#@cash:persist`, `# @cash:persist`, and `#   @cash:persist` all match.
@@ -92,7 +92,7 @@ Forces a statement to be cached on disk even when the cost model would normally 
 cheap_constant = compute_constants()    # would normally be skipped; now forced
 ```
 
-<!-- claim: cash/notebook/annotations.py:parse_annotation_line @f843a7c6, cash/notebook/statement/processor.py:StatementProcessor._parse_annotation @70e15ddd -->
+<!-- claim: cash/notebook/annotations.py:parse_annotation_line @4e940712, cash/notebook/statement/processor.py:StatementProcessor._parse_annotation @70e15ddd -->
 Behind the scenes: the parser sets `CacheAnnotation(persist=True)` ([`annotations.py` — `parse_annotation_line`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)), and `_parse_annotation` in the statement processor turns that into `force_persist=True` ([`statement/processor.py` — `StatementProcessor._parse_annotation`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py)), which bypasses the cost-model skip logic downstream.
 
 If both `persist` and `no-cache` apply to the same statement, **`no-cache` wins** (see [Merging](#merging-multiple-annotations)).
@@ -110,7 +110,7 @@ now = datetime.utcnow()    # always fresh
 
 This is the right directive when a statement has observable side effects or produces values that must always be recomputed (timestamps, monotonic counters, "fire and forget" prints).
 
-<!-- claim: cash/notebook/cacheability_decision.py:decide_cacheability @be2e3981 -->
+<!-- claim: cash/notebook/cacheability_decision.py:decide_cacheability @e9c27ac0 -->
 Behind the scenes: the cacheability decision short-circuits at [`cacheability_decision.py` — `decide_cacheability`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/cacheability_decision.py):
 
 <!-- test:skip reason="source-code excerpt: has return outside function" -->
@@ -136,7 +136,7 @@ Notes:
 - If multiple `ttl=` annotations apply to the same statement, **the last one wins** (see [Merging](#merging-multiple-annotations)).
 - TTL only governs *cache freshness*. A statement with `no-cache` won't be cached at all, so its `ttl=` is irrelevant.
 
-<!-- claim: cash/notebook/annotations.py:parse_annotation_line @f843a7c6 -->
+<!-- claim: cash/notebook/annotations.py:parse_annotation_line @4e940712 -->
 Behind the scenes: the annotation sets `CacheAnnotation.ttl` ([`annotations.py` — `parse_annotation_line`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)), which `_parse_annotation` reads and uses as `effective_ttl` ([`statement/processor.py` — `StatementProcessor._parse_annotation`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py)).
 
 ### `# @cash:allow-random` (alias: `allowrandom`)
@@ -333,7 +333,7 @@ element, which no key can see, so it is not intercepted. The same holds for a
 lambda's parameters, and for an argument computed from the element
 (`make_features(cleaned[mid], W)`): it too is hashed in full.
 
-<!-- claim: cash/notebook/call_unit.py:CallUnit._entry_for @f3e978ec, cash/notebook/call_unit.py:_GUARD_AFTER_CALLS == 50, cash/notebook/call_unit.py:_OVERHEAD_FACTOR == 3.0 -->
+<!-- claim: cash/notebook/call_unit.py:CallUnit._entry_for @89e5ce0c, cash/notebook/call_unit.py:_GUARD_AFTER_CALLS == 50, cash/notebook/call_unit.py:_OVERHEAD_FACTOR == 3.0 -->
 A comprehension makes its call once per element, and caching each one has a
 cost of its own — a key, a lookup, a store. So past 50 calls in one run of the
 statement, cash times a few of them uncached; when caching a call costs more
@@ -345,7 +345,7 @@ run as one unit. The badge's `sub-call` line counts those calls too and says
 how many ran plain. A call that does real work, like fitting a model per
 element, is never re-run to be timed.
 
-<!-- claim: cash/notebook/call_unit.py:_keys_by_content @b1716a9c, cash/notebook/call_unit.py:call_cache_key @4a98c572, cash/notebook/call_unit.py:_CONTENT_KEY_MAX_BYTES == 67108864, cash/notebook/call_unit.py:_NAME_CONTENT_MAX_BYTES == 1048576 -->
+<!-- claim: cash/notebook/call_unit.py:_keys_by_content @f28dca7c, cash/notebook/call_unit.py:call_cache_key @cadcbc40, cash/notebook/call_unit.py:_CONTENT_KEY_MAX_BYTES == 67108864, cash/notebook/call_unit.py:_NAME_CONTENT_MAX_BYTES == 1048576 -->
 **The key holds what the call receives.** When everything a call reads is plain
 data — numbers, strings, dates, numpy arrays, pandas frames, and lists or dicts
 of those — its key is the function it calls and the values it is handed. An
@@ -576,7 +576,7 @@ generator instead.
 
 ## Lookback and scoping
 
-<!-- claim: cash/notebook/annotations.py:parse_annotations_in_range @f1299a54 -->
+<!-- claim: cash/notebook/annotations.py:parse_annotations_in_range @d13a2128 -->
 Cash needs to associate each annotation with a specific statement. It does this in [`parse_annotations_in_range`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py) which walks two directions from a top-level AST node:
 
 ### Backward walk
@@ -674,7 +674,7 @@ That's a perfectly valid placement. Don't overuse it — the multi-line form abo
 
 ## Merging multiple annotations
 
-<!-- claim: cash/notebook/annotations.py:CacheAnnotation.merge @b2421117 -->
+<!-- claim: cash/notebook/annotations.py:CacheAnnotation.merge @dd1153cd -->
 When several annotations apply to a single statement (stacked above, on the line, or inside a compound body), Cash merges them with `CacheAnnotation.merge` ([`annotations.py` — `CacheAnnotation.merge`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)):
 
 | Field | Merge rule |

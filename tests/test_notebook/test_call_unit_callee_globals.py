@@ -6,6 +6,7 @@ widened the bug into — a call whose enclosing statement is skip-cached
 (``sink.append(compute(y))``), where the intercepted call is the only thing
 serving a hit and therefore the only thing that can put the write back.
 """
+
 import types
 
 import pytest
@@ -113,23 +114,30 @@ class TestIdentification:
 
         tmp = Path(__file__).parent / "_cas260_redef_probe.py"
         try:
-            tmp.write_text(textwrap.dedent("""
+            tmp.write_text(
+                textwrap.dedent("""
                 MARK = []
                 def edited(v):
                     MARK.append(v)
                     return v
-            """), encoding="utf-8")
+            """),
+                encoding="utf-8",
+            )
             sys.path.insert(0, str(tmp.parent))
             mod = importlib.import_module("_cas260_redef_probe")
             assert callee_mutated_globals(mod.edited) == ("MARK",)
 
-            tmp.write_text(textwrap.dedent("""
+            tmp.write_text(
+                textwrap.dedent("""
                 MARK = []
                 def edited(v):
                     return v
-            """), encoding="utf-8")
+            """),
+                encoding="utf-8",
+            )
             importlib.invalidate_caches()
             import linecache
+
             linecache.clearcache()
             mod = importlib.reload(mod)
             assert callee_mutated_globals(mod.edited) == (), (
@@ -201,10 +209,17 @@ class TestKeying:
         site = self._site()
         ctx = CacheKeyContext(variable_lineage={"x": "aaa"}, user_ns={"x": 1, "compute": len})
         as_global = call_cache_key(
-            site, ctx=ctx, arg_digests=[], loop_vars={}, global_digests={"t": "d"},
+            site,
+            ctx=ctx,
+            arg_digests=[],
+            loop_vars={},
+            global_digests={"t": "d"},
         )
         as_loop_var = call_cache_key(
-            site, ctx=ctx, arg_digests=[], loop_vars={"t": object()},
+            site,
+            ctx=ctx,
+            arg_digests=[],
+            loop_vars={"t": object()},
             loop_var_digests={"t": "d"},
         )
         assert as_global != as_loop_var
@@ -232,6 +247,7 @@ class TestCaptureAndRestore:
         whole class. Storing an entry whose key cannot discriminate is the
         partial-accumulator hazard, so this fails closed."""
         import threading
+
         fn, _ = _make("def f():\n    pass\n", "f", {"LOCK": threading.Lock()})
         assert CallUnit._capture_globals(fn, ("LOCK",)) is None
 
@@ -271,8 +287,7 @@ class TestCaptureAndRestore:
         captured = CallUnit._capture_globals(fn, ("CALLS",))
         ns["CALLS"].append(2)
         assert captured == {"CALLS": [1]}, (
-            "the capture aliases the live object, so a later mutation rewrites "
-            "an entry that was already stored"
+            "the capture aliases the live object, so a later mutation rewrites an entry that was already stored"
         )
 
     def test_restore_hands_back_a_copy(self):
@@ -284,9 +299,7 @@ class TestCaptureAndRestore:
         unit = CallUnit.__new__(CallUnit)
         unit._restore_globals(fn, ("CALLS",), entry)
         ns["CALLS"].append(2)
-        assert entry["CALLS"] == [1], (
-            "mutating the restored variable reached back into the cache entry"
-        )
+        assert entry["CALLS"] == [1], "mutating the restored variable reached back into the cache entry"
 
     def test_capture_refuses_a_value_that_cannot_be_copied(self):
         class NoCopy:
@@ -319,10 +332,7 @@ def test_digests_use_the_full_hash_not_the_sampled_one():
     first = CallUnit._global_digests(fn, ("ACC",))
     ns["ACC"] = b
     second = CallUnit._global_digests(fn, ("ACC",))
-    assert first != second, (
-        "the pre-state digest is sampled; two accumulators differing only in "
-        "the middle share a key"
-    )
+    assert first != second, "the pre-state digest is sampled; two accumulators differing only in the middle share a key"
 
 
 @pytest.mark.parametrize("bad", [None, 42, "text"])
@@ -348,8 +358,7 @@ class TestPayloadLivesOnTheValueNotInMetadata:
         assert _unwrap_callee_globals(42, {}) == (42, None)
 
     def test_a_wrapped_entry_splits_into_result_and_globals(self):
-        result, globs = _unwrap_callee_globals((42, {"CALLS": [1]}),
-                                               {"has_callee_globals": True})
+        result, globs = _unwrap_callee_globals((42, {"CALLS": [1]}), {"has_callee_globals": True})
         assert result == 42
         assert globs == {"CALLS": [1]}
 
@@ -371,6 +380,5 @@ class TestPayloadLivesOnTheValueNotInMetadata:
         """``_UNWRAP_FAILED`` is a unique sentinel precisely so a stored
         ``None`` stays distinguishable from a broken entry."""
         assert _unwrap_callee_globals(None, {}) == (None, None)
-        result, globs = _unwrap_callee_globals((None, {"C": [1]}),
-                                               {"has_callee_globals": True})
+        result, globs = _unwrap_callee_globals((None, {"C": [1]}), {"has_callee_globals": True})
         assert result is None and globs == {"C": [1]}

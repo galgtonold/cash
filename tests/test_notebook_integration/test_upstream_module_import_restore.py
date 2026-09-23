@@ -15,6 +15,7 @@ was auto-executed.
 Fix: Check `self.shell.user_ns` before skipping module imports. If the import
 is in virtual_modules but NOT in memory, schedule it for re-execution.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.upstream, pytest.mark.modules]
@@ -32,21 +33,23 @@ def test_mid_cell_import_available_for_upstream_execution(nb_runner):
     - Running Cell B triggers upstream execution of `pressure_solve = factorized(...)`
     - But `factorized` isn't in memory → NameError
     """
-    nb_runner.create_notebook([
-        # Cell 1: imports
-        "from collections import OrderedDict",
-        # Cell 2: define data
-        "data = {'b': 2, 'a': 1, 'c': 3}",
-        # Cell 3: import mid-cell + use the import
-        (
-            "from operator import itemgetter\n"
-            "sorted_keys = sorted(data.keys(), key=itemgetter(0))\n"
-            "result = OrderedDict((k, data[k]) for k in sorted_keys)\n"
-            "print(f'Sorted: {list(result.items())}')"
-        ),
-        # Cell 4: depends on result from cell 3
-        "output = list(result.values())\nprint(f'Values: {output}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            # Cell 1: imports
+            "from collections import OrderedDict",
+            # Cell 2: define data
+            "data = {'b': 2, 'a': 1, 'c': 3}",
+            # Cell 3: import mid-cell + use the import
+            (
+                "from operator import itemgetter\n"
+                "sorted_keys = sorted(data.keys(), key=itemgetter(0))\n"
+                "result = OrderedDict((k, data[k]) for k in sorted_keys)\n"
+                "print(f'Sorted: {list(result.items())}')"
+            ),
+            # Cell 4: depends on result from cell 3
+            "output = list(result.values())\nprint(f'Values: {output}')",
+        ]
+    )
     nb_runner.start_kernel()
 
     # Run cells 1-3 first to populate cache
@@ -71,19 +74,16 @@ def test_import_and_usage_in_same_upstream_cell(nb_runner):
       Cell 7: from scipy... import factorized; pressure_solve = factorized(A)
       Cell 10: uses pressure_solve in a loop
     """
-    nb_runner.create_notebook([
-        # Cell 1: basic data
-        "import math\nradius = 5",
-        # Cell 2: import + compute in same cell (like the CFD Laplacian cell)
-        (
-            "from math import pi as PI\n"
-            "area = PI * radius ** 2\n"
-            "print(f'Area: {area:.4f}')"
-        ),
-        # Cell 3: depends on area from cell 2
-        "circumference = 2 * math.sqrt(area / math.pi) * math.pi\n"
-        "print(f'Circumference: {circumference:.4f}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            # Cell 1: basic data
+            "import math\nradius = 5",
+            # Cell 2: import + compute in same cell (like the CFD Laplacian cell)
+            ("from math import pi as PI\narea = PI * radius ** 2\nprint(f'Area: {area:.4f}')"),
+            # Cell 3: depends on area from cell 2
+            "circumference = 2 * math.sqrt(area / math.pi) * math.pi\nprint(f'Circumference: {circumference:.4f}')",
+        ]
+    )
     nb_runner.start_kernel()
 
     # Run all cells to build cache
@@ -125,20 +125,18 @@ ip.register_magics(magics)
 %cash_on
 """
 
-    nb_runner.create_notebook([
-        # Cell 1: setup (custom backend)
-        setup_cell,
-        # Cell 2: data
-        "values = [3, 1, 4, 1, 5]",
-        # Cell 3: import + compute
-        (
-            "from functools import reduce\n"
-            "total = reduce(lambda a, b: a + b, values)\n"
-            "print(f'Total: {total}')"
-        ),
-        # Cell 4: use total
-        "avg = total / len(values)\nprint(f'Average: {avg}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            # Cell 1: setup (custom backend)
+            setup_cell,
+            # Cell 2: data
+            "values = [3, 1, 4, 1, 5]",
+            # Cell 3: import + compute
+            ("from functools import reduce\ntotal = reduce(lambda a, b: a + b, values)\nprint(f'Total: {total}')"),
+            # Cell 4: use total
+            "avg = total / len(values)\nprint(f'Average: {avg}')",
+        ]
+    )
     nb_runner.start_kernel(with_cash=False)  # We have custom setup
 
     # Run all cells

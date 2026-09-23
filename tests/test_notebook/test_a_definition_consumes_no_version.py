@@ -8,6 +8,7 @@ non-final version, so it scheduled the producers of both versions. A function
 reads its globals when it is CALLED; at definition time it consumes nothing,
 and the call site's own inputs cover what it will read.
 """
+
 from __future__ import annotations
 
 import types
@@ -25,12 +26,18 @@ def _entry(stmt, outputs=(), inputs=(), consumed=None, produced=None):
 
 
 TRACE = [
-    _entry("bt = []", ("bt",), (), None, {"bt": "B0"}),                                               # 0
-    _entry("backtest = pd.concat(bt)", ("backtest",), ("bt",), {"bt": "B0"}, {"backtest": "L1"}),      # 1
-    _entry("backtest['abs_err'] = backtest.pred", ("backtest",), ("backtest",), {"backtest": "L1"},
-           {"backtest": "L2"}),                                                                        # 2
-    _entry("def plot_region(region):\n    return backtest[backtest.region == region]",
-           ("plot_region",), ("backtest",), {"backtest": "L1"}, {"plot_region": "P"}),                # 3
+    _entry("bt = []", ("bt",), (), None, {"bt": "B0"}),  # 0
+    _entry("backtest = pd.concat(bt)", ("backtest",), ("bt",), {"bt": "B0"}, {"backtest": "L1"}),  # 1
+    _entry(
+        "backtest['abs_err'] = backtest.pred", ("backtest",), ("backtest",), {"backtest": "L1"}, {"backtest": "L2"}
+    ),  # 2
+    _entry(
+        "def plot_region(region):\n    return backtest[backtest.region == region]",
+        ("plot_region",),
+        ("backtest",),
+        {"backtest": "L1"},
+        {"plot_region": "P"},
+    ),  # 3
 ]
 
 

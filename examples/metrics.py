@@ -1,6 +1,8 @@
-import cash
 import time
+
 from advanced_metrics import number
+
+import cash
 
 
 def increment(counter: int) -> int:
@@ -11,15 +13,18 @@ def increment(counter: int) -> int:
 def bla(asdf):
     print("Hi")
 
+
 @cash.cache
 def dep(a):
     time.sleep(1)
     return a + 3
 
+
 @cash.cache
 def fun(a, b):
     time.sleep(1)
     return a + b + dep(a) + 2
+
 
 @cash.cache
 def super_fun(a):

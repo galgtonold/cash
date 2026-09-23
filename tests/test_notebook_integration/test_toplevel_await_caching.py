@@ -16,6 +16,7 @@ every run.  These tests pin the stage-2 behaviour:
    cell (``x = await bump(x)``) re-run in isolation must reprint its from-start
    value, guarding against a stage-1 regression once caching is in play.
 """
+
 import textwrap
 
 import pytest
@@ -32,8 +33,9 @@ def test_toplevel_await_result_is_cached_second_run(nb_runner):
     cache HIT restores ``result`` without calling ``slow()``, so the counter
     stays at 1.  We also assert the debug markers show cache activity on run 2.
     """
-    nb_runner.create_notebook([
-        textwrap.dedent("""\
+    nb_runner.create_notebook(
+        [
+            textwrap.dedent("""\
             import asyncio
             call_log = []
             async def slow():
@@ -41,18 +43,17 @@ def test_toplevel_await_result_is_cached_second_run(nb_runner):
                 call_log.append('ran')
                 return sum(range(300000))
         """),
-        "result = await slow()\nprint(f'result={result}')",
-        "print(f'calls={len(call_log)}')",
-    ])
+            "result = await slow()\nprint(f'result={result}')",
+            "print(f'calls={len(call_log)}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_debug()
     nb_runner.enable_persist()
 
     # Run 1: the coroutine runs once (COMPUTE).
     nb_runner.run_all()
-    assert "result=44999850000" in nb_runner.get_output(2), (
-        f"run 1 wrong result: {nb_runner.get_output(2)!r}"
-    )
+    assert "result=44999850000" in nb_runner.get_output(2), f"run 1 wrong result: {nb_runner.get_output(2)!r}"
     assert "calls=1" in nb_runner.get_output(3), (
         f"coroutine did not run exactly once on first run: {nb_runner.get_output(3)!r}"
     )
@@ -60,35 +61,32 @@ def test_toplevel_await_result_is_cached_second_run(nb_runner):
     # Run 2 (identical): a cache HIT restores ``result`` and MUST NOT re-run the
     # coroutine, so the side-effect counter stays at 1.
     nb_runner.run_all()
-    assert "result=44999850000" in nb_runner.get_output(2), (
-        f"run 2 wrong result: {nb_runner.get_output(2)!r}"
-    )
+    assert "result=44999850000" in nb_runner.get_output(2), f"run 2 wrong result: {nb_runner.get_output(2)!r}"
     assert "calls=1" in nb_runner.get_output(3), (
-        f"await cell recomputed on identical 2nd run (counter grew): "
-        f"{nb_runner.get_output(3)!r}"
+        f"await cell recomputed on identical 2nd run (counter grew): {nb_runner.get_output(3)!r}"
     )
 
     raw = nb_runner.get_raw_output(2)
     has_cache = "CACHE_HIT" in raw or "Cache hit: True" in raw
-    assert has_cache, (
-        f"top-level-await cell shows no cache activity on identical 2nd run: {raw[:500]}"
-    )
+    assert has_cache, f"top-level-await cell shows no cache activity on identical 2nd run: {raw[:500]}"
 
 
 def test_toplevel_await_selfmod_stays_idempotent(nb_runner):
     """A self-modifying await cell (``x = await bump(x)``) re-run in isolation
     reprints its from-start value — caching must not turn an isolated re-run
     into an accumulation (stage-1 regression guard)."""
-    nb_runner.create_notebook([
-        textwrap.dedent("""\
+    nb_runner.create_notebook(
+        [
+            textwrap.dedent("""\
             import asyncio
             x = 1
             async def bump(v):
                 await asyncio.sleep(0)
                 return v + 1
         """),
-        "x = await bump(x)\nprint(f'x={x}')",
-    ])
+            "x = await bump(x)\nprint(f'x={x}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_persist()
 
@@ -98,6 +96,5 @@ def test_toplevel_await_selfmod_stays_idempotent(nb_runner):
     # Isolated re-run of only the self-modifying await cell must be idempotent.
     nb_runner.run_cell(2)
     assert "x=2" in nb_runner.get_output(2), (
-        f"self-mod await cell accumulated instead of idempotent: "
-        f"{nb_runner.get_output(2)!r}"
+        f"self-mod await cell accumulated instead of idempotent: {nb_runner.get_output(2)!r}"
     )

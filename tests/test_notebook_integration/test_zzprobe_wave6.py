@@ -15,15 +15,17 @@ MISS = "Executing (cache miss)"
 
 
 def test_stateful_marker_forces_reexecution(nb_runner):
-    nb_runner.create_notebook([
-        "from cash.notebook.purity import stateful\n"
-        "calls6 = []\n"
-        "@stateful\n"
-        "def next_id():\n"
-        "    calls6.append(1)\n"
-        "    return len(calls6)",
-        "nid = next_id()\nprint('nid=', nid)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "from cash.notebook.purity import stateful\n"
+            "calls6 = []\n"
+            "@stateful\n"
+            "def next_id():\n"
+            "    calls6.append(1)\n"
+            "    return len(calls6)",
+            "nid = next_id()\nprint('nid=', nid)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_debug()
     nb_runner.run_all()
@@ -38,9 +40,4 @@ def test_stateful_marker_forces_reexecution(nb_runner):
     # a stale replay marked as cached.)
     assert "nid= 1" in out, f"stateful rerun output wrong: {out!r}"
     raw = nb_runner.get_raw_output(2)
-    assert MISS in raw, (
-        "@stateful call cell was served from cache / skipped on rerun "
-        "(marker promises re-execution)"
-    )
-
-
+    assert MISS in raw, "@stateful call cell was served from cache / skipped on rerun (marker promises re-execution)"

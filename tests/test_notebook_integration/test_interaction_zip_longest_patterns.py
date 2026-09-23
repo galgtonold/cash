@@ -1,16 +1,18 @@
 """Batch 405: zip with unequal lengths and zip_longest."""
+
 import pytest
 
 pytestmark = [pytest.mark.stress, pytest.mark.timeout(90)]
 
 
 class TestZipLongestPatterns:
-
     def test_zip_strict_truncate(self, nb_runner):
-        nb_runner.create_notebook([
-            "names = ['Alice', 'Bob', 'Charlie']\nscores = [90, 85]",
-            "paired = list(zip(names, scores))\ncount = len(paired)\nprint(f'paired={paired} count={count}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "names = ['Alice', 'Bob', 'Charlie']\nscores = [90, 85]",
+                "paired = list(zip(names, scores))\ncount = len(paired)\nprint(f'paired={paired} count={count}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -18,10 +20,12 @@ class TestZipLongestPatterns:
         assert "('Alice', 90)" in out
 
     def test_zip_edit(self, nb_runner):
-        nb_runner.create_notebook([
-            "from itertools import zip_longest\nk = ['a', 'b']\nv = [1, 2, 3]",
-            "result = dict(zip_longest(k, v, fillvalue='?'))\nprint(f'result={result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from itertools import zip_longest\nk = ['a', 'b']\nv = [1, 2, 3]",
+                "result = dict(zip_longest(k, v, fillvalue='?'))\nprint(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "'a': 1" in nb_runner.get_output(2)

@@ -1,11 +1,10 @@
 import time
-import os
-import pickle
+
 from cash.backends import FileBackend
-from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry, read_entry
+from cash.backends.entry_format import ENTRY_SUFFIX, read_entry
+
 
 class TestFileBackendEnhanced:
-    
     def test_async_metadata_tracking(self, tmp_path):
         # Flush interval 1s
         backend = FileBackend(str(tmp_path), flush_interval=0.5)
@@ -16,30 +15,30 @@ class TestFileBackendEnhanced:
         # Get initial metadata access time
         meta_path = backend._get_path("key1")
         meta_initial, _ = read_entry(meta_path, with_payload=False)
-        
+
         # Wait a bit to ensure distinct timestamp
         time.sleep(1.0)
-        
+
         # Access -> Should update last_access
         backend.get("key1")
-        
+
         # Immediate check from disk (should be OLD or NEW depending on flush?)
         # Since flush is 0.5s, it might have happened or not.
         # But we want to ensure it DOES happen eventually.
-        
+
         # In-memory metadata should be updated immediately
         assert backend._metadata_cache["key1"]["last_access"] > meta_initial["last_access"]
-        
+
         # Wait for flush
         time.sleep(1.0)
-        
+
         # Check disk. Reading the metadata region alone is what makes the
         # in-place flush observable: the flusher rewrites only that region,
         # never the payload.
         meta_updated, _ = read_entry(meta_path, with_payload=False)
-            
+
         assert meta_updated["last_access"] > meta_initial["last_access"]
-        
+
         backend.shutdown()
 
     def test_lru_eviction(self, tmp_path):
@@ -47,12 +46,12 @@ class TestFileBackendEnhanced:
         # We need to know serialized size.
         # "value" string ~ 20 bytes? + metadata overhead.
         # Let's use 1500 bytes (1.5KB) limit.
-        
-        backend = FileBackend(str(tmp_path), max_size_bytes=1500, flush_interval=0) # No async flush for this test
-        
+
+        backend = FileBackend(str(tmp_path), max_size_bytes=1500, flush_interval=0)  # No async flush for this test
+
         # Check empty size
         assert backend._current_size_bytes == 0
-        
+
         # Insert items items approx 300-400 bytes each (Pickle overhead is significant)
         large_val = "x" * 400
 
@@ -60,10 +59,10 @@ class TestFileBackendEnhanced:
         backend._writes.wait_all()  # async write — size only known after it lands
         s1 = backend._current_size_bytes
         assert s1 > 400
-        
+
         time.sleep(0.1)
         backend.set("k2", large_val)
-        
+
         # Access k1 to make it fresh.
         #
         # The sleep is load-bearing: without it this get() lands ~0.4ms after
@@ -74,13 +73,13 @@ class TestFileBackendEnhanced:
         # "k2 should have been evicted" on one job in five, at random.
         time.sleep(0.1)
         backend.get("k1")
-        
+
         time.sleep(0.1)
         # k2 is now oldest accessed? No, k1 accessed recently. k2 is older.
         # k1 created t0, accessed t2.
         # k2 created t1.
         # LRU = k2.
-        
+
         # Insert k3, forcing eviction if sum > 1000
         backend.set("k3", large_val)
         backend._writes.wait_all()  # let the async write + _check_and_evict settle
@@ -91,17 +90,17 @@ class TestFileBackendEnhanced:
         # Verify k2 is gone (LRU)
         meta2, val2 = backend.get("k2")
         assert val2 is None, "k2 should have been evicted"
-        
+
         # Verify k1 is still there (Recently Accessed)
         meta1, val1 = backend.get("k1")
         assert val1 == large_val, "k1 should be preserved"
-        
+
         # Verify k3 is there
         meta3, val3 = backend.get("k3")
         assert val3 == large_val
-        
+
         backend.shutdown()
-        
+
     def test_size_init(self, tmp_path):
         """A second backend must account for what the first one left on disk.
 
@@ -120,12 +119,11 @@ class TestFileBackendEnhanced:
         assert size > 0
 
         # 2. Re-create backend over the same directory and make it need a total
-        b2 = FileBackend(str(tmp_path), max_size_bytes=10 ** 9)
+        b2 = FileBackend(str(tmp_path), max_size_bytes=10**9)
         b2.set("k2", "v2")
         b2._writes.wait_all()
 
-        on_disk = sum(f.stat().st_size for f in tmp_path.iterdir()
-                      if f.suffix == ENTRY_SUFFIX)
+        on_disk = sum(f.stat().st_size for f in tmp_path.iterdir() if f.suffix == ENTRY_SUFFIX)
         assert b2._current_size_bytes == on_disk
         assert b2._current_size_bytes > size, "k1's bytes were not counted"
         b2.shutdown()
@@ -154,6 +152,6 @@ class TestCacheDirDeletedWhileLive:
         backend._writes.wait_all()
 
         assert cache_dir.exists()
-        _meta, value = backend.get("after")   # get() returns (metadata, value)
+        _meta, value = backend.get("after")  # get() returns (metadata, value)
         assert value == "v2"
         backend.shutdown()

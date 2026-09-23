@@ -7,6 +7,7 @@ has since changed, so the tests are mostly the other direction: every way a
 name's behaviour can change without its own source changing must move the
 digest, and every way cash cannot bound the answer must return None.
 """
+
 from __future__ import annotations
 
 import textwrap
@@ -60,12 +61,15 @@ class TestWhatDoesNotMatter:
 class TestWhatDoes:
     """Every way `load` can change without `load` changing."""
 
-    @pytest.mark.parametrize("old,new,what", [
-        ("return [_helper(i)", "return [_helper(i + 0)", "the function itself"),
-        ("return n + 1", "return n + 2", "a helper it calls"),
-        ("THRESHOLD = 3", "THRESHOLD = 4", "a constant it reads"),
-        ("return 2", "return 5", "a function run at import time to build a value it reads"),
-    ])
+    @pytest.mark.parametrize(
+        "old,new,what",
+        [
+            ("return [_helper(i)", "return [_helper(i + 0)", "the function itself"),
+            ("return n + 1", "return n + 2", "a helper it calls"),
+            ("THRESHOLD = 3", "THRESHOLD = 4", "a constant it reads"),
+            ("return 2", "return 5", "a function run at import time to build a value it reads"),
+        ],
+    )
     def test_a_dependency_moves_the_digest(self, old, new, what):
         assert _d(BASE, "load") != _d(BASE.replace(old, new), "load"), what
 
@@ -79,8 +83,7 @@ class TestWhatDoes:
         assert _d(BASE, "load") != _d(src, "load")
 
     def test_import_time_code_that_mutates_what_it_reads(self):
-        src = BASE.replace("TABLE = build_table()", "TABLE = [build_table()]") + \
-            "\n    TABLE.append(4)\n"
+        src = BASE.replace("TABLE = build_table()", "TABLE = [build_table()]") + "\n    TABLE.append(4)\n"
         before = BASE.replace("TABLE = build_table()", "TABLE = [build_table()]")
         assert _d(before, "load") != _d(src, "load")
 
@@ -141,14 +144,17 @@ class TestWhenItCannotSay:
     def test_a_module_level_getattr(self):
         assert _d("def __getattr__(name):\n    return 1\ndef load():\n    return 2\n", "load") is None
 
-    @pytest.mark.parametrize("body", [
-        "return globals()['x']",
-        "return eval('1')",
-        "exec('x = 1')",
-        "setattr(obj, 'a', 1)",
-        "return sys.modules[__name__]",
-        "return obj.__dict__",
-    ])
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "return globals()['x']",
+            "return eval('1')",
+            "exec('x = 1')",
+            "setattr(obj, 'a', 1)",
+            "return sys.modules[__name__]",
+            "return obj.__dict__",
+        ],
+    )
     def test_code_in_the_closure_that_reaches_the_namespace_by_string(self, body):
         src = "import sys\nobj = object()\ndef load():\n    " + body + "\n"
         assert _d(src, "load") is None
@@ -164,24 +170,30 @@ class TestWhenItCannotSay:
 class TestStaticAttributeReads:
     """Which names a statement reads from a module -- or that it does more."""
 
-    @pytest.mark.parametrize("code,expected", [
-        ("x = lib.load(3)", {"load"}),
-        ("x = lib.load(lib.SIZE)", {"load", "SIZE"}),
-        ("x = [lib.f(i) for i in range(3)]", {"f"}),
-        ("x = lib.sub.fn()", {"sub"}),
-    ])
+    @pytest.mark.parametrize(
+        "code,expected",
+        [
+            ("x = lib.load(3)", {"load"}),
+            ("x = lib.load(lib.SIZE)", {"load", "SIZE"}),
+            ("x = [lib.f(i) for i in range(3)]", {"f"}),
+            ("x = lib.sub.fn()", {"sub"}),
+        ],
+    )
     def test_plain_reads(self, code, expected):
         assert static_attribute_reads(code, "lib") == expected
 
-    @pytest.mark.parametrize("code", [
-        "x = run(lib)",                    # passed whole
-        "x = lib",                         # rebound
-        "lib.load = other",                # stored
-        "del lib.load",
-        "x = getattr(lib, name)",
-        "x = lib.__dict__['load']",
-        "x = 1",                           # not read at all
-    ])
+    @pytest.mark.parametrize(
+        "code",
+        [
+            "x = run(lib)",  # passed whole
+            "x = lib",  # rebound
+            "lib.load = other",  # stored
+            "del lib.load",
+            "x = getattr(lib, name)",
+            "x = lib.__dict__['load']",
+            "x = 1",  # not read at all
+        ],
+    )
     def test_anything_else_is_not_static(self, code):
         assert static_attribute_reads(code, "lib") is None
 
@@ -221,12 +233,10 @@ class TestModuleReadLineage:
         before = module_read_lineage(tracker, "lib", module, "x = lib.load(3)")
         path.write_text(textwrap.dedent(BASE).replace('"v1:"', '"v2:"'), encoding="utf-8")
         assert module_read_lineage(tracker, "lib", module, "x = lib.load(3)") == before
-        path.write_text(textwrap.dedent(BASE).replace("return n + 1", "return n + 2"),
-                        encoding="utf-8")
+        path.write_text(textwrap.dedent(BASE).replace("return n + 1", "return n + 2"), encoding="utf-8")
         assert module_read_lineage(tracker, "lib", module, "x = lib.load(3)") != before
 
-    @pytest.mark.parametrize("case", ["untracked", "not a module", "bare use",
-                                      "no code", "no tracker"])
+    @pytest.mark.parametrize("case", ["untracked", "not a module", "bare use", "no code", "no tracker"])
     def test_whole_lineage_when_narrowing_does_not_apply(self, tmp_path, case):
         from cash.notebook.lineage_formula import module_read_lineage
 
@@ -263,8 +273,7 @@ class TestModuleReadLineage:
         path, module, tracker = self._setup(tmp_path)
         st = os.stat(path)
         before = module_read_lineage(tracker, "lib", module, "x = lib.load(3)")
-        path.write_text(textwrap.dedent(BASE).replace("return n + 1", "return n + 2"),
-                        encoding="utf-8")
+        path.write_text(textwrap.dedent(BASE).replace("return n + 1", "return n + 2"), encoding="utf-8")
         os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
         assert os.stat(path).st_size == st.st_size
 
@@ -281,16 +290,18 @@ class TestNondeterministicImportTimeCode:
     behaviour.
     """
 
-    @pytest.mark.parametrize("line", [
-        "STAMP = time.time()",
-        "STAMP = datetime.datetime.now()",
-        "STAMP = random.random()",
-        "STAMP = uuid.uuid4()",
-        "STAMP = np.random.rand()",
-    ])
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "STAMP = time.time()",
+            "STAMP = datetime.datetime.now()",
+            "STAMP = random.random()",
+            "STAMP = uuid.uuid4()",
+            "STAMP = np.random.rand()",
+        ],
+    )
     def test_a_nondeterministic_value_in_the_closure(self, line):
-        src = ("import time, datetime, random, uuid\nimport numpy as np\n"
-               + line + "\ndef load():\n    return STAMP\n")
+        src = "import time, datetime, random, uuid\nimport numpy as np\n" + line + "\ndef load():\n    return STAMP\n"
         assert _d(src, "load") is None
 
     def test_a_deterministic_call_at_import_time_is_fine(self):
@@ -302,17 +313,23 @@ class TestNondeterministicImportTimeCode:
         every edit to its module -- even appending an unrelated function --
         re-run everything built on it. A clock read that runs only when the
         function is CALLED gives no new value on a reload."""
-        src = ("import time\ndef summary(rows):\n    t0 = time.perf_counter()\n"
-               "    print(time.perf_counter() - t0)\n    return sum(rows)\n")
+        src = (
+            "import time\ndef summary(rows):\n    t0 = time.perf_counter()\n"
+            "    print(time.perf_counter() - t0)\n    return sum(rows)\n"
+        )
         assert _d(src, "summary") is not None
         assert _d(src + "def unrelated():\n    return 1\n", "summary") == _d(src, "summary")
 
-    @pytest.mark.parametrize("src", [
-        "def make():\n    return time.time()\nSTAMP = make()\n",
-        "def inner():\n    return time.time()\ndef make():\n    return inner()\nSTAMP = make()\n",
-        "def make():\n    return time.time()\nclass C:\n    stamp = make()\nSTAMP = C.stamp\n",
-        "def make(t=time.time()):\n    return t\nSTAMP = 1\n",
-    ], ids=["called_at_import", "called_through_another", "called_in_a_class_body", "a_default"])
+    @pytest.mark.parametrize(
+        "src",
+        [
+            "def make():\n    return time.time()\nSTAMP = make()\n",
+            "def inner():\n    return time.time()\ndef make():\n    return inner()\nSTAMP = make()\n",
+            "def make():\n    return time.time()\nclass C:\n    stamp = make()\nSTAMP = C.stamp\n",
+            "def make(t=time.time()):\n    return t\nSTAMP = 1\n",
+        ],
+        ids=["called_at_import", "called_through_another", "called_in_a_class_body", "a_default"],
+    )
     def test_a_function_run_at_import_time_still_counts(self, src):
         src = "import time\n" + src + "def load():\n    return STAMP, make\n"
         assert _d(src, "load") is None
@@ -320,6 +337,5 @@ class TestNondeterministicImportTimeCode:
     def test_nondeterminism_nothing_in_the_closure_reaches(self):
         """Only what the read name reaches counts -- except import-time code,
         which is in every closure; a def that is never called is not."""
-        src = ("import time\ndef stamp():\n    return time.time()\n"
-               "def load():\n    return 1\n")
+        src = "import time\ndef stamp():\n    return time.time()\ndef load():\n    return 1\n"
         assert _d(src, "load") is not None

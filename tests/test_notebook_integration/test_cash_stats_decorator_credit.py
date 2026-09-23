@@ -19,6 +19,7 @@ part reproducible in-process.)
 Compute cost is mocked with ``time.sleep`` so the numbers are deterministic; the
 assertions are on sign and structure, never wall-clock exact.
 """
+
 import json
 import re
 
@@ -29,14 +30,7 @@ pytestmark = pytest.mark.libraries
 COST = 2.0  # stands in for a slow fit, scaled for test speed
 
 SETUP = "import cash\n%cash_on"
-DEFINE = (
-    "import time\n"
-    "@cash.cache\n"
-    "def train(x):\n"
-    f"    time.sleep({COST})\n"
-    "    return x * 3\n"
-    "print('defined')"
-)
+DEFINE = f"import time\n@cash.cache\ndef train(x):\n    time.sleep({COST})\n    return x * 3\nprint('defined')"
 STATS = "%cash_stats json"
 
 
@@ -55,23 +49,25 @@ def test_decorator_hit_credited_and_verified_in_one_session(nb_runner):
     measures the compute this session, so the second (a hit) is creditable as
     verified under the CAS-157 rule, and the headline net is a real win.
     """
-    nb_runner.create_notebook([
-        SETUP,
-        DEFINE,
-        "a = train(7)  # @cash:no-cache\nprint('a=', a)",   # miss: sleeps, measured
-        "b = train(7)  # @cash:no-cache\nprint('b=', b)",   # hit: no sleep, same key
-        STATS,
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            DEFINE,
+            "a = train(7)  # @cash:no-cache\nprint('a=', a)",  # miss: sleeps, measured
+            "b = train(7)  # @cash:no-cache\nprint('b=', b)",  # hit: no sleep, same key
+            STATS,
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     s = _stats(nb_runner.get_output(5))
 
     # The decorator hit's saving reaches gross AND verified...
-    assert s['total_time_saved'] >= COST * 0.8, s
-    assert s['total_verified_saved'] >= COST * 0.8, s
+    assert s["total_time_saved"] >= COST * 0.8, s
+    assert s["total_verified_saved"] >= COST * 0.8, s
     # ...so the honest, verified headline is a win, not a cost.
-    assert s['net_time_saved'] > 0, s
-    assert 'statements_cacheable_hit' in s and s['statements_cacheable_hit'] >= 1, s
+    assert s["net_time_saved"] > 0, s
+    assert "statements_cacheable_hit" in s and s["statements_cacheable_hit"] >= 1, s
 
 
 def test_decorator_hit_after_restart_is_gross_not_a_phantom_cost(nb_runner):
@@ -84,24 +80,26 @@ def test_decorator_hit_after_restart_is_gross_not_a_phantom_cost(nb_runner):
     critical: the gross/upper-bound must reflect the hit, so the summary reads
     "at best a win" instead of the old "cash cost you N".
     """
-    nb_runner.create_notebook([
-        SETUP,
-        DEFINE,
-        "cold = train(9)  # @cash:no-cache\nprint('cold=', cold)",  # miss
-        "%cash_stats reset",                                        # forget baselines
-        "warm = train(9)  # @cash:no-cache\nprint('warm=', warm)",  # hit
-        STATS,
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            DEFINE,
+            "cold = train(9)  # @cash:no-cache\nprint('cold=', cold)",  # miss
+            "%cash_stats reset",  # forget baselines
+            "warm = train(9)  # @cash:no-cache\nprint('warm=', warm)",  # hit
+            STATS,
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     s = _stats(nb_runner.get_output(6))
 
     # Gross reflects the saving even though it can't be verified this session...
-    assert s['total_time_saved'] >= COST * 0.8, s
+    assert s["total_time_saved"] >= COST * 0.8, s
     # ...so the generous bound is a clear win -- the old bug printed a cost here.
-    assert s['net_time_saved_upper_bound'] > 0, s
+    assert s["net_time_saved_upper_bound"] > 0, s
     # Verified stays honest: the reset forgot the measurement, so no verified credit.
-    assert s['total_verified_saved'] == 0.0, s
+    assert s["total_verified_saved"] == 0.0, s
 
 
 def test_plain_statement_caching_stats_unchanged(nb_runner):
@@ -110,25 +108,23 @@ def test_plain_statement_caching_stats_unchanged(nb_runner):
     The fix adds a branch that is a strict no-op when a statement carries no
     decorator_calls, so ordinary statement-level caching stats must be untouched.
     """
-    nb_runner.create_notebook([
-        SETUP,
-        "import time\n"
-        "def slow():\n"
-        f"    time.sleep({COST})\n"
-        "    return 123\n"
-        "print('defined')",
-        "val = slow()\nprint('val=', val)",   # cold: computes
-        STATS,
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            f"import time\ndef slow():\n    time.sleep({COST})\n    return 123\nprint('defined')",
+            "val = slow()\nprint('val=', val)",  # cold: computes
+            STATS,
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     cold = _stats(nb_runner.get_output(4))
     # No decorator anywhere, so no decorator crediting can have fired.
-    assert cold['total_time_saved'] == 0.0, cold
-    assert cold['statements_cacheable_hit'] == 0, cold
+    assert cold["total_time_saved"] == 0.0, cold
+    assert cold["statements_cacheable_hit"] == 0, cold
 
-    nb_runner.run_all()   # warm: statement restores
+    nb_runner.run_all()  # warm: statement restores
     warm = _stats(nb_runner.get_output(4))
     # The saving is the ordinary statement restore, credited exactly as before.
-    assert warm['total_time_saved'] >= COST * 0.8, warm
-    assert warm['statements_restored'] >= 1, warm
+    assert warm["total_time_saved"] >= COST * 0.8, warm
+    assert warm["statements_restored"] >= 1, warm

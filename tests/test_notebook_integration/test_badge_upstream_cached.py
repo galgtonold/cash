@@ -35,6 +35,7 @@ scheduled for re-execute. The module-in-memory check existed but ran after
 the short-circuit. Fix: move the module check before the
 ``variable_lineage`` short-circuit. (src/cash/notebook/mismatch_classifier.py)
 """
+
 import re
 
 import pytest
@@ -52,7 +53,7 @@ def _strip_style(html: str) -> str:
     future stylesheet change can never again make -- or break -- an
     assertion here.
     """
-    return re.sub(r'<style>.*?</style>', '', html, flags=re.DOTALL)
+    return re.sub(r"<style>.*?</style>", "", html, flags=re.DOTALL)
 
 
 def _full_restart_code(vars_to_clear):
@@ -70,7 +71,7 @@ def _full_restart_code(vars_to_clear):
     ``test_cost_model_skip_downstream._full_restart_code`` /
     ``test_skipped_timing_after_restart._full_restart_code``.
     """
-    var_list = ', '.join(f"'{v}'" for v in vars_to_clear)
+    var_list = ", ".join(f"'{v}'" for v in vars_to_clear)
     return f"""
 try:
     _cash_magics = get_ipython().magics_manager.registry.get('CashMagics')
@@ -108,15 +109,15 @@ def _simulate_restart(nb_runner, vars_to_clear):
 def _badge_html(cell) -> str:
     """Return concatenated text/html from a cell's display_data outputs."""
     parts = []
-    for output in cell.get('outputs', []):
-        if output.output_type in ('display_data', 'execute_result'):
-            data = output.get('data', {})
-            html = data.get('text/html', '')
+    for output in cell.get("outputs", []):
+        if output.output_type in ("display_data", "execute_result"):
+            data = output.get("data", {})
+            html = data.get("text/html", "")
             if isinstance(html, list):
-                html = ''.join(html)
+                html = "".join(html)
             if html:
                 parts.append(html)
-    return '\n'.join(parts)
+    return "\n".join(parts)
 
 
 @pytest.mark.badges
@@ -125,47 +126,45 @@ def test_multi_import_cell_fully_restored_after_kernel_restart(nb_runner, tmp_pa
     must be auto-executed when a downstream cell that uses both is run
     alone after a real kernel restart."""
     csv_path = tmp_path / "data.csv"
-    csv_path_str = str(csv_path).replace('\\', '/')
+    csv_path_str = str(csv_path).replace("\\", "/")
     csv_path.write_text(
         "Ticker,Date,Close\n"
-        + "\n".join(
-            f"{t},2024-01-{d:02d},{100 + d}"
-            for t in ("AAPL", "GOOGL", "MSFT")
-            for d in range(1, 21)
-        )
+        + "\n".join(f"{t},2024-01-{d:02d},{100 + d}" for t in ("AAPL", "GOOGL", "MSFT") for d in range(1, 21))
         + "\n"
     )
 
-    nb_runner.create_notebook([
-        # Cell 1 — two imports in the same cell. This is the bug trigger:
-        # without the fix, only the first import gets scheduled on rerun.
-        "import pandas as pd\nimport numpy as np",
-        # Cell 2 — read csv (file dep + pd dep)
-        f"df = pd.read_csv('{csv_path_str}')\ndf['Date'] = pd.to_datetime(df['Date'])",
-        # Cell 3 — self-assignment sort
-        "df = df.sort_values(by=['Ticker', 'Date'])",
-        # Cell 4 — uses BOTH df (transitively needs pd) AND np (direct)
-        (
-            "import time\n"
-            "t0 = time.time()\n"
-            "df['VolAdj_5'] = df.groupby('Ticker')['Close'].transform(\n"
-            "    lambda x: x.rolling(window=5).apply(\n"
-            "        lambda y: np.mean(y) / (np.std(y) + 1e-6), raw=True)\n"
-            ")\n"
-            "def custom_weighted_mean(x):\n"
-            "    weights = np.arange(1, len(x) + 1)\n"
-            "    return np.sum(x * weights) / np.sum(weights)\n"
-            "df['SMA_5'] = df.groupby('Ticker')['Close'].transform(\n"
-            "    lambda x: x.rolling(window=5).apply(custom_weighted_mean, raw=True)\n"
-            ")\n"
-            "print(f'rows={len(df)}; elapsed={time.time()-t0:.3f}s')"
-        ),
-    ])
+    nb_runner.create_notebook(
+        [
+            # Cell 1 — two imports in the same cell. This is the bug trigger:
+            # without the fix, only the first import gets scheduled on rerun.
+            "import pandas as pd\nimport numpy as np",
+            # Cell 2 — read csv (file dep + pd dep)
+            f"df = pd.read_csv('{csv_path_str}')\ndf['Date'] = pd.to_datetime(df['Date'])",
+            # Cell 3 — self-assignment sort
+            "df = df.sort_values(by=['Ticker', 'Date'])",
+            # Cell 4 — uses BOTH df (transitively needs pd) AND np (direct)
+            (
+                "import time\n"
+                "t0 = time.time()\n"
+                "df['VolAdj_5'] = df.groupby('Ticker')['Close'].transform(\n"
+                "    lambda x: x.rolling(window=5).apply(\n"
+                "        lambda y: np.mean(y) / (np.std(y) + 1e-6), raw=True)\n"
+                ")\n"
+                "def custom_weighted_mean(x):\n"
+                "    weights = np.arange(1, len(x) + 1)\n"
+                "    return np.sum(x * weights) / np.sum(weights)\n"
+                "df['SMA_5'] = df.groupby('Ticker')['Close'].transform(\n"
+                "    lambda x: x.rolling(window=5).apply(custom_weighted_mean, raw=True)\n"
+                ")\n"
+                "print(f'rows={len(df)}; elapsed={time.time()-t0:.3f}s')"
+            ),
+        ]
+    )
     nb_runner.start_kernel()
 
     # Populate the disk cache.
     nb_runner.run_all()
-    assert 'rows=' in nb_runner.get_output(4)
+    assert "rows=" in nb_runner.get_output(4)
 
     # Real kernel restart — wipes user_ns AND cash tracking state. The bug
     # only surfaces here; reset_cash_state alone leaves df/np in memory.
@@ -175,11 +174,10 @@ def test_multi_import_cell_fully_restored_after_kernel_restart(nb_runner, tmp_pa
     nb_runner.run_cell(4)
 
     raw = nb_runner.get_raw_output(4)
-    assert 'NameError' not in raw, (
-        "Upstream re-execution skipped 'import numpy as np' — cell 4 hit "
-        f"NameError. Raw output:\n{raw[:2000]}"
+    assert "NameError" not in raw, (
+        f"Upstream re-execution skipped 'import numpy as np' — cell 4 hit NameError. Raw output:\n{raw[:2000]}"
     )
-    assert 'rows=' in nb_runner.get_output(4)
+    assert "rows=" in nb_runner.get_output(4)
 
     # And the badge should still surface upstream activity.
     html = _badge_html(nb_runner.get_cell(4))
@@ -209,19 +207,21 @@ def test_badge_shows_upstream_chain_after_downstream_only_run(nb_runner):
     ``test_skipped_timing_after_restart.py`` in this directory) is what
     exercises the feature this test is named for.
     """
-    nb_runner.create_notebook([
-        "a = 1",
-        "b = a + 1",
-        "c = b + 1",
-        "d = c + 1\nprint(f'd={d}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            "a = 1",
+            "b = a + 1",
+            "c = b + 1",
+            "d = c + 1\nprint(f'd={d}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
-    assert 'd=4' in nb_runner.get_output(4)
+    assert "d=4" in nb_runner.get_output(4)
 
-    _simulate_restart(nb_runner, ['a', 'b', 'c', 'd'])
+    _simulate_restart(nb_runner, ["a", "b", "c", "d"])
     nb_runner.run_cell(4)
-    assert 'd=4' in nb_runner.get_output(4)
+    assert "d=4" in nb_runner.get_output(4)
 
     html = _badge_html(nb_runner.get_cell(4))
     assert html, "Cell 4 produced no badge HTML on downstream-only run"
@@ -234,7 +234,7 @@ def test_badge_shows_upstream_chain_after_downstream_only_run(nb_runner):
     # upstream.items:`), so its presence is real, structural evidence that
     # a, b, c were re-derived and surfaced to the user -- not prose that
     # merely sounds relevant.
-    assert 'c3-upstream' in body and 'upstream context' in body, (
+    assert "c3-upstream" in body and "upstream context" in body, (
         "Badge for downstream-only run does not show the upstream chain "
         "(no upstream section in the badge body) -- cash may have "
         "re-derived a/b/c silently, without surfacing that work.\n"

@@ -14,10 +14,12 @@ class TestFunctionDefinitionEdits:
 
     def test_edit_function_body(self, nb_runner):
         """Change function body, verify callers get new result."""
-        nb_runner.create_notebook([
-            "def compute(x):\n    return x * 2",
-            "result = compute(5)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def compute(x):\n    return x * 2",
+                "result = compute(5)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 10" in nb_runner.get_output(2)
@@ -29,10 +31,12 @@ class TestFunctionDefinitionEdits:
 
     def test_add_parameter_to_function(self, nb_runner):
         """Add parameter to function definition."""
-        nb_runner.create_notebook([
-            "def greet(name):\n    return f'Hello {name}'",
-            "msg = greet('World')\nprint(msg)",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def greet(name):\n    return f'Hello {name}'",
+                "msg = greet('World')\nprint(msg)",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "Hello World" in nb_runner.get_output(2)
@@ -48,12 +52,14 @@ class TestFunctionDefinitionEdits:
 
     def test_chain_of_functions_edit_middle(self, nb_runner):
         """Chain: f -> g -> h, edit g."""
-        nb_runner.create_notebook([
-            "def f(x):\n    return x + 1",
-            "def g(x):\n    return f(x) * 2",
-            "def h(x):\n    return g(x) + 10",
-            "result = h(5)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def f(x):\n    return x + 1",
+                "def g(x):\n    return f(x) * 2",
+                "def h(x):\n    return g(x) + 10",
+                "result = h(5)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         # h(5) = g(5) + 10 = f(5)*2 + 10 = 6*2+10 = 22
@@ -71,11 +77,13 @@ class TestClosureEdits:
 
     def test_edit_closure_variable(self, nb_runner):
         """Closure captures a variable, edit the variable."""
-        nb_runner.create_notebook([
-            "factor = 3",
-            "def scale(x):\n    return x * factor",
-            "result = scale(10)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "factor = 3",
+                "def scale(x):\n    return x * factor",
+                "result = scale(10)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 30" in nb_runner.get_output(3)
@@ -87,11 +95,13 @@ class TestClosureEdits:
 
     def test_function_with_default_arg_edit(self, nb_runner):
         """Function with default arg, edit the default."""
-        nb_runner.create_notebook([
-            "default_power = 2",
-            "def raise_to(x, p=None):\n    if p is None:\n        p = default_power\n    return x ** p",
-            "result = raise_to(3)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "default_power = 2",
+                "def raise_to(x, p=None):\n    if p is None:\n        p = default_power\n    return x ** p",
+                "result = raise_to(3)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 9" in nb_runner.get_output(3)
@@ -106,11 +116,13 @@ class TestLambdaEdits:
 
     def test_edit_lambda(self, nb_runner):
         """Change lambda, verify new behavior."""
-        nb_runner.create_notebook([
-            "transform = lambda x: x + 10",
-            "vals = [transform(i) for i in range(5)]",
-            "total = sum(vals)\nprint(f'total = {total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "transform = lambda x: x + 10",
+                "vals = [transform(i) for i in range(5)]",
+                "total = sum(vals)\nprint(f'total = {total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         # [10, 11, 12, 13, 14] -> 60
@@ -123,10 +135,12 @@ class TestLambdaEdits:
 
     def test_lambda_to_function(self, nb_runner):
         """Replace lambda with full function def."""
-        nb_runner.create_notebook([
-            "double = lambda x: x * 2",
-            "result = double(15)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "double = lambda x: x * 2",
+                "result = double(15)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 30" in nb_runner.get_output(2)

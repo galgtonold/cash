@@ -1,8 +1,8 @@
 """A call unit refuses to store values that must not be copied."""
+
 import time
 
 from cash.notebook.call_interception import CallSite
-from cash.notebook.call_unit import CallUnit
 
 
 def _site(source="f(d)", names=("f", "d")):
@@ -50,8 +50,7 @@ def test_a_scalar_that_happens_to_be_an_argument_is_still_cached(call_unit_harne
         time.sleep(0.05)
         return c * a
 
-    unit = call_unit_harness(lineage={"c": "hash-c", "a": "hash-a"},
-                             user_ns={"c": 1, "a": 10, "score": score})
+    unit = call_unit_harness(lineage={"c": "hash-c", "a": "hash-a"}, user_ns={"c": 1, "a": 10, "score": score})
     wrapped = unit.wrap(score, _site(source="score(c, a)", names=("score", "c", "a")))
 
     ten = 10
@@ -83,6 +82,5 @@ def test_an_identity_coupled_value_is_never_cached(call_unit_harness):
     # not merely that the returned object differs -- only shows up in
     # whether the second call was logged as a hit at all.
     assert [e["cache_hit"] for e in unit.call_log] == [False, False], (
-        "an identity-coupled result must never be served from cache -- the "
-        "second call has to recompute, not hit"
+        "an identity-coupled result must never be served from cache -- the second call has to recompute, not hit"
     )

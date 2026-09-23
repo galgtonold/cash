@@ -9,6 +9,7 @@ Minified once at import, not at build time and not as a committed generated
 file: 0.57ms against a 157ms `import cash`, and it keeps an editable dev
 install byte-identical to what users receive.
 """
+
 from __future__ import annotations
 
 import re
@@ -57,6 +58,4 @@ def test_it_is_meaningfully_smaller():
     """Guards against a no-op: the assertions above pass on unminified CSS
     only if it happens to lack comments, which this stylesheet does not."""
     css = _emitted_css(SIMPLE)
-    assert len(css) < len(H._CSS) * 0.75, (
-        f"expected a real reduction, got {len(H._CSS)} -> {len(css)}"
-    )
+    assert len(css) < len(H._CSS) * 0.75, f"expected a real reduction, got {len(H._CSS)} -> {len(css)}"

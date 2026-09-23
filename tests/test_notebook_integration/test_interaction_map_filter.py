@@ -2,6 +2,7 @@
 Batch 308: Mapping and filtering with functions interaction tests.
 Tests that editing filter/map functions or data properly invalidates downstream.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.interaction, pytest.mark.stress, pytest.mark.timeout(90)]
@@ -12,13 +13,15 @@ class TestMapFilterInteraction:
 
     def test_map_function_edit(self, nb_runner):
         """Editing the mapping function should propagate."""
-        nb_runner.create_notebook([
-            "data = [1, 2, 3, 4, 5]",
-            "def transform(x):\n    return x * 2",
-            "mapped = list(map(transform, data))",
-            "result = sum(mapped)",
-            "print(f'result={result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = [1, 2, 3, 4, 5]",
+                "def transform(x):\n    return x * 2",
+                "mapped = list(map(transform, data))",
+                "result = sum(mapped)",
+                "print(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(5)
@@ -31,13 +34,15 @@ class TestMapFilterInteraction:
 
     def test_filter_predicate_edit(self, nb_runner):
         """Editing the filter predicate should propagate."""
-        nb_runner.create_notebook([
-            "numbers = list(range(1, 11))",
-            "def is_valid(x):\n    return x % 2 == 0",
-            "filtered = list(filter(is_valid, numbers))",
-            "result = ','.join(str(x) for x in filtered)",
-            "print(f'result={result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "numbers = list(range(1, 11))",
+                "def is_valid(x):\n    return x % 2 == 0",
+                "filtered = list(filter(is_valid, numbers))",
+                "result = ','.join(str(x) for x in filtered)",
+                "print(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(5)
@@ -50,12 +55,14 @@ class TestMapFilterInteraction:
 
     def test_reduce_edit(self, nb_runner):
         """Editing the reduce function should propagate."""
-        nb_runner.create_notebook([
-            "from functools import reduce\ndata = [1, 2, 3, 4]",
-            "def combine(acc, x):\n    return acc + x",
-            "result = reduce(combine, data, 0)",
-            "print(f'result={result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from functools import reduce\ndata = [1, 2, 3, 4]",
+                "def combine(acc, x):\n    return acc + x",
+                "result = reduce(combine, data, 0)",
+                "print(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(4)

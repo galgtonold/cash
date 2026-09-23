@@ -8,6 +8,7 @@ same name was never looked at again -- the downstream cell printed the old
 total. Reading the file in the statement itself, or skipping the restart,
 was always fine.
 """
+
 import os
 from pathlib import Path
 
@@ -40,8 +41,11 @@ def _csv(path: Path, n: int) -> None:
 
 def _stdout(runner, cell):
     outs = runner.nb.cells[cell - 1].get("outputs", [])
-    return "".join(o["text"] if isinstance(o["text"], str) else "".join(o["text"])
-                   for o in outs if o.get("output_type") == "stream" and o.get("name") == "stdout")
+    return "".join(
+        o["text"] if isinstance(o["text"], str) else "".join(o["text"])
+        for o in outs
+        if o.get("output_type") == "stream" and o.get("name") == "stdout"
+    )
 
 
 def _slow_calls(work: Path) -> int:
@@ -61,7 +65,7 @@ def test_downstream_cell_sees_the_redelivered_file(nb_runner, restart, redeliver
     if restart:
         nb_runner.restart()
         nb_runner.run_cell(1)
-        nb_runner.run_cell(5)            # the morning: everything restored
+        nb_runner.run_cell(5)  # the morning: everything restored
     before = _slow_calls(work)
     if redelivered:
         _csv(work / "data.csv", 200)

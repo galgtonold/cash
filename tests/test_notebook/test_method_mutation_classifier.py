@@ -11,11 +11,12 @@ must agree, and must:
 without loosening the genuine cases (``lst.append``, ``df.sort_values(inplace=
 True)`` still mutate; ``df.head()`` still does not).
 """
+
 import ast
 import hashlib
+from unittest.mock import MagicMock
 
 import pytest
-from unittest.mock import MagicMock
 from traitlets.config import Configurable
 
 from cash import Cash
@@ -75,35 +76,37 @@ def test_axes_hist_is_a_mutation_but_dataframe_writes_are_not(classifiers):
     proc, shell = classifiers
 
     fig, ax = plt.subplots()
-    shell.user_ns.update({
-        'df': pd.DataFrame({'x': [1, 2, 3]}),
-        'ax': ax,
-        'fig': fig,
-        'lst': [1, 2, 3],
-        'data': [1, 2, 3, 4, 5],
-    })
+    shell.user_ns.update(
+        {
+            "df": pd.DataFrame({"x": [1, 2, 3]}),
+            "ax": ax,
+            "fig": fig,
+            "lst": [1, 2, 3],
+            "data": [1, 2, 3, 4, 5],
+        }
+    )
 
     # CAS-194: ax.hist(...) draws on the Axes -> mutation, despite the data tuple.
-    assert 'ax' in _routes_mutation(proc, shell, "ax.hist(data)")
-    assert 'ax' in _routes_mutation(proc, shell, "ax.plot(data)")
+    assert "ax" in _routes_mutation(proc, shell, "ax.hist(data)")
+    assert "ax" in _routes_mutation(proc, shell, "ax.plot(data)")
 
     # CAS-196: df.to_csv reads the frame and writes a file -> NOT a receiver
     # mutation, so it never bumps df's lineage and cannot become a spurious
     # producer of df that re-fires the write during reconstruction.
-    assert 'df' not in _routes_mutation(proc, shell, "df.to_csv('out.csv')")
-    assert 'df' not in _routes_mutation(proc, shell, "df.to_parquet('out.pq')")
+    assert "df" not in _routes_mutation(proc, shell, "df.to_csv('out.csv')")
+    assert "df" not in _routes_mutation(proc, shell, "df.to_parquet('out.pq')")
 
     # fig.savefig() is DELIBERATELY still a mutation: fig is identity-coupled
     # (never cached, re-derived as a unit) so bumping it is idempotent, and the
     # savefig->fig edge is load-bearing for CAS-175 chart-coherence re-derivation.
-    assert 'fig' in _routes_mutation(proc, shell, "fig.savefig('out.png')")
+    assert "fig" in _routes_mutation(proc, shell, "fig.savefig('out.png')")
 
     # Controls — genuine mutations must STILL route (no under-invalidation).
-    assert 'lst' in _routes_mutation(proc, shell, "lst.append(4)")
-    assert 'df' in _routes_mutation(proc, shell, "df.sort_values('x', inplace=True)")
+    assert "lst" in _routes_mutation(proc, shell, "lst.append(4)")
+    assert "df" in _routes_mutation(proc, shell, "df.sort_values('x', inplace=True)")
 
     # Control — a genuine receiver-pure read must STILL not route (no over-invalidation).
-    assert 'df' not in _routes_mutation(proc, shell, "df.head()")
+    assert "df" not in _routes_mutation(proc, shell, "df.head()")
 
     plt.close(fig)
 
@@ -122,27 +125,29 @@ def test_captured_return_draw_routes_on_identity_coupled_receiver_only(classifie
     proc, shell = classifiers
 
     fig, ax = plt.subplots()
-    shell.user_ns.update({
-        'df': pd.DataFrame({'x': [1, 2, 3]}),
-        'ax': ax,
-        'fig': fig,
-        'data': [1, 2, 3, 4, 5],
-        'sizes': [30, 20, 50],
-    })
+    shell.user_ns.update(
+        {
+            "df": pd.DataFrame({"x": [1, 2, 3]}),
+            "ax": ax,
+            "fig": fig,
+            "data": [1, 2, 3, 4, 5],
+            "sizes": [30, 20, 50],
+        }
+    )
 
     # Captured-return draws on a live Axes -> mutation, whatever the return type.
-    assert 'ax' in _routes_mutation(proc, shell, "counts, bins, patches = ax.hist(data)")
-    assert 'ax' in _routes_mutation(proc, shell, "h = ax.hist(data, bins=11)")          # single target
-    assert 'ax' in _routes_mutation(proc, shell, "wedges, texts = ax.pie(sizes)")       # sibling: pie
-    assert 'ax' in _routes_mutation(proc, shell, "ml, sl, bl = ax.stem(data)")          # sibling: stem
+    assert "ax" in _routes_mutation(proc, shell, "counts, bins, patches = ax.hist(data)")
+    assert "ax" in _routes_mutation(proc, shell, "h = ax.hist(data, bins=11)")  # single target
+    assert "ax" in _routes_mutation(proc, shell, "wedges, texts = ax.pie(sizes)")  # sibling: pie
+    assert "ax" in _routes_mutation(proc, shell, "ml, sl, bl = ax.stem(data)")  # sibling: stem
     # Nested in a larger RHS expression is still caught (whole RHS is walked).
-    assert 'ax' in _routes_mutation(proc, shell, "n = int((ax.hist(data)[0] > 0).sum())")
+    assert "ax" in _routes_mutation(proc, shell, "n = int((ax.hist(data)[0] > 0).sum())")
 
     # No over-invalidation: a captured pure read on an ORDINARY (non-Axes)
     # receiver must NOT route -- the discriminator is the receiver, not the shape.
-    assert 'df' not in _routes_mutation(proc, shell, "m = df.mean()")
-    assert 'df' not in _routes_mutation(proc, shell, "s = df.describe()")
-    assert 'df' not in _routes_mutation(proc, shell, "top = df.head()")
+    assert "df" not in _routes_mutation(proc, shell, "m = df.mean()")
+    assert "df" not in _routes_mutation(proc, shell, "s = df.describe()")
+    assert "df" not in _routes_mutation(proc, shell, "top = df.head()")
 
     plt.close(fig)
 
@@ -161,22 +166,24 @@ def test_call_expression_receiver_is_not_attributed_to_the_callee(classifiers):
     re-fired at all is the separate defence-in-depth half of CAS-210.
     """
     proc, shell = classifiers
-    shell.user_ns.update({
-        'p': 'audit.log',
-        'payload': 42,
-        'groups': {},
-        'key': 'k',
-        'val': 1,
-    })
+    shell.user_ns.update(
+        {
+            "p": "audit.log",
+            "payload": 42,
+            "groups": {},
+            "key": "k",
+            "val": 1,
+        }
+    )
 
     # A constructor/factory call as the receiver has NO variable to mutate.
-    assert 'open' not in _routes_mutation(proc, shell, "open(p, 'a').write('x\\n')")
-    assert 'open' not in _routes_mutation(proc, shell, "open(p, 'w').writelines(['x'])")
-    assert 'Path' not in _routes_mutation(proc, shell, "Path(p).write_text('x')")
+    assert "open" not in _routes_mutation(proc, shell, "open(p, 'a').write('x\\n')")
+    assert "open" not in _routes_mutation(proc, shell, "open(p, 'w').writelines(['x'])")
+    assert "Path" not in _routes_mutation(proc, shell, "Path(p).write_text('x')")
 
     # The documented chained-call intent still resolves to the real variable:
     # this descends through the Attribute branch, not the callee branch.
-    assert 'groups' in _routes_mutation(proc, shell, "groups.setdefault(key, []).append(val)")
+    assert "groups" in _routes_mutation(proc, shell, "groups.setdefault(key, []).append(val)")
 
     # And an ordinary named receiver is untouched by the guard.
-    assert 'groups' in _routes_mutation(proc, shell, "groups.update({'a': 1})")
+    assert "groups" in _routes_mutation(proc, shell, "groups.update({'a': 1})")

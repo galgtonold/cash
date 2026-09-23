@@ -1,5 +1,6 @@
-from cash.notebook.cache_status import CacheStatus
 from cash.notebook.annotations import CacheAnnotation
+from cash.notebook.cache_status import CacheStatus
+
 """
 Tests for module reload cache invalidation and exception surfacing.
 
@@ -10,20 +11,20 @@ Issue 2: Exceptions during cell execution (e.g., import nonexistent_module, rais
          should be surfaced to the user, not silently swallowed.
 """
 
+import hashlib
+import importlib
 import os
 import sys
 import time
-import hashlib
-import importlib
-import pytest
 from unittest.mock import MagicMock
 
-from cash.notebook.function_tracker import FunctionTracker
-from cash.notebook.ipython.magics import CashMagics
-from cash.core import Cash
-from cash.backends import InMemoryBackend
+import pytest
 from traitlets.config.configurable import Configurable
 
+from cash.backends import InMemoryBackend
+from cash.core import Cash
+from cash.notebook.function_tracker import FunctionTracker
+from cash.notebook.ipython.magics import CashMagics
 
 # ============================================================================
 # Fixtures
@@ -32,6 +33,7 @@ from traitlets.config.configurable import Configurable
 
 class MockShell(Configurable):
     """Mock IPython shell for testing."""
+
     def __init__(self):
         super().__init__()
         self.user_ns = {}
@@ -40,7 +42,7 @@ class MockShell(Configurable):
         self.events = MagicMock()
         self.ast_transformers = []
         self.user_global_ns = self.user_ns
-        self.display_pub = type('MockDisplayPub', (), {'publish': MagicMock()})()
+        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
 
 
 @pytest.fixture
@@ -108,7 +110,7 @@ class TestModuleReloadInvalidation:
         new_lineage = sp.variable_lineage[module_name]
         assert new_lineage != old_lineage
         # It should be a hash of the file content
-        with open(module_file, 'rb') as f:
+        with open(module_file, "rb") as f:
             expected = hashlib.sha256(f.read()).hexdigest()
         assert new_lineage == expected
 
@@ -121,10 +123,10 @@ class TestModuleReloadInvalidation:
         # Set up lineage: module has old lineage, result depends on it
         old_module_lineage = hashlib.sha256(b"old_source").hexdigest()
         sp.variable_lineage[module_name] = old_module_lineage
-        sp.variable_lineage['result'] = "some_hash_for_result"
-        sp.executed_cell_codes['result'] = f"result = {module_name}.increment(5)"
-        sp.executed_input_lineages['result'] = {module_name: old_module_lineage}
-        sp.current_session_hashes['result'] = "some_content_hash"
+        sp.variable_lineage["result"] = "some_hash_for_result"
+        sp.executed_cell_codes["result"] = f"result = {module_name}.increment(5)"
+        sp.executed_input_lineages["result"] = {module_name: old_module_lineage}
+        sp.current_session_hashes["result"] = "some_content_hash"
 
         # Trigger invalidation
         changed_modules = {module_name: module_file}
@@ -134,10 +136,10 @@ class TestModuleReloadInvalidation:
         )
 
         # Dependent variable 'result' should have been cleared
-        assert 'result' not in sp.variable_lineage
-        assert 'result' not in sp.executed_cell_codes
-        assert 'result' not in sp.executed_input_lineages
-        assert 'result' not in sp.current_session_hashes
+        assert "result" not in sp.variable_lineage
+        assert "result" not in sp.executed_cell_codes
+        assert "result" not in sp.executed_input_lineages
+        assert "result" not in sp.current_session_hashes
 
     def test_invalidate_module_lineages_preserves_unrelated_vars(self, magics_fixture, temp_module):
         """Variables NOT depending on the changed module should be preserved."""
@@ -148,9 +150,9 @@ class TestModuleReloadInvalidation:
         old_module_lineage = hashlib.sha256(b"old_source").hexdigest()
         sp.variable_lineage[module_name] = old_module_lineage
         # Unrelated variable
-        sp.variable_lineage['unrelated'] = "unrelated_hash"
-        sp.executed_cell_codes['unrelated'] = "unrelated = 42"
-        sp.executed_input_lineages['unrelated'] = {}
+        sp.variable_lineage["unrelated"] = "unrelated_hash"
+        sp.executed_cell_codes["unrelated"] = "unrelated = 42"
+        sp.executed_input_lineages["unrelated"] = {}
 
         changed_modules = {module_name: module_file}
         magics._module_invalidator.invalidate(
@@ -159,8 +161,8 @@ class TestModuleReloadInvalidation:
         )
 
         # Unrelated variable should be preserved
-        assert sp.variable_lineage['unrelated'] == "unrelated_hash"
-        assert sp.executed_cell_codes['unrelated'] == "unrelated = 42"
+        assert sp.variable_lineage["unrelated"] == "unrelated_hash"
+        assert sp.executed_cell_codes["unrelated"] == "unrelated = 42"
 
     def test_recently_reloaded_modules_set(self, magics_fixture, temp_module):
         """After invalidation, recently_reloaded_modules should contain the module name."""
@@ -260,7 +262,7 @@ class TestModuleReloadInvalidation:
         # First import should be skipped (redundant)
         code = f"import {module_name}"
         metrics1 = sp.process_statement(code, silent=True)
-        assert metrics1['status'] == CacheStatus.SKIPPED
+        assert metrics1["status"] == CacheStatus.SKIPPED
 
         # Simulate full reload flow: invalidate lineages (which sets recently_reloaded_modules
         # AND clears executed_cell_codes/variable_lineage for the module)
@@ -272,7 +274,7 @@ class TestModuleReloadInvalidation:
         # Now import should NOT be skipped (module was reloaded)
         metrics2 = sp.process_statement(code, silent=True)
         # It should be computed or at least not SKIPPED
-        assert metrics2['status'] != CacheStatus.SKIPPED
+        assert metrics2["status"] != CacheStatus.SKIPPED
 
     def test_full_flow_module_change_invalidates_cache(self, magics_fixture, tmp_path):
         """End-to-end: changing module source should cause cache miss for dependent statements.
@@ -307,12 +309,12 @@ class TestModuleReloadInvalidation:
             # Execute: use the module
             use_code = f"result = {module_name}.increment(5)"
             metrics_use1 = sp.process_statement(use_code, silent=True, annotation=_persist)
-            assert metrics_use1['status'] == CacheStatus.COMPUTED
-            assert shell.user_ns.get('result') == 6
+            assert metrics_use1["status"] == CacheStatus.COMPUTED
+            assert shell.user_ns.get("result") == 6
 
             # Re-run the same code - should be SKIPPED or RESTORED
             metrics_use2 = sp.process_statement(use_code, silent=True, annotation=_persist)
-            assert metrics_use2['status'] in (CacheStatus.SKIPPED, CacheStatus.RESTORED)
+            assert metrics_use2["status"] in (CacheStatus.SKIPPED, CacheStatus.RESTORED)
 
             # Now change the module source
             time.sleep(0.05)
@@ -324,18 +326,18 @@ class TestModuleReloadInvalidation:
 
             # Invalidate lineages
             magics._module_invalidator.invalidate(
-            changed,
-            magics._statement_processor,
-            per_mod_syms,
-        )
+                changed,
+                magics._statement_processor,
+                per_mod_syms,
+            )
 
             # Re-run the import (should not be skipped because of recently_reloaded_modules)
             sp.process_statement(import_code, silent=True)
 
             # Re-run: use the module - should be COMPUTED (cache miss)
             metrics_use3 = sp.process_statement(use_code, silent=True, annotation=_persist)
-            assert metrics_use3['status'] == CacheStatus.COMPUTED
-            assert shell.user_ns.get('result') == 15  # 5 + 10
+            assert metrics_use3["status"] == CacheStatus.COMPUTED
+            assert shell.user_ns.get("result") == 15  # 5 + 10
 
         finally:
             sys.path.remove(str(tmp_path))
@@ -417,7 +419,7 @@ class TestExceptionSurfacing:
             magics.cash("", cell)
 
         # Second statement should not have executed
-        assert 'x' not in shell.user_ns
+        assert "x" not in shell.user_ns
 
     def test_error_after_successful_statement(self, magics_fixture):
         """Error in second statement should still surface, first statement's effects persist."""
@@ -428,7 +430,7 @@ class TestExceptionSurfacing:
             magics.cash("", cell)
 
         # First statement should have executed
-        assert shell.user_ns.get('x') == 42
+        assert shell.user_ns.get("x") == 42
 
     def test_syntax_error_handled(self, magics_fixture):
         """SyntaxError in cell should be handled (returned, not crashing)."""
@@ -445,8 +447,8 @@ class TestExceptionSurfacing:
         sp = magics._statement_processor
 
         metrics = sp.process_statement("raise RuntimeError('test')", silent=True)
-        assert metrics['status'] == CacheStatus.ERROR
-        assert metrics['error'] is not None
+        assert metrics["status"] == CacheStatus.ERROR
+        assert metrics["error"] is not None
 
     def test_execute_cell_surfaces_error(self, magics_fixture):
         """_execute_cell should display errors cleanly via showtraceback,
@@ -464,9 +466,11 @@ class TestExceptionSurfacing:
 
         # Add showtraceback to the mock shell so _show_clean_error can call it
         showtraceback_calls = []
+
         def mock_showtraceback(*args, **kwargs):
-            exc_tuple = kwargs.get('exc_tuple') or (args[0] if args else None)
+            exc_tuple = kwargs.get("exc_tuple") or (args[0] if args else None)
             showtraceback_calls.append(exc_tuple)
+
         shell.showtraceback = mock_showtraceback
 
         # Run a cell that will fail
@@ -482,7 +486,7 @@ class TestExceptionSurfacing:
         # The exception should be re-raised via _original_run_cell
         # so the kernel marks the cell as 'error'
         assert any("raise __cash_exception__" in call for call in run_cell_calls)
-        assert isinstance(shell.user_ns.get('__cash_exception__'), ValueError)
+        assert isinstance(shell.user_ns.get("__cash_exception__"), ValueError)
 
 
 # ============================================================================
@@ -501,16 +505,13 @@ class TestTransitiveDependencyTracking:
         helpers_file.write_text("def add_one(x):\n    return x + 1\n")
 
         metrics_file = tmp_path / "metrics.py"
-        metrics_file.write_text(
-            "from helpers import add_one\n"
-            "def compute(x):\n"
-            "    return add_one(x) * 2\n"
-        )
+        metrics_file.write_text("from helpers import add_one\ndef compute(x):\n    return add_one(x) * 2\n")
 
         sys.path.insert(0, str(tmp_path))
 
         # Import so they appear in sys.modules
         import importlib
+
         helpers_mod = importlib.import_module("helpers")
         metrics_mod = importlib.import_module("metrics")
 
@@ -538,8 +539,7 @@ class TestTransitiveDependencyTracking:
                 found = True
                 break
         assert found, (
-            f"Expected helpers.py to be a dependency of metrics. "
-            f"dep_file_to_parents = {ft._dep_file_to_parents}"
+            f"Expected helpers.py to be a dependency of metrics. dep_file_to_parents = {ft._dep_file_to_parents}"
         )
 
     def test_sub_dep_tracked_in_tracked_modules(self, two_level_modules):
@@ -578,8 +578,7 @@ class TestTransitiveDependencyTracking:
 
         changed = ft.check_tracked_modules()
         assert "metrics" in changed, (
-            f"Expected metrics to be reported as changed after helpers.py changed. "
-            f"changed = {changed}"
+            f"Expected metrics to be reported as changed after helpers.py changed. changed = {changed}"
         )
 
     def test_sub_dep_change_reloads_parent(self, two_level_modules):
@@ -599,6 +598,7 @@ class TestTransitiveDependencyTracking:
 
         # Verify the reloaded module uses the new helpers
         import metrics
+
         assert metrics.compute(5) == (5 + 100) * 2
 
     def test_invalidate_lineages_with_transitive_dep(self, magics_fixture, two_level_modules):
@@ -626,13 +626,13 @@ class TestTransitiveDependencyTracking:
 
         # Compute expected: hash of metrics.py + helpers.py
         import hashlib as hl
+
         hasher = hl.sha256()
         with open(info["metrics_file"], "rb") as f:
             hasher.update(f.read())
         # Find the helpers dep path in _dep_file_to_parents
         dep_files = sorted(
-            dp for dp, parents in sp.function_tracker._dep_file_to_parents.items()
-            if "metrics" in parents
+            dp for dp, parents in sp.function_tracker._dep_file_to_parents.items() if "metrics" in parents
         )
         for dp in dep_files:
             if os.path.isfile(dp):
@@ -655,6 +655,7 @@ class TestTransitiveDependencyTracking:
         sys.path.insert(0, str(tmp_path))
         try:
             import importlib
+
             importlib.import_module("dep_utils")
             importlib.import_module("dep_service")
             importlib.import_module("dep_app")
@@ -669,8 +670,7 @@ class TestTransitiveDependencyTracking:
                     found_utils = True
                     break
             assert found_utils, (
-                f"dep_utils should be a transitive dep of dep_app. "
-                f"dep_file_to_parents = {ft._dep_file_to_parents}"
+                f"dep_utils should be a transitive dep of dep_app. dep_file_to_parents = {ft._dep_file_to_parents}"
             )
 
             # Change dep_utils
@@ -705,13 +705,12 @@ class TestTransitiveDependencyTracking:
 
         # No stdlib paths should appear in _dep_file_to_parents
         from cash.notebook.function_tracker import _get_stdlib_site_prefixes
+
         prefixes = _get_stdlib_site_prefixes()
         for dep_path in ft._dep_file_to_parents:
             norm = os.path.normcase(os.path.realpath(dep_path))
             for prefix in prefixes:
-                assert not norm.startswith(prefix), (
-                    f"Stdlib path {dep_path} should not be tracked as a dependency"
-                )
+                assert not norm.startswith(prefix), f"Stdlib path {dep_path} should not be tracked as a dependency"
 
 
 # ============================================================================
@@ -765,9 +764,9 @@ class TestPipelineParity:
         magics.cash("", "a_via_cash_magic = 1")
         metrics_cash = magics._last_cell_metrics
         assert metrics_cash is not None
-        assert 'statements' in metrics_cash
-        assert 'total_time' in metrics_cash
-        assert 'status' in metrics_cash
+        assert "statements" in metrics_cash
+        assert "total_time" in metrics_cash
+        assert "status" in metrics_cash
 
         magics._execute_cell("b_via_hook = 2")
         metrics_hook = magics._last_cell_metrics

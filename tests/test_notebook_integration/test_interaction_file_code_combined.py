@@ -18,18 +18,18 @@ class TestFilePlusCellEdits:
         data_file.write_text("hello")
         fpath = str(data_file).replace("\\", "/")
 
-        nb_runner.create_notebook([
-            f"with open('{fpath}') as f:\n    content = f.read()",
-            "result = content.upper()\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                f"with open('{fpath}') as f:\n    content = f.read()",
+                "result = content.upper()\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = HELLO" in nb_runner.get_output(2)
 
         # Edit code (file stays same)
-        nb_runner.set_cell_source(
-            2, "result = content.lower()\nprint(f'result = {result}')"
-        )
+        nb_runner.set_cell_source(2, "result = content.lower()\nprint(f'result = {result}')")
         nb_runner.run_all()
         assert "result = hello" in nb_runner.get_output(2)
 
@@ -39,10 +39,12 @@ class TestFilePlusCellEdits:
         data_file.write_text("1,2,3")
         fpath = str(data_file).replace("\\", "/")
 
-        nb_runner.create_notebook([
-            f"with open('{fpath}') as f:\n    raw = f.read()",
-            "nums = [int(x) for x in raw.split(',')]\ntotal = sum(nums)\nprint(f'total = {total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                f"with open('{fpath}') as f:\n    raw = f.read()",
+                "nums = [int(x) for x in raw.split(',')]\ntotal = sum(nums)\nprint(f'total = {total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total = 6" in nb_runner.get_output(2)
@@ -61,10 +63,12 @@ class TestFilePlusCellEdits:
         data_file.write_text("scale=2")
         fpath = str(data_file).replace("\\", "/")
 
-        nb_runner.create_notebook([
-            f"with open('{fpath}') as f:\n    line = f.read()",
-            "key, val = line.split('=')\nresult = int(val) * 10\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                f"with open('{fpath}') as f:\n    line = f.read()",
+                "key, val = line.split('=')\nresult = int(val) * 10\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 20" in nb_runner.get_output(2)
@@ -90,11 +94,13 @@ class TestCSVFileEdits:
         csv_file.write_text("a,b\n1,2\n3,4\n")
         fpath = str(csv_file).replace("\\", "/")
 
-        nb_runner.create_notebook([
-            "import csv",
-            f"with open('{fpath}') as f:\n    reader = csv.DictReader(f)\n    rows = list(reader)",
-            "total_a = sum(int(r['a']) for r in rows)\nprint(f'total_a = {total_a}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import csv",
+                f"with open('{fpath}') as f:\n    reader = csv.DictReader(f)\n    rows = list(reader)",
+                "total_a = sum(int(r['a']) for r in rows)\nprint(f'total_a = {total_a}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total_a = 4" in nb_runner.get_output(3)

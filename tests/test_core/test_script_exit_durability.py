@@ -6,13 +6,15 @@ before the actual disk write completes, so without proper ``atexit``
 plumbing the data would never land. These tests spawn a real
 subprocess to verify that writes survive process termination.
 """
+
 from __future__ import annotations
 
 import subprocess
 import sys
 import textwrap
 from pathlib import Path
-from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry, read_entry
+
+from cash.backends.entry_format import ENTRY_SUFFIX
 
 
 def test_decorator_writes_survive_script_exit(tmp_path: Path):
@@ -41,7 +43,10 @@ def test_decorator_writes_survive_script_exit(tmp_path: Path):
 
     proc = subprocess.run(
         [sys.executable, "-c", script],
-        check=True, timeout=30, capture_output=True, text=True,
+        check=True,
+        timeout=30,
+        capture_output=True,
+        text=True,
     )
 
     # After the script exits, the cache directory must contain the files.
@@ -81,19 +86,17 @@ def test_cache_value_readable_in_second_script(tmp_path: Path):
     """)
 
     subprocess.run(
-        [sys.executable, "-c", script_template.format(
-            cache_dir=str(cache_dir), sentinel=str(sentinel))],
-        check=True, timeout=30,
+        [sys.executable, "-c", script_template.format(cache_dir=str(cache_dir), sentinel=str(sentinel))],
+        check=True,
+        timeout=30,
     )
     # First run: must have computed.
     assert sentinel.read_text() == "1"
 
     # Second run: should hit cache, NOT recompute.
     subprocess.run(
-        [sys.executable, "-c", script_template.format(
-            cache_dir=str(cache_dir), sentinel=str(sentinel))],
-        check=True, timeout=30,
+        [sys.executable, "-c", script_template.format(cache_dir=str(cache_dir), sentinel=str(sentinel))],
+        check=True,
+        timeout=30,
     )
-    assert sentinel.read_text() == "1", (
-        "second script run recomputed — cached value did not survive exit of script 1"
-    )
+    assert sentinel.read_text() == "1", "second script run recomputed — cached value did not survive exit of script 1"

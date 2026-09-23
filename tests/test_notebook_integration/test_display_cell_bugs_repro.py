@@ -11,25 +11,28 @@ Bug 2: After running both df display cells, re-running the read_csv cell
 Bug 3: Print statements execute twice — once during upstream re-execution and
        again during the cell's own statement processing.
 """
-import pytest
-import pandas as pd
 
+import pandas as pd
+import pytest
 
 
 def _create_csv(tmp_path):
     """Create a small test CSV file."""
     csv_path = tmp_path / "data.csv"
-    csv_path_str = str(csv_path).replace('\\', '/')
-    pd.DataFrame({
-        'Ticker': ['AAPL'] * 20 + ['GOOGL'] * 20,
-        'Date': list(range(40)),
-        'Close': [100 + i * 0.5 for i in range(40)],
-        'Volume': [1000 + i * 10 for i in range(40)],
-    }).to_csv(csv_path, index=False)
+    csv_path_str = str(csv_path).replace("\\", "/")
+    pd.DataFrame(
+        {
+            "Ticker": ["AAPL"] * 20 + ["GOOGL"] * 20,
+            "Date": list(range(40)),
+            "Close": [100 + i * 0.5 for i in range(40)],
+            "Volume": [1000 + i * 10 for i in range(40)],
+        }
+    ).to_csv(csv_path, index=False)
     return csv_path_str
 
 
 # ─── Bug 1: Display cell after running downstream df cell first ────────────────
+
 
 @pytest.mark.upstream
 @pytest.mark.mutations
@@ -43,20 +46,22 @@ def test_display_cell_after_running_downstream_df_first(nb_runner, tmp_path):
     """
     csv_path_str = _create_csv(tmp_path)
 
-    nb_runner.create_notebook([
-        # Cell 1: Load data
-        f"import pandas as pd\ndf = pd.read_csv('{csv_path_str}')\nprint('Loaded:', list(df.columns))",
-        # Cell 2: Sort
-        "df = df.sort_values(by=['Ticker', 'Date']).reset_index(drop=True)\nprint('Sorted:', list(df.columns))",
-        # Cell 3: First display cell (read-only) — use print to distinguish from cell 5
-        "print('--- Display 1 ---')\ndf",
-        # Cell 4: Heavy computation — adds columns (df is input AND output via mutation)
-        "df['SMA'] = df.groupby('Ticker')['Close'].transform(lambda x: x.rolling(window=3, min_periods=1).mean())\n"
-        "df['VolAdj'] = df['Close'] / (df['Volume'] + 1)\n"
-        "print('Heavy calc done:', list(df.columns))",
-        # Cell 5: Second display cell (read-only) — use different print to distinguish
-        "print('--- Display 2 ---')\ndf",
-    ])
+    nb_runner.create_notebook(
+        [
+            # Cell 1: Load data
+            f"import pandas as pd\ndf = pd.read_csv('{csv_path_str}')\nprint('Loaded:', list(df.columns))",
+            # Cell 2: Sort
+            "df = df.sort_values(by=['Ticker', 'Date']).reset_index(drop=True)\nprint('Sorted:', list(df.columns))",
+            # Cell 3: First display cell (read-only) — use print to distinguish from cell 5
+            "print('--- Display 1 ---')\ndf",
+            # Cell 4: Heavy computation — adds columns (df is input AND output via mutation)
+            "df['SMA'] = df.groupby('Ticker')['Close'].transform(lambda x: x.rolling(window=3, min_periods=1).mean())\n"
+            "df['VolAdj'] = df['Close'] / (df['Volume'] + 1)\n"
+            "print('Heavy calc done:', list(df.columns))",
+            # Cell 5: Second display cell (read-only) — use different print to distinguish
+            "print('--- Display 2 ---')\ndf",
+        ]
+    )
     nb_runner.start_kernel()
 
     # Step 1: Run all cells in order
@@ -70,21 +75,19 @@ def test_display_cell_after_running_downstream_df_first(nb_runner, tmp_path):
 
     # Enable debug to trace what happens during cell 3 execution
     nb_runner.set_cell_source(3, "print('--- Display 1 ---')\ndf")
-    
+
     # Step 3: Run cell 3 (first df display) — should show df WITHOUT extra columns
     nb_runner.run_cell(3)
     output_3 = nb_runner.get_output(3)
     assert "SMA" not in output_3, (
-        f"Bug 1! Cell 3 (first df display) shows downstream SMA column after "
-        f"running cell 5 first.\nOutput: {output_3}"
+        f"Bug 1! Cell 3 (first df display) shows downstream SMA column after running cell 5 first.\nOutput: {output_3}"
     )
-    assert "VolAdj" not in output_3, (
-        f"Bug 1! Cell 3 shows downstream VolAdj column.\nOutput: {output_3}"
-    )
+    assert "VolAdj" not in output_3, f"Bug 1! Cell 3 shows downstream VolAdj column.\nOutput: {output_3}"
     print("[PASS] Bug 1: First display cell correctly shows upstream state")
 
 
 # ─── Bug 2: Cache invalidation after running display cells ─────────────────────
+
 
 @pytest.mark.upstream
 @pytest.mark.core
@@ -99,19 +102,21 @@ def test_cache_not_invalidated_after_display_cells(nb_runner, tmp_path):
     """
     csv_path_str = _create_csv(tmp_path)
 
-    nb_runner.create_notebook([
-        # Cell 1: Load data (with timing print)
-        f"import pandas as pd\ndf = pd.read_csv('{csv_path_str}')\nprint('Loaded:', list(df.columns))",
-        # Cell 2: Sort
-        "df = df.sort_values(by=['Ticker', 'Date']).reset_index(drop=True)\nprint('Sorted')",
-        # Cell 3: First display cell
-        "print('Display 1')\ndf",
-        # Cell 4: Heavy computation
-        "df['SMA'] = df.groupby('Ticker')['Close'].transform(lambda x: x.rolling(window=3, min_periods=1).mean())\n"
-        "print('SMA done')",
-        # Cell 5: Second display cell
-        "print('Display 2')\ndf",
-    ])
+    nb_runner.create_notebook(
+        [
+            # Cell 1: Load data (with timing print)
+            f"import pandas as pd\ndf = pd.read_csv('{csv_path_str}')\nprint('Loaded:', list(df.columns))",
+            # Cell 2: Sort
+            "df = df.sort_values(by=['Ticker', 'Date']).reset_index(drop=True)\nprint('Sorted')",
+            # Cell 3: First display cell
+            "print('Display 1')\ndf",
+            # Cell 4: Heavy computation
+            "df['SMA'] = df.groupby('Ticker')['Close'].transform(lambda x: x.rolling(window=3, min_periods=1).mean())\n"
+            "print('SMA done')",
+            # Cell 5: Second display cell
+            "print('Display 2')\ndf",
+        ]
+    )
     nb_runner.start_kernel()
 
     # Step 1: Run all cells
@@ -145,12 +150,14 @@ def test_cache_preserved_sequential_rerun(nb_runner, tmp_path):
     """
     csv_path_str = _create_csv(tmp_path)
 
-    nb_runner.create_notebook([
-        f"import pandas as pd\ndf = pd.read_csv('{csv_path_str}')\nprint('Loaded')",
-        "df = df.sort_values(by=['Ticker', 'Date']).reset_index(drop=True)\nprint('Sorted')",
-        "df['SMA'] = df.groupby('Ticker')['Close'].transform(lambda x: x.rolling(window=3, min_periods=1).mean())\nprint('SMA done')",
-        "print('Final columns:', list(df.columns))",
-    ])
+    nb_runner.create_notebook(
+        [
+            f"import pandas as pd\ndf = pd.read_csv('{csv_path_str}')\nprint('Loaded')",
+            "df = df.sort_values(by=['Ticker', 'Date']).reset_index(drop=True)\nprint('Sorted')",
+            "df['SMA'] = df.groupby('Ticker')['Close'].transform(lambda x: x.rolling(window=3, min_periods=1).mean())\nprint('SMA done')",
+            "print('Final columns:', list(df.columns))",
+        ]
+    )
     nb_runner.start_kernel()
 
     # Run all cells
@@ -169,6 +176,7 @@ def test_cache_preserved_sequential_rerun(nb_runner, tmp_path):
 
 # ─── Bug 3: Double print statements ────────────────────────────────────────────
 
+
 @pytest.mark.upstream
 @pytest.mark.core
 @pytest.mark.timeout(60)
@@ -181,14 +189,16 @@ def test_no_double_prints_on_rerun(nb_runner, tmp_path):
     """
     csv_path_str = _create_csv(tmp_path)
 
-    nb_runner.create_notebook([
-        # Cell 1: Load data with a distinctive print
-        f"import pandas as pd\ndf = pd.read_csv('{csv_path_str}')\nprint('MARKER_LOAD')",
-        # Cell 2: Process with a distinctive print
-        "df = df.sort_values(by=['Ticker', 'Date']).reset_index(drop=True)\nprint('MARKER_SORT')",
-        # Cell 3: Display
-        "print('MARKER_DISPLAY')\ndf",
-    ])
+    nb_runner.create_notebook(
+        [
+            # Cell 1: Load data with a distinctive print
+            f"import pandas as pd\ndf = pd.read_csv('{csv_path_str}')\nprint('MARKER_LOAD')",
+            # Cell 2: Process with a distinctive print
+            "df = df.sort_values(by=['Ticker', 'Date']).reset_index(drop=True)\nprint('MARKER_SORT')",
+            # Cell 3: Display
+            "print('MARKER_DISPLAY')\ndf",
+        ]
+    )
     nb_runner.start_kernel()
 
     # Run all cells
@@ -199,20 +209,15 @@ def test_no_double_prints_on_rerun(nb_runner, tmp_path):
     output_3 = nb_runner.get_output(3)
 
     # Count occurrences of MARKER_DISPLAY — should be exactly 1
-    marker_count = output_3.count('MARKER_DISPLAY')
-    assert marker_count == 1, (
-        f"Bug 3! 'MARKER_DISPLAY' appears {marker_count} times (expected 1).\n"
-        f"Output: {output_3}"
-    )
+    marker_count = output_3.count("MARKER_DISPLAY")
+    assert marker_count == 1, f"Bug 3! 'MARKER_DISPLAY' appears {marker_count} times (expected 1).\nOutput: {output_3}"
 
     # Also check that upstream prints don't leak into cell 3's output
     assert "MARKER_LOAD" not in output_3, (
-        f"Bug 3! Upstream 'MARKER_LOAD' leaked into cell 3 output.\n"
-        f"Output: {output_3}"
+        f"Bug 3! Upstream 'MARKER_LOAD' leaked into cell 3 output.\nOutput: {output_3}"
     )
     assert "MARKER_SORT" not in output_3, (
-        f"Bug 3! Upstream 'MARKER_SORT' leaked into cell 3 output.\n"
-        f"Output: {output_3}"
+        f"Bug 3! Upstream 'MARKER_SORT' leaked into cell 3 output.\nOutput: {output_3}"
     )
     print("[PASS] Bug 3: No double prints on re-run")
 
@@ -227,13 +232,15 @@ def test_no_double_prints_in_heavy_calc_cell(nb_runner, tmp_path):
     """
     csv_path_str = _create_csv(tmp_path)
 
-    nb_runner.create_notebook([
-        f"import pandas as pd\ndf = pd.read_csv('{csv_path_str}')\nprint('LOAD_MARKER')",
-        "df = df.sort_values(by=['Ticker', 'Date']).reset_index(drop=True)",
-        "print('CALC_START')\n"
-        "df['SMA'] = df.groupby('Ticker')['Close'].transform(lambda x: x.rolling(window=3, min_periods=1).mean())\n"
-        "print('CALC_END')",
-    ])
+    nb_runner.create_notebook(
+        [
+            f"import pandas as pd\ndf = pd.read_csv('{csv_path_str}')\nprint('LOAD_MARKER')",
+            "df = df.sort_values(by=['Ticker', 'Date']).reset_index(drop=True)",
+            "print('CALC_START')\n"
+            "df['SMA'] = df.groupby('Ticker')['Close'].transform(lambda x: x.rolling(window=3, min_periods=1).mean())\n"
+            "print('CALC_END')",
+        ]
+    )
     nb_runner.start_kernel()
 
     # Run all cells
@@ -244,12 +251,10 @@ def test_no_double_prints_in_heavy_calc_cell(nb_runner, tmp_path):
     output_3 = nb_runner.get_output(3)
 
     # Each marker should appear exactly once
-    assert output_3.count('CALC_START') == 1, (
+    assert output_3.count("CALC_START") == 1, (
         f"'CALC_START' appears {output_3.count('CALC_START')} times. Output: {output_3}"
     )
-    assert output_3.count('CALC_END') == 1, (
-        f"'CALC_END' appears {output_3.count('CALC_END')} times. Output: {output_3}"
-    )
+    assert output_3.count("CALC_END") == 1, f"'CALC_END' appears {output_3.count('CALC_END')} times. Output: {output_3}"
     print("[PASS] No double prints in heavy calc cell")
 
 
@@ -263,12 +268,14 @@ def test_upstream_print_leaks_during_display_cell(nb_runner, tmp_path):
     """
     csv_path_str = _create_csv(tmp_path)
 
-    nb_runner.create_notebook([
-        f"import pandas as pd\ndf = pd.read_csv('{csv_path_str}')\nprint('UPSTREAM_PRINT_1')",
-        "df = df.sort_values(by=['Ticker', 'Date']).reset_index(drop=True)\nprint('UPSTREAM_PRINT_2')",
-        "df",
-        "df['extra'] = 1\nprint('DOWNSTREAM_PRINT')",
-    ])
+    nb_runner.create_notebook(
+        [
+            f"import pandas as pd\ndf = pd.read_csv('{csv_path_str}')\nprint('UPSTREAM_PRINT_1')",
+            "df = df.sort_values(by=['Ticker', 'Date']).reset_index(drop=True)\nprint('UPSTREAM_PRINT_2')",
+            "df",
+            "df['extra'] = 1\nprint('DOWNSTREAM_PRINT')",
+        ]
+    )
     nb_runner.start_kernel()
 
     # Run all cells
@@ -280,15 +287,9 @@ def test_upstream_print_leaks_during_display_cell(nb_runner, tmp_path):
     output_3 = nb_runner.get_output(3)
 
     # Cell 3's output should NOT contain upstream prints
-    assert "UPSTREAM_PRINT_1" not in output_3, (
-        f"Upstream print leaked into display cell output.\nOutput: {output_3}"
-    )
-    assert "UPSTREAM_PRINT_2" not in output_3, (
-        f"Upstream print leaked into display cell output.\nOutput: {output_3}"
-    )
-    assert "DOWNSTREAM_PRINT" not in output_3, (
-        f"Downstream print leaked into display cell output.\nOutput: {output_3}"
-    )
+    assert "UPSTREAM_PRINT_1" not in output_3, f"Upstream print leaked into display cell output.\nOutput: {output_3}"
+    assert "UPSTREAM_PRINT_2" not in output_3, f"Upstream print leaked into display cell output.\nOutput: {output_3}"
+    assert "DOWNSTREAM_PRINT" not in output_3, f"Downstream print leaked into display cell output.\nOutput: {output_3}"
     print("[PASS] No upstream prints leaked into display cell")
 
 
@@ -306,19 +307,21 @@ def test_display_cell_correct_after_alternating_out_of_order(nb_runner, tmp_path
     """
     csv_path_str = _create_csv(tmp_path)
 
-    nb_runner.create_notebook([
-        # Cell 1: Load data
-        f"import pandas as pd\ndf = pd.read_csv('{csv_path_str}')\nprint('Loaded')",
-        # Cell 2: Sort
-        "df = df.sort_values(by=['Ticker', 'Date']).reset_index(drop=True)\nprint('Sorted')",
-        # Cell 3: First display cell
-        "print('--- Display 1 ---')\ndf",
-        # Cell 4: Heavy computation — adds SMA column
-        "df['SMA'] = df.groupby('Ticker')['Close'].transform(lambda x: x.rolling(window=3, min_periods=1).mean())\n"
-        "print('Heavy calc done')",
-        # Cell 5: Second display cell
-        "print('--- Display 2 ---')\ndf",
-    ])
+    nb_runner.create_notebook(
+        [
+            # Cell 1: Load data
+            f"import pandas as pd\ndf = pd.read_csv('{csv_path_str}')\nprint('Loaded')",
+            # Cell 2: Sort
+            "df = df.sort_values(by=['Ticker', 'Date']).reset_index(drop=True)\nprint('Sorted')",
+            # Cell 3: First display cell
+            "print('--- Display 1 ---')\ndf",
+            # Cell 4: Heavy computation — adds SMA column
+            "df['SMA'] = df.groupby('Ticker')['Close'].transform(lambda x: x.rolling(window=3, min_periods=1).mean())\n"
+            "print('Heavy calc done')",
+            # Cell 5: Second display cell
+            "print('--- Display 2 ---')\ndf",
+        ]
+    )
     nb_runner.start_kernel()
 
     # Step 1: Run all cells in order

@@ -11,6 +11,7 @@ the result between the call's return and the statement's store: the statement
 refers to the call's entry, by item for unpacked names, without a digest.
 Anything else still proves "unchanged" by digesting.
 """
+
 import pytest
 
 pd = pytest.importorskip("pandas")
@@ -39,6 +40,7 @@ def seen(monkeypatch):
         out = real_refs(*a, **k)
         stored.append(out)
         return out
+
     monkeypatch.setattr(call_refs, "with_call_refs", spy_refs)
     real_digest = call_refs.digest_of
     monkeypatch.setattr(call_refs, "digest_of", lambda v: digests.append(1) or real_digest(v))
@@ -87,8 +89,9 @@ def test_a_plain_value_worth_keeping_is_not_pickled_either(cash_magics, seen):
     """r28s5's result was 402 MiB for 3.7 s: worth keeping, and the digest the
     statement's trusted reference does not need took 2.6 s."""
     stored, digests = seen
-    cash_magics.cash("", BUILD + "def small():\n    time.sleep(0.12)\n"
-                     "    return pd.DataFrame({'x': np.arange(1000, dtype=float)})\n")
+    cash_magics.cash(
+        "", BUILD + "def small():\n    time.sleep(0.12)\n    return pd.DataFrame({'x': np.arange(1000, dtype=float)})\n"
+    )
     stored.clear()
     cash_magics.cash("", "s = small()")
     assert isinstance(stored[-1]["s"], call_refs.CallRef)
@@ -100,8 +103,9 @@ def test_a_plain_value_worth_keeping_is_not_pickled_either(cash_magics, seen):
 
 def test_a_value_used_elsewhere_is_still_digested(cash_magics, seen):
     stored, digests = seen
-    cash_magics.cash("", BUILD + "def small():\n    time.sleep(0.12)\n"
-                     "    return pd.DataFrame({'x': np.arange(1000, dtype=float)})\n")
+    cash_magics.cash(
+        "", BUILD + "def small():\n    time.sleep(0.12)\n    return pd.DataFrame({'x': np.arange(1000, dtype=float)})\n"
+    )
     cash_magics.cash("", "acc = []")
     cash_magics.cash("", "acc.append(small())")
     assert digests, "a call that is not its statement's plain value is digested as before"

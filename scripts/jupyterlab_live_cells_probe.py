@@ -62,6 +62,7 @@ The default workdir is deliberately SHORT and outside the repo: a venv nested
 under a long path trips Windows' 260-character path limit while pip is unpacking
 itself, and the venv must never be committed.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -110,39 +111,59 @@ def work(k):
 '''
 
 CELLS = [
-    ("guard", '''import sys, os, pathlib
+    (
+        "guard",
+        """import sys, os, pathlib
 print("AUTOLOAD_OFF:", "cash" not in sys.modules)
 print("IPYTHONDIR:", os.environ.get("IPYTHONDIR"))
 print("STARTUP_DIR_FILES:", sorted(p.name for p in pathlib.Path(get_ipython().profile_dir.startup_dir).iterdir()))
-print("PY:", sys.version.split()[0])'''),
-    ("enable", '''import cash
-%cash_on'''),
-    ("warmup", '''import t4probe
-print("PROBE_LOADED", t4probe.LOG)'''),
-    ("upstream", '''K = 1'''),
-    ("downstream", '''RESULT = t4probe.work(K)
-print("RESULT", RESULT, "LIVE_CALLS", len(t4probe.CALLS))'''),
-    ("source", '''from cash.notebook import server_discovery as _sd
+print("PY:", sys.version.split()[0])""",
+    ),
+    (
+        "enable",
+        """import cash
+%cash_on""",
+    ),
+    (
+        "warmup",
+        """import t4probe
+print("PROBE_LOADED", t4probe.LOG)""",
+    ),
+    ("upstream", """K = 1"""),
+    (
+        "downstream",
+        """RESULT = t4probe.work(K)
+print("RESULT", RESULT, "LIVE_CALLS", len(t4probe.CALLS))""",
+    ),
+    (
+        "source",
+        """from cash.notebook import server_discovery as _sd
 from cash.notebook import live_cells as _lc
 print("LAST_CELL_SOURCE:", _sd.last_cell_source())
 _c = _lc.latest_cells()
 print("SEQ:", _lc._store["seq"], "NCELLS:", None if _c is None else len(_c))
 for _x in (_c or []):
     if _x.get("source", "").startswith("K ="):
-        print("KERNEL_SEES_UPSTREAM:", repr(_x["source"]))'''),
+        print("KERNEL_SEES_UPSTREAM:", repr(_x["source"]))""",
+    ),
 ]
 
 
 def _notebook() -> dict:
     return {
         "cells": [
-            {"cell_type": "code", "execution_count": None, "id": cid,
-             "metadata": {}, "outputs": [], "source": src.splitlines(keepends=True)}
+            {
+                "cell_type": "code",
+                "execution_count": None,
+                "id": cid,
+                "metadata": {},
+                "outputs": [],
+                "source": src.splitlines(keepends=True),
+            }
             for cid, src in CELLS
         ],
         "metadata": {
-            "kernelspec": {"display_name": "Python 3", "language": "python",
-                           "name": "python3"},
+            "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
             "language_info": {"name": "python"},
         },
         "nbformat": 4,
@@ -156,8 +177,7 @@ def _repo_root() -> Path:
 
 def _build_wheel(dist: Path) -> Path:
     dist.mkdir(parents=True, exist_ok=True)
-    subprocess.run([sys.executable, "-m", "build", "--wheel", "--outdir", str(dist)],
-                   cwd=str(_repo_root()), check=True)
+    subprocess.run([sys.executable, "-m", "build", "--wheel", "--outdir", str(dist)], cwd=str(_repo_root()), check=True)
     wheels = sorted(dist.glob("*.whl"), key=lambda p: p.stat().st_mtime)
     if not wheels:
         raise SystemExit("no wheel produced")
@@ -175,8 +195,7 @@ def setup(workdir: Path) -> None:
 
     subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True)
     py = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-    subprocess.run([str(py), "-m", "pip", "install", "-q", str(wheel), "jupyterlab"],
-                   check=True)
+    subprocess.run([str(py), "-m", "pip", "install", "-q", str(wheel), "jupyterlab"], check=True)
     print("[probe] installed wheel + jupyterlab")
 
     (nb_dir / "t4probe.py").write_text(PROBE_MODULE, encoding="ascii")
@@ -188,20 +207,21 @@ def setup(workdir: Path) -> None:
     # Trap 2: autosave off. Read at server START, so this must precede launch.
     settings = venv / "share/jupyter/lab/settings"
     settings.mkdir(parents=True, exist_ok=True)
-    (settings / "overrides.json").write_text(json.dumps(
-        {"@jupyterlab/docmanager-extension:plugin": {"autosave": False}}, indent=2),
-        encoding="utf-8")
+    (settings / "overrides.json").write_text(
+        json.dumps({"@jupyterlab/docmanager-extension:plugin": {"autosave": False}}, indent=2), encoding="utf-8"
+    )
 
     jlab = venv / ("Scripts/jupyter-lab.exe" if os.name == "nt" else "bin/jupyter-lab")
     print("\n[probe] launch with (note IPYTHONDIR -- trap 1):\n")
-    print(f'  IPYTHONDIR="{workdir / "ipythondir"}" \\\n'
-          f'    "{jlab}" --no-browser --port=8899 \\\n'
-          f'    --IdentityProvider.token=cashprobe \\\n'
-          f'    --ServerApp.root_dir="{nb_dir}" --ServerApp.open_browser=False\n')
+    print(
+        f'  IPYTHONDIR="{workdir / "ipythondir"}" \\\n'
+        f'    "{jlab}" --no-browser --port=8899 \\\n'
+        f"    --IdentityProvider.token=cashprobe \\\n"
+        f'    --ServerApp.root_dir="{nb_dir}" --ServerApp.open_browser=False\n'
+    )
     print("  then open  http://localhost:8899/lab/tree/t4.ipynb?token=cashprobe")
     print("  and follow the protocol in this file's module docstring.")
-    print(f"\n[probe] inspect with:  python {Path(__file__).name} check "
-          f"--workdir {workdir}")
+    print(f"\n[probe] inspect with:  python {Path(__file__).name} check --workdir {workdir}")
 
 
 def check(workdir: Path) -> None:
@@ -210,8 +230,7 @@ def check(workdir: Path) -> None:
     if not nb.exists():
         raise SystemExit(f"no notebook at {nb} -- run `setup` first")
     st = nb.stat()
-    print(f"NB mtime={st.st_mtime:.3f} size={st.st_size}   "
-          f"(an unchanged mtime proves no save happened)")
+    print(f"NB mtime={st.st_mtime:.3f} size={st.st_size}   (an unchanged mtime proves no save happened)")
     for cell in json.loads(nb.read_text(encoding="utf-8"))["cells"]:
         if cell["id"] in ("upstream", "downstream"):
             print(f"  DISK[{cell['id']}] = {''.join(cell['source'])!r}")
@@ -224,8 +243,9 @@ def check(workdir: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("action", choices=("setup", "check"))
-    parser.add_argument("--workdir", type=Path, default=DEFAULT_WORKDIR,
-                        help=f"default: {DEFAULT_WORKDIR} (keep it SHORT on Windows)")
+    parser.add_argument(
+        "--workdir", type=Path, default=DEFAULT_WORKDIR, help=f"default: {DEFAULT_WORKDIR} (keep it SHORT on Windows)"
+    )
     args = parser.parse_args()
     (setup if args.action == "setup" else check)(args.workdir)
 

@@ -9,13 +9,23 @@ from typing import Any, TypeVar
 
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 
-__all__ = ["pure", "stateful", "is_pure", "is_stateful", "is_known_pure", "KNOWN_PURE_BUILTINS", "analyze_function_purity", "clear_purity_cache"]
+__all__ = [
+    "pure",
+    "stateful",
+    "is_pure",
+    "is_stateful",
+    "is_known_pure",
+    "KNOWN_PURE_BUILTINS",
+    "analyze_function_purity",
+    "clear_purity_cache",
+]
 
-F = TypeVar('F', bound=Callable[..., Any])
+F = TypeVar("F", bound=Callable[..., Any])
 
 # Attribute names used to mark functions
-_PURE_ATTR = '_cash_pure'
-_STATEFUL_ATTR = '_cash_stateful'
+_PURE_ATTR = "_cash_pure"
+_STATEFUL_ATTR = "_cash_stateful"
+
 
 def pure(func: F) -> F:
     """Mark a function as pure (no side effects) for the purity analyzer.
@@ -50,6 +60,7 @@ def pure(func: F) -> F:
     setattr(wrapper, _PURE_ATTR, True)
     return wrapper  # type: ignore[return-value]  # wrapper preserves F's signature via @wraps
 
+
 def stateful(func: F) -> F:
     """Mark a function as stateful (has side effects).
 
@@ -79,6 +90,7 @@ def stateful(func: F) -> F:
     setattr(wrapper, _STATEFUL_ATTR, True)
     return wrapper  # type: ignore[return-value]  # wrapper preserves F's signature via @wraps
 
+
 def is_pure(func: Any) -> bool:
     """Check if a function is marked as pure.
 
@@ -89,6 +101,7 @@ def is_pure(func: Any) -> bool:
         True if the function has the ``_cash_pure`` attribute set to True.
     """
     return getattr(func, _PURE_ATTR, False) is True
+
 
 def is_stateful(func: Any) -> bool:
     """Check if a function is marked as stateful.
@@ -101,29 +114,70 @@ def is_stateful(func: Any) -> bool:
     """
     return getattr(func, _STATEFUL_ATTR, False) is True
 
+
 # ============================================================================
 # Known-pure built-in and stdlib functions
 # ============================================================================
 
 # These built-in functions have no side effects and always return
 # the same output for the same inputs.
-KNOWN_PURE_BUILTINS: frozenset[str] = frozenset({
-    # Type constructors / conversions
-    'int', 'float', 'str', 'bool', 'bytes', 'complex',
-    'list', 'tuple', 'set', 'frozenset', 'dict',
-    # Numeric / math
-    'abs', 'round', 'pow', 'divmod', 'min', 'max', 'sum',
-    # Sequence / iteration
-    'len', 'sorted', 'reversed', 'enumerate', 'zip', 'range',
-    'map', 'filter', 'all', 'any',
-    # Object introspection
-    'type', 'isinstance', 'issubclass', 'id', 'hash',
-    'callable', 'hasattr', 'getattr',
-    'repr', 'ascii', 'format', 'chr', 'ord',
-    'hex', 'oct', 'bin',
-    # Containers
-    'iter', 'next', 'slice',
-})
+KNOWN_PURE_BUILTINS: frozenset[str] = frozenset(
+    {
+        # Type constructors / conversions
+        "int",
+        "float",
+        "str",
+        "bool",
+        "bytes",
+        "complex",
+        "list",
+        "tuple",
+        "set",
+        "frozenset",
+        "dict",
+        # Numeric / math
+        "abs",
+        "round",
+        "pow",
+        "divmod",
+        "min",
+        "max",
+        "sum",
+        # Sequence / iteration
+        "len",
+        "sorted",
+        "reversed",
+        "enumerate",
+        "zip",
+        "range",
+        "map",
+        "filter",
+        "all",
+        "any",
+        # Object introspection
+        "type",
+        "isinstance",
+        "issubclass",
+        "id",
+        "hash",
+        "callable",
+        "hasattr",
+        "getattr",
+        "repr",
+        "ascii",
+        "format",
+        "chr",
+        "ord",
+        "hex",
+        "oct",
+        "bin",
+        # Containers
+        "iter",
+        "next",
+        "slice",
+    }
+)
+
 
 def is_known_pure(name: str) -> bool:
     """Check if a function name is a known-pure built-in.
@@ -140,6 +194,7 @@ def is_known_pure(name: str) -> bool:
     """
     return name in KNOWN_PURE_BUILTINS
 
+
 # ============================================================================
 # Automatic purity analysis for user-defined functions
 # ============================================================================
@@ -155,25 +210,56 @@ _purity_cache_lock = threading.Lock()
 _PURITY_CACHE_MAX_SIZE = 200
 
 # Operations that indicate impurity (side effects or global state access)
-_IMPURE_FUNCTION_CALLS = frozenset({
-    'print', 'input', 'open', 'exec', 'eval', 'compile',
-    'exit', 'quit', 'breakpoint',
-})
+_IMPURE_FUNCTION_CALLS = frozenset(
+    {
+        "print",
+        "input",
+        "open",
+        "exec",
+        "eval",
+        "compile",
+        "exit",
+        "quit",
+        "breakpoint",
+    }
+)
 
-_IMPURE_MODULE_CALLS = frozenset({
-    'os.system', 'os.remove', 'os.unlink', 'os.mkdir', 'os.makedirs',
-    'os.rename', 'os.replace', 'os.rmdir',
-    'subprocess.run', 'subprocess.call', 'subprocess.Popen',
-    'subprocess.check_call', 'subprocess.check_output',
-    'shutil.copy', 'shutil.copy2', 'shutil.move', 'shutil.rmtree',
-    'logging.info', 'logging.debug', 'logging.warning', 'logging.error',
-    'logging.critical',
-    'requests.get', 'requests.post', 'requests.put', 'requests.delete',
-    # `patch` was missing beside its four siblings; `request` is the generic
-    # form they all delegate to, so naming only the verbs left a hole.
-    'requests.patch', 'requests.request',
-    'json.dump', 'pickle.dump',
-})
+_IMPURE_MODULE_CALLS = frozenset(
+    {
+        "os.system",
+        "os.remove",
+        "os.unlink",
+        "os.mkdir",
+        "os.makedirs",
+        "os.rename",
+        "os.replace",
+        "os.rmdir",
+        "subprocess.run",
+        "subprocess.call",
+        "subprocess.Popen",
+        "subprocess.check_call",
+        "subprocess.check_output",
+        "shutil.copy",
+        "shutil.copy2",
+        "shutil.move",
+        "shutil.rmtree",
+        "logging.info",
+        "logging.debug",
+        "logging.warning",
+        "logging.error",
+        "logging.critical",
+        "requests.get",
+        "requests.post",
+        "requests.put",
+        "requests.delete",
+        # `patch` was missing beside its four siblings; `request` is the generic
+        # form they all delegate to, so naming only the verbs left a hole.
+        "requests.patch",
+        "requests.request",
+        "json.dump",
+        "pickle.dump",
+    }
+)
 
 #: Calls that READ ambient state — the clock, the environment, the working
 #: directory, a fresh UUID.
@@ -195,22 +281,41 @@ _IMPURE_MODULE_CALLS = frozenset({
 #: answers, through no argument the caller passed. `os.path.exists` fails that
 #: bar (it is about a file, which the file-dependency tracker already owns);
 #: `os.getpid` passes it but is not worth the noise.
-_AMBIENT_READ_CALLS = frozenset({
-    'datetime.now', 'datetime.utcnow', 'datetime.today',
-    'datetime.datetime.now', 'datetime.datetime.utcnow',
-    'datetime.datetime.today', 'datetime.date.today', 'date.today',
-    'time.time', 'time.time_ns', 'time.monotonic', 'time.perf_counter',
-    'os.getcwd', 'os.getenv', 'os.environ.get',
-    'uuid.uuid1', 'uuid.uuid4',
-    'pandas.Timestamp.now', 'pandas.Timestamp.today', 'pandas.Timestamp.utcnow',
-})
+_AMBIENT_READ_CALLS = frozenset(
+    {
+        "datetime.now",
+        "datetime.utcnow",
+        "datetime.today",
+        "datetime.datetime.now",
+        "datetime.datetime.utcnow",
+        "datetime.datetime.today",
+        "datetime.date.today",
+        "date.today",
+        "time.time",
+        "time.time_ns",
+        "time.monotonic",
+        "time.perf_counter",
+        "os.getcwd",
+        "os.getenv",
+        "os.environ.get",
+        "uuid.uuid1",
+        "uuid.uuid4",
+        "pandas.Timestamp.now",
+        "pandas.Timestamp.today",
+        "pandas.Timestamp.utcnow",
+    }
+)
 
 #: Constructors that read the clock only when a string argument says so:
 #: ``pd.to_datetime("today")``, ``pd.Timestamp("now")``, ``np.datetime64("now")``.
-_AMBIENT_WHEN_ARG_CALLS = frozenset({
-    'pandas.to_datetime', 'pandas.Timestamp', 'numpy.datetime64',
-})
-_AMBIENT_ARG_VALUES = frozenset({'now', 'today'})
+_AMBIENT_WHEN_ARG_CALLS = frozenset(
+    {
+        "pandas.to_datetime",
+        "pandas.Timestamp",
+        "numpy.datetime64",
+    }
+)
+_AMBIENT_ARG_VALUES = frozenset({"now", "today"})
 
 #: Functions that read the clock when their time argument is LEFT OUT: called
 #: with at most this many positional arguments. ``time.strftime("%Y-%m")``
@@ -218,8 +323,11 @@ _AMBIENT_ARG_VALUES = frozenset({'now', 'today'})
 #: ``time.strftime("%Y-%m", t)`` only formats ``t`` -- as ``time.localtime(ts)``
 #: only converts, which the flat list above used to warn about.
 _AMBIENT_WHEN_ARGS_OMITTED: dict[str, int] = {
-    'time.strftime': 1, 'time.asctime': 0, 'time.ctime': 0,
-    'time.localtime': 0, 'time.gmtime': 0,
+    "time.strftime": 1,
+    "time.asctime": 0,
+    "time.ctime": 0,
+    "time.localtime": 0,
+    "time.gmtime": 0,
 }
 
 #: Method names meaning "this call changed something outside the function".
@@ -241,22 +349,54 @@ _AMBIENT_WHEN_ARGS_OMITTED: dict[str, int] = {
 #: client object still cannot be reached by name at all. A false positive here
 #: costs an advisory warning; a false negative costs a write that silently
 #: stops happening on every cache hit.
-_WRITE_METHODS = frozenset({
-    'write', 'writelines', 'send', 'sendall', 'sendto',
-    'append', 'extend', 'insert', 'pop', 'remove', 'sort', 'reverse', 'clear',
-    'update', 'add', 'discard',
-    'to_csv', 'to_excel', 'to_parquet', 'to_json', 'to_pickle',
-    'savefig', 'save',
-    'write_text', 'write_bytes',  # pathlib.Path
-    # HTTP verbs that change server state, reached through a client object
-    # (a requests Session, httpx, an SDK wrapper) rather than the
-    # module-qualified form already listed above.
-    'post', 'put', 'patch',
-    # Database writes, reached through a cursor / connection / collection.
-    'execute', 'executemany', 'executescript', 'commit', 'rollback',
-    # Object stores and message buses.
-    'upload', 'upload_file', 'upload_fileobj', 'put_object', 'publish',
-})
+_WRITE_METHODS = frozenset(
+    {
+        "write",
+        "writelines",
+        "send",
+        "sendall",
+        "sendto",
+        "append",
+        "extend",
+        "insert",
+        "pop",
+        "remove",
+        "sort",
+        "reverse",
+        "clear",
+        "update",
+        "add",
+        "discard",
+        "to_csv",
+        "to_excel",
+        "to_parquet",
+        "to_json",
+        "to_pickle",
+        "savefig",
+        "save",
+        "write_text",
+        "write_bytes",  # pathlib.Path
+        # HTTP verbs that change server state, reached through a client object
+        # (a requests Session, httpx, an SDK wrapper) rather than the
+        # module-qualified form already listed above.
+        "post",
+        "put",
+        "patch",
+        # Database writes, reached through a cursor / connection / collection.
+        "execute",
+        "executemany",
+        "executescript",
+        "commit",
+        "rollback",
+        # Object stores and message buses.
+        "upload",
+        "upload_file",
+        "upload_fileobj",
+        "put_object",
+        "publish",
+    }
+)
+
 
 def analyze_function_purity(func: Any, user_ns: dict[str, Any] | None = None) -> bool:
     """Analyze a user-defined function to determine if it's pure.
@@ -319,6 +459,7 @@ def analyze_function_purity(func: Any, user_ns: dict[str, Any] | None = None) ->
     _cache_purity_result(source_hash, is_func_pure)
     return is_func_pure
 
+
 def _cache_purity_result(source_hash: str, is_pure_result: bool) -> None:
     """Cache a purity analysis result, evicting oldest if full."""
     global _purity_analysis_cache
@@ -328,6 +469,7 @@ def _cache_purity_result(source_hash: str, is_pure_result: bool) -> None:
             oldest = next(iter(_purity_analysis_cache))
             del _purity_analysis_cache[oldest]
         _purity_analysis_cache[source_hash] = is_pure_result
+
 
 class _ImpurityVisitor(ast.NodeVisitor):
     """AST visitor that sets ``self.impure = True`` on the first impurity sign."""
@@ -352,8 +494,11 @@ class _ImpurityVisitor(ast.NodeVisitor):
         self._flag()
 
     def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
-        if isinstance(node.func, ast.Name) and node.func.id in _IMPURE_FUNCTION_CALLS or isinstance(node.func, ast.Attribute) and (
-            _get_dotted_name(node.func) in _IMPURE_MODULE_CALLS or node.func.attr in _WRITE_METHODS
+        if (
+            isinstance(node.func, ast.Name)
+            and node.func.id in _IMPURE_FUNCTION_CALLS
+            or isinstance(node.func, ast.Attribute)
+            and (_get_dotted_name(node.func) in _IMPURE_MODULE_CALLS or node.func.attr in _WRITE_METHODS)
         ):
             self._flag()
         self.generic_visit(node)
@@ -385,6 +530,7 @@ def _check_body_purity(func_def: ast.AST, user_ns: dict[str, Any] | None = None)
     visitor.visit(func_def)
     return not visitor.impure
 
+
 def _get_dotted_name(node: ast.Attribute) -> str:
     """Get a dotted name like 'os.path.join' from an Attribute node."""
     parts = [node.attr]
@@ -394,11 +540,11 @@ def _get_dotted_name(node: ast.Attribute) -> str:
         current = current.value
     if isinstance(current, ast.Name):
         parts.append(current.id)
-    return '.'.join(reversed(parts))
+    return ".".join(reversed(parts))
+
 
 def clear_purity_cache() -> None:
     """Clear the purity analysis cache. Useful for testing."""
     global _purity_analysis_cache
     with _purity_cache_lock:
         _purity_analysis_cache.clear()
-

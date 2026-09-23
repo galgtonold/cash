@@ -4,6 +4,7 @@ All assertions target :class:`StatementAnalysis` fields or
 ``skip_reasons()``.  No direct visitor or detector API remains; this
 file replaces ``test_mutation_detector.py`` and ``test_side_effects.py``.
 """
+
 from __future__ import annotations
 
 import ast
@@ -12,36 +13,34 @@ import pytest
 
 from cash.notebook.cacheability import (
     KNOWN_PURE_METHODS,
-    MutationInfo,
-    SideEffectInfo,
     StatementAnalysis,
     alias_mutation_sources,
     aliased_sources,
     analyze_statement,
+    assigned_method_call_receivers,
     bare_alias_targets,
-    crossref_reassigned_vars,
-    subscript_view_bindings,
-    function_arg_mutations,
     called_function_global_mutations,
+    crossref_reassigned_vars,
+    function_arg_mutations,
     function_global_mutations,
-    stateful_self_functions,
-    stateful_closure_vars,
-    partial_arg_mutations,
     mutating_partials,
-    reduce_free_mutations,
     object_protocol_mutations,
     params_mutated_in_function,
+    partial_arg_mutations,
+    reduce_free_mutations,
+    selfref_inplace_write_vars,
     standalone_call_arg_targets,
     standalone_method_call_receivers,
     standalone_method_mutation_receivers,
-    assigned_method_call_receivers,
-    selfref_inplace_write_vars,
+    stateful_closure_vars,
+    stateful_self_functions,
+    subscript_view_bindings,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _analyze(code: str) -> StatementAnalysis:
     return analyze_statement(code, None)
@@ -56,152 +55,153 @@ def _analyze_with_tree(code: str) -> StatementAnalysis:
 # Mutation detection — all_mutated_vars
 # ---------------------------------------------------------------------------
 
+
 class TestAllMutatedVars:
     """Behaviour previously tested through MutationDetector.detect_mutations /
     get_mutated_variables."""
 
     def test_list_append(self):
         a = _analyze("lst.append(42)")
-        assert 'lst' in a.all_mutated_vars
+        assert "lst" in a.all_mutated_vars
 
     def test_list_extend(self):
         a = _analyze("data.extend([1, 2, 3])")
-        assert 'data' in a.all_mutated_vars
+        assert "data" in a.all_mutated_vars
 
     def test_list_sort(self):
         a = _analyze("items.sort(key=lambda x: x.name)")
-        assert 'items' in a.all_mutated_vars
+        assert "items" in a.all_mutated_vars
 
     def test_list_insert(self):
         a = _analyze("lst.insert(0, 'first')")
-        assert 'lst' in a.all_mutated_vars
+        assert "lst" in a.all_mutated_vars
 
     def test_dict_update(self):
         a = _analyze("config.update({'key': 'value'})")
-        assert 'config' in a.all_mutated_vars
+        assert "config" in a.all_mutated_vars
 
     def test_dict_setitem(self):
         a = _analyze("d['key'] = value")
-        assert 'd' in a.all_mutated_vars
+        assert "d" in a.all_mutated_vars
 
     def test_dict_pop(self):
         a = _analyze("d.pop('key')")
-        assert 'd' in a.all_mutated_vars
+        assert "d" in a.all_mutated_vars
 
     def test_set_add(self):
         a = _analyze("seen.add(item)")
-        assert 'seen' in a.all_mutated_vars
+        assert "seen" in a.all_mutated_vars
 
     def test_augmented_add(self):
         a = _analyze("counter += 1")
-        assert 'counter' in a.all_mutated_vars
+        assert "counter" in a.all_mutated_vars
 
     def test_augmented_multiply(self):
         a = _analyze("arr *= 2")
-        assert 'arr' in a.all_mutated_vars
+        assert "arr" in a.all_mutated_vars
 
     def test_pandas_fillna_inplace(self):
         a = _analyze("df.fillna(0, inplace=True)")
-        assert 'df' in a.all_mutated_vars
+        assert "df" in a.all_mutated_vars
 
     def test_pandas_dropna_inplace(self):
         a = _analyze("df.dropna(inplace=True)")
-        assert 'df' in a.all_mutated_vars
+        assert "df" in a.all_mutated_vars
 
     def test_pandas_sort_inplace(self):
         a = _analyze("df.sort_values('col', inplace=True)")
-        assert 'df' in a.all_mutated_vars
+        assert "df" in a.all_mutated_vars
 
     def test_pandas_no_inplace(self):
         """Without inplace=True, it's not a mutation."""
         a = _analyze("df.fillna(0)")
-        assert 'df' not in a.all_mutated_vars
+        assert "df" not in a.all_mutated_vars
 
     def test_pandas_inplace_false(self):
         """Explicit inplace=False is not a mutation."""
         a = _analyze("df.fillna(0, inplace=False)")
-        assert 'df' not in a.all_mutated_vars
+        assert "df" not in a.all_mutated_vars
 
     def test_numpy_out_kwarg(self):
         """numpy ufunc out= writes its target in place: out=a mutates a."""
         a = _analyze("np.add(a, 10, out=a)")
-        assert 'a' in a.all_mutated_vars
+        assert "a" in a.all_mutated_vars
 
     def test_numpy_out_kwarg_distinct_target(self):
         """out= names the mutated array even when it is not also an input."""
         a = _analyze("np.multiply(x, y, out=result)")
-        assert 'result' in a.all_mutated_vars
+        assert "result" in a.all_mutated_vars
 
     def test_numpy_out_kwarg_tuple(self):
         """Multi-output ufuncs take a tuple: out=(a, b) mutates both."""
         a = _analyze("np.divmod(x, y, out=(q, r))")
-        assert {'q', 'r'} <= a.all_mutated_vars
+        assert {"q", "r"} <= a.all_mutated_vars
 
     def test_numpy_out_kwarg_subscript(self):
         """out=arr[1:] mutates the base array arr."""
         a = _analyze("np.add(arr, 1, out=arr[1:])")
-        assert 'arr' in a.all_mutated_vars
+        assert "arr" in a.all_mutated_vars
 
     def test_out_kwarg_captured_result(self):
         """out= mutation is detected even when the call's result is assigned."""
         a = _analyze("b = np.add(a, 10, out=a)")
-        assert 'a' in a.all_mutated_vars
+        assert "a" in a.all_mutated_vars
 
     def test_method_mutation_in_list_comprehension(self):
         # CAS-67: a known-mutating method inside a comprehension element.
         a = _analyze("r = [base.append(0) for _ in range(2)]")
-        assert 'base' in a.all_mutated_vars
+        assert "base" in a.all_mutated_vars
 
     def test_method_mutation_in_generator_expr(self):
         a = _analyze("r = list(base.append(0) for _ in range(2))")
-        assert 'base' in a.all_mutated_vars
+        assert "base" in a.all_mutated_vars
 
     def test_method_mutation_in_dict_comprehension(self):
         a = _analyze("r = {i: base.append(0) for i in range(2)}")
-        assert 'base' in a.all_mutated_vars
+        assert "base" in a.all_mutated_vars
 
     def test_method_mutation_in_fstring(self):
         a = _analyze("s = f'{base.append(0)}'")
-        assert 'base' in a.all_mutated_vars
+        assert "base" in a.all_mutated_vars
 
     def test_method_mutation_captured_result(self):
         # r = d.pop(k) still mutates d (append/pop/... always mutate).
         a = _analyze("r = d.pop('k')")
-        assert 'd' in a.all_mutated_vars
+        assert "d" in a.all_mutated_vars
 
     def test_pure_method_in_comprehension_not_flagged(self):
         # A non-mutating method (copy/head) inside a comprehension is not a mutation.
         a = _analyze("r = [base.copy() for _ in range(2)]")
-        assert 'base' not in a.all_mutated_vars
+        assert "base" not in a.all_mutated_vars
 
     def test_subscript_assign(self):
         a = _analyze("arr[0] = 100")
-        assert 'arr' in a.all_mutated_vars
+        assert "arr" in a.all_mutated_vars
 
     def test_nested_subscript(self):
         a = _analyze("matrix[0][1] = 42")
-        assert 'matrix' in a.all_mutated_vars
+        assert "matrix" in a.all_mutated_vars
 
     def test_attribute_assign(self):
         a = _analyze("obj.name = 'new_name'")
-        assert 'obj' in a.all_mutated_vars
+        assert "obj" in a.all_mutated_vars
 
     def test_del_subscript(self):
         a = _analyze("del d['key']")
-        assert 'd' in a.all_mutated_vars
+        assert "d" in a.all_mutated_vars
 
     def test_tuple_unpack_subscript_target(self):
         # CAS-56: subscript writes nested in a tuple target mutate their bases.
         a = _analyze("df['a'], df['b'] = df['b'], df['a']")
-        assert 'df' in a.all_mutated_vars
+        assert "df" in a.all_mutated_vars
 
     def test_tuple_unpack_mixed_bases(self):
         a = _analyze("d['x'], lst[0] = 1, 2")
-        assert {'d', 'lst'} <= a.all_mutated_vars
+        assert {"d", "lst"} <= a.all_mutated_vars
 
     def test_list_target_attribute(self):
         a = _analyze("[obj.x, obj.y] = (1, 2)")
-        assert 'obj' in a.all_mutated_vars
+        assert "obj" in a.all_mutated_vars
 
     def test_tuple_unpack_plain_names_no_mutation(self):
         a = _analyze("x, y = 1, 2")
@@ -210,7 +210,7 @@ class TestAllMutatedVars:
     def test_multiple_mutations(self):
         code = "lst.append(1)\nlst.append(2)\nd['key'] = 'val'\ncounter += 1"
         a = _analyze(code)
-        assert {'lst', 'd', 'counter'} <= a.all_mutated_vars
+        assert {"lst", "d", "counter"} <= a.all_mutated_vars
 
     def test_pure_assignment(self):
         a = _analyze("x = 42")
@@ -223,7 +223,7 @@ class TestAllMutatedVars:
     def test_method_call_with_assignment(self):
         """Result captured — original isn't mutated."""
         a = _analyze("new_df = df.fillna(0)")
-        assert 'df' not in a.all_mutated_vars
+        assert "df" not in a.all_mutated_vars
 
     def test_syntax_error_returns_empty(self):
         a = _analyze("def :")
@@ -232,12 +232,13 @@ class TestAllMutatedVars:
     def test_pre_parsed_tree(self):
         code = "lst.append(42)"
         a = _analyze_with_tree(code)
-        assert 'lst' in a.all_mutated_vars
+        assert "lst" in a.all_mutated_vars
 
 
 # ---------------------------------------------------------------------------
 # Standalone method-mutation receivers (lineage-bump + skip-cache trigger)
 # ---------------------------------------------------------------------------
+
 
 class TestStandaloneMethodMutationReceivers:
     """``standalone_method_mutation_receivers`` returns the base variable of a
@@ -254,19 +255,19 @@ class TestStandaloneMethodMutationReceivers:
         return standalone_method_mutation_receivers(ast.parse(code))
 
     def test_list_append(self):
-        assert self._receivers("lst.append(42)") == {'lst'}
+        assert self._receivers("lst.append(42)") == {"lst"}
 
     def test_set_add(self):
-        assert self._receivers("box.add(10)") == {'box'}
+        assert self._receivers("box.add(10)") == {"box"}
 
     def test_attribute_receiver_append(self):
-        assert self._receivers("box.items.append(10)") == {'box'}
+        assert self._receivers("box.items.append(10)") == {"box"}
 
     def test_dict_update(self):
-        assert self._receivers("config.update({'k': 'v'})") == {'config'}
+        assert self._receivers("config.update({'k': 'v'})") == {"config"}
 
     def test_pandas_inplace_true(self):
-        assert self._receivers("df.dropna(inplace=True)") == {'df'}
+        assert self._receivers("df.dropna(inplace=True)") == {"df"}
 
     def test_pure_method_excluded(self):
         """A non-mutating standalone call must NOT bump its receiver."""
@@ -288,20 +289,20 @@ class TestStandaloneMethodMutationReceivers:
         assert self._receivers(code) == frozenset()
 
     def test_multiple_receivers(self):
-        assert self._receivers("a.append(1)\nb.add(2)") == {'a', 'b'}
+        assert self._receivers("a.append(1)\nb.add(2)") == {"a", "b"}
 
     def test_numpy_out_kwarg(self):
         """numpy out= writes its target in place -> bump the out target ``a``.
         (``np`` also appears here because ``add`` is in MUTATING_METHODS via
         ``set.add``; that pre-existing artifact is harmless — the runtime/sim
         loops skip module receivers.)"""
-        assert 'a' in self._receivers("np.add(a, 10, out=a)")
+        assert "a" in self._receivers("np.add(a, 10, out=a)")
 
     def test_numpy_out_kwarg_tuple(self):
-        assert self._receivers("np.divmod(x, y, out=(q, r))") == {'q', 'r'}
+        assert self._receivers("np.divmod(x, y, out=(q, r))") == {"q", "r"}
 
     def test_numpy_out_kwarg_distinct_target(self):
-        assert self._receivers("np.multiply(x, y, out=result)") == {'result'}
+        assert self._receivers("np.multiply(x, y, out=result)") == {"result"}
 
     def test_none_tree(self):
         assert standalone_method_mutation_receivers(None) == frozenset()
@@ -320,19 +321,19 @@ class TestStandaloneMethodCallReceivers:
 
     def test_pure_method_included_as_candidate(self):
         # narrow helper drops df.head(); the broad candidate set keeps it
-        assert self._calls("df.head()") == {('df', 'head')}
+        assert self._calls("df.head()") == {("df", "head")}
 
     def test_mutating_method_included(self):
-        assert self._calls("box.add(10)") == {('box', 'add')}
+        assert self._calls("box.add(10)") == {("box", "add")}
 
     def test_attribute_receiver(self):
-        assert self._calls("box.items.append(10)") == {('box', 'append')}
+        assert self._calls("box.items.append(10)") == {("box", "append")}
 
     def test_custom_method(self):
-        assert self._calls("bus.on(handler)") == {('bus', 'on')}
+        assert self._calls("bus.on(handler)") == {("bus", "on")}
 
     def test_chained_call_uses_outer_method_and_root_base(self):
-        assert self._calls("df.groupby('a').sum()") == {('df', 'sum')}
+        assert self._calls("df.groupby('a').sum()") == {("df", "sum")}
 
     def test_assignment_excluded(self):
         assert self._calls("r = df.head()") == frozenset()
@@ -345,11 +346,11 @@ class TestStandaloneMethodCallReceivers:
         assert self._calls("def f():\n    a.append(1)") == frozenset()
 
     def test_multiple(self):
-        assert self._calls("a.foo()\nb.bar(1)") == {('a', 'foo'), ('b', 'bar')}
+        assert self._calls("a.foo()\nb.bar(1)") == {("a", "foo"), ("b", "bar")}
 
     def test_numpy_out_kwarg_candidate(self):
         """out= target is a candidate (method label 'out='); np.add receiver too."""
-        assert self._calls("np.add(a, 10, out=a)") == {('np', 'add'), ('a', 'out=')}
+        assert self._calls("np.add(a, 10, out=a)") == {("np", "add"), ("a", "out=")}
 
     def test_none_tree(self):
         assert standalone_method_call_receivers(None) == frozenset()
@@ -368,25 +369,25 @@ class TestAssignedMethodCallReceivers:
         return assigned_method_call_receivers(ast.parse(code))
 
     def test_tuple_unpack_captured(self):
-        assert self._calls("counts, bins, patches = ax.hist(data)") == {('ax', 'hist')}
+        assert self._calls("counts, bins, patches = ax.hist(data)") == {("ax", "hist")}
 
     def test_single_target_captured(self):
-        assert self._calls("h = ax.hist(data, bins=11)") == {('ax', 'hist')}
+        assert self._calls("h = ax.hist(data, bins=11)") == {("ax", "hist")}
 
     def test_annotated_assignment_captured(self):
-        assert self._calls("h: object = ax.hist(data)") == {('ax', 'hist')}
+        assert self._calls("h: object = ax.hist(data)") == {("ax", "hist")}
 
     def test_bare_annotation_has_no_value(self):
         assert self._calls("h: object") == frozenset()
 
     def test_nested_in_larger_rhs_expression(self):
         # whole RHS is walked, so a draw nested in an expression is caught
-        assert self._calls("n = int((ax.hist(data)[0] > 0).sum())") == {('ax', 'hist')}
+        assert self._calls("n = int((ax.hist(data)[0] > 0).sum())") == {("ax", "hist")}
 
     def test_pure_capture_included_as_candidate(self):
         # the helper is receiver-agnostic; the identity-coupled gate (applied by
         # the runtime/sim, not here) is what keeps df.mean() cacheable
-        assert self._calls("m = df.mean()") == {('df', 'mean')}
+        assert self._calls("m = df.mean()") == {("df", "mean")}
 
     def test_bare_expr_excluded(self):
         assert self._calls("ax.hist(data)") == frozenset()
@@ -407,11 +408,11 @@ class TestKnownPureMethods:
     content-observation for read-only methods on big objects."""
 
     def test_common_pandas_inspection_pure(self):
-        for m in ('head', 'tail', 'describe', 'info', 'sample', 'value_counts'):
+        for m in ("head", "tail", "describe", "info", "sample", "value_counts"):
             assert m in KNOWN_PURE_METHODS
 
     def test_mutating_methods_not_in_pure_set(self):
-        for m in ('append', 'add', 'update', 'pop', 'sort'):
+        for m in ("append", "add", "update", "pop", "sort"):
             assert m not in KNOWN_PURE_METHODS
 
 
@@ -419,37 +420,39 @@ class TestKnownPureMethods:
 # Top-level mutation detection
 # ---------------------------------------------------------------------------
 
+
 class TestTopLevelMutatedVars:
     """Behaviour previously in MutationDetector.get_top_level_mutated_variables."""
 
     def test_top_level_append_detected(self):
         a = _analyze("lst.append(1)")
-        assert 'lst' in a.top_level_mutated_vars
+        assert "lst" in a.top_level_mutated_vars
 
     def test_mutation_inside_function_not_top_level(self):
         code = "def foo():\n    lst.append(1)"
         a = _analyze(code)
         # all_mutated_vars walks the full tree
-        assert 'lst' in a.all_mutated_vars
+        assert "lst" in a.all_mutated_vars
         # top_level_mutated_vars skips function/class bodies
-        assert 'lst' not in a.top_level_mutated_vars
+        assert "lst" not in a.top_level_mutated_vars
 
     def test_mutation_inside_class_not_top_level(self):
         code = "class Foo:\n    def method(self):\n        self.val = 1"
         a = _analyze(code)
-        assert 'self' not in a.top_level_mutated_vars
+        assert "self" not in a.top_level_mutated_vars
 
     def test_mixed_top_level_and_nested(self):
         code = "d['x'] = 1\ndef foo():\n    lst.append(2)"
         a = _analyze(code)
-        assert 'd' in a.top_level_mutated_vars
-        assert 'lst' not in a.top_level_mutated_vars
-        assert 'lst' in a.all_mutated_vars
+        assert "d" in a.top_level_mutated_vars
+        assert "lst" not in a.top_level_mutated_vars
+        assert "lst" in a.all_mutated_vars
 
 
 # ---------------------------------------------------------------------------
 # Side-effect detection
 # ---------------------------------------------------------------------------
+
 
 class TestSideEffects:
     """Behaviour previously in SideEffectDetector."""
@@ -457,43 +460,45 @@ class TestSideEffects:
     def test_open_write_mode(self):
         a = _analyze("with open('out.txt', 'w') as f: f.write('x')")
         kinds = [e.kind for e in a.side_effects]
-        assert 'file_write' in kinds
+        assert "file_write" in kinds
 
     def test_open_append_mode(self):
         a = _analyze("open('log.txt', 'a')")
-        assert any(e.kind == 'file_write' for e in a.side_effects)
+        assert any(e.kind == "file_write" for e in a.side_effects)
 
     def test_open_read_mode_not_detected(self):
         a = _analyze("f = open('data.csv', 'r')")
-        assert not any(e.kind == 'file_write' for e in a.side_effects)
+        assert not any(e.kind == "file_write" for e in a.side_effects)
 
     def test_pathlib_write_text(self):
         # CAS-83: Path.write_text is a file write; without this the write-only
         # cell is cacheable and a cache hit skips creating the file.
         a = _analyze("from pathlib import Path\nPath('out.json').write_text('x')")
-        assert any(e.kind == 'file_write' for e in a.side_effects)
+        assert any(e.kind == "file_write" for e in a.side_effects)
 
     def test_pathlib_write_bytes(self):
         a = _analyze("p.write_bytes(b'\\x00')")
-        assert any(e.kind == 'file_write' for e in a.side_effects)
+        assert any(e.kind == "file_write" for e in a.side_effects)
 
     def test_pathlib_mkdir(self):
         # Round 22: `OUT.mkdir(exist_ok=True)` restored from the cache left an
         # emptied output folder missing; it must run like any other write.
         from cash.notebook.cacheability import statement_write_repeatability, statement_writes_files
+
         a = _analyze("OUT.mkdir(exist_ok=True)")
-        assert any(e.kind == 'file_write' for e in a.side_effects)
+        assert any(e.kind == "file_write" for e in a.side_effects)
         assert statement_writes_files("OUT.mkdir(parents=True, exist_ok=True)")
         # Unknown, like os.mkdir: without exist_ok a second run raises.
-        assert statement_write_repeatability("OUT.mkdir()") == 'unknown'
+        assert statement_write_repeatability("OUT.mkdir()") == "unknown"
 
     def test_pathlib_read_text_not_detected(self):
         a = _analyze("s = p.read_text()")
-        assert not any(e.kind == 'file_write' for e in a.side_effects)
+        assert not any(e.kind == "file_write" for e in a.side_effects)
 
     def test_statement_writes_files_helper(self):
         # CAS-81/82: the sim/planner seam for scheduling stale writers.
         from cash.notebook.cacheability import statement_writes_files
+
         assert statement_writes_files("df.to_csv('out.csv', index=False)")
         assert statement_writes_files("with open('f.txt', 'w') as f:\n    f.write('x')")
         assert statement_writes_files("pickle.dump(obj, fh)")
@@ -505,9 +510,17 @@ class TestSideEffects:
         # Any pyplot draw/style/show call mutates pyplot's untracked process-global
         # figure and must stay uncacheable — else a cache hit skips the draw/style
         # (losing figure content) or replays a stale figure (duplicating the plot).
-        for code in ("plt.show()", "pyplot.show()", "matplotlib.pyplot.show()",
-                     "plt.title('t')", "plt.plot(x, y)", "plt.hist(a, bins=5)",
-                     "plt.legend()", "plt.grid(True)", "matplotlib.pyplot.xlabel('t')"):
+        for code in (
+            "plt.show()",
+            "pyplot.show()",
+            "matplotlib.pyplot.show()",
+            "plt.title('t')",
+            "plt.plot(x, y)",
+            "plt.hist(a, bins=5)",
+            "plt.legend()",
+            "plt.grid(True)",
+            "matplotlib.pyplot.xlabel('t')",
+        ):
             a = _analyze(code)
             assert any(e.kind == "display" for e in a.side_effects), code
 
@@ -537,24 +550,24 @@ class TestSideEffects:
         from cash.notebook.cacheability import statement_write_repeatability as verdict
 
         # ACCUMULATING -- re-firing duplicates data.
-        assert verdict("open(p, 'a').write(x)") == 'accumulating'
-        assert verdict("with open(p, 'ab') as f:\n    f.write(b'x')") == 'accumulating'
-        assert verdict("df.to_csv('log.csv', mode='a', header=False)") == 'accumulating'
+        assert verdict("open(p, 'a').write(x)") == "accumulating"
+        assert verdict("with open(p, 'ab') as f:\n    f.write(b'x')") == "accumulating"
+        assert verdict("df.to_csv('log.csv', mode='a', header=False)") == "accumulating"
 
         # REPLACING -- idempotent, must keep re-firing (chart coherence).
-        assert verdict("open(p, 'w').write(x)") == 'replacing'
-        assert verdict("with open(p, 'w') as f:\n    f.write(x)") == 'replacing'
-        assert verdict("df.to_csv('out.csv', index=False)") == 'replacing'
-        assert verdict("fig.savefig('chart.png')") == 'replacing'
-        assert verdict("p.write_text('x')") == 'replacing'
-        assert verdict("np.save('a.npy', arr)") == 'replacing'
-        assert verdict("x = 1 + 2") == 'replacing'          # no write at all
-        assert verdict("data = open(p).read()") == 'replacing'  # read mode
+        assert verdict("open(p, 'w').write(x)") == "replacing"
+        assert verdict("with open(p, 'w') as f:\n    f.write(x)") == "replacing"
+        assert verdict("df.to_csv('out.csv', index=False)") == "replacing"
+        assert verdict("fig.savefig('chart.png')") == "replacing"
+        assert verdict("p.write_text('x')") == "replacing"
+        assert verdict("np.save('a.npy', arr)") == "replacing"
+        assert verdict("x = 1 + 2") == "replacing"  # no write at all
+        assert verdict("data = open(p).read()") == "replacing"  # read mode
 
         # UNKNOWN -- cannot prove either way.
-        assert verdict("f.write(x)") == 'unknown'           # handle from another cell
-        assert verdict("os.rename(a, b)") == 'unknown'      # second run has no source
-        assert verdict("shutil.move(a, b)") == 'unknown'
+        assert verdict("f.write(x)") == "unknown"  # handle from another cell
+        assert verdict("os.rename(a, b)") == "unknown"  # second run has no source
+        assert verdict("shutil.move(a, b)") == "unknown"
 
     def test_variable_open_mode_is_not_mistaken_for_truncating(self):
         """`open(p, m)` proves nothing -- m could be 'a' at runtime.
@@ -565,13 +578,15 @@ class TestSideEffects:
         would silently classify a possible append as safe to repeat.
         """
         from cash.notebook.cacheability import statement_write_repeatability as verdict
-        assert verdict("open(p, m).write(x)") == 'unknown'
-        assert verdict("open(p, mode=m).write(x)") == 'unknown'
+
+        assert verdict("open(p, m).write(x)") == "unknown"
+        assert verdict("open(p, mode=m).write(x)") == "unknown"
 
     def test_to_hdf_is_not_treated_as_truncating(self):
         """pandas defaults `to_hdf` to mode='a', unlike its `to_*` siblings."""
         from cash.notebook.cacheability import statement_write_repeatability as verdict
-        assert verdict("df.to_hdf('store.h5', key='k')") != 'replacing'
+
+        assert verdict("df.to_hdf('store.h5', key='k')") != "replacing"
 
     def test_dump_into_a_locally_opened_handle_defers_to_that_open(self):
         """`pickle.dump(obj, f)` carries no mode -- the `open()` that made `f` does.
@@ -584,72 +599,72 @@ class TestSideEffects:
         """
         from cash.notebook.cacheability import statement_write_repeatability as verdict
 
-        assert verdict("import pickle\nwith open(p, 'wb') as f:\n    pickle.dump(o, f)") == 'replacing'
-        assert verdict("import json\nwith open(p, 'w') as f:\n    json.dump(o, f)") == 'replacing'
-        assert verdict("pickle.dump(o, open(p, 'wb'))") == 'replacing'
+        assert verdict("import pickle\nwith open(p, 'wb') as f:\n    pickle.dump(o, f)") == "replacing"
+        assert verdict("import json\nwith open(p, 'w') as f:\n    json.dump(o, f)") == "replacing"
+        assert verdict("pickle.dump(o, open(p, 'wb'))") == "replacing"
         # An append handle still wins, and a handle from elsewhere stays unknown.
-        assert verdict("import pickle\nwith open(p, 'ab') as f:\n    pickle.dump(o, f)") == 'accumulating'
-        assert verdict("pickle.dump(o, fh)") == 'unknown'
+        assert verdict("import pickle\nwith open(p, 'ab') as f:\n    pickle.dump(o, f)") == "accumulating"
+        assert verdict("pickle.dump(o, fh)") == "unknown"
 
     def test_os_remove(self):
         a = _analyze("import os; os.remove('file.txt')")
-        assert any(e.kind == 'file_write' for e in a.side_effects)
+        assert any(e.kind == "file_write" for e in a.side_effects)
 
     def test_os_makedirs(self):
         a = _analyze("import os; os.makedirs('new_dir')")
-        assert any(e.kind == 'file_write' for e in a.side_effects)
+        assert any(e.kind == "file_write" for e in a.side_effects)
 
     def test_shutil_copy(self):
         a = _analyze("import shutil; shutil.copy('a', 'b')")
-        assert any(e.kind == 'file_write' for e in a.side_effects)
+        assert any(e.kind == "file_write" for e in a.side_effects)
 
     def test_pandas_to_csv(self):
         a = _analyze("df.to_csv('output.csv')")
-        assert any(e.kind == 'file_write' for e in a.side_effects)
+        assert any(e.kind == "file_write" for e in a.side_effects)
 
     def test_pandas_to_parquet(self):
         a = _analyze("df.to_parquet('data.parquet')")
-        assert any(e.kind == 'file_write' for e in a.side_effects)
+        assert any(e.kind == "file_write" for e in a.side_effects)
 
     def test_json_dump(self):
         a = _analyze("import json; json.dump(data, f)")
-        assert any(e.kind == 'file_write' for e in a.side_effects)
+        assert any(e.kind == "file_write" for e in a.side_effects)
 
     def test_pickle_dump(self):
         a = _analyze("import pickle; pickle.dump(obj, f)")
-        assert any(e.kind == 'file_write' for e in a.side_effects)
+        assert any(e.kind == "file_write" for e in a.side_effects)
 
     def test_savefig(self):
         a = _analyze("plt.savefig('plot.png')")
-        assert any(e.kind == 'file_write' for e in a.side_effects)
+        assert any(e.kind == "file_write" for e in a.side_effects)
 
     def test_numpy_save(self):
         a = _analyze("np.save('arr.npy', data)")
-        assert any(e.kind == 'file_write' for e in a.side_effects)
+        assert any(e.kind == "file_write" for e in a.side_effects)
 
     def test_write_method(self):
         a = _analyze("f.write('content')")
-        assert any(e.kind == 'file_write' for e in a.side_effects)
+        assert any(e.kind == "file_write" for e in a.side_effects)
 
     def test_subprocess_run(self):
         a = _analyze("import subprocess; subprocess.run(['ls'])")
-        assert any(e.kind == 'system' for e in a.side_effects)
+        assert any(e.kind == "system" for e in a.side_effects)
 
     def test_subprocess_popen(self):
         a = _analyze("subprocess.Popen(['cmd'])")
-        assert any(e.kind == 'system' for e in a.side_effects)
+        assert any(e.kind == "system" for e in a.side_effects)
 
     def test_os_system(self):
         a = _analyze("os.system('rm -f file')")
-        assert any(e.kind == 'system' for e in a.side_effects)
+        assert any(e.kind == "system" for e in a.side_effects)
 
     def test_requests_post(self):
         a = _analyze("requests.post('https://api.example.com', data=payload)")
-        assert any(e.kind == 'network' for e in a.side_effects)
+        assert any(e.kind == "network" for e in a.side_effects)
 
     def test_requests_delete(self):
         a = _analyze("requests.delete(url)")
-        assert any(e.kind == 'network' for e in a.side_effects)
+        assert any(e.kind == "network" for e in a.side_effects)
 
     def test_no_side_effects_for_pure_code(self):
         a = _analyze("x = 1 + 2")
@@ -663,7 +678,7 @@ class TestSideEffects:
         code = "df.to_csv('output.csv')"
         tree = ast.parse(code)
         a = analyze_statement(code, tree)
-        assert any(e.kind == 'file_write' for e in a.side_effects)
+        assert any(e.kind == "file_write" for e in a.side_effects)
 
     def test_line_numbers_captured(self):
         code = "df.to_csv('out.csv')\nx = 1"
@@ -680,6 +695,7 @@ class TestSideEffects:
 # statement_written_paths — output-path extraction for write-provenance (CAS-153)
 # ---------------------------------------------------------------------------
 
+
 class TestStatementWrittenPaths:
     """The write-freshness short-circuit's output-path extractor.
 
@@ -690,30 +706,31 @@ class TestStatementWrittenPaths:
 
     def _paths(self, code, namespace=None):
         from cash.notebook.cacheability import statement_written_paths
+
         return statement_written_paths(code, None, namespace)
 
     def test_to_csv_string_literal(self):
-        assert self._paths("df.to_csv('out.csv', index=False)") == {'out.csv'}
+        assert self._paths("df.to_csv('out.csv', index=False)") == {"out.csv"}
 
     def test_to_parquet_pickle_json_feather(self):
-        assert self._paths("df.to_parquet('a.parquet')") == {'a.parquet'}
-        assert self._paths("df.to_pickle('a.pkl')") == {'a.pkl'}
-        assert self._paths("df.to_json('a.json')") == {'a.json'}
-        assert self._paths("df.to_feather('a.feather')") == {'a.feather'}
+        assert self._paths("df.to_parquet('a.parquet')") == {"a.parquet"}
+        assert self._paths("df.to_pickle('a.pkl')") == {"a.pkl"}
+        assert self._paths("df.to_json('a.json')") == {"a.json"}
+        assert self._paths("df.to_feather('a.feather')") == {"a.feather"}
 
     def test_open_write_and_append_modes(self):
-        assert self._paths("with open('log.txt', 'w') as f:\n    f.write('x')") == {'log.txt'}
-        assert self._paths("with open('log.txt', 'a') as f:\n    f.write('x')") == {'log.txt'}
+        assert self._paths("with open('log.txt', 'w') as f:\n    f.write('x')") == {"log.txt"}
+        assert self._paths("with open('log.txt', 'a') as f:\n    f.write('x')") == {"log.txt"}
 
     def test_open_read_mode_returns_none(self):
         # A read is not a write target — nothing to vouch for.
         assert self._paths("with open('log.txt') as f:\n    body = f.read()") is None
 
     def test_savefig(self):
-        assert self._paths("plt.savefig('plot.png')") == {'plot.png'}
+        assert self._paths("plt.savefig('plot.png')") == {"plot.png"}
 
     def test_numpy_save_first_arg(self):
-        assert self._paths("np.save('arr.npy', data)") == {'arr.npy'}
+        assert self._paths("np.save('arr.npy', data)") == {"arr.npy"}
 
     def test_bare_save_method_is_conservative(self):
         # An ambiguous ``.save`` (PIL first-arg vs torch second-arg) is not
@@ -721,26 +738,27 @@ class TestStatementWrittenPaths:
         assert self._paths("img.save('pic.png')") is None
 
     def test_pathlib_write_text_inline_constructor(self):
-        assert self._paths("Path('out.json').write_text('x')") == {'out.json'}
-        assert self._paths("Path('out.bin').write_bytes(b'x')") == {'out.bin'}
+        assert self._paths("Path('out.json').write_text('x')") == {"out.json"}
+        assert self._paths("Path('out.bin').write_bytes(b'x')") == {"out.bin"}
 
     def test_pathlib_write_text_non_inline_receiver_conservative(self):
         # ``p.write_text`` with the path not on an inline Path(...) -> None.
         assert self._paths("p.write_text('x')") is None
 
     def test_json_dump_into_open(self):
-        assert self._paths("json.dump(obj, open('d.json', 'w'))") == {'d.json'}
+        assert self._paths("json.dump(obj, open('d.json', 'w'))") == {"d.json"}
 
     def test_pickle_dump_into_open(self):
-        assert self._paths("pickle.dump(obj, open('d.pkl', 'wb'))") == {'d.pkl'}
+        assert self._paths("pickle.dump(obj, open('d.pkl', 'wb'))") == {"d.pkl"}
 
     def test_name_bound_to_str_in_namespace(self):
-        assert self._paths("df.to_csv(OUT)", {'OUT': '/tmp/x.csv'}) == {'/tmp/x.csv'}
+        assert self._paths("df.to_csv(OUT)", {"OUT": "/tmp/x.csv"}) == {"/tmp/x.csv"}
 
     def test_name_bound_to_pathlike_in_namespace(self):
         import pathlib
-        got = self._paths("df.to_csv(OUT)", {'OUT': pathlib.PurePosixPath('/tmp/x.csv')})
-        assert got == {'/tmp/x.csv'}
+
+        got = self._paths("df.to_csv(OUT)", {"OUT": pathlib.PurePosixPath("/tmp/x.csv")})
+        assert got == {"/tmp/x.csv"}
 
     def test_fstring_path_returns_none(self):
         # Computed path -> conservative None (must NOT silently skip the writer).
@@ -769,32 +787,34 @@ class TestStatementWrittenPaths:
 # called_names
 # ---------------------------------------------------------------------------
 
+
 class TestCalledNames:
     """Bare-name function-call targets for stateful-call detection."""
 
     def test_simple_call(self):
         a = _analyze("foo()")
-        assert 'foo' in a.called_names
+        assert "foo" in a.called_names
 
     def test_multiple_calls(self):
         a = _analyze("foo()\nbar(x)")
-        assert {'foo', 'bar'} <= a.called_names
+        assert {"foo", "bar"} <= a.called_names
 
     def test_method_call_not_included(self):
         """obj.method() — func is an Attribute, not a Name."""
         a = _analyze("obj.method()")
-        assert 'method' not in a.called_names
-        assert 'obj' not in a.called_names
+        assert "method" not in a.called_names
+        assert "obj" not in a.called_names
 
     def test_nested_call(self):
         a = _analyze("result = foo(bar(x))")
-        assert 'foo' in a.called_names
-        assert 'bar' in a.called_names
+        assert "foo" in a.called_names
+        assert "bar" in a.called_names
 
 
 # ---------------------------------------------------------------------------
 # skip_reasons
 # ---------------------------------------------------------------------------
+
 
 class TestSkipReasons:
     """skip_reasons(outputs) produces the right human-readable strings."""
@@ -806,26 +826,26 @@ class TestSkipReasons:
     def test_mutation_not_in_outputs_generates_reason(self):
         a = _analyze("lst.append(1)")
         reasons = a.skip_reasons(set())
-        assert any('lst' in r for r in reasons)
+        assert any("lst" in r for r in reasons)
 
     def test_mutation_on_output_does_not_generate_reason(self):
         """If 'lst' is an output (e.g. lst = []; lst.append(1)), no skip reason."""
         a = _analyze("lst.append(1)")
-        reasons = a.skip_reasons({'lst'})
+        reasons = a.skip_reasons({"lst"})
         assert reasons == []
 
     def test_side_effect_generates_reason(self):
         a = _analyze("df.to_csv('out.csv')")
         reasons = a.skip_reasons(set())
-        assert any('Side effect' in r for r in reasons)
-        assert any('file_write' in r for r in reasons)
+        assert any("Side effect" in r for r in reasons)
+        assert any("file_write" in r for r in reasons)
 
     def test_both_mutation_and_side_effect(self):
         code = "lst.append(1)\ndf.to_csv('out.csv')"
         a = _analyze(code)
         reasons = a.skip_reasons(set())
-        assert any('lst' in r for r in reasons)
-        assert any('Side effect' in r for r in reasons)
+        assert any("lst" in r for r in reasons)
+        assert any("Side effect" in r for r in reasons)
 
 
 class TestAccumulatorHint:
@@ -837,7 +857,7 @@ class TestAccumulatorHint:
 
     @staticmethod
     def _tips(reasons):
-        return [r for r in reasons if r.startswith('tip:')]
+        return [r for r in reasons if r.startswith("tip:")]
 
     def test_append_accumulator_gets_tip(self):
         # The canonical case: `out = []` then `for e in it: out.append(slow(e))`.
@@ -846,7 +866,7 @@ class TestAccumulatorHint:
         reasons = a.skip_reasons(set())
         tips = self._tips(reasons)
         assert len(tips) == 1
-        assert 'out = [f(e) for e in it]' in tips[0]
+        assert "out = [f(e) for e in it]" in tips[0]
 
     def test_bare_append_gets_tip(self):
         reasons = _analyze("out.append(slow(e))").skip_reasons(set())
@@ -861,7 +881,7 @@ class TestAccumulatorHint:
         # df['x'] = 1 is an in-place mutation but has no comprehension rewrite.
         a = _analyze("df['x'] = 1")
         reasons = a.skip_reasons(set())
-        assert any('In-place mutation on: df' in r for r in reasons)
+        assert any("In-place mutation on: df" in r for r in reasons)
         assert self._tips(reasons) == []
 
     def test_attribute_store_does_not_get_tip(self):
@@ -877,7 +897,7 @@ class TestAccumulatorHint:
 
     def test_inplace_kwarg_mutation_does_not_get_tip(self):
         reasons = _analyze("df.dropna(inplace=True)").skip_reasons(set())
-        assert any('In-place mutation on: df' in r for r in reasons)
+        assert any("In-place mutation on: df" in r for r in reasons)
         assert self._tips(reasons) == []
 
     def test_tip_is_advisory_decision_unchanged(self):
@@ -885,16 +905,17 @@ class TestAccumulatorHint:
         # (non-empty reasons) and the mutated-var set is unchanged.
         a = _analyze("for e in it:\n    out.append(slow(e))")
         with_tip = a.skip_reasons(set())
-        assert any('In-place mutation on: out' in r for r in with_tip)
-        assert a.top_level_mutated_vars == {'out'}
-        assert 'out' in a.accumulator_mutated_vars
+        assert any("In-place mutation on: out" in r for r in with_tip)
+        assert a.top_level_mutated_vars == {"out"}
+        assert "out" in a.accumulator_mutated_vars
         # When `out` IS an output, nothing fires at all (tip included).
-        assert a.skip_reasons({'out'}) == []
+        assert a.skip_reasons({"out"}) == []
 
 
 # ---------------------------------------------------------------------------
 # Immutability of StatementAnalysis
 # ---------------------------------------------------------------------------
+
 
 class TestImmutability:
     """StatementAnalysis is frozen — fields are immutable."""
@@ -902,7 +923,7 @@ class TestImmutability:
     def test_frozen(self):
         a = _analyze("x = 1")
         with pytest.raises(Exception):
-            a.all_mutated_vars = frozenset({'x'})  # type: ignore[misc]
+            a.all_mutated_vars = frozenset({"x"})  # type: ignore[misc]
 
     def test_fields_are_frozenset_and_tuple(self):
         a = _analyze("lst.append(1)\ndf.to_csv('out.csv')")
@@ -923,31 +944,29 @@ class TestSelfrefInplaceWriteVars:
         return selfref_inplace_write_vars(ast.parse(code))
 
     def test_column_scale_self_ref(self):
-        assert self._vars("df['a'] = df['a'] * 2") == {'df'}
+        assert self._vars("df['a'] = df['a'] * 2") == {"df"}
 
     def test_column_augmented(self):
-        assert self._vars("df['a'] += 100") == {'df'}
+        assert self._vars("df['a'] += 100") == {"df"}
 
     def test_iloc_scalar_self_ref(self):
-        assert self._vars("df.iloc[2, 0] = df.iloc[2, 0] + 1000") == {'df'}
+        assert self._vars("df.iloc[2, 0] = df.iloc[2, 0] + 1000") == {"df"}
 
     def test_iloc_augmented(self):
-        assert self._vars("df.iloc[2, 0] += 5") == {'df'}
+        assert self._vars("df.iloc[2, 0] += 5") == {"df"}
 
     def test_column_method_self_ref(self):
-        assert self._vars("df['a'] = df['a'].fillna(0)") == {'df'}
+        assert self._vars("df['a'] = df['a'].fillna(0)") == {"df"}
 
     def test_attribute_self_ref(self):
-        assert self._vars("obj.total = obj.total + 1") == {'obj'}
+        assert self._vars("obj.total = obj.total + 1") == {"obj"}
 
     def test_new_column_from_other_excluded(self):
         # CAS-42: writes a NEW column read from a DIFFERENT column -> idempotent.
         assert self._vars("df['b'] = df['a'] + 1") == frozenset()
 
     def test_groupby_transform_excluded(self):
-        assert self._vars(
-            "df['VolAdj'] = df.groupby('Ticker')['Close'].transform(lambda x: x.mean())"
-        ) == frozenset()
+        assert self._vars("df['VolAdj'] = df.groupby('Ticker')['Close'].transform(lambda x: x.mean())") == frozenset()
 
     def test_constant_assign_excluded(self):
         assert self._vars("df['c'] = 5") == frozenset()
@@ -962,13 +981,13 @@ class TestSelfrefInplaceWriteVars:
     def test_loc_masked_self_ref_same_column(self):
         # CAS-55: masked .loc write reads the SAME column spelled differently
         # (df['a']) than the target (df.loc[mask, 'a']) -> still self-referential.
-        assert self._vars("df.loc[df['a'] >= 50, 'a'] = df['a'] * 2") == {'df'}
+        assert self._vars("df.loc[df['a'] >= 50, 'a'] = df['a'] * 2") == {"df"}
 
     def test_loc_masked_self_ref_via_loc_read(self):
-        assert self._vars("df.loc[mask, 'a'] = df.loc[mask, 'a'] + 1") == {'df'}
+        assert self._vars("df.loc[mask, 'a'] = df.loc[mask, 'a'] + 1") == {"df"}
 
     def test_loc_masked_list_columns_self_ref(self):
-        assert self._vars("df.loc[mask, ['a', 'b']] = df[['a', 'b']] * 2") == {'df'}
+        assert self._vars("df.loc[mask, ['a', 'b']] = df[['a', 'b']] * 2") == {"df"}
 
     def test_loc_masked_new_column_excluded(self):
         # CAS-42: masked write to a DIFFERENT column read from another -> idempotent.
@@ -979,10 +998,10 @@ class TestSelfrefInplaceWriteVars:
 
     def test_loc_row_grow_len(self):
         # CAS-74: df.loc[len(df)] = .. appends a row (size-dependent index).
-        assert self._vars("df.loc[len(df)] = 99") == {'df'}
+        assert self._vars("df.loc[len(df)] = 99") == {"df"}
 
     def test_loc_row_grow_shape(self):
-        assert self._vars("df.loc[df.shape[0]] = 99") == {'df'}
+        assert self._vars("df.loc[df.shape[0]] = 99") == {"df"}
 
     def test_loc_masked_reading_frame_excluded(self):
         # a masked write whose key reads the frame (not len/shape) is idempotent.
@@ -996,10 +1015,10 @@ class TestSelfrefInplaceWriteVars:
     def test_tuple_unpack_column_swap(self):
         # CAS-56: df['a'], df['b'] = df['b'], df['a'] -- statement reads & writes
         # overlapping columns of df -> non-idempotent -> flag df.
-        assert self._vars("df['a'], df['b'] = df['b'], df['a']") == {'df'}
+        assert self._vars("df['a'], df['b'] = df['b'], df['a']") == {"df"}
 
     def test_tuple_unpack_self_scale(self):
-        assert self._vars("df['a'], df['b'] = df['a'] * 2, df['b'] * 2") == {'df'}
+        assert self._vars("df['a'], df['b'] = df['a'] * 2, df['b'] * 2") == {"df"}
 
     def test_tuple_unpack_new_columns_excluded(self):
         # CAS-42: new columns c,d derived from existing a,b -> idempotent.
@@ -1011,10 +1030,10 @@ class TestSelfrefInplaceWriteVars:
     def test_del_subscript(self):
         # CAS-56: del df['b'] removes a column in place -> non-idempotent
         # (second del KeyErrors) -> df must reset on isolated re-run.
-        assert self._vars("del df['b']") == {'df'}
+        assert self._vars("del df['b']") == {"df"}
 
     def test_del_attribute(self):
-        assert self._vars("del obj.cache") == {'obj'}
+        assert self._vars("del obj.cache") == {"obj"}
 
     def test_del_plain_name_excluded(self):
         # deleting a plain name is a namespace op, handled elsewhere -> not here.
@@ -1022,22 +1041,22 @@ class TestSelfrefInplaceWriteVars:
 
     def test_conditional_self_mutation(self):
         # CAS-57: a self-mutation nested in an if-body executes at module level.
-        assert self._vars("if cond:\n    df['a'] = df['a'] * 2") == {'df'}
+        assert self._vars("if cond:\n    df['a'] = df['a'] * 2") == {"df"}
 
     def test_for_loop_self_mutation(self):
-        assert self._vars("for c in cols:\n    df[c] = df[c] * 2") == {'df'}
+        assert self._vars("for c in cols:\n    df[c] = df[c] * 2") == {"df"}
 
     def test_for_loop_augmented_self_mutation(self):
-        assert self._vars("for c in cols:\n    df[c] += 1") == {'df'}
+        assert self._vars("for c in cols:\n    df[c] += 1") == {"df"}
 
     def test_with_block_self_mutation(self):
-        assert self._vars("with ctx:\n    df['a'] = df['a'] * 2") == {'df'}
+        assert self._vars("with ctx:\n    df['a'] = df['a'] * 2") == {"df"}
 
     def test_try_body_del(self):
-        assert self._vars("try:\n    del df['b']\nexcept KeyError:\n    pass") == {'df'}
+        assert self._vars("try:\n    del df['b']\nexcept KeyError:\n    pass") == {"df"}
 
     def test_nested_control_self_mutation(self):
-        assert self._vars("for c in cols:\n    if c:\n        df[c] = df[c] * 2") == {'df'}
+        assert self._vars("for c in cols:\n    if c:\n        df[c] = df[c] * 2") == {"df"}
 
     def test_function_body_not_scanned(self):
         # a mutation inside a def runs only when called -> not a module-level write.
@@ -1065,22 +1084,22 @@ class TestParamsMutatedInFunction:
         return params_mutated_in_function(fdef)
 
     def test_list_append_param(self):
-        assert self._params("def f(x):\n    x.append(1)") == {'x'}
+        assert self._params("def f(x):\n    x.append(1)") == {"x"}
 
     def test_subscript_assign_param(self):
-        assert self._params("def f(d):\n    d['k'] = 1") == {'d'}
+        assert self._params("def f(d):\n    d['k'] = 1") == {"d"}
 
     def test_augmented_subscript_param(self):
-        assert self._params("def f(d):\n    d['n'] += 1") == {'d'}
+        assert self._params("def f(d):\n    d['n'] += 1") == {"d"}
 
     def test_attribute_assign_param(self):
-        assert self._params("def f(o):\n    o.count = 5") == {'o'}
+        assert self._params("def f(o):\n    o.count = 5") == {"o"}
 
     def test_del_subscript_param(self):
-        assert self._params("def f(d):\n    del d['k']") == {'d'}
+        assert self._params("def f(d):\n    del d['k']") == {"d"}
 
     def test_only_mutated_param_reported(self):
-        assert self._params("def f(a, b):\n    a.append(1)\n    return b") == {'a'}
+        assert self._params("def f(a, b):\n    a.append(1)\n    return b") == {"a"}
 
     def test_reassignment_is_not_mutation(self):
         # rebinding the param to a new local object is not a caller mutation.
@@ -1093,10 +1112,10 @@ class TestParamsMutatedInFunction:
         assert self._params("def f(x):\n    tmp = []\n    tmp.append(x)") == frozenset()
 
     def test_conditional_mutation_param(self):
-        assert self._params("def f(d, c):\n    if c:\n        d['k'] = 1") == {'d'}
+        assert self._params("def f(d, c):\n    if c:\n        d['k'] = 1") == {"d"}
 
     def test_keyword_only_param(self):
-        assert self._params("def f(*, d):\n    d.append(1)") == {'d'}
+        assert self._params("def f(*, d):\n    d.append(1)") == {"d"}
 
 
 class TestStandaloneCallArgTargets:
@@ -1108,19 +1127,19 @@ class TestStandaloneCallArgTargets:
         return standalone_call_arg_targets(ast.parse(code))
 
     def test_single_positional(self):
-        assert self._targets("f(data)") == frozenset({('f', ('data',), ())})
+        assert self._targets("f(data)") == frozenset({("f", ("data",), ())})
 
     def test_multiple_positional(self):
-        assert self._targets("f(a, b)") == frozenset({('f', ('a', 'b'), ())})
+        assert self._targets("f(a, b)") == frozenset({("f", ("a", "b"), ())})
 
     def test_keyword_arg(self):
-        assert self._targets("f(x=data)") == frozenset({('f', (), (('x', 'data'),))})
+        assert self._targets("f(x=data)") == frozenset({("f", (), (("x", "data"),))})
 
     def test_non_name_arg_is_none(self):
-        assert self._targets("f(a, [1, 2])") == frozenset({('f', ('a', None), ())})
+        assert self._targets("f(a, [1, 2])") == frozenset({("f", ("a", None), ())})
 
     def test_starred_arg_is_none(self):
-        assert self._targets("f(*args)") == frozenset({('f', (None,), ())})
+        assert self._targets("f(*args)") == frozenset({("f", (None,), ())})
 
     def test_method_call_excluded(self):
         # obj.method(x) is handled by the method-receiver path, not here.
@@ -1136,31 +1155,31 @@ class TestFunctionArgMutations:
     argument variables, via a source resolver."""
 
     SRCS = {
-        'append_one': "def append_one(x):\n    x.append(99)",
-        'bump': "def bump(d):\n    d['n'] += 1",
-        'pure': "def pure(x):\n    return x * 2",
-        'two': "def two(a, b):\n    a.append(1)\n    return b",
-        'kw': "def kw(*, target):\n    target.append(1)",
+        "append_one": "def append_one(x):\n    x.append(99)",
+        "bump": "def bump(d):\n    d['n'] += 1",
+        "pure": "def pure(x):\n    return x * 2",
+        "two": "def two(a, b):\n    a.append(1)\n    return b",
+        "kw": "def kw(*, target):\n    target.append(1)",
     }
 
     def _muts(self, code):
         return function_arg_mutations(ast.parse(code), self.SRCS.get)
 
     def test_positional_mutation(self):
-        assert self._muts("append_one(data)") == {'data'}
+        assert self._muts("append_one(data)") == {"data"}
 
     def test_dict_mutation(self):
-        assert self._muts("bump(cfg)") == {'cfg'}
+        assert self._muts("bump(cfg)") == {"cfg"}
 
     def test_pure_call_excluded(self):
         assert self._muts("pure(x)") == frozenset()
 
     def test_only_mutated_position(self):
         # two(a, b) mutates only the first param -> only the first arg.
-        assert self._muts("two(rows, keep)") == {'rows'}
+        assert self._muts("two(rows, keep)") == {"rows"}
 
     def test_keyword_mapping(self):
-        assert self._muts("kw(target=mylist)") == {'mylist'}
+        assert self._muts("kw(target=mylist)") == {"mylist"}
 
     def test_unknown_function_excluded(self):
         assert self._muts("mystery(data)") == frozenset()
@@ -1174,23 +1193,23 @@ class TestInterproceduralArgMutations:
     only through a further resolvable call is detected too."""
 
     SRCS = {
-        'inner': "def inner(z):\n    z.append(9)",
-        'outer': "def outer(y):\n    inner(y)",
-        'mid': "def mid(b):\n    inner(b)",
-        'deep': "def deep(a):\n    mid(a)",
-        'inner_pure': "def inner_pure(z):\n    return z * 2",
-        'pure_outer': "def pure_outer(y):\n    return inner_pure(y)",
-        'recurse': "def recurse(x):\n    recurse(x)",
+        "inner": "def inner(z):\n    z.append(9)",
+        "outer": "def outer(y):\n    inner(y)",
+        "mid": "def mid(b):\n    inner(b)",
+        "deep": "def deep(a):\n    mid(a)",
+        "inner_pure": "def inner_pure(z):\n    return z * 2",
+        "pure_outer": "def pure_outer(y):\n    return inner_pure(y)",
+        "recurse": "def recurse(x):\n    recurse(x)",
     }
 
     def _muts(self, code):
         return function_arg_mutations(ast.parse(code), self.SRCS.get)
 
     def test_depth2(self):
-        assert self._muts("outer(data)") == {'data'}
+        assert self._muts("outer(data)") == {"data"}
 
     def test_depth3(self):
-        assert self._muts("deep(data)") == {'data'}
+        assert self._muts("deep(data)") == {"data"}
 
     def test_pure_chain_excluded(self):
         assert self._muts("pure_outer(data)") == frozenset()
@@ -1209,16 +1228,16 @@ class TestAliasMutationSources:
         return alias_mutation_sources(ast.parse(code))
 
     def test_method_mutation(self):
-        assert self._src("y = x\ny.append(99)") == {'x'}
+        assert self._src("y = x\ny.append(99)") == {"x"}
 
     def test_subscript_aug_assign(self):
-        assert self._src("y = x\ny[0] += 5") == {'x'}
+        assert self._src("y = x\ny[0] += 5") == {"x"}
 
     def test_alias_chain_resolves_to_root(self):
-        assert self._src("y = x\nz = y\nz.append(1)") == {'x'}
+        assert self._src("y = x\nz = y\nz.append(1)") == {"x"}
 
     def test_two_aliases_same_source(self):
-        assert self._src("a = src\nb = src\nb.add(1)") == {'src'}
+        assert self._src("a = src\nb = src\nb.add(1)") == {"src"}
 
     def test_copy_is_not_alias(self):
         assert self._src("y = x.copy()\ny.append(1)") == frozenset()
@@ -1236,14 +1255,14 @@ class TestAliasMutationSources:
         assert self._src("x = x\nx.append(1)") == frozenset()
 
     def test_chained_assignment(self):
-        assert self._src("a = b = x\na.append(1)") == {'x'}
+        assert self._src("a = b = x\na.append(1)") == {"x"}
 
     def test_tuple_unpack_pair(self):
-        assert self._src("(y,) = (x,)\ny.append(1)") == {'x'}
+        assert self._src("(y,) = (x,)\ny.append(1)") == {"x"}
 
     def test_unpack_only_name_elements(self):
         # literal list element is not a Name -> not an alias
-        assert self._src("a, b = [1], src\nb.append(1)") == {'src'}
+        assert self._src("a, b = [1], src\nb.append(1)") == {"src"}
 
     def test_non_literal_unpack_excluded(self):
         # RHS is a call, not a literal tuple -> no element aliasing
@@ -1255,25 +1274,25 @@ class TestFunctionGlobalMutations:
     mutations back to the global (CAS-68 A)."""
 
     SRCS = {
-        'bump': "def bump():\n    global g\n    g += 1",
-        'add': "def add():\n    items.append(1)",
-        'put': "def put():\n    store['k'] = store.get('k', 0) + 1",
-        'pure': "def pure():\n    return 42",
-        'local': "def local():\n    acc = []\n    acc.append(1)\n    return acc",
-        'arg': "def arg(x):\n    x.append(1)",
+        "bump": "def bump():\n    global g\n    g += 1",
+        "add": "def add():\n    items.append(1)",
+        "put": "def put():\n    store['k'] = store.get('k', 0) + 1",
+        "pure": "def pure():\n    return 42",
+        "local": "def local():\n    acc = []\n    acc.append(1)\n    return acc",
+        "arg": "def arg(x):\n    x.append(1)",
     }
 
     def _f(self, code):
         return function_global_mutations(ast.parse(code), self.SRCS.get)
 
     def test_global_augassign(self):
-        assert self._f("bump()") == {'g'}
+        assert self._f("bump()") == {"g"}
 
     def test_free_var_append(self):
-        assert self._f("add()") == {'items'}
+        assert self._f("add()") == {"items"}
 
     def test_free_var_subscript(self):
-        assert self._f("put()") == {'store'}
+        assert self._f("put()") == {"store"}
 
     def test_pure_excluded(self):
         assert self._f("pure()") == frozenset()
@@ -1300,7 +1319,7 @@ class TestCalledFunctionGlobalMutations:
     """
 
     SRCS = TestFunctionGlobalMutations.SRCS | {
-        'compute': "def compute(v):\n    CALLS.append(v)\n    return v * 10",
+        "compute": "def compute(v):\n    CALLS.append(v)\n    return v * 10",
     }
 
     def _f(self, code):
@@ -1312,26 +1331,26 @@ class TestCalledFunctionGlobalMutations:
     def test_bare_call_spelling(self):
         # The one shape the narrow version already covered -- kept so a
         # regression that traded one spelling for another is visible here.
-        assert self._f("add()") == {'items'}
-        assert self._narrow("add()") == {'items'}
+        assert self._f("add()") == {"items"}
+        assert self._narrow("add()") == {"items"}
 
     def test_assignment_spelling(self):
-        assert self._f("x = compute(1)") == {'CALLS'}
+        assert self._f("x = compute(1)") == {"CALLS"}
         assert self._narrow("x = compute(1)") == frozenset()
 
     def test_append_spelling(self):
-        assert self._f("out.append(compute(1))") == {'CALLS'}
+        assert self._f("out.append(compute(1))") == {"CALLS"}
         assert self._narrow("out.append(compute(1))") == frozenset()
 
     def test_nested_in_another_call_spelling(self):
-        assert self._f("print('C', compute(1))") == {'CALLS'}
+        assert self._f("print('C', compute(1))") == {"CALLS"}
         assert self._narrow("print('C', compute(1))") == frozenset()
 
     def test_comprehension_spelling(self):
-        assert self._f("vals = [compute(i) for i in range(3)]") == {'CALLS'}
+        assert self._f("vals = [compute(i) for i in range(3)]") == {"CALLS"}
 
     def test_several_callees_union(self):
-        assert self._f("x = compute(1)\nbump()") == {'CALLS', 'g'}
+        assert self._f("x = compute(1)\nbump()") == {"CALLS", "g"}
 
     def test_pure_callee_contributes_nothing(self):
         assert self._f("x = pure()") == frozenset()
@@ -1360,14 +1379,14 @@ class TestStatefulSelfFunctions:
     its own object — mutable default arg or function attribute (CAS-68 B)."""
 
     SRCS = {
-        'collect': "def collect(x, acc=[]):\n    acc.append(x)\n    return acc",
-        'tally': "def tally(k, acc={}):\n    acc[k] = acc.get(k, 0) + 1\n    return acc",
-        'tick': "def tick():\n    tick.count = getattr(tick, 'count', 0) + 1\n    return tick.count",
-        'pure': "def pure(x):\n    return x + 1",
-        'none_default': "def g(x, cache=None):\n    return x",
-        'fresh_default': "def h(x, acc=[]):\n    return acc + [x]",
-        'memo': "@functools.lru_cache(maxsize=None)\ndef memo(x):\n    seen.append(x)\n    return x",
-        'pure_memo': "@lru_cache\ndef pure_memo(x):\n    return x * x",
+        "collect": "def collect(x, acc=[]):\n    acc.append(x)\n    return acc",
+        "tally": "def tally(k, acc={}):\n    acc[k] = acc.get(k, 0) + 1\n    return acc",
+        "tick": "def tick():\n    tick.count = getattr(tick, 'count', 0) + 1\n    return tick.count",
+        "pure": "def pure(x):\n    return x + 1",
+        "none_default": "def g(x, cache=None):\n    return x",
+        "fresh_default": "def h(x, acc=[]):\n    return acc + [x]",
+        "memo": "@functools.lru_cache(maxsize=None)\ndef memo(x):\n    seen.append(x)\n    return x",
+        "pure_memo": "@lru_cache\ndef pure_memo(x):\n    return x * x",
     }
 
     def _f(self, code):
@@ -1375,19 +1394,19 @@ class TestStatefulSelfFunctions:
 
     def test_lru_cache_memoizer(self):
         # a functools memoizer carries a persistent cache -> stateful (CAS-80)
-        assert self._f("memo(1)") == {'memo'}
+        assert self._f("memo(1)") == {"memo"}
 
     def test_bare_lru_cache_memoizer(self):
-        assert self._f("r = pure_memo(2)") == {'pure_memo'}
+        assert self._f("r = pure_memo(2)") == {"pure_memo"}
 
     def test_mutable_default_list_captured(self):
-        assert self._f("r = collect(1)") == {'collect'}
+        assert self._f("r = collect(1)") == {"collect"}
 
     def test_mutable_default_dict_captured(self):
-        assert self._f("r = tally('a')") == {'tally'}
+        assert self._f("r = tally('a')") == {"tally"}
 
     def test_function_attribute(self):
-        assert self._f("print(tick())") == {'tick'}
+        assert self._f("print(tick())") == {"tick"}
 
     def test_pure_excluded(self):
         assert self._f("r = pure(1)") == frozenset()
@@ -1405,9 +1424,9 @@ class TestStatefulClosureVars:
     returns an inner function mutating factory-local state (CAS-68 B closure)."""
 
     FACTORIES = {
-        'c': "def make_counter():\n    n = 0\n    def inc():\n        nonlocal n\n        n += 1\n        return n\n    return inc",
-        'adder': "def make_list():\n    data = []\n    def add(x):\n        data.append(x)\n    return add",
-        'p': "def make_pure():\n    def f(x):\n        return x + 1\n    return f",
+        "c": "def make_counter():\n    n = 0\n    def inc():\n        nonlocal n\n        n += 1\n        return n\n    return inc",
+        "adder": "def make_list():\n    data = []\n    def add(x):\n        data.append(x)\n    return add",
+        "p": "def make_pure():\n    def f(x):\n        return x + 1\n    return f",
     }
 
     def _resolve(self, name):
@@ -1418,10 +1437,10 @@ class TestStatefulClosureVars:
         return stateful_closure_vars(ast.parse(code), self._resolve)
 
     def test_nonlocal_counter(self):
-        assert self._f("print(c())") == {'c'}
+        assert self._f("print(c())") == {"c"}
 
     def test_captured_list(self):
-        assert self._f("adder(1)") == {'adder'}
+        assert self._f("adder(1)") == {"adder"}
 
     def test_pure_closure_excluded(self):
         assert self._f("r = p(1)") == frozenset()
@@ -1434,15 +1453,15 @@ class TestFunctoolsHiddenMutations:
     """partial / reduce hidden-mutation detectors (CAS-72)."""
 
     SRCS = {
-        'push': "def push(lst, v):\n    lst.append(v)",
-        'tick': "def tick(step):\n    counter[0] += step",
-        'combine': "def combine(a, b):\n    log.append(b)\n    return a + b",
-        'mul': "def mul(a, b):\n    return a * b",
+        "push": "def push(lst, v):\n    lst.append(v)",
+        "tick": "def tick(step):\n    counter[0] += step",
+        "combine": "def combine(a, b):\n    log.append(b)\n    return a + b",
+        "mul": "def mul(a, b):\n    return a * b",
     }
     PARTIALS = {
-        'p': ('push', ['shared']),
-        't': ('tick', [None]),          # partial(tick, 1) -> literal, no bound Name
-        'double': ('mul', [None]),      # partial(mul, 2) -> pure
+        "p": ("push", ["shared"]),
+        "t": ("tick", [None]),  # partial(tick, 1) -> literal, no bound Name
+        "double": ("mul", [None]),  # partial(mul, 2) -> pure
     }
 
     def _pam(self, code):
@@ -1455,24 +1474,24 @@ class TestFunctoolsHiddenMutations:
         return reduce_free_mutations(ast.parse(code), self.SRCS.get)
 
     def test_partial_bound_arg_mutated(self):
-        assert self._pam("p('a')") == {'shared'}
+        assert self._pam("p('a')") == {"shared"}
 
     def test_partial_free_var_mutated(self):
-        assert self._pam("t()") == {'counter'}
+        assert self._pam("t()") == {"counter"}
 
     def test_partial_pure_not_flagged(self):
         assert self._pam("r = double(5)") == frozenset()
 
     def test_mutating_partial_bound_arg(self):
         # p binds a mutated arg -> must re-bind
-        assert self._mp("p('a')") == {'p'}
+        assert self._mp("p('a')") == {"p"}
 
     def test_mutating_partial_free_var_excluded(self):
         # t mutates only a free var (global) -> no re-bind needed
         assert self._mp("t()") == frozenset()
 
     def test_reduce_side_effect(self):
-        assert self._rfm("total = reduce(combine, [1, 2, 3], 0)") == {'log'}
+        assert self._rfm("total = reduce(combine, [1, 2, 3], 0)") == {"log"}
 
     def test_reduce_pure_not_flagged(self):
         assert self._rfm("total = reduce(mul, [1, 2, 3], 1)") == frozenset()
@@ -1485,44 +1504,68 @@ class TestObjectProtocolMutations:
     channel (free var / receiver / class def), CAS-69/70/71/73."""
 
     CLASSES = {
-        'Counter': ("class Counter:\n    def __init__(self):\n        self.n = 0\n"
-                    "    def __enter__(self):\n        self.n += 1\n        return self\n"
-                    "    def __exit__(self, *a):\n        return False"),
-        'Store': ("class Store:\n    def __setitem__(self, k, v):\n        log.append((k, v))\n"
-                  "    def __delitem__(self, k):\n        log.append(k)"),
-        'Accum': ("class Accum:\n    def __init__(self):\n        self.calls = []\n"
-                  "    def __call__(self, x):\n        self.calls.append(x)\n        return x"),
-        'Registry': ("class Registry:\n    log = []\n    @classmethod\n"
-                     "    def record(cls):\n        cls.log.append('r')"),
-        'Reg': ("class Reg:\n    registry = []\n    def __init__(self):\n"
-                "        Reg.registry.append(id(self))"),
-        'Shared': ("class Shared:\n    data = []\n    def add(self, x):\n"
-                   "        self.data.append(x)"),
-        'Stack': ("class Stack:\n    def __init__(self):\n        self.data = []\n"
-                  "    def push(self, x):\n        self.data.append(x)\n        return self.data"),
-        'Point': ("class Point:\n    def __init__(self, x, y):\n        self.x = x\n"
-                  "        self.y = y\n    def norm(self):\n        return self.x + self.y"),
-        'Doubler': "class Doubler:\n    def __call__(self, x):\n        return x * 2",
-        'Box': ("class Box:\n    def __iadd__(self, x):\n        log.append(x)\n"
-                "        return self"),
-        'Scaler': ("class Scaler:\n    seen = []\n    def __imul__(self, x):\n"
-                   "        Scaler.seen.append(x)\n        return self"),
-        'Money': ("class Money:\n    def __init__(self, c):\n        self.c = c\n"
-                  "    def __iadd__(self, x):\n        return Money(self.c + x)"),
+        "Counter": (
+            "class Counter:\n    def __init__(self):\n        self.n = 0\n"
+            "    def __enter__(self):\n        self.n += 1\n        return self\n"
+            "    def __exit__(self, *a):\n        return False"
+        ),
+        "Store": (
+            "class Store:\n    def __setitem__(self, k, v):\n        log.append((k, v))\n"
+            "    def __delitem__(self, k):\n        log.append(k)"
+        ),
+        "Accum": (
+            "class Accum:\n    def __init__(self):\n        self.calls = []\n"
+            "    def __call__(self, x):\n        self.calls.append(x)\n        return x"
+        ),
+        "Registry": (
+            "class Registry:\n    log = []\n    @classmethod\n    def record(cls):\n        cls.log.append('r')"
+        ),
+        "Reg": ("class Reg:\n    registry = []\n    def __init__(self):\n        Reg.registry.append(id(self))"),
+        "Shared": ("class Shared:\n    data = []\n    def add(self, x):\n        self.data.append(x)"),
+        "Stack": (
+            "class Stack:\n    def __init__(self):\n        self.data = []\n"
+            "    def push(self, x):\n        self.data.append(x)\n        return self.data"
+        ),
+        "Point": (
+            "class Point:\n    def __init__(self, x, y):\n        self.x = x\n"
+            "        self.y = y\n    def norm(self):\n        return self.x + self.y"
+        ),
+        "Doubler": "class Doubler:\n    def __call__(self, x):\n        return x * 2",
+        "Box": ("class Box:\n    def __iadd__(self, x):\n        log.append(x)\n        return self"),
+        "Scaler": (
+            "class Scaler:\n    seen = []\n    def __imul__(self, x):\n"
+            "        Scaler.seen.append(x)\n        return self"
+        ),
+        "Money": (
+            "class Money:\n    def __init__(self, c):\n        self.c = c\n"
+            "    def __iadd__(self, x):\n        return Money(self.c + x)"
+        ),
     }
     FUNCS = {
-        'track': ("@contextlib.contextmanager\ndef track():\n    log.append('e')\n"
-                  "    yield\n    log.append('x')"),
-        'logged': ("def logged(f):\n    def wrap(*a, **k):\n        calls.append('x')\n"
-                   "        return f(*a, **k)\n    return wrap"),
-        'work': "@logged\ndef work():\n    return 42",
-        'trace': ("def trace(f):\n    def wrap(*a, **k):\n        return f(*a, **k)\n    return wrap"),
-        'square': "@trace\ndef square(x):\n    return x * x",
+        "track": ("@contextlib.contextmanager\ndef track():\n    log.append('e')\n    yield\n    log.append('x')"),
+        "logged": (
+            "def logged(f):\n    def wrap(*a, **k):\n        calls.append('x')\n"
+            "        return f(*a, **k)\n    return wrap"
+        ),
+        "work": "@logged\ndef work():\n    return 42",
+        "trace": ("def trace(f):\n    def wrap(*a, **k):\n        return f(*a, **k)\n    return wrap"),
+        "square": "@trace\ndef square(x):\n    return x * x",
     }
     # var -> constructing name (for instance_class + reassignment-decorator factory)
-    FACTORIES = {'cm': 'Counter', 's': 'Store', 'a': 'Accum', 'r': 'Reg',
-                 'x': 'Shared', 'y': 'Shared', 'st': 'Stack', 'p': 'Point',
-                 'd': 'Doubler', 'bx': 'Box', 'sc': 'Scaler', 'mo': 'Money'}
+    FACTORIES = {
+        "cm": "Counter",
+        "s": "Store",
+        "a": "Accum",
+        "r": "Reg",
+        "x": "Shared",
+        "y": "Shared",
+        "st": "Stack",
+        "p": "Point",
+        "d": "Doubler",
+        "bx": "Box",
+        "sc": "Scaler",
+        "mo": "Money",
+    }
 
     def _instance_class(self, var):
         cls = self.FACTORIES.get(var)
@@ -1537,43 +1580,46 @@ class TestObjectProtocolMutations:
 
     def _f(self, code):
         return object_protocol_mutations(
-            ast.parse(code), self.CLASSES.get, self._instance_class,
-            self.FUNCS.get, self._var_factory,
+            ast.parse(code),
+            self.CLASSES.get,
+            self._instance_class,
+            self.FUNCS.get,
+            self._var_factory,
         )
 
     # --- free-var channel ----------------------------------------------------
     def test_contextmanager_generator_free_var(self):
-        assert self._f("with track():\n    pass").free_vars == {'log'}
+        assert self._f("with track():\n    pass").free_vars == {"log"}
 
     def test_setitem_free_var(self):
-        assert self._f("s['k'] = 1").free_vars == {'log'}
+        assert self._f("s['k'] = 1").free_vars == {"log"}
 
     def test_delitem_free_var(self):
-        assert self._f("del s['a']").free_vars == {'log'}
+        assert self._f("del s['a']").free_vars == {"log"}
 
     def test_decorator_wrapper_free_var(self):
-        assert self._f("work()").free_vars == {'calls'}
+        assert self._f("work()").free_vars == {"calls"}
 
     # --- receiver channel ----------------------------------------------------
     def test_with_enter_mutates_self(self):
-        assert self._f("with cm:\n    pass").receivers == {'cm'}
+        assert self._f("with cm:\n    pass").receivers == {"cm"}
 
     def test_call_mutates_self(self):
-        assert self._f("r2 = a('z')").receivers == {'a'}
+        assert self._f("r2 = a('z')").receivers == {"a"}
 
     def test_instance_method_mutates_self(self):
-        assert self._f("out = st.push('x')").receivers == {'st'}
+        assert self._f("out = st.push('x')").receivers == {"st"}
 
     # --- class-def channel ---------------------------------------------------
     def test_classmethod_class_var(self):
-        assert self._f("Registry.record()").class_defs == {'Registry'}
+        assert self._f("Registry.record()").class_defs == {"Registry"}
 
     def test_constructor_class_var(self):
-        assert self._f("obj = Reg()").class_defs == {'Reg'}
+        assert self._f("obj = Reg()").class_defs == {"Reg"}
 
     def test_instance_method_class_var(self):
         # Shared.data is class-level (no __init__), so add() mutates the class var
-        assert self._f("x.add('v')").class_defs == {'Shared'}
+        assert self._f("x.add('v')").class_defs == {"Shared"}
         assert self._f("x.add('v')").receivers == frozenset()
 
     # --- pure guards (nothing flagged) ---------------------------------------
@@ -1595,10 +1641,10 @@ class TestObjectProtocolMutations:
 
     # --- in-place operator dunders (CAS-78) ----------------------------------
     def test_iadd_free_var(self):
-        assert self._f("bx += 1").free_vars == {'log'}
+        assert self._f("bx += 1").free_vars == {"log"}
 
     def test_imul_class_var(self):
-        assert self._f("sc *= 2").class_defs == {'Scaler'}
+        assert self._f("sc *= 2").class_defs == {"Scaler"}
 
     def test_pure_iadd_not_flagged(self):
         r = self._f("mo += 5")
@@ -1616,25 +1662,24 @@ class TestObjectProtocolInheritance:
     base-owned class variable is attributed to the OWNING class."""
 
     CLASSES = {
-        'Base': ("class Base:\n    registry = []\n    def __init__(self):\n"
-                 "        Base.registry.append(1)"),
-        'Sub': "class Sub(Base):\n    pass",
-        'SBase': ("class SBase:\n    shared = []\n    def add(self, v):\n"
-                  "        self.shared.append(v)"),
-        'SSub': "class SSub(SBase):\n    pass",
-        'SupBase': ("class SupBase:\n    seen = []\n    def __init__(self):\n"
-                    "        SupBase.seen.append(1)"),
-        'SupSub': ("class SupSub(SupBase):\n    def __init__(self):\n"
-                   "        super().__init__()"),
-        'PBase': ("class PBase:\n    def __init__(self, n):\n        self.n = n\n"
-                  "    def doubled(self):\n        return self.n * 2"),
-        'PSub': "class PSub(PBase):\n    pass",
-        'DReg': ("@dataclass\nclass DReg:\n    name: str\n    def __post_init__(self):\n"
-                 "        log.append(self.name)"),
-        'DNode': ("@dataclass\nclass DNode:\n    val: int\n    registry: ClassVar[list] = []\n"
-                  "    def __post_init__(self):\n        DNode.registry.append(self.val)"),
+        "Base": ("class Base:\n    registry = []\n    def __init__(self):\n        Base.registry.append(1)"),
+        "Sub": "class Sub(Base):\n    pass",
+        "SBase": ("class SBase:\n    shared = []\n    def add(self, v):\n        self.shared.append(v)"),
+        "SSub": "class SSub(SBase):\n    pass",
+        "SupBase": ("class SupBase:\n    seen = []\n    def __init__(self):\n        SupBase.seen.append(1)"),
+        "SupSub": ("class SupSub(SupBase):\n    def __init__(self):\n        super().__init__()"),
+        "PBase": (
+            "class PBase:\n    def __init__(self, n):\n        self.n = n\n"
+            "    def doubled(self):\n        return self.n * 2"
+        ),
+        "PSub": "class PSub(PBase):\n    pass",
+        "DReg": ("@dataclass\nclass DReg:\n    name: str\n    def __post_init__(self):\n        log.append(self.name)"),
+        "DNode": (
+            "@dataclass\nclass DNode:\n    val: int\n    registry: ClassVar[list] = []\n"
+            "    def __post_init__(self):\n        DNode.registry.append(self.val)"
+        ),
     }
-    FACTORIES = {'sub': 'Sub', 'a': 'SSub', 'b': 'SSub', 'sup': 'SupSub', 'ps': 'PSub'}
+    FACTORIES = {"sub": "Sub", "a": "SSub", "b": "SSub", "sup": "SupSub", "ps": "PSub"}
 
     def _instance_class(self, var):
         cls = self.FACTORIES.get(var)
@@ -1642,29 +1687,32 @@ class TestObjectProtocolInheritance:
 
     def _f(self, code):
         return object_protocol_mutations(
-            ast.parse(code), self.CLASSES.get, self._instance_class,
-            lambda n: None, lambda n: None,
+            ast.parse(code),
+            self.CLASSES.get,
+            self._instance_class,
+            lambda n: None,
+            lambda n: None,
         )
 
     def test_inherited_init_owner_is_base(self):
-        assert self._f("sub = Sub()").class_defs == {'Base', 'Sub'}
+        assert self._f("sub = Sub()").class_defs == {"Base", "Sub"}
 
     def test_super_init_follows_base(self):
-        assert self._f("sup = SupSub()").class_defs == {'SupBase', 'SupSub'}
+        assert self._f("sup = SupSub()").class_defs == {"SupBase", "SupSub"}
 
     def test_inherited_method_shared_attr(self):
         # add() (on SBase) mutates self.shared, a base class var — reset both
-        assert self._f("a.add('v')").class_defs == {'SBase', 'SSub'}
+        assert self._f("a.add('v')").class_defs == {"SBase", "SSub"}
 
     def test_pure_inheritance_not_flagged(self):
         r = self._f("ps = PSub(4)")
         assert not (r.free_vars or r.receivers or r.class_defs)
 
     def test_dataclass_post_init_free_var(self):
-        assert self._f("r = DReg('a')").free_vars == {'log'}
+        assert self._f("r = DReg('a')").free_vars == {"log"}
 
     def test_dataclass_post_init_class_var(self):
-        assert self._f("n = DNode(7)").class_defs == {'DNode'}
+        assert self._f("n = DNode(7)").class_defs == {"DNode"}
 
 
 class TestObjectProtocolDescriptor:
@@ -1673,25 +1721,34 @@ class TestObjectProtocolDescriptor:
     data-descriptor ``__set__`` / ``__get__``."""
 
     CLASSES = {
-        'Cfg': ("class Cfg:\n    @property\n    def x(self):\n        return self._x\n"
-                "    @x.setter\n    def x(self, v):\n        log.append(v)\n        self._x = v"),
-        'Rec': ("class Rec:\n    def __init__(self):\n        self.history = []\n"
-                "    @property\n    def val(self):\n        return self._v\n"
-                "    @val.setter\n    def val(self, v):\n        self.history.append(v)\n"
-                "        self._v = v"),
-        'Meter': ("class Meter:\n    def __init__(self):\n        self.reads = []\n"
-                  "    @property\n    def now(self):\n        self.reads.append(1)\n"
-                  "        return len(self.reads)"),
-        'Circle': ("class Circle:\n    def __init__(self, r):\n        self._r = r\n"
-                   "    @property\n    def area(self):\n        return 3 * self._r * self._r"),
-        'Tracked': ("class Tracked:\n    def __set__(self, obj, v):\n        log.append(v)\n"
-                    "    def __get__(self, obj, owner=None):\n        log.append(1)\n"
-                    "        return None"),
-        'Model': "class Model:\n    field = Tracked()",
-        'Bag': "class Bag:\n    def __init__(self):\n        self.n = 0",
+        "Cfg": (
+            "class Cfg:\n    @property\n    def x(self):\n        return self._x\n"
+            "    @x.setter\n    def x(self, v):\n        log.append(v)\n        self._x = v"
+        ),
+        "Rec": (
+            "class Rec:\n    def __init__(self):\n        self.history = []\n"
+            "    @property\n    def val(self):\n        return self._v\n"
+            "    @val.setter\n    def val(self, v):\n        self.history.append(v)\n"
+            "        self._v = v"
+        ),
+        "Meter": (
+            "class Meter:\n    def __init__(self):\n        self.reads = []\n"
+            "    @property\n    def now(self):\n        self.reads.append(1)\n"
+            "        return len(self.reads)"
+        ),
+        "Circle": (
+            "class Circle:\n    def __init__(self, r):\n        self._r = r\n"
+            "    @property\n    def area(self):\n        return 3 * self._r * self._r"
+        ),
+        "Tracked": (
+            "class Tracked:\n    def __set__(self, obj, v):\n        log.append(v)\n"
+            "    def __get__(self, obj, owner=None):\n        log.append(1)\n"
+            "        return None"
+        ),
+        "Model": "class Model:\n    field = Tracked()",
+        "Bag": "class Bag:\n    def __init__(self):\n        self.n = 0",
     }
-    FACTORIES = {'c': 'Cfg', 'r': 'Rec', 'm': 'Meter', 'ci': 'Circle',
-                 'mdl': 'Model', 'bag': 'Bag'}
+    FACTORIES = {"c": "Cfg", "r": "Rec", "m": "Meter", "ci": "Circle", "mdl": "Model", "bag": "Bag"}
 
     def _instance_class(self, var):
         cls = self.FACTORIES.get(var)
@@ -1699,26 +1756,29 @@ class TestObjectProtocolDescriptor:
 
     def _f(self, code):
         return object_protocol_mutations(
-            ast.parse(code), self.CLASSES.get, self._instance_class,
-            lambda n: None, lambda n: None,
+            ast.parse(code),
+            self.CLASSES.get,
+            self._instance_class,
+            lambda n: None,
+            lambda n: None,
         )
 
     def test_property_setter_free_var(self):
-        assert self._f("c.x = 5").free_vars == {'log'}
+        assert self._f("c.x = 5").free_vars == {"log"}
 
     def test_property_setter_self_list(self):
-        assert self._f("r.val = 7").receivers == {'r'}
+        assert self._f("r.val = 7").receivers == {"r"}
 
     def test_property_getter_side_effect_self(self):
-        assert self._f("v = m.now").receivers == {'m'}
+        assert self._f("v = m.now").receivers == {"m"}
 
     def test_descriptor_set_free_var(self):
-        assert self._f("mdl.field = 3").free_vars == {'log'}
+        assert self._f("mdl.field = 3").free_vars == {"log"}
 
     def test_descriptor_get_free_var(self):
         # __set__ AND __get__ both append to log; a bare load hits __get__
         r = self._f("v = mdl.field")
-        assert 'log' in r.free_vars
+        assert "log" in r.free_vars
 
     def test_pure_property_not_flagged(self):
         r = self._f("a = ci.area")
@@ -1739,22 +1799,31 @@ class TestObjectProtocolExotic:
     class-based decorator."""
 
     CLASSES = {
-        'CM': ("class CM:\n    def __enter__(self):\n        log.append(1)\n"
-               "        return self\n    def __exit__(self, *a):\n        return False"),
-        'Mgr': ("class Mgr:\n    def __enter__(self):\n        hits.append(1)\n"
-                "        return len(hits)\n    def __exit__(self, *a):\n        return False"),
-        'It': ("class It:\n    def __iter__(self):\n        return self\n"
-               "    def __next__(self):\n        cursor[0] += 1\n        return 1"),
-        'Counter': ("class Counter:\n    def __init__(self, f):\n        self.f = f\n"
-                    "        self.n = 0\n    def __call__(self, *a, **k):\n"
-                    "        self.n += 1\n        return self.f(*a, **k)"),
-        'Quiet': ("class Quiet:\n    def __enter__(self):\n        return 42\n"
-                  "    def __exit__(self, *a):\n        return False"),
+        "CM": (
+            "class CM:\n    def __enter__(self):\n        log.append(1)\n"
+            "        return self\n    def __exit__(self, *a):\n        return False"
+        ),
+        "Mgr": (
+            "class Mgr:\n    def __enter__(self):\n        hits.append(1)\n"
+            "        return len(hits)\n    def __exit__(self, *a):\n        return False"
+        ),
+        "It": (
+            "class It:\n    def __iter__(self):\n        return self\n"
+            "    def __next__(self):\n        cursor[0] += 1\n        return 1"
+        ),
+        "Counter": (
+            "class Counter:\n    def __init__(self, f):\n        self.f = f\n"
+            "        self.n = 0\n    def __call__(self, *a, **k):\n"
+            "        self.n += 1\n        return self.f(*a, **k)"
+        ),
+        "Quiet": (
+            "class Quiet:\n    def __enter__(self):\n        return 42\n"
+            "    def __exit__(self, *a):\n        return False"
+        ),
     }
-    FUNCS = {'cm': "def cm():\n    return Mgr()",
-             'make': "def make():\n    return Quiet()"}
-    FACTORIES = {'cmv': 'CM', 'it': 'It'}
-    DECORATED = {'task': 'Counter'}
+    FUNCS = {"cm": "def cm():\n    return Mgr()", "make": "def make():\n    return Quiet()"}
+    FACTORIES = {"cmv": "CM", "it": "It"}
+    DECORATED = {"task": "Counter"}
 
     def _ic(self, var):
         cls = self.FACTORIES.get(var)
@@ -1766,21 +1835,25 @@ class TestObjectProtocolExotic:
 
     def _f(self, code):
         return object_protocol_mutations(
-            ast.parse(code), self.CLASSES.get, self._ic, self.FUNCS.get,
-            lambda n: None, decorated_class=self._dc,
+            ast.parse(code),
+            self.CLASSES.get,
+            self._ic,
+            self.FUNCS.get,
+            lambda n: None,
+            decorated_class=self._dc,
         )
 
     def test_next_free_var(self):
-        assert self._f("v = next(it)").free_vars == {'cursor'}
+        assert self._f("v = next(it)").free_vars == {"cursor"}
 
     def test_enter_context_free_var(self):
-        assert self._f("stack.enter_context(cmv)").free_vars == {'log'}
+        assert self._f("stack.enter_context(cmv)").free_vars == {"log"}
 
     def test_with_factory_free_var(self):
-        assert self._f("with cm() as x:\n    pass").free_vars == {'hits'}
+        assert self._f("with cm() as x:\n    pass").free_vars == {"hits"}
 
     def test_class_based_decorator_stateful(self):
-        assert self._f("task()").class_defs == {'task'}
+        assert self._f("task()").class_defs == {"task"}
 
     def test_pure_factory_cm_not_flagged(self):
         r = self._f("with make() as v:\n    pass")
@@ -1789,16 +1862,22 @@ class TestObjectProtocolExotic:
     def test_aliased_decorator_via_factory(self):
         # resolve_var_factory follows h -> g -> counting (alias handled upstream);
         # here it directly returns counting's def, exercising the wrapper analysis
-        counting = ("def counting(f):\n    def wrap(*a, **k):\n        log.append(1)\n"
-                    "        return f(*a, **k)\n    return wrap")
+        counting = (
+            "def counting(f):\n    def wrap(*a, **k):\n        log.append(1)\n"
+            "        return f(*a, **k)\n    return wrap"
+        )
 
         def vf(name):
-            return ast.parse(counting).body[0] if name == 'h' else None
+            return ast.parse(counting).body[0] if name == "h" else None
 
         r = object_protocol_mutations(
-            ast.parse("h()"), lambda n: None, lambda n: None, lambda n: None, vf,
+            ast.parse("h()"),
+            lambda n: None,
+            lambda n: None,
+            lambda n: None,
+            vf,
         )
-        assert r.free_vars == {'log'}
+        assert r.free_vars == {"log"}
 
 
 class TestSubscriptViewBindings:
@@ -1808,13 +1887,13 @@ class TestSubscriptViewBindings:
         return subscript_view_bindings(ast.parse(code))
 
     def test_slice_binding(self):
-        assert self._f("v = arr[1:]") == {'v': 'arr'}
+        assert self._f("v = arr[1:]") == {"v": "arr"}
 
     def test_full_slice_binding(self):
-        assert self._f("v = arr[:]") == {'v': 'arr'}
+        assert self._f("v = arr[:]") == {"v": "arr"}
 
     def test_step_slice_binding(self):
-        assert self._f("v = arr[::2]") == {'v': 'arr'}
+        assert self._f("v = arr[::2]") == {"v": "arr"}
 
     def test_plain_name_not_a_view(self):
         assert self._f("v = arr") == {}
@@ -1823,7 +1902,7 @@ class TestSubscriptViewBindings:
         assert self._f("v = arr.copy()") == {}
 
     def test_binding_in_if_body(self):
-        assert self._f("if c:\n    v = arr[1:]") == {'v': 'arr'}
+        assert self._f("if c:\n    v = arr[1:]") == {"v": "arr"}
 
 
 class TestCrossrefReassignedVars:
@@ -1834,20 +1913,20 @@ class TestCrossrefReassignedVars:
         return crossref_reassigned_vars(ast.parse(code))
 
     def test_tuple_swap(self):
-        assert self._f("a, b = b, a") == {'a', 'b'}
+        assert self._f("a, b = b, a") == {"a", "b"}
 
     def test_three_way_rotate(self):
-        assert self._f("a, b, c = c, a, b") == {'a', 'b', 'c'}
+        assert self._f("a, b, c = c, a, b") == {"a", "b", "c"}
 
     def test_temp_swap(self):
-        assert self._f("tmp = a\na = b\nb = tmp") == {'a', 'b'}
+        assert self._f("tmp = a\na = b\nb = tmp") == {"a", "b"}
 
     def test_partial_swap(self):
-        assert self._f("a, b = b, c") == {'b'}
+        assert self._f("a, b = b, c") == {"b"}
 
     def test_read_before_write_from_other(self):
         # b read then reassigned from a DIFFERENT value -> swap-like.
-        assert self._f("y = b\nb = k") == {'b'}
+        assert self._f("y = b\nb = k") == {"b"}
 
     def test_read_before_write_selfref_excluded(self):
         # total is read then reassigned FROM ITSELF -> accumulator, not a swap.
@@ -1870,7 +1949,7 @@ class TestCrossrefReassignedVars:
         assert self._f("x, y = data") == frozenset()
 
     def test_swap_in_if_body(self):
-        assert self._f("if cond:\n    a, b = b, a") == {'a', 'b'}
+        assert self._f("if cond:\n    a, b = b, a") == {"a", "b"}
 
 
 class TestAliasedSources:
@@ -1882,13 +1961,13 @@ class TestAliasedSources:
 
     def test_selfref_df_alias(self):
         # df2 is the selfref receiver; resolves to df
-        assert self._f("df2 = df\ndf2['a'] = df2['a'] * 2", {'df2'}) == {'df'}
+        assert self._f("df2 = df\ndf2['a'] = df2['a'] * 2", {"df2"}) == {"df"}
 
     def test_method_df_alias(self):
-        assert self._f("df2 = df\ndf2.fillna(0, inplace=True)", {'df2'}) == {'df'}
+        assert self._f("df2 = df\ndf2.fillna(0, inplace=True)", {"df2"}) == {"df"}
 
     def test_non_alias_name_contributes_nothing(self):
-        assert self._f("df['a'] = df['a'] * 2", {'df'}) == frozenset()
+        assert self._f("df['a'] = df['a'] * 2", {"df"}) == frozenset()
 
     def test_empty_names(self):
         assert self._f("y = x", set()) == frozenset()
@@ -1905,18 +1984,18 @@ class TestBareAliasTargets:
     # --- the shapes that ARE aliases ---
 
     def test_simple_alias(self):
-        assert self._f("b = a") == {'b'}
+        assert self._f("b = a") == {"b"}
 
     def test_chained_alias(self):
         # ``b = c = a``: BOTH names bind a's object.
-        assert self._f("b = c = a") == {'b', 'c'}
+        assert self._f("b = c = a") == {"b", "c"}
 
     def test_tuple_alias_1to1(self):
         # The RHS tuple is built then unpacked element-wise: two pointer copies.
-        assert self._f("b, c = a, d") == {'b', 'c'}
+        assert self._f("b, c = a, d") == {"b", "c"}
 
     def test_list_display_alias(self):
-        assert self._f("[b, c] = [a, d]") == {'b', 'c'}
+        assert self._f("[b, c] = [a, d]") == {"b", "c"}
 
     # --- the shapes that are NOT aliases ---
 
@@ -1971,31 +2050,35 @@ class TestAliasSkipReason:
 
     def test_alias_statement_reports_reason(self):
         analysis = analyze_statement("backup = model", None)
-        assert analysis.alias_targets == {'backup'}
-        reasons = analysis.skip_reasons({'backup'})
-        assert any('Alias assignment' in r for r in reasons), reasons
+        assert analysis.alias_targets == {"backup"}
+        reasons = analysis.skip_reasons({"backup"})
+        assert any("Alias assignment" in r for r in reasons), reasons
 
     def test_non_alias_statement_has_no_alias_reason(self):
         analysis = analyze_statement("backup = model.copy()", None)
         assert analysis.alias_targets == frozenset()
-        assert analysis.skip_reasons({'backup'}) == []
+        assert analysis.skip_reasons({"backup"}) == []
 
     def test_alias_reason_fires_even_when_target_not_in_outputs(self):
         # The refusal is a property of the statement's SHAPE, not of the caller's
         # output set, so it must not depend on how outputs were computed.
         analysis = analyze_statement("b = a", None)
-        assert any('Alias assignment' in r for r in analysis.skip_reasons(set()))
+        assert any("Alias assignment" in r for r in analysis.skip_reasons(set()))
 
 
-@pytest.mark.parametrize("code", [
-    "pd.Series(d).to_csv('a.csv')",
-    "scored.sort_values('x').to_csv('a.csv')",
-    "metrics.to_csv('a.csv')",
-])
+@pytest.mark.parametrize(
+    "code",
+    [
+        "pd.Series(d).to_csv('a.csv')",
+        "scored.sort_values('x').to_csv('a.csv')",
+        "metrics.to_csv('a.csv')",
+    ],
+)
 def test_a_file_write_is_reported_once(code):
     """Round 25 (r25s1): ``Side effect: to_csv() (file_write), Side effect:
     to_csv() (file_write)`` -- a write on a call's result matched both the
     name lookup and the write-method check."""
     from cash.notebook.cacheability import analyze_statement
+
     reasons = analyze_statement(code, ast.parse(code)).skip_reasons(set())
     assert sum(r.count("to_csv()") for r in reasons) == 1, reasons

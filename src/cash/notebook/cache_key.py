@@ -117,6 +117,7 @@ def control_outcome_key(code: str) -> str:
     """
     return "ctrlout:" + hashlib.sha256(code.encode("utf-8")).hexdigest()
 
+
 class VirtualCallable(NamedTuple):
     """A notebook function the simulation has seen defined but the kernel has not.
 
@@ -135,6 +136,7 @@ class VirtualCallable(NamedTuple):
     the definition above it, and by name because one ``from m import f, g``
     gives both names the same lineage.
     """
+
     source_hash: str
     code: types.CodeType
 
@@ -152,6 +154,7 @@ class FunctionTrackerProtocol(Protocol):
         """Return the source hash for a callable, or None if unavailable."""
         ...
 
+
 @dataclass
 class CacheKeyContext:
     """Groups the environment state needed for cache key computation.
@@ -161,6 +164,7 @@ class CacheKeyContext:
     Parameters that change per-call (code, inputs, outputs, occurrence_index)
     remain as direct arguments to ``compute_cache_key``.
     """
+
     variable_lineage: dict[str, str]
     user_ns: Mapping[str, Any]
     function_tracker: FunctionTrackerProtocol | None = None
@@ -181,6 +185,7 @@ class CacheKeyContext:
         # dict, so external writes to ``variable_lineage`` remain visible.
         self._lineage_store = LineageStore(backing=self.variable_lineage)
 
+
 class CacheKeyResult(NamedTuple):
     """Result of :func:`compute_cache_key`."""
 
@@ -198,6 +203,7 @@ class CacheKeyResult(NamedTuple):
 
     module_source_hashes: list[str]
     """``['var:hash', ...]`` for tracked module dependencies."""
+
 
 def is_cash_instrumentation(val: object) -> bool:
     """True when *val* is one of cash's own I/O-tracking wrappers.
@@ -226,7 +232,7 @@ def is_cash_instrumentation(val: object) -> bool:
     literal ``True`` (``file_tracker.py`` ``_patch_user_ns``), so an identity
     test is both sufficient and safe.
     """
-    return getattr(val, '_is_file_tracker_patch', False) is True
+    return getattr(val, "_is_file_tracker_patch", False) is True
 
 
 def is_module_like(var_name: str, val: object, virtual_modules: set[str]) -> bool:
@@ -248,7 +254,7 @@ def is_module_like(var_name: str, val: object, virtual_modules: set[str]) -> boo
         if isinstance(val, types.ModuleType):
             return True
         # IPython internals and bound methods behave like modules — skip them
-        if callable(val) and (var_name.startswith('_') or hasattr(val, '__self__')):
+        if callable(val) and (var_name.startswith("_") or hasattr(val, "__self__")):
             return True
     except (AttributeError, TypeError) as exc:
         logger.debug("[CACHE_KEY] Failed to check module/callable type for '%s': %s", var_name, exc)
@@ -263,6 +269,7 @@ class VirtualNamespace(NamedTuple):
     its code, which of the names it reads are modules, and their lineages at
     the call's position.
     """
+
     code_for: Callable[[str], types.CodeType | None]
     is_module: Callable[[str], bool]
     lineage_of: Callable[[str], str | None]
@@ -275,11 +282,12 @@ def virtual_namespace(
     virtual_modules: set[str],
 ) -> VirtualNamespace:
     """The simulation's answers, a name's simulated lineage first."""
+
     def lineage_of(name: str) -> str | None:
         return virtual_lineage.get(name) or variable_lineage.get(name)
 
     def code_for(name: str) -> types.CodeType | None:
-        found = callables.get(virtual_callable_key(lineage_of(name) or '', name))
+        found = callables.get(virtual_callable_key(lineage_of(name) or "", name))
         return found.code if found is not None else None
 
     return VirtualNamespace(code_for, virtual_modules.__contains__, lineage_of)
@@ -322,7 +330,7 @@ def called_function_dependencies(
 
     def code_of(name: str) -> types.CodeType | None:
         nonlocal used_virtual
-        code_obj = getattr(user_ns.get(name), '__code__', None)
+        code_obj = getattr(user_ns.get(name), "__code__", None)
         if code_obj is None and virtual is not None and name not in user_ns:
             code_obj = virtual.code_for(name)
             used_virtual = used_virtual or code_obj is not None
@@ -343,7 +351,7 @@ def called_function_dependencies(
             continue
         attrs = _attribute_only_names(code_obj)
         for ref in code_obj.co_names:
-            if ref in seen or ref in ('get_ipython', '__builtins__'):
+            if ref in seen or ref in ("get_ipython", "__builtins__"):
                 continue
             # Modules carry their own key component; builtins are constant.
             if not is_module(ref) and not hasattr(builtins, ref):
@@ -361,15 +369,15 @@ def called_function_dependencies(
     # after, so the simulation never found the entry and re-ran it (round 21).
     attribute_only -= {ref for name in seen for ref in _global_names(code_of(name))}
     if used_virtual:
+
         def lineage(ref: str) -> str:
-            return virtual.lineage_of(ref) or 'ABSENT'
+            return virtual.lineage_of(ref) or "ABSENT"
     else:
+
         def lineage(ref: str) -> str:
-            return variable_lineage.get(ref, 'ABSENT')
-    return sorted(
-        f"{ref}:{'ABSENT' if ref in attribute_only else lineage(ref)}"
-        for ref in referenced
-    )
+            return variable_lineage.get(ref, "ABSENT")
+
+    return sorted(f"{ref}:{'ABSENT' if ref in attribute_only else lineage(ref)}" for ref in referenced)
 
 
 def called_function_globals(
@@ -397,7 +405,7 @@ def called_function_globals(
         if name in seen:
             continue
         seen.add(name)
-        code = getattr(user_ns.get(name), '__code__', None)
+        code = getattr(user_ns.get(name), "__code__", None)
         if code is None and virtual is not None and name not in user_ns:
             code = virtual.code_for(name)
         code_objs = [code]
@@ -407,10 +415,11 @@ def called_function_globals(
                 continue
             code_objs.extend(c for c in code_obj.co_consts if isinstance(c, types.CodeType))
             for ref in _global_names(code_obj):
-                if ref in ('get_ipython', '__builtins__') or hasattr(builtins, ref):
+                if ref in ("get_ipython", "__builtins__") or hasattr(builtins, ref):
                     continue
                 if isinstance(user_ns.get(ref), types.ModuleType) or (
-                        virtual is not None and ref not in user_ns and virtual.is_module(ref)):
+                    virtual is not None and ref not in user_ns and virtual.is_module(ref)
+                ):
                     if keep_modules:
                         found.add(ref)
                     continue
@@ -419,9 +428,15 @@ def called_function_globals(
     return found - set(inputs)
 
 
-_ATTRIBUTE_OPS = frozenset({
-    'LOAD_ATTR', 'LOAD_METHOD', 'STORE_ATTR', 'DELETE_ATTR', 'LOAD_SUPER_ATTR',
-})
+_ATTRIBUTE_OPS = frozenset(
+    {
+        "LOAD_ATTR",
+        "LOAD_METHOD",
+        "STORE_ATTR",
+        "DELETE_ATTR",
+        "LOAD_SUPER_ATTR",
+    }
+)
 
 
 #: code object -> its global names. A code object never changes, and a call
@@ -442,11 +457,13 @@ def _global_names(code_obj: Any) -> frozenset[str]:
     if found is not None:
         return found
     try:
-        found = frozenset(ins.argval for ins in dis.get_instructions(code_obj)
-                          if ins.opname not in _ATTRIBUTE_OPS and isinstance(ins.argval, str)
-                          and ins.argval in code_obj.co_names)
+        found = frozenset(
+            ins.argval
+            for ins in dis.get_instructions(code_obj)
+            if ins.opname not in _ATTRIBUTE_OPS and isinstance(ins.argval, str) and ins.argval in code_obj.co_names
+        )
     except (TypeError, ValueError):
-        return frozenset(code_obj.co_names)      # unknown: treat every name as a global
+        return frozenset(code_obj.co_names)  # unknown: treat every name as a global
     try:
         if len(_GLOBAL_NAMES_MEMO) >= 4096:
             _GLOBAL_NAMES_MEMO.clear()
@@ -490,6 +507,7 @@ def _process_input_var(
         # `lineage_formula.module_read_lineage`, which the output lineage on
         # both engines calls too, so all three agree.
         from .lineage_formula import module_read_lineage
+
         narrowed = module_read_lineage(function_tracker, var_name, val, code)
         if narrowed is not None:
             module_source_hashes.append(f"{var_name}:{narrowed}")
@@ -497,14 +515,14 @@ def _process_input_var(
         if var_name in variable_lineage:
             module_source_hashes.append(f"{var_name}:{variable_lineage[var_name]}")
             if debug:
-                debug_print_fn(
-                    f"[CACHE_KEY] Module component for '{var_name}': "
-                    f"{variable_lineage[var_name][:12]}..."
-                )
+                debug_print_fn(f"[CACHE_KEY] Module component for '{var_name}': {variable_lineage[var_name][:12]}...")
         return
 
     lineage = lineage_store.resolve(
-        var_name, value=val, virtual=virtual_lineage, compute_hash_fn=compute_hash_fn,
+        var_name,
+        value=val,
+        virtual=virtual_lineage,
+        compute_hash_fn=compute_hash_fn,
     )
     if lineage:
         input_hashes.append(lineage)
@@ -523,10 +541,7 @@ def _process_input_var(
             if func_hash is not None:
                 func_source_hashes.append(f"{var_name}:{func_hash}")
                 if debug:
-                    debug_print_fn(
-                        f"[CACHE_KEY] Func component for '{var_name}': "
-                        f"{func_hash[:12]}..."
-                    )
+                    debug_print_fn(f"[CACHE_KEY] Func component for '{var_name}': {func_hash[:12]}...")
         except (AttributeError, TypeError, ValueError, OSError) as exc:
             logger.debug("[CACHE_KEY] Failed to get function source hash for '%s': %s", var_name, exc)
 
@@ -555,11 +570,10 @@ def _collect_output_module_hashes(
             hashes.append(f"out:{out_var}:{variable_lineage[out_var]}")
             if debug:
                 debug_print_fn(
-                    f"[CACHE_KEY] Output module lineage for '{out_var}': "
-                    f"{variable_lineage[out_var][:12]}..."
+                    f"[CACHE_KEY] Output module lineage for '{out_var}': {variable_lineage[out_var][:12]}..."
                 )
         elif callable(val):
-            obj_module = getattr(val, '__module__', None)
+            obj_module = getattr(val, "__module__", None)
             if obj_module and obj_module in variable_lineage:
                 hashes.append(f"from_out:{out_var}:{obj_module}:{variable_lineage[obj_module]}")
                 if debug:
@@ -665,7 +679,6 @@ def compute_cache_key(
     debug = ctx.debug
     debug_print_fn = ctx.debug_print_fn or print
 
-
     source_hash = statement_source_hash(code)
 
     input_hashes: list[str] = []
@@ -675,13 +688,24 @@ def compute_cache_key(
     sorted_inputs = sorted(inputs)
 
     for var_name in sorted_inputs:
-        if var_name in ('get_ipython', '__builtins__'):
+        if var_name in ("get_ipython", "__builtins__"):
             continue
         _process_input_var(
-            var_name, virtual_modules, user_ns, variable_lineage, virtual_lineage,
-            ctx._lineage_store, compute_hash_fn, function_tracker, debug, debug_print_fn,
-            input_hashes, func_source_hashes, module_source_hashes,
-            ctx.virtual_callables, code=code,
+            var_name,
+            virtual_modules,
+            user_ns,
+            variable_lineage,
+            virtual_lineage,
+            ctx._lineage_store,
+            compute_hash_fn,
+            function_tracker,
+            debug,
+            debug_print_fn,
+            input_hashes,
+            func_source_hashes,
+            module_source_hashes,
+            ctx.virtual_callables,
+            code=code,
         )
 
     # Build the final combined hash string
@@ -714,8 +738,11 @@ def compute_cache_key(
     # see, because it is built when the ``def`` runs and only looks upward.
     # Omitted entirely when absent, so a statement that calls no user-defined
     # function keeps a byte-identical key.
-    virtual = (virtual_namespace(ctx.virtual_callables, virtual_lineage, variable_lineage, virtual_modules)
-               if ctx.virtual_callables else None)
+    virtual = (
+        virtual_namespace(ctx.virtual_callables, virtual_lineage, variable_lineage, virtual_modules)
+        if ctx.virtual_callables
+        else None
+    )
     callee_deps = called_function_dependencies(sorted_inputs, user_ns, variable_lineage, virtual)
     callee_component = f":callees:{':'.join(callee_deps)}" if callee_deps else ""
 
@@ -723,7 +750,7 @@ def compute_cache_key(
         f"{source_hash}:{':'.join(input_hashes)}{func_component}{module_component}"
         f"{occurrence_component}{callee_component}"
     )
-    combined_hash = hashlib.sha256(combined_hash_str.encode('utf-8')).hexdigest()
+    combined_hash = hashlib.sha256(combined_hash_str.encode("utf-8")).hexdigest()
     cache_key = f"{namespace}:{combined_hash}"
 
     if debug:
@@ -737,4 +764,3 @@ def compute_cache_key(
         )
 
     return CacheKeyResult(cache_key, source_hash, input_hashes, func_source_hashes, module_source_hashes)
-

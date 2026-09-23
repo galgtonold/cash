@@ -14,18 +14,18 @@ class TestTypeConversionEdits:
 
     def test_edit_conversion_chain(self, nb_runner):
         """Edit a type conversion chain."""
-        nb_runner.create_notebook([
-            "raw = '42.5'  # type conversion source",
-            "value = int(float(raw))\nprint(f'value = {value}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "raw = '42.5'  # type conversion source",
+                "value = int(float(raw))\nprint(f'value = {value}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "value = 42" in nb_runner.get_output(2)
 
         # Change chain to round instead of truncate
-        nb_runner.set_cell_source(
-            2, "value = round(float(raw))\nprint(f'value = {value}')"
-        )
+        nb_runner.set_cell_source(2, "value = round(float(raw))\nprint(f'value = {value}')")
         nb_runner.run_all()
         assert "value = 42" in nb_runner.get_output(2)
 
@@ -36,25 +36,23 @@ class TestTypeConversionEdits:
 
     def test_edit_format_conversion(self, nb_runner):
         """Edit between different format representations."""
-        nb_runner.create_notebook([
-            "number = 255  # format source",
-            "formatted = hex(number)\nprint(f'formatted = {formatted}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "number = 255  # format source",
+                "formatted = hex(number)\nprint(f'formatted = {formatted}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "formatted = 0xff" in nb_runner.get_output(2)
 
         # Change to binary
-        nb_runner.set_cell_source(
-            2, "formatted = bin(number)\nprint(f'formatted = {formatted}')"
-        )
+        nb_runner.set_cell_source(2, "formatted = bin(number)\nprint(f'formatted = {formatted}')")
         nb_runner.run_all()
         assert "formatted = 0b11111111" in nb_runner.get_output(2)
 
         # Change to octal
-        nb_runner.set_cell_source(
-            2, "formatted = oct(number)\nprint(f'formatted = {formatted}')"
-        )
+        nb_runner.set_cell_source(2, "formatted = oct(number)\nprint(f'formatted = {formatted}')")
         nb_runner.run_all()
         assert "formatted = 0o377" in nb_runner.get_output(2)
 
@@ -64,11 +62,13 @@ class TestSerializationEdits:
 
     def test_json_roundtrip_edit(self, nb_runner):
         """Edit data in a JSON serialization round-trip."""
-        nb_runner.create_notebook([
-            "import json",
-            "data = {'name': 'Alice', 'age': 30}",
-            "serialized = json.dumps(data)\nrestored = json.loads(serialized)\nprint(f'name={restored[\"name\"]} age={restored[\"age\"]}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import json",
+                "data = {'name': 'Alice', 'age': 30}",
+                'serialized = json.dumps(data)\nrestored = json.loads(serialized)\nprint(f\'name={restored["name"]} age={restored["age"]}\')',
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "name=Alice age=30" in nb_runner.get_output(3)
@@ -81,11 +81,13 @@ class TestSerializationEdits:
     def test_csv_roundtrip_edit(self, nb_runner, tmp_path):
         """Edit data in a CSV write/read round-trip."""
         fpath = str(tmp_path / "roundtrip.csv").replace("\\", "/")
-        nb_runner.create_notebook([
-            f"import csv\nfpath = '{fpath}'",
-            "with open(fpath, 'w', newline='') as f:\n    w = csv.writer(f)\n    w.writerow(['a', 'b'])\n    w.writerow([1, 2])",
-            "with open(fpath) as f:\n    reader = csv.reader(f)\n    rows = list(reader)\nprint(f'rows = {rows}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                f"import csv\nfpath = '{fpath}'",
+                "with open(fpath, 'w', newline='') as f:\n    w = csv.writer(f)\n    w.writerow(['a', 'b'])\n    w.writerow([1, 2])",
+                "with open(fpath) as f:\n    reader = csv.reader(f)\n    rows = list(reader)\nprint(f'rows = {rows}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(3)

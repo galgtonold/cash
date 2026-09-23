@@ -8,6 +8,7 @@ logger reaches the manager again, and with the few dozen loggers of an
 ordinary process the first call never returned. Every release up to 0.10.0
 did this, for the most common line in a service's module header.
 """
+
 from __future__ import annotations
 
 import logging
@@ -44,7 +45,7 @@ def test_a_cyclic_argument_is_keyed_without_walking_every_path(tmp_path):
         calls.append(node.name)
         return len(node.peers)
 
-    graph = _complete_graph(12)       # 11 ** 50 paths to the depth limit
+    graph = _complete_graph(12)  # 11 ** 50 paths to the depth limit
     assert f(graph) == 11
     assert f(graph) == 11
     assert calls == [0], "the second call did not hit"
@@ -75,7 +76,8 @@ def test_a_module_logger_read_in_a_cached_function_returns(tmp_path):
     """The shape that hung: a subprocess, so a regression times out one
     child process rather than a test worker."""
     script = tmp_path / "svc.py"
-    script.write_text(textwrap.dedent('''
+    script.write_text(
+        textwrap.dedent("""
         import logging, sys
         import cash
 
@@ -89,10 +91,13 @@ def test_a_module_logger_read_in_a_cached_function_returns(tmp_path):
             return n * 2
 
         print(job(21), job(21))
-    '''), encoding="utf-8")
+    """),
+        encoding="utf-8",
+    )
     try:
-        out = subprocess.run([sys.executable, str(script)], capture_output=True, text=True,
-                             timeout=60, cwd=str(tmp_path))
+        out = subprocess.run(
+            [sys.executable, str(script)], capture_output=True, text=True, timeout=60, cwd=str(tmp_path)
+        )
     except subprocess.TimeoutExpired:
         pytest.fail("the first call of a function reading a module logger did not return")
     assert out.stdout.split() == ["42", "42"], out.stderr

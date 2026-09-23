@@ -57,6 +57,7 @@ class DataSource(ABC):
                 _warned_bool_token_sources.add(name)
                 from .diagnostics import warn_diagnostic
                 from .exceptions import CashCacheIneffectiveWarning
+
                 warn_diagnostic(
                     CashCacheIneffectiveWarning,
                     "KEY-BOOL-STATE-TOKEN",
@@ -68,6 +69,7 @@ class DataSource(ABC):
                     "state_token() to return that token.",
                 )
         return token
+
 
 class FileDataSource(DataSource):
     """Tracks a file for changes using modification time."""

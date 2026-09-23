@@ -19,6 +19,7 @@ So neither is hand-written:
   to, so the README and the benchmarks page cannot drift apart from each other
   or from the measurement.
 """
+
 from __future__ import annotations
 
 import csv
@@ -57,9 +58,7 @@ def _badge_images(readme: str):
         alt = re.search(r'alt="([^"]+)"', tag)
         width = re.search(r'width="(\d+)"', tag)
         if src and src.group(1).endswith(".png"):
-            out.append((alt.group(1) if alt else "",
-                        src.group(1),
-                        int(width.group(1)) if width else None))
+            out.append((alt.group(1) if alt else "", src.group(1), int(width.group(1)) if width else None))
     return [x for x in out if "_badges/" in x[1]]
 
 
@@ -75,7 +74,7 @@ def test_readme_badge_image_is_committed(readme):
             f"{url} is not an absolute raw.githubusercontent URL. PyPI renders the "
             "README standalone and cannot resolve repo-relative image paths."
         )
-        local = REPO / url[len(_RAW_PREFIX):]
+        local = REPO / url[len(_RAW_PREFIX) :]
         assert local.exists(), (
             f"README points at {url}, but {local.relative_to(REPO)} is not in the "
             "repo. Run `python scripts/build_badge_images.py` and commit the PNG."
@@ -109,9 +108,7 @@ def test_readme_badge_image_has_alt_text(readme):
 
 def test_readme_restore_cost_matches_the_frozen_matrix(readme):
     """'a 100 MB DataFrame comes back from disk in N ms' must be the measured N."""
-    m = re.search(
-        r"100 MB DataFrame comes back from disk in \*\*([\d.]+) ms\*\*", readme
-    )
+    m = re.search(r"100 MB DataFrame comes back from disk in \*\*([\d.]+) ms\*\*", readme)
     assert m, (
         "the README no longer quotes a 100 MB DataFrame restore cost in the "
         "expected shape. If the sentence was reworded, update this test with it."
@@ -124,9 +121,7 @@ def test_readme_restore_cost_matches_the_frozen_matrix(readme):
         for r in csv.DictReader(fh):
             if r["error"]:
                 continue
-            if (r["family"], r["backend_kind"], int(r["target_bytes"])) == (
-                "dataframe_numeric", "disk", 100_000_000
-            ):
+            if (r["family"], r["backend_kind"], int(r["target_bytes"])) == ("dataframe_numeric", "disk", 100_000_000):
                 measured = float(r["deserialize_seconds"]) * 1000
     assert measured is not None, "no frozen row for a 100 MB DataFrame on disk"
 

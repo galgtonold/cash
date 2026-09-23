@@ -1,4 +1,4 @@
-"""``cash clear`` removes cash's own files, never a user's.
+r"""``cash clear`` removes cash's own files, never a user's.
 
 Found while attacking the decorator before round 26: a project whose
 ``[tool.cash] cache_dir`` points at a directory holding data --
@@ -7,13 +7,15 @@ Found while attacking the decorator before round 26: a project whose
 "does it look like a cache" guard passes and ``clear --all`` removed the
 directory whole: ``Cleared: ...\shared_data``, exit 0, ``precious.csv`` gone.
 """
+
 from __future__ import annotations
+
+from types import SimpleNamespace
 
 import pytest
 
 from cash.__main__ import cmd_clear
 from cash.backends.entry_format import ENTRY_SUFFIX
-from types import SimpleNamespace
 
 
 def _cache_with(tmp_path, *foreign):
@@ -29,8 +31,7 @@ def _cache_with(tmp_path, *foreign):
 
 def _clear(cache, monkeypatch, tmp_path, **kwargs):
     monkeypatch.chdir(tmp_path)
-    args = SimpleNamespace(path=str(cache), all=False, force=False, tool=None,
-                           entry=None, function=None, expired=False)
+    args = SimpleNamespace(path=str(cache), all=False, force=False, tool=None, entry=None, function=None, expired=False)
     for key, value in kwargs.items():
         setattr(args, key, value)
     cmd_clear(args)

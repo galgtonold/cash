@@ -1,5 +1,7 @@
 """Batch 67: Bisect, heapq & algorithm patterns — cash caching with stdlib algorithms."""
+
 import textwrap
+
 import pytest
 
 
@@ -9,8 +11,9 @@ class TestBisectPatterns:
 
     def test_sorted_insert(self, nb_runner):
         """Maintain sorted list with bisect across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 import bisect
 
                 sorted_list = []
@@ -18,14 +21,15 @@ class TestBisectPatterns:
                     bisect.insort(sorted_list, val)
                 print(f"sorted={sorted_list}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 import bisect
                 pos = bisect.bisect_left(sorted_list, 5)
                 print(f"pos_of_5={pos}")
                 count_le_5 = bisect.bisect_right(sorted_list, 5)
                 print(f"count_le_5={count_le_5}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "sorted=[1, 2, 3, 5, 7, 8, 9]" in nb_runner.get_output(1)
@@ -34,8 +38,9 @@ class TestBisectPatterns:
 
     def test_grade_lookup(self, nb_runner):
         """Grade lookup using bisect across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 import bisect
 
                 def grade(score, breakpoints=[60, 70, 80, 90], grades='FDCBA'):
@@ -46,12 +51,13 @@ class TestBisectPatterns:
                 student_grades = [(s, grade(s)) for s in scores]
                 print(f"grades={student_grades}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 from collections import Counter
                 distribution = Counter(g for _, g in student_grades)
                 print(f"dist={dict(sorted(distribution.items()))}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out1 = nb_runner.get_output(1)
@@ -67,8 +73,9 @@ class TestHeapqPatterns:
 
     def test_priority_queue(self, nb_runner):
         """Priority queue with heapq across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 import heapq
 
                 tasks = []
@@ -78,7 +85,7 @@ class TestHeapqPatterns:
                 heapq.heappush(tasks, (1, 'also urgent'))
                 print(f"size={len(tasks)}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 import heapq
                 order = []
                 while tasks:
@@ -86,7 +93,8 @@ class TestHeapqPatterns:
                     order.append(f"[{priority}]{name}")
                 print(f"order={order}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "size=4" in nb_runner.get_output(1)
@@ -97,8 +105,9 @@ class TestHeapqPatterns:
 
     def test_nlargest_nsmallest(self, nb_runner):
         """heapq.nlargest and nsmallest across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 import heapq
 
                 data = [
@@ -111,12 +120,13 @@ class TestHeapqPatterns:
                 top2 = heapq.nlargest(2, data, key=lambda x: x['price'])
                 bottom2 = heapq.nsmallest(2, data, key=lambda x: x['price'])
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 top_names = [d['name'] for d in top2]
                 bottom_names = [d['name'] for d in bottom2]
                 print(f"top={top_names} bottom={bottom_names}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -126,8 +136,9 @@ class TestHeapqPatterns:
 
     def test_merge_sorted_streams(self, nb_runner):
         """heapq.merge sorted streams across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 import heapq
 
                 stream_a = [1, 5, 9, 13]
@@ -136,11 +147,12 @@ class TestHeapqPatterns:
                 merged = list(heapq.merge(stream_a, stream_b, stream_c))
                 print(f"merged={merged}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 is_sorted = all(merged[i] <= merged[i+1] for i in range(len(merged)-1))
                 print(f"sorted={is_sorted} len={len(merged)}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out1 = nb_runner.get_output(1)

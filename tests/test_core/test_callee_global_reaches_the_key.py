@@ -35,6 +35,7 @@ mutated in-process, which is exact -- the fold re-reads the module live from
 ``sys.modules`` on every call, so an attribute assignment is what a library
 upgrade looks like from cash's side.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -66,9 +67,7 @@ def test_a_callees_global_invalidates_the_caller():
     _callee_rules.THRESHOLD = 60
     got = _callee_calc.outer(1000)
 
-    assert _callee_calc.RUNS, (
-        "the caller served a cached answer computed under THRESHOLD=20"
-    )
+    assert _callee_calc.RUNS, "the caller served a cached answer computed under THRESHOLD=20"
     assert got == _oracle(1000, 60)
 
 
@@ -100,6 +99,7 @@ def test_a_callee_reading_the_global_directly():
 
 # --- controls: it must still be a cache -------------------------------------
 
+
 def test_the_caller_hits_when_nothing_changed():
     """Without this, every assertion above passes on "never cache anything"."""
     assert _callee_calc.outer(1000) == _oracle(1000, 20)
@@ -121,9 +121,7 @@ def test_an_unread_global_does_not_churn_the_key():
     _callee_rules.UNUSED_SETTING = "loud"
     assert _callee_calc.outer(1000) == _oracle(1000, 20)
 
-    assert _callee_calc.RUNS == [], (
-        f"an unread global invalidated the caller: {_callee_calc.RUNS}"
-    )
+    assert _callee_calc.RUNS == [], f"an unread global invalidated the caller: {_callee_calc.RUNS}"
 
 
 def test_an_unrelated_cached_function_is_unaffected():

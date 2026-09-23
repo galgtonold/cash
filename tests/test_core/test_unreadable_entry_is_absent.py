@@ -17,6 +17,7 @@ Two independent defects, so two independent sets of tests:
 Either fix alone leaves a real hole: existing caches are already poisoned, and
 a future non-builtin scalar would poison new ones.
 """
+
 import pickle
 
 import pytest
@@ -37,6 +38,7 @@ class _Exploding:
 
 def _missing_module_loader():  # pragma: no cover - never actually called
     import _cas_probe_missing_mod  # noqa: F401
+
     return 1
 
 
@@ -116,8 +118,7 @@ def test_metadata_size_is_a_builtin_int_for_a_numpy_value():
     backend.set("arr", np.arange(1000))
     meta, _ = backend.get("arr")
     assert type(meta["size"]) is int, (
-        f"size is {type(meta['size'])}, which drags that module into every "
-        "future read of this entry's metadata"
+        f"size is {type(meta['size'])}, which drags that module into every future read of this entry's metadata"
     )
 
 

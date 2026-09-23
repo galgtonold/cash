@@ -25,6 +25,7 @@ output through a live kernel. The seeded / deterministic / allow-random controls
 are what make the positive test discriminating rather than a detector that shouts
 at every ``.fit()`` it sees.
 """
+
 import pytest
 from conftest import shows_cached
 
@@ -55,12 +56,14 @@ def test_unseeded_estimator_fit_warns(nb_runner):
     passes with it. ``RandomForestClassifier(n_estimators=160)`` carries no
     ``random_state``, so ``get_params()['random_state']`` is ``None`` -> unseeded.
     """
-    nb_runner.create_notebook([
-        SETUP,
-        DATA,
-        "clf = RandomForestClassifier(n_estimators=160)",   # UNSEEDED: no random_state
-        "# @cash:cache-fit\nclf.fit(X, y)\nprint('fitted', clf.n_estimators)",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            DATA,
+            "clf = RandomForestClassifier(n_estimators=160)",  # UNSEEDED: no random_state
+            "# @cash:cache-fit\nclf.fit(X, y)\nprint('fitted', clf.n_estimators)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -79,21 +82,21 @@ def test_unseeded_estimator_fit_warns(nb_runner):
     assert shows_cached(nb_runner.get_output(4)), (
         f"unseeded fit did not restore on warm re-run: {nb_runner.get_output(4)!r}"
     )
-    assert RESTORED_TEXT in warm, (
-        f"restore did not announce the replay: {warm!r}"
-    )
+    assert RESTORED_TEXT in warm, f"restore did not announce the replay: {warm!r}"
     assert "replay" in warm, warm
 
 
 def test_seeded_estimator_fit_does_not_warn(nb_runner):
     """Control: ``RandomForestClassifier(random_state=42)`` is reproducible, so it
     must stay quiet. This is what makes the positive test discriminating."""
-    nb_runner.create_notebook([
-        SETUP,
-        DATA,
-        "clf = RandomForestClassifier(n_estimators=40, random_state=42)",   # SEEDED
-        "# @cash:cache-fit\nclf.fit(X, y)\nprint('fitted', clf.n_estimators)",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            DATA,
+            "clf = RandomForestClassifier(n_estimators=40, random_state=42)",  # SEEDED
+            "# @cash:cache-fit\nclf.fit(X, y)\nprint('fitted', clf.n_estimators)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -106,17 +109,19 @@ def test_seeded_estimator_fit_does_not_warn(nb_runner):
 def test_deterministic_estimator_fit_does_not_warn(nb_runner):
     """Control: ``LinearRegression()`` has NO ``random_state`` param, so its fit is
     deterministic -- ``'random_state' not in get_params()`` -> no warning."""
-    nb_runner.create_notebook([
-        "import numpy as np\n"
-        "from sklearn.linear_model import LinearRegression\n"
-        "from sklearn.datasets import make_regression\n"
-        "import cash\n"
-        "%cash_on\n"
-        "%cash_badge print",
-        "X, y = make_regression(n_samples=6000, n_features=20, random_state=0)",
-        "reg = LinearRegression()",
-        "# @cash:cache-fit\nreg.fit(X, y)\nprint('coef', reg.coef_.shape[0])",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np\n"
+            "from sklearn.linear_model import LinearRegression\n"
+            "from sklearn.datasets import make_regression\n"
+            "import cash\n"
+            "%cash_on\n"
+            "%cash_badge print",
+            "X, y = make_regression(n_samples=6000, n_features=20, random_state=0)",
+            "reg = LinearRegression()",
+            "# @cash:cache-fit\nreg.fit(X, y)\nprint('coef', reg.coef_.shape[0])",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -133,12 +138,14 @@ def test_allow_random_suppresses_unseeded_estimator_fit(nb_runner):
     Stacks with ``# @cash:cache-fit``: the two directives merge (both are sticky
     booleans), so the fit caches AND stays quiet.
     """
-    nb_runner.create_notebook([
-        SETUP,
-        DATA,
-        "clf = RandomForestClassifier(n_estimators=40)",   # UNSEEDED
-        "# @cash:cache-fit\n# @cash:allow-random\nclf.fit(X, y)\nprint('fitted', clf.n_estimators)",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            DATA,
+            "clf = RandomForestClassifier(n_estimators=40)",  # UNSEEDED
+            "# @cash:cache-fit\n# @cash:allow-random\nclf.fit(X, y)\nprint('fitted', clf.n_estimators)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -158,18 +165,18 @@ def test_default_bare_fit_does_not_warn(nb_runner):
     be FALSE. This is what keeps the warning honest rather than a blanket
     ``.fit()`` alarm.
     """
-    nb_runner.create_notebook([
-        SETUP,
-        DATA,
-        "clf = RandomForestClassifier(n_estimators=40)",   # UNSEEDED
-        "clf.fit(X, y)\nprint('fitted', clf.n_estimators)",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            DATA,
+            "clf = RandomForestClassifier(n_estimators=40)",  # UNSEEDED
+            "clf.fit(X, y)\nprint('fitted', clf.n_estimators)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
     out = nb_runner.get_raw_output(4)
-    assert DETECTED_TEXT not in out, (
-        f"uncached bare fit warned about a replay that cannot happen: {out!r}"
-    )
+    assert DETECTED_TEXT not in out, f"uncached bare fit warned about a replay that cannot happen: {out!r}"
     assert "frozen replay" not in out, out
     assert "fitted 40" in nb_runner.get_output(4)

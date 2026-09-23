@@ -7,6 +7,7 @@ standing in for the impure helper re-resolution. The fold's whole job
 is deterministic serialization, so it is tested without touching Cash,
 the cache backend, or sys.modules.
 """
+
 from __future__ import annotations
 
 import hashlib

@@ -43,6 +43,7 @@ Edit kinds
 Without ``linked``, a harness that silently failed to detect any
 recomputation would score a perfect zero on every scenario.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
@@ -73,6 +74,7 @@ class EditScenario:
     first time in the measured run would recompute simply for being new
     code, and would prove nothing.
     """
+
     kind: str
     site: int
     label: str
@@ -85,6 +87,7 @@ class EditScenario:
 @dataclass
 class SiteRanking:
     """A candidate edit site and the downstream compute it puts at risk."""
+
     site: int
     downstream_restorable_seconds: float
     downstream_restorable_count: int
@@ -121,13 +124,13 @@ def rank_sites(
     ranked: list[SiteRanking] = []
     for cell in cells:
         below = [c.index for c in cells if c.index > cell.index]
-        ranked.append(SiteRanking(
-            site=cell.index,
-            downstream_restorable_seconds=sum(
-                restorable_seconds_by_cell.get(i, 0.0) for i in below),
-            downstream_restorable_count=sum(
-                restorable_count_by_cell.get(i, 0) for i in below),
-        ))
+        ranked.append(
+            SiteRanking(
+                site=cell.index,
+                downstream_restorable_seconds=sum(restorable_seconds_by_cell.get(i, 0.0) for i in below),
+                downstream_restorable_count=sum(restorable_count_by_cell.get(i, 0) for i in below),
+            )
+        )
     return ranked
 
 
@@ -149,20 +152,21 @@ def plan_scenarios(
     answer "can this harness see a real dependency"; more would cost a prime
     run each for no extra signal.
     """
-    ranked = [r for r in rank_sites(
-        cells, restorable_seconds_by_cell, restorable_count_by_cell)
-        if r.downstream_restorable_count > 0]
+    ranked = [
+        r
+        for r in rank_sites(cells, restorable_seconds_by_cell, restorable_count_by_cell)
+        if r.downstream_restorable_count > 0
+    ]
     if not ranked:
         return []
 
     band_size = max(1, len(ranked) // max_sites)
     sites: list[int] = []
     for band_start in range(0, len(ranked), band_size):
-        band = ranked[band_start:band_start + band_size]
+        band = ranked[band_start : band_start + band_size]
         if not band:
             continue
-        best = max(band, key=lambda r: (r.downstream_restorable_seconds,
-                                        r.downstream_restorable_count))
+        best = max(band, key=lambda r: (r.downstream_restorable_seconds, r.downstream_restorable_count))
         sites.append(best.site)
         if len(sites) == max_sites:
             break
@@ -170,13 +174,10 @@ def plan_scenarios(
     scenarios: list[EditScenario] = []
     for site in sites:
         for kind in NULL_KINDS:
-            scenarios.append(EditScenario(
-                kind=kind, site=site, label=f"{kind}@cell{site}"))
+            scenarios.append(EditScenario(kind=kind, site=site, label=f"{kind}@cell{site}"))
     if sites:
         control_site = sites[len(sites) // 2]
-        scenarios.append(EditScenario(
-            kind="linked", site=control_site,
-            label=f"linked@cell{control_site}"))
+        scenarios.append(EditScenario(kind="linked", site=control_site, label=f"linked@cell{control_site}"))
     return scenarios
 
 
@@ -205,14 +206,14 @@ def build_cells(
     if scenario.kind == "comment":
         if not edited:
             return out
-        return [_append_line(c, f"# cash-bench edit probe {scenario.site}")
-                if c.index == scenario.site else c for c in out]
+        return [
+            _append_line(c, f"# cash-bench edit probe {scenario.site}") if c.index == scenario.site else c for c in out
+        ]
 
     if scenario.kind == "null-assign":
         if not edited:
             return out
-        return [_append_line(c, f"{probe} = {scenario.site}")
-                if c.index == scenario.site else c for c in out]
+        return [_append_line(c, f"{probe} = {scenario.site}") if c.index == scenario.site else c for c in out]
 
     if scenario.kind == "linked":
         value = scenario.site + (1000 if edited else 0)
@@ -232,6 +233,7 @@ def build_cells(
 @dataclass
 class WastedStatement:
     """A statement that restored in the control but recomputed after an edit."""
+
     cell_index: int
     code: str
     execution_seconds: float
@@ -331,18 +333,18 @@ def attribute_waste(
                     # MIN_WASTE_SECONDS. Counting it manufactures waste out of
                     # the cost model's own threshold noise.
                     continue
-                wasted.append(WastedStatement(
-                    cell_index=cell_index,
-                    code=code[:160],
-                    execution_seconds=edited_metric.execution_time or 0.0,
-                    uncacheable_reasons=list(
-                        getattr(edited_metric, "uncacheable_reasons", []) or []),
-                ))
+                wasted.append(
+                    WastedStatement(
+                        cell_index=cell_index,
+                        code=code[:160],
+                        execution_seconds=edited_metric.execution_time or 0.0,
+                        uncacheable_reasons=list(getattr(edited_metric, "uncacheable_reasons", []) or []),
+                    )
+                )
 
     sink_recomputed: bool | None = None
     if scenario.kind == "linked":
-        sink_metrics = [m for metrics in edited_by_cell.values()
-                        for m in metrics if m.code.startswith(sink)]
+        sink_metrics = [m for metrics in edited_by_cell.values() for m in metrics if m.code.startswith(sink)]
         sink_recomputed = any(m.status != "RESTORED" for m in sink_metrics)
 
     return ScenarioResult(

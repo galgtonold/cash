@@ -53,6 +53,7 @@ def _rerun(nb_runner, setup, cell, expect):
 
 # --- 1. chained assignment creating a fresh shared object ------------------
 
+
 def test_chained_assign_fresh_object_pair_rerun(nb_runner):
     # a = b = [..] creates ONE object bound to two names in the producer cell.
     # Cell 2 mutates through a. On isolated re-run BOTH names must be restored
@@ -68,6 +69,7 @@ def test_chained_assign_fresh_object_pair_rerun(nb_runner):
 
 # --- 2. nested 1:1 literal tuple unpack alias -------------------------------
 
+
 def test_nested_tuple_unpack_alias_rerun(nb_runner):
     # Flat (y,) = (x,) alias is fixed; probe one nesting level deeper.
     _rerun(
@@ -79,6 +81,7 @@ def test_nested_tuple_unpack_alias_rerun(nb_runner):
 
 
 # --- 3. augmented assignment on a slice target -------------------------------
+
 
 def test_augassign_slice_target_rerun(nb_runner):
     # lst[1:3] += [99]  ==>  [1, 2, 3, 99, 4, 5]; re-run must not grow again.
@@ -92,6 +95,7 @@ def test_augassign_slice_target_rerun(nb_runner):
 
 # --- 4. nested subscript self-reference --------------------------------------
 
+
 def test_nested_subscript_selfref_rerun(nb_runner):
     _rerun(
         nb_runner,
@@ -103,39 +107,42 @@ def test_nested_subscript_selfref_rerun(nb_runner):
 
 # --- 5. exec() creating a variable invisible to AST analysis -----------------
 
+
 def test_exec_created_var_edit_invalidation(nb_runner):
-    nb_runner.create_notebook([
-        'exec("q = 42")',
-        "print(f'q={q}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            'exec("q = 42")',
+            "print(f'q={q}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "q=42" in nb_runner.get_output(2), f"first: {nb_runner.get_output(2)!r}"
     nb_runner.set_cell_source(1, 'exec("q = 100")')
     nb_runner.run_all()
-    assert "q=100" in nb_runner.get_output(2), (
-        f"stale exec-produced value: {nb_runner.get_output(2)!r}"
-    )
+    assert "q=100" in nb_runner.get_output(2), f"stale exec-produced value: {nb_runner.get_output(2)!r}"
 
 
 # --- 6. globals()['gv'] assignment invisible to AST analysis -----------------
 
+
 def test_globals_subscript_assign_edit_invalidation(nb_runner):
-    nb_runner.create_notebook([
-        "globals()['gv'] = 5",
-        "print(f'gv={gv}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            "globals()['gv'] = 5",
+            "print(f'gv={gv}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "gv=5" in nb_runner.get_output(2), f"first: {nb_runner.get_output(2)!r}"
     nb_runner.set_cell_source(1, "globals()['gv'] = 50")
     nb_runner.run_all()
-    assert "gv=50" in nb_runner.get_output(2), (
-        f"stale globals()-assigned value: {nb_runner.get_output(2)!r}"
-    )
+    assert "gv=50" in nb_runner.get_output(2), f"stale globals()-assigned value: {nb_runner.get_output(2)!r}"
 
 
 # --- 7. f-string side effect --------------------------------------------------
+
 
 def test_fstring_mutating_side_effect_rerun(nb_runner):
     _rerun(
@@ -145,12 +152,11 @@ def test_fstring_mutating_side_effect_rerun(nb_runner):
         "top=3",
     )
     # also assert the container itself did not shrink twice
-    assert "[1, 2]" in nb_runner.get_output(2), (
-        f"stack not reset: {nb_runner.get_output(2)!r}"
-    )
+    assert "[1, 2]" in nb_runner.get_output(2), f"stack not reset: {nb_runner.get_output(2)!r}"
 
 
 # --- 8. semicolon-joined multi-statement line --------------------------------
+
 
 def test_semicolon_multistmt_selfmod_rerun(nb_runner):
     _rerun(
@@ -163,44 +169,45 @@ def test_semicolon_multistmt_selfmod_rerun(nb_runner):
 
 # --- 9. match statement capture bindings --------------------------------------
 
+
 def test_match_capture_bindings_edit_invalidation(nb_runner):
-    nb_runner.create_notebook([
-        "pt = (1, 2)",
-        "match pt:\n    case (mx, my):\n        ms = mx + my\nprint(f'ms={ms}')",
-        "print(f'double={ms * 2}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            "pt = (1, 2)",
+            "match pt:\n    case (mx, my):\n        ms = mx + my\nprint(f'ms={ms}')",
+            "print(f'double={ms * 2}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "ms=3" in nb_runner.get_output(2)
     assert "double=6" in nb_runner.get_output(3)
     nb_runner.set_cell_source(1, "pt = (10, 20)")
     nb_runner.run_all()
-    assert "ms=30" in nb_runner.get_output(2), (
-        f"match-capture cell stale: {nb_runner.get_output(2)!r}"
-    )
-    assert "double=60" in nb_runner.get_output(3), (
-        f"downstream of match-capture stale: {nb_runner.get_output(3)!r}"
-    )
+    assert "ms=30" in nb_runner.get_output(2), f"match-capture cell stale: {nb_runner.get_output(2)!r}"
+    assert "double=60" in nb_runner.get_output(3), f"downstream of match-capture stale: {nb_runner.get_output(3)!r}"
 
 
 # --- 10. annotated assignment + PEP 695 type alias ---------------------------
 
+
 def test_annassign_and_type_alias_edit_invalidation(nb_runner):
-    nb_runner.create_notebook([
-        "x: int = 5",
-        "type Vec = list[int]\ny: int = x * 2\nprint(f'y={y}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            "x: int = 5",
+            "type Vec = list[int]\ny: int = x * 2\nprint(f'y={y}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "y=10" in nb_runner.get_output(2), f"first: {nb_runner.get_output(2)!r}"
     nb_runner.set_cell_source(1, "x: int = 7")
     nb_runner.run_all()
-    assert "y=14" in nb_runner.get_output(2), (
-        f"annotated-assign downstream stale: {nb_runner.get_output(2)!r}"
-    )
+    assert "y=14" in nb_runner.get_output(2), f"annotated-assign downstream stale: {nb_runner.get_output(2)!r}"
 
 
 # --- 11. same var assigned twice self-referentially in one cell --------------
+
 
 def test_same_var_twice_selfref_rerun(nb_runner):
     _rerun(
@@ -213,6 +220,7 @@ def test_same_var_twice_selfref_rerun(nb_runner):
 
 # --- 12. immediately-invoked lambda mutating an upstream list ----------------
 
+
 def test_lambda_iife_mutation_rerun(nb_runner):
     _rerun(
         nb_runner,
@@ -224,6 +232,7 @@ def test_lambda_iife_mutation_rerun(nb_runner):
 
 # --- 13. global statement in a function defined+called in one cell -----------
 
+
 def test_global_stmt_func_same_cell_rerun(nb_runner):
     _rerun(
         nb_runner,
@@ -234,6 +243,7 @@ def test_global_stmt_func_same_cell_rerun(nb_runner):
 
 
 # --- 14. very long cell: statement-splitting integrity -----------------------
+
 
 def test_long_cell_statement_splitting_integrity(nb_runner):
     # 60 sequential dependent statements in ONE cell.
@@ -256,23 +266,22 @@ def test_long_cell_statement_splitting_integrity(nb_runner):
     # edit upstream: whole chain must recompute
     nb_runner.set_cell_source(1, "base = 100")
     nb_runner.run_all()
-    assert "v59=159" in nb_runner.get_output(2), (
-        f"long-cell chain stale after edit: {nb_runner.get_output(2)!r}"
-    )
+    assert "v59=159" in nb_runner.get_output(2), f"long-cell chain stale after edit: {nb_runner.get_output(2)!r}"
 
 
 # --- 15. backslash line continuation ------------------------------------------
 
+
 def test_backslash_continuation_edit_invalidation(nb_runner):
-    nb_runner.create_notebook([
-        "p = 2\nq = 3",
-        "total = p + \\\n    q\nprint(f'total={total}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            "p = 2\nq = 3",
+            "total = p + \\\n    q\nprint(f'total={total}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "total=5" in nb_runner.get_output(2), f"first: {nb_runner.get_output(2)!r}"
     nb_runner.set_cell_source(1, "p = 2\nq = 30")
     nb_runner.run_all()
-    assert "total=32" in nb_runner.get_output(2), (
-        f"continuation-line cell stale: {nb_runner.get_output(2)!r}"
-    )
+    assert "total=32" in nb_runner.get_output(2), f"continuation-line cell stale: {nb_runner.get_output(2)!r}"

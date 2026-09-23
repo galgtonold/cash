@@ -6,6 +6,7 @@ content changed -- and treats ``adata`` as an output from then on. The badge
 row of that first run still said "Produced -": the observed name reached the
 lineage and the cache decision but not the row.
 """
+
 from cash.notebook.cache_status import CacheStatus
 
 

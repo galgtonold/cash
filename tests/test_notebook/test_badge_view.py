@@ -42,8 +42,14 @@ def test_badge_status_enum_is_a_string_enum() -> None:
 def test_status_enum_covers_all_legacy_string_statuses() -> None:
     """The IR must be able to represent every status the legacy code emits."""
     required = {
-        "RESTORED", "COMPUTED", "SKIPPED", "MIXED", "ERROR",
-        "FUNCTION_CHANGED", "MODULE_RELOADED", "WARNING",
+        "RESTORED",
+        "COMPUTED",
+        "SKIPPED",
+        "MIXED",
+        "ERROR",
+        "FUNCTION_CHANGED",
+        "MODULE_RELOADED",
+        "WARNING",
     }
     assert required.issubset({s.name for s in BadgeStatus})
 
@@ -107,26 +113,33 @@ def test_fully_populated_tree_is_hashable() -> None:
     )
 
     upstream_section = Section(
-        kind=SectionKind.UPSTREAM, header="UPSTREAM HISTORY",
+        kind=SectionKind.UPSTREAM,
+        header="UPSTREAM HISTORY",
         items=(for_group, skipped),
     )
     current_section = Section(
-        kind=SectionKind.CURRENT, header="",
+        kind=SectionKind.CURRENT,
+        header="",
         items=(ctrl_group, ctrl_single),
     )
     decorators_section = Section(
-        kind=SectionKind.DECORATORS, header="DECORATOR CACHE",
+        kind=SectionKind.DECORATORS,
+        header="DECORATOR CACHE",
         items=(dec_group,),
     )
     overhead_section = Section(
-        kind=SectionKind.OVERHEAD, header="",
+        kind=SectionKind.OVERHEAD,
+        header="",
         items=(overhead,),
     )
 
     badge = InteractiveBadge(
         header=BadgeHeader(
-            status=BadgeStatus.MIXED, restored_count=1, computed_count=1,
-            total_saved_s=0.3, total_exec_s=0.01,
+            status=BadgeStatus.MIXED,
+            restored_count=1,
+            computed_count=1,
+            total_saved_s=0.3,
+            total_exec_s=0.01,
         ),
         sections=(upstream_section, current_section, decorators_section, overhead_section),
         footer=BugReportLink(url="https://github.com/x/y/issues/new?body=..."),

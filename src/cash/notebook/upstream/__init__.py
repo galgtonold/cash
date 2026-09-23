@@ -17,14 +17,12 @@ this package. See ADR-010 for the package-extraction rationale.
 
 from __future__ import annotations
 
-from .checker import UpstreamChecker, UpstreamResult
-from .simulator import NotebookSimulator
-
 # Private re-exports kept for test files that import them via the package
 # path (e.g. ``from cash.notebook.upstream import _SimulationCacheEntry``).
 # These are not part of the public surface — the leading underscore is the
 # signal — but co-locating the re-export here keeps test paths stable.
-from .checker import _FORWARD_PROBE_PLACEHOLDER, _SimulationCacheEntry  # noqa: F401
+from .checker import _FORWARD_PROBE_PLACEHOLDER, UpstreamChecker, UpstreamResult, _SimulationCacheEntry  # noqa: F401
+from .simulator import NotebookSimulator
 
 __all__ = [
     "NotebookSimulator",

@@ -16,6 +16,7 @@ A relative read is recorded under two spellings (the resolved path, and the
 relative one so an ``os.chdir`` is seen), so these fixtures carry 2N paths for
 N files -- one digest serves both.
 """
+
 import ast
 import os
 from pathlib import Path
@@ -45,8 +46,10 @@ N = 80
 #: all, and a second test's counter stacked on the first counted every call
 #: twice -- which read as the check running twice.
 _M = "__import__('cash.notebook.file_dep_snapshot', fromlist=['_'])"
-_BUMP = ("m._test_n.setdefault(getattr(m, '_HASH_EPOCH', None), [0, 0]).__setitem__({i}, "
-         "m._test_n[getattr(m, '_HASH_EPOCH', None)][{i}] + 1)")
+_BUMP = (
+    "m._test_n.setdefault(getattr(m, '_HASH_EPOCH', None), [0, 0]).__setitem__({i}, "
+    "m._test_n[getattr(m, '_HASH_EPOCH', None)][{i}] + 1)"
+)
 COUNTER = (
     "(lambda m, types: (lambda s: (setattr(m, '_test_saved', s), setattr(m, '_test_n', {}),"
     " setattr(m, '_HASH_MEMO_TTL_SECONDS', 0.0),"
@@ -75,14 +78,16 @@ def _counting(nb_runner):
         pass
 
 
-SETUP ="import glob\nimport os\nimport pandas as pd\nfiles = sorted(glob.glob('exports/*.csv'))"
-LOOP = ("parts = []\n"
-        "for f in files:\n"
-        "    d = pd.read_csv(f)\n"
-        "    d['source_file'] = os.path.basename(f)\n"
-        "    parts.append(d)\n"
-        "raw = pd.concat(parts, ignore_index=True)\n"
-        "print('rows', len(raw))")
+SETUP = "import glob\nimport os\nimport pandas as pd\nfiles = sorted(glob.glob('exports/*.csv'))"
+LOOP = (
+    "parts = []\n"
+    "for f in files:\n"
+    "    d = pd.read_csv(f)\n"
+    "    d['source_file'] = os.path.basename(f)\n"
+    "    parts.append(d)\n"
+    "raw = pd.concat(parts, ignore_index=True)\n"
+    "print('rows', len(raw))"
+)
 COMPREHENSION = "raw = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)\nprint('rows', len(raw))"
 DERIVED = "\n".join(f"s{k} = raw[raw['v'] > {k}].copy()" for k in range(6)) + "\nprint(len(s5))"
 
@@ -107,8 +112,7 @@ def _counts_for(nb_runner, cell):
     # Nothing counted at all is the best case, not a broken counter: inputs
     # that are settled and unchanged are not read (`_unchanged_since_hashed`).
     # The loop test's cell reads its files, so there the counter does count.
-    return (max((v[0] for v in table.values()), default=0),
-            max((v[1] for v in table.values()), default=0))
+    return (max((v[0] for v in table.values()), default=0), max((v[1] for v in table.values()), default=0))
 
 
 def test_a_loop_over_files_digests_each_file_once(nb_runner, _counting):

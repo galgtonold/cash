@@ -8,6 +8,7 @@ digest already moved; the decorator's helper channel hashed the subclass's own
 source text only. ``docs/decorator.md`` promises "a class its code reaches --
 followed transitively".
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -16,7 +17,7 @@ import textwrap
 
 import pytest
 
-MODULE = textwrap.dedent('''
+MODULE = textwrap.dedent("""
     import time
     import cash
 
@@ -54,27 +55,33 @@ MODULE = textwrap.dedent('''
         time.sleep(0.4)
         worker = Empty()
         return worker.run(x)
-''')
+""")
 
-RUNNER = textwrap.dedent('''
+RUNNER = textwrap.dedent("""
     import mod
     print(mod.via_empty(10), mod.via_with_body(10), mod.via_local(10))
-''')
+""")
 
 
 def _write(project, mult):
     (project / "mod.py").write_text(
-        MODULE.replace("MULT", str(mult)).replace("CACHE_DIR", repr(str(project / ".cash"))),
-        encoding="utf-8")
+        MODULE.replace("MULT", str(mult)).replace("CACHE_DIR", repr(str(project / ".cash"))), encoding="utf-8"
+    )
 
 
 def _run(project):
     import os
     import shutil
+
     shutil.rmtree(project / "__pycache__", ignore_errors=True)
-    done = subprocess.run([sys.executable, "run.py"], cwd=str(project), text=True,
-                          capture_output=True, timeout=180,
-                          env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+    done = subprocess.run(
+        [sys.executable, "run.py"],
+        cwd=str(project),
+        text=True,
+        capture_output=True,
+        timeout=180,
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+    )
     assert done.returncode == 0, done.stderr
     return done.stdout.strip()
 

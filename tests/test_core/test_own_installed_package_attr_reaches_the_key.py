@@ -18,6 +18,7 @@ it is installed -- the boundary the helper channel already used.
 from a directory with that name reaches exactly the code the bug lived in, in
 a fraction of the time a real venv takes. Each run is a fresh process.
 """
+
 from __future__ import annotations
 
 import os
@@ -29,7 +30,7 @@ import pytest
 
 pytestmark = pytest.mark.core
 
-CORE = textwrap.dedent('''
+CORE = textwrap.dedent("""
     import sys, time
     import cash
     from cfgpkg import settings, util
@@ -60,11 +61,13 @@ CORE = textwrap.dedent('''
     def via_same_module_global():
         print("RAN via_same_module_global", file=sys.stderr)  # @cash:assume-safe
         return _work() * LOCAL_FACTOR
-''')
+""")
 
-RUN = ("import json\nfrom cfgpkg import core\n"
-       "print(json.dumps([core.via_module_attr(), core.via_imported_name(),"
-       " core.via_helper(), core.via_same_module_global()]))\n")
+RUN = (
+    "import json\nfrom cfgpkg import core\n"
+    "print(json.dumps([core.via_module_attr(), core.via_imported_name(),"
+    " core.via_helper(), core.via_same_module_global()]))\n"
+)
 
 
 def _install(site, factor):
@@ -79,12 +82,12 @@ def _install(site, factor):
 
 def _run(tmp_path, site):
     import json
+
     env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
     env["CASH_CACHE_DIR"] = str(tmp_path / "cache")
     env["PYTHONPATH"] = str(site)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
-    out = subprocess.run([sys.executable, "-c", RUN], cwd=str(tmp_path),
-                         capture_output=True, text=True, env=env)
+    out = subprocess.run([sys.executable, "-c", RUN], cwd=str(tmp_path), capture_output=True, text=True, env=env)
     assert out.returncode == 0, out.stderr
     ran = {line.split()[1] for line in out.stderr.splitlines() if line.startswith("RAN ")}
     return json.loads(out.stdout.strip().splitlines()[-1]), ran
@@ -101,7 +104,7 @@ def test_settings_attr_in_an_installed_package_invalidates(tmp_path, site):
     first, _ = _run(tmp_path, site)
     assert first == [20, 20, 20, 20]
 
-    _install(site, 3)                                 # the "reinstall"
+    _install(site, 3)  # the "reinstall"
     second, ran = _run(tmp_path, site)
 
     assert second[0] == 30, "settings.FACTOR in the installed package was served stale"
@@ -116,8 +119,7 @@ def test_the_shapes_that_already_worked_still_do(tmp_path, site):
     second, ran = _run(tmp_path, site)
 
     assert second == [30, 30, 30, 30]
-    assert ran == {"via_module_attr", "via_imported_name", "via_helper",
-                   "via_same_module_global"}
+    assert ran == {"via_module_attr", "via_imported_name", "via_helper", "via_same_module_global"}
 
 
 def test_an_unchanged_install_still_hits(tmp_path, site):

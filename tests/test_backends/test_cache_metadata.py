@@ -31,9 +31,7 @@ class TestCacheMetadataCompat:
     def test_from_dict_ignores_unknown_keys(self):
         # Backend-private and stale keys (e.g. an older/newer cash version)
         # must not blow up construction.
-        meta = CacheMetadata.from_dict(
-            {"key": "k", "compressed": True, "some_future_field": 42}
-        )
+        meta = CacheMetadata.from_dict({"key": "k", "compressed": True, "some_future_field": 42})
 
         assert meta.key == "k"
         assert not hasattr(meta, "compressed")

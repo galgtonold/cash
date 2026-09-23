@@ -8,18 +8,22 @@ Round 25's r25s2 (BLOCKING): an upstream cell gained
 so the rebuild ran the statement without its producer, and an edit to the mask
 did not re-key it.
 """
+
 import pytest
 
 from cash.notebook.analysis import CodeAnalyzer
 
 
-@pytest.mark.parametrize("code, selector", [
-    ("sales.loc[too_high, ['price']] /= 100", "too_high"),
-    ("sales[mask] += 1", "mask"),
-    ("counts[key] -= 1", "key"),
-    ("a.b[k].c *= 2", "k"),
-    ("grid[i][j] += 1", "j"),
-])
+@pytest.mark.parametrize(
+    "code, selector",
+    [
+        ("sales.loc[too_high, ['price']] /= 100", "too_high"),
+        ("sales[mask] += 1", "mask"),
+        ("counts[key] -= 1", "key"),
+        ("a.b[k].c *= 2", "k"),
+        ("grid[i][j] += 1", "j"),
+    ],
+)
 def test_the_selector_is_an_input(code, selector):
     inputs, outputs = CodeAnalyzer.analyze_code_block(code)
     assert selector in inputs

@@ -1,7 +1,3 @@
-from pathlib import Path
-
-import pytest
-
 from benchmarks._ser_deser_measure import MeasureResult, measure_one
 
 
@@ -72,12 +68,18 @@ def test_matrix_cli_writes_csv_with_expected_columns(tmp_path):
     cmd = [
         sys.executable,
         "benchmarks/measure_ser_deser.py",
-        "--out", str(out_csv),
-        "--cache-root", str(cache_dir),
-        "--families", "dict_shallow,bytes",
-        "--sizes", "1000,10000",
-        "--backends", "ram",
-        "--repeats", "2",
+        "--out",
+        str(out_csv),
+        "--cache-root",
+        str(cache_dir),
+        "--families",
+        "dict_shallow,bytes",
+        "--sizes",
+        "1000,10000",
+        "--backends",
+        "ram",
+        "--repeats",
+        "2",
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr}"
@@ -88,8 +90,14 @@ def test_matrix_cli_writes_csv_with_expected_columns(tmp_path):
     # 2 families × 2 sizes × 1 backend = 4 rows
     assert len(rows) == 4
     expected_cols = {
-        "family", "target_bytes", "backend_kind", "repeats",
-        "actual_size_bytes", "serialize_seconds", "deserialize_seconds", "error",
+        "family",
+        "target_bytes",
+        "backend_kind",
+        "repeats",
+        "actual_size_bytes",
+        "serialize_seconds",
+        "deserialize_seconds",
+        "error",
     }
     assert expected_cols.issubset(rows[0].keys())
     # All cells should have succeeded (no errors).

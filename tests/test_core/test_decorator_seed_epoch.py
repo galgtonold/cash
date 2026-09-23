@@ -16,11 +16,10 @@ The counterpart guard matters just as much: an UNSEEDED draw must still be
 cached and replayed. Freezing an unseeded value is the documented contract and
 the reason caching an expensive sample is worth anything.
 """
+
 from __future__ import annotations
 
 import pytest
-
-import cash
 
 np = pytest.importorskip("numpy")
 
@@ -29,6 +28,7 @@ np = pytest.importorskip("numpy")
 def _isolated_epochs():
     """Point the shared seed ledger at a dict this test owns."""
     from cash.notebook.randomness import publish_seed_epochs
+
     epochs: dict[str, str] = {}
     publish_seed_epochs(epochs)
     yield epochs
@@ -47,6 +47,7 @@ def inst(tmp_path):
     """
     from cash import Cash
     from cash.backends import FileBackend
+
     return Cash(backend=FileBackend(cache_dir=str(tmp_path / "c")), register_magic=False)
 
 
@@ -89,9 +90,7 @@ def test_seed_change_invalidates_a_drawing_function(_isolated_epochs, inst):
     # And it must equal what the function genuinely computes under seed 999.
     np.random.seed(999)
     oracle = float(np.random.rand(3).sum())
-    assert under_999 == pytest.approx(oracle), (
-        "recomputed, but not with the new seed's stream"
-    )
+    assert under_999 == pytest.approx(oracle), "recomputed, but not with the new seed's stream"
 
 
 def test_unseeded_draw_is_still_cached_and_replayed(_isolated_epochs, inst):
@@ -167,14 +166,11 @@ def test_no_entry_is_left_under_the_epoch_free_key(_isolated_epochs, inst):
     before = len(calls)
     under_b = draw(3)
     assert len(calls) > before, (
-        "served an entry stored under the epoch-free key: the seed changed but "
-        "the previous seed's value came back"
+        "served an entry stored under the epoch-free key: the seed changed but the previous seed's value came back"
     )
 
     np.random.seed(777)
-    assert under_b == pytest.approx(float(np.random.rand(3).sum())), (
-        "recomputed, but not on the new seed's stream"
-    )
+    assert under_b == pytest.approx(float(np.random.rand(3).sum())), "recomputed, but not on the new seed's stream"
 
 
 def test_cache_if_does_not_write_the_epoch_free_entry(_isolated_epochs, inst):

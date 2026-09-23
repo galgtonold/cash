@@ -10,8 +10,8 @@ If ``x = next_seq()`` freezes across cell re-runs, statement analysis is
 already blind to callee impurity and interception adds no new *class* of
 defect -- only a wider surface.
 """
-import json
 
+import json
 
 SETUP = """\
 import cash

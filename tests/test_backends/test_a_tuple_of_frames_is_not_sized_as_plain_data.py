@@ -8,6 +8,7 @@ a 12 s statement -- the call itself took 3.2 s -- in pandas' deep
 were frames, not plain data, and gave up; the frame's own sizer, which reads
 its arrays, then ran as well.
 """
+
 from cash import _plain_data
 
 

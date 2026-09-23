@@ -1,7 +1,6 @@
 import json
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -10,6 +9,7 @@ def test_cli_runs_on_synthetic_micro_off_mode(tmp_path):
     """Smoke test: run the CLI in off mode against a small synthetic
     notebook and verify the JSON output appears and is valid."""
     from benchmarks._overhead_io import write_synthetic_micro
+
     nb = tmp_path / "micro.ipynb"
     write_synthetic_micro(nb, n_statements=5)
 
@@ -18,9 +18,12 @@ def test_cli_runs_on_synthetic_micro_off_mode(tmp_path):
         sys.executable,
         "benchmarks/bench_notebook_overhead.py",
         str(nb),
-        "--mode", "off",
-        "--repeats", "2",
-        "--results-dir", str(results_dir),
+        "--mode",
+        "off",
+        "--repeats",
+        "2",
+        "--results-dir",
+        str(results_dir),
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr}"
@@ -39,6 +42,7 @@ def test_cli_runs_on_synthetic_micro_off_mode(tmp_path):
 @pytest.mark.timeout(60)
 def test_cli_runs_on_synthetic_micro_cold_mode(tmp_path):
     from benchmarks._overhead_io import write_synthetic_micro
+
     nb = tmp_path / "micro.ipynb"
     write_synthetic_micro(nb, n_statements=5)
 
@@ -47,10 +51,14 @@ def test_cli_runs_on_synthetic_micro_cold_mode(tmp_path):
         sys.executable,
         "benchmarks/bench_notebook_overhead.py",
         str(nb),
-        "--mode", "cold",
-        "--repeats", "2",
-        "--results-dir", str(results_dir),
-        "--cache-root", str(tmp_path / "cache"),
+        "--mode",
+        "cold",
+        "--repeats",
+        "2",
+        "--results-dir",
+        str(results_dir),
+        "--cache-root",
+        str(tmp_path / "cache"),
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr}"

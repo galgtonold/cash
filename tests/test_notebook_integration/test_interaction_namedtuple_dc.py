@@ -13,12 +13,14 @@ class TestNamedtupleDataclass:
 
     def test_namedtuple_basic(self, nb_runner):
         """Create and use namedtuple, verify caching."""
-        nb_runner.create_notebook([
-            "from collections import namedtuple",
-            "Point = namedtuple('Point', ['x', 'y'])",
-            "p = Point(3, 4)\ndist = (p.x**2 + p.y**2)**0.5",
-            "print(f'dist={dist}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from collections import namedtuple",
+                "Point = namedtuple('Point', ['x', 'y'])",
+                "p = Point(3, 4)\ndist = (p.x**2 + p.y**2)**0.5",
+                "print(f'dist={dist}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(4)
@@ -31,12 +33,14 @@ class TestNamedtupleDataclass:
 
     def test_namedtuple_edit_values(self, nb_runner):
         """Edit namedtuple values, verify propagation."""
-        nb_runner.create_notebook([
-            "from collections import namedtuple",
-            "RGB = namedtuple('RGB', 'r g b')\ncolor = RGB(255, 0, 0)",
-            "brightness = (color.r + color.g + color.b) // 3",
-            "print(f'brightness={brightness}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from collections import namedtuple",
+                "RGB = namedtuple('RGB', 'r g b')\ncolor = RGB(255, 0, 0)",
+                "brightness = (color.r + color.g + color.b) // 3",
+                "print(f'brightness={brightness}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(4)
@@ -49,12 +53,14 @@ class TestNamedtupleDataclass:
 
     def test_dataclass_pattern(self, nb_runner):
         """Dataclass creation and field access with caching."""
-        nb_runner.create_notebook([
-            "from dataclasses import dataclass",
-            "@dataclass\nclass Item:\n    name: str\n    price: float\n    qty: int = 1",
-            "item = Item('Widget', 9.99, 5)\ntotal = item.price * item.qty",
-            "print(f'total={total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from dataclasses import dataclass",
+                "@dataclass\nclass Item:\n    name: str\n    price: float\n    qty: int = 1",
+                "item = Item('Widget', 9.99, 5)\ntotal = item.price * item.qty",
+                "print(f'total={total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(4)

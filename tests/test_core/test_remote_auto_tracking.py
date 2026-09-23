@@ -12,6 +12,7 @@ call pays for it; a metadata request is tens of milliseconds against a download
 that may be hundreds of megabytes; and on a hit you skip the download entirely.
 The alternative default is silent staleness.
 """
+
 from __future__ import annotations
 
 import threading
@@ -155,11 +156,7 @@ class TestTrackedThroughTheDecorator:
         load(origin.url)
         # Non-vacuity guard for the test above: prove the dependency is on the
         # entry, so a later "it hit" cannot be mistaken for "nothing was tracked".
-        recorded = [
-            (path, entry)
-            for path, entry in _stored_deps(cash).items()
-            if entry.get("remote")
-        ]
+        recorded = [(path, entry) for path, entry in _stored_deps(cash).items() if entry.get("remote")]
         assert recorded, "the remote read must be recorded as a dependency"
         assert recorded[0][0] == origin.url
         assert recorded[0][1]["hash"] == 'etag:"v1"'
@@ -230,10 +227,10 @@ class TestValidationCostIsVisible:
         assert validation_is_expensive(seconds, saved) is expected, why
 
     def test_an_expensive_check_warns_once(self, origin):
+        import warnings as w
+
         from cash.exceptions import CashCacheIneffectiveWarning
         from cash.remote_source import warn_validation_cost_once
-
-        import warnings as w
 
         with w.catch_warnings(record=True) as caught:
             w.simplefilter("always")

@@ -15,13 +15,15 @@ class TestSimCacheAfterEdits:
     def test_edit_root_long_chain_no_restart(self, nb_runner):
         """Edit root of long chain without restart.
         Upstream simulation should propagate correctly."""
-        nb_runner.create_notebook([
-            "x = 1",
-            "y = x + 1",
-            "z = y + 1",
-            "w = z + 1",
-            "result = w\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 1",
+                "y = x + 1",
+                "z = y + 1",
+                "w = z + 1",
+                "result = w\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 4" in nb_runner.get_output(5)
@@ -33,13 +35,15 @@ class TestSimCacheAfterEdits:
 
     def test_edit_two_independent_roots(self, nb_runner):
         """Edit two independent roots, verify both paths update."""
-        nb_runner.create_notebook([
-            "a = 1",
-            "b = 2",
-            "c = a * 10",
-            "d = b * 10",
-            "result = c + d\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 1",
+                "b = 2",
+                "c = a * 10",
+                "d = b * 10",
+                "result = c + d\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 30" in nb_runner.get_output(5)
@@ -52,10 +56,12 @@ class TestSimCacheAfterEdits:
 
     def test_repeated_edits_same_cell_five_times(self, nb_runner):
         """Edit the same cell 5 times, run last each time."""
-        nb_runner.create_notebook([
-            "x = 0",
-            "result = x * 10\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 0",
+                "result = x * 10\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 0" in nb_runner.get_output(2)
@@ -71,11 +77,13 @@ class TestSimCacheWithRestart:
 
     def test_edit_restart_edit_again(self, nb_runner):
         """Edit → restart → edit again → verify coherence."""
-        nb_runner.create_notebook([
-            "a = 1",
-            "b = a + 1",
-            "c = b + 1\nprint(f'c = {c}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 1",
+                "b = a + 1",
+                "c = b + 1\nprint(f'c = {c}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "c = 3" in nb_runner.get_output(3)
@@ -96,10 +104,12 @@ class TestSimCacheWithRestart:
 
     def test_restart_without_edit_restores(self, nb_runner):
         """Restart without any edits — should restore from cache."""
-        nb_runner.create_notebook([
-            "x = 42",
-            "y = x * 2\nprint(f'y = {y}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 42",
+                "y = x * 2\nprint(f'y = {y}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "y = 84" in nb_runner.get_output(2)
@@ -115,10 +125,12 @@ class TestUpstreamPropagationEdges:
 
     def test_edit_does_not_change_output_value(self, nb_runner):
         """Edit code but the output value doesn't change."""
-        nb_runner.create_notebook([
-            "x = 5 + 5",
-            "y = x * 2\nprint(f'y = {y}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 5 + 5",
+                "y = x * 2\nprint(f'y = {y}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "y = 20" in nb_runner.get_output(2)
@@ -130,10 +142,12 @@ class TestUpstreamPropagationEdges:
 
     def test_edit_comment_only_change(self, nb_runner):
         """Edit only a comment — code is different but effect is same."""
-        nb_runner.create_notebook([
-            "x = 10  # initial value",
-            "y = x * 2\nprint(f'y = {y}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10  # initial value",
+                "y = x * 2\nprint(f'y = {y}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "y = 20" in nb_runner.get_output(2)
@@ -145,10 +159,12 @@ class TestUpstreamPropagationEdges:
 
     def test_whitespace_only_change_still_correct(self, nb_runner):
         """Change only whitespace — should still produce correct results."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "y = x + 1\nprint(f'y = {y}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "y = x + 1\nprint(f'y = {y}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "y = 11" in nb_runner.get_output(2)
@@ -160,11 +176,13 @@ class TestUpstreamPropagationEdges:
 
     def test_reorder_independent_cells_swap(self, nb_runner):
         """Reorder two independent cells (swap order in notebook)."""
-        nb_runner.create_notebook([
-            "a = 10",
-            "b = 20",
-            "result = a + b\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 10",
+                "b = 20",
+                "result = a + b\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 30" in nb_runner.get_output(3)

@@ -4,8 +4,9 @@ Verifies that UpstreamChecker and its new helper methods are importable
 and have the expected interface, improving test coverage visibility.
 """
 
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
 
 from cash.notebook.upstream import NotebookSimulator, UpstreamChecker
 
@@ -31,9 +32,7 @@ class TestUpstreamCheckerImport:
             "_resolve_input_lineage",
         ]
         for name in expected_helpers:
-            assert hasattr(NotebookSimulator, name), (
-                f"NotebookSimulator missing helper method {name}"
-            )
+            assert hasattr(NotebookSimulator, name), f"NotebookSimulator missing helper method {name}"
 
 
 class TestValidateFileFreshness:
@@ -44,20 +43,21 @@ class TestValidateFileFreshness:
 
     def test_missing_file_is_stale(self, tmp_path):
         missing = str(tmp_path / "nonexistent.csv")
-        assert NotebookSimulator._validate_file_freshness({missing: {'mtime': 0.0}}) is False
+        assert NotebookSimulator._validate_file_freshness({missing: {"mtime": 0.0}}) is False
 
     def test_existing_file_with_matching_mtime(self, tmp_path):
         test_file = tmp_path / "data.csv"
         test_file.write_text("a,b\n1,2")
         import os
+
         mtime = os.path.getmtime(str(test_file))
-        assert NotebookSimulator._validate_file_freshness({str(test_file): {'mtime': mtime}}) is True
+        assert NotebookSimulator._validate_file_freshness({str(test_file): {"mtime": mtime}}) is True
 
     def test_existing_file_with_stale_mtime(self, tmp_path):
         test_file = tmp_path / "data.csv"
         test_file.write_text("a,b\n1,2")
         # Use a very old mtime
-        assert NotebookSimulator._validate_file_freshness({str(test_file): {'mtime': 0.0}}) is False
+        assert NotebookSimulator._validate_file_freshness({str(test_file): {"mtime": 0.0}}) is False
 
     def test_multiple_files_all_fresh(self, tmp_path):
         """All files must be fresh for the result to be True."""
@@ -66,9 +66,10 @@ class TestValidateFileFreshness:
         f1.write_text("data1")
         f2.write_text("data2")
         import os
+
         files = {
-            str(f1): {'mtime': os.path.getmtime(str(f1))},
-            str(f2): {'mtime': os.path.getmtime(str(f2))},
+            str(f1): {"mtime": os.path.getmtime(str(f1))},
+            str(f2): {"mtime": os.path.getmtime(str(f2))},
         }
         assert NotebookSimulator._validate_file_freshness(files) is True
 
@@ -79,9 +80,10 @@ class TestValidateFileFreshness:
         f1.write_text("data1")
         f2.write_text("data2")
         import os
+
         files = {
-            str(f1): {'mtime': os.path.getmtime(str(f1))},
-            str(f2): {'mtime': 0.0},  # Stale
+            str(f1): {"mtime": os.path.getmtime(str(f1))},
+            str(f2): {"mtime": 0.0},  # Stale
         }
         assert NotebookSimulator._validate_file_freshness(files) is False
 
@@ -113,11 +115,7 @@ class TestUpstreamCheckerSetTrackingState:
         """
         import ast
 
-        tree = ast.parse(
-            "for i in range(3):\n"
-            "    for j in range(3):\n"
-            "        x = i + j\n"
-        )
+        tree = ast.parse("for i in range(3):\n    for j in range(3):\n        x = i + j\n")
         outer_for = tree.body[0]
         nodes = list(NotebookSimulator._iter_body_nodes(outer_for))
         # Inner ``for`` plus the ``x = i + j`` assignment inside it.
@@ -163,6 +161,7 @@ class TestUpdateTrackingAfterRestoreFileDeps:
 
     def _make_checker(self, tmp_path):
         from cash.notebook._protocols import TrackingState
+
         mock_shell = MagicMock()
         mock_shell.user_ns = {}
         # Pass a fresh TrackingState through the constructor so checker and
@@ -178,29 +177,29 @@ class TestUpdateTrackingAfterRestoreFileDeps:
 
         checker = self._make_checker(tmp_path)
         metadata = {
-            'output_lineages': {'df': 'abc123'},
-            'code': 'df = pd.read_csv("data.csv")',
-            'source_hash': 'hash1',
-            'file_dependencies': {csv_path: {'mtime': csv_file.stat().st_mtime}},
+            "output_lineages": {"df": "abc123"},
+            "code": 'df = pd.read_csv("data.csv")',
+            "source_hash": "hash1",
+            "file_dependencies": {csv_path: {"mtime": csv_file.stat().st_mtime}},
         }
-        checker.simulator._virtual_lineage._update_tracking_after_restore({'df'}, metadata, {'data_path': 'lin1'})
+        checker.simulator._virtual_lineage._update_tracking_after_restore({"df"}, metadata, {"data_path": "lin1"})
         checker.simulator._apply_phase_mutations()
 
-        assert 'df' in checker.executed_file_deps
-        assert csv_path in checker.executed_file_deps['df']
+        assert "df" in checker.executed_file_deps
+        assert csv_path in checker.executed_file_deps["df"]
 
     def test_file_deps_empty_when_no_file_deps_in_metadata(self, tmp_path):
         """No file deps should be propagated when metadata lacks file_dependencies."""
         checker = self._make_checker(tmp_path)
         metadata = {
-            'output_lineages': {'x': 'abc123'},
-            'code': 'x = 42',
-            'source_hash': 'hash1',
+            "output_lineages": {"x": "abc123"},
+            "code": "x = 42",
+            "source_hash": "hash1",
         }
-        checker.simulator._virtual_lineage._update_tracking_after_restore({'x'}, metadata, {})
+        checker.simulator._virtual_lineage._update_tracking_after_restore({"x"}, metadata, {})
         checker.simulator._apply_phase_mutations()
 
-        assert 'x' not in checker.executed_file_deps
+        assert "x" not in checker.executed_file_deps
 
     def test_file_deps_resolved_via_fallback(self, tmp_path):
         """File deps with stale paths should resolve via resolve_file_dep_path."""
@@ -208,6 +207,7 @@ class TestUpdateTrackingAfterRestoreFileDeps:
         csv_file.write_text("a,b\n1,2")
 
         import os
+
         old_cwd = os.getcwd()
         os.chdir(str(tmp_path))
         try:
@@ -215,17 +215,17 @@ class TestUpdateTrackingAfterRestoreFileDeps:
             stale_path = "/nonexistent/old/path/data.csv"
             checker = self._make_checker(tmp_path)
             metadata = {
-                'output_lineages': {'df': 'abc123'},
-                'code': 'df = pd.read_csv("data.csv")',
-                'source_hash': 'hash1',
-                'file_dependencies': {stale_path: {'mtime': 0.0}},
+                "output_lineages": {"df": "abc123"},
+                "code": 'df = pd.read_csv("data.csv")',
+                "source_hash": "hash1",
+                "file_dependencies": {stale_path: {"mtime": 0.0}},
             }
-            checker.simulator._virtual_lineage._update_tracking_after_restore({'df'}, metadata, {})
+            checker.simulator._virtual_lineage._update_tracking_after_restore({"df"}, metadata, {})
             checker.simulator._apply_phase_mutations()
 
-            assert 'df' in checker.executed_file_deps
+            assert "df" in checker.executed_file_deps
             # The resolved path should be the actual file, not the stale path
-            resolved = next(iter(checker.executed_file_deps['df']))
+            resolved = next(iter(checker.executed_file_deps["df"]))
             assert os.path.exists(resolved)
             assert resolved != stale_path
         finally:
@@ -235,16 +235,16 @@ class TestUpdateTrackingAfterRestoreFileDeps:
         """Completely unresolvable paths should not pollute executed_file_deps."""
         checker = self._make_checker(tmp_path)
         metadata = {
-            'output_lineages': {'df': 'abc123'},
-            'code': 'df = pd.read_csv("missing.csv")',
-            'source_hash': 'hash1',
-            'file_dependencies': {'/no/such/file/ever_unique_xyz.csv': {'mtime': 0.0}},
+            "output_lineages": {"df": "abc123"},
+            "code": 'df = pd.read_csv("missing.csv")',
+            "source_hash": "hash1",
+            "file_dependencies": {"/no/such/file/ever_unique_xyz.csv": {"mtime": 0.0}},
         }
-        checker.simulator._virtual_lineage._update_tracking_after_restore({'df'}, metadata, {})
+        checker.simulator._virtual_lineage._update_tracking_after_restore({"df"}, metadata, {})
         checker.simulator._apply_phase_mutations()
 
         # No resolved path → nothing added
-        assert 'df' not in checker.executed_file_deps or len(checker.executed_file_deps['df']) == 0
+        assert "df" not in checker.executed_file_deps or len(checker.executed_file_deps["df"]) == 0
 
     def test_file_deps_propagated_to_multiple_restored_vars(self, tmp_path):
         """When multiple vars are restored, all get the file deps."""
@@ -254,16 +254,16 @@ class TestUpdateTrackingAfterRestoreFileDeps:
 
         checker = self._make_checker(tmp_path)
         metadata = {
-            'output_lineages': {'df': 'abc1', 'df2': 'abc2'},
-            'code': 'df, df2 = load()',
-            'source_hash': 'hash1',
-            'file_dependencies': {csv_path: {'mtime': csv_file.stat().st_mtime}},
+            "output_lineages": {"df": "abc1", "df2": "abc2"},
+            "code": "df, df2 = load()",
+            "source_hash": "hash1",
+            "file_dependencies": {csv_path: {"mtime": csv_file.stat().st_mtime}},
         }
-        checker.simulator._virtual_lineage._update_tracking_after_restore({'df', 'df2'}, metadata, {})
+        checker.simulator._virtual_lineage._update_tracking_after_restore({"df", "df2"}, metadata, {})
         checker.simulator._apply_phase_mutations()
 
-        assert csv_path in checker.executed_file_deps['df']
-        assert csv_path in checker.executed_file_deps['df2']
+        assert csv_path in checker.executed_file_deps["df"]
+        assert csv_path in checker.executed_file_deps["df2"]
 
 
 class TestUpstreamFindCellIndex:
@@ -339,22 +339,26 @@ class TestForwardProbePopulatesState:
         checker, shell, backend, PLACEHOLDER = self._make_checker()
 
         # Simulate a cache hit
-        backend.get.return_value = ({'file_dependencies': {}}, {'variables': {'df': 'data'}})
+        backend.get.return_value = ({"file_dependencies": {}}, {"variables": {"df": "data"}})
 
-        broken = {'df'}
-        virtual_lineage = {'df': 'lineage_hash_abc'}
+        broken = {"df"}
+        virtual_lineage = {"df": "lineage_hash_abc"}
         cells = ["x = 10", "df['col'] = x * 2"]
 
         checker.simulator._virtual_lineage._eliminate_broken_vars_via_current_cell_probe(
-            broken, cells, 1, virtual_lineage, set(),
+            broken,
+            cells,
+            1,
+            virtual_lineage,
+            set(),
         )
 
         # broken_vars should be empty (resolved)
         assert not broken
         # Placeholder should be in user_ns
-        assert shell.user_ns.get('df') is PLACEHOLDER
+        assert shell.user_ns.get("df") is PLACEHOLDER
         # Lineage should be set
-        assert checker.variable_lineage.get('df') == 'lineage_hash_abc'
+        assert checker.variable_lineage.get("df") == "lineage_hash_abc"
 
     def test_no_placeholder_when_no_cache_hit(self):
         """When there's no cache hit, nothing should be injected."""
@@ -363,38 +367,46 @@ class TestForwardProbePopulatesState:
         # Simulate a cache miss
         backend.get.return_value = (None, None)
 
-        broken = {'df'}
-        virtual_lineage = {'df': 'lineage_hash_abc'}
+        broken = {"df"}
+        virtual_lineage = {"df": "lineage_hash_abc"}
         cells = ["x = 10", "df['col'] = x * 2"]
 
         checker.simulator._virtual_lineage._eliminate_broken_vars_via_current_cell_probe(
-            broken, cells, 1, virtual_lineage, set(),
+            broken,
+            cells,
+            1,
+            virtual_lineage,
+            set(),
         )
 
         # broken_vars should NOT be resolved
-        assert 'df' in broken
+        assert "df" in broken
         # No placeholder should be injected
-        assert 'df' not in shell.user_ns
-        assert 'df' not in checker.variable_lineage
+        assert "df" not in shell.user_ns
+        assert "df" not in checker.variable_lineage
 
     def test_existing_value_not_overwritten(self):
         """If user_ns already has the var, don't overwrite with placeholder."""
         checker, shell, backend, PLACEHOLDER = self._make_checker()
 
         existing_value = [1, 2, 3]
-        shell.user_ns['df'] = existing_value
+        shell.user_ns["df"] = existing_value
 
-        backend.get.return_value = ({'file_dependencies': {}}, {'variables': {'df': 'data'}})
+        backend.get.return_value = ({"file_dependencies": {}}, {"variables": {"df": "data"}})
 
-        broken = {'df'}
-        virtual_lineage = {'df': 'lineage_hash_abc'}
+        broken = {"df"}
+        virtual_lineage = {"df": "lineage_hash_abc"}
         cells = ["x = 10", "df['col'] = x * 2"]
 
         checker.simulator._virtual_lineage._eliminate_broken_vars_via_current_cell_probe(
-            broken, cells, 1, virtual_lineage, set(),
+            broken,
+            cells,
+            1,
+            virtual_lineage,
+            set(),
         )
 
         # broken_vars should still be resolved
         assert not broken
         # Original value should be preserved, not overwritten with placeholder
-        assert shell.user_ns['df'] is existing_value
+        assert shell.user_ns["df"] is existing_value

@@ -21,17 +21,13 @@ here the code is GENUINELY broken and must be reported, not swallowed - while
 a valid cell must still cache (the ``control`` test pins that CAS-163 stays
 fixed).
 """
+
 import pytest
 from conftest import shows_cached
 
 pytestmark = [pytest.mark.upstream, pytest.mark.timeout(240)]
 
-SETUP = (
-    "import numpy as np\n"
-    "import cash\n"
-    "%cash_on\n"
-    "%cash_badge print"
-)
+SETUP = "import numpy as np\nimport cash\n%cash_on\n%cash_badge print"
 
 # An independent, comfortably-cacheable cell that depends ONLY on numpy - never
 # on the cell we break. Its cache fate is the whole point: a broken UNRELATED
@@ -81,11 +77,13 @@ def test_dependent_downstream_cell_never_serves_wrong_value(nb_runner):
     dependent cell must therefore still compute the correct value (whether it
     restores or recomputes) - never a stale/wrong one. This pins that skipping
     the unparseable cell does not corrupt a genuine dependent."""
-    nb_runner.create_notebook([
-        SETUP,
-        "base = 100",
-        "derived = base + 1\nprint('derived=', derived)",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            "base = 100",
+            "derived = base + 1\nprint('derived=', derived)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "derived= 101" in nb_runner.get_output(3)

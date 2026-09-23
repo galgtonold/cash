@@ -11,6 +11,7 @@ The real function is kept inside a tuple: freezegun swaps module attributes
 that ARE the real function, not what a container holds. If cash itself is
 imported under a frozen clock, freezegun's own saved original is used.
 """
+
 from __future__ import annotations
 
 import sys

@@ -14,6 +14,7 @@ Workflow: edit ``examples/try_cash_binder.ipynb``, then run::
 ``tests/test_docs/test_try_cash_notebooks_in_sync.py`` fails if the committed
 Colab notebook doesn't match what this script would produce.
 """
+
 from __future__ import annotations
 
 import json
@@ -29,7 +30,7 @@ COLAB_SETUP = [
     "# Install cash from PyPI. The [pandas] extra pulls pandas + pyarrow; numpy,\n",
     "# pandas and matplotlib are already present on Colab. (On a re-run this is a\n",
     "# fast no-op — pip sees it's already satisfied.)\n",
-    "%pip install -q \"cash-lib[pandas]\"\n",
+    '%pip install -q "cash-lib[pandas]"\n',
     "\n",
     "import cash\n",
     "import numpy as np\n",

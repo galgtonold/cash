@@ -6,9 +6,8 @@ share the ``<lambda>`` qualname) overwrites the shared registry slot; before
 the fix a stale wrapper then stored its results under the NEW function's
 state hash, poisoning it — and two lambdas collided outright.
 """
-from __future__ import annotations
 
-import pytest
+from __future__ import annotations
 
 from cash import Cash, FileBackend
 
@@ -32,8 +31,8 @@ def test_redefinition_does_not_poison_new_wrapper(tmp_path):
 
     w1 = c.cache(score_v1)
     assert w1(1) == 2
-    w2 = c.cache(score_v2)      # re-registration overwrites the registry slot
-    assert w1(1) == 2           # stale wrapper keeps ITS OWN identity
+    w2 = c.cache(score_v2)  # re-registration overwrites the registry slot
+    assert w1(1) == 2  # stale wrapper keeps ITS OWN identity
     assert w2(1) == 101, "v1's result was planted under v2's state hash"
     assert w1(1) == 2
 
@@ -51,10 +50,7 @@ def test_same_line_lambdas_distinct_entries(tmp_path):
     c = _cash(tmp_path)
     f, g = c.cache(lambda x: x + 1), c.cache(lambda x: x + 100)  # one source line
     assert f(1) == 2
-    assert g(1) == 101, (
-        "same-line lambdas share source text; the code fingerprint must "
-        "disambiguate them"
-    )
+    assert g(1) == 101, "same-line lambdas share source text; the code fingerprint must disambiguate them"
 
 
 def test_named_function_keys_stable_across_instances(tmp_path):

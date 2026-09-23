@@ -41,6 +41,7 @@ still hands back an object distinct from the one a fresh call would produce.
 Confirmed by mutation testing during Task 6: disabling the guard left every
 identity-only assertion in this file passing.
 """
+
 from __future__ import annotations
 
 import time
@@ -80,6 +81,7 @@ def test_a_figure_returning_call_does_not_hijack_pyplot(call_cache):
     call is never a store candidate at all and the test would pass whether or
     not the guard exists.
     """
+
     def make_fig():
         time.sleep(ABOVE_PERSISTENCE_FLOOR_S)
         fig, ax = plt.subplots()
@@ -98,6 +100,7 @@ def test_a_figure_returning_call_is_not_cached(call_cache):
     since a hit's deep-copied return is *always* a distinct object from the
     first call's live one, guard or no guard (see module docstring).
     """
+
     def make_fig():
         time.sleep(ABOVE_PERSISTENCE_FLOOR_S)
         fig, ax = plt.subplots()
@@ -108,8 +111,7 @@ def test_a_figure_returning_call_is_not_cached(call_cache):
     first, second = cached(), cached()
     assert first is not second, "a Figure was served from cache"
     assert [e["cache_hit"] for e in call_cache.drain_call_log()] == [False, False], (
-        "an identity-coupled result must never be served from cache -- the "
-        "second call has to recompute, not hit"
+        "an identity-coupled result must never be served from cache -- the second call has to recompute, not hit"
     )
 
 
@@ -128,13 +130,13 @@ def test_ordinary_results_are_still_cached(call_cache):
     assert cached(3) == 4
     assert calls == [3], "the identity guard suppressed ordinary caching"
     assert [e["cache_hit"] for e in call_cache.drain_call_log()] == [False, True], (
-        "an ordinary, non-identity-coupled result should still hit on the "
-        "second call"
+        "an ordinary, non-identity-coupled result should still hit on the second call"
     )
 
 
 def test_a_container_of_figures_is_also_refused(call_cache):
     """`fig, axes = plt.subplots(2, 2)` shapes hide the Figure in a tuple."""
+
     def make_pair():
         time.sleep(ABOVE_PERSISTENCE_FLOOR_S)
         fig, ax = plt.subplots()

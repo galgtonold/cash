@@ -13,11 +13,13 @@ class TestDictMergeWalrus:
 
     def test_dict_merge_operator(self, nb_runner):
         """Dict merge with | operator, verify caching."""
-        nb_runner.create_notebook([
-            "d1 = {'a': 1, 'b': 2}",
-            "d2 = {'b': 3, 'c': 4}",
-            "merged = d1 | d2\nprint(f'merged={merged}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "d1 = {'a': 1, 'b': 2}",
+                "d2 = {'b': 3, 'c': 4}",
+                "merged = d1 | d2\nprint(f'merged={merged}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(3)
@@ -31,11 +33,13 @@ class TestDictMergeWalrus:
 
     def test_dict_merge_edit(self, nb_runner):
         """Edit one dict, verify merge result updates."""
-        nb_runner.create_notebook([
-            "base = {'x': 10, 'y': 20}",
-            "override = {'y': 99}",
-            "final = base | override\nprint(f'y={final[\"y\"]}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "base = {'x': 10, 'y': 20}",
+                "override = {'y': 99}",
+                "final = base | override\nprint(f'y={final[\"y\"]}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(3)
@@ -48,11 +52,13 @@ class TestDictMergeWalrus:
 
     def test_walrus_in_condition(self, nb_runner):
         """Walrus operator in condition with caching."""
-        nb_runner.create_notebook([
-            "data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]",
-            "evens = [x for x in data if (y := x % 2) == 0]\ncount = len(evens)",
-            "print(f'count={count}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]",
+                "evens = [x for x in data if (y := x % 2) == 0]\ncount = len(evens)",
+                "print(f'count={count}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(3)

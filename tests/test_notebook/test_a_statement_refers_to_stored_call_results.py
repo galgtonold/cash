@@ -6,6 +6,7 @@ statement gathered from per-call cached fits, and each fit under its call's key
 restores the value on its own (a later cell or a restart needs no call
 arguments rebuilt); it just points at the call entries for the parts they hold.
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -63,7 +64,7 @@ def test_a_dict_of_call_results_is_stored_as_references(nb):
     assert all(isinstance(v, CallRef) for v in stored.values()), stored
 
     shell.user_ns.pop("models")
-    magics.cash("", code)                       # restored: the references are read back
+    magics.cash("", code)  # restored: the references are read back
     assert shell.user_ns["models"] == {k: list(range(k * 1000)) for k in range(1, 4)}
 
 
@@ -92,6 +93,7 @@ def test_a_statement_whose_call_entry_is_gone_recomputes(nb):
 
 def test_a_reference_to_an_entry_holding_something_else_is_a_miss():
     from cash.notebook.call_refs import resolve_call_refs
+
     backend = InMemoryBackend()
     backend.set("call:a", [1, 2], {"value_digest": "d1"})
     payload = {"variables": {"models": {1: CallRef("call:a", "d1")}}, "stdout": ""}

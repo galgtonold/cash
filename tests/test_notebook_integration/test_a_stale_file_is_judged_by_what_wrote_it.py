@@ -16,18 +16,20 @@ The writer's own provenance -- the lineages of what it read and, for a
 figure, the history of what was drawn into it, recorded when it wrote --
 answers all three.
 """
+
 import pytest
 
 pytest.importorskip("matplotlib")
 pytest.importorskip("pandas")
 
-pytestmark = [pytest.mark.integration, pytest.mark.upstream, pytest.mark.files,
-              pytest.mark.timeout(300)]
+pytestmark = [pytest.mark.integration, pytest.mark.upstream, pytest.mark.files, pytest.mark.timeout(300)]
 
-SETUP = ("import cash\n%cash_on\n%cash_badge print\n"
-         "import numpy as np\nimport pandas as pd\nfrom pathlib import Path\n"
-         "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt\n"
-         "Path('out').mkdir(exist_ok=True)")
+SETUP = (
+    "import cash\n%cash_on\n%cash_badge print\n"
+    "import numpy as np\nimport pandas as pd\nfrom pathlib import Path\n"
+    "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt\n"
+    "Path('out').mkdir(exist_ok=True)"
+)
 
 LOOP_CHART = (
     "fig, axes = plt.subplots(1, 2, figsize=(4, 2))\n"

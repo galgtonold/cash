@@ -1,4 +1,5 @@
 """Which calls into user code write a file a cache hit would skip (round 22)."""
+
 import json
 import shutil
 
@@ -16,7 +17,7 @@ def export(df, path):
 
 
 def report(df):
-    export(df, "report.csv")          # the write is one call further down
+    export(df, "report.csv")  # the write is one call further down
     return len(df)
 
 

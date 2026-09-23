@@ -17,6 +17,7 @@ so resolution returns long before this branch — the same harness-blindness cla
 as CAS-190. These tests therefore drive the parse directly rather than through
 ``nb_runner``.
 """
+
 import sys
 import types
 
@@ -26,19 +27,22 @@ import cash.notebook.server_discovery as sd
 from cash.notebook.server_discovery import _kernel_id_from_connection_file
 
 
-@pytest.mark.parametrize("filename,expected", [
-    # Well-formed: semantics identical to the original expression.
-    (r"C:\rt\kernel-abc123.json", "abc123"),
-    ("/rt/kernel-abc123.json", "abc123"),
-    # A UUID's own dashes survive (split on the FIRST '-' only).
-    ("/rt/kernel-2f9a-4b1c-88de.json", "2f9a-4b1c-88de"),
-    # The CAS-205 shapes: no id to extract -> None, never an exception.
-    (r"C:\rt\kernel.json", None),
-    ("kernel.json", None),
-    ("kernel-.json", None),
-    ("", None),
-    (None, None),
-])
+@pytest.mark.parametrize(
+    "filename,expected",
+    [
+        # Well-formed: semantics identical to the original expression.
+        (r"C:\rt\kernel-abc123.json", "abc123"),
+        ("/rt/kernel-abc123.json", "abc123"),
+        # A UUID's own dashes survive (split on the FIRST '-' only).
+        ("/rt/kernel-2f9a-4b1c-88de.json", "2f9a-4b1c-88de"),
+        # The CAS-205 shapes: no id to extract -> None, never an exception.
+        (r"C:\rt\kernel.json", None),
+        ("kernel.json", None),
+        ("kernel-.json", None),
+        ("", None),
+        (None, None),
+    ],
+)
 def test_kernel_id_parse_is_total(filename, expected):
     assert _kernel_id_from_connection_file(filename) == expected
 
@@ -59,7 +63,8 @@ def _fake_ipykernel(monkeypatch, connection_file):
 
 
 def test_get_notebook_path_degrades_on_idless_connection_file(
-    monkeypatch, _isolated_discovery,
+    monkeypatch,
+    _isolated_discovery,
 ):
     """The CAS-205 regression: return None rather than raising IndexError."""
     _fake_ipykernel(monkeypatch, r"C:\Temp\runtime\kernel.json")
@@ -67,7 +72,8 @@ def test_get_notebook_path_degrades_on_idless_connection_file(
 
 
 def test_get_notebook_path_degrades_when_connection_file_raises(
-    monkeypatch, _isolated_discovery,
+    monkeypatch,
+    _isolated_discovery,
 ):
     """An unavailable connection file is still handled (pre-existing behaviour)."""
     mod = types.ModuleType("ipykernel")

@@ -58,7 +58,6 @@ The correctness gates this file pins, post-CAS-259:
 its lineage and source hash — an input without a lineage would refuse the loop
 for an unrelated reason ("Input variable missing lineage").
 """
-import asyncio
 
 import pytest
 from conftest import shows_cached
@@ -66,12 +65,7 @@ from conftest import shows_cached
 pytestmark = [pytest.mark.loops, pytest.mark.mutations, pytest.mark.timeout(120)]
 
 # ``print`` badge so the CACHED status lands in the cell's text output.
-SETUP = (
-    "import cash\n"
-    "%cash_on\n"
-    "%cash_badge print\n"
-    "import time"
-)
+SETUP = "import cash\n%cash_on\n%cash_badge print\nimport time"
 # Slow enough that the loop clears the "too cheap to cache" floor.
 SLOW = "def slow(e):\n    time.sleep(0.03)\n    return e * 10"
 
@@ -85,12 +79,7 @@ def _n(path):
 def _slow_def(counter):
     """Like ``SLOW``, but also logs each real call to *counter* so tests can
     count real executions instead of trusting the badge's own bookkeeping."""
-    return (
-        "def slow(e):\n"
-        f"    open(r'{counter}', 'a').write('X')\n"
-        "    time.sleep(0.03)\n"
-        "    return e * 10"
-    )
+    return f"def slow(e):\n    open(r'{counter}', 'a').write('X')\n    time.sleep(0.03)\n    return e * 10"
 
 
 def _restart(nb_runner):
@@ -104,17 +93,18 @@ def _restart(nb_runner):
 #    result is byte-identical to a plain (no-cash) run.
 # ---------------------------------------------------------------------------
 
+
 def test_accumulator_loop_caches(nb_runner, tmp_path):
     counter = tmp_path / "calls.log"
-    nb_runner.create_notebook([
-        SETUP,
-        _slow_def(counter),
-        "items = [1, 2, 3, 4, 5]",
-        "out = []\n"
-        "for e in items:\n"
-        "    out.append(slow(e))",
-        "print(f'out={out}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            _slow_def(counter),
+            "items = [1, 2, 3, 4, 5]",
+            "out = []\nfor e in items:\n    out.append(slow(e))",
+            "print(f'out={out}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     cold = _n(counter)
@@ -133,9 +123,7 @@ def test_accumulator_loop_caches(nb_runner, tmp_path):
     out = nb_runner.get_output(4)
     warm = _n(counter) - cold
     assert warm == 0, f"accumulator loop did not cache: {warm} real calls, badge={out!r}"
-    assert "[intercepted]" in out, (
-        f"badge does not name interception as the cache mechanism: {out!r}"
-    )
+    assert "[intercepted]" in out, f"badge does not name interception as the cache mechanism: {out!r}"
 
     nb_runner.run_cell(5)
     assert "out=[10, 20, 30, 40, 50]" in nb_runner.get_output(5), nb_runner.get_output(5)
@@ -155,19 +143,22 @@ def test_accumulator_loop_caches(nb_runner, tmp_path):
 #     task report for the measured before/after.
 # ---------------------------------------------------------------------------
 
+
 def test_large_accumulator_loop_single_unit_still_caches(nb_runner, tmp_path):
     """150 iterations x 1 body statement -> 150*1*0.008 = 1.2s estimated
     overhead, clearing BOTH the >50-iteration and >1s-overhead cost-check
     thresholds -> the cost check chooses the single-unit branch, not
     decomposition. An isolated re-run must still skip ALL real work."""
     counter = tmp_path / "calls.log"
-    nb_runner.create_notebook([
-        SETUP,
-        _slow_def(counter),
-        "items = list(range(150))",
-        "out = []\nfor e in items:\n    out.append(slow(e))",
-        "print(f'len={len(out)} last={out[-1]}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            _slow_def(counter),
+            "items = list(range(150))",
+            "out = []\nfor e in items:\n    out.append(slow(e))",
+            "print(f'len={len(out)} last={out[-1]}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     cold = _n(counter)
@@ -199,6 +190,7 @@ def test_large_accumulator_loop_single_unit_still_caches(nb_runner, tmp_path):
 #    the loop must land the exact right answer, restored or recomputed.
 # ---------------------------------------------------------------------------
 
+
 def _restart_and_rerun_loop(nb_runner, tmp_path, annotation):
     """Cold run, real restart, re-run the loop cell. Returns re-executions.
 
@@ -210,13 +202,15 @@ def _restart_and_rerun_loop(nb_runner, tmp_path, annotation):
     if annotation:
         loop += f"{annotation}\n"
     loop += "for e in items:\n    out.append(slow(e))"
-    nb_runner.create_notebook([
-        SETUP,
-        _slow_def(counter),
-        "items = [1, 2, 3, 4, 5]",
-        loop,
-        "print(f'out={out}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            _slow_def(counter),
+            "items = [1, 2, 3, 4, 5]",
+            loop,
+            "print(f'out={out}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "out=[10, 20, 30, 40, 50]" in nb_runner.get_output(5)
@@ -257,8 +251,7 @@ def test_persist_makes_a_cheap_accumulator_loop_survive_a_restart(nb_runner, tmp
     """
     warm = _restart_and_rerun_loop(nb_runner, tmp_path, "# @cash:persist")
     assert warm == 0, (
-        f"`# @cash:persist` did not reach the loop's call entries: {warm} of 5 "
-        "calls re-ran after a restart"
+        f"`# @cash:persist` did not reach the loop's call entries: {warm} of 5 calls re-ran after a restart"
     )
 
 
@@ -288,19 +281,18 @@ def test_without_persist_a_cheap_accumulator_loop_recomputes(nb_runner, tmp_path
 #    this test would now catch.
 # ---------------------------------------------------------------------------
 
+
 def test_loop_variable_correct_after_restart_recompute(nb_runner):
-    nb_runner.create_notebook([
-        SETUP,
-        SLOW,
-        "items = [10, 20, 30]",
-        "out = []\n"
-        "# @cash:persist\n"
-        "for e in items:\n"
-        "    out.append(slow(e))",
-        # no-cache so this always re-reads the live ``e`` rather than replaying.
-        "# @cash:no-cache\n"
-        "print(f'e={e}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            SLOW,
+            "items = [10, 20, 30]",
+            "out = []\n# @cash:persist\nfor e in items:\n    out.append(slow(e))",
+            # no-cache so this always re-reads the live ``e`` rather than replaying.
+            "# @cash:no-cache\nprint(f'e={e}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "e=30" in nb_runner.get_output(5), nb_runner.get_output(5)
@@ -328,19 +320,22 @@ def test_loop_variable_correct_after_restart_recompute(nb_runner):
 #    file-writer re-execution machinery never double-counts it.
 # ---------------------------------------------------------------------------
 
+
 def test_side_effect_loop_not_cached(nb_runner, tmp_path):
     sink = tmp_path / "sink.txt"
     sink_s = str(sink).replace("\\", "/")
-    nb_runner.create_notebook([
-        SETUP,
-        SLOW,
-        f"SINK = r'{sink_s}'\nitems = [1, 2, 3]",
-        "out = []\n"
-        "for e in items:\n"
-        "    out.append(slow(e))\n"
-        "    with open(SINK, 'a') as f:\n"
-        "        f.write(str(e) + '\\n')",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            SLOW,
+            f"SINK = r'{sink_s}'\nitems = [1, 2, 3]",
+            "out = []\n"
+            "for e in items:\n"
+            "    out.append(slow(e))\n"
+            "    with open(SINK, 'a') as f:\n"
+            "        f.write(str(e) + '\\n')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert sink.read_text().count("\n") == 3, sink.read_text()
@@ -352,8 +347,7 @@ def test_side_effect_loop_not_cached(nb_runner, tmp_path):
     loop_out = nb_runner.get_output(4)
     assert not shows_cached(loop_out), f"side-effect loop was wrongly cached: {loop_out!r}"
     assert sink.read_text().count("\n") == 6, (
-        f"side effect was skipped on re-run (loop wrongly cached): "
-        f"{sink.read_text()!r}"
+        f"side effect was skipped on re-run (loop wrongly cached): {sink.read_text()!r}"
     )
 
 
@@ -363,17 +357,18 @@ def test_side_effect_loop_not_cached(nb_runner, tmp_path):
 #    behaviour, which still produces the correct value.
 # ---------------------------------------------------------------------------
 
+
 def test_preseeded_accumulator_not_cached(nb_runner):
-    nb_runner.create_notebook([
-        SETUP,
-        SLOW,
-        "items = [1, 2, 3]",
-        # non-empty seed -> not the fresh-empty shape -> not matched.
-        "out = [0]\n"
-        "for e in items:\n"
-        "    out.append(slow(e))",
-        "print(f'out={out}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            SLOW,
+            "items = [1, 2, 3]",
+            # non-empty seed -> not the fresh-empty shape -> not matched.
+            "out = [0]\nfor e in items:\n    out.append(slow(e))",
+            "print(f'out={out}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "out=[0, 10, 20, 30]" in nb_runner.get_output(5), nb_runner.get_output(5)
@@ -389,15 +384,16 @@ def test_preseeded_accumulator_not_cached(nb_runner):
 def test_prior_cell_seed_not_cached(nb_runner):
     """The seed lives in a PRIOR cell, so the loop's immediately-preceding
     top-level sibling is not ``out = []`` -> not matched."""
-    nb_runner.create_notebook([
-        SETUP,
-        SLOW,
-        "items = [1, 2, 3]",
-        "out = []",  # seed in its own cell
-        "for e in items:\n"
-        "    out.append(slow(e))",
-        "print(f'out={out}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            SLOW,
+            "items = [1, 2, 3]",
+            "out = []",  # seed in its own cell
+            "for e in items:\n    out.append(slow(e))",
+            "print(f'out={out}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "out=[10, 20, 30]" in nb_runner.get_output(6), nb_runner.get_output(6)
@@ -410,16 +406,17 @@ def test_prior_cell_seed_not_cached(nb_runner):
 # #6 Editing the iterable upstream invalidates the cached loop.
 # ---------------------------------------------------------------------------
 
+
 def test_iterable_edit_invalidates(nb_runner):
-    nb_runner.create_notebook([
-        SETUP,
-        SLOW,
-        "items = [1, 2, 3]",
-        "out = []\n"
-        "for e in items:\n"
-        "    out.append(slow(e))",
-        "print(f'out={out}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            SLOW,
+            "items = [1, 2, 3]",
+            "out = []\nfor e in items:\n    out.append(slow(e))",
+            "print(f'out={out}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "out=[10, 20, 30]" in nb_runner.get_output(5), nb_runner.get_output(5)
@@ -435,16 +432,17 @@ def test_iterable_edit_invalidates(nb_runner):
 # #7 Editing the body function's definition invalidates the cached loop.
 # ---------------------------------------------------------------------------
 
+
 def test_body_function_edit_invalidates(nb_runner):
-    nb_runner.create_notebook([
-        SETUP,
-        SLOW,
-        "items = [1, 2, 3]",
-        "out = []\n"
-        "for e in items:\n"
-        "    out.append(slow(e))",
-        "print(f'out={out}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            SLOW,
+            "items = [1, 2, 3]",
+            "out = []\nfor e in items:\n    out.append(slow(e))",
+            "print(f'out={out}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "out=[10, 20, 30]" in nb_runner.get_output(5), nb_runner.get_output(5)

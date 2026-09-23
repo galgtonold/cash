@@ -2,6 +2,7 @@
 Batch 284: Regex compilation interaction tests.
 Tests that editing regex patterns properly invalidates match results downstream.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.interaction, pytest.mark.stress, pytest.mark.timeout(90)]
@@ -12,13 +13,15 @@ class TestRegexInteraction:
 
     def test_regex_pattern_edit(self, nb_runner):
         """Editing a regex pattern should invalidate match results."""
-        nb_runner.create_notebook([
-            "import re\npattern = re.compile(r'\\d+')",
-            "text = 'abc 123 def 456'",
-            "matches = pattern.findall(text)",
-            "result = ','.join(matches)",
-            "print(f'result={result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import re\npattern = re.compile(r'\\d+')",
+                "text = 'abc 123 def 456'",
+                "matches = pattern.findall(text)",
+                "result = ','.join(matches)",
+                "print(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(5)
@@ -32,12 +35,14 @@ class TestRegexInteraction:
 
     def test_regex_sub_edit(self, nb_runner):
         """Editing substitution pattern should propagate."""
-        nb_runner.create_notebook([
-            "import re\nreplacer = re.compile(r'\\s+')",
-            "text = 'hello   world   python'",
-            "cleaned = replacer.sub('-', text)",
-            "print(f'cleaned={cleaned}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import re\nreplacer = re.compile(r'\\s+')",
+                "text = 'hello   world   python'",
+                "cleaned = replacer.sub('-', text)",
+                "print(f'cleaned={cleaned}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(4)
@@ -52,12 +57,14 @@ class TestRegexInteraction:
 
     def test_regex_groups_edit(self, nb_runner):
         """Editing regex with groups should propagate captured groups."""
-        nb_runner.create_notebook([
-            "import re\npat = re.compile(r'(\\w+)@(\\w+\\.\\w+)')",
-            "email = 'alice@example.com'",
-            "m = pat.match(email)\nuser = m.group(1)\ndomain = m.group(2)",
-            "print(f'user={user},domain={domain}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import re\npat = re.compile(r'(\\w+)@(\\w+\\.\\w+)')",
+                "email = 'alice@example.com'",
+                "m = pat.match(email)\nuser = m.group(1)\ndomain = m.group(2)",
+                "print(f'user={user},domain={domain}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(4)

@@ -17,6 +17,7 @@ from ..notebook.statement import StatementCacheMetadata
 
 logger = logging.getLogger(__name__)
 
+
 class CacheDebugger:
     """Step-through inspector for the notebook cache decision pipeline.
 
@@ -47,19 +48,21 @@ class CacheDebugger:
         if isinstance(cash_instance, types.ModuleType):
             cash_instance = None
 
-        if cash_instance is None and hasattr(shell, 'magics_manager') and shell.magics_manager:
-            magics = shell.magics_manager.magics.get('cell', {}).get('cash')
+        if cash_instance is None and hasattr(shell, "magics_manager") and shell.magics_manager:
+            magics = shell.magics_manager.magics.get("cell", {}).get("cash")
             # 'magics' is likely a bound method: CashMagics.cash
-            if magics and hasattr(magics, '__self__'):
+            if magics and hasattr(magics, "__self__"):
                 cash_magics = magics.__self__
-                if hasattr(cash_magics, '_cash_instance'):
+                if hasattr(cash_magics, "_cash_instance"):
                     cash_instance = cash_magics._cash_instance
             # Fallback: maybe it's the object itself (unlikely for standard magics)
-            elif magics and hasattr(magics, '_cash_instance'):
+            elif magics and hasattr(magics, "_cash_instance"):
                 cash_instance = magics._cash_instance
 
         if cash_instance is None:
-            raise CashError("Could not find Cash instance. Please pass the 'cash' instance (not the module) or ensure %cash_enable has been run.")
+            raise CashError(
+                "Could not find Cash instance. Please pass the 'cash' instance (not the module) or ensure %cash_enable has been run."
+            )
 
         self.cash = cash_instance
 
@@ -71,12 +74,14 @@ class CacheDebugger:
             for node in tree.body:
                 if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
                     call = node.value
-                    if (isinstance(call.func, ast.Attribute) and
-                            call.func.attr == 'run_cell_magic' and
-                            len(call.args) >= 3 and
-                            isinstance(call.args[0], ast.Constant) and
-                            call.args[0].value == 'cash' and
-                            isinstance(call.args[2], ast.Constant)):
+                    if (
+                        isinstance(call.func, ast.Attribute)
+                        and call.func.attr == "run_cell_magic"
+                        and len(call.args) >= 3
+                        and isinstance(call.args[0], ast.Constant)
+                        and call.args[0].value == "cash"
+                        and isinstance(call.args[2], ast.Constant)
+                    ):
                         return call.args[2].value
         except Exception as exc:
             logger.debug("[DEBUGGER] Failed to parse run_cell_magic code: %s", exc)
@@ -90,9 +95,11 @@ class CacheDebugger:
             for node in tree.body:
                 if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
                     call = node.value
-                    if (isinstance(call.func, ast.Attribute) and
-                            call.func.attr == 'run_line_magic' and
-                            len(call.args) >= 2):
+                    if (
+                        isinstance(call.func, ast.Attribute)
+                        and call.func.attr == "run_line_magic"
+                        and len(call.args) >= 2
+                    ):
                         return f"%{call.args[0].value} {call.args[1].value}"
         except Exception as exc:
             logger.debug("[DEBUGGER] Failed to parse run_line_magic code: %s", exc)
@@ -100,13 +107,10 @@ class CacheDebugger:
 
     def _preprocess_cell_code(self, cell_code: str) -> str:
         """Strip IPython magic lines and unwrap get_ipython() transform wrappers."""
-        code = '\n'.join(
-            line for line in cell_code.split('\n')
-            if not line.lstrip().startswith(('%', '%%'))
-        )
-        if 'get_ipython' in code and 'run_cell_magic' in code:
+        code = "\n".join(line for line in cell_code.split("\n") if not line.lstrip().startswith(("%", "%%")))
+        if "get_ipython" in code and "run_cell_magic" in code:
             code = self._unwrap_run_cell_magic(code)
-        if 'get_ipython' in code and 'run_line_magic' in code:
+        if "get_ipython" in code and "run_line_magic" in code:
             code = self._unwrap_run_line_magic(code)
         return code
 
@@ -119,13 +123,13 @@ class CacheDebugger:
     ) -> None:
         """Compute hash for one input variable and populate input_details/input_hashes."""
         # Skip modules, get_ipython, and IPython magic functions
-        if isinstance(val, types.ModuleType) or var_name == 'get_ipython':
+        if isinstance(val, types.ModuleType) or var_name == "get_ipython":
             return
-        if callable(val) and (var_name.startswith('_') or hasattr(val, '__self__')):
+        if callable(val) and (var_name.startswith("_") or hasattr(val, "__self__")):
             return
 
         try:
-            if hasattr(val, '_cash_lineage_hash'):
+            if hasattr(val, "_cash_lineage_hash"):
                 h = val._cash_lineage_hash
                 input_details[var_name] = f"Hash (from metadata): {h[:8]}..."
             else:
@@ -148,7 +152,7 @@ class CacheDebugger:
         try:
             tree = ast.parse(cleaned_code)
         except SyntaxError as e:
-            return [{'error': f"Syntax Error: {e}"}]
+            return [{"error": f"Syntax Error: {e}"}]
 
         results = []
         user_ns = self.shell.user_ns
@@ -161,7 +165,7 @@ class CacheDebugger:
                 continue
 
             inputs, outputs = CodeAnalyzer.analyze_code_block(stmt_code)
-            source_hash = hashlib.sha256(stmt_code.encode('utf-8')).hexdigest()
+            source_hash = hashlib.sha256(stmt_code.encode("utf-8")).hexdigest()
 
             input_details: dict[str, str] = {}
             input_hashes: list[str] = []
@@ -171,29 +175,24 @@ class CacheDebugger:
                 else:
                     input_details[var_name] = "Missing from namespace"
 
-            combined_hash = hashlib.sha256(
-                f"{source_hash}:{':'.join(input_hashes)}".encode()
-            ).hexdigest()
+            combined_hash = hashlib.sha256(f"{source_hash}:{':'.join(input_hashes)}".encode()).hexdigest()
             cache_key = f"stmt:{combined_hash}"
 
             raw_metadata, cached_data = self.cash.backend.get(cache_key)
-            metadata = (
-                StatementCacheMetadata.from_dict(raw_metadata)
-                if raw_metadata is not None
-                else None
-            )
+            metadata = StatementCacheMetadata.from_dict(raw_metadata) if raw_metadata is not None else None
             status = "HIT" if cached_data else "MISS"
             execution_time = metadata.execution_time if metadata else None
 
-            results.append({
-                'code': stmt_code,
-                'inputs': list(inputs),
-                'input_details': input_details,
-                'cache_key': cache_key,
-                'status': status,
-                'outputs': list(outputs),
-                'execution_time': execution_time,
-            })
+            results.append(
+                {
+                    "code": stmt_code,
+                    "inputs": list(inputs),
+                    "input_details": input_details,
+                    "cache_key": cache_key,
+                    "status": status,
+                    "outputs": list(outputs),
+                    "execution_time": execution_time,
+                }
+            )
 
         return results
-

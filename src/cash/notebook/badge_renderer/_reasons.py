@@ -19,6 +19,7 @@ the guard owns its message, and matching on a substring of prose would silently
 stop recognising it the day that message is reworded -- reverting the badge to
 the wall of text without any test noticing.
 """
+
 from __future__ import annotations
 
 import os
@@ -102,8 +103,10 @@ def stale_export_text(code: str, paths) -> str:
     target = ", ".join(_shown_path(p) for p in paths[:3]) if paths else "a file"
     if paths and len(paths) > 3:
         target += f" and {len(paths) - 3} more"
-    return (f"STALE FILE: {target} not rewritten, though its data changed "
-            f"upstream -- run the cell with `{first}` to update it")
+    return (
+        f"STALE FILE: {target} not rewritten, though its data changed "
+        f"upstream -- run the cell with `{first}` to update it"
+    )
 
 
 def _shown_path(path) -> str:
@@ -111,6 +114,6 @@ def _shown_path(path) -> str:
     path = str(path)
     try:
         rel = os.path.relpath(path)
-    except ValueError:              # another drive
+    except ValueError:  # another drive
         return path
     return path if rel.startswith("..") else rel.replace(os.sep, "/")

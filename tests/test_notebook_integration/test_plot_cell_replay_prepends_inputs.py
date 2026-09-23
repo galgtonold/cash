@@ -20,6 +20,7 @@ Same family as the RNG-chain prepend fix (437f3cb), where a draw sharing a cell
 with an ordinary assignment was re-executed without it. That fix did not reach
 this path.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -83,7 +84,6 @@ def test_an_unrelated_cell_is_not_blocked_by_an_unrun_plot_cell(nb_runner):
     out = nb_runner.get_output(4)
 
     assert "UpstreamStateError" not in out and "is not defined" not in out, (
-        f"an unrelated cell was blocked by the replay of a plot cell it does "
-        f"not depend on:\n{out}"
+        f"an unrelated cell was blocked by the replay of a plot cell it does not depend on:\n{out}"
     )
     assert "WORST" in out, f"cell produced no result:\n{out}"

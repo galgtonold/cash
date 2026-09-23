@@ -15,10 +15,12 @@ class TestMultiOutputEdits:
 
     def test_edit_multi_output_cell(self, nb_runner):
         """Edit cell that produces two variables."""
-        nb_runner.create_notebook([
-            "a = 10\nb = 20",
-            "result = a + b\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 10\nb = 20",
+                "result = a + b\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 30" in nb_runner.get_output(2)
@@ -30,11 +32,13 @@ class TestMultiOutputEdits:
 
     def test_multi_output_different_consumers(self, nb_runner):
         """Two outputs consumed by different cells."""
-        nb_runner.create_notebook([
-            "x = 5\ny = 10",
-            "rx = x * 2\nprint(f'rx = {rx}')",
-            "ry = y * 3\nprint(f'ry = {ry}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 5\ny = 10",
+                "rx = x * 2\nprint(f'rx = {rx}')",
+                "ry = y * 3\nprint(f'ry = {ry}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "rx = 10" in nb_runner.get_output(2)
@@ -48,10 +52,12 @@ class TestMultiOutputEdits:
 
     def test_tuple_unpacking_edit(self, nb_runner):
         """Tuple unpacking with edits."""
-        nb_runner.create_notebook([
-            "a, b, c = 1, 2, 3",
-            "total = a + b + c\nprint(f'total = {total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a, b, c = 1, 2, 3",
+                "total = a + b + c\nprint(f'total = {total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total = 6" in nb_runner.get_output(2)
@@ -66,10 +72,12 @@ class TestMultiStatementCellEdits:
 
     def test_edit_one_statement_in_multi_stmt_cell(self, nb_runner):
         """Edit one statement in a multi-statement cell."""
-        nb_runner.create_notebook([
-            "x = 10\ny = x * 2\nz = y + 1",
-            "print(f'z = {z}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10\ny = x * 2\nz = y + 1",
+                "print(f'z = {z}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "z = 21" in nb_runner.get_output(2)
@@ -81,10 +89,12 @@ class TestMultiStatementCellEdits:
 
     def test_reorder_statements_in_cell(self, nb_runner):
         """Reorder statements within a cell."""
-        nb_runner.create_notebook([
-            "a = 5\nb = a + 1",
-            "result = b * 2\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 5\nb = a + 1",
+                "result = b * 2\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 12" in nb_runner.get_output(2)

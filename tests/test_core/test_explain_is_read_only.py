@@ -6,6 +6,7 @@ entry file ~5 s later to persist the access stamp -- while the docs say
 explain() writes nothing. It read through `backend.get`, the access path. It
 now asks `peek_metadata`, which every backend answers without recording a use.
 """
+
 from __future__ import annotations
 
 import os
@@ -20,14 +21,20 @@ pytestmark = pytest.mark.core
 
 def _entry_state(cache_dir):
     files = sorted(p for p in os.listdir(cache_dir) if p.endswith(".entry"))
-    return [(name, os.stat(os.path.join(cache_dir, name)).st_mtime_ns,
-             open(os.path.join(cache_dir, name), "rb").read()) for name in files]
+    return [
+        (name, os.stat(os.path.join(cache_dir, name)).st_mtime_ns, open(os.path.join(cache_dir, name), "rb").read())
+        for name in files
+    ]
 
 
-@pytest.mark.parametrize("make", [
-    lambda d: Cash(backend=FileBackend(cache_dir=d), register_magic=False),
-    lambda d: Cash(cache_dir=d, register_magic=False, persist_all=True),
-], ids=["file", "tiered"])
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda d: Cash(backend=FileBackend(cache_dir=d), register_magic=False),
+        lambda d: Cash(cache_dir=d, register_magic=False, persist_all=True),
+    ],
+    ids=["file", "tiered"],
+)
 def test_explain_leaves_the_entry_and_its_use_count_alone(tmp_path, make):
     cache_dir = str(tmp_path / ".cash")
     c = make(cache_dir)

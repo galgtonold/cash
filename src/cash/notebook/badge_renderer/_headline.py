@@ -1,4 +1,5 @@
 """The headline of a cell that both restored and ran statements."""
+
 from __future__ import annotations
 
 from .view import BadgeHeader

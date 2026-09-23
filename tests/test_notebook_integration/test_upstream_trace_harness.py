@@ -5,6 +5,7 @@ loggers are surfaced through IOPub, so we trace decisions to a file the kernel
 inherits via CASH_TRACE_FILE. This test guards that the channel works end to end
 so the harness stays trustworthy for future cache-correctness debugging.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.upstream]

@@ -7,6 +7,7 @@ calls ``m.forecast(h)``: the key held ``forecast:ABSENT`` before the first run
 and ``forecast:<lineage>`` after, so the simulation never found the entry and
 the export cell re-ran the forecast.
 """
+
 from cash.notebook.cache_key import called_function_dependencies
 
 
@@ -25,7 +26,7 @@ def run_forecast(series, h):
 def test_an_attribute_named_like_a_variable_is_not_a_dependency():
     ns = _ns(HELPER)
     before = called_function_dependencies(["run_forecast", "series"], ns, {})
-    ns["forecast"] = object()               # the statement's own output, after it ran
+    ns["forecast"] = object()  # the statement's own output, after it ran
     after = called_function_dependencies(["run_forecast", "series"], ns, {"forecast": "L1"})
     assert before == after == ["forecast:ABSENT"]
 

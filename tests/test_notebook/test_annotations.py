@@ -2,14 +2,15 @@
 Tests for cache annotation parsing and behavior.
 """
 
-import unittest
 import ast
+import unittest
+
 from cash.notebook.annotations import (
     CacheAnnotation,
+    extract_annotations_for_statements,
+    get_statement_annotations,
     parse_annotation_line,
     parse_annotations_in_range,
-    get_statement_annotations,
-    extract_annotations_for_statements
 )
 
 
@@ -76,7 +77,7 @@ class TestAnnotationParsing(unittest.TestCase):
         ann1 = CacheAnnotation(persist=True)
         ann2 = CacheAnnotation(no_cache=True, ttl=60)
         merged = ann1.merge(ann2)
-        
+
         self.assertTrue(merged.persist)
         self.assertTrue(merged.no_cache)
         self.assertEqual(merged.ttl, 60)
@@ -86,7 +87,7 @@ class TestAnnotationParsing(unittest.TestCase):
         ann1 = CacheAnnotation(ttl=100)
         ann2 = CacheAnnotation(ttl=200)
         merged = ann1.merge(ann2)
-        
+
         self.assertEqual(merged.ttl, 200)
 
 
@@ -95,30 +96,19 @@ class TestAnnotationRangeParsing(unittest.TestCase):
 
     def test_annotation_on_preceding_line(self):
         """Annotation on line before statement should apply."""
-        source = [
-            "# @cash:persist",
-            "x = expensive_operation()"
-        ]
+        source = ["# @cash:persist", "x = expensive_operation()"]
         ann = parse_annotations_in_range(source, 2, 2)
         self.assertTrue(ann.persist)
 
     def test_annotation_inside_statement(self):
         """Annotation inside multi-line statement should apply."""
-        source = [
-            "for i in range(10):",
-            "    # @cash:no-cache",
-            "    print(i)"
-        ]
+        source = ["for i in range(10):", "    # @cash:no-cache", "    print(i)"]
         ann = parse_annotations_in_range(source, 1, 3)
         self.assertTrue(ann.no_cache)
 
     def test_multiple_annotations_combine(self):
         """Multiple annotations should combine."""
-        source = [
-            "# @cash:persist",
-            "# @cash:ttl=60",
-            "x = expensive_operation()"
-        ]
+        source = ["# @cash:persist", "# @cash:ttl=60", "x = expensive_operation()"]
         ann = parse_annotations_in_range(source, 3, 3)
         self.assertTrue(ann.persist)
         self.assertEqual(ann.ttl, 60)
@@ -133,7 +123,7 @@ class TestGetStatementAnnotations(unittest.TestCase):
 x = 1 + 1"""
         tree = ast.parse(code)
         node = tree.body[0]  # The assignment
-        
+
         ann = get_statement_annotations(code, node)
         self.assertTrue(ann.persist)
 
@@ -144,7 +134,7 @@ x = 1 + 1"""
     result = compute(i)"""
         tree = ast.parse(code)
         node = tree.body[0]  # The for loop
-        
+
         ann = get_statement_annotations(code, node)
         self.assertTrue(ann.no_cache)
 
@@ -153,7 +143,7 @@ x = 1 + 1"""
         code = """x = 1 + 1"""
         tree = ast.parse(code)
         node = tree.body[0]
-        
+
         ann = get_statement_annotations(code, node)
         self.assertFalse(ann.has_directives())
 
@@ -170,20 +160,20 @@ y = cheap()
 
 # @cash:no-cache
 z = volatile()"""
-        
+
         annotations = extract_annotations_for_statements(code)
-        
+
         # Line 2 (x = ...) should have persist
         self.assertIn(2, annotations)
         self.assertTrue(annotations[2].persist)
-        
+
         # Line 7 (z = ...) should have no-cache
         self.assertIn(7, annotations)
         self.assertTrue(annotations[7].no_cache)
-        
+
         # y = ... should not be in the dict (no directives)
         self.assertNotIn(4, annotations)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

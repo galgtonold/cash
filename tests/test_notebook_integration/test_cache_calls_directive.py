@@ -18,6 +18,7 @@ every run.
 Counted, never timed — wall-clock cannot distinguish "recomputed" from
 "restored but slow".
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.loops]
@@ -46,20 +47,20 @@ def _n(log):
 def test_append_loop_caches_the_call_with_no_directive(nb_runner, tmp_path):
     """No directive anywhere -- interception is on by default."""
     log = tmp_path / "calls.log"
-    nb_runner.create_notebook([
-        _helpers(log),
-        "out = []",
-        "for t in [1, 2]:\n    out.append(compute(t))\nprint('OUT', out)",
-    ])
+    nb_runner.create_notebook(
+        [
+            _helpers(log),
+            "out = []",
+            "for t in [1, 2]:\n    out.append(compute(t))\nprint('OUT', out)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert _n(log) == 2, "baseline did not run both iterations"
     assert "OUT [2, 3]" in nb_runner.get_output(3)
 
     nb_runner.run_cell(3)
-    assert _n(log) == 2, (
-        "compute() re-ran; call caching should be on by default, no directive needed"
-    )
+    assert _n(log) == 2, "compute() re-ran; call caching should be on by default, no directive needed"
     assert "OUT [2, 3]" in nb_runner.get_output(3), (
         "the append stopped executing -- the mutation must still happen every run"
     )
@@ -79,11 +80,13 @@ def test_no_cache_calls_directive_turns_interception_off(nb_runner, tmp_path):
     line is what actually reaches the statement doing the call.
     """
     log = tmp_path / "calls.log"
-    nb_runner.create_notebook([
-        _helpers(log),
-        "out = []",
-        "# @cash:no-cache-calls\nfor t in [1, 2]:\n    out.append(compute(t))",
-    ])
+    nb_runner.create_notebook(
+        [
+            _helpers(log),
+            "out = []",
+            "# @cash:no-cache-calls\nfor t in [1, 2]:\n    out.append(compute(t))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert _n(log) == 2
@@ -106,11 +109,13 @@ def test_no_cache_wins_over_interception(nb_runner, tmp_path):
     must cost the full 2 calls again, not 0.
     """
     log = tmp_path / "calls.log"
-    nb_runner.create_notebook([
-        _helpers(log),
-        "out = []",
-        "# @cash:no-cache\nfor t in [1, 2]:\n    out.append(compute(t))",
-    ])
+    nb_runner.create_notebook(
+        [
+            _helpers(log),
+            "out = []",
+            "# @cash:no-cache\nfor t in [1, 2]:\n    out.append(compute(t))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert _n(log) == 2
@@ -136,24 +141,18 @@ def test_no_cache_calls_from_the_cell_header_covers_every_statement(nb_runner, t
     actually guarantees reaches every one of, per its own docstring.
     """
     log = tmp_path / "calls.log"
-    nb_runner.create_notebook([
-        _helpers(log),
-        (
-            "# @cash:no-cache-calls\n"
-            "out = []\n"
-            "out.append(compute(1))\n"
-            "out.append(compute(2))"
-        ),
-    ])
+    nb_runner.create_notebook(
+        [
+            _helpers(log),
+            ("# @cash:no-cache-calls\nout = []\nout.append(compute(1))\nout.append(compute(2))"),
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert _n(log) == 2, "baseline did not run both calls"
 
     nb_runner.run_cell(2)
-    assert _n(log) == 4, (
-        "the header opt-out did not reach the second append statement -- it "
-        "only covered the first"
-    )
+    assert _n(log) == 4, "the header opt-out did not reach the second append statement -- it only covered the first"
 
 
 def test_badge_names_the_mechanism_that_cached_the_call(nb_runner, tmp_path):
@@ -162,20 +161,20 @@ def test_badge_names_the_mechanism_that_cached_the_call(nb_runner, tmp_path):
     the only place a reader can confirm it engaged.
     """
     log = tmp_path / "calls.log"
-    nb_runner.create_notebook([
-        "%cash_badge print",
-        _helpers(log),
-        "out = []",
-        "for t in [1, 2]:\n    out.append(compute(t))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "%cash_badge print",
+            _helpers(log),
+            "out = []",
+            "for t in [1, 2]:\n    out.append(compute(t))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     badge = nb_runner.get_output(4)
 
     assert "compute()" in badge, badge
-    assert "[intercepted]" in badge, (
-        f"the badge does not say the call was cached by interception:\n{badge}"
-    )
+    assert "[intercepted]" in badge, f"the badge does not say the call was cached by interception:\n{badge}"
 
 
 def test_reordering_an_accumulator_fold_costs_nothing_with_no_directive(nb_runner, tmp_path):
@@ -183,18 +182,18 @@ def test_reordering_an_accumulator_fold_costs_nothing_with_no_directive(nb_runne
     no directive needed.
     """
     log = tmp_path / "calls.log"
-    nb_runner.create_notebook([
-        _helpers(log),
-        "s = 0\nfor x in [1, 10, 5]:\n    s += compute(x)\nprint('SUM', s)",
-    ])
+    nb_runner.create_notebook(
+        [
+            _helpers(log),
+            "s = 0\nfor x in [1, 10, 5]:\n    s += compute(x)\nprint('SUM', s)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert _n(log) == 3
     assert "SUM 19" in nb_runner.get_output(2)
 
-    nb_runner.set_cell_source(
-        2, "s = 0\nfor x in [5, 10, 1]:\n    s += compute(x)\nprint('SUM', s)"
-    )
+    nb_runner.set_cell_source(2, "s = 0\nfor x in [5, 10, 1]:\n    s += compute(x)\nprint('SUM', s)")
     nb_runner.run_cell(2)
     assert "SUM 19" in nb_runner.get_output(2)
     assert _n(log) == 3, (
@@ -203,9 +202,7 @@ def test_reordering_an_accumulator_fold_costs_nothing_with_no_directive(nb_runne
     )
 
     # A genuinely new value costs exactly one call, and no more.
-    nb_runner.set_cell_source(
-        2, "s = 0\nfor x in [5, 10, 1, 7]:\n    s += compute(x)\nprint('SUM', s)"
-    )
+    nb_runner.set_cell_source(2, "s = 0\nfor x in [5, 10, 1, 7]:\n    s += compute(x)\nprint('SUM', s)")
     nb_runner.run_cell(2)
     assert "SUM 27" in nb_runner.get_output(2)
     assert _n(log) == 4, "adding one item cost more than one call"
@@ -218,10 +215,12 @@ def test_no_cache_calls_disables_the_reordering_win_too(nb_runner, tmp_path):
     the append shape above.
     """
     log = tmp_path / "calls.log"
-    nb_runner.create_notebook([
-        _helpers(log),
-        "s = 0\n# @cash:no-cache-calls\nfor x in [1, 10, 5]:\n    s += compute(x)\nprint('SUM', s)",
-    ])
+    nb_runner.create_notebook(
+        [
+            _helpers(log),
+            "s = 0\n# @cash:no-cache-calls\nfor x in [1, 10, 5]:\n    s += compute(x)\nprint('SUM', s)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert _n(log) == 3
@@ -233,6 +232,5 @@ def test_no_cache_calls_disables_the_reordering_win_too(nb_runner, tmp_path):
     nb_runner.run_cell(2)
     assert "SUM 19" in nb_runner.get_output(2)
     assert _n(log) == 6, (
-        "no-cache-calls should have disabled the call cache, so the reorder "
-        "re-runs compute() for every element again"
+        "no-cache-calls should have disabled the call cache, so the reorder re-runs compute() for every element again"
     )

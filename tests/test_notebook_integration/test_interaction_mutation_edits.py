@@ -5,6 +5,7 @@ Tests that in-place mutations (list.append, dict update, etc.) are correctly
 handled when cells are re-run or edited. Mutation detection must not allow
 stale cached values to be restored when mutations have changed the variable.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.stress, pytest.mark.mutations]
@@ -15,11 +16,13 @@ class TestMutationRerunConsistency:
 
     def test_append_does_not_accumulate_on_rerun(self, nb_runner):
         """list.append in a cell should not double-append on re-run."""
-        nb_runner.create_notebook([
-            "data = [1, 2, 3]",
-            "data.append(4)",
-            "print(f'len = {len(data)}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = [1, 2, 3]",
+                "data.append(4)",
+                "print(f'len = {len(data)}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "len = 4" in nb_runner.get_output(3)
@@ -30,11 +33,13 @@ class TestMutationRerunConsistency:
 
     def test_dict_update_idempotent(self, nb_runner):
         """dict update should be idempotent across re-runs."""
-        nb_runner.create_notebook([
-            "d = {'a': 1}",
-            "d['b'] = 2",
-            "print(f'keys = {sorted(d.keys())}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "d = {'a': 1}",
+                "d['b'] = 2",
+                "print(f'keys = {sorted(d.keys())}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "keys = ['a', 'b']" in nb_runner.get_output(3)
@@ -44,11 +49,13 @@ class TestMutationRerunConsistency:
 
     def test_set_add_idempotent(self, nb_runner):
         """set.add should not create duplicates on re-run."""
-        nb_runner.create_notebook([
-            "s = {1, 2}",
-            "s.add(3)",
-            "print(f'len = {len(s)}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "s = {1, 2}",
+                "s.add(3)",
+                "print(f'len = {len(s)}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "len = 3" in nb_runner.get_output(3)
@@ -62,16 +69,18 @@ class TestMutationWithCellEdits:
 
     def test_edit_init_then_mutation_cell(self, nb_runner):
         """Edit the initialization cell, mutation cell should re-execute with new base.
-        
-        NOTE: Standalone mutation cells (data.append(30)) are a known limitation — 
+
+        NOTE: Standalone mutation cells (data.append(30)) are a known limitation —
         the mutation may not propagate through upstream simulation. We test that
         at minimum the init change propagates.
         """
-        nb_runner.create_notebook([
-            "data = [10, 20]",
-            "data.append(30)",
-            "print(f'data = {data}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = [10, 20]",
+                "data.append(30)",
+                "print(f'data = {data}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "data = [10, 20, 30]" in nb_runner.get_output(3)
@@ -87,18 +96,20 @@ class TestMutationWithCellEdits:
 
     def test_edit_mutation_operation_with_restart(self, nb_runner):
         """Change what the mutation cell does — kernel restart forces fresh execution.
-        
+
         Standalone mutation cells (data.append(X)) are tricky because:
         1. They don't produce outputs that can be tracked in lineage
         2. Cache restoration may restore the old state
-        
+
         A kernel restart is the reliable way to pick up mutation cell changes.
         """
-        nb_runner.create_notebook([
-            "data = [1, 2, 3]",
-            "data.append(4)",
-            "print(f'data = {data}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = [1, 2, 3]",
+                "data.append(4)",
+                "print(f'data = {data}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "data = [1, 2, 3, 4]" in nb_runner.get_output(3)
@@ -113,11 +124,13 @@ class TestMutationWithCellEdits:
     def test_remove_mutation_cell(self, nb_runner):
         """Effectively skip the mutation by changing it to a no-op.
         Requires restart since standalone mutation cells need fresh state."""
-        nb_runner.create_notebook([
-            "data = [1, 2]",
-            "data.append(3)",
-            "total = sum(data)\nprint(f'total = {total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = [1, 2]",
+                "data.append(3)",
+                "total = sum(data)\nprint(f'total = {total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total = 6" in nb_runner.get_output(3)
@@ -137,11 +150,13 @@ class TestMutationWithRestart:
         """After restart, mutation result should be correctly restored.
         Mutations can't be virtually restored — must re-run all cells
         so the mutation is re-executed from scratch."""
-        nb_runner.create_notebook([
-            "data = [1, 2, 3]",
-            "data.append(4)",
-            "total = sum(data)\nprint(f'total = {total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = [1, 2, 3]",
+                "data.append(4)",
+                "total = sum(data)\nprint(f'total = {total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total = 10" in nb_runner.get_output(3)
@@ -154,11 +169,13 @@ class TestMutationWithRestart:
     def test_mutation_edit_after_restart(self, nb_runner):
         """Restart, edit the mutation, re-run all.
         After restart, all cells re-execute from scratch."""
-        nb_runner.create_notebook([
-            "items = ['a', 'b']",
-            "items.append('c')",
-            "result = ','.join(items)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "items = ['a', 'b']",
+                "items.append('c')",
+                "result = ','.join(items)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = a,b,c" in nb_runner.get_output(3)
@@ -175,12 +192,14 @@ class TestMultipleMutationsInSequence:
 
     def test_two_mutations_edit_first(self, nb_runner):
         """Two mutation cells, edit the first one. Restart for clean state."""
-        nb_runner.create_notebook([
-            "data = []",
-            "data.append(1)",
-            "data.append(2)",
-            "print(f'data = {data}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = []",
+                "data.append(1)",
+                "data.append(2)",
+                "print(f'data = {data}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "data = [1, 2]" in nb_runner.get_output(4)
@@ -193,12 +212,14 @@ class TestMultipleMutationsInSequence:
 
     def test_two_mutations_edit_second(self, nb_runner):
         """Two mutation cells, edit the second one. Restart for clean state."""
-        nb_runner.create_notebook([
-            "data = []",
-            "data.append(1)",
-            "data.append(2)",
-            "print(f'data = {data}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = []",
+                "data.append(1)",
+                "data.append(2)",
+                "print(f'data = {data}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "data = [1, 2]" in nb_runner.get_output(4)
@@ -211,11 +232,13 @@ class TestMultipleMutationsInSequence:
 
     def test_accumulator_pattern_rerun(self, nb_runner):
         """Classic accumulator pattern: init + loop += must not double-count."""
-        nb_runner.create_notebook([
-            "total = 0",
-            "for x in [1, 2, 3]:\n    total += x",
-            "print(f'total = {total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "total = 0",
+                "for x in [1, 2, 3]:\n    total += x",
+                "print(f'total = {total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total = 6" in nb_runner.get_output(3)

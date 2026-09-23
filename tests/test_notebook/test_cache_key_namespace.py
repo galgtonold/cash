@@ -1,5 +1,4 @@
 """The key builder must namespace keys without disturbing existing ones."""
-import ast
 
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 

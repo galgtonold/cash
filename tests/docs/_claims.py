@@ -19,6 +19,7 @@ at the moment of drift.
 
 This module is pure — no pytest import — so ``scripts/claims.py`` can use it.
 """
+
 from __future__ import annotations
 
 import ast
@@ -57,17 +58,17 @@ def published_pages() -> list[Path]:
 
 @dataclass(frozen=True)
 class Target:
-    path: str                 # relative to src/, e.g. "cash/core.py"
+    path: str  # relative to src/, e.g. "cash/core.py"
     symbol: str | None = None  # dotted, e.g. "Cash.cache"; None means the module
-    pin: str | None = None     # 8 hex chars, or "?" for an unfilled placeholder
-    value: str | None = None   # raw literal text from `== ...`
+    pin: str | None = None  # 8 hex chars, or "?" for an unfilled placeholder
+    value: str | None = None  # raw literal text from `== ...`
 
 
 @dataclass(frozen=True)
 class Anchor:
     page: Path
-    line: int                 # 1-based, the line the comment starts on
-    claim: str                # first non-blank line after the comment
+    line: int  # 1-based, the line the comment starts on
+    claim: str  # first non-blank line after the comment
     targets: tuple[Target, ...]
     broad: str | None = None
     span: tuple[int, int] = (0, 0)  # (start, end) char offsets of the WHOLE
@@ -166,7 +167,7 @@ def _claim_text(lines: list[str], end_line_idx: int) -> str:
     truncating here would silently shorten the value every consumer sees,
     including any future one that compares claim text rather than printing it.
     """
-    for line in lines[end_line_idx + 1:]:
+    for line in lines[end_line_idx + 1 :]:
         if line.strip():
             return line.strip()
     return ""
@@ -203,9 +204,7 @@ def parse_anchors(text: str, page: Path) -> list[Anchor]:
                 continue
             tm = _TARGET_RE.match(chunk)
             if tm is None:
-                raise AnchorError(
-                    f"{page}:{line_no}: cannot parse claim target {chunk.strip()!r}"
-                )
+                raise AnchorError(f"{page}:{line_no}: cannot parse claim target {chunk.strip()!r}")
             raw_value = tm.group("value")
             targets.append(
                 Target(
@@ -252,15 +251,9 @@ def _children_named(node: ast.AST, name: str) -> list[ast.AST]:
     for child in ast.iter_child_nodes(node):
         if isinstance(child, _DEF_NODES) and child.name == name:
             found.append(child)
-        elif isinstance(child, ast.Assign) and any(
-            isinstance(t, ast.Name) and t.id == name for t in child.targets
-        ):
+        elif isinstance(child, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in child.targets):
             found.append(child)
-        elif (
-            isinstance(child, ast.AnnAssign)
-            and isinstance(child.target, ast.Name)
-            and child.target.id == name
-        ):
+        elif isinstance(child, ast.AnnAssign) and isinstance(child.target, ast.Name) and child.target.id == name:
             found.append(child)
     return found
 
@@ -305,9 +298,7 @@ def resolve(target: Target, src_root: Path = SRC_ROOT) -> tuple[list[ast.AST], s
         found = _children_named(nodes[-1], part)
         if not found:
             where = ".".join(seen) if seen else "module scope"
-            raise AnchorError(
-                f"src/{target.path}: no symbol {part!r} in {where}"
-            )
+            raise AnchorError(f"src/{target.path}: no symbol {part!r} in {where}")
         nodes = found
         seen.append(part)
     return nodes, source
@@ -334,7 +325,7 @@ def normalize(node: ast.AST, source: str) -> str:
         for deco in getattr(node, "decorator_list", []) or []:
             start = min(start, deco.lineno)
         lines = source.splitlines()
-        segment = "\n".join(lines[start - 1: node.end_lineno])
+        segment = "\n".join(lines[start - 1 : node.end_lineno])
 
     segment = textwrap.dedent(segment)
 
@@ -378,9 +369,7 @@ def fingerprint(nodes: list[ast.AST], source: str) -> str:
 
 def _is_field_call(call: ast.Call) -> bool:
     fn = call.func
-    return (isinstance(fn, ast.Name) and fn.id == "field") or (
-        isinstance(fn, ast.Attribute) and fn.attr == "field"
-    )
+    return (isinstance(fn, ast.Name) and fn.id == "field") or (isinstance(fn, ast.Attribute) and fn.attr == "field")
 
 
 # Arithmetic that ``ast.literal_eval`` refuses but that is unambiguously a
@@ -413,9 +402,7 @@ def _fold_numeric(node: ast.AST):
         operand = _fold_numeric(node.operand)
         return operand if isinstance(node.op, ast.UAdd) else -operand
     if isinstance(node, ast.BinOp) and type(node.op) in _ARITH_OPS:
-        return _ARITH_OPS[type(node.op)](
-            _fold_numeric(node.left), _fold_numeric(node.right)
-        )
+        return _ARITH_OPS[type(node.op)](_fold_numeric(node.left), _fold_numeric(node.right))
     raise ValueError("not a constant numeric expression")
 
 
@@ -427,8 +414,7 @@ def literal_value(node: ast.AST) -> object:
     """
     if not isinstance(node, (ast.Assign, ast.AnnAssign)):
         raise AnchorError(
-            "a value anchor only applies to an assignment; use a fingerprint "
-            "anchor for a function or class"
+            "a value anchor only applies to an assignment; use a fingerprint anchor for a function or class"
         )
     value = node.value
     if value is None:
@@ -442,8 +428,7 @@ def literal_value(node: ast.AST) -> object:
         for kw in value.keywords:
             if kw.arg == "default_factory":
                 raise AnchorError(
-                    "dataclasses.field(default_factory=...) has no comparable "
-                    "literal; use a fingerprint anchor instead"
+                    "dataclasses.field(default_factory=...) has no comparable literal; use a fingerprint anchor instead"
                 )
         for kw in value.keywords:
             if kw.arg == "default":
@@ -461,9 +446,7 @@ def literal_value(node: ast.AST) -> object:
     try:
         return _fold_numeric(value)
     except ValueError as exc:
-        raise AnchorError(
-            f"not a literal: {ast.unparse(value)[:60]}"
-        ) from exc
+        raise AnchorError(f"not a literal: {ast.unparse(value)[:60]}") from exc
 
 
 def values_match(documented: str, actual: object) -> bool:
@@ -479,7 +462,7 @@ def values_match(documented: str, actual: object) -> bool:
     except (ValueError, TypeError, SyntaxError) as exc:
         raise AnchorError(
             f"documented value {documented!r} is not a Python literal; write it "
-            f"as one (0.01, None, \"sha256\") or use a fingerprint anchor"
+            f'as one (0.01, None, "sha256") or use a fingerprint anchor'
         ) from exc
     # bool FIRST and by `is`: bool is a subclass of int, so `True == 1` and
     # `False == 0` in plain Python. Falling through to `want == actual` below
@@ -546,9 +529,7 @@ def check_page(page: Path, src_root: Path = SRC_ROOT) -> list[Problem]:
             try:
                 nodes, source = resolve(t, src_root)
             except AnchorError as exc:
-                problems.append(
-                    Problem(rel, anchor.line, "unresolved", str(exc), t)
-                )
+                problems.append(Problem(rel, anchor.line, "unresolved", str(exc), t))
                 continue
 
             name = f"{t.path}:{t.symbol or '<module>'}"
@@ -566,15 +547,13 @@ def check_page(page: Path, src_root: Path = SRC_ROOT) -> list[Problem]:
             # it, and a rule that fires on correct authoring is one people learn
             # to satisfy by rote.
             is_pinned = t.pin is not None or t.value is not None
-            if (
-                is_pinned
-                and isinstance(node, (ast.Module, ast.ClassDef))
-                and not anchor.broad
-            ):
+            if is_pinned and isinstance(node, (ast.Module, ast.ClassDef)) and not anchor.broad:
                 what = "module" if isinstance(node, ast.Module) else "class"
                 problems.append(
                     Problem(
-                        rel, anchor.line, "broad",
+                        rel,
+                        anchor.line,
+                        "broad",
                         f"{name} is a {what}-level anchor; narrow it to the "
                         f"function or attribute the claim is actually about, or "
                         f'justify it with broad="reason"',
@@ -588,14 +567,14 @@ def check_page(page: Path, src_root: Path = SRC_ROOT) -> list[Problem]:
                     actual = literal_value(node)
                     ok = values_match(t.value, actual)
                 except AnchorError as exc:
-                    problems.append(
-                        Problem(rel, anchor.line, "value", str(exc), t)
-                    )
+                    problems.append(Problem(rel, anchor.line, "value", str(exc), t))
                     continue
                 if not ok:
                     problems.append(
                         Problem(
-                            rel, anchor.line, "value",
+                            rel,
+                            anchor.line,
+                            "value",
                             f"docs say {name} == {t.value}, source says {actual!r}",
                             t,
                         )
@@ -605,9 +584,10 @@ def check_page(page: Path, src_root: Path = SRC_ROOT) -> list[Problem]:
             if t.pin == "?":
                 problems.append(
                     Problem(
-                        rel, anchor.line, "unpinned",
-                        f"{name} has an unfilled pin placeholder; run "
-                        f"`python scripts/claims.py --pin`",
+                        rel,
+                        anchor.line,
+                        "unpinned",
+                        f"{name} has an unfilled pin placeholder; run `python scripts/claims.py --pin`",
                         t,
                     )
                 )
@@ -620,9 +600,10 @@ def check_page(page: Path, src_root: Path = SRC_ROOT) -> list[Problem]:
             if actual_fp != t.pin:
                 problems.append(
                     Problem(
-                        rel, anchor.line, "drift",
-                        f"{name} changed (@{t.pin} -> @{actual_fp}); re-read the "
-                        f"claim: {ellipsize(anchor.claim)!r}",
+                        rel,
+                        anchor.line,
+                        "drift",
+                        f"{name} changed (@{t.pin} -> @{actual_fp}); re-read the claim: {ellipsize(anchor.claim)!r}",
                         t,
                     )
                 )
@@ -688,9 +669,7 @@ def _mask_html_comments(text: str) -> str:
     wrongness that makes a report worse than useless, because it names a real
     line, just not the one it found.
     """
-    return _HTML_COMMENT_RE.sub(
-        lambda m: re.sub(r"[^\n]", "\0", m.group(0)), text
-    )
+    return _HTML_COMMENT_RE.sub(lambda m: re.sub(r"[^\n]", "\0", m.group(0)), text)
 
 
 def _headings(text: str) -> list[tuple[int, int]]:
@@ -703,9 +682,7 @@ def _headings(text: str) -> list[tuple[int, int]]:
     return out
 
 
-def _enclosing_section(
-    headings: list[tuple[int, int]], total_lines: int, line: int
-) -> tuple[int, int]:
+def _enclosing_section(headings: list[tuple[int, int]], total_lines: int, line: int) -> tuple[int, int]:
     """The INNERMOST heading-delimited section containing *line*, 1-based.
 
     Innermost, not outermost, and that is load-bearing. An anchor under
@@ -772,9 +749,7 @@ def mention_pattern(target: Target) -> "re.Pattern[str] | None":
     return re.compile(r"(?<![\w.])%{0,2}(?:" + alternatives + r")(?![\w])")
 
 
-def check_unanchored(
-    target: Target, pages: list[Path] | None = None
-) -> list[Problem]:
+def check_unanchored(target: Target, pages: list[Path] | None = None) -> list[Problem]:
     """Published prose about *target* that pins nothing -- triage, never a gate.
 
     Two rules, because the two real misses needed two different ones:
@@ -808,7 +783,7 @@ def check_unanchored(
     name = f"{target.path}:{target.symbol or '<module>'}"
     out: list[Problem] = []
 
-    for page in (published_pages() if pages is None else pages):
+    for page in published_pages() if pages is None else pages:
         rel = _rel(page)
         text = page.read_text(encoding="utf-8")
         prose = _mask_html_comments(strip_code_fences(text)).splitlines()
@@ -829,20 +804,19 @@ def check_unanchored(
             if needle and needle.search(line) and not _within(anchored_here, i):
                 out.append(
                     Problem(
-                        rel, i, "unanchored",
-                        f"names {name} but pins nothing: "
-                        f"{ellipsize(line.strip())!r}",
+                        rel,
+                        i,
+                        "unanchored",
+                        f"names {name} but pins nothing: {ellipsize(line.strip())!r}",
                         target,
                     )
                 )
-            elif (
-                anchored_here
-                and _ENUMERATION_RE.search(line)
-                and not _within(anchored, i)
-            ):
+            elif anchored_here and _ENUMERATION_RE.search(line) and not _within(anchored, i):
                 out.append(
                     Problem(
-                        rel, i, "unanchored",
+                        rel,
+                        i,
+                        "unanchored",
                         f"closed enumeration on a page that pins {name}, but "
                         f"this line pins nothing: {ellipsize(line.strip())!r}",
                         target,
@@ -869,9 +843,10 @@ def check_manifest() -> list[Problem]:
     for rel in sorted(set(manifest) - set(pages)):
         problems.append(
             Problem(
-                rel, 0, "manifest",
-                "listed in claim_manifest.json but is not a published page; "
-                "remove the entry or restore the page",
+                rel,
+                0,
+                "manifest",
+                "listed in claim_manifest.json but is not a published page; remove the entry or restore the page",
             )
         )
 
@@ -880,9 +855,10 @@ def check_manifest() -> list[Problem]:
         if entry is None:
             problems.append(
                 Problem(
-                    rel, 0, "manifest",
-                    'not in claim_manifest.json; add {"audited": null, '
-                    '"anchors": 0} and triage the page',
+                    rel,
+                    0,
+                    "manifest",
+                    'not in claim_manifest.json; add {"audited": null, "anchors": 0} and triage the page',
                 )
             )
             continue
@@ -892,9 +868,10 @@ def check_manifest() -> list[Problem]:
         if actual < entry["anchors"]:
             problems.append(
                 Problem(
-                    rel, 0, "manifest",
-                    f"anchor count fell from {entry['anchors']} to {actual}; a "
-                    f"claim was removed along with its anchor",
+                    rel,
+                    0,
+                    "manifest",
+                    f"anchor count fell from {entry['anchors']} to {actual}; a claim was removed along with its anchor",
                 )
             )
     return problems

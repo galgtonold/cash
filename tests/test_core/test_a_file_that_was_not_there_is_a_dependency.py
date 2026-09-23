@@ -11,6 +11,7 @@ promises "A file that was **not** there counts as well", and the
 
 did not, so the default was served for ever after the file appeared.
 """
+
 from __future__ import annotations
 
 import json
@@ -20,7 +21,7 @@ import textwrap
 
 import pytest
 
-PROGRAM = textwrap.dedent('''
+PROGRAM = textwrap.dedent("""
     import os, time, json
     import pandas as pd
     import cash
@@ -54,7 +55,7 @@ PROGRAM = textwrap.dedent('''
             return "MISSING"
 
     print(json.dumps([with_try(1), str(with_pandas(1)), with_pathlib(1)]))
-''')
+""")
 
 
 @pytest.mark.timeout(300)
@@ -62,12 +63,13 @@ def test_the_file_appearing_invalidates_each_spelling(tmp_path):
     data = tmp_path / "cfg.csv"
     script = tmp_path / "run.py"
     script.write_text(
-        PROGRAM.replace("CACHE_DIR", repr(str(tmp_path / ".cash"))).replace("PATH", repr(str(data))),
-        encoding="utf-8")
+        PROGRAM.replace("CACHE_DIR", repr(str(tmp_path / ".cash"))).replace("PATH", repr(str(data))), encoding="utf-8"
+    )
 
     def run():
-        done = subprocess.run([sys.executable, str(script)], capture_output=True,
-                              text=True, timeout=180, cwd=str(tmp_path))
+        done = subprocess.run(
+            [sys.executable, str(script)], capture_output=True, text=True, timeout=180, cwd=str(tmp_path)
+        )
         assert done.returncode == 0, done.stderr
         return json.loads(done.stdout.strip().splitlines()[-1])
 

@@ -3,6 +3,7 @@ elsewhere should be flagged (the result would go stale when the global changes).
 Reads of never-written globals (constants, lookup tables) must stay quiet, and a
 local that merely shares a name with a global must not trigger a false positive.
 """
+
 from __future__ import annotations
 
 import warnings
@@ -15,25 +16,21 @@ from cash.purity_analyzer import (
     _module_modified_globals,
     get_analyzer,
 )
-
 from tests.test_core import _global_read_fixture as gf
 
 
 def _global_flags(func):
     report = get_analyzer().analyze(func.__wrapped__)
-    return {
-        i.description.split("'")[1]
-        for i in report.issues if i.kind == ISSUE_MUTABLE_GLOBAL
-    }
+    return {i.description.split("'")[1] for i in report.issues if i.kind == ISSUE_MUTABLE_GLOBAL}
 
 
 def test_scanner_finds_only_modified_globals():
     modified = _module_modified_globals(gf)
-    assert "CONFIG" in modified           # in-place mutated (inside a function)
-    assert "COUNTER" in modified          # reassigned via `global`
-    assert "TABLE" not in modified        # constant (local shadow doesn't count)
-    assert "LIMIT" not in modified        # constant int
-    assert "REGISTRY" not in modified     # mutated only at import time (top level)
+    assert "CONFIG" in modified  # in-place mutated (inside a function)
+    assert "COUNTER" in modified  # reassigned via `global`
+    assert "TABLE" not in modified  # constant (local shadow doesn't count)
+    assert "LIMIT" not in modified  # constant int
+    assert "REGISTRY" not in modified  # mutated only at import time (top level)
 
 
 def test_import_time_only_global_not_flagged():
@@ -57,7 +54,7 @@ def test_a_global_the_key_folds_is_not_reported_and_invalidates():
     and "cached results won't reflect changes to it" is false. This test
     pinned that warning until round 18 measured the opposite. The second
     half is the reason: a setter's change is a new entry, not a stale hit."""
-    gf.price.cache_clear()                # reset warn-once dedup
+    gf.price.cache_clear()  # reset warn-once dedup
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
         assert gf.price(100) == pytest.approx(110)

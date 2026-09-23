@@ -27,6 +27,7 @@ Like the rank index, the record is ADVISORY: a line per write, access and
 removal, appended by any process and read once per process. Lost or stale, it
 costs pruning precision, never a value.
 """
+
 from __future__ import annotations
 
 import logging
@@ -37,8 +38,14 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["Version", "VersionIndex", "superseded_to_drop", "INDEX_FILENAME",
-           "BYTES_PER_COMPUTE_SECOND", "MAX_SUPERSEDED"]
+__all__ = [
+    "Version",
+    "VersionIndex",
+    "superseded_to_drop",
+    "INDEX_FILENAME",
+    "BYTES_PER_COMPUTE_SECOND",
+    "MAX_SUPERSEDED",
+]
 
 #: No entry suffix, so every entry glob passes it by.
 INDEX_FILENAME = "_versions.log"
@@ -66,16 +73,15 @@ class Version:
     used: float
 
 
-def superseded_to_drop(versions: dict[str, Version], current: str,
-                       in_use: set[str] | frozenset[str] = frozenset()) -> list[str]:
+def superseded_to_drop(
+    versions: dict[str, Version], current: str, in_use: set[str] | frozenset[str] = frozenset()
+) -> list[str]:
     """Keys of *versions* other than *current* that are not worth keeping."""
-    older = sorted((v for k, v in versions.items() if k != current),
-                   key=lambda v: v.used, reverse=True)
+    older = sorted((v for k, v in versions.items() if k != current), key=lambda v: v.used, reverse=True)
     drop: list[str] = []
     kept = kept_bytes = 0
     for i, v in enumerate(older):
-        affordable = (kept < MAX_SUPERSEDED
-                      and kept_bytes + v.size <= BYTES_PER_COMPUTE_SECOND * max(v.cost, 0.0))
+        affordable = kept < MAX_SUPERSEDED and kept_bytes + v.size <= BYTES_PER_COMPUTE_SECOND * max(v.cost, 0.0)
         if i == 0 or v.key in in_use or affordable:
             kept += 1
             kept_bytes += v.size
@@ -194,8 +200,11 @@ class VersionIndex:
         """Rewrite as exactly what is known, through a temp file and a rename;
         a failed rename leaves the longer, still-correct file."""
         tmp = f"{self.path}.{os.getpid()}.tmp"
-        body = "".join(f"{slot} {v.key} {v.size} {v.cost!r} {v.used!r}\n"
-                       for slot, versions in self._slots.items() for v in versions.values())
+        body = "".join(
+            f"{slot} {v.key} {v.size} {v.cost!r} {v.used!r}\n"
+            for slot, versions in self._slots.items()
+            for v in versions.values()
+        )
         try:
             with self._untracked():
                 with open(tmp, "w", encoding="ascii") as fh:

@@ -12,6 +12,7 @@ single ``state_hash`` indirection below is the one line that gets
 repointed at the new call path once the extraction lands; the asserted
 digests do not change.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -68,15 +69,14 @@ def test_helper_token_format_is_helper_qual_hash(tmp_path):
     assert report.helper_source_hashes, "fixture expected to capture hm.helper"
 
     import sys as _sys
+
     live: dict[str, str] = {}
     for qual, (mod_name, attr_chain) in report.helper_resolution_paths.items():
         obj = _sys.modules.get(mod_name)
         for attr in attr_chain:
             obj = getattr(obj, attr, None)
         if callable(obj):
-            live[qual] = hashlib.sha256(
-                normalize_source_for_hash(inspect.getsource(obj)).encode("utf-8")
-            ).hexdigest()
+            live[qual] = hashlib.sha256(normalize_source_for_hash(inspect.getsource(obj)).encode("utf-8")).hexdigest()
 
     parts = [c.source_hashes[name]]
     for qual in sorted(report.helper_source_hashes):
@@ -93,6 +93,7 @@ def test_state_hash_is_stable_across_cash_instances(tmp_path):
     produce an identical state hash — this is the on-disk-cache-validity
     guarantee. Pins purity (no instance identity, mtime, or ordering
     leaks into the digest)."""
+
     def build(cache_dir):
         c = Cash(cache_dir=str(cache_dir), register_magic=False)
 

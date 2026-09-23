@@ -6,13 +6,13 @@ If this test fails, run:
 
 and commit the regenerated docs/_badges/*.html.
 """
+
 from __future__ import annotations
 
 import re
 import subprocess
 import sys
 from pathlib import Path
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BADGES_DIR = REPO_ROOT / "docs" / "_badges"
@@ -25,22 +25,21 @@ def test_committed_badges_match_current_render(tmp_path):
     out_dir.mkdir()
     result = subprocess.run(
         [sys.executable, str(BUILD_SCRIPT), "--out", str(out_dir)],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     assert result.returncode == 0, f"build script failed: {result.stderr}"
 
     # Only compare files the build script owns (those generated from FIXTURES).
     # Hand-crafted badge HTML in docs/_badges/ (e.g. animated "why-cash" reels
     # or one-off tutorial illustrations) are intentionally excluded.
-    committed = {p.name: p.read_text(encoding="utf-8")
-                 for p in BADGES_DIR.glob("*.html")}
-    rendered = {p.name: p.read_text(encoding="utf-8")
-                for p in out_dir.glob("*.html")}
+    committed = {p.name: p.read_text(encoding="utf-8") for p in BADGES_DIR.glob("*.html")}
+    rendered = {p.name: p.read_text(encoding="utf-8") for p in out_dir.glob("*.html")}
 
     committed_managed = {k: v for k, v in committed.items() if k in rendered}
     assert committed_managed == rendered, (
-        "docs/_badges/*.html is stale. Run "
-        "`python scripts/build_badge_examples.py` and commit the result."
+        "docs/_badges/*.html is stale. Run `python scripts/build_badge_examples.py` and commit the result."
     )
 
 
@@ -65,21 +64,19 @@ def test_render_is_independent_of_ambient_uuid_consumption(tmp_path):
     out_dir.mkdir()
     preamble = (
         "import sys, uuid, runpy\n"
-        "[uuid.uuid4() for _ in range(7)]\n"          # stand-in for opentelemetry et al.
+        "[uuid.uuid4() for _ in range(7)]\n"  # stand-in for opentelemetry et al.
         f"sys.argv = ['build_badge_examples.py', '--out', {str(out_dir)!r}]\n"
         "try:\n"
         f"    runpy.run_path({str(BUILD_SCRIPT)!r}, run_name='__main__')\n"
         "except SystemExit as e:\n"
         "    sys.exit(e.code)\n"
     )
-    result = subprocess.run([sys.executable, "-c", preamble],
-                            capture_output=True, text=True, check=False)
+    result = subprocess.run([sys.executable, "-c", preamble], capture_output=True, text=True, check=False)
     assert result.returncode == 0, f"build script failed: {result.stderr}"
 
     rendered = {p.name: p.read_text(encoding="utf-8") for p in out_dir.glob("*.html")}
     assert rendered, "build script produced no output"
-    committed = {p.name: p.read_text(encoding="utf-8")
-                 for p in BADGES_DIR.glob("*.html") if p.name in rendered}
+    committed = {p.name: p.read_text(encoding="utf-8") for p in BADGES_DIR.glob("*.html") if p.name in rendered}
     assert committed == rendered, (
         "Badge output shifted when unrelated code consumed uuid4() first. The "
         "per-fixture counter reset in scripts/build_badge_examples.py is gone "
@@ -92,9 +89,9 @@ def test_every_fixture_renders():
     """Each fixture in scripts/badge_fixtures.py must build without raising."""
     sys.path.insert(0, str(REPO_ROOT))
     try:
-        from scripts.badge_fixtures import FIXTURES
         from cash.notebook.badge_renderer.renderers.html import render_html
         from cash.notebook.badge_renderer.view_builder import build_interactive_badge
+        from scripts.badge_fixtures import FIXTURES
     finally:
         sys.path.pop(0)
 

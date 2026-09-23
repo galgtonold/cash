@@ -16,32 +16,32 @@ byte-identical. Before the fix they differed (5437B vs 8460B) and
 Deliberately end-to-end rather than a unit test: the defect only appears once a
 real kernel, a real backend tier and real pyplot state are all in play.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.loops]
 
 pytest.importorskip("matplotlib")
 
-_HEAD = ("import time, matplotlib\nmatplotlib.use('Agg')\n"
-         "import matplotlib.pyplot as plt")
+_HEAD = "import time, matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt"
 # Creation is cached; the DRAWING happens later, in a separate statement. That
 # split is the vulnerable arrangement — a function that draws and returns in one
 # go cannot expose it.
-_DEFS = ("def new_fig(n):\n    time.sleep(0.2)\n    fig, ax = plt.subplots()\n"
-         "    return fig, ax")
+_DEFS = "def new_fig(n):\n    time.sleep(0.2)\n    fig, ax = plt.subplots()\n    return fig, ax"
 
 
 def _run(nb_runner, tmp_path, loop_src, tag):
     obj, glb = tmp_path / f"{tag}_o.png", tmp_path / f"{tag}_g.png"
-    nb_runner.create_notebook([
-        _HEAD,
-        _DEFS,
-        "holder = []",
-        loop_src,
-        "fig, ax = holder[-1]\nax.bar(['a', 'b'], [3, 6])",
-        f"fig.savefig(r'{obj}')\nplt.savefig(r'{glb}')\n"
-        "print('IS_CURRENT', plt.gcf() is fig)",
-    ])
+    nb_runner.create_notebook(
+        [
+            _HEAD,
+            _DEFS,
+            "holder = []",
+            loop_src,
+            "fig, ax = holder[-1]\nax.bar(['a', 'b'], [3, 6])",
+            f"fig.savefig(r'{obj}')\nplt.savefig(r'{glb}')\nprint('IS_CURRENT', plt.gcf() is fig)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     out = nb_runner.get_output(6)
@@ -51,7 +51,8 @@ def _run(nb_runner, tmp_path, loop_src, tag):
 
 def test_intercepted_figure_call_does_not_hijack_pyplot(nb_runner, tmp_path):
     same, out = _run(
-        nb_runner, tmp_path,
+        nb_runner,
+        tmp_path,
         "# @cash:cache-calls\nfor n in [1]:\n    holder.append(new_fig(n))",
         "directive",
     )
@@ -72,7 +73,8 @@ def test_ground_truth_without_caching(nb_runner, tmp_path):
     test above by making both arms equally wrong.
     """
     same, out = _run(
-        nb_runner, tmp_path,
+        nb_runner,
+        tmp_path,
         "%cash_off\nfor n in [1]:\n    holder.append(new_fig(n))",
         "plain",
     )

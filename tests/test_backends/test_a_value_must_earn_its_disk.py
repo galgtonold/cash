@@ -33,6 +33,7 @@ An explicit decision by the user -- ``@cash.cache`` or ``@cash:persist`` -- is
 never second-guessed here, the same way it is not second-guessed by the
 compute floor or the cost model.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -44,7 +45,7 @@ from cash.backends.value_policy import (
     worth_its_bytes,
 )
 
-MIB = 1024 ** 2
+MIB = 1024**2
 
 
 class TestTheArithmetic:
@@ -75,6 +76,7 @@ class TestTheArithmetic:
         """The two rates are related on purpose: `versions` rations superseded
         copies, which are speculative, at half what a live entry gets."""
         from cash.backends.value_policy import BYTES_PER_COMPUTE_SECOND
+
         assert WORTH_CEILING_BYTES_PER_SECOND == 2 * BYTES_PER_COMPUTE_SECOND
 
     @pytest.mark.parametrize("size", [0, 1, WORTH_FLOOR_BYTES - 1])
@@ -90,8 +92,7 @@ class TestThroughABackend:
     """The gate where it actually runs."""
 
     def _tiered(self, tmp_path):
-        return TieredBackend([InMemoryBackend(), FileBackend(str(tmp_path),
-                                                             flush_interval=0)])
+        return TieredBackend([InMemoryBackend(), FileBackend(str(tmp_path), flush_interval=0)])
 
     def _set(self, backend, key, nbytes, cost, **extra):
         meta = {"execution_time": cost, "size": nbytes, "key": key, **extra}
@@ -118,10 +119,8 @@ class TestThroughABackend:
         holds -- not by what it takes in memory: r28s5's result is 402 MiB
         pickled and 1.7 GiB in memory, as 3.7 million strings."""
         b = self._tiered(tmp_path)
-        kept = self._set(b, "call:kept", 200 * MIB, 1.2,
-                         value_bytes=100 * MIB, value_bytes_estimated=True)
-        refused = self._set(b, "call:refused", 20 * MIB, 1.2,
-                            value_bytes=300 * MIB, value_bytes_estimated=True)
+        kept = self._set(b, "call:kept", 200 * MIB, 1.2, value_bytes=100 * MIB, value_bytes_estimated=True)
+        refused = self._set(b, "call:refused", 20 * MIB, 1.2, value_bytes=300 * MIB, value_bytes_estimated=True)
         b.shutdown()
         assert "DISK" in (kept.get("storage") or []), kept
         assert "DISK" not in (refused.get("storage") or []), refused
@@ -130,6 +129,7 @@ class TestThroughABackend:
         """Round 29, r29s5: about 30 of these warnings, 12 from one sweep cell,
         five lines each. One per cell, naming its statements."""
         import warnings
+
         b = self._tiered(tmp_path)
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
@@ -147,11 +147,11 @@ class TestThroughABackend:
         internal ``call:efa280...`` key -- the statement holding the call's
         result says it, naming the code the user wrote."""
         import warnings
+
         b = self._tiered(tmp_path)
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            self._set(b, "call:efa280", 20 * MIB, 1.2,
-                      value_bytes=300 * MIB, value_bytes_estimated=True)
+            self._set(b, "call:efa280", 20 * MIB, 1.2, value_bytes=300 * MIB, value_bytes_estimated=True)
         b.shutdown()
         assert not [w for w in caught if "CACHE-NOT-WORTH-BYTES" in str(w.message)]
 
@@ -171,6 +171,7 @@ class TestThroughABackend:
         per statement, naming its code, blamed on ``<cash>``.
         """
         import warnings
+
         b = self._tiered(tmp_path)
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
@@ -233,10 +234,8 @@ class TestTheDecoratorIsNotReJudged:
     def _cash(self, tmp_path, frozen):
         from cash import Cash, CashConfig
 
-        backend = TieredBackend([InMemoryBackend(),
-                                 FileBackend(str(tmp_path), flush_interval=0)])
-        cash_obj = Cash(backend=backend, config=CashConfig(cache_dir=str(tmp_path)),
-                        register_magic=False)
+        backend = TieredBackend([InMemoryBackend(), FileBackend(str(tmp_path), flush_interval=0)])
+        cash_obj = Cash(backend=backend, config=CashConfig(cache_dir=str(tmp_path)), register_magic=False)
 
         @cash_obj.cache(frozen=frozen)
         def build(n):
@@ -245,8 +244,7 @@ class TestTheDecoratorIsNotReJudged:
         return cash_obj, backend, build
 
     @pytest.mark.parametrize("frozen", [False, True])
-    def test_a_decorated_result_reaches_disk_however_it_is_declared(
-            self, tmp_path, frozen):
+    def test_a_decorated_result_reaches_disk_however_it_is_declared(self, tmp_path, frozen):
         """40 MiB for ~0 s is far over the ceiling -- and exempt either way."""
         cash_obj, backend, build = self._cash(tmp_path, frozen)
         build(40 * MIB)

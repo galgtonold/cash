@@ -14,11 +14,13 @@ class TestEnumEdits:
 
     def test_edit_enum_member(self, nb_runner):
         """Edit an enum member value."""
-        nb_runner.create_notebook([
-            "from enum import Enum",
-            "class Color(Enum):\n    RED = 1\n    GREEN = 2\n    BLUE = 3",
-            "c = Color.RED\nprint(f'color = {c.name}, value = {c.value}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from enum import Enum",
+                "class Color(Enum):\n    RED = 1\n    GREEN = 2\n    BLUE = 3",
+                "c = Color.RED\nprint(f'color = {c.name}, value = {c.value}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "color = RED, value = 1" in nb_runner.get_output(3)
@@ -34,11 +36,13 @@ class TestEnumEdits:
 
     def test_add_enum_member(self, nb_runner):
         """Add a new member to an enum."""
-        nb_runner.create_notebook([
-            "from enum import Enum",
-            "class Status(Enum):\n    ACTIVE = 'active'\n    INACTIVE = 'inactive'",
-            "statuses = [s.value for s in Status]\nprint(f'statuses = {statuses}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from enum import Enum",
+                "class Status(Enum):\n    ACTIVE = 'active'\n    INACTIVE = 'inactive'",
+                "statuses = [s.value for s in Status]\nprint(f'statuses = {statuses}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(3)
@@ -60,10 +64,12 @@ class TestConstantEdits:
 
     def test_edit_config_constant(self, nb_runner):
         """Edit a config constant that affects computation."""
-        nb_runner.create_notebook([
-            "MAX_RETRIES = 3  # config constant",
-            "retries = list(range(MAX_RETRIES))\nprint(f'retries = {retries}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "MAX_RETRIES = 3  # config constant",
+                "retries = list(range(MAX_RETRIES))\nprint(f'retries = {retries}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "retries = [0, 1, 2]" in nb_runner.get_output(2)
@@ -74,10 +80,12 @@ class TestConstantEdits:
 
     def test_edit_multiple_constants(self, nb_runner):
         """Edit multiple constants at once."""
-        nb_runner.create_notebook([
-            "WIDTH = 10\nHEIGHT = 5",
-            "area = WIDTH * HEIGHT\nperim = 2 * (WIDTH + HEIGHT)\nprint(f'area={area} perim={perim}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "WIDTH = 10\nHEIGHT = 5",
+                "area = WIDTH * HEIGHT\nperim = 2 * (WIDTH + HEIGHT)\nprint(f'area={area} perim={perim}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "area=50 perim=30" in nb_runner.get_output(2)
@@ -88,11 +96,13 @@ class TestConstantEdits:
 
     def test_frozen_dataclass_constant(self, nb_runner):
         """Use a frozen dataclass as a constant, edit it."""
-        nb_runner.create_notebook([
-            "from dataclasses import dataclass",
-            "@dataclass(frozen=True)\nclass Params:\n    lr: float = 0.01\n    epochs: int = 10",
-            "p = Params()\nprint(f'lr={p.lr} epochs={p.epochs}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from dataclasses import dataclass",
+                "@dataclass(frozen=True)\nclass Params:\n    lr: float = 0.01\n    epochs: int = 10",
+                "p = Params()\nprint(f'lr={p.lr} epochs={p.epochs}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "lr=0.01 epochs=10" in nb_runner.get_output(3)

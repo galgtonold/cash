@@ -14,6 +14,7 @@ a stale value, even on the first (cold) run.
 
 Run through ``scripts/fails_first.py`` to confirm these fail without the fix.
 """
+
 import pytest
 
 pytestmark = pytest.mark.core
@@ -32,12 +33,14 @@ def _num(out: str) -> str:
 def _run(nb_runner, tmp_path, module_body):
     (tmp_path / "mutmod.py").write_text(module_body, encoding="utf-8")
     p = str(tmp_path).replace("\\", "/")
-    nb_runner.create_notebook([
-        f"import sys\nsys.path.insert(0, '{p}')\nimport pandas as pd\n"
-        f"from mutmod import build\nclass Box:\n    def __init__(self, df): self.df = df",
-        f"box = Box(pd.DataFrame({{'a': range({N})}}))\nbuild(box)",   # create + mutate via import
-        "result = int(box.df['x'].sum())\nprint('RESULT', result)",   # read in a LATER cell
-    ])
+    nb_runner.create_notebook(
+        [
+            f"import sys\nsys.path.insert(0, '{p}')\nimport pandas as pd\n"
+            f"from mutmod import build\nclass Box:\n    def __init__(self, df): self.df = df",
+            f"box = Box(pd.DataFrame({{'a': range({N})}}))\nbuild(box)",  # create + mutate via import
+            "result = int(box.df['x'].sum())\nprint('RESULT', result)",  # read in a LATER cell
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     return _num(nb_runner.get_output(3))
@@ -53,9 +56,9 @@ def test_imported_interprocedural_arg_mutation_survives_cross_cell(nb_runner, tm
     # entry point calls a module-level helper -> needs interprocedural resolution
     # through the imported function's __globals__.
     v = _run(
-        nb_runner, tmp_path,
-        "def _apply(box):\n    box.df['x'] = box.df['a'] * 3\n"
-        "def build(box):\n    _apply(box)\n",
+        nb_runner,
+        tmp_path,
+        "def _apply(box):\n    box.df['x'] = box.df['a'] * 3\ndef build(box):\n    _apply(box)\n",
     )
     assert v.isdigit(), f"interprocedural imported-fn mutation reverted: {v!r}"
     assert int(v) == EXPECTED, f"wrong value from interprocedural imported-fn mutation: {v}"

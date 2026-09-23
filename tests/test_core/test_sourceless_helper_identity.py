@@ -21,10 +21,10 @@ import pytest
 
 from cash import Cash
 
-DYNMOD = '''
+DYNMOD = """
 _SRC = {src!r}
 exec(compile(_SRC, "<dynamic-absent-from-linecache>", "exec"), globals())
-'''
+"""
 
 USERMOD = """
 import dynmod
@@ -119,9 +119,7 @@ def test_helper_is_recorded_rather_than_dropped(env):
     usermod.compute(3)
     report = cash._purity_reports[cash._get_func_key(usermod.compute)]
 
-    assert "dynmod.helper" in report.opaque_callees, (
-        "still opaque for PURITY -- we cannot read what it does"
-    )
+    assert "dynmod.helper" in report.opaque_callees, "still opaque for PURITY -- we cannot read what it does"
     assert "dynmod.helper" in report.helper_source_hashes, (
         "but it must contribute to the CACHE KEY, which is the bug this pins"
     )

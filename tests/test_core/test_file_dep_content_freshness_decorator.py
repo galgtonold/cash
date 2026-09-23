@@ -13,6 +13,7 @@ only, so it failed in both opposite directions (CAS-119):
 Both paths now route through the shared ``file_dep_is_fresh``: size first, then
 CONTENT is authoritative whenever the size matches.
 """
+
 from __future__ import annotations
 
 import os

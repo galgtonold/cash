@@ -5,6 +5,7 @@ all, rather than `ast.unparse` output. The cache key still comes from the
 unparsed text. These tests pin the consequences -- the two that must NOT change,
 and the one that deliberately does.
 """
+
 from __future__ import annotations
 
 import tempfile
@@ -84,14 +85,10 @@ def test_an_annotated_cell_defined_function_keeps_its_original_source(cell_runne
     import inspect
 
     ns = cell_runner(
-        "def marked(n):\n"
-        "    value = n * 2  # @cash:assume-safe - a distinctive marker\n"
-        "    return value\n"
+        "def marked(n):\n    value = n * 2  # @cash:assume-safe - a distinctive marker\n    return value\n"
     )
     src = inspect.getsource(ns["marked"])
-    assert "a distinctive marker" in src, (
-        f"linecache holds normalised source, not the user's:\n{src}"
-    )
+    assert "a distinctive marker" in src, f"linecache holds normalised source, not the user's:\n{src}"
 
 
 def test_an_unannotated_cell_defined_function_does_not(cell_runner):
@@ -112,9 +109,5 @@ def test_an_unannotated_cell_defined_function_does_not(cell_runner):
     """
     import inspect
 
-    ns = cell_runner(
-        "def plain(n):\n"
-        "    value = n * 2  # an ordinary comment, no directive\n"
-        "    return value\n"
-    )
+    ns = cell_runner("def plain(n):\n    value = n * 2  # an ordinary comment, no directive\n    return value\n")
     assert "an ordinary comment" not in inspect.getsource(ns["plain"])

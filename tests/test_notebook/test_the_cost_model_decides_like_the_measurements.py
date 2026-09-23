@@ -20,6 +20,7 @@ backend per cell still running its threads. The fitted intercept landed at
 earned its place, including a 100 MB frame from a 100 ms body whose restore
 measures 70 ms.
 """
+
 from __future__ import annotations
 
 import csv
@@ -34,8 +35,7 @@ SAVINGS_PCT = 0.20
 #: Five decades of body time, which is the range a decision is asked over.
 BODY_SECONDS = [0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0]
 
-MATRIX = (Path(__file__).resolve().parents[2]
-          / "benchmarks" / "results" / "ser_deser_matrix.frozen.csv")
+MATRIX = Path(__file__).resolve().parents[2] / "benchmarks" / "results" / "ser_deser_matrix.frozen.csv"
 
 
 def _persists(restore_seconds: float, body_seconds: float) -> bool:
@@ -43,15 +43,14 @@ def _persists(restore_seconds: float, body_seconds: float) -> bool:
 
 
 def _measured_cells() -> list[tuple[str, float, float]]:
-    if not MATRIX.exists():                      # a wheel install has no benchmarks/
+    if not MATRIX.exists():  # a wheel install has no benchmarks/
         pytest.skip(f"measurement matrix not present at {MATRIX}")
     cells = []
     with open(MATRIX, newline="", encoding="utf-8") as fh:
         for row in csv.DictReader(fh):
             if row["error"] or row["backend_kind"] != "disk":
                 continue
-            cells.append((row["family"], float(row["actual_size_bytes"]),
-                          float(row["deserialize_seconds"])))
+            cells.append((row["family"], float(row["actual_size_bytes"]), float(row["deserialize_seconds"])))
     assert cells, "the matrix has no usable disk rows"
     return cells
 
@@ -61,13 +60,11 @@ def _score() -> tuple[int, int, int, list[str]]:
     total = kept_out = let_in = 0
     wrong: list[str] = []
     for family, size, real in _measured_cells():
-        type_name = next((t for t, f in cost_model._TYPE_TO_FAMILY.items()
-                          if f == family), "")
+        type_name = next((t for t, f in cost_model._TYPE_TO_FAMILY.items() if f == family), "")
         for body in BODY_SECONDS:
             total += 1
             truth = _persists(real, body)
-            predicted = _persists(
-                cost_model.estimated_restore_time(type_name, size, "disk"), body)
+            predicted = _persists(cost_model.estimated_restore_time(type_name, size, "disk"), body)
             if predicted == truth:
                 continue
             if truth:
@@ -78,7 +75,8 @@ def _score() -> tuple[int, int, int, list[str]]:
                 f"{family} {int(size):,}B, body {body * 1000:.0f}ms, measured "
                 f"restore {real * 1000:.1f}ms: model says "
                 f"{'persist' if predicted else 'skip'}, measurement says "
-                f"{'persist' if truth else 'skip'}")
+                f"{'persist' if truth else 'skip'}"
+            )
     return total, kept_out, let_in, wrong
 
 
@@ -87,8 +85,8 @@ def test_the_constants_agree_with_the_measurements():
     rate = (kept_out + let_in) / total
     assert rate <= 0.02, (
         f"{kept_out + let_in} of {total} promotion decisions ({rate:.1%}) "
-        f"disagree with the measured restore times:" + "".join(
-            "\n  " + w for w in wrong[:12]))
+        f"disagree with the measured restore times:" + "".join("\n  " + w for w in wrong[:12])
+    )
 
 
 def test_the_constants_do_not_wave_through_a_slow_restore():
@@ -98,7 +96,8 @@ def test_the_constants_do_not_wave_through_a_slow_restore():
     let_in_cases = [w for w in wrong if "model says persist" in w]
     assert let_in <= 1, (
         f"{let_in} values would be persisted although restoring them costs more "
-        f"than recomputing:" + "".join("\n  " + w for w in let_in_cases[:8]))
+        f"than recomputing:" + "".join("\n  " + w for w in let_in_cases[:8])
+    )
 
 
 def test_a_small_read_is_not_priced_like_a_large_one():
@@ -113,4 +112,5 @@ def test_a_small_read_is_not_priced_like_a_large_one():
     predicted = cost_model.estimated_restore_time("", int(smallest), "disk")
     assert predicted < measured * 2, (
         f"a {int(smallest):,}B entry measures {measured * 1000:.2f}ms to restore "
-        f"but is priced at {predicted * 1000:.2f}ms")
+        f"but is priced at {predicted * 1000:.2f}ms"
+    )

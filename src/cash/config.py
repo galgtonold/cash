@@ -133,10 +133,7 @@ class TierConfig:
 
     def __post_init__(self) -> None:
         if self.type not in _SUPPORTED_TIER_TYPES:
-            raise ValueError(
-                f"Unknown tier type: {self.type!r}. "
-                f"Supported: {sorted(_SUPPORTED_TIER_TYPES)}"
-            )
+            raise ValueError(f"Unknown tier type: {self.type!r}. Supported: {sorted(_SUPPORTED_TIER_TYPES)}")
 
 
 @dataclass
@@ -430,8 +427,14 @@ _SIZE_FIELDS = frozenset({"max_cache_size", "file_hash_full_max_bytes", "max_siz
 _SIZE_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([kmgt]i?b|b)?\s*$", re.IGNORECASE)
 _SIZE_UNITS = {
     "b": 1,
-    "kb": 10**3, "mb": 10**6, "gb": 10**9, "tb": 10**12,          # SI
-    "kib": 2**10, "mib": 2**20, "gib": 2**30, "tib": 2**40,       # binary
+    "kb": 10**3,
+    "mb": 10**6,
+    "gb": 10**9,
+    "tb": 10**12,  # SI
+    "kib": 2**10,
+    "mib": 2**20,
+    "gib": 2**30,
+    "tib": 2**40,  # binary
 }
 
 
@@ -462,6 +465,7 @@ def format_size(n: int) -> str:
         if n >= unit and (n * 10) % unit == 0:
             return f"{n / unit:g} {name}"
     from .backends.adaptive_caps import human_bytes
+
     return human_bytes(n)
 
 
@@ -528,6 +532,7 @@ def _config_notice(code: str, what: str, fix: str) -> None:
     try:
         from .diagnostics import warn_diagnostic
         from .exceptions import CashCacheIneffectiveWarning
+
         warn_diagnostic(CashCacheIneffectiveWarning, code, what, fix)
     except Exception:  # noqa: BLE001 - a notice must never break a config load
         logger.debug("Could not emit %s", code, exc_info=True)
@@ -535,6 +540,7 @@ def _config_notice(code: str, what: str, fix: str) -> None:
 
 def _did_you_mean(key: str, valid: Any) -> str:
     import difflib
+
     match = difflib.get_close_matches(key, sorted(valid), n=1, cutoff=0.6)
     return f" Did you mean `{match[0]}`?" if match else ""
 
@@ -548,6 +554,7 @@ def _warn_toml_unreadable(path: Path) -> None:
     try:
         from .diagnostics import warn_diagnostic
         from .exceptions import CashCacheIneffectiveWarning
+
         warn_diagnostic(
             CashCacheIneffectiveWarning,
             "CONFIG-TOML-UNREADABLE",
@@ -566,8 +573,7 @@ def _warn_toml_unreadable(path: Path) -> None:
         logger.debug("Could not emit the unreadable-TOML notice", exc_info=True)
 
 
-_CASH_SECTION_RE = re.compile(
-    r"^\s*(\[\s*(tool\s*\.\s*)?cash\s*[\].]|tool\s*\.\s*cash\s*\.)", re.MULTILINE)
+_CASH_SECTION_RE = re.compile(r"^\s*(\[\s*(tool\s*\.\s*)?cash\s*[\].]|tool\s*\.\s*cash\s*\.)", re.MULTILINE)
 
 
 def _may_hold_cash_settings(path: Path) -> bool:
@@ -588,8 +594,7 @@ def _may_hold_cash_settings(path: Path) -> bool:
         return True
     if path.name == "pyproject.toml":
         return False
-    return any(line.strip() and not line.lstrip().startswith("#")
-               for line in text.splitlines())
+    return any(line.strip() and not line.lstrip().startswith("#") for line in text.splitlines())
 
 
 #: What `_load_toml_layer` found. The first two are cash's settings, so a key
@@ -670,15 +675,18 @@ def _warn_toml_malformed(path: Path, exc: Exception) -> None:
     except OSError:
         bom = False
     if bom:
-        what = (f"cash cannot read {path}: the file starts with a UTF-8 byte-order "
-                f"mark (BOM), which TOML does not allow ({exc}). Every setting in "
-                f"it is being ignored.")
-        fix = ("save it as UTF-8 without a BOM. In an editor that is \"UTF-8\" "
-               "rather than \"UTF-8 with BOM\"; Windows PowerShell 5.1 writes a "
-               "BOM for `-Encoding utf8`, and PowerShell 7 does not.")
+        what = (
+            f"cash cannot read {path}: the file starts with a UTF-8 byte-order "
+            f"mark (BOM), which TOML does not allow ({exc}). Every setting in "
+            f"it is being ignored."
+        )
+        fix = (
+            'save it as UTF-8 without a BOM. In an editor that is "UTF-8" '
+            'rather than "UTF-8 with BOM"; Windows PowerShell 5.1 writes a '
+            "BOM for `-Encoding utf8`, and PowerShell 7 does not."
+        )
     else:
-        what = (f"cash cannot read {path}: it is not valid TOML ({exc}). Every "
-                f"setting in it is being ignored.")
+        what = f"cash cannot read {path}: it is not valid TOML ({exc}). Every setting in it is being ignored."
         fix = "correct the file at the line and column named."
     _config_notice("CONFIG-INVALID", what, fix)
 
@@ -722,8 +730,8 @@ def _load_env_config() -> dict[str, Any]:
                     f"the environment sets {env_key}, and `{field_name}` is not a "
                     f"tier setting, so it does nothing."
                     f"{_did_you_mean(field_name, tier_field_names)}",
-                    "rename or unset it; the tier settings are listed under "
-                    "Configuration > Tiers in the docs.")
+                    "rename or unset it; the tier settings are listed under Configuration > Tiers in the docs.",
+                )
                 continue
             try:
                 value = _coerce(_field_type(field_name, TierConfig), raw, field_name)
@@ -731,15 +739,15 @@ def _load_env_config() -> dict[str, Any]:
             except ValueError as e:
                 _config_notice(
                     "CONFIG-INVALID",
-                    f"the environment sets {env_key}={raw!r}, which cash cannot "
-                    f"use: {e}. It is being ignored.",
-                    f"correct or unset {env_key}.")
+                    f"the environment sets {env_key}={raw!r}, which cash cannot use: {e}. It is being ignored.",
+                    f"correct or unset {env_key}.",
+                )
                 continue
             tier_overrides.setdefault(idx, {})[field_name] = value
             continue
 
         # Top-level field
-        key = env_key[len("CASH_"):].lower()
+        key = env_key[len("CASH_") :].lower()
         if key not in field_names:
             # Silently ignore unknown CASH_* vars — they may be from
             # other tools that namespace with CASH_ too.
@@ -750,9 +758,9 @@ def _load_env_config() -> dict[str, Any]:
         except ValueError as e:
             _config_notice(
                 "CONFIG-INVALID",
-                f"the environment sets {env_key}={raw!r}, which cash cannot use: "
-                f"{e}. It is being ignored.",
-                f"correct or unset {env_key}.")
+                f"the environment sets {env_key}={raw!r}, which cash cannot use: {e}. It is being ignored.",
+                f"correct or unset {env_key}.",
+            )
             continue
         out[key] = value
 
@@ -899,7 +907,8 @@ def _running_installed_code() -> bool:
 #: cold cache when pytest ran from there, and the repository's ``[tool.cash]``
 #: ignored (round 19).
 _PYPROJECT_PROJECT_TABLE = re.compile(
-    r"^\s*\[\[?\s*(project|build-system|tool\.cash|tool\.poetry)\s*[\].]", re.MULTILINE)
+    r"^\s*\[\[?\s*(project|build-system|tool\.cash|tool\.poetry)\s*[\].]", re.MULTILINE
+)
 
 
 def _marks_project(directory: Path, marker: str) -> bool:
@@ -1106,7 +1115,7 @@ def _running_installed_module_name() -> str | None:
 def _per_user_cache_root() -> Path:
     """The platform's own place for caches, where a cache survives ``cd``."""
     if os.name == "nt":
-        base = os.environ.get("LOCALAPPDATA")     # not APPDATA: caches do not roam
+        base = os.environ.get("LOCALAPPDATA")  # not APPDATA: caches do not roam
         if base:
             return Path(base) / "cash"
         return Path.home() / "AppData" / "Local" / "cash"
@@ -1152,7 +1161,7 @@ def _installed_entry_point_cache_dir() -> Path | None:
         return None
     try:
         return _per_user_cache_root() / name
-    except (OSError, RuntimeError):           # no home directory to speak of
+    except (OSError, RuntimeError):  # no home directory to speak of
         return None
 
 
@@ -1252,9 +1261,14 @@ def _warn_if_cache_moved(resolved: str, relative: str) -> None:
         script_dir = _running_script_dir()
         if script_dir is not None:
             candidates.append(script_dir / relative)
-        previous = next((c for c in candidates
-                         if os.path.normcase(str(c)) != os.path.normcase(resolved)
-                         and c.is_dir() and any(c.iterdir())), None)
+        previous = next(
+            (
+                c
+                for c in candidates
+                if os.path.normcase(str(c)) != os.path.normcase(resolved) and c.is_dir() and any(c.iterdir())
+            ),
+            None,
+        )
         if previous is None:
             return
     except OSError:
@@ -1263,6 +1277,7 @@ def _warn_if_cache_moved(resolved: str, relative: str) -> None:
     try:
         from .diagnostics import warn_diagnostic
         from .exceptions import CashCacheIneffectiveWarning
+
         warn_diagnostic(
             CashCacheIneffectiveWarning,
             "CACHE-DIR-MOVED",
@@ -1281,7 +1296,6 @@ def _warn_if_cache_moved(resolved: str, relative: str) -> None:
         logger.debug("Could not emit the cache-relocation notice", exc_info=True)
 
 
-
 def get_config(
     config_path: str | Path | None = None,
     *,
@@ -1296,10 +1310,13 @@ def get_config(
     function's.
     """
     from .notebook.file_tracker import untracked
+
     with untracked():
         return _resolve_config(
-            config_path, user_config_path=user_config_path,
-            project_config_path=project_config_path, overrides=overrides,
+            config_path,
+            user_config_path=user_config_path,
+            project_config_path=project_config_path,
+            overrides=overrides,
         )
 
 
@@ -1338,8 +1355,7 @@ def _resolve_config(
     def file_layer(layer: str, path: Any) -> dict[str, Any]:
         data, found = _load_toml_layer(Path(path))
         files.append((layer, str(path), found))
-        data = _validated_layer(data, str(path), strict=False,
-                                unknown_keys=found in (TOML_SECTION, TOML_FLAT))
+        data = _validated_layer(data, str(path), strict=False, unknown_keys=found in (TOML_SECTION, TOML_FLAT))
         for key in data:
             origins[key] = str(path)
         return data
@@ -1356,9 +1372,7 @@ def _resolve_config(
 
     # Layer 1: defaults from CashConfig dataclass
     merged: dict[str, Any] = {
-        f.name: getattr(CashConfig(), f.name)
-        for f in fields(CashConfig)
-        if not f.name.startswith("_")
+        f.name: getattr(CashConfig(), f.name) for f in fields(CashConfig) if not f.name.startswith("_")
     }
 
     # Layer 2: user TOML
@@ -1442,7 +1456,7 @@ def _resolve_config(
         installed = _installed_entry_point_cache_dir()
         if installed is not None:
             merged["cache_dir"] = str(installed)
-            cache_dir_origin = _CALLER_RELATIVE      # already absolute
+            cache_dir_origin = _CALLER_RELATIVE  # already absolute
             sources.append("entry-point")
             origins["cache_dir"] = "installed tool, run outside any project"
     merged["cache_dir"] = _anchor_cache_dir(merged.get("cache_dir"), cache_dir_origin)
@@ -1481,7 +1495,7 @@ def validate_value(name: str, value: Any, dataclass_type: type = CashConfig) -> 
         if isinstance(value, bool):
             return value
         if isinstance(value, int) and value in (0, 1):
-            return bool(value)          # `debug=1` is ordinary code
+            return bool(value)  # `debug=1` is ordinary code
     elif base is int:
         if isinstance(value, int) and not isinstance(value, bool):
             return value
@@ -1498,20 +1512,16 @@ def validate_value(name: str, value: Any, dataclass_type: type = CashConfig) -> 
                 # does. It used to reach the backend factory, which raised
                 # ValueError out of `import cash` -- and out of `cash info`,
                 # the command for finding out what is wrong.
-                raise ValueError(
-                    f"{name}={value!r}: not one of "
-                    f"{', '.join(sorted(_NAMED_CHOICES[name]))}")
+                raise ValueError(f"{name}={value!r}: not one of {', '.join(sorted(_NAMED_CHOICES[name]))}")
             return value
     else:
-        return value                    # lists, nested configs: checked elsewhere
+        return value  # lists, nested configs: checked elsewhere
     expected = getattr(base, "__name__", str(base))
     hint = " (or a size string such as '2GB')" if name in _SIZE_FIELDS else ""
-    raise ValueError(
-        f"{name}={value!r} is a {type(value).__name__}; expected {expected}{hint}")
+    raise ValueError(f"{name}={value!r} is a {type(value).__name__}; expected {expected}{hint}")
 
 
-def _validated_layer(data: dict[str, Any], label: str, *, strict: bool,
-                     unknown_keys: bool = False) -> dict[str, Any]:
+def _validated_layer(data: dict[str, Any], label: str, *, strict: bool, unknown_keys: bool = False) -> dict[str, Any]:
     """*data* with every known field checked by `validate_value`.
 
     A bad value RAISES when the caller's own code supplied it (*strict*) --
@@ -1540,12 +1550,13 @@ def _validated_layer(data: dict[str, Any], label: str, *, strict: bool,
                         for k in t:
                             if k not in tier_valid:
                                 _unknown_key(label, f"tiers[{i}].{k}", k, tier_valid)
-                    tiers.append({k: (validate_value(k, v, TierConfig) if k in tier_valid else v)
-                                  for k, v in t.items()})
+                    tiers.append(
+                        {k: (validate_value(k, v, TierConfig) if k in tier_valid else v) for k, v in t.items()}
+                    )
                     if tiers[-1].get("type") not in _SUPPORTED_TIER_TYPES:
                         raise ValueError(
-                            f"tiers[{i}].type={t.get('type')!r}: not one of "
-                            f"{', '.join(sorted(_SUPPORTED_TIER_TYPES))}")
+                            f"tiers[{i}].type={t.get('type')!r}: not one of {', '.join(sorted(_SUPPORTED_TIER_TYPES))}"
+                        )
                 out[key] = tiers
             elif key in valid:
                 out[key] = validate_value(key, value)
@@ -1558,20 +1569,18 @@ def _validated_layer(data: dict[str, Any], label: str, *, strict: bool,
                 raise ValueError(f"cash config ({label}): {exc}") from None
             _config_notice(
                 "CONFIG-INVALID",
-                f"{label} sets {exc}. That setting is being ignored, so its "
-                f"default applies.",
-                "correct the value; `cash info` shows every setting in effect "
-                "and where it came from.")
+                f"{label} sets {exc}. That setting is being ignored, so its default applies.",
+                "correct the value; `cash info` shows every setting in effect and where it came from.",
+            )
     return out
 
 
 def _unknown_key(label: str, shown: str, key: str, valid: Any) -> None:
     _config_notice(
         "CONFIG-UNKNOWN-KEY",
-        f"{label} sets `{shown}`, which is not a cash setting, so it does "
-        f"nothing.{_did_you_mean(key, valid)}",
-        "rename or remove it; `cash info` shows every setting in effect and "
-        "where it came from.")
+        f"{label} sets `{shown}`, which is not a cash setting, so it does nothing.{_did_you_mean(key, valid)}",
+        "rename or remove it; `cash info` shows every setting in effect and where it came from.",
+    )
 
 
 def _merge(base: dict[str, Any], update: dict[str, Any]) -> None:
@@ -1631,13 +1640,14 @@ def _build_config(merged: dict[str, Any], source: str) -> CashConfig:
 # Default config file template
 # ---------------------------------------------------------------------------
 
+
 def create_default_config(path: str | None = None) -> str:
     """Write a documented default config TOML to *path* (or to the user
     config location if *path* is None) and return the path written."""
     if path is None:
         path = str(_default_user_config_path())
 
-    content = '''# Cash configuration — see https://github.com/your-repo/cash
+    content = """# Cash configuration — see https://github.com/your-repo/cash
 #
 # Resolution priority (highest wins):
 #   1. Cash(**kwargs)
@@ -1695,7 +1705,7 @@ smart_persistence = true
 # type = "redis"
 # host = "redis.internal"
 # port = 6379
-'''
+"""
 
     out_path = Path(path)
     out_path.parent.mkdir(parents=True, exist_ok=True)

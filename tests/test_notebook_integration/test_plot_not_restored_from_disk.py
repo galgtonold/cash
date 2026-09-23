@@ -23,15 +23,17 @@ CHART = (
 
 
 def _plots(cell):
-    return sum(1 for o in cell.get("outputs", [])
-               if o.get("output_type") in ("display_data", "execute_result")
-               and "image/png" in o.get("data", {}))
+    return sum(
+        1
+        for o in cell.get("outputs", [])
+        if o.get("output_type") in ("display_data", "execute_result") and "image/png" in o.get("data", {})
+    )
 
 
 def test_plot_not_restored_from_disk_cache(nb_runner):
     nb_runner.create_notebook([SETUP, AGG, CHART])
     nb_runner.start_kernel()
-    nb_runner.enable_persist()          # cache even the cheap statements to disk
+    nb_runner.enable_persist()  # cache even the cheap statements to disk
     nb_runner.run_all()
     assert _plots(nb_runner.get_cell(3)) == 1
 
@@ -40,6 +42,4 @@ def test_plot_not_restored_from_disk_cache(nb_runner):
     nb_runner._init_cash()
     nb_runner.enable_persist()
     nb_runner.run_all()
-    assert _plots(nb_runner.get_cell(3)) == 1, (
-        "a plot was restored from the disk cache instead of being re-drawn"
-    )
+    assert _plots(nb_runner.get_cell(3)) == 1, "a plot was restored from the disk cache instead of being re-drawn"

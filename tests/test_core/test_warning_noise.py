@@ -11,6 +11,7 @@
 * KEY-OPAQUE-CALLABLE named neither the parameter nor what the object wraps,
   so a new hole printed the same text as one already handled.
 """
+
 from __future__ import annotations
 
 import http.server
@@ -53,10 +54,11 @@ def c(tmp_path):
 
 # -- 1. an observed effect is reported whatever the static pass said ---------
 
+
 @pytest.fixture(scope="module")
 def url():
     class Handler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):                  # noqa: N802
+        def do_GET(self):  # noqa: N802
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"7")
@@ -118,6 +120,7 @@ def test_an_effect_the_static_warning_named_is_not_repeated(c, tmp_path):
 
 
 # -- 2. a value that only reaches a log line is not frozen into anything -----
+
 
 def _log(message):
     print(message, file=sys.stderr)  # @cash:assume-safe
@@ -188,6 +191,7 @@ def test_a_global_the_function_itself_mutates_still_is(c):
 
 
 # -- 5. an opaque callable is named by where it arrived -----------------------
+
 
 class _Opaque:
     __call__ = staticmethod(abs)

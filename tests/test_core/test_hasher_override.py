@@ -26,6 +26,7 @@ The risk it opens is real and is asserted below rather than hedged: an
 overriding hasher IS the identity of the value, so two different values that
 hash alike share one entry. That is the trade the flag names.
 """
+
 from __future__ import annotations
 
 import warnings
@@ -148,6 +149,7 @@ def test_a_subclass_in_your_own_module_is_still_yours(c):
     is dispatched by its own name and module -- so registering a plain hasher
     for it has always worked, and must keep working.
     """
+
     class MyArray(np.ndarray):
         pass
 
@@ -289,6 +291,7 @@ def test_a_late_registration_is_not_shadowed_by_the_memo(c):
     that, or the new hasher silently does nothing for exactly the objects the
     user has been passing all along.
     """
+
     @c.cache(assume_safe=True)
     def f(value):
         return value.payload
@@ -314,14 +317,19 @@ def test_the_effectiveness_warning_names_the_override(tmp_path):
     ledger = EffectivenessLedger(waste_threshold_seconds=0.01)
     message = None
     for _ in range(5):
-        message = ledger.record(
-            "mod.f", overhead_seconds=1.0, body_seconds=0.0, was_hit=True,
-        ) or message
+        message = (
+            ledger.record(
+                "mod.f",
+                overhead_seconds=1.0,
+                body_seconds=0.0,
+                was_hit=True,
+            )
+            or message
+        )
 
     assert message is not None, "this workload should have been flagged"
     _what, fix = message
     assert "register_hasher" in fix
     assert "override=True" in fix, (
-        "the remedy is unreachable for numpy/pandas arguments without it, "
-        "which is the case this warning fires on most"
+        "the remedy is unreachable for numpy/pandas arguments without it, which is the case this warning fires on most"
     )

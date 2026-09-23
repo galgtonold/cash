@@ -2,6 +2,7 @@
 Batch 306: Type conversion chain interaction tests.
 Tests str→int, list→tuple→set, and dict→items→sorted conversion chains.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.interaction, pytest.mark.stress, pytest.mark.timeout(90)]
@@ -12,12 +13,14 @@ class TestTypeConvChainInteraction:
 
     def test_str_to_int_chain_edit(self, nb_runner):
         """Editing string input should propagate through int conversion."""
-        nb_runner.create_notebook([
-            "raw = '42'",
-            "val = int(raw)",
-            "doubled = val * 2",
-            "print(f'doubled={doubled}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "raw = '42'",
+                "val = int(raw)",
+                "doubled = val * 2",
+                "print(f'doubled={doubled}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(4)
@@ -30,13 +33,15 @@ class TestTypeConvChainInteraction:
 
     def test_list_to_tuple_to_set_edit(self, nb_runner):
         """Editing list should propagate through tuple and set conversions."""
-        nb_runner.create_notebook([
-            "data = [3, 1, 4, 1, 5, 9, 2, 6]",
-            "as_tuple = tuple(sorted(data))",
-            "as_set = set(data)",
-            "info = f'tuple_len={len(as_tuple)},set_len={len(as_set)}'",
-            "print(f'info={info}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = [3, 1, 4, 1, 5, 9, 2, 6]",
+                "as_tuple = tuple(sorted(data))",
+                "as_set = set(data)",
+                "info = f'tuple_len={len(as_tuple)},set_len={len(as_set)}'",
+                "print(f'info={info}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(5)
@@ -51,13 +56,15 @@ class TestTypeConvChainInteraction:
 
     def test_dict_items_sorted_edit(self, nb_runner):
         """Editing dict should propagate through items/sorted chain."""
-        nb_runner.create_notebook([
-            "mapping = {'b': 2, 'a': 1, 'c': 3}",
-            "items = list(mapping.items())",
-            "sorted_items = sorted(items)",
-            "keys = [k for k, v in sorted_items]",
-            "print(f'keys={keys}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "mapping = {'b': 2, 'a': 1, 'c': 3}",
+                "items = list(mapping.items())",
+                "sorted_items = sorted(items)",
+                "keys = [k for k, v in sorted_items]",
+                "print(f'keys={keys}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(5)

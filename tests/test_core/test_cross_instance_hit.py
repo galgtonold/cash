@@ -23,6 +23,7 @@ but that was a harness artefact: it defined ``f`` in the first Cash and
 legitimately produce different cache keys. The tests below use the
 same function source on both sides.
 """
+
 from __future__ import annotations
 
 import time
@@ -50,6 +51,7 @@ def _make_cached_fn(c: Cash, calls: dict):
 class TestSameSourceHitsAcrossInstances:
     def test_file_backend(self, tmp_path):
         from cash.backends.file_backend import FileBackend
+
         calls = {"n": 0}
 
         c1 = Cash(backend=FileBackend(str(tmp_path / "store"), flush_interval=0), register_magic=False)
@@ -62,12 +64,12 @@ class TestSameSourceHitsAcrossInstances:
         assert f2(11) == 33
         c2.shutdown()
         assert calls["n"] == 1, (
-            f"second instance recomputed (calls={calls['n']}) — same source "
-            "should produce same cache key"
+            f"second instance recomputed (calls={calls['n']}) — same source should produce same cache key"
         )
 
     def test_sqlite_backend(self, tmp_path):
         from cash.backends.sqlite_backend import SQLiteBackend
+
         calls = {"n": 0}
         db = str(tmp_path / "c.db")
 
@@ -88,6 +90,7 @@ class TestSameSourceHitsAcrossInstances:
         calls = {"n": 0}
         with patch.object(_redis, "Redis", fakeredis.FakeStrictRedis):
             from cash.backends.redis_backend import RedisBackend
+
             prefix = "cash:cit:"
 
             c1 = Cash(backend=RedisBackend(prefix=prefix), register_magic=False)

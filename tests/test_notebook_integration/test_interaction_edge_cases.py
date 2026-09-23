@@ -14,10 +14,12 @@ class TestWhitespaceEdits:
 
     def test_add_trailing_newline(self, nb_runner):
         """Adding trailing newline should not invalidate cache."""
-        nb_runner.create_notebook([
-            "x = 42",
-            "print(f'x = {x}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 42",
+                "print(f'x = {x}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "x = 42" in nb_runner.get_output(2)
@@ -29,10 +31,12 @@ class TestWhitespaceEdits:
 
     def test_add_comment_only(self, nb_runner):
         """Adding a comment changes the code hash → recomputes."""
-        nb_runner.create_notebook([
-            "val = 10",
-            "print(f'val = {val}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "val = 10",
+                "print(f'val = {val}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "val = 10" in nb_runner.get_output(2)
@@ -48,10 +52,12 @@ class TestLargeOutput:
 
     def test_large_list_output(self, nb_runner):
         """Generate a large list, edit the size."""
-        nb_runner.create_notebook([
-            "n = 100  # list size",
-            "data = list(range(n))\nprint(f'len = {len(data)}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "n = 100  # list size",
+                "data = list(range(n))\nprint(f'len = {len(data)}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "len = 100" in nb_runner.get_output(2)
@@ -63,10 +69,12 @@ class TestLargeOutput:
 
     def test_large_string_output(self, nb_runner):
         """Generate a large string, then edit pattern."""
-        nb_runner.create_notebook([
-            "pattern = 'ab'  # string pattern",
-            "big = pattern * 500\nprint(f'length = {len(big)}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "pattern = 'ab'  # string pattern",
+                "big = pattern * 500\nprint(f'length = {len(big)}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "length = 1000" in nb_runner.get_output(2)
@@ -81,10 +89,12 @@ class TestMultipleOutputsPerCell:
 
     def test_multi_output_edit_one(self, nb_runner):
         """Cell producing multiple vars, edit to change one."""
-        nb_runner.create_notebook([
-            "a = 1\nb = 2\nc = 3",
-            "total = a + b + c\nprint(f'total = {total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 1\nb = 2\nc = 3",
+                "total = a + b + c\nprint(f'total = {total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total = 6" in nb_runner.get_output(2)
@@ -96,10 +106,12 @@ class TestMultipleOutputsPerCell:
 
     def test_swap_variable_assignments(self, nb_runner):
         """Swap which variables get which values."""
-        nb_runner.create_notebook([
-            "x = 10\ny = 20",
-            "diff = x - y\nprint(f'diff = {diff}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10\ny = 20",
+                "diff = x - y\nprint(f'diff = {diff}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "diff = -10" in nb_runner.get_output(2)
@@ -115,10 +127,12 @@ class TestRerunPatterns:
 
     def test_run_same_cell_twice(self, nb_runner):
         """Run a cell twice without edits — idempotent."""
-        nb_runner.create_notebook([
-            "x = 5  # initial",
-            "y = x * 2\nprint(f'y = {y}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 5  # initial",
+                "y = x * 2\nprint(f'y = {y}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "y = 10" in nb_runner.get_output(2)
@@ -129,10 +143,12 @@ class TestRerunPatterns:
 
     def test_edit_then_revert(self, nb_runner):
         """Edit a cell, run, then revert and run again."""
-        nb_runner.create_notebook([
-            "val = 'original'  # version 1",
-            "print(f'val = {val}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "val = 'original'  # version 1",
+                "print(f'val = {val}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "val = original" in nb_runner.get_output(2)

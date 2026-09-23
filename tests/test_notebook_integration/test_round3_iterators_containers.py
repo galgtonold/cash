@@ -1,5 +1,7 @@
 """Batch 53: Iterator & custom container patterns — __iter__, __getitem__, __contains__."""
+
 import textwrap
+
 import pytest
 
 
@@ -9,8 +11,9 @@ class TestCustomIterators:
 
     def test_range_iterator(self, nb_runner):
         """Custom range-like iterator across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class FibRange:
                     def __init__(self, n):
                         self.n = n
@@ -23,20 +26,22 @@ class TestCustomIterators:
 
                 fib = FibRange(8)
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 values = list(fib)
                 print(f"values={values}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "values=[0, 1, 1, 2, 3, 5, 8, 13]" in nb_runner.get_output(2)
 
     def test_infinite_iterator_sliced(self, nb_runner):
         """Infinite iterator with islice."""
-        nb_runner.create_notebook([
-            "from itertools import islice",
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                "from itertools import islice",
+                textwrap.dedent("""\
                 def powers_of_two():
                     n = 1
                     while True:
@@ -47,11 +52,12 @@ class TestCustomIterators:
                 first_10 = list(islice(gen, 10))
                 print(f"first_10={first_10}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 total = sum(first_10)
                 print(f"total={total}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "first_10=[1, 2, 4, 8, 16, 32, 64, 128, 256, 512]" in nb_runner.get_output(2)
@@ -59,18 +65,20 @@ class TestCustomIterators:
 
     def test_chained_itertools(self, nb_runner):
         """Complex itertools chains cached across cells."""
-        nb_runner.create_notebook([
-            "from itertools import chain, repeat, cycle, islice",
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                "from itertools import chain, repeat, cycle, islice",
+                textwrap.dedent("""\
                 pattern = list(islice(cycle([1, 2, 3]), 9))
                 repeated = list(chain(repeat('a', 3), repeat('b', 2)))
                 print(f"pattern={pattern} repeated={repeated}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 combined = list(zip(pattern, repeated * 2))[:5]
                 print(f"combined={combined}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "pattern=[1, 2, 3, 1, 2, 3, 1, 2, 3]" in nb_runner.get_output(2)
@@ -82,8 +90,9 @@ class TestCustomContainers:
 
     def test_ordered_set(self, nb_runner):
         """Custom OrderedSet-like container."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class OrderedSet:
                     def __init__(self, items=None):
                         self._items = []
@@ -109,12 +118,13 @@ class TestCustomContainers:
                     def __repr__(self):
                         return f"OrderedSet({self._items})"
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 os = OrderedSet([3, 1, 4, 1, 5, 9, 2, 6, 5, 3])
                 print(f"os={os} len={len(os)}")
                 print(f"has_5={5 in os} has_7={7 in os}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -124,8 +134,9 @@ class TestCustomContainers:
 
     def test_matrix_container(self, nb_runner):
         """Custom matrix with __getitem__ and __setitem__."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class Matrix:
                     def __init__(self, rows, cols, fill=0):
                         self.rows = rows
@@ -147,12 +158,13 @@ class TestCustomContainers:
                 for i in range(3):
                     m[i, i] = 1  # identity
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 diag = [m[i, i] for i in range(3)]
                 off_diag = m[0, 1]
                 print(f"m={m} diag={diag} off={off_diag}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "Matrix(3x3)" in nb_runner.get_output(2)
@@ -161,8 +173,9 @@ class TestCustomContainers:
 
     def test_default_dict_like(self, nb_runner):
         """Custom defaultdict-like with factory across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class AutoDict(dict):
                     def __init__(self, factory):
                         super().__init__()
@@ -177,11 +190,12 @@ class TestCustomContainers:
                 for w in words:
                     word_counts[w] += 1
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 sorted_counts = sorted(word_counts.items())
                 print(f"counts={sorted_counts}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -190,8 +204,9 @@ class TestCustomContainers:
 
     def test_stack_implementation(self, nb_runner):
         """Stack data structure across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class Stack:
                     def __init__(self):
                         self._items = []
@@ -211,11 +226,12 @@ class TestCustomContainers:
                 s.push(10).push(20).push(30)
                 print(f"stack={s} len={len(s)} peek={s.peek()}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 popped = s.pop()
                 print(f"popped={popped} remaining={s}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "Stack([10, 20, 30])" in nb_runner.get_output(1)

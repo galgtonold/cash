@@ -15,6 +15,7 @@ Measured 2026-09-13:
   plain LRU (split off):  69/80 stale kept, 250/250 hot kept
   GDSF ranking:           69/80 stale kept, 250/250 hot kept
 """
+
 import os
 import sys
 import tempfile

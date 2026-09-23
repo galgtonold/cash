@@ -3,6 +3,7 @@
 A blind ``re.sub`` over CSS corrupts quoted text. These tests pin the two
 things that matter: the rule set is unchanged, and strings survive.
 """
+
 from __future__ import annotations
 
 import re
@@ -62,6 +63,4 @@ def test_it_actually_shrinks_the_real_stylesheet():
     full = H._CSS
     small = minify_css(full)
     assert _rules(small) == _rules(full), "minification changed the rule set"
-    assert len(small) < len(full) * 0.75, (
-        f"expected a meaningful reduction, got {len(full)} -> {len(small)}"
-    )
+    assert len(small) < len(full) * 0.75, f"expected a meaningful reduction, got {len(full)} -> {len(small)}"

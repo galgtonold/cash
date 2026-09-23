@@ -19,14 +19,17 @@ file a new ``st_mtime_ns``. (Any peek into the new kernel runs an upstream
 check of its own, which would re-fire a stale writer before a probe installed
 by that peek could see it.)
 """
+
 from pathlib import Path
 
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(600)]
 
-SETUP = ("import time\nfrom pathlib import Path\nOUT = Path('out')\nOUT.mkdir(exist_ok=True)\n"
-         "def slow(k):\n    time.sleep(0.3)\n    return k * 10\n")
+SETUP = (
+    "import time\nfrom pathlib import Path\nOUT = Path('out')\nOUT.mkdir(exist_ok=True)\n"
+    "def slow(k):\n    time.sleep(0.3)\n    return k * 10\n"
+)
 SAVE = "def save(k, v):\n    (OUT / f'f{k}.txt').write_text(str(v))"
 SCORES = "scores = [slow(k) for k in range(3)]"
 WRITE = "for k, v in enumerate(scores):\n    save(k, v)"

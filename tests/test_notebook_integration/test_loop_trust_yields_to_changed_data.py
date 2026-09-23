@@ -9,6 +9,7 @@ value whose lineage disagrees with the simulation stand -- still applied to
 the loop and everything derived from it. Written as a comprehension, the
 same cell was always right.
 """
+
 from pathlib import Path
 
 import numpy as np
@@ -17,7 +18,7 @@ import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.upstream]
 
-LOAD = '''import glob, os
+LOAD = """import glob, os
 import pandas as pd
 files = sorted(glob.glob(os.path.join("rdata", "part_*.csv")))
 raw = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
@@ -25,27 +26,26 @@ def score(frame, k):
     open("calls.log", "a").write("score\\n")
     pred = frame.y.rolling(k, min_periods=1).mean().shift(1)
     return float((frame.y - pred).abs().mean())
-'''
-BACKTEST = '''rows = []
+"""
+BACKTEST = """rows = []
 for k in (2, 5, 20):
     rows.append(dict(k=k, err=score(raw, k)))
 bt = pd.DataFrame(rows)
 BEST_K = int(bt.loc[bt.err.idxmin(), "k"])
-'''
-FINAL = '''forecast = float(raw.y.rolling(BEST_K).mean().iloc[-1])
+"""
+FINAL = """forecast = float(raw.y.rolling(BEST_K).mean().iloc[-1])
 print("RESULT BEST_K", BEST_K, "forecast", round(forecast, 4), "rows", len(raw))
-'''
+"""
 
 
 def _part(d: Path, n: int) -> None:
     d.mkdir(exist_ok=True)
     rng = np.random.default_rng(1)
     t = np.arange(300)
-    if n == 1:      # flat and noisy: heavy smoothing wins
+    if n == 1:  # flat and noisy: heavy smoothing wins
         pd.DataFrame({"t": t, "y": 10 + rng.normal(0, 3, 300)}).to_csv(d / "part_1.csv", index=False)
-    else:           # a steep ramp: light smoothing wins
-        pd.DataFrame({"t": 300 + t, "y": 10 + 3.0 * t + rng.normal(0, 1, 300)}).to_csv(
-            d / "part_2.csv", index=False)
+    else:  # a steep ramp: light smoothing wins
+        pd.DataFrame({"t": 300 + t, "y": 10 + 3.0 * t + rng.normal(0, 1, 300)}).to_csv(d / "part_2.csv", index=False)
 
 
 def _scores(work: Path) -> int:

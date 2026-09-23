@@ -25,6 +25,7 @@ and three operations, because the tiers make them behave differently:
 Usage:
     python benchmarks/bench_tiered_overhead.py [--payload 512] [--rounds 15]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -92,7 +93,7 @@ def main() -> int:
 
         results = {a: {"set": [], "get L1": [], "get L2": []} for a in arms}
         for r in range(args.rounds):
-            for a in arms:                                   # interleaved
+            for a in arms:  # interleaved
                 b = backends[a]
                 promote = not a.endswith("nopromote")
 
@@ -113,7 +114,7 @@ def main() -> int:
                     b.backends[0].delete("seed")
                 t = time.perf_counter()
                 b.get("seed")
-                drain(b)                                     # read-repair write
+                drain(b)  # read-repair write
                 results[a]["get L2"].append(time.perf_counter() - t)
 
         print()
@@ -122,8 +123,7 @@ def main() -> int:
         print(f"  {'arm':<20}{'set':>12}{'get L1':>12}{'get L2':>12}")
         base = {}
         for a in arms:
-            row = [statistics.median(results[a][op]) * 1000
-                   for op in ("set", "get L1", "get L2")]
+            row = [statistics.median(results[a][op]) * 1000 for op in ("set", "get L1", "get L2")]
             if a == "file":
                 base = dict(zip(("set", "get L1", "get L2"), row))
             print(f"  {a:<20}" + "".join(f"{v:>10.3f}ms" for v in row))
@@ -131,8 +131,7 @@ def main() -> int:
         if base:
             print()
             print("  tiered vs bare file:")
-            row = {op: statistics.median(results["tiered"][op]) * 1000
-                   for op in ("set", "get L1", "get L2")}
+            row = {op: statistics.median(results["tiered"][op]) * 1000 for op in ("set", "get L1", "get L2")}
             for op in ("set", "get L1", "get L2"):
                 delta = row[op] - base[op]
                 print(f"    {op:<8}{delta:+8.3f}ms  ({row[op] / base[op]:.2f}x)")

@@ -24,6 +24,7 @@ still fails.
 The integration twin is
 ``tests/test_notebook_integration/test_an_aliased_module_is_the_same_module.py``.
 """
+
 import sys
 import types
 
@@ -69,8 +70,7 @@ class TestTheLineageComponent:
 
         assert component.startswith(":mod_src:"), (
             "the module is tracked and the cell bound it to 'apl'; returning "
-            "nothing here is what let an edit to it change no key: %r"
-            % (component,)
+            "nothing here is what let an edit to it change no key: %r" % (component,)
         )
 
     def test_and_that_source_moves_when_the_file_does(self, local_module):
@@ -92,8 +92,7 @@ class TestTheLineageComponent:
         module, _write = local_module
         tracker = _Tracker({"aliased_probe_lib"})
 
-        component = module_source_component(
-            tracker, module, "aliased_probe_lib", "import aliased_probe_lib")
+        component = module_source_component(tracker, module, "aliased_probe_lib", "import aliased_probe_lib")
 
         assert component.startswith(":mod_src:"), component
 
@@ -102,8 +101,7 @@ class TestTheLineageComponent:
         module, _write = local_module
         tracker = _Tracker(set())
 
-        assert module_source_component(
-            tracker, module, "apl", "import aliased_probe_lib as apl") == ""
+        assert module_source_component(tracker, module, "apl", "import aliased_probe_lib as apl") == ""
 
     def test_a_dependency_file_is_found_under_either_name(self, local_module):
         """A tracked module's own dependencies must not go missing either."""
@@ -111,9 +109,9 @@ class TestTheLineageComponent:
         dep = str(module.__file__)
         tracker = _Tracker({"aliased_probe_lib"}, {dep: {"aliased_probe_lib"}})
 
-        assert module_source_component(
-            tracker, module, "apl", "import aliased_probe_lib as apl"
-        ).startswith(":mod_src:")
+        assert module_source_component(tracker, module, "apl", "import aliased_probe_lib as apl").startswith(
+            ":mod_src:"
+        )
 
 
 class TestTheInvalidator:
@@ -132,7 +130,8 @@ class TestTheInvalidator:
         try:
             inv = self._invalidator({"apl": module, "other": 1})
             assert sorted(inv._names_bound_to("aliased_probe_lib")) == [
-                "aliased_probe_lib", "apl",
+                "aliased_probe_lib",
+                "apl",
             ]
         finally:
             del sys.modules["aliased_probe_lib"]

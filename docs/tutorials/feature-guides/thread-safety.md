@@ -17,7 +17,7 @@ Net result: the computation ran twice instead of once. Both threads return the r
 
 ## The fix: double-checked locking
 
-<!-- claim: cash/core.py:Cash._compute_with_lock @b47c9e4c, cash/core.py:Cash._warn_lock_failed @7150ae79 -->
+<!-- claim: cash/core.py:Cash._compute_with_lock @1fb8f33f, cash/core.py:Cash._warn_lock_failed @bb3cefef -->
 When `use_locking=True`, the miss path routes through `Cash._compute_with_lock` instead of calling the compute closure directly. The helper does three things:
 
 1. **Acquire `self.backend.lock(cache_key)`** as a context manager.
@@ -99,14 +99,14 @@ There are exactly **two** `lock()` definitions in the codebase:
 
 ## Async
 
-<!-- claim: cash/core.py:Cash._make_async_wrapper @68b3fcd4 -->
+<!-- claim: cash/core.py:Cash._make_async_wrapper @95b38d10 -->
 `use_locking=True` **is supported on the async path**, via in-process single-flight rather than `_compute_with_lock`. Concurrent awaits of the same cache key coalesce: the first awaiter (the *leader*) registers an `asyncio.Event` in `self._async_inflight`, computes, and stores; other awaiters of the same key (the *followers*) `await` the event and then read the stored result. If the leader stored nothing — `cache_if` rejected the value, or the compute raised — followers fall through and compute themselves, so correctness is never traded for the optimization.
 
 The coalescing is keyed on the running event loop, so it dedupes an `asyncio.gather` within one process, not across processes. For cross-process async, you still want Redis. Test reference: `tests/test_core/test_async_single_flight.py`.
 
 ## Lock behaviour details
 
-<!-- claim: cash/core.py:Cash._compute_with_lock @b47c9e4c -->
+<!-- claim: cash/core.py:Cash._compute_with_lock @1fb8f33f -->
 - **Per cache key, not per function.** The key passed to `backend.lock()` is the full `func_name:state_hash:dynamic_hash:args_hash` cache key, so two different arg-tuples for the same function don't serialize on each other.
 - **Any acquisition failure degrades to an unlocked compute.** `_compute_with_lock` catches `Exception` broadly on `__enter__` — a Redis `LockError` on contention/timeout, a dropped connection, an `OSError` on a file lock — surfaces a `CashCacheIneffectiveWarning` and proceeds without the lock. The user's call never hangs indefinitely and never crashes on a lock problem.
 - **Redis times out gracefully.** The Redis backend passes `timeout=60` (lock TTL — auto-released after 60 s in case the holder crashed) and `blocking_timeout=10` (max 10 s wait to acquire). A failed acquisition lands in the degrade path above.
@@ -124,7 +124,7 @@ The standard introspection surface works:
 
 ## Across processes: Pool, ProcessPoolExecutor, joblib { #across-processes-pool-processpoolexecutor-joblib }
 
-<!-- claim: cash/utils.py:resolve_main_module @787a38f9, cash/backends/_base.py:_in_multiprocessing_child @e87f049e, cash/core.py:Cash._print_run_summary @54975534 -->
+<!-- claim: cash/utils.py:resolve_main_module @4e43f809, cash/backends/_base.py:_in_multiprocessing_child @e87f049e, cash/core.py:Cash._print_run_summary @8e96e43d -->
 A `multiprocessing.Pool`, a `ProcessPoolExecutor` or joblib's process workers
 all use the cache directory of the process that started them, so what one
 worker computes is a hit for the others, for the parent afterwards, and for the
@@ -148,7 +148,7 @@ the next run is all hits. What differs is what each process keeps to itself:
   both compute it. `use_locking=True` with `RedisBackend` is the only lock that
   spans processes (see [which backends](#which-backends-implement-locking)).
 
-<!-- claim: cash/core.py:_expose_script_function @eac4e478, cash/core.py:Cash.__reduce__ @713060b9 -->
+<!-- claim: cash/core.py:_expose_script_function @de09c381, cash/core.py:Cash.__reduce__ @26cd00dc -->
 For **joblib**, keep the script's work behind `if __name__ == "__main__":`.
 joblib's default process backend sends a function from the running script *by
 value*, and a cached function cannot travel that way. So cash sends one *by

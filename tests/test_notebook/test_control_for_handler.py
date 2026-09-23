@@ -18,10 +18,10 @@ import pytest
 from cash.notebook.cache_status import CacheStatus
 from cash.notebook.control_structures.for_handler import ForLoopHandler
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def mock_shell():
@@ -33,14 +33,18 @@ def mock_shell():
 @pytest.fixture
 def mock_statement_processor():
     processor = MagicMock()
-    processor.process_statement = MagicMock(return_value={
-        'status': CacheStatus.COMPUTED,
-        'execution_time': 0.01,
-        'stdout': '', 'stderr': '', 'outputs': [],
-    })
+    processor.process_statement = MagicMock(
+        return_value={
+            "status": CacheStatus.COMPUTED,
+            "execution_time": 0.01,
+            "stdout": "",
+            "stderr": "",
+            "outputs": [],
+        }
+    )
     processor.variable_lineage = {}
     processor.vars_with_mutation_lineage = set()
-    processor.compute_hash = MagicMock(return_value='fakehash')
+    processor.compute_hash = MagicMock(return_value="fakehash")
     return processor
 
 
@@ -53,7 +57,10 @@ def mock_dispatcher():
 @pytest.fixture
 def handler(mock_shell, mock_statement_processor, mock_dispatcher):
     return ForLoopHandler(
-        mock_shell, mock_statement_processor, debug=False, dispatcher=mock_dispatcher,
+        mock_shell,
+        mock_statement_processor,
+        debug=False,
+        dispatcher=mock_dispatcher,
     )
 
 
@@ -64,6 +71,7 @@ def _parse_for(code: str) -> ast.For:
 # ---------------------------------------------------------------------------
 # Per-iteration decomposition
 # ---------------------------------------------------------------------------
+
 
 def test_for_loop_one_call_per_iteration(handler, mock_statement_processor):
     """Each iteration → one call per body statement."""
@@ -85,6 +93,7 @@ def test_for_loop_two_body_stmts_four_iterations(handler, mock_statement_process
 # Iteration context
 # ---------------------------------------------------------------------------
 
+
 def test_iteration_context_marker_in_code(handler, mock_statement_processor):
     """Every body call must carry the __iteration_context__ comment."""
     node = _parse_for("for i in range(2): x = i")
@@ -99,23 +108,22 @@ def test_iteration_context_differs_per_iteration(handler, mock_statement_process
     node = _parse_for("for i in [10, 20, 30]: x = i")
     handler.process(node, None, True, None)
     ctx_hashes = {
-        c[0][0].split('\n')[0].split(': ')[1]
-        for c in mock_statement_processor.process_statement.call_args_list
+        c[0][0].split("\n")[0].split(": ")[1] for c in mock_statement_processor.process_statement.call_args_list
     }
     assert len(ctx_hashes) == 3
 
 
 def test_iteration_context_inherits_parent(handler, mock_statement_processor):
     """parent_context is folded into each iteration's context."""
-    parent = {'outer_i': 7}
+    parent = {"outer_i": 7}
     node = _parse_for("for i in range(1): x = i")
     handler.process(node, None, True, parent_context=parent)
     # The hash should depend on parent contents — verify by running with a
     # different parent and confirming a different hash.
-    h1 = mock_statement_processor.process_statement.call_args_list[0][0][0].split('\n')[0]
+    h1 = mock_statement_processor.process_statement.call_args_list[0][0][0].split("\n")[0]
     mock_statement_processor.process_statement.reset_mock()
-    handler.process(node, None, True, parent_context={'outer_i': 8})
-    h2 = mock_statement_processor.process_statement.call_args_list[0][0][0].split('\n')[0]
+    handler.process(node, None, True, parent_context={"outer_i": 8})
+    h2 = mock_statement_processor.process_statement.call_args_list[0][0][0].split("\n")[0]
     assert h1 != h2
 
 
@@ -123,29 +131,34 @@ def test_iteration_context_inherits_parent(handler, mock_statement_processor):
 # Lineage propagation
 # ---------------------------------------------------------------------------
 
+
 def test_loop_target_lineage_set_per_iteration(handler, mock_statement_processor, mock_shell):
     """Each iteration must set variable_lineage for the loop target."""
     node = _parse_for("for i in range(2): x = i")
     handler.process(node, None, True, None)
     # After the loop, 'i' must have a lineage entry (set on each iteration).
-    assert 'i' in mock_statement_processor.variable_lineage
+    assert "i" in mock_statement_processor.variable_lineage
 
 
 def test_loop_target_bound_in_user_ns(handler, mock_shell):
     """Last iteration's value persists in user_ns."""
     node = _parse_for("for i in range(3): x = i")
     handler.process(node, None, True, None)
-    assert mock_shell.user_ns['i'] == 2  # last value of range(3)
+    assert mock_shell.user_ns["i"] == 2  # last value of range(3)
 
 
 # ---------------------------------------------------------------------------
 # Mixed cache results
 # ---------------------------------------------------------------------------
 
+
 def test_for_loop_all_restored(handler, mock_statement_processor):
     mock_statement_processor.process_statement.return_value = {
-        'status': CacheStatus.RESTORED,
-        'execution_time': 0.0, 'stdout': '', 'stderr': '', 'outputs': [],
+        "status": CacheStatus.RESTORED,
+        "execution_time": 0.0,
+        "stdout": "",
+        "stderr": "",
+        "outputs": [],
     }
     node = _parse_for("for i in range(3): x = i")
     result = handler.process(node, None, True, None)
@@ -155,9 +168,9 @@ def test_for_loop_all_restored(handler, mock_statement_processor):
 
 def test_for_loop_mixed(handler, mock_statement_processor):
     mock_statement_processor.process_statement.side_effect = [
-        {'status': CacheStatus.COMPUTED, 'execution_time': 0.01, 'stdout': '', 'stderr': '', 'outputs': []},
-        {'status': CacheStatus.RESTORED, 'execution_time': 0.0, 'stdout': '', 'stderr': '', 'outputs': []},
-        {'status': CacheStatus.COMPUTED, 'execution_time': 0.01, 'stdout': '', 'stderr': '', 'outputs': []},
+        {"status": CacheStatus.COMPUTED, "execution_time": 0.01, "stdout": "", "stderr": "", "outputs": []},
+        {"status": CacheStatus.RESTORED, "execution_time": 0.0, "stdout": "", "stderr": "", "outputs": []},
+        {"status": CacheStatus.COMPUTED, "execution_time": 0.01, "stdout": "", "stderr": "", "outputs": []},
     ]
     node = _parse_for("for i in range(3): x = i")
     result = handler.process(node, None, True, None)
@@ -168,6 +181,7 @@ def test_for_loop_mixed(handler, mock_statement_processor):
 # ---------------------------------------------------------------------------
 # Fast-loop heuristic
 # ---------------------------------------------------------------------------
+
 
 def test_fast_loop_falls_back_to_single_unit(handler, mock_dispatcher):
     """Loops with many iterations × many stmts hit the fast-loop heuristic.
@@ -190,7 +204,7 @@ def test_fast_loop_fires_even_when_nested(handler, mock_dispatcher, mock_stateme
     7000+ trivial statements just cost time for no payoff.)"""
     body = "\n    ".join([f"x{i} = {i}" for i in range(200)])
     node = _parse_for(f"for i in range(1000):\n    {body}")
-    handler.process(node, None, True, parent_context={'outer': 1})
+    handler.process(node, None, True, parent_context={"outer": 1})
     assert mock_dispatcher._execute_as_single_unit.call_count == 1
     # Per-iteration processing did NOT happen — single-unit short-circuited it.
     assert mock_statement_processor.process_statement.call_count == 0
@@ -222,8 +236,9 @@ def test_fast_loop_skipped_when_body_has_file_io(handler, mock_dispatcher, mock_
     # so the thresholds are genuinely met.
     clean_body = "\n    ".join([f"x{i} = {i}" for i in range(n_stmts)])
     handler.process(_parse_for(f"for i in range({n_iter}):\n    {clean_body}"), None, True, None)
-    assert mock_dispatcher._execute_as_single_unit.call_count == 1, \
+    assert mock_dispatcher._execute_as_single_unit.call_count == 1, (
         "control: identical loop without file I/O should fire single-unit"
+    )
 
     mock_dispatcher._execute_as_single_unit.reset_mock()
 

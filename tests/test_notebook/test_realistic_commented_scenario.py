@@ -10,24 +10,28 @@ reappear via a cache restore: re-running the cell processes only the surviving
 against the fresh ``df_clean`` and therefore recomputes rather than restoring
 the stale cached frame that still carried ``revenue``.
 """
+
+import os
+import sys
 import unittest
 from unittest.mock import MagicMock
-import sys
-import os
-import pandas as pd
+
 import numpy as np
+import pandas as pd
 
 # Add src to path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
 
-from cash.notebook.ipython.magics import CashMagics
+from traitlets.config.configurable import Configurable
+
 from cash.backends import InMemoryBackend
 from cash.core import Cash
-from traitlets.config.configurable import Configurable
+from cash.notebook.ipython.magics import CashMagics
 
 
 class MockShell(Configurable):
     """Mock IPython shell for testing."""
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.user_ns = {}
@@ -42,41 +46,44 @@ class MockShell(Configurable):
 
 class TestRealisticCommentedCodeScenario(unittest.TestCase):
     """Test the EXACT scenario the user reported."""
-    
+
     def setUp(self):
         self.backend = InMemoryBackend()
         self.cash = Cash(backend=self.backend, register_magic=False)
-        
+
         self.shell = MockShell()
-        
+
         self.magics = CashMagics(self.shell, self.cash)
         self.magics._debug = True
-        
+
         # Create a realistic DataFrame
         np.random.seed(42)
-        self.shell.user_ns['df_clean'] = pd.DataFrame({
-            'date': pd.date_range('2023-01-01', periods=100),
-            'sales': np.random.rand(100) * 1000,
-            'units': np.random.randint(1, 20, 100),
-            'product': np.random.choice(['A', 'B', 'C'], 100)
-        })
-    
+        self.shell.user_ns["df_clean"] = pd.DataFrame(
+            {
+                "date": pd.date_range("2023-01-01", periods=100),
+                "sales": np.random.rand(100) * 1000,
+                "units": np.random.randint(1, 20, 100),
+                "product": np.random.choice(["A", "B", "C"], 100),
+            }
+        )
 
     def tearDown(self):
         """Clean up after each test."""
-        if hasattr(self, 'backend'):
+        if hasattr(self, "backend"):
             self.backend.clear()
-        if hasattr(self, 'shell') and hasattr(self.shell, 'user_ns'):
+        if hasattr(self, "shell") and hasattr(self.shell, "user_ns"):
             self.shell.user_ns.clear()
 
     def _fresh_df_clean(self):
         """Replace df_clean with a fresh frame (no revenue/month columns)."""
-        self.shell.user_ns['df_clean'] = pd.DataFrame({
-            'date': pd.date_range('2023-01-01', periods=100),
-            'sales': np.random.rand(100) * 1000,
-            'units': np.random.randint(1, 20, 100),
-            'product': np.random.choice(['A', 'B', 'C'], 100)
-        })
+        self.shell.user_ns["df_clean"] = pd.DataFrame(
+            {
+                "date": pd.date_range("2023-01-01", periods=100),
+                "sales": np.random.rand(100) * 1000,
+                "units": np.random.randint(1, 20, 100),
+                "product": np.random.choice(["A", "B", "C"], 100),
+            }
+        )
 
     def test_exact_user_scenario(self):
         """
@@ -91,8 +98,8 @@ class TestRealisticCommentedCodeScenario(unittest.TestCase):
             "df_clean['month'] = df_clean['date'].dt.to_period('M')"
         )
         self.magics.cash("", original_cell)
-        self.assertIn('revenue', self.shell.user_ns['df_clean'].columns)
-        self.assertIn('month', self.shell.user_ns['df_clean'].columns)
+        self.assertIn("revenue", self.shell.user_ns["df_clean"].columns)
+        self.assertIn("month", self.shell.user_ns["df_clean"].columns)
 
         # User comments out the revenue line and re-runs against a fresh frame.
         commented_cell = (
@@ -103,9 +110,12 @@ class TestRealisticCommentedCodeScenario(unittest.TestCase):
         self.magics.cash("", commented_cell)
 
         # The commented-out mutation must not be restored from cache.
-        self.assertNotIn('revenue', self.shell.user_ns['df_clean'].columns,
-                         "revenue column should not reappear after commenting out the line")
-        self.assertIn('month', self.shell.user_ns['df_clean'].columns)
+        self.assertNotIn(
+            "revenue",
+            self.shell.user_ns["df_clean"].columns,
+            "revenue column should not reappear after commenting out the line",
+        )
+        self.assertIn("month", self.shell.user_ns["df_clean"].columns)
 
     def test_saved_notebook_with_commented_line(self):
         """
@@ -120,7 +130,7 @@ class TestRealisticCommentedCodeScenario(unittest.TestCase):
             "df_clean['month'] = df_clean['date'].dt.to_period('M')"
         )
         self.magics.cash("", original_cell)
-        self.assertIn('revenue', self.shell.user_ns['df_clean'].columns)
+        self.assertIn("revenue", self.shell.user_ns["df_clean"].columns)
 
         commented_cell = (
             "#df_clean['revenue'] = df_clean['sales'] * df_clean['units']\n"
@@ -129,10 +139,13 @@ class TestRealisticCommentedCodeScenario(unittest.TestCase):
         self._fresh_df_clean()
         self.magics.cash("", commented_cell)
 
-        self.assertNotIn('revenue', self.shell.user_ns['df_clean'].columns,
-                         "revenue column should not reappear after commenting out the line")
-        self.assertIn('month', self.shell.user_ns['df_clean'].columns)
+        self.assertNotIn(
+            "revenue",
+            self.shell.user_ns["df_clean"].columns,
+            "revenue column should not reappear after commenting out the line",
+        )
+        self.assertIn("month", self.shell.user_ns["df_clean"].columns)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main(verbosity=2)
-

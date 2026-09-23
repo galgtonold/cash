@@ -25,6 +25,7 @@ df" has been sent to look at a variable that is not the problem.
 Tested against the attributor directly rather than through a kernel: the
 comparison is the bug, and it needs only a tracking state to exercise.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -34,10 +35,12 @@ from cash.notebook.statement.processor import StatementProcessor
 
 def _attribute(*, variable_lineage, executed_input_lineages, inputs, outputs):
     """Run the attributor over a minimal tracking state, return miss_reason."""
-    stub = SimpleNamespace(_tracking_state=SimpleNamespace(
-        variable_lineage=dict(variable_lineage),
-        executed_input_lineages=dict(executed_input_lineages),
-    ))
+    stub = SimpleNamespace(
+        _tracking_state=SimpleNamespace(
+            variable_lineage=dict(variable_lineage),
+            executed_input_lineages=dict(executed_input_lineages),
+        )
+    )
     metrics: dict = {}
     StatementProcessor._attribute_input_change(stub, metrics, inputs, outputs)
     return metrics.get("miss_reason")

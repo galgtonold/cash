@@ -7,6 +7,7 @@ it keys through ``call_cache_key`` (the statement key builder, under the
 ``get``/``set`` calls the statement path itself uses. These tests exercise
 that round-trip end to end, independent of ``CallCache``/AST rewriting.
 """
+
 from __future__ import annotations
 
 import time

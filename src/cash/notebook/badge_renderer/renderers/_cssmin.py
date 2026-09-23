@@ -10,6 +10,7 @@ String-aware on purpose. A blind ``re.sub(r"\\s*([{};:,>])\\s*", ...)`` also
 rewrites the inside of ``content: "a ; b"`` and of quoted attribute values,
 which is a silent corruption rather than a crash.
 """
+
 from __future__ import annotations
 
 import re
@@ -29,7 +30,7 @@ def minify_css(css: str) -> str:
                 j += 2 if css[j] == "\\" else 1
             segments.append(("code", "".join(buf)))
             buf = []
-            segments.append(("str", css[i:j + 1]))
+            segments.append(("str", css[i : j + 1]))
             i = j + 1
             continue
         if css.startswith("/*", i):

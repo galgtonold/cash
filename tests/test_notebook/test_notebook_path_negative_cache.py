@@ -18,6 +18,7 @@ These tests pin the fix:
   * the "upstream tracking disabled" advisory fires once per session, not once
     per cell.
 """
+
 from __future__ import annotations
 
 import time
@@ -64,6 +65,7 @@ def failing_discovery(monkeypatch):
 # Call-count guard — the stable, deterministic proof
 # ---------------------------------------------------------------------------
 
+
 def test_repeated_failing_lookups_probe_once(failing_discovery):
     """Many resolves within one TTL window collapse to a single probe.
 
@@ -74,8 +76,7 @@ def test_repeated_failing_lookups_probe_once(failing_discovery):
         assert sd.get_notebook_path() is None
 
     assert failing_discovery["n"] == 1, (
-        f"expected 1 probe for 15 failing lookups, got {failing_discovery['n']} "
-        "(negative cache not deduping)"
+        f"expected 1 probe for 15 failing lookups, got {failing_discovery['n']} (negative cache not deduping)"
     )
 
 
@@ -85,6 +86,7 @@ def test_run_all_of_cells_bounded_probes(failing_discovery):
     Exercises the REAL checker choke point (`_resolve_notebook_path`) plus two
     per-cell analysis helpers that each used to call discovery independently.
     """
+
     class _Shell:
         user_ns: dict = {}
 
@@ -98,14 +100,13 @@ def test_run_all_of_cells_bounded_probes(failing_discovery):
 
     # Old code: >= 3 probes/cell (2 helpers + phase-2 doubling) -> ~39-52.
     # New code: bounded to ~1 per TTL window (these run well within one window).
-    assert failing_discovery["n"] <= 2, (
-        f"expected <=2 probes across {n_cells} cells, got {failing_discovery['n']}"
-    )
+    assert failing_discovery["n"] <= 2, f"expected <=2 probes across {n_cells} cells, got {failing_discovery['n']}"
 
 
 # ---------------------------------------------------------------------------
 # Negative-cache TTL: not re-probed within TTL, re-probed after
 # ---------------------------------------------------------------------------
+
 
 def test_not_reprobed_within_ttl(failing_discovery):
     sd.get_notebook_path()
@@ -120,7 +121,8 @@ def test_reprobed_after_ttl_expires(failing_discovery, monkeypatch):
 
     # Age the negative-cache timestamp past the TTL (deterministic — no sleep).
     monkeypatch.setattr(
-        sd, "_negative_cache_time",
+        sd,
+        "_negative_cache_time",
         time.monotonic() - (sd._NOTEBOOK_PATH_NEGATIVE_TTL + 0.5),
     )
 
@@ -138,6 +140,7 @@ def test_negative_ttl_is_short():
 # ---------------------------------------------------------------------------
 # Success still works + still cached (300s), unchanged
 # ---------------------------------------------------------------------------
+
 
 def test_success_resolves_and_is_cached(monkeypatch):
     probes = {"n": 0}
@@ -182,16 +185,14 @@ def test_set_notebook_path_clears_negative(failing_discovery, tmp_path):
 # Warning fires once per session, not per cell
 # ---------------------------------------------------------------------------
 
+
 def test_warning_fires_once_per_session():
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         for _ in range(10):
             sd.warn_notebook_not_found_once()
 
-    discovery_warnings = [
-        w for w in caught
-        if issubclass(w.category, sd.CashNotebookDiscoveryWarning)
-    ]
+    discovery_warnings = [w for w in caught if issubclass(w.category, sd.CashNotebookDiscoveryWarning)]
     assert len(discovery_warnings) == 1, (
         f"expected exactly one advisory for 10 failed cells, got {len(discovery_warnings)}"
     )
@@ -201,6 +202,7 @@ def test_warning_is_cashwarning_family():
     """So the documented blanket filter (filterwarnings(category=CashWarning))
     silences it."""
     from cash.exceptions import CashWarning
+
     assert issubclass(sd.CashNotebookDiscoveryWarning, CashWarning)
 
 
@@ -215,10 +217,7 @@ def test_checker_resolve_emits_warning_when_not_found(failing_discovery):
         uc._resolve_notebook_path()
         uc._resolve_notebook_path()
 
-    discovery_warnings = [
-        w for w in caught
-        if issubclass(w.category, sd.CashNotebookDiscoveryWarning)
-    ]
+    discovery_warnings = [w for w in caught if issubclass(w.category, sd.CashNotebookDiscoveryWarning)]
     assert len(discovery_warnings) == 1
 
 
@@ -254,19 +253,23 @@ def _advisories(fn) -> int:
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         fn()
-    return len([
-        w for w in caught
-        if issubclass(w.category, sd.CashNotebookDiscoveryWarning)
-    ])
+    return len([w for w in caught if issubclass(w.category, sd.CashNotebookDiscoveryWarning)])
 
 
 def test_a_pushed_snapshot_suppresses_the_disabled_advisory(monkeypatch):
     from cash.notebook import live_cells
 
     sd.reset_notebook_discovery_warning()
-    monkeypatch.setattr(live_cells, "_store", {"seq": 3, "cells": [
-        {"cell_type": "code", "id": "a", "source": "x = 1"},
-    ]})
+    monkeypatch.setattr(
+        live_cells,
+        "_store",
+        {
+            "seq": 3,
+            "cells": [
+                {"cell_type": "code", "id": "a", "source": "x = 1"},
+            ],
+        },
+    )
 
     assert _advisories(sd.warn_notebook_not_found_once) == 0, (
         "cash claimed upstream tracking was disabled while the extension was "
@@ -295,9 +298,16 @@ def test_suppression_does_not_burn_the_once_per_session_flag(monkeypatch):
     from cash.notebook import live_cells
 
     sd.reset_notebook_discovery_warning()
-    monkeypatch.setattr(live_cells, "_store", {"seq": 3, "cells": [
-        {"cell_type": "code", "id": "a", "source": "x = 1"},
-    ]})
+    monkeypatch.setattr(
+        live_cells,
+        "_store",
+        {
+            "seq": 3,
+            "cells": [
+                {"cell_type": "code", "id": "a", "source": "x = 1"},
+            ],
+        },
+    )
     assert _advisories(sd.warn_notebook_not_found_once) == 0
 
     # The frontend goes away: the snapshot expires and nothing replaces it.

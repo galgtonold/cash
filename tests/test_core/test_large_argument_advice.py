@@ -12,6 +12,7 @@ Round 18:
   which. It now names the costliest parameter, and when a cached function
   produced it, suggests `frozen=True` there.
 """
+
 from __future__ import annotations
 
 import warnings
@@ -97,8 +98,8 @@ def test_net_loss_without_a_producer_keeps_the_hasher_advice():
     verdict = None
     for _ in range(5):
         verdict = verdict or ledger.record(
-            "f", overhead_seconds=0.5, body_seconds=0.001, was_hit=True,
-            culprit=("grid", "ndarray", 0.49, None, False))
+            "f", overhead_seconds=0.5, body_seconds=0.001, was_hit=True, culprit=("grid", "ndarray", 0.49, None, False)
+        )
     what, fix = verdict
     assert "'grid' (ndarray)" in what
     assert fix.startswith("register a cheaper hasher")

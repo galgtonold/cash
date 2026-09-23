@@ -15,16 +15,16 @@ you ran belongs to module ``__main__``, so its full name is ``__main__.work``
 -- which is why an unambiguous trailing segment resolves, and why ambiguity
 has to report candidates instead of picking one.
 """
+
 from __future__ import annotations
 
-import pickle
 import subprocess
 import sys
 
 import pytest
 
 from cash.__main__ import _function_of, _resolve_function, _scan_entries
-from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry, read_entry
+from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry
 
 
 def _write_entry(cache_dir, stem, key, payload=b"x" * 100, **meta):
@@ -35,9 +35,14 @@ def _write_entry(cache_dir, stem, key, payload=b"x" * 100, **meta):
 
 
 def _cli(*args, cwd):
-    return subprocess.run([sys.executable, "-m", "cash", *args],
-                          capture_output=True, text=True, cwd=str(cwd),
-                          encoding="utf-8", errors="replace")
+    return subprocess.run(
+        [sys.executable, "-m", "cash", *args],
+        capture_output=True,
+        text=True,
+        cwd=str(cwd),
+        encoding="utf-8",
+        errors="replace",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -45,15 +50,18 @@ def _cli(*args, cwd):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(("key", "owner"), [
-    ("mod.work:aaa:bbb:ccc", "mod.work"),
-    ("__main__.work:aaa::ccc", "__main__.work"),
-    ("pkg.mod.Klass.method:a:b:c", "pkg.mod.Klass.method"),
-    # Notebook statements have no function to name. Reporting them as a
-    # function called "stmt" would be worse than grouping them.
-    ("stmt:9f8e7d", "(notebook statements)"),
-    ("", "(unknown)"),
-])
+@pytest.mark.parametrize(
+    ("key", "owner"),
+    [
+        ("mod.work:aaa:bbb:ccc", "mod.work"),
+        ("__main__.work:aaa::ccc", "__main__.work"),
+        ("pkg.mod.Klass.method:a:b:c", "pkg.mod.Klass.method"),
+        # Notebook statements have no function to name. Reporting them as a
+        # function called "stmt" would be worse than grouping them.
+        ("stmt:9f8e7d", "(notebook statements)"),
+        ("", "(unknown)"),
+    ],
+)
 def test_the_owning_function_comes_straight_off_the_key(key, owner):
     assert _function_of(key) == owner
 
@@ -64,14 +72,12 @@ def test_the_owning_function_comes_straight_off_the_key(key, owner):
 
 
 def _entries(*names):
-    return [type("E", (), {"function": n, "size": 1, "mtime": 0.0,
-                           "stem": "s", "key": n})() for n in names]
+    return [type("E", (), {"function": n, "size": 1, "mtime": 0.0, "stem": "s", "key": n})() for n in names]
 
 
 def test_a_trailing_segment_is_enough_when_unambiguous(capsys):
     """Nobody wants to type ``__main__.``."""
-    assert _resolve_function(_entries("__main__.work", "lib.other"), "work") \
-        == "__main__.work"
+    assert _resolve_function(_entries("__main__.work", "lib.other"), "work") == "__main__.work"
 
 
 def test_an_exact_name_always_wins():
@@ -102,7 +108,7 @@ def test_an_unknown_name_lists_what_is_there(capsys):
 def test_an_entry_is_sized_by_meta_plus_data(tmp_path):
     cache = tmp_path / ".cash"
     _write_entry(cache, "aa", "mod.f:1:2:3", payload=b"y" * 500)
-    entry, = _scan_entries(cache)
+    (entry,) = _scan_entries(cache)
     assert entry.function == "mod.f"
     assert entry.size > 500, "the payload was not counted"
 
@@ -155,9 +161,11 @@ def test_cli_output_is_ascii(tmp_path):
     """
     cache = tmp_path / ".cash"
     _write_entry(cache, "a1", "mod.f:1:2:3")
-    for argv in (["inspect", str(cache)],
-                 ["inspect", str(cache), "--function", "mod.f"],
-                 ["clear", str(cache), "--function", "mod.f"]):
+    for argv in (
+        ["inspect", str(cache)],
+        ["inspect", str(cache), "--function", "mod.f"],
+        ["clear", str(cache), "--function", "mod.f"],
+    ):
         out = _cli(*argv, cwd=tmp_path).stdout
         assert out.isascii(), f"non-ascii in `cash {' '.join(argv)}` output"
 
@@ -176,10 +184,8 @@ def test_cli_output_is_ascii(tmp_path):
 def test_the_entry_view_shows_what_an_entry_is_worth(tmp_path):
     """Bytes say what you get back; seconds say what it costs you to lose."""
     cache = tmp_path / ".cash"
-    _write_entry(cache, "aa" * 32, "mod.f:1:2:3", payload=b"x" * 5000,
-                 execution_time=0.2, access_count=1)
-    _write_entry(cache, "bb" * 32, "mod.f:9:2:3", payload=b"x" * 100,
-                 execution_time=41.2, access_count=7)
+    _write_entry(cache, "aa" * 32, "mod.f:1:2:3", payload=b"x" * 5000, execution_time=0.2, access_count=1)
+    _write_entry(cache, "bb" * 32, "mod.f:9:2:3", payload=b"x" * 100, execution_time=41.2, access_count=7)
     out = _cli("inspect", str(cache), "--function", "mod.f", cwd=tmp_path).stdout
     assert "SAVES" in out and "USES" in out
     assert "41.2s" in out, "the entry worth keeping does not say so"
@@ -190,15 +196,13 @@ def test_the_entry_view_shows_what_an_entry_is_worth(tmp_path):
 def test_notebook_entries_name_the_variables_they_produced(tmp_path):
     """A statement has no function name, but it does have outputs."""
     cache = tmp_path / ".cash"
-    _write_entry(cache, "aa" * 32, "stmt:9f8e", outputs=["df", "model"],
-                 execution_time=12.5)
+    _write_entry(cache, "aa" * 32, "stmt:9f8e", outputs=["df", "model"], execution_time=12.5)
     out = _cli("inspect", str(cache), "--function", "notebook", cwd=tmp_path).stdout
     assert "PRODUCES" in out
     assert "df, model" in out
 
 
-@pytest.mark.parametrize("alias", ["notebook", "notebooks", "statements",
-                                   "(notebook statements)"])
+@pytest.mark.parametrize("alias", ["notebook", "notebooks", "statements", "(notebook statements)"])
 def test_the_notebook_group_is_addressable_without_its_brackets(tmp_path, alias):
     """The heading reads as prose in a table; typing it should not require that."""
     cache = tmp_path / ".cash"
@@ -226,7 +230,7 @@ def test_one_entry_can_be_dropped_by_id_prefix(tmp_path):
     assert result.returncode == 0, result.stdout
     remaining = [e.stem for e in _scan_entries(cache)]
     assert len(remaining) == 1 and remaining[0].startswith("fedcba")
-    assert not (cache / ("abcdef" + "0" * 58 + ENTRY_SUFFIX)).exists(),         "the entry outlived the clear"
+    assert not (cache / ("abcdef" + "0" * 58 + ENTRY_SUFFIX)).exists(), "the entry outlived the clear"
 
 
 def test_an_ambiguous_entry_prefix_refuses_and_lists(tmp_path):

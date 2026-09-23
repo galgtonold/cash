@@ -7,6 +7,7 @@ the call's entry instead of a copy -- and the statement was then refused for
 disk, as not worth its bytes, on the size that digest reported. An estimate
 read off the arrays gives that answer without the pickle.
 """
+
 import pickle
 
 import numpy as np
@@ -25,6 +26,7 @@ def _spy(monkeypatch):
     def spy(value):
         calls.append(1)
         return real(value)
+
     monkeypatch.setattr(call_unit_mod, "digest_and_size", spy)
     return calls
 
@@ -36,8 +38,8 @@ def _meta(unit, key):
 def test_a_result_far_over_the_ceiling_is_not_digested(call_unit_harness, monkeypatch):
     calls = _spy(monkeypatch)
     unit = call_unit_harness(lineage={}, user_ns={})
-    big = pd.DataFrame({"x": np.zeros(4_000_000), "s": ["a"] * 4_000_000})   # ~40 MB
-    unit._store("call:big", big, 0.1)                    # 0.1 s is worth 12.8 MiB at most
+    big = pd.DataFrame({"x": np.zeros(4_000_000), "s": ["a"] * 4_000_000})  # ~40 MB
+    unit._store("call:big", big, 0.1)  # 0.1 s is worth 12.8 MiB at most
     assert calls == [], "pickled a result the size estimate already refuses"
     meta = _meta(unit, "call:big")
     assert meta.get(ESTIMATED_FIELD) is True
@@ -87,8 +89,13 @@ def test_estimating_does_not_pickle_a_column(monkeypatch):
     """pandas 2 hands out 2-D blocks; sampling one as a single item pickled
     the whole column -- the cost the estimate exists to avoid."""
     import cash._sizing as sizing
-    frame = pd.DataFrame({"s": pd.array([f"o{i}" for i in range(10_000)], dtype=object),
-                          "t": pd.array([f"p{i}" for i in range(10_000)], dtype=object)})
+
+    frame = pd.DataFrame(
+        {
+            "s": pd.array([f"o{i}" for i in range(10_000)], dtype=object),
+            "t": pd.array([f"p{i}" for i in range(10_000)], dtype=object),
+        }
+    )
     biggest = []
     real = sizing.pickle.dumps
 
@@ -96,6 +103,7 @@ def test_estimating_does_not_pickle_a_column(monkeypatch):
         out = real(obj, *a, **k)
         biggest.append(len(out))
         return out
+
     monkeypatch.setattr(sizing.pickle, "dumps", spy)
     pickled_size_estimate(frame)
     assert max(biggest, default=0) < 1000, "an estimate pickled a whole column"

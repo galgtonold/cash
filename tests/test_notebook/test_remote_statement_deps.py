@@ -15,6 +15,7 @@ Remote URLs deliberately do NOT enter ``executed_file_deps``: that set is
 stat'ed and getmtime'd by its consumers, so a URL there contributes nothing.
 See CAS-237.
 """
+
 from __future__ import annotations
 
 import threading
@@ -109,9 +110,7 @@ class TestRemoteInTheKeyComponent:
         f.write_text("a,b\n1,2\n")
         local_only = compute_file_hash_component({str(f)})
         both = compute_file_hash_component({str(f)}, {origin.url})
-        assert both and both != local_only, (
-            "a statement reading both a file and an object must depend on both"
-        )
+        assert both and both != local_only, "a statement reading both a file and an object must depend on both"
 
 
 class TestThroughARealStatement:
@@ -162,8 +161,7 @@ class TestThroughARealStatement:
         second = processor.process_statement(code)
 
         assert second["status"] == CacheStatus.COMPUTED, (
-            "a changed object must force a recompute, or an edited upstream "
-            "dataset is served stale forever"
+            "a changed object must force a recompute, or an edited upstream dataset is served stale forever"
         )
 
     def test_an_unchanged_object_still_hits(self, processor, origin):
@@ -177,6 +175,4 @@ class TestThroughARealStatement:
         processor.process_statement(code)
         second = processor.process_statement(code)
 
-        assert second["status"] != CacheStatus.COMPUTED, (
-            f"an unchanged object must hit, got {second['status']!r}"
-        )
+        assert second["status"] != CacheStatus.COMPUTED, f"an unchanged object must hit, got {second['status']!r}"

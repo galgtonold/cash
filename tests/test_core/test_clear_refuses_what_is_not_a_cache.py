@@ -19,6 +19,7 @@ anything containing it is refused always.
 Through the real CLI in a subprocess, because what is under test is what an
 operator types.
 """
+
 from __future__ import annotations
 
 import os
@@ -32,8 +33,7 @@ pytestmark = pytest.mark.core
 
 def _cash(*argv, cwd):
     env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    return subprocess.run([sys.executable, "-m", "cash", *argv], cwd=str(cwd),
-                          capture_output=True, text=True, env=env)
+    return subprocess.run([sys.executable, "-m", "cash", *argv], cwd=str(cwd), capture_output=True, text=True, env=env)
 
 
 def _a_project(root):

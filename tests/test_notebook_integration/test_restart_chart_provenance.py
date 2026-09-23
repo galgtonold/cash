@@ -16,29 +16,33 @@ read is not re-fired in the first place).
 
 Observed on disk: a re-drawn chart gets a new ``st_mtime_ns``.
 """
+
 from pathlib import Path
 
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(600)]
 
-SETUP = ("import time\nfrom pathlib import Path\nimport matplotlib\nmatplotlib.use('Agg')\n"
-         "import matplotlib.pyplot as plt\nOUT = Path('out')\nOUT.mkdir(exist_ok=True)\n"
-         "def slow(n):\n    time.sleep(0.3)\n    return list(range(1, n + 1))\n"
-         "data = slow(5)")
+SETUP = (
+    "import time\nfrom pathlib import Path\nimport matplotlib\nmatplotlib.use('Agg')\n"
+    "import matplotlib.pyplot as plt\nOUT = Path('out')\nOUT.mkdir(exist_ok=True)\n"
+    "def slow(n):\n    time.sleep(0.3)\n    return list(range(1, n + 1))\n"
+    "data = slow(5)"
+)
 # Two figures, as a report cell draws them: the first is filled through ``ax``
 # and closed, so ``fig`` has moved on by the time the second one is saved.
-CHART = ("fig, ax = plt.subplots(figsize=(4, 3))\n"
-         "ax.bar(range(len(data)), data)\n"
-         "ax.set_title('first')\n"
-         "fig.tight_layout()\n"
-         "fig.savefig(OUT / 'a.png'); plt.close(fig)\n"
-         "fig, axes = plt.subplots(1, 2, figsize=(4, 3))\n"
-         "axes[0].bar(range(3), data[:3])\n"
-         "axes[1].set_title('second')\n"
-         "fig.savefig(OUT / 'b.png'); plt.close(fig)")
-READ = ("drawn = [len((OUT / n).read_bytes()) > 0 for n in ('a.png', 'b.png')]\n"
-        "print('DRAWN', drawn, sum(data))")
+CHART = (
+    "fig, ax = plt.subplots(figsize=(4, 3))\n"
+    "ax.bar(range(len(data)), data)\n"
+    "ax.set_title('first')\n"
+    "fig.tight_layout()\n"
+    "fig.savefig(OUT / 'a.png'); plt.close(fig)\n"
+    "fig, axes = plt.subplots(1, 2, figsize=(4, 3))\n"
+    "axes[0].bar(range(3), data[:3])\n"
+    "axes[1].set_title('second')\n"
+    "fig.savefig(OUT / 'b.png'); plt.close(fig)"
+)
+READ = "drawn = [len((OUT / n).read_bytes()) > 0 for n in ('a.png', 'b.png')]\nprint('DRAWN', drawn, sum(data))"
 CELLS = ["import cash\n%cash_on", SETUP, CHART, READ]
 
 

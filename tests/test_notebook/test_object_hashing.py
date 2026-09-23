@@ -4,16 +4,17 @@ Migrated from `test_magics_coverage.py` when the functions moved out of
 `CashMagics` into their own module. The companion size-estimator
 (``estimate_object_size``) is exercised by ``test_size_estimator.py``.
 """
+
 import hashlib
 
 import pytest
 
 from cash.notebook.object_hashing import compute_hash, identity_hash, is_identity_fallback_hash
 
-
 # ============================================================================
 # compute_hash
 # ============================================================================
+
 
 class TestComputeHash:
     def test_hash_simple_objects(self):
@@ -42,7 +43,7 @@ class TestComputeHash:
             import pandas as pd
         except ImportError:
             pytest.skip("pandas not installed")
-        df = pd.DataFrame({'a': [1, 2, 3], 'b': [4, 5, 6]})
+        df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
         h = compute_hash(df)
         assert isinstance(h, str)
         assert len(h) == 64
@@ -63,7 +64,7 @@ class TestComputeHash:
             import pandas as pd
         except ImportError:
             pytest.skip("pandas not installed")
-        s = pd.Series([1, 2, 3], name='test')
+        s = pd.Series([1, 2, 3], name="test")
         h = compute_hash(s)
         assert isinstance(h, str)
         assert len(h) == 64
@@ -71,6 +72,7 @@ class TestComputeHash:
     def test_hash_unpicklable_object(self):
         """Unpicklable objects should fall back to id-based hash."""
         import threading
+
         lock = threading.Lock()
         h = compute_hash(lock)
         assert isinstance(h, str)
@@ -84,9 +86,10 @@ class TestComputeHash:
         changing to match.
         """
         import threading
+
         lock = threading.Lock()
         h = compute_hash(lock)
-        assert h == hashlib.sha256(str(id(lock)).encode('utf-8')).hexdigest()
+        assert h == hashlib.sha256(str(id(lock)).encode("utf-8")).hexdigest()
         assert h == identity_hash(lock)
         assert is_identity_fallback_hash(lock, h)
 
@@ -126,4 +129,3 @@ class TestComputeHash:
 # ============================================================================
 # calculate_memory_size
 # ============================================================================
-

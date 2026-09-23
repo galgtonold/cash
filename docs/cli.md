@@ -10,7 +10,7 @@ canonical reference.
 as `cash = "cash.__main__:main"` in `pyproject.toml`). Running `cash` with no
 subcommand prints help and exits 0.
 
-<!-- claim: cash/__main__.py:main @6c4baf93 broad="the quick-reference table is a claim about the whole subcommand set" -->
+<!-- claim: cash/__main__.py:main @fc218b1b broad="the quick-reference table is a claim about the whole subcommand set" -->
 ## Quick reference
 
 | Subcommand | Purpose | Destructive? |
@@ -217,7 +217,7 @@ cash info
   that is not a setting, or a value cash could not use, is left out of the
   list and reported as a warning.
 
-<!-- claim: cash/__main__.py:cmd_inspect @f584cf61, cash/__main__.py:_inspect_cache_dir @c4025bfc, cash/__main__.py:_inspect_notebook @06ba3efe -->
+<!-- claim: cash/__main__.py:cmd_inspect @0975006f, cash/__main__.py:_inspect_cache_dir @5372c14d, cash/__main__.py:_inspect_notebook @b18767fe -->
 ### `cash inspect [path] [--function NAME]` { #cash-inspect-path }
 
 Summarise a cache directory, or report on a notebook and its sibling `.cash`
@@ -336,7 +336,7 @@ REPL, `python -c`, or a notebook kernel.
 
 ## Clearing caches
 
-<!-- claim: cash/__main__.py:cmd_clear @66d03200 -->
+<!-- claim: cash/__main__.py:cmd_clear @a2a0458b -->
 ### `cash clear [path] [--all] [--function NAME]` { #cash-clear-path-all }
 
 Delete a cache directory, or just one function's entries.
@@ -430,8 +430,8 @@ cash clear /tmp/some-cache-dir         # nuke any directory
   have meant.
 - The no-op "nothing to clear" message paths (no resolved cache, no sibling
   cache) exit 0; they're treated as success, not failure.
-<!-- claim: cash/backends/file_backend.py:FileBackend._check_format_version @8efef298, cash/backends/file_backend.py:FileBackend._entries_are_current_format @a4172379 -->
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend._drop_ram_if_cleared @751b655a, cash/__main__.py:_bump_generation @9e2ac2be -->
+<!-- claim: cash/backends/file_backend.py:FileBackend._check_format_version @3cfbee74, cash/backends/file_backend.py:FileBackend._entries_are_current_format @a4172379 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend._drop_ram_if_cleared @eaca5300, cash/__main__.py:_bump_generation @9e2ac2be -->
 - **Clearing the cache of a process that is still running** reaches its memory
   too. A running process checks, at most once a second, whether its cache
   directory was cleared (`--all`, `--function`, `--entry`), and if so drops
@@ -459,7 +459,7 @@ cash clear /tmp/some-cache-dir         # nuke any directory
 
 ---
 
-<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @f84644ce -->
+<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @d6c3c39a -->
 ## Exit codes
 
 | Code | When |

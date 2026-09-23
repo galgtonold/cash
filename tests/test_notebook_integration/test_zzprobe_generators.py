@@ -38,13 +38,16 @@ pytestmark = [pytest.mark.timeout(90)]
 # on an exhausted/advanced iterator.
 # ---------------------------------------------------------------------------
 
+
 def test_genexpr_cross_cell_second_run_all(nb_runner):
     """Generator expression created in A, consumed in B. run_all twice must
     print the same values (A re-runs -> fresh generator)."""
-    nb_runner.create_notebook([
-        "g = (i * i for i in range(4))",
-        "vals = list(g)\nprint(vals)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "g = (i * i for i in range(4))",
+            "vals = list(g)\nprint(vals)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "[0, 1, 4, 9]" in nb_runner.get_output(2), nb_runner.get_output(2)
@@ -58,11 +61,13 @@ def test_genexpr_unrelated_edit_run_all(nb_runner):
     """Gen in A, consumed in B, unrelated cell C edited, then run_all.
     Skipping A (unchanged) while re-executing B would consume an exhausted
     generator -> []."""
-    nb_runner.create_notebook([
-        "g = (i * i for i in range(4))",
-        "vals = list(g)\nprint(vals)",
-        "z = 1\nprint(z)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "g = (i * i for i in range(4))",
+            "vals = list(g)\nprint(vals)",
+            "z = 1\nprint(z)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "[0, 1, 4, 9]" in nb_runner.get_output(2)
@@ -76,29 +81,28 @@ def test_genexpr_unrelated_edit_run_all(nb_runner):
 
 def test_map_filter_cross_cell_second_run_all(nb_runner):
     """map/filter objects with lambdas (unpicklable) crossing cells."""
-    nb_runner.create_notebook([
-        "m = map(str, filter(lambda x: x % 2 == 0, [1, 2, 3, 4]))",
-        "out = list(m)\nprint(out)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "m = map(str, filter(lambda x: x % 2 == 0, [1, 2, 3, 4]))",
+            "out = list(m)\nprint(out)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "['2', '4']" in nb_runner.get_output(2), nb_runner.get_output(2)
     nb_runner.run_all()
-    assert "['2', '4']" in nb_runner.get_output(2), (
-        f"second run_all: {nb_runner.get_output(2)!r}"
-    )
+    assert "['2', '4']" in nb_runner.get_output(2), f"second run_all: {nb_runner.get_output(2)!r}"
 
 
 def test_zip_enumerate_chain_second_run_all(nb_runner):
     """zip/enumerate/chain (picklable C iterators) crossing cells; a stale
     RESTORE of an advanced iterator would change the printed lists."""
-    nb_runner.create_notebook([
-        "import itertools\n"
-        "pairs = zip([1, 2, 3], 'abc')\n"
-        "en = enumerate('xy')\n"
-        "ch = itertools.chain([1, 2], [3])",
-        "print(list(pairs))\nprint(list(en))\nprint(list(ch))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import itertools\npairs = zip([1, 2, 3], 'abc')\nen = enumerate('xy')\nch = itertools.chain([1, 2], [3])",
+            "print(list(pairs))\nprint(list(en))\nprint(list(ch))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     out1 = nb_runner.get_output(2)
@@ -115,10 +119,12 @@ def test_zip_enumerate_chain_second_run_all(nb_runner):
 def test_cycle_cross_cell_second_run_all(nb_runner):
     """itertools.cycle is infinite AND picklable-with-state: restoring the
     advanced cycle (or skipping the producer) shifts the printed window."""
-    nb_runner.create_notebook([
-        "import itertools\ncyc = itertools.cycle([1, 2, 3])",
-        "vals = [next(cyc) for _ in range(4)]\nprint(vals)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import itertools\ncyc = itertools.cycle([1, 2, 3])",
+            "vals = [next(cyc) for _ in range(4)]\nprint(vals)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "[1, 2, 3, 1]" in nb_runner.get_output(2), nb_runner.get_output(2)
@@ -131,36 +137,32 @@ def test_cycle_cross_cell_second_run_all(nb_runner):
 def test_tee_cross_cell_second_run_all(nb_runner):
     """tee pair created in A (multi-target), each branch consumed in its own
     cell. Both branches must replay identically on the second run_all."""
-    nb_runner.create_notebook([
-        "import itertools\nsrc = iter([1, 2, 3])\nta, tb = itertools.tee(src)",
-        "a_vals = list(ta)\nprint(a_vals)",
-        "b_vals = list(tb)\nprint(b_vals)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import itertools\nsrc = iter([1, 2, 3])\nta, tb = itertools.tee(src)",
+            "a_vals = list(ta)\nprint(a_vals)",
+            "b_vals = list(tb)\nprint(b_vals)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "[1, 2, 3]" in nb_runner.get_output(2), nb_runner.get_output(2)
     assert "[1, 2, 3]" in nb_runner.get_output(3), nb_runner.get_output(3)
     nb_runner.run_all()
-    assert "[1, 2, 3]" in nb_runner.get_output(2), (
-        f"tee branch a on second run: {nb_runner.get_output(2)!r}"
-    )
-    assert "[1, 2, 3]" in nb_runner.get_output(3), (
-        f"tee branch b on second run: {nb_runner.get_output(3)!r}"
-    )
+    assert "[1, 2, 3]" in nb_runner.get_output(2), f"tee branch a on second run: {nb_runner.get_output(2)!r}"
+    assert "[1, 2, 3]" in nb_runner.get_output(3), f"tee branch b on second run: {nb_runner.get_output(3)!r}"
 
 
 def test_send_protocol_cross_cell_second_run_all(nb_runner):
     """Primed coroutine-style generator; a skipped producer cell leaves an
     advanced coroutine, so send(5) would print 10 instead of 5."""
-    nb_runner.create_notebook([
-        "def acc():\n"
-        "    total = 0\n"
-        "    while True:\n"
-        "        x = yield total\n"
-        "        total += x",
-        "a = acc()\nnext(a)",
-        "r = a.send(5)\nprint(r)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "def acc():\n    total = 0\n    while True:\n        x = yield total\n        total += x",
+            "a = acc()\nnext(a)",
+            "r = a.send(5)\nprint(r)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert nb_runner.get_output(3).strip().endswith("5"), nb_runner.get_output(3)
@@ -174,35 +176,38 @@ def test_send_protocol_cross_cell_second_run_all(nb_runner):
 def test_gen_close_cross_cell_second_run_all(nb_runner):
     """Consumer closes the generator. Second run_all with a skipped producer
     would call next() on a closed generator -> StopIteration error output."""
-    nb_runner.create_notebook([
-        "g = (i for i in range(5))",
-        "first = next(g)\ng.close()\nprint(first)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "g = (i for i in range(5))",
+            "first = next(g)\ng.close()\nprint(first)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "0" in nb_runner.get_output(2), nb_runner.get_output(2)
     nb_runner.run_all()
     out = nb_runner.get_output(2)
-    assert "0" in out and "StopIteration" not in out, (
-        f"closed generator leaked into second run: {out!r}"
-    )
+    assert "0" in out and "StopIteration" not in out, f"closed generator leaked into second run: {out!r}"
 
 
 # ---------------------------------------------------------------------------
 # View aliasing + edit invalidation
 # ---------------------------------------------------------------------------
 
+
 def test_dict_view_alias_upstream_mutation_edit(nb_runner):
     """ks = d.keys() aliases d live. After editing the mutating cell, the
     downstream print of the VIEW must reflect the new mutation. If cash
     restores d as a NEW object (breaking the alias) or serves ks stale, the
     view shows the old key set."""
-    nb_runner.create_notebook([
-        "d = {'a': 1}",
-        "ks = d.keys()",
-        "d['b'] = 2",
-        "print(sorted(ks))\nprint(len(ks))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "d = {'a': 1}",
+            "ks = d.keys()",
+            "d['b'] = 2",
+            "print(sorted(ks))\nprint(len(ks))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     out1 = nb_runner.get_output(4)
@@ -210,9 +215,7 @@ def test_dict_view_alias_upstream_mutation_edit(nb_runner):
     nb_runner.set_cell_source(3, "d['b'] = 2\nd['c'] = 3")
     nb_runner.run_all()
     out2 = nb_runner.get_output(4)
-    assert "['a', 'b', 'c']" in out2 and "3" in out2, (
-        f"view must reflect the edited mutation: {out2!r}"
-    )
+    assert "['a', 'b', 'c']" in out2 and "3" in out2, f"view must reflect the edited mutation: {out2!r}"
 
 
 def test_reversed_later_mutated_list_second_run_all(nb_runner):
@@ -220,34 +223,35 @@ def test_reversed_later_mutated_list_second_run_all(nb_runner):
     does not extend it -> [3, 2, 1] (plain semantics). Second run_all must
     reproduce that, not [4, 3, 2, 1] (view recreated after the mutation) nor
     an empty list (exhausted iterator)."""
-    nb_runner.create_notebook([
-        "lst = [1, 2, 3]",
-        "r = reversed(lst)",
-        "lst.append(4)",
-        "print(list(r))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "lst = [1, 2, 3]",
+            "r = reversed(lst)",
+            "lst.append(4)",
+            "print(list(r))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "[3, 2, 1]" in nb_runner.get_output(4), nb_runner.get_output(4)
     nb_runner.run_all()
-    assert "[3, 2, 1]" in nb_runner.get_output(4), (
-        f"second run_all diverged: {nb_runner.get_output(4)!r}"
-    )
+    assert "[3, 2, 1]" in nb_runner.get_output(4), f"second run_all diverged: {nb_runner.get_output(4)!r}"
 
 
 # ---------------------------------------------------------------------------
 # Real resources / persistence
 # ---------------------------------------------------------------------------
 
+
 def test_file_handle_iteration_second_run_all(nb_runner):
     """Open file handle created in A, iterated in B. Skipping A on the second
     run_all leaves fh at EOF -> B prints []."""
-    nb_runner.create_notebook([
-        "with open('probe_data.txt', 'w') as f:\n"
-        "    f.write('a\\nb\\nc\\n')\n"
-        "fh = open('probe_data.txt')",
-        "lines = [l.strip() for l in fh]\nprint(lines)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "with open('probe_data.txt', 'w') as f:\n    f.write('a\\nb\\nc\\n')\nfh = open('probe_data.txt')",
+            "lines = [l.strip() for l in fh]\nprint(lines)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "['a', 'b', 'c']" in nb_runner.get_output(2), nb_runner.get_output(2)
@@ -261,10 +265,12 @@ def test_iterator_restart_persist_graceful(nb_runner):
     """Kernel restart under persist with an unpicklable generator variable.
     The gen cannot be persisted -- restart must recompute (or restore the
     downstream list) and print correct values with no traceback."""
-    nb_runner.create_notebook([
-        "import time\ng = (i * i for i in range(4))\ntime.sleep(0.02)",
-        "vals = list(g)\nprint(vals)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import time\ng = (i * i for i in range(4))\ntime.sleep(0.02)",
+            "vals = list(g)\nprint(vals)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_persist()
     nb_runner.run_all()
@@ -279,30 +285,29 @@ def test_iterator_restart_persist_graceful(nb_runner):
     raw2 = nb_runner.get_raw_output(2)
     assert "[0, 1, 4, 9]" in out, f"post-restart value wrong: {out!r}"
     for raw in (raw1, raw2):
-        assert "Traceback" not in raw and "StopIteration" not in raw, (
-            f"post-restart error output: {raw[:400]!r}"
-        )
+        assert "Traceback" not in raw and "StopIteration" not in raw, f"post-restart error output: {raw[:400]!r}"
 
 
 # ---------------------------------------------------------------------------
 # Generator functions & partial consumption
 # ---------------------------------------------------------------------------
 
+
 def test_genfunc_downstream_instance_edit(nb_runner):
     """Generator FUNCTION defined in A, instance created in B, consumed in C.
     Editing the function body must propagate through the instance cell to the
     consumer."""
-    nb_runner.create_notebook([
-        "def gen(n):\n    for i in range(n):\n        yield i * 2",
-        "g = gen(3)",
-        "vals = list(g)\nprint(vals)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "def gen(n):\n    for i in range(n):\n        yield i * 2",
+            "g = gen(3)",
+            "vals = list(g)\nprint(vals)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "[0, 2, 4]" in nb_runner.get_output(3), nb_runner.get_output(3)
-    nb_runner.set_cell_source(
-        1, "def gen(n):\n    for i in range(n):\n        yield i * 3"
-    )
+    nb_runner.set_cell_source(1, "def gen(n):\n    for i in range(n):\n        yield i * 3")
     nb_runner.run_all()
     assert "[0, 3, 6]" in nb_runner.get_output(3), (
         f"edited generator function did not propagate: {nb_runner.get_output(3)!r}"
@@ -314,17 +319,17 @@ def test_half_consumed_iterator_isolated_rerun_persist(nb_runner):
     under persist. CAS-50-adjacent: with the statement cached (persist on),
     can cash serve rest=[3, 4, 5] instead of re-executing on the exhausted
     iterator?"""
-    nb_runner.create_notebook([
-        "it = iter(range(6))",
-        "first3 = [next(it) for _ in range(3)]\nprint(first3)",
-        "rest = list(it)\nprint(rest)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "it = iter(range(6))",
+            "first3 = [next(it) for _ in range(3)]\nprint(first3)",
+            "rest = list(it)\nprint(rest)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_persist()
     nb_runner.run_all()
     assert "[0, 1, 2]" in nb_runner.get_output(2), nb_runner.get_output(2)
     assert "[3, 4, 5]" in nb_runner.get_output(3), nb_runner.get_output(3)
     nb_runner.run_cell(3)
-    assert "[3, 4, 5]" in nb_runner.get_output(3), (
-        f"isolated re-run of the tail consumer: {nb_runner.get_output(3)!r}"
-    )
+    assert "[3, 4, 5]" in nb_runner.get_output(3), f"isolated re-run of the tail consumer: {nb_runner.get_output(3)!r}"

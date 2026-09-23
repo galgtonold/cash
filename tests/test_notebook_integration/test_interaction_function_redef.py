@@ -14,10 +14,12 @@ class TestFunctionRedefinition:
 
     def test_redefine_function_downstream_updates(self, nb_runner):
         """Change function body, downstream should recompute."""
-        nb_runner.create_notebook([
-            "def f(x):\n    return x * 2",
-            "result = f(5)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def f(x):\n    return x * 2",
+                "result = f(5)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 10" in nb_runner.get_output(2)
@@ -28,10 +30,12 @@ class TestFunctionRedefinition:
 
     def test_redefine_function_twice(self, nb_runner):
         """Redefine a function two times sequentially."""
-        nb_runner.create_notebook([
-            "def compute(a, b):\n    return a + b",
-            "val = compute(3, 4)\nprint(f'val = {val}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def compute(a, b):\n    return a + b",
+                "val = compute(3, 4)\nprint(f'val = {val}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "val = 7" in nb_runner.get_output(2)
@@ -48,10 +52,12 @@ class TestFunctionRedefinition:
 
     def test_redefine_function_revert(self, nb_runner):
         """Change function, then revert to original. Cache should still work."""
-        nb_runner.create_notebook([
-            "def double(x):\n    return x * 2",
-            "r = double(7)\nprint(f'r = {r}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def double(x):\n    return x * 2",
+                "r = double(7)\nprint(f'r = {r}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "r = 14" in nb_runner.get_output(2)
@@ -67,11 +73,13 @@ class TestFunctionRedefinition:
 
     def test_function_used_in_multiple_cells(self, nb_runner):
         """Function redefined, used in multiple downstream cells."""
-        nb_runner.create_notebook([
-            "def inc(x):\n    return x + 1",
-            "a = inc(10)\nprint(f'a = {a}')",
-            "b = inc(20)\nprint(f'b = {b}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def inc(x):\n    return x + 1",
+                "a = inc(10)\nprint(f'a = {a}')",
+                "b = inc(20)\nprint(f'b = {b}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "a = 11" in nb_runner.get_output(2)
@@ -82,13 +90,14 @@ class TestFunctionRedefinition:
         assert "a = 20" in nb_runner.get_output(2)
         assert "b = 30" in nb_runner.get_output(3)
 
-
     def test_function_redefined_after_restart(self, nb_runner):
         """Restart kernel, redefine function, downstream should recompute."""
-        nb_runner.create_notebook([
-            "def square(x):\n    return x ** 2",
-            "val = square(4)\nprint(f'val = {val}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def square(x):\n    return x ** 2",
+                "val = square(4)\nprint(f'val = {val}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "val = 16" in nb_runner.get_output(2)
@@ -105,10 +114,12 @@ class TestClassRedefinition:
 
     def test_redefine_class_method(self, nb_runner):
         """Change a class method, downstream should reflect."""
-        nb_runner.create_notebook([
-            "class Calculator:\n    def add(self, a, b):\n        return a + b",
-            "c = Calculator()\nresult = c.add(3, 4)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "class Calculator:\n    def add(self, a, b):\n        return a + b",
+                "c = Calculator()\nresult = c.add(3, 4)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 7" in nb_runner.get_output(2)
@@ -122,10 +133,12 @@ class TestClassRedefinition:
 
     def test_add_method_to_class(self, nb_runner):
         """Add a new method to an existing class."""
-        nb_runner.create_notebook([
-            "class MyClass:\n    def foo(self):\n        return 1",
-            "obj = MyClass()\nprint(f'foo = {obj.foo()}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "class MyClass:\n    def foo(self):\n        return 1",
+                "obj = MyClass()\nprint(f'foo = {obj.foo()}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "foo = 1" in nb_runner.get_output(2)
@@ -148,11 +161,13 @@ class TestFunctionCallingFunction:
 
     def test_inner_function_redefined(self, nb_runner):
         """Redefine an inner function used by an outer function."""
-        nb_runner.create_notebook([
-            "def helper(x):\n    return x + 1",
-            "def main(x):\n    return helper(x) * 2",
-            "result = main(5)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def helper(x):\n    return x + 1",
+                "def main(x):\n    return helper(x) * 2",
+                "result = main(5)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 12" in nb_runner.get_output(3)
@@ -164,11 +179,13 @@ class TestFunctionCallingFunction:
 
     def test_outer_function_redefined(self, nb_runner):
         """Redefine the outer function while helper stays the same."""
-        nb_runner.create_notebook([
-            "def helper(x):\n    return x + 1",
-            "def main(x):\n    return helper(x) * 2",
-            "result = main(5)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def helper(x):\n    return x + 1",
+                "def main(x):\n    return helper(x) * 2",
+                "result = main(5)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 12" in nb_runner.get_output(3)
@@ -180,11 +197,13 @@ class TestFunctionCallingFunction:
 
     def test_both_functions_redefined(self, nb_runner):
         """Redefine both inner and outer functions simultaneously."""
-        nb_runner.create_notebook([
-            "def helper(x):\n    return x + 1",
-            "def main(x):\n    return helper(x) * 2",
-            "result = main(5)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def helper(x):\n    return x + 1",
+                "def main(x):\n    return helper(x) * 2",
+                "result = main(5)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 12" in nb_runner.get_output(3)
@@ -197,10 +216,12 @@ class TestFunctionCallingFunction:
 
     def test_recursive_function_redefined(self, nb_runner):
         """Redefine a recursive function."""
-        nb_runner.create_notebook([
-            "def fib(n):\n    if n <= 1:\n        return n\n    return fib(n-1) + fib(n-2)",
-            "val = fib(6)\nprint(f'val = {val}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def fib(n):\n    if n <= 1:\n        return n\n    return fib(n-1) + fib(n-2)",
+                "val = fib(6)\nprint(f'val = {val}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "val = 8" in nb_runner.get_output(2)
@@ -215,10 +236,12 @@ class TestFunctionCallingFunction:
 
     def test_lambda_redefined(self, nb_runner):
         """Redefine a lambda used downstream."""
-        nb_runner.create_notebook([
-            "transform = lambda x: x * 2",
-            "result = transform(7)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "transform = lambda x: x * 2",
+                "result = transform(7)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 14" in nb_runner.get_output(2)

@@ -20,6 +20,7 @@ Two arms, on the real notebook path:
     is the standing regression test for refusing those, and it must keep
     passing)
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(240)]
@@ -46,39 +47,35 @@ def test_a_big_value_that_rebuilds_quickly_does_not_reach_disk(nb_runner):
     r26s4's shape -- 48 MiB entries whose recorded compute was 0.00 s, 72 of
     them, 3.5 GB. Nothing this cheap is worth that much disk.
     """
-    nb_runner.create_notebook([
-        "import numpy as np\nimport time",
-        "def make_frame():\n"
-        "    time.sleep(0.15)\n"
-        "    return np.arange(6_000_000, dtype='float64')",
-        "big = make_frame()\nprint(f'shape={big.shape[0]}')",
-        REPORT,
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np\nimport time",
+            "def make_frame():\n    time.sleep(0.15)\n    return np.arange(6_000_000, dtype='float64')",
+            "big = make_frame()\nprint(f'shape={big.shape[0]}')",
+            REPORT,
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
     assert "shape=6000000" in nb_runner.get_output(3)
-    assert _disk_bytes(nb_runner, 4) < 1_000_000, (
-        "a 48 MB value that rebuilds in 0.15 s was written to disk anyway"
-    )
+    assert _disk_bytes(nb_runner, 4) < 1_000_000, "a 48 MB value that rebuilds in 0.15 s was written to disk anyway"
 
 
 def test_a_big_value_that_is_expensive_still_reaches_disk(nb_runner):
     """The control. The ceiling must not simply refuse everything large --
     that is the bug CAS-141 fixed, and re-creating it would be worse than the
     disk it saves."""
-    nb_runner.create_notebook([
-        "import numpy as np\nimport time",
-        "def make_frame():\n"
-        "    time.sleep(2.0)\n"
-        "    return np.arange(6_000_000, dtype='float64')",
-        "big = make_frame()\nprint(f'shape={big.shape[0]}')",
-        REPORT,
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np\nimport time",
+            "def make_frame():\n    time.sleep(2.0)\n    return np.arange(6_000_000, dtype='float64')",
+            "big = make_frame()\nprint(f'shape={big.shape[0]}')",
+            REPORT,
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
     assert "shape=6000000" in nb_runner.get_output(3)
-    assert _disk_bytes(nb_runner, 4) > 1_000_000, (
-        "a 48 MB value that costs 2 s to rebuild should be on disk"
-    )
+    assert _disk_bytes(nb_runner, 4) > 1_000_000, "a 48 MB value that costs 2 s to rebuild should be on disk"

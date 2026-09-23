@@ -20,13 +20,12 @@ Placement:
 
 It is honoured in ``strict=True`` too: a line you audited is audited.
 """
+
 from __future__ import annotations
 
 import inspect
 import os
 import warnings
-
-import pytest
 
 from cash import Cash
 from cash.exceptions import CashImpureFunctionError, CashImpurityWarning
@@ -75,20 +74,19 @@ def test_the_blanket_flag_hides_a_later_addition(tmp_path):
     function. It is here so that if the blanket flag is ever narrowed, this
     test fails and somebody reads the docstring above.
     """
+
     def audited_then_extended(uid):
-        sink({"unaudited": uid})          # added long after the audit
+        sink({"unaudited": uid})  # added long after the audit
         return uid
 
-    assert _kinds(audited_then_extended), (
-        "control: the analyzer must see this call at all"
-    )
+    assert _kinds(audited_then_extended), "control: the analyzer must see this call at all"
     assert _run(audited_then_extended, 1, assume_safe=True, tmp_path=tmp_path) == ""
 
 
 # ------------------------------------------------------------- the annotation
 def test_an_annotated_statement_is_waived(tmp_path):
     def audited(uid):
-        sink({"audited": uid})            # @cash:assume-safe
+        sink({"audited": uid})  # @cash:assume-safe
         return uid
 
     assert _kinds(audited) == []
@@ -97,6 +95,7 @@ def test_an_annotated_statement_is_waived(tmp_path):
 
 def test_an_annotation_on_the_line_above_also_waives(tmp_path):
     """The ``# noqa``-above idiom, for when the line is already long."""
+
     def audited(uid):
         # @cash:assume-safe
         sink({"audited": uid})
@@ -107,9 +106,10 @@ def test_an_annotation_on_the_line_above_also_waives(tmp_path):
 
 def test_a_statement_added_later_is_reported_again(tmp_path):
     """The whole point: the waiver covers what it was written for, not more."""
+
     def audited_then_extended(uid):
-        sink({"audited": uid})            # @cash:assume-safe
-        sink({"added": uid})              # no annotation -- new, unaudited
+        sink({"audited": uid})  # @cash:assume-safe
+        sink({"added": uid})  # no annotation -- new, unaudited
         return uid
 
     issues = PurityAnalyzer().analyze(audited_then_extended).issues
@@ -124,8 +124,9 @@ def test_a_statement_added_later_is_reported_again(tmp_path):
 def test_the_def_line_waives_function_scoped_findings_only(tmp_path):
     """``mutable_global`` has no line, so it needs somewhere else to live --
     and waiving it must not quietly waive the statements too."""
-    def reads_and_writes(uid):            # @cash:assume-safe
-        REGISTRY["seen"] = uid            # a real scope mutation, still flagged
+
+    def reads_and_writes(uid):  # @cash:assume-safe
+        REGISTRY["seen"] = uid  # a real scope mutation, still flagged
         return REGISTRY.get(uid)
 
     kinds = _kinds(reads_and_writes)
@@ -135,7 +136,7 @@ def test_the_def_line_waives_function_scoped_findings_only(tmp_path):
 
 def test_strict_mode_honours_the_annotation(tmp_path):
     def audited(uid):
-        sink({"audited": uid})            # @cash:assume-safe
+        sink({"audited": uid})  # @cash:assume-safe
         return uid
 
     def not_audited(uid):
@@ -149,12 +150,15 @@ def test_strict_mode_honours_the_annotation(tmp_path):
 def test_it_waives_the_class_that_raises(tmp_path):
     """``untrackable_dep`` raises by default; the per-line waiver is the
     statement-scoped equivalent of ``assume_safe=True`` for it."""
+
     def audited(name):
         import importlib
-        return importlib.import_module(name).__name__   # @cash:assume-safe
+
+        return importlib.import_module(name).__name__  # @cash:assume-safe
 
     def bare(name):
         import importlib
+
         return importlib.import_module(name).__name__
 
     assert _run(audited, "json", tmp_path=tmp_path) == ""
@@ -167,8 +171,9 @@ def test_a_multiline_call_is_waived_from_its_OPENING_line(tmp_path):
     Worth pinning because the closing-paren line is the tempting place to put
     it, and putting it there does nothing.
     """
+
     def opening(uid):
-        sink(                              # @cash:assume-safe
+        sink(  # @cash:assume-safe
             {"audited": uid},
         )
         return uid
@@ -176,7 +181,7 @@ def test_a_multiline_call_is_waived_from_its_OPENING_line(tmp_path):
     def closing(uid):
         sink(
             {"audited": uid},
-        )                                  # @cash:assume-safe
+        )  # @cash:assume-safe
         return uid
 
     # Bare statements, not `return sink(...)`: a call whose value is USED is
@@ -189,8 +194,9 @@ def test_a_multiline_call_is_waived_from_its_OPENING_line(tmp_path):
 
 def test_an_unrelated_comment_does_not_waive(tmp_path):
     """Only the directive counts -- a passing mention must not silence."""
+
     def looks_similar(uid):
-        sink({"x": uid})                  # assume this is safe, cash
+        sink({"x": uid})  # assume this is safe, cash
         return uid
 
     assert _kinds(looks_similar), "a passing mention must not act as a waiver"
@@ -203,6 +209,7 @@ def test_a_waiver_in_a_HELPER_covers_that_helper_for_every_caller():
     right (the audit is about the helper's body) but worth knowing: you cannot
     accept a helper's side effect for one caller only.
     """
+
     def calls_audited(uid):
         return audited_helper.audited_helper(uid)
 
@@ -224,6 +231,7 @@ def test_a_write_named_call_on_a_MODULE_does_not_flag_the_module(tmp_path):
     not make the call itself -- and on a finding with no line number, so the
     annotation above could not even waive it per statement.
     """
+
     def only_reads():
         return os.getpid()
 
@@ -239,6 +247,7 @@ def test_a_real_container_mutation_still_flags(tmp_path):
     reading it must still be reported -- otherwise the fix above would have
     turned the whole rule off.
     """
+
     def reads_registry():
         return REGISTRY.get("seen")
 

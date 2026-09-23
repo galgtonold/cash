@@ -12,13 +12,14 @@ kernel restart: the simulation's cache key diverged from runtime's because
 module_component handling was inconsistent across the 4 call sites.
 The fix unifies all cache key computation in cash.notebook.cache_key.
 """
+
 import hashlib
 import unittest
 from unittest.mock import MagicMock
 
-from cash.notebook.cache_key import compute_cache_key, CacheKeyContext
-from cash.notebook.upstream import UpstreamChecker
 from cash.notebook._protocols import TrackingState
+from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
+from cash.notebook.upstream import UpstreamChecker
 
 
 class TestComputeCacheKey(unittest.TestCase):
@@ -31,8 +32,8 @@ class TestComputeCacheKey(unittest.TestCase):
 
         key, source_hash, input_hashes, func_hashes, mod_hashes = compute_cache_key(
             code,
-            {'x'},
-            ctx=CacheKeyContext(variable_lineage={'x': x_lineage}, user_ns={'x': 42}),
+            {"x"},
+            ctx=CacheKeyContext(variable_lineage={"x": x_lineage}, user_ns={"x": 42}),
         )
 
         self.assertTrue(key.startswith("stmt:"))
@@ -50,8 +51,10 @@ class TestComputeCacheKey(unittest.TestCase):
 
         key, _, input_hashes, _, mod_hashes = compute_cache_key(
             code,
-            {'np', 'df'},
-            ctx=CacheKeyContext(variable_lineage={'df': df_lineage, 'np': np_lineage}, user_ns={'np': np, 'df': [1, 2, 3]}),
+            {"np", "df"},
+            ctx=CacheKeyContext(
+                variable_lineage={"df": df_lineage, "np": np_lineage}, user_ns={"np": np, "df": [1, 2, 3]}
+            ),
         )
 
         # np is a module and IS in variable_lineage -> included in module_component
@@ -67,8 +70,8 @@ class TestComputeCacheKey(unittest.TestCase):
 
         key, _, input_hashes, _, mod_hashes = compute_cache_key(
             code,
-            {'np', 'df'},
-            ctx=CacheKeyContext(variable_lineage={'df': df_lineage}, user_ns={'np': np, 'df': [1, 2, 3]}),
+            {"np", "df"},
+            ctx=CacheKeyContext(variable_lineage={"df": df_lineage}, user_ns={"np": np, "df": [1, 2, 3]}),
         )
 
         # np is a module but NOT in variable_lineage -> excluded
@@ -82,14 +85,14 @@ class TestComputeCacheKey(unittest.TestCase):
 
         key1, _, _, _, _ = compute_cache_key(
             code,
-            {'x'},
-            ctx=CacheKeyContext(variable_lineage={}, user_ns={}, virtual_lineage={'x': x_lineage}),
+            {"x"},
+            ctx=CacheKeyContext(variable_lineage={}, user_ns={}, virtual_lineage={"x": x_lineage}),
         )
 
         key2, _, _, _, _ = compute_cache_key(
             code,
-            {'x'},
-            ctx=CacheKeyContext(variable_lineage={'x': x_lineage}, user_ns={}),
+            {"x"},
+            ctx=CacheKeyContext(variable_lineage={"x": x_lineage}, user_ns={}),
         )
 
         # Both should produce the same key
@@ -103,8 +106,10 @@ class TestComputeCacheKey(unittest.TestCase):
 
         key, _, input_hashes, _, mod_hashes = compute_cache_key(
             code,
-            {'np', 'df'},
-            ctx=CacheKeyContext(variable_lineage={'df': df_lineage, 'np': np_lineage}, user_ns={}, virtual_modules={'np'}),
+            {"np", "df"},
+            ctx=CacheKeyContext(
+                variable_lineage={"df": df_lineage, "np": np_lineage}, user_ns={}, virtual_modules={"np"}
+            ),
         )
 
         # np is in virtual_modules AND in variable_lineage -> included
@@ -118,8 +123,8 @@ class TestComputeCacheKey(unittest.TestCase):
 
         key, _, input_hashes, _, _ = compute_cache_key(
             code,
-            {'x', 'get_ipython', '__builtins__'},
-            ctx=CacheKeyContext(variable_lineage={'x': x_lineage}, user_ns={'x': 42}),
+            {"x", "get_ipython", "__builtins__"},
+            ctx=CacheKeyContext(variable_lineage={"x": x_lineage}, user_ns={"x": 42}),
         )
 
         self.assertEqual(input_hashes, [x_lineage])
@@ -134,8 +139,8 @@ class TestComputeCacheKey(unittest.TestCase):
         key, _, _, _, mod_hashes = compute_cache_key(
             code,
             set(),
-            ctx=CacheKeyContext(variable_lineage={'np': np_lineage}, user_ns={'np': np}),
-            outputs={'np'},
+            ctx=CacheKeyContext(variable_lineage={"np": np_lineage}, user_ns={"np": np}),
+            outputs={"np"},
         )
 
         # Output module should be included
@@ -143,8 +148,9 @@ class TestComputeCacheKey(unittest.TestCase):
 
     def test_multiple_modules_sorted(self):
         """Multiple module inputs should be sorted in module_component."""
-        import numpy as np
         import os
+
+        import numpy as np
 
         code = "result = np.array(os.listdir('.'))"
         np_lineage = hashlib.sha256(b"np_lin").hexdigest()
@@ -152,8 +158,8 @@ class TestComputeCacheKey(unittest.TestCase):
 
         key, _, _, _, mod_hashes = compute_cache_key(
             code,
-            {'np', 'os'},
-            ctx=CacheKeyContext(variable_lineage={'np': np_lineage, 'os': os_lineage}, user_ns={'np': np, 'os': os}),
+            {"np", "os"},
+            ctx=CacheKeyContext(variable_lineage={"np": np_lineage, "os": os_lineage}, user_ns={"np": np, "os": os}),
         )
 
         # Should be sorted by variable name
@@ -161,7 +167,7 @@ class TestComputeCacheKey(unittest.TestCase):
 
     def test_identical_keys_across_call_patterns(self):
         """The same inputs must produce the same key regardless of call pattern.
-        
+
         This is THE critical invariant: runtime (via _analyze_and_hash) and
         simulation (via _update_virtual_lineage) must produce identical keys.
         """
@@ -174,24 +180,25 @@ class TestComputeCacheKey(unittest.TestCase):
         # Pattern 1: Runtime call (variable_lineage has everything)
         key_runtime, _, _, _, _ = compute_cache_key(
             code,
-            {'np', 'df'},
-            ctx=CacheKeyContext(variable_lineage={'df': df_lineage, 'np': np_lineage}, user_ns={'np': np, 'df': [1, 2, 3]}),
+            {"np", "df"},
+            ctx=CacheKeyContext(
+                variable_lineage={"df": df_lineage, "np": np_lineage}, user_ns={"np": np, "df": [1, 2, 3]}
+            ),
         )
 
         # Pattern 2: Simulation call (variable_lineage has module, virtual_lineage has df)
         key_sim, _, _, _, _ = compute_cache_key(
             code,
-            {'np', 'df'},
+            {"np", "df"},
             ctx=CacheKeyContext(
-                variable_lineage={'np': np_lineage},
-                user_ns={'np': np, 'df': [1, 2, 3]},
-                virtual_lineage={'df': df_lineage, 'np': np_lineage},
-                virtual_modules={'np'},
+                variable_lineage={"np": np_lineage},
+                user_ns={"np": np, "df": [1, 2, 3]},
+                virtual_lineage={"df": df_lineage, "np": np_lineage},
+                virtual_modules={"np"},
             ),
         )
 
-        self.assertEqual(key_runtime, key_sim,
-                         "Runtime and simulation must produce identical cache keys")
+        self.assertEqual(key_runtime, key_sim, "Runtime and simulation must produce identical cache keys")
 
 
 class TestModuleLineagePropagation(unittest.TestCase):
@@ -202,7 +209,7 @@ class TestModuleLineagePropagation(unittest.TestCase):
         self.shell.user_ns = {}
         mock_backend = MagicMock()
         mock_backend.get.return_value = (None, None)
-        mock_backend.get_metadata.return_value = {'output_lineages': {}}
+        mock_backend.get_metadata.return_value = {"output_lineages": {}}
         self.cash_instance = MagicMock()
         self.cash_instance.backend = mock_backend
         self.checker = UpstreamChecker(
@@ -222,10 +229,10 @@ class TestModuleLineagePropagation(unittest.TestCase):
         )
 
         # pd should now be in both virtual_lineage AND variable_lineage
-        self.assertIn('pd', virtual_lineage)
-        self.assertIn('pd', virtual_modules)
-        self.assertIn('pd', self.checker.variable_lineage)
-        self.assertEqual(self.checker.variable_lineage['pd'], virtual_lineage['pd'])
+        self.assertIn("pd", virtual_lineage)
+        self.assertIn("pd", virtual_modules)
+        self.assertIn("pd", self.checker.variable_lineage)
+        self.assertEqual(self.checker.variable_lineage["pd"], virtual_lineage["pd"])
 
     def test_from_import_propagates_lineage(self):
         """'from ... import' statements should propagate lineage."""
@@ -236,28 +243,26 @@ class TestModuleLineagePropagation(unittest.TestCase):
             "from numpy import array", virtual_lineage, virtual_modules
         )
 
-        self.assertIn('array', virtual_lineage)
-        self.assertIn('array', virtual_modules)
+        self.assertIn("array", virtual_lineage)
+        self.assertIn("array", virtual_modules)
         # array is detected as module output -> propagated
-        self.assertIn('array', self.checker.variable_lineage)
+        self.assertIn("array", self.checker.variable_lineage)
 
     def test_non_import_does_not_propagate(self):
         """Non-import statements should not propagate to variable_lineage."""
-        virtual_lineage = {'x': 'abc123'}
+        virtual_lineage = {"x": "abc123"}
         virtual_modules = set()
 
-        self.checker.simulator._virtual_lineage._update_virtual_lineage(
-            "y = x + 1", virtual_lineage, virtual_modules
-        )
+        self.checker.simulator._virtual_lineage._update_virtual_lineage("y = x + 1", virtual_lineage, virtual_modules)
 
         # y should be in virtual_lineage but NOT in variable_lineage
-        self.assertIn('y', virtual_lineage)
-        self.assertNotIn('y', self.checker.variable_lineage)
+        self.assertIn("y", virtual_lineage)
+        self.assertNotIn("y", self.checker.variable_lineage)
 
     def test_existing_variable_lineage_not_overwritten(self):
         """If variable_lineage already has a module, don't overwrite it."""
         existing_lineage = "existing_lineage_hash"
-        self.checker.variable_lineage['pd'] = existing_lineage
+        self.checker.variable_lineage["pd"] = existing_lineage
 
         virtual_lineage = {}
         virtual_modules = set()
@@ -267,12 +272,12 @@ class TestModuleLineagePropagation(unittest.TestCase):
         )
 
         # Should NOT be overwritten
-        self.assertEqual(self.checker.variable_lineage['pd'], existing_lineage)
+        self.assertEqual(self.checker.variable_lineage["pd"], existing_lineage)
 
 
 class TestSimulationRuntimeKeyMatch(unittest.TestCase):
     """End-to-end test: simulation cache key matches runtime key.
-    
+
     This simulates the real flow:
     1. Import statement -> propagates module lineage
     2. Downstream statement -> includes module in cache key
@@ -285,7 +290,7 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
         self.shell.user_ns = {}
         mock_backend = MagicMock()
         mock_backend.get.return_value = (None, None)
-        mock_backend.get_metadata.return_value = {'output_lineages': {}}
+        mock_backend.get_metadata.return_value = {"output_lineages": {}}
         self.cash_instance = MagicMock()
         self.cash_instance.backend = mock_backend
         self.checker = UpstreamChecker(
@@ -300,12 +305,12 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
         calls = self.cash_instance.backend.get_metadata.call_args_list
         for call in calls:
             args, kwargs = call
-            if args and isinstance(args[0], str) and args[0].startswith('stmt:'):
+            if args and isinstance(args[0], str) and args[0].startswith("stmt:"):
                 return args[0]
         calls = self.cash_instance.backend.get.call_args_list
         for call in calls:
             args, kwargs = call
-            if args and isinstance(args[0], str) and args[0].startswith('stmt:'):
+            if args and isinstance(args[0], str) and args[0].startswith("stmt:"):
                 return args[0]
         return None
 
@@ -321,15 +326,15 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
         self.checker.simulator._virtual_lineage._update_virtual_lineage(
             "import numpy as np", virtual_lineage, virtual_modules
         )
-        np_lineage_from_import = self.checker.variable_lineage['np']
+        np_lineage_from_import = self.checker.variable_lineage["np"]
 
         # Step 2: Set up df lineage
-        virtual_lineage['df'] = df_lineage
+        virtual_lineage["df"] = df_lineage
 
         # Step 3: Reset backend call tracking
         self.cash_instance.backend.get_metadata.reset_mock()
         self.cash_instance.backend.get.reset_mock()
-        self.cash_instance.backend.get_metadata.return_value = {'output_lineages': {}}
+        self.cash_instance.backend.get_metadata.return_value = {"output_lineages": {}}
 
         # Step 4: Simulate downstream statement
         self.checker.simulator._virtual_lineage._update_virtual_lineage(code, virtual_lineage, virtual_modules)
@@ -339,14 +344,17 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
         # At runtime, variable_lineage has both df and np
         runtime_key, _, _, _, _ = compute_cache_key(
             code,
-            {'np', 'df'},
-            ctx=CacheKeyContext(variable_lineage={'df': df_lineage, 'np': np_lineage_from_import}, user_ns={}, virtual_modules={'np'}),
+            {"np", "df"},
+            ctx=CacheKeyContext(
+                variable_lineage={"df": df_lineage, "np": np_lineage_from_import}, user_ns={}, virtual_modules={"np"}
+            ),
         )
 
-        self.assertEqual(sim_key, runtime_key,
-                         f"Simulation key must match runtime key.\n"
-                         f"Simulation: {sim_key}\n"
-                         f"Runtime: {runtime_key}")
+        self.assertEqual(
+            sim_key,
+            runtime_key,
+            f"Simulation key must match runtime key.\nSimulation: {sim_key}\nRuntime: {runtime_key}",
+        )
 
     def test_try_virtual_restore_key_matches(self):
         """_try_virtual_restore key must match _analyze_and_hash key."""
@@ -355,17 +363,17 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
         np_lineage = hashlib.sha256(b"np_module").hexdigest()
 
         # Simulate import having been processed (lineage propagated)
-        self.checker.variable_lineage['np'] = np_lineage
+        self.checker.variable_lineage["np"] = np_lineage
 
-        inputs = {'np', 'df'}
-        outputs = {'result'}
-        input_hashes = {'df': df_lineage, 'np': np_lineage}
-        virtual_modules = {'np'}
+        inputs = {"np", "df"}
+        outputs = {"result"}
+        input_hashes = {"df": df_lineage, "np": np_lineage}
+        virtual_modules = {"np"}
 
         # Set up backend to return valid data
         self.cash_instance.backend.get.return_value = (
-            {'output_lineages': {'result': 'cached_lineage'}, 'execution_time': 5.0},
-            {'variables': {'result': 42}}
+            {"output_lineages": {"result": "cached_lineage"}, "execution_time": 5.0},
+            {"variables": {"result": 42}},
         )
 
         restored, _, _ = self.checker.simulator._virtual_lineage._try_virtual_restore(
@@ -377,7 +385,7 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
         restore_key = None
         for call in calls:
             args, kwargs = call
-            if args and isinstance(args[0], str) and args[0].startswith('stmt:'):
+            if args and isinstance(args[0], str) and args[0].startswith("stmt:"):
                 restore_key = args[0]
                 break
 
@@ -385,30 +393,34 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
         runtime_key, _, _, _, _ = compute_cache_key(
             code,
             inputs,
-            ctx=CacheKeyContext(variable_lineage={'df': df_lineage, 'np': np_lineage}, user_ns={}, virtual_modules=virtual_modules),
+            ctx=CacheKeyContext(
+                variable_lineage={"df": df_lineage, "np": np_lineage}, user_ns={}, virtual_modules=virtual_modules
+            ),
         )
 
-        self.assertEqual(restore_key, runtime_key,
-                         f"Virtual restore key must match runtime key.\n"
-                         f"Restore: {restore_key}\n"
-                         f"Runtime: {runtime_key}")
+        self.assertEqual(
+            restore_key,
+            runtime_key,
+            f"Virtual restore key must match runtime key.\nRestore: {restore_key}\nRuntime: {runtime_key}",
+        )
 
     def test_module_in_user_ns_detected(self):
         """When a module is in user_ns (not virtual_modules), isinstance detects it."""
         import numpy as np
-        self.shell.user_ns = {'np': np, 'df': [1, 2, 3]}
+
+        self.shell.user_ns = {"np": np, "df": [1, 2, 3]}
         np_lineage = hashlib.sha256(b"np_module").hexdigest()
         df_lineage = hashlib.sha256(b"df_data").hexdigest()
 
         # np is in variable_lineage (from import simulation) and user_ns
-        self.checker.variable_lineage['np'] = np_lineage
+        self.checker.variable_lineage["np"] = np_lineage
 
         code = "result = np.mean(df)"
-        virtual_lineage = {'df': df_lineage, 'np': np_lineage}
+        virtual_lineage = {"df": df_lineage, "np": np_lineage}
         virtual_modules = set()  # np NOT in virtual_modules
 
         self.cash_instance.backend.get_metadata.reset_mock()
-        self.cash_instance.backend.get_metadata.return_value = {'output_lineages': {}}
+        self.cash_instance.backend.get_metadata.return_value = {"output_lineages": {}}
 
         self.checker.simulator._virtual_lineage._update_virtual_lineage(code, virtual_lineage, virtual_modules)
 
@@ -417,8 +429,10 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
         # np should be detected via isinstance and included in module_component
         runtime_key, _, _, _, mod_hashes = compute_cache_key(
             code,
-            {'np', 'df'},
-            ctx=CacheKeyContext(variable_lineage={'df': df_lineage, 'np': np_lineage}, user_ns={'np': np, 'df': [1, 2, 3]}),
+            {"np", "df"},
+            ctx=CacheKeyContext(
+                variable_lineage={"df": df_lineage, "np": np_lineage}, user_ns={"np": np, "df": [1, 2, 3]}
+            ),
         )
         self.assertIn(f"np:{np_lineage}", mod_hashes)
         self.assertEqual(sim_key, runtime_key)
@@ -433,15 +447,15 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
         self.checker.simulator._virtual_lineage._update_virtual_lineage(
             "import numpy as np", virtual_lineage, virtual_modules
         )
-        np_lineage = self.checker.variable_lineage['np']
+        np_lineage = self.checker.variable_lineage["np"]
 
         # Step 2: Set up df lineage
         df_lineage = hashlib.sha256(b"df_data").hexdigest()
-        virtual_lineage['df'] = df_lineage
+        virtual_lineage["df"] = df_lineage
 
         # Step 3: Reset mocks
         self.cash_instance.backend.get_metadata.reset_mock()
-        self.cash_instance.backend.get_metadata.return_value = {'output_lineages': {}}
+        self.cash_instance.backend.get_metadata.return_value = {"output_lineages": {}}
 
         # Step 4: Simulate downstream statement
         code = "result = np.mean(df)"
@@ -451,13 +465,14 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
         # Step 5: Compute runtime key
         runtime_key, _, _, _, _ = compute_cache_key(
             code,
-            {'np', 'df'},
-            ctx=CacheKeyContext(variable_lineage={'df': df_lineage, 'np': np_lineage}, user_ns={}, virtual_modules={'np'}),
+            {"np", "df"},
+            ctx=CacheKeyContext(
+                variable_lineage={"df": df_lineage, "np": np_lineage}, user_ns={}, virtual_modules={"np"}
+            ),
         )
 
-        self.assertEqual(sim_key, runtime_key,
-                         "After kernel restart with empty user_ns, keys must match")
+        self.assertEqual(sim_key, runtime_key, "After kernel restart with empty user_ns, keys must match")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

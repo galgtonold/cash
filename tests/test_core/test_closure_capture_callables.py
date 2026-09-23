@@ -23,6 +23,7 @@ That one is about an argument, it fails loudly at pickling, and the docs promise
 it "does not return a wrong answer, it just never caches". This is the closure
 on the decorated function itself, and it did return a wrong answer.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -47,6 +48,7 @@ def test_two_factory_built_functions_do_not_share_a_cache_entry(cash_instance):
         def score(n):
             ran.append(n)
             return weight(n)
+
         return score
 
     doubler = make(lambda n: n * 2)
@@ -68,13 +70,14 @@ def test_a_captured_function_built_by_a_factory_is_distinguished(cash_instance):
     ran: list[int] = []
 
     def outer(k):
-        return lambda n: n * k          # identical source for every k
+        return lambda n: n * k  # identical source for every k
 
     def make(weight):
         @cash_instance.cache
         def score(n):
             ran.append(n)
             return weight(n)
+
         return score
 
     assert make(outer(2))(10) == 20
@@ -99,15 +102,13 @@ def test_an_identically_built_function_still_hits(cash_instance):
         def score(n):
             ran.append(n)
             return weight(n)
+
         return score
 
     assert make(outer(2))(10) == 20
     before = len(ran)
     assert make(outer(2))(10) == 20
-    assert len(ran) == before, (
-        "an identically-built helper missed the cache: the fold is now "
-        "over-discriminating"
-    )
+    assert len(ran) == before, "an identically-built helper missed the cache: the fold is now over-discriminating"
 
 
 def test_two_lambdas_on_the_same_source_line_are_distinguished(cash_instance):
@@ -117,10 +118,12 @@ def test_two_lambdas_on_the_same_source_line_are_distinguished(cash_instance):
     source-only fingerprint collides -- measured, both arms returned "AAA".
     Their code objects differ, which is what separates them.
     """
+
     def make(weight):
         @cash_instance.cache
         def g():
             return weight()
+
         return g()
 
     first, second = make(lambda: "AAA"), make(lambda: "BBB")
@@ -147,13 +150,10 @@ def test_the_capture_fingerprint_is_stable_across_processes(tmp_path):
         encoding="utf-8",
     )
     runs = [
-        subprocess.run([sys.executable, str(script)], capture_output=True,
-                       text=True, check=True).stdout.strip()
+        subprocess.run([sys.executable, str(script)], capture_output=True, text=True, check=True).stdout.strip()
         for _ in range(2)
     ]
-    assert runs[0] and runs[0] == runs[1], (
-        f"the fingerprint moved between processes: {runs}"
-    )
+    assert runs[0] and runs[0] == runs[1], f"the fingerprint moved between processes: {runs}"
 
 
 def test_editing_a_captured_helper_invalidates(cash_instance):
@@ -165,6 +165,7 @@ def test_editing_a_captured_helper_invalidates(cash_instance):
         def score(n):
             ran.append(n)
             return weight(n)
+
         return score
 
     assert make(lambda n: n * 2)(10) == 20

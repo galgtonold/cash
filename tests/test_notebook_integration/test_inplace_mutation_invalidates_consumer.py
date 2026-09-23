@@ -26,6 +26,7 @@ The genuinely awkward part, worth keeping visible: cash does not revert the
 object. `s.iloc[0]` still reads 1e9 in the kernel while `summarize(s)` returns
 the value for 0.0, so live state and the cached answer disagree on screen.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -94,8 +95,8 @@ def test_a_consumer_above_a_mutation_keeps_top_to_bottom_semantics(nb_runner):
     nb_runner.run_all()
     before = _out(nb_runner, 3)
 
-    nb_runner.run_cell(4)      # mutate, below the consumer
-    nb_runner.run_cell(3)      # ask the consumer again
+    nb_runner.run_cell(4)  # mutate, below the consumer
+    nb_runner.run_cell(3)  # ask the consumer again
 
     assert _out(nb_runner, 3) == before, (
         "the consumer above the mutation changed its answer; that is a "

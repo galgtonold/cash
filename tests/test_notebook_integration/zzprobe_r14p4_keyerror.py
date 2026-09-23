@@ -26,6 +26,7 @@ the two hypotheses are directly distinguishable:
 
     python tests/test_notebook_integration/zzprobe_r14p4_keyerror.py
 """
+
 from __future__ import annotations
 
 import shutil
@@ -40,21 +41,23 @@ work = Path(tempfile.mkdtemp(prefix="r14p4k_"))
 counter = work / "clean_calls.log"
 
 runner = NotebookTestRunner(str(work))
-runner.create_notebook([
-    "import cash\n%cash_on",
-    "import os, time\nimport pandas as pd\n"
-    f"CNT = r'{counter}'\n"
-    "def clean_columns(frame):\n"
-    "    fd = os.open(CNT, os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
-    "    os.write(fd, b'X')\n"
-    "    os.close(fd)\n"
-    "    time.sleep(0.02)\n"
-    "    frame.drop(columns=['tmp'], inplace=True)\n"
-    "    frame['flag'] = 1",
-    "df = pd.DataFrame({'a': [1, 2, 3], 'tmp': [4, 5, 6]})",
-    "clean_columns(df)",
-    "cols = list(df.columns)\nprint('COLS', cols)",
-])
+runner.create_notebook(
+    [
+        "import cash\n%cash_on",
+        "import os, time\nimport pandas as pd\n"
+        f"CNT = r'{counter}'\n"
+        "def clean_columns(frame):\n"
+        "    fd = os.open(CNT, os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+        "    os.write(fd, b'X')\n"
+        "    os.close(fd)\n"
+        "    time.sleep(0.02)\n"
+        "    frame.drop(columns=['tmp'], inplace=True)\n"
+        "    frame['flag'] = 1",
+        "df = pd.DataFrame({'a': [1, 2, 3], 'tmp': [4, 5, 6]})",
+        "clean_columns(df)",
+        "cols = list(df.columns)\nprint('COLS', cols)",
+    ]
+)
 runner.start_kernel()
 try:
     runner.run_all()
@@ -66,15 +69,16 @@ try:
         try:
             runner.run_cell(4)
             err = "none"
-        except Exception as e:                       # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
             err = f"{type(e).__name__}: {str(e)[:60]}"
         n1 = len(counter.read_bytes())
         post = runner.peek("list(df.columns)")
         restored = "tmp" in pre
-        print(f"warm re-run #{attempt}         : cols BEFORE={pre}  "
-              f"-> AFTER={post}  calls={n1}  raised={err}")
-        print(f"   'tmp' present before the re-run: {restored}"
-              f"   {'<- cash reset the object first' if restored else '<- object still mutated'}")
+        print(f"warm re-run #{attempt}         : cols BEFORE={pre}  -> AFTER={post}  calls={n1}  raised={err}")
+        print(
+            f"   'tmp' present before the re-run: {restored}"
+            f"   {'<- cash reset the object first' if restored else '<- object still mutated'}"
+        )
         n0 = n1
 finally:
     runner.shutdown()

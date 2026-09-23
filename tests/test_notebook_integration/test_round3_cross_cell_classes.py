@@ -1,6 +1,8 @@
 """Batch 99 – complex class interactions across multiple cells."""
 
-import textwrap, pytest
+import textwrap
+
+import pytest
 
 pytestmark = [pytest.mark.stress, pytest.mark.integration]
 
@@ -10,15 +12,16 @@ class TestCrossCellClassInteractions:
 
     def test_class_composition_cross_cell(self, nb_runner):
         """Class defined in cell 1, composed in cell 2, used in cell 3."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class Engine:
                     def __init__(self, hp):
                         self.hp = hp
                     def describe(self):
                         return f"{self.hp}hp"
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 class Car:
                     def __init__(self, model, engine):
                         self.model = model
@@ -27,23 +30,25 @@ class TestCrossCellClassInteractions:
                         return f"{self.model} ({self.engine.describe()})"
                 car = Car("Sedan", Engine(200))
             """),
-            "print(f'car={car.info()}')",
-        ])
+                "print(f'car={car.info()}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "car=Sedan (200hp)" in nb_runner.get_output(3)
 
     def test_inheritance_cross_cell(self, nb_runner):
         """Base in cell 1, derived in cell 2, usage in cell 3."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class Shape:
                     def area(self):
                         raise NotImplementedError
                     def describe(self):
                         return f"{type(self).__name__}: area={self.area():.2f}"
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 import math
                 class Circle(Shape):
                     def __init__(self, r):
@@ -61,8 +66,9 @@ class TestCrossCellClassInteractions:
                 shapes = [Circle(5), Rectangle(3, 4)]
                 descriptions = [s.describe() for s in shapes]
             """),
-            "for d in descriptions:\n    print(d)",
-        ])
+                "for d in descriptions:\n    print(d)",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(3)
@@ -73,15 +79,16 @@ class TestCrossCellClassInteractions:
 
     def test_strategy_pattern_cross_cell(self, nb_runner):
         """Strategy pattern across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class Sorter:
                     def __init__(self, strategy):
                         self.strategy = strategy
                     def sort(self, data):
                         return self.strategy(data)
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 def ascending(data):
                     return sorted(data)
                 def descending(data):
@@ -89,14 +96,15 @@ class TestCrossCellClassInteractions:
                 def by_length(data):
                     return sorted(data, key=len)
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 words = ['banana', 'apple', 'cherry', 'date']
                 r1 = Sorter(ascending).sort(words)
                 r2 = Sorter(descending).sort(words)
                 r3 = Sorter(by_length).sort(words)
             """),
-            "print(f'asc={r1}')\nprint(f'desc={r2}')\nprint(f'len={r3}')",
-        ])
+                "print(f'asc={r1}')\nprint(f'desc={r2}')\nprint(f'len={r3}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(4)
@@ -107,9 +115,10 @@ class TestCrossCellClassInteractions:
 
     def test_observer_pattern_cross_cell(self, nb_runner):
         """Observer pattern across cells with change propagation."""
-        nb_runner.create_notebook([
-            "event_name = 'click'",
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                "event_name = 'click'",
+                textwrap.dedent("""\
                 class EventBus:
                     def __init__(self):
                         self.listeners = {}
@@ -127,8 +136,9 @@ class TestCrossCellClassInteractions:
                 bus.emit(event_name, "test_data")
                 logged = bus.log[:]
             """),
-            "print(f'logged={logged}')",
-        ])
+                "print(f'logged={logged}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(3)

@@ -15,15 +15,16 @@ The harm is not a corrupted number, it is a corrupted conclusion -- in the
 reporter's words, "I would have written 'the model is completely stable across
 random seeds' in a report."
 """
+
 from __future__ import annotations
 
 import warnings
 
 import pytest
 
+from cash import CashRandomnessWarning
 from cash.backends import InMemoryBackend
 from cash.core import Cash
-from cash import CashRandomnessWarning
 
 
 class _Estimator:
@@ -54,8 +55,7 @@ def _warnings_from(fn, *args):
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         fn(*args)
-    return [str(w.message) for w in caught
-            if issubclass(w.category, CashRandomnessWarning)]
+    return [str(w.message) for w in caught if issubclass(w.category, CashRandomnessWarning)]
 
 
 def test_an_unseeded_returned_estimator_warns(cash_instance):
@@ -79,6 +79,7 @@ def test_a_seeded_estimator_is_silent(cash_instance):
 
 def test_an_estimator_with_no_random_state_is_silent(cash_instance):
     """`LinearRegression` has no such parameter; warning about it is noise."""
+
     @cash_instance.cache
     def train(n):
         return _Deterministic()
@@ -96,6 +97,7 @@ def test_allow_random_silences_it(cash_instance):
 
 def test_an_ordinary_return_value_is_untouched(cash_instance):
     """The check must not fire -- or cost anything visible -- on normal results."""
+
     @cash_instance.cache
     def add(a, b):
         return a + b
@@ -106,6 +108,7 @@ def test_an_ordinary_return_value_is_untouched(cash_instance):
 
 def test_a_broken_get_params_cannot_break_the_call(cash_instance):
     """An advisory must never take down a user's function."""
+
     class _Hostile:
         def get_params(self, deep=True):
             raise RuntimeError("nope")

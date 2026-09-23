@@ -14,13 +14,13 @@ Off unless asked for, as it takes minutes:
     CASH_STRESS_REPEAT=24 python -m pytest tests/test_notebook_integration/test_zz_stress_alias_mutation.py -n 16
     python scripts/run_integration_sweep.py --stress 24
 """
+
 import json
 import os
 import pathlib
 import shutil
 
 import pytest
-
 from conftest import NotebookTestRunner
 from test_eda_mutation_reconstruction import (
     _oracle,
@@ -49,8 +49,7 @@ def _keep(tmp_path, name, r, trace):
     keep.mkdir(parents=True, exist_ok=True)
     if trace.exists():
         shutil.copy(trace, keep / "trace.jsonl")
-    cells = [{"cell": i, "source": c.source, "output": r.get_raw_output(i)}
-             for i, c in enumerate(r.nb.cells, 1)]
+    cells = [{"cell": i, "source": c.source, "output": r.get_raw_output(i)} for i, c in enumerate(r.nb.cells, 1)]
     (keep / "cells.json").write_text(json.dumps(cells, indent=1), encoding="utf-8")
     return keep
 
@@ -77,6 +76,7 @@ def test_repeated_under_load(scenario, repeat, tmp_path, monkeypatch):
             pytest.fail(
                 f"cash-ON diverged from the top-to-bottom oracle in {scenario.__name__} "
                 f"(repeat {repeat}); trace and cell outputs kept in {kept}:\n"
-                + "\n".join(f"  [{k}] oracle={o!r}  cash={c!r}" for k, (o, c) in diffs.items()))
+                + "\n".join(f"  [{k}] oracle={o!r}  cash={c!r}" for k, (o, c) in diffs.items())
+            )
     finally:
         r.shutdown()

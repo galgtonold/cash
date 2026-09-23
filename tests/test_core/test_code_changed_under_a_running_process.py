@@ -12,6 +12,7 @@ Round 19, two ways the two came apart, both persisting a wrong answer:
   from the old text. Reverting the edit then served the edited code's numbers
   (r19s5).
 """
+
 from __future__ import annotations
 
 import importlib
@@ -28,7 +29,7 @@ from cash import Cash
 
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
 
-JOB = '''\
+JOB = """\
 import sys, time
 from pathlib import Path
 import cash
@@ -44,15 +45,14 @@ print("READY", flush=True)
 while go is not None and not go.exists():
     time.sleep(0.02)
 print("ANSWER", work(5), flush=True)
-'''
+"""
 
 V1 = "def smooth(x):\n    return x + 1\n"
 V2 = "def smooth(x):\n    return x + 1000\n"
 
 
 def _env(proj):
-    env = {k: v for k, v in os.environ.items()
-           if not k.startswith("CASH_") and k != "PYTHONDONTWRITEBYTECODE"}
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_") and k != "PYTHONDONTWRITEBYTECODE"}
     env["CASH_CACHE_DIR"] = str(proj / ".cash")
     return env
 
@@ -62,8 +62,7 @@ def _answer(out):
 
 
 @pytest.mark.parametrize("warm_first", [False, True], ids=["pyc-written-by-this-run", "pyc-older-than-the-run"])
-def test_a_helper_replaced_by_a_copy_that_keeps_its_old_mtime_is_not_keyed_by_the_new_text(
-        tmp_path, warm_first):
+def test_a_helper_replaced_by_a_copy_that_keeps_its_old_mtime_is_not_keyed_by_the_new_text(tmp_path, warm_first):
     """`warm_first` runs the job once beforehand, so the helper's .pyc is
     older than the process that sees the replacement: the fast path that reads
     the .pyc header must still notice it."""
@@ -75,23 +74,31 @@ def test_a_helper_replaced_by_a_copy_that_keeps_its_old_mtime_is_not_keyed_by_th
     os.utime(staged, (two_hours_ago, two_hours_ago))
     env = _env(tmp_path)
     if warm_first:
-        first = subprocess.run([sys.executable, "job.py"], cwd=str(tmp_path), env=env,
-                               capture_output=True, text=True, timeout=120)
+        first = subprocess.run(
+            [sys.executable, "job.py"], cwd=str(tmp_path), env=env, capture_output=True, text=True, timeout=120
+        )
         assert _answer(first.stdout) == "6", first.stderr[-2000:]
-        time.sleep(1.1)       # the next process starts after the .pyc was written
+        time.sleep(1.1)  # the next process starts after the .pyc was written
 
     go = tmp_path / "GO"
-    running = subprocess.Popen([sys.executable, "job.py", str(go)], cwd=str(tmp_path), env=env,
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    running = subprocess.Popen(
+        [sys.executable, "job.py", str(go)],
+        cwd=str(tmp_path),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
     assert running.stdout.readline().strip() == "READY"
-    shutil.copy2(staged, tmp_path / "helper.py")        # the deploy: V2, with an OLD mtime
+    shutil.copy2(staged, tmp_path / "helper.py")  # the deploy: V2, with an OLD mtime
     go.write_text("go", encoding="utf-8")
     out, err = running.communicate(timeout=120)
-    assert _answer(out) == "6", err[-2000:]                  # it still runs the code it loaded
+    assert _answer(out) == "6", err[-2000:]  # it still runs the code it loaded
     assert "KEY-SOURCE-CHANGED" in err
 
-    fresh = subprocess.run([sys.executable, "job.py"], cwd=str(tmp_path), env=env,
-                           capture_output=True, text=True, timeout=120)
+    fresh = subprocess.run(
+        [sys.executable, "job.py"], cwd=str(tmp_path), env=env, capture_output=True, text=True, timeout=120
+    )
     assert _answer(fresh.stdout) == "1005", "the old code's result was served for the new code"
 
 

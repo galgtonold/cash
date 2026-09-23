@@ -9,6 +9,7 @@ that passes against the unfixed code, which is the whole trap.
 `_callee_rules` is a third module on purpose: the constant has to live outside
 the caller's own module, or a channel that already worked would carry it.
 """
+
 import cash
 from cash import InMemoryBackend
 

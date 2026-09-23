@@ -29,6 +29,7 @@ Not exercised via ``nb_runner`` (no real kernel needed): this is the
 synchronous statement path, and ``CashMagics`` + a mock shell reaches
 ``_code_and_tree_for_execution`` directly.
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -107,9 +108,7 @@ def test_an_ordinary_eligible_call_is_wrapped(magics_fixture, monkeypatch):
 
     magics.cash("", "out.append(compute(x))")
 
-    assert len(captured["sites"]) == 1, (
-        f"a genuinely cacheable call was not wrapped: {captured['sites']!r}"
-    )
+    assert len(captured["sites"]) == 1, f"a genuinely cacheable call was not wrapped: {captured['sites']!r}"
 
 
 def test_a_gate_exception_fails_closed_instead_of_crashing_the_cell(magics_fixture, monkeypatch):
@@ -169,8 +168,7 @@ def test_the_gate_is_given_variable_lineage(magics_fixture, monkeypatch):
     magics.cash("", "# @cash:cache-calls\nout.append(compute(x))")
 
     assert "variable_lineage" in captured_kwargs, (
-        "the gate never passes variable_lineage, even though a real lineage "
-        "table is in scope at this call site"
+        "the gate never passes variable_lineage, even though a real lineage table is in scope at this call site"
     )
     assert captured_kwargs["variable_lineage"] is magics._statement_processor.variable_lineage, (
         "the gate passed SOME variable_lineage, but not the processor's own "

@@ -14,10 +14,12 @@ class TestComprehensionFilterEdits:
 
     def test_edit_list_comp_filter(self, nb_runner):
         """Edit the filter condition in a list comprehension."""
-        nb_runner.create_notebook([
-            "nums = list(range(20))",
-            "evens = [x for x in nums if x % 2 == 0]\nprint(f'count = {len(evens)}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "nums = list(range(20))",
+                "evens = [x for x in nums if x % 2 == 0]\nprint(f'count = {len(evens)}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "count = 10" in nb_runner.get_output(2)
@@ -29,10 +31,12 @@ class TestComprehensionFilterEdits:
 
     def test_edit_dict_comp_transform(self, nb_runner):
         """Edit a dict comprehension transformation."""
-        nb_runner.create_notebook([
-            "words = ['hello', 'world', 'python']",
-            "lengths = {w: len(w) for w in words}\nprint(f'lengths = {lengths}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "words = ['hello', 'world', 'python']",
+                "lengths = {w: len(w) for w in words}\nprint(f'lengths = {lengths}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "'hello': 5" in nb_runner.get_output(2)
@@ -44,10 +48,12 @@ class TestComprehensionFilterEdits:
 
     def test_edit_nested_flat_comprehension(self, nb_runner):
         """Edit a nested comprehension (matrix flattening)."""
-        nb_runner.create_notebook([
-            "matrix = [[1, 2], [3, 4], [5, 6]]",
-            "flat = [x for row in matrix for x in row]\nprint(f'flat = {flat}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "matrix = [[1, 2], [3, 4], [5, 6]]",
+                "flat = [x for row in matrix for x in row]\nprint(f'flat = {flat}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "flat = [1, 2, 3, 4, 5, 6]" in nb_runner.get_output(2)
@@ -59,10 +65,12 @@ class TestComprehensionFilterEdits:
 
     def test_edit_sorted_set_comprehension(self, nb_runner):
         """Edit a set comprehension."""
-        nb_runner.create_notebook([
-            "data = [1, 2, 2, 3, 3, 3]",
-            "unique = sorted({x for x in data})\nprint(f'unique = {unique}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = [1, 2, 2, 3, 3, 3]",
+                "unique = sorted({x for x in data})\nprint(f'unique = {unique}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "unique = [1, 2, 3]" in nb_runner.get_output(2)

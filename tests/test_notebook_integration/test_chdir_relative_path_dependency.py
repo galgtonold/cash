@@ -7,6 +7,7 @@ relative name, even run_all served the old directory's data (the frozen realpath
 still existed and was unmodified). Tracking the relative path too lets the
 freshness check re-resolve it against the current cwd and catch the collision.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
@@ -22,11 +23,13 @@ def test_chdir_relative_path_different_file_invalidates(nb_runner, tmp_path):
     pa = str(dira).replace("\\", "/")
     pb = str(dirb).replace("\\", "/")
 
-    nb_runner.create_notebook([
-        "import os\nimport pandas as pd",
-        f"os.chdir('{pa}')",
-        "df = pd.read_csv('data.csv')\nprint('vals =', df['v'].tolist())",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import os\nimport pandas as pd",
+            f"os.chdir('{pa}')",
+            "df = pd.read_csv('data.csv')\nprint('vals =', df['v'].tolist())",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "vals = [1, 2, 3]" in nb_runner.get_output(3)
@@ -35,8 +38,7 @@ def test_chdir_relative_path_different_file_invalidates(nb_runner, tmp_path):
     nb_runner.set_cell_source(2, f"os.chdir('{pb}')")
     nb_runner.run_all()
     assert "vals = [100, 200, 300, 400]" in nb_runner.get_output(3), (
-        f"reader served the OLD directory's data after chdir edit: "
-        f"{nb_runner.get_output(3)!r}"
+        f"reader served the OLD directory's data after chdir edit: {nb_runner.get_output(3)!r}"
     )
 
 
@@ -45,11 +47,13 @@ def test_relative_read_same_cwd_stays_cached(nb_runner, tmp_path):
     d.mkdir()
     (d / "data.csv").write_text("v\n7\n8\n")
     p = str(d).replace("\\", "/")
-    nb_runner.create_notebook([
-        "import os\nimport pandas as pd",
-        f"os.chdir('{p}')",
-        "df = pd.read_csv('data.csv')\nprint('vals =', df['v'].tolist())",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import os\nimport pandas as pd",
+            f"os.chdir('{p}')",
+            "df = pd.read_csv('data.csv')\nprint('vals =', df['v'].tolist())",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_debug()
     nb_runner.run_all()

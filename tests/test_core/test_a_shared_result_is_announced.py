@@ -11,6 +11,7 @@ A hit hands back a value rebuilt from the stored bytes, so this is what caching
 such a result means. Cash cannot tell whether the caller relies on the sharing,
 so it says what will differ and lets the user waive it (``assume_safe=True``).
 """
+
 from __future__ import annotations
 
 import warnings

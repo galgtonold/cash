@@ -26,6 +26,7 @@ Two things these tests learned the hard way:
   correctly re-runs it. The claim worth pinning is that the EXPENSIVE upstream
   statement came back from cache.
 """
+
 from __future__ import annotations
 
 import re
@@ -67,12 +68,14 @@ def _upstream_cached(output: str) -> bool:
 
 
 def _build(nb_runner):
-    nb_runner.create_notebook([
-        "%load_ext cash\n%cash_badge print\n" + PIN_THRESHOLDS + "%cash_on",
-        "# @cash:persist\nroot = 2",
-        "# @cash:persist\n" + EXPENSIVE,
-        "# @cash:persist\nleaf = mid + 1\nprint('leaf =', leaf)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "%load_ext cash\n%cash_badge print\n" + PIN_THRESHOLDS + "%cash_on",
+            "# @cash:persist\nroot = 2",
+            "# @cash:persist\n" + EXPENSIVE,
+            "# @cash:persist\nleaf = mid + 1\nprint('leaf =', leaf)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     return nb_runner
@@ -89,8 +92,8 @@ def test_the_expensive_upstream_statement_restores_rather_than_re_running(nb_run
     """
     r = _build(nb_runner)
     r.restart()
-    r.run_cell(1)              # re-load the extension; the restart cleared it
-    r.run_cell(4)              # only the leaf; the runner is 1-based
+    r.run_cell(1)  # re-load the extension; the restart cleared it
+    r.run_cell(4)  # only the leaf; the runner is 1-based
 
     out = r.get_raw_output(4)
     assert out.strip(), "no badge captured -- every assertion below would be vacuous"
@@ -105,8 +108,7 @@ def test_the_expensive_upstream_statement_restores_rather_than_re_running(nb_run
     expensive = [r_ for r_ in rows if "mid =" in r_]
     assert expensive, f"the expensive upstream row is missing:\n{out[:1200]}"
     assert expensive[0].startswith("^CACHED:"), (
-        f"the expensive upstream statement re-executed instead of restoring:\n"
-        f"{expensive[0]}"
+        f"the expensive upstream statement re-executed instead of restoring:\n{expensive[0]}"
     )
 
 
@@ -126,9 +128,7 @@ def test_the_restored_upstream_row_reports_a_real_saving(nb_runner):
     r.run_cell(4)
 
     out = r.get_raw_output(4)
-    assert "leaf = 8999995500000500003" in out, (
-        f"wrong value -- the chain did not rebuild correctly:\n{out[:800]}"
-    )
+    assert "leaf = 8999995500000500003" in out, f"wrong value -- the chain did not rebuild correctly:\n{out[:800]}"
 
     rows = [x for x in _upstream_rows(out) if "mid =" in x]
     assert rows, f"the expensive upstream row is missing:\n{out[:1200]}"
@@ -137,6 +137,4 @@ def test_the_restored_upstream_row_reports_a_real_saving(nb_runner):
 
     saved = re.search(r"saved ([0-9.]+)s", row)
     assert saved, f"a restored row reported no saving at all:\n{row}"
-    assert float(saved.group(1)) > 0.0, (
-        f"restored, but saved 0s -- the work was not actually skipped:\n{row}"
-    )
+    assert float(saved.group(1)) > 0.0, f"restored, but saved 0s -- the work was not actually skipped:\n{row}"

@@ -2,11 +2,12 @@
 Tests for provenance tracking module.
 """
 
-import time
 import json
+import time
+
 import pytest
 
-from cash.notebook.provenance import ProvenanceTracker, ProvenanceRecord
+from cash.notebook.provenance import ProvenanceRecord, ProvenanceTracker
 
 
 class TestProvenanceRecord:
@@ -128,8 +129,7 @@ class TestProvenanceTracker:
 
     def test_format_provenance(self):
         tracker = ProvenanceTracker()
-        tracker.record("result", "result = compute(data)", ["data"],
-                       status="computed", duration_ms=150.0)
+        tracker.record("result", "result = compute(data)", ["data"], status="computed", duration_ms=150.0)
         output = tracker.format_provenance("result")
         assert "result" in output
         assert "computed" in output
@@ -195,8 +195,7 @@ class TestProvenanceTracker:
 
     def test_file_deps_tracked(self):
         tracker = ProvenanceTracker()
-        tracker.record("df", "df = pd.read_csv('data.csv')", [],
-                       file_deps=["data.csv"])
+        tracker.record("df", "df = pd.read_csv('data.csv')", [], file_deps=["data.csv"])
         latest = tracker.get_latest("df")
         assert "data.csv" in latest.file_deps
 
@@ -206,11 +205,13 @@ class TestCashProvenanceMagic:
 
     @pytest.fixture
     def magics_fixture(self):
-        from cash.notebook.ipython.magics import CashMagics
-        from cash.core import Cash
-        from cash.backends import InMemoryBackend
-        from traitlets.config.configurable import Configurable
         from unittest.mock import MagicMock
+
+        from traitlets.config.configurable import Configurable
+
+        from cash.backends import InMemoryBackend
+        from cash.core import Cash
+        from cash.notebook.ipython.magics import CashMagics
 
         class MockShell(Configurable):
             def __init__(self):
@@ -246,8 +247,7 @@ class TestCashProvenanceMagic:
 
     def test_show_variable(self, magics_fixture, capsys):
         magics, _, _ = magics_fixture
-        magics._session.provenance.record("result", "result = calc()", ["data"],
-                                  status="computed", duration_ms=50.0)
+        magics._session.provenance.record("result", "result = calc()", ["data"], status="computed", duration_ms=50.0)
         magics.cash_provenance("result")
         output = capsys.readouterr().out
         assert "result" in output
@@ -280,17 +280,16 @@ class TestFileDepsDisplayHygiene:
 
     def _tracker(self):
         from cash.notebook.provenance import ProvenanceTracker
+
         return ProvenanceTracker()
 
     def test_phantom_paths_are_not_displayed(self, tmp_path):
         real = tmp_path / "sales.csv"
         real.write_text("a,b\n")
-        phantoms = [str(tmp_path / "venv" / f"pkg{i}" / "entry_points.txt")
-                    for i in range(120)]
+        phantoms = [str(tmp_path / "venv" / f"pkg{i}" / "entry_points.txt") for i in range(120)]
 
         t = self._tracker()
-        t.record(variable="df", code="df = load()", inputs=[], status="COMPUTED",
-                 file_deps=[str(real), *phantoms])
+        t.record(variable="df", code="df = load()", inputs=[], status="COMPUTED", file_deps=[str(real), *phantoms])
         out = t.format_provenance("df")
 
         assert "entry_points.txt" not in out
@@ -304,15 +303,19 @@ class TestFileDepsDisplayHygiene:
             paths.append(str(p))
 
         t = self._tracker()
-        t.record(variable="v", code="v = 1", inputs=[], status="COMPUTED",
-                 file_deps=paths)
+        t.record(variable="v", code="v = 1", inputs=[], status="COMPUTED", file_deps=paths)
         out = t.format_provenance("v")
 
-        assert "(+17 more)" in out          # 25 real - 8 shown
+        assert "(+17 more)" in out  # 25 real - 8 shown
         assert out.count("f0.csv") == 1
 
     def test_all_phantom_deps_render_no_file_deps_line(self, tmp_path):
         t = self._tracker()
-        t.record(variable="x", code="x = 1", inputs=[], status="COMPUTED",
-                 file_deps=[str(tmp_path / "nope" / "entry_points.txt")])
+        t.record(
+            variable="x",
+            code="x = 1",
+            inputs=[],
+            status="COMPUTED",
+            file_deps=[str(tmp_path / "nope" / "entry_points.txt")],
+        )
         assert "File deps" not in t.format_provenance("x")

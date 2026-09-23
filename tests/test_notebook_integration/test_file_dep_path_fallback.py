@@ -6,9 +6,11 @@ stored in cache file dependencies may no longer exist.  The resolve_file_dep_pat
 utility should find the file through basename/suffix matching, allowing upstream
 virtual restore to succeed without wasteful re-execution.
 """
-import pytest
-import pandas as pd
+
 import time
+
+import pandas as pd
+import pytest
 
 pytestmark = pytest.mark.files
 
@@ -29,10 +31,12 @@ class TestFileDepPathFallback:
 
         pd.DataFrame({"val": [10, 20, 30]}).to_csv(csv_path, index=False)
 
-        nb_runner.create_notebook([
-            f"import pandas as pd\ndf = pd.read_csv('{csv_path_str}')\nprint('loaded:', len(df))",
-            "total = df['val'].sum()\nprint('total =', total)",
-        ])
+        nb_runner.create_notebook(
+            [
+                f"import pandas as pd\ndf = pd.read_csv('{csv_path_str}')\nprint('loaded:', len(df))",
+                "total = df['val'].sum()\nprint('total =', total)",
+            ]
+        )
         nb_runner.start_kernel()
 
         # First run: populate cache
@@ -55,10 +59,12 @@ class TestFileDepPathFallback:
 
         pd.DataFrame({"val": [10, 20, 30]}).to_csv(csv_path, index=False)
 
-        nb_runner.create_notebook([
-            f"import pandas as pd\ndf = pd.read_csv('{csv_path_str}')\nprint('loaded:', len(df))",
-            "total = df['val'].sum()\nprint('total =', total)",
-        ])
+        nb_runner.create_notebook(
+            [
+                f"import pandas as pd\ndf = pd.read_csv('{csv_path_str}')\nprint('loaded:', len(df))",
+                "total = df['val'].sum()\nprint('total =', total)",
+            ]
+        )
         nb_runner.start_kernel()
 
         # Populate cache
@@ -85,11 +91,13 @@ class TestFileDepPathFallback:
 
         pd.DataFrame({"val": [30, 10, 20]}).to_csv(csv_path, index=False)
 
-        nb_runner.create_notebook([
-            f"import pandas as pd\ndf = pd.read_csv('{csv_path_str}')\nprint('loaded:', len(df))",
-            "df = df.sort_values('val')\nprint('sorted:', df['val'].tolist())",
-            "total = df['val'].sum()\nprint('total =', total)",
-        ])
+        nb_runner.create_notebook(
+            [
+                f"import pandas as pd\ndf = pd.read_csv('{csv_path_str}')\nprint('loaded:', len(df))",
+                "df = df.sort_values('val')\nprint('sorted:', df['val'].tolist())",
+                "total = df['val'].sum()\nprint('total =', total)",
+            ]
+        )
         nb_runner.start_kernel()
 
         # Populate cache

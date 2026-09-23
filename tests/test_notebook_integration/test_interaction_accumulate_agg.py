@@ -13,12 +13,14 @@ class TestAccumulationAggregation:
 
     def test_build_list_across_cells(self, nb_runner):
         """Build list in separate cells, aggregate in final."""
-        nb_runner.create_notebook([
-            "part1 = [1, 2, 3]",
-            "part2 = [4, 5, 6]",
-            "part3 = [7, 8, 9]",
-            "combined = part1 + part2 + part3\ntotal = sum(combined)\nprint(f'total = {total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "part1 = [1, 2, 3]",
+                "part2 = [4, 5, 6]",
+                "part3 = [7, 8, 9]",
+                "combined = part1 + part2 + part3\ntotal = sum(combined)\nprint(f'total = {total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total = 45" in nb_runner.get_output(4)
@@ -30,11 +32,13 @@ class TestAccumulationAggregation:
 
     def test_dict_merge_across_cells(self, nb_runner):
         """Build dict across cells, query in final."""
-        nb_runner.create_notebook([
-            "user_data = {'name': 'Alice', 'age': 30}",
-            "settings = {'theme': 'dark', 'lang': 'en'}",
-            "profile = {**user_data, **settings}\nprint(f'profile = {sorted(profile.items())}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "user_data = {'name': 'Alice', 'age': 30}",
+                "settings = {'theme': 'dark', 'lang': 'en'}",
+                "profile = {**user_data, **settings}\nprint(f'profile = {sorted(profile.items())}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(3)
@@ -49,12 +53,14 @@ class TestAccumulationAggregation:
 
     def test_reduce_across_cells(self, nb_runner):
         """Multiple reduction steps across cells."""
-        nb_runner.create_notebook([
-            "data = [10, 20, 30, 40, 50]",
-            "filtered = [x for x in data if x >= 20]",
-            "squared = [x**2 for x in filtered]",
-            "avg = sum(squared) / len(squared)\nprint(f'avg = {avg}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = [10, 20, 30, 40, 50]",
+                "filtered = [x for x in data if x >= 20]",
+                "squared = [x**2 for x in filtered]",
+                "avg = sum(squared) / len(squared)\nprint(f'avg = {avg}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         # filtered=[20,30,40,50], squared=[400,900,1600,2500], avg=5400/4=1350

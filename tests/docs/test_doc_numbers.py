@@ -19,6 +19,7 @@ here, so CI runs the full ``--check`` as its own step in the docs job. Anything
 that can be checked without spawning pytest is checked on every ordinary run of
 this suite.
 """
+
 from __future__ import annotations
 
 import shutil
@@ -35,7 +36,9 @@ SCRIPT = REPO / "scripts" / "doc_numbers.py"
 def _run(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(SCRIPT), *args],
-        cwd=REPO, capture_output=True, text=True,
+        cwd=REPO,
+        capture_output=True,
+        text=True,
     )
 
 
@@ -44,8 +47,7 @@ def test_the_cheap_derived_numbers_are_current():
     result = _run("--check", "--fast")
     assert result.returncode == 0, (
         "a number quoted in the docs no longer matches the repository.\n"
-        "Run `python scripts/doc_numbers.py --update`.\n\n"
-        + result.stdout + result.stderr
+        "Run `python scripts/doc_numbers.py --update`.\n\n" + result.stdout + result.stderr
     )
 
 
@@ -74,25 +76,19 @@ def test_the_checker_actually_fails_on_drift(tmp_path):
     rel = Path("docs") / "how-it-works" / "testing.md"
     original = (REPO / rel).read_text(encoding="utf-8")
     assert "<!-- docnum:platforms -->" in original, (
-        "testing.md lost its platform-count marker; the derivation is no "
-        "longer covering the number it was added for"
+        "testing.md lost its platform-count marker; the derivation is no longer covering the number it was added for"
     )
 
     root = tmp_path / "repo"
     shutil.copytree(REPO / "docs", root / "docs")
     shutil.copy2(REPO / "README.md", root / "README.md")
 
-    corrupted = original.replace(
-        "<!-- docnum:platforms -->", "<!-- docnum:platforms -->999", 1
-    )
+    corrupted = original.replace("<!-- docnum:platforms -->", "<!-- docnum:platforms -->999", 1)
     assert corrupted != original
     (root / rel).write_text(corrupted, encoding="utf-8")
 
     result = _run("--check", "--fast", "--docs-root", str(root))
-    assert result.returncode == 1, (
-        "the checker passed against a deliberately wrong number:\n"
-        + result.stdout
-    )
+    assert result.returncode == 1, "the checker passed against a deliberately wrong number:\n" + result.stdout
     assert "docnum:platforms" in result.stdout, result.stdout
 
     # The repository itself was never touched.
@@ -117,9 +113,7 @@ def test_the_numbers_that_drifted_are_the_ones_now_derived(path, name):
     validates the markers that exist.
     """
     text = (REPO / path).read_text(encoding="utf-8")
-    assert f"<!-- docnum:{name} -->" in text, (
-        f"{path} no longer derives `{name}`; it is hand-maintained again"
-    )
+    assert f"<!-- docnum:{name} -->" in text, f"{path} no longer derives `{name}`; it is hand-maintained again"
 
 
 def test_a_rounded_count_on_a_boundary_is_not_drift():

@@ -9,6 +9,7 @@ Usage:
         [--families a,b,c] [--sizes 1000,10000,...] [--backends ram,disk]
         [--repeats N]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -23,7 +24,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from benchmarks._object_generators import FAMILIES
 from benchmarks._ser_deser_measure import MeasureResult, measure_one
 
-
 _DEFAULT_SIZES = [1_000, 10_000, 100_000, 1_000_000, 10_000_000, 100_000_000]
 _DEFAULT_BACKENDS = ["ram", "disk"]
 
@@ -34,13 +34,10 @@ def _parse_list(s: str, conv=str) -> list:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Cost-model measurement matrix")
-    p.add_argument("--out", type=Path,
-                   default=Path("benchmarks/results/ser_deser_matrix.csv"))
-    p.add_argument("--cache-root", type=Path,
-                   default=Path("benchmarks/results/_ser_deser_cache"))
+    p.add_argument("--out", type=Path, default=Path("benchmarks/results/ser_deser_matrix.csv"))
+    p.add_argument("--cache-root", type=Path, default=Path("benchmarks/results/_ser_deser_cache"))
     p.add_argument("--families", type=str, default=",".join(FAMILIES))
-    p.add_argument("--sizes", type=str,
-                   default=",".join(str(x) for x in _DEFAULT_SIZES))
+    p.add_argument("--sizes", type=str, default=",".join(str(x) for x in _DEFAULT_SIZES))
     p.add_argument("--backends", type=str, default=",".join(_DEFAULT_BACKENDS))
     p.add_argument("--repeats", type=int, default=3)
     args = p.parse_args(argv)
@@ -65,10 +62,12 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 rows.append(r)
                 label = "OK" if r.error is None else f"ERR: {r.error[:40]}"
-                print(f"[{family:18s} {size:>10} {backend_kind:4s}] "
-                      f"ser={r.serialize_seconds*1000:.2f}ms "
-                      f"deser={r.deserialize_seconds*1000:.2f}ms "
-                      f"size={r.actual_size_bytes:>10} {label}")
+                print(
+                    f"[{family:18s} {size:>10} {backend_kind:4s}] "
+                    f"ser={r.serialize_seconds * 1000:.2f}ms "
+                    f"deser={r.deserialize_seconds * 1000:.2f}ms "
+                    f"size={r.actual_size_bytes:>10} {label}"
+                )
 
     fields = [f.name for f in dataclasses.fields(MeasureResult)]
     with open(args.out, "w", newline="", encoding="utf-8") as f:

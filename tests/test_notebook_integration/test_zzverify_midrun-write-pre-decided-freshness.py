@@ -37,10 +37,7 @@ def test_reexecuted_writer_midrun_reader_still_restores_stale(nb_runner, tmp_pat
         "print('dumped', len(payload['nums']))"
     )
     reader = (
-        "import pickle\n"
-        f"with open('{p}', 'rb') as f:\n"
-        "    loaded = pickle.load(f)\n"
-        "print('loaded =', loaded['nums'])"
+        f"import pickle\nwith open('{p}', 'rb') as f:\n    loaded = pickle.load(f)\nprint('loaded =', loaded['nums'])"
     )
     # Consumer needs BOTH payload (writer var) and loaded (reader var): the
     # upstream simulation cannot satisfy the consumer without re-executing

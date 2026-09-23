@@ -46,7 +46,7 @@ Two fixes, and CI wants both:
 
 ## Turning caching off: `CASH_DISABLE=1`
 
-<!-- claim: cash/config.py:CashConfig.disable == False, cash/core.py:Cash._wrap_with_stats @69809278 -->
+<!-- claim: cash/config.py:CashConfig.disable == False, cash/core.py:Cash._wrap_with_stats @fd1feb5c -->
 ```bash
 CASH_DISABLE=1 pytest
 ```
@@ -151,7 +151,7 @@ Patching `sievelib.sieve` after `primes` imported it changes nothing `count`
 runs, and so nothing about its key. That holds at any depth: a helper's own
 helpers are looked up in the helper's module.
 
-<!-- claim: cash/purity_analyzer.py:is_mock @90a11aac -->
+<!-- claim: cash/purity_analyzer.py:is_mock @173f99ff -->
 A `unittest.mock` object (`mock.patch(..., return_value=...)`, `MagicMock`,
 `pytest-mock`'s `mocker`) has no code for cash to key, and its answer is
 whatever the test configured, so a call that reaches one **runs uncached**,
@@ -172,7 +172,7 @@ is keyed as the date it equals, so a frozen run and a real one share entries.
 What the frozen clock does reach is TTLs, which follow `time.time()`: an
 entry's age is measured on the clock the test is pretending to.
 
-<!-- claim: cash/effect_observer.py:_hook_mock_calls @d4677a09, cash/core.py:Cash._store_refusal @c3dac710 -->
+<!-- claim: cash/effect_observer.py:_hook_mock_calls @d4677a09, cash/core.py:Cash._store_refusal @3815fd67 -->
 A mock deeper down — `mock.patch("requests.Session.request")`,
 `HTTPAdapter.send`, or a `MagicMock` swapped into a module-level session
 after the function first ran — is not part of the key, so cash cannot tell

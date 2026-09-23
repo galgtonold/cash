@@ -7,12 +7,14 @@ __all__ = ["visualize_notebook", "visualize_cache"]
 
 try:
     import pandas as pd
+
     HAS_PANDAS = True
 except ImportError:
     HAS_PANDAS = False
 
 try:
     from IPython.display import display
+
     HAS_IPYTHON = True
 except ImportError:
     HAS_IPYTHON = False
@@ -33,6 +35,7 @@ _STATUS_STYLES = {
 
 # ── Formatting helpers ────────────────────────────────────────────────────────
 
+
 def format_time(seconds: float | None) -> str:
     """Format seconds into a human-readable duration string."""
     if seconds is None:
@@ -40,7 +43,7 @@ def format_time(seconds: float | None) -> str:
     if seconds < 0.001:
         return "< 1ms"
     if seconds < 1:
-        return f"{seconds*1000:.0f}ms"
+        return f"{seconds * 1000:.0f}ms"
     return f"{seconds:.2f}s"
 
 
@@ -51,7 +54,7 @@ def format_memory(bytes_size: int | None) -> str:
     if bytes_size == 0:
         return "0 B"
 
-    units = ['B', 'KB', 'MB', 'GB']
+    units = ["B", "KB", "MB", "GB"]
     unit_index = 0
     size = float(bytes_size)
 
@@ -65,6 +68,7 @@ def format_memory(bytes_size: int | None) -> str:
 
 
 # ── Shared rendering logic ────────────────────────────────────────────────────
+
 
 def _build_results_dataframe(
     results: list[dict],
@@ -84,55 +88,50 @@ def _build_results_dataframe(
     stmt_counter = 1
 
     for res in results:
-        if 'error' in res:
-            row: dict = {'#': stmt_counter, 'Code': 'ERROR', 'Status': res['error'],
-                         'Depends On': '', 'Outputs': ''}
+        if "error" in res:
+            row: dict = {"#": stmt_counter, "Code": "ERROR", "Status": res["error"], "Depends On": "", "Outputs": ""}
             if include_cell_column:
-                row['Cell'] = res.get('cell_number', '?')
+                row["Cell"] = res.get("cell_number", "?")
             data.append(row)
             stmt_counter += 1
             continue
 
         # Find which previous statements this statement depends on
-        dependencies = [
-            f"#{var_to_stmt[input_var]}"
-            for input_var in res['inputs']
-            if input_var in var_to_stmt
-        ]
+        dependencies = [f"#{var_to_stmt[input_var]}" for input_var in res["inputs"] if input_var in var_to_stmt]
 
         # Track which variables this statement produces
-        for output_var in res['outputs']:
+        for output_var in res["outputs"]:
             var_to_stmt[output_var] = stmt_counter
 
         deps_str = ", ".join(dependencies) if dependencies else "None"
-        code_display = res['code'][:60] + "..." if len(res['code']) > 60 else res['code']
+        code_display = res["code"][:60] + "..." if len(res["code"]) > 60 else res["code"]
 
         row = {
-            '#': stmt_counter,
-            'Code': code_display,
-            'Status': res['status'],
-            'Exec Time': format_time(res.get('execution_time')),
-            'Memory': format_memory(res.get('memory_size')),
-            'Depends On': deps_str,
-            'Outputs': ", ".join(res['outputs']),
+            "#": stmt_counter,
+            "Code": code_display,
+            "Status": res["status"],
+            "Exec Time": format_time(res.get("execution_time")),
+            "Memory": format_memory(res.get("memory_size")),
+            "Depends On": deps_str,
+            "Outputs": ", ".join(res["outputs"]),
         }
         if include_cell_column:
-            row['Cell'] = res.get('cell_number', '?')
+            row["Cell"] = res.get("cell_number", "?")
         data.append(row)
         stmt_counter += 1
 
     df = pd.DataFrame(data)
 
     # Reorder columns so Cell comes after # if present
-    if include_cell_column and 'Cell' in df.columns:
+    if include_cell_column and "Cell" in df.columns:
         cols = list(df.columns)
-        if '#' in cols and 'Cell' in cols:
-            cols.remove('Cell')
-            cols.insert(cols.index('#') + 1, 'Cell')
+        if "#" in cols and "Cell" in cols:
+            cols.remove("Cell")
+            cols.insert(cols.index("#") + 1, "Cell")
             df = df[cols]
 
-    hits = sum(1 for r in results if 'status' in r and r['status'] == STATUS_HIT)
-    total = len([r for r in results if 'error' not in r])
+    hits = sum(1 for r in results if "status" in r and r["status"] == STATUS_HIT)
+    total = len([r for r in results if "error" not in r])
 
     return df, hits, total
 
@@ -142,20 +141,21 @@ def _display_styled_dataframe(df: pd.DataFrame, hits: int, total: int) -> None:
     if not HAS_IPYTHON:
         print(df.to_string())
         if total > 0:
-            print(f"\nCache Summary: {hits}/{total} statements cached ({hits/total*100:.1f}%)")
+            print(f"\nCache Summary: {hits}/{total} statements cached ({hits / total * 100:.1f}%)")
         return
 
     def _color_status(val: str) -> str:
-        return _STATUS_STYLES.get(val, '')
+        return _STATUS_STYLES.get(val, "")
 
-    styler = df.style.map(_color_status, subset=['Status'])
+    styler = df.style.map(_color_status, subset=["Status"])
     display(styler)
 
     if total > 0:
-        print(f"\nCache Summary: {hits}/{total} statements cached ({hits/total*100:.1f}%)")
+        print(f"\nCache Summary: {hits}/{total} statements cached ({hits / total * 100:.1f}%)")
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
+
 
 def _collect_cells_from_notebook(
     code_cells: list,
@@ -189,11 +189,11 @@ def _collect_cells_from_shell(
     print("No notebook file found or provided. Falling back to execution history.")
     shell = debugger.shell
 
-    if not (hasattr(shell, 'user_ns') and 'In' in shell.user_ns):
+    if not (hasattr(shell, "user_ns") and "In" in shell.user_ns):
         print("Could not access notebook cells")
         return None
 
-    all_cells = shell.user_ns['In']
+    all_cells = shell.user_ns["In"]
     cells: list[tuple[int, str]] = []
     for idx, cell_code in enumerate(all_cells):
         if idx == 0:
@@ -237,7 +237,7 @@ def visualize_notebook(
     for cell_num, cell_code in cells_to_analyze:
         results = debugger.debug(cell_code)
         for res in results:
-            res['cell_number'] = cell_num
+            res["cell_number"] = cell_num
             all_results.append(res)
 
     df, hits, total = _build_results_dataframe(all_results, include_cell_column=True)

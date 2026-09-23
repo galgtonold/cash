@@ -6,6 +6,7 @@ ignored its seed: the second call was a hit, on a fresh cache too. There was
 no supported way to run a suite uncached; the tester wrote a pytest plugin to
 get one.
 """
+
 from __future__ import annotations
 
 import os
@@ -26,9 +27,15 @@ def _run(tmp_path, body, **env_extra):
     env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
     env["CASH_CACHE_DIR"] = str(tmp_path / ".cash")
     env.update(env_extra)
-    return subprocess.run([sys.executable, str(script)], capture_output=True,
-                          text=True, cwd=str(tmp_path), env=env,
-                          encoding="utf-8", errors="replace")
+    return subprocess.run(
+        [sys.executable, str(script)],
+        capture_output=True,
+        text=True,
+        cwd=str(tmp_path),
+        env=env,
+        encoding="utf-8",
+        errors="replace",
+    )
 
 
 _JOB = """
@@ -95,7 +102,7 @@ def test_configure_flips_it_at_runtime(tmp_path):
     f(1)
     f(1)
     assert len(calls) == 1
-    c.config.disable = True                  # what cash.configure(disable=True) sets
+    c.config.disable = True  # what cash.configure(disable=True) sets
     f(1)
     f(1)
     assert len(calls) == 3, "disable did not take effect on the next call"

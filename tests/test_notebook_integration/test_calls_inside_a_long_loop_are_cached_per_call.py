@@ -17,6 +17,7 @@ the unit's is the whole loop's -- so it is treated like a comprehension's
 variable: an argument reading it is keyed on its value, and a call whose callee
 reads it as a global is not intercepted.
 """
+
 from pathlib import Path
 
 import pytest
@@ -36,8 +37,9 @@ SETUP = (
     "    time.sleep(0.06)\n"
     "    return round(sum(values) / len(values), 6)"
 )
-DATA = ("BUMP = {bump}\n"
-        "groups = {{k: [float(k + i + (0.5 if k in BUMP else 0)) for i in range(4)] for k in range(%d)}}" % N)
+DATA = (
+    "BUMP = {bump}\ngroups = {{k: [float(k + i + (0.5 if k in BUMP else 0)) for i in range(4)] for k in range(%d)}}" % N
+)
 LOOP = (
     "models = {}\n"
     "sizes = {}\n"

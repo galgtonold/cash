@@ -10,9 +10,8 @@ inside ``DependencyStateHasher.compute`` (via the ``HelperResolver``
 seam) so the cache key reflects the current source, not the
 analysis-time snapshot.
 """
-from __future__ import annotations
 
-import importlib
+from __future__ import annotations
 
 import pytest
 
@@ -45,6 +44,7 @@ def test_in_process_helper_redefinition_invalidates_cache(tmp_path):
     # Simulate notebook cell redefinition: rebind module attribute.
     def new_helper(x):
         return x * 3
+
     hm.helper = new_helper
 
     # Without per-call helper re-resolution, this would return the
@@ -75,6 +75,7 @@ def test_helper_redefinition_creates_new_cache_entry(tmp_path):
     # Redefine.
     def new_helper(x):
         return x * 3
+
     hm.helper = new_helper
 
     # New helper → new cache key.
@@ -88,8 +89,7 @@ def test_helper_redefinition_creates_new_cache_entry(tmp_path):
     assert main(7) == 14
     n_calls_after = main.cache_info()["misses"]
     assert n_calls_after == n_calls_before, (
-        "restoring original helper should hit the original cache entry, "
-        "but a recompute happened (miss count increased)"
+        "restoring original helper should hit the original cache entry, but a recompute happened (miss count increased)"
     )
 
 

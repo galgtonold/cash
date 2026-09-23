@@ -6,6 +6,7 @@ read as stale on every later run; and ``open(3)`` -- a file descriptor --
 was recorded as a read of ``<cwd>/3``, a directory every report written under
 the cwd sits in.
 """
+
 from __future__ import annotations
 
 import os
@@ -31,6 +32,7 @@ def test_a_joblib_memmap_read_is_not_a_dependency(tmp_path):
             pass
         with open(tmp_path / "data.csv", "rb"):
             pass
+
     tracked = _tracked(read)
     assert not [t for t in tracked if "joblib_memmapping_folder_" in t], tracked
     assert any(t.endswith("data.csv") for t in tracked), tracked
@@ -44,6 +46,7 @@ def test_opening_a_file_descriptor_records_no_path(tmp_path, monkeypatch):
     def read():
         with open(fd, "rb", closefd=True):
             pass
+
     tracked = _tracked(read)
     assert not tracked, tracked
 
@@ -66,10 +69,10 @@ def test_a_jit_or_bytecode_cache_read_is_not_a_dependency(tmp_path):
     (tmp_path / "data.csv").write_text("a\n1\n")
 
     def read():
-        for p in (pyc / "_normalize_csr-parallel-29.py314.nbi",
-                  elsewhere / "f-12.py314.nbc", tmp_path / "data.csv"):
+        for p in (pyc / "_normalize_csr-parallel-29.py314.nbi", elsewhere / "f-12.py314.nbc", tmp_path / "data.csv"):
             with open(p, "rb"):
                 pass
+
     tracked = _tracked(read)
     assert not [t for t in tracked if "__pycache__" in t or t.endswith((".nbi", ".nbc"))], tracked
     assert any(t.endswith("data.csv") for t in tracked), tracked

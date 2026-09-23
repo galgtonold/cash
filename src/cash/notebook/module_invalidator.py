@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
 class ModuleInvalidator:
     """Encapsulates module-change detection and lineage invalidation.
 
@@ -84,7 +85,9 @@ class ModuleInvalidator:
 
         if old_module_lineages:
             self._propagate_module_invalidation(
-                old_module_lineages, per_module_changed_symbols, processor,
+                old_module_lineages,
+                per_module_changed_symbols,
+                processor,
             )
 
     # ------------------------------------------------------------------
@@ -128,18 +131,14 @@ class ModuleInvalidator:
                 old_lineage = processor.variable_lineage.get(name)
                 if old_lineage:
                     old_module_lineages[name] = old_lineage
-                processor.variable_lineage[name] = (
-                    self._lineage_as_imported(name, processor) or new_lineage)
+                processor.variable_lineage[name] = self._lineage_as_imported(name, processor) or new_lineage
                 processor.executed_cell_codes.pop(name, None)
                 processor.executed_input_lineages.pop(name, None)
                 processor.current_session_hashes.pop(name, None)
 
                 if self._debug:
-                    old_short = (old_lineage or 'NONE')[:12]
-                    print(
-                        f"[MODULE_INVALIDATE] Updated lineage for '{name}': "
-                        f"{old_short}... -> {new_lineage[:12]}..."
-                    )
+                    old_short = (old_lineage or "NONE")[:12]
+                    print(f"[MODULE_INVALIDATE] Updated lineage for '{name}': {old_short}... -> {new_lineage[:12]}...")
 
             processor.recently_reloaded_modules.add(mod_name)
 
@@ -157,6 +156,7 @@ class ModuleInvalidator:
         restored until a second restart (round 29, r29s1 2/2, r29s3 2/2).
         """
         from .upstream.mismatch_classifier import import_only
+
         code = processor.executed_cell_codes.get(name)
         value = self._shell.user_ns.get(name)
         if not code or value is None or not import_only(code):
@@ -172,7 +172,7 @@ class ModuleInvalidator:
         module = sys.modules.get(name)
         if module is not None:
             return module
-        user_ns = getattr(self._shell, 'user_ns', None)
+        user_ns = getattr(self._shell, "user_ns", None)
         candidate = user_ns.get(name) if isinstance(user_ns, dict) else None
         return candidate if isinstance(candidate, ModuleType) else None
 
@@ -181,9 +181,9 @@ class ModuleInvalidator:
         names: set[str] = set()
         for mod_name in changed_modules:
             names.update(self._names_bound_to(mod_name))
-            prefix = mod_name + '.'
+            prefix = mod_name + "."
             for var_name, value in list(self._shell.user_ns.items()):
-                owner = getattr(value, '__module__', None)
+                owner = getattr(value, "__module__", None)
                 if isinstance(owner, str) and (owner == mod_name or owner.startswith(prefix)):
                     names.add(var_name)
             for var_name, src in state.from_import_sources.items():
@@ -209,12 +209,13 @@ class ModuleInvalidator:
         module = sys.modules.get(mod_name)
         if module is None:
             return names
-        user_ns = getattr(self._shell, 'user_ns', None)
+        user_ns = getattr(self._shell, "user_ns", None)
         if not isinstance(user_ns, dict):
             return names
         names.extend(
-            name for name, value in list(user_ns.items())
-            if value is module and name != mod_name and not name.startswith('_')
+            name
+            for name, value in list(user_ns.items())
+            if value is module and name != mod_name and not name.startswith("_")
         )
         return names
 
@@ -235,13 +236,10 @@ class ModuleInvalidator:
         function in the same file.
         """
         for var_name, var_value in list(self._shell.user_ns.items()):
-            if var_name.startswith('_'):
+            if var_name.startswith("_"):
                 continue
-            value_module = getattr(var_value, '__module__', None)
-            if value_module and (
-                value_module == mod_name
-                or value_module.startswith(mod_name + '.')
-            ):
+            value_module = getattr(var_value, "__module__", None)
+            if value_module and (value_module == mod_name or value_module.startswith(mod_name + ".")):
                 if self._keep_unchanged_from_import(var_name, var_value, processor):
                     continue
                 processor._tracking_state.from_import_components.pop(var_name, None)
@@ -250,13 +248,13 @@ class ModuleInvalidator:
                 processor.current_session_hashes.pop(var_name, None)
                 processor.variable_lineage.pop(var_name, None)
                 if self._debug:
-                    print(
-                        f"[MODULE_INVALIDATE] Cleared tracking for "
-                        f"from-imported '{var_name}' (module: {mod_name})"
-                    )
+                    print(f"[MODULE_INVALIDATE] Cleared tracking for from-imported '{var_name}' (module: {mod_name})")
 
     def _keep_unchanged_from_import(
-        self, var_name: str, var_value: Any, processor: StatementProcessor,
+        self,
+        var_name: str,
+        var_value: Any,
+        processor: StatementProcessor,
     ) -> bool:
         """True -- and the name refreshed -- when its narrowed component still holds.
 
@@ -273,11 +271,11 @@ class ModuleInvalidator:
             return False
         try:
             from .lineage_formula import imported_from, module_source_component
+
             source = imported_from(var_name, code)
             if source is None:
                 return False
-            current = module_source_component(
-                processor.function_tracker, var_value, var_name, code)
+            current = module_source_component(processor.function_tracker, var_value, var_name, code)
             if current != recorded:
                 return False
             module = sys.modules.get(source[0])
@@ -295,17 +293,14 @@ class ModuleInvalidator:
             print(f"[MODULE_INVALIDATE] Kept '{var_name}': what it reaches in the module is unchanged")
         return True
 
-    def _clear_constant_from_imports(
-        self, mod_name: str, processor: StatementProcessor, reloaded_mod: Any
-    ) -> None:
+    def _clear_constant_from_imports(self, mod_name: str, processor: StatementProcessor, reloaded_mod: Any) -> None:
         """Category 2: clear/refresh non-callable from-imports (constants) from *mod_name*."""
         for var_name, src_mod in list(processor._tracking_state.from_import_sources.items()):
-            if src_mod != mod_name and not src_mod.startswith(mod_name + '.'):
+            if src_mod != mod_name and not src_mod.startswith(mod_name + "."):
                 continue
             # This map holds callables as well as constants, so this pass saw
             # -- and dropped -- every name Category 1 had just kept.
-            if self._keep_unchanged_from_import(
-                    var_name, self._shell.user_ns.get(var_name), processor):
+            if self._keep_unchanged_from_import(var_name, self._shell.user_ns.get(var_name), processor):
                 continue
             processor._tracking_state.from_import_components.pop(var_name, None)
             processor.executed_cell_codes.pop(var_name, None)
@@ -363,23 +358,23 @@ class ModuleInvalidator:
     ) -> str:
         """Return ``'invalidate'`` or ``'preserve'`` given symbol-change info."""
         if changed_syms is None:
-            return 'invalidate'
+            return "invalidate"
         if len(changed_syms) == 0:
             if self._debug:
                 print(f"[GRANULAR] Preserving '{var_name}': no symbols changed in '{input_var}'")
-            return 'preserve'
+            return "preserve"
         var_attrs = processor._tracking_state.module_attribute_deps.get(var_name, {}).get(input_var)
         if var_attrs:
             if var_attrs & changed_syms:
                 if self._debug:
                     print(f"[GRANULAR] Invalidating '{var_name}': uses changed symbols {var_attrs & changed_syms}")
-                return 'invalidate'
+                return "invalidate"
             if self._debug:
                 print(f"[GRANULAR] Preserving '{var_name}': uses {var_attrs}, changed: {changed_syms}")
-            return 'preserve'
+            return "preserve"
         if self._debug:
             print(f"[GRANULAR] Invalidating '{var_name}': unknown attribute access on '{input_var}'")
-        return 'invalidate'
+        return "invalidate"
 
     def _classify_var_invalidation(
         self,
@@ -446,18 +441,24 @@ class ModuleInvalidator:
         preserve variables that don't use any changed symbols.
         """
         expanded_changed_symbols = self._expand_changed_symbols(
-            old_module_lineages, per_module_changed_symbols, processor.function_tracker,
+            old_module_lineages,
+            per_module_changed_symbols,
+            processor.function_tracker,
         )
 
         vars_to_invalidate: set[str] = set()
         vars_preserved: set[str] = set()
         for var_name, input_map in list(processor.executed_input_lineages.items()):
             decision = self._classify_var_invalidation(
-                var_name, input_map, old_module_lineages, expanded_changed_symbols, processor,
+                var_name,
+                input_map,
+                old_module_lineages,
+                expanded_changed_symbols,
+                processor,
             )
-            if decision == 'invalidate':
+            if decision == "invalidate":
                 vars_to_invalidate.add(var_name)
-            elif decision == 'preserve':
+            elif decision == "preserve":
                 vars_preserved.add(var_name)
 
         for var_name in vars_to_invalidate:
@@ -492,23 +493,24 @@ class ModuleInvalidator:
         expanded: dict[str, set[str] | None] = {}
         for mod_name_key in old_module_lineages:
             mod = self._module_named(mod_name_key)
-            real_name = getattr(mod, '__name__', mod_name_key) if mod else mod_name_key
+            real_name = getattr(mod, "__name__", mod_name_key) if mod else mod_name_key
             raw_syms = per_module_changed_symbols.get(mod_name_key)
             if raw_syms is None:
                 raw_syms = per_module_changed_symbols.get(real_name)
             if raw_syms is not None and len(raw_syms) > 0:
-                mod_file = getattr(mod, '__file__', None) if mod else None
-                call_deps = (
-                    ft.get_intra_module_call_deps(mod_file) if mod_file else {}
-                )
+                mod_file = getattr(mod, "__file__", None) if mod else None
+                call_deps = ft.get_intra_module_call_deps(mod_file) if mod_file else {}
                 result = ft.expand_changed_symbols_transitively(
-                    raw_syms, call_deps,
+                    raw_syms,
+                    call_deps,
                 )
                 expanded[mod_name_key] = result
                 if result != raw_syms:
                     logger.debug(
                         "[GRANULAR] Expanded changed symbols for '%s': %s -> %s",
-                        mod_name_key, raw_syms, result,
+                        mod_name_key,
+                        raw_syms,
+                        result,
                     )
             else:
                 expanded[mod_name_key] = raw_syms
@@ -530,7 +532,7 @@ class ModuleInvalidator:
 
         if file_path and os.path.isfile(file_path):
             try:
-                with open(file_path, 'rb') as f:
+                with open(file_path, "rb") as f:
                     hasher.update(f.read())
             except OSError as e:
                 logger.debug("[MODULE] Could not read module file %r for hash: %s", file_path, e)
@@ -543,12 +545,12 @@ class ModuleInvalidator:
         for dep_path in sorted(dep_files):
             if os.path.isfile(dep_path):
                 try:
-                    with open(dep_path, 'rb') as f:
+                    with open(dep_path, "rb") as f:
                         hasher.update(f.read())
                 except OSError as e:
                     logger.debug("[MODULE] Could not read dep file %r for hash: %s", dep_path, e)
 
         digest = hasher.hexdigest()
-        if not digest or digest == hashlib.sha256(b'').hexdigest():
+        if not digest or digest == hashlib.sha256(b"").hexdigest():
             digest = hashlib.sha256(os.urandom(32)).hexdigest()
         return digest

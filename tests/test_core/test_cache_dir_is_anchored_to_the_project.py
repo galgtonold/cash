@@ -20,6 +20,7 @@ Subprocesses throughout. This is a property of a fresh interpreter deciding
 where its cache lives; an in-process test asserting on ``get_config()`` cannot
 see what a real second run does, and that is what the reporter measured.
 """
+
 from __future__ import annotations
 
 import os
@@ -57,7 +58,8 @@ def project(tmp_path):
     root = tmp_path / "proj"
     (root / "scripts").mkdir(parents=True)
     (root / "pyproject.toml").write_text(
-        '[project]\nname = "demo"\nversion = "0"\n', encoding="utf-8",
+        '[project]\nname = "demo"\nversion = "0"\n',
+        encoding="utf-8",
     )
     script = root / "scripts" / "job.py"
     script.write_text(textwrap.dedent(_SCRIPT), encoding="utf-8")
@@ -71,13 +73,15 @@ def _run(script, cwd, env_extra=None):
     env.pop("CASH_CACHE_DIR", None)
     env.update(env_extra or {})
     proc = subprocess.run(
-        [sys.executable, str(script)], cwd=str(cwd), env=env,
-        capture_output=True, text=True, timeout=300,
+        [sys.executable, str(script)],
+        cwd=str(cwd),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
     )
     assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
-    lines = dict(
-        line.split(" ", 1) for line in proc.stdout.splitlines() if " " in line
-    )
+    lines = dict(line.split(" ", 1) for line in proc.stdout.splitlines() if " " in line)
     return {
         "ran": "RAN" in proc.stderr,
         "cache_dir": lines.get("CACHE_DIR", ""),
@@ -95,17 +99,13 @@ def test_the_same_script_uses_one_cache_from_any_directory(project):
     third = _run(script, cwd=root / "scripts")
 
     assert first["ran"], "the first run must actually compute something"
-    assert not second["ran"], (
-        "running from another directory recomputed -- it found a different cache"
-    )
+    assert not second["ran"], "running from another directory recomputed -- it found a different cache"
     assert not third["ran"]
     assert first["result"] == second["result"] == third["result"] == "42"
 
     dirs = {r["cache_dir"] for r in (first, second, third)}
     assert len(dirs) == 1, f"one project, {len(dirs)} cache directories: {dirs}"
-    assert os.path.dirname(dirs.pop()) == str(root), (
-        "the cache belongs beside the project, not beside the caller"
-    )
+    assert os.path.dirname(dirs.pop()) == str(root), "the cache belongs beside the project, not beside the caller"
 
 
 def test_no_stray_cache_appears_where_the_job_was_launched(project):
@@ -113,8 +113,7 @@ def test_no_stray_cache_appears_where_the_job_was_launched(project):
     root, script, elsewhere = project
     _run(script, cwd=elsewhere)
     assert not (elsewhere / ".cash").exists(), (
-        f"a second cache was created in the launch directory: "
-        f"{list(elsewhere.iterdir())}"
+        f"a second cache was created in the launch directory: {list(elsewhere.iterdir())}"
     )
 
 
@@ -122,16 +121,14 @@ def test_a_relative_cache_dir_in_pyproject_is_relative_to_pyproject(project):
     """CAS-99: the documented fix, working from outside the project."""
     root, script, elsewhere = project
     (root / "pyproject.toml").write_text(
-        '[project]\nname = "demo"\nversion = "0"\n'
-        '[tool.cash]\ncache_dir = "var/cache"\n', encoding="utf-8",
+        '[project]\nname = "demo"\nversion = "0"\n[tool.cash]\ncache_dir = "var/cache"\n',
+        encoding="utf-8",
     )
 
     inside = _run(script, cwd=root)
     outside = _run(script, cwd=elsewhere)
 
-    assert inside["cache_dir"] == outside["cache_dir"], (
-        "the project's own config resolved to two different directories"
-    )
+    assert inside["cache_dir"] == outside["cache_dir"], "the project's own config resolved to two different directories"
     assert inside["cache_dir"] == str(root / "var" / "cache")
     assert not outside["ran"], "the second run did not find the first one's cache"
 
@@ -144,7 +141,8 @@ def test_an_absolute_cache_dir_in_pyproject_is_honoured_from_outside(project, tm
         '[project]\nname = "demo"\nversion = "0"\n'
         # A TOML LITERAL string (single quotes): Python's repr would escape the
         # Windows backslashes and TOML would hand back the doubled form.
-        f"[tool.cash]\ncache_dir = '{shared}'\n", encoding="utf-8",
+        f"[tool.cash]\ncache_dir = '{shared}'\n",
+        encoding="utf-8",
     )
 
     first = _run(script, cwd=root)
@@ -162,9 +160,7 @@ def test_the_env_var_still_wins_and_stays_relative_to_you(project, tmp_path):
     """
     root, script, elsewhere = project
     result = _run(script, cwd=elsewhere, env_extra={"CASH_CACHE_DIR": "here"})
-    assert result["cache_dir"] == "here", (
-        "an explicitly given path must be carried exactly as written"
-    )
+    assert result["cache_dir"] == "here", "an explicitly given path must be carried exactly as written"
     # And what it resolves to on disk is the caller's directory, not the
     # project's -- the assertion that would catch the anchoring reaching a
     # value the user typed.
@@ -197,9 +193,11 @@ def test_an_interactive_session_still_uses_the_cwd(tmp_path):
     move on upgrade.
     """
     proc = subprocess.run(
-        [sys.executable, "-c",
-         "import cash; print(cash.get_config().cache_dir)"],
-        cwd=str(tmp_path), capture_output=True, text=True, timeout=300,
+        [sys.executable, "-c", "import cash; print(cash.get_config().cache_dir)"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+        timeout=300,
         env={k: v for k, v in os.environ.items() if k != "CASH_CACHE_DIR"},
     )
     assert proc.returncode == 0, proc.stderr
@@ -209,6 +207,7 @@ def test_an_interactive_session_still_uses_the_cwd(tmp_path):
 # --------------------------------------------------------------------------- #
 # __main__.__file__ is not always a script                                    #
 # --------------------------------------------------------------------------- #
+
 
 def test_an_ipython_startup_script_does_not_become_the_anchor(tmp_path, monkeypatch):
     """IPython SETS ``__main__.__file__`` while running its startup scripts.
@@ -235,7 +234,7 @@ def test_an_ipython_startup_script_does_not_become_the_anchor(tmp_path, monkeypa
     monkeypatch.setitem(sys.modules, "__main__", main)
 
     fake_ipython = types.ModuleType("IPython")
-    fake_ipython.get_ipython = lambda: object()          # a live shell
+    fake_ipython.get_ipython = lambda: object()  # a live shell
     monkeypatch.setitem(sys.modules, "IPython", fake_ipython)
     work = tmp_path / "work"
     work.mkdir()
@@ -262,11 +261,12 @@ def test_a_real_script_is_still_the_anchor_without_a_shell(tmp_path, monkeypatch
     monkeypatch.setitem(sys.modules, "__main__", main)
 
     fake_ipython = types.ModuleType("IPython")
-    fake_ipython.get_ipython = lambda: None              # no shell
+    fake_ipython.get_ipython = lambda: None  # no shell
     monkeypatch.setitem(sys.modules, "IPython", fake_ipython)
     monkeypatch.chdir(tmp_path)
 
     assert cash_config.project_anchor() == project.resolve()
+
 
 # --------------------------------------------------------------------------- #
 # Spawned workers must anchor where their parent did                           #
@@ -317,7 +317,8 @@ def test_a_spawned_worker_anchors_where_its_parent_did(tmp_path):
     pkg = project / "pkg"
     pkg.mkdir(parents=True)
     (project / "pyproject.toml").write_text(
-        '[project]\nname = "demo"\nversion = "0"\n', encoding="utf-8",
+        '[project]\nname = "demo"\nversion = "0"\n',
+        encoding="utf-8",
     )
     (pkg / "__init__.py").write_text("", encoding="utf-8")
     (pkg / "__main__.py").write_text(textwrap.dedent(_POOL_MAIN), encoding="utf-8")
@@ -328,14 +329,13 @@ def test_a_spawned_worker_anchors_where_its_parent_did(tmp_path):
     env = dict(os.environ, PYTHONPATH=str(project))
     env.pop("CASH_CACHE_DIR", None)
 
-    proc = subprocess.run([sys.executable, "-m", "pkg"], cwd=str(elsewhere),
-                          env=env, capture_output=True, text=True, timeout=300)
+    proc = subprocess.run(
+        [sys.executable, "-m", "pkg"], cwd=str(elsewhere), env=env, capture_output=True, text=True, timeout=300
+    )
     assert proc.returncode == 0, proc.stderr[-2000:]
 
     lines = dict(line.split(" ", 1) for line in proc.stdout.splitlines() if " " in line)
-    assert lines["PARENT"] == lines["WORKER"], (
-        f"one run resolved two cache directories: {lines}"
-    )
+    assert lines["PARENT"] == lines["WORKER"], f"one run resolved two cache directories: {lines}"
     assert lines["PARENT"] == str(project / ".cash")
 
 
@@ -349,15 +349,14 @@ def test_a_lint_only_pyproject_below_the_project_is_not_a_project(tmp_path):
     tests = root / "tests"
     tests.mkdir(parents=True)
     (root / "pyproject.toml").write_text(
-        '[project]\nname = "r"\nversion = "0"\n\n[tool.cash]\ncache_dir = "shared_cache"\n',
-        encoding="utf-8")
-    (tests / "pyproject.toml").write_text('[tool.ruff]\nline-length = 100\n', encoding="utf-8")
+        '[project]\nname = "r"\nversion = "0"\n\n[tool.cash]\ncache_dir = "shared_cache"\n', encoding="utf-8"
+    )
+    (tests / "pyproject.toml").write_text("[tool.ruff]\nline-length = 100\n", encoding="utf-8")
     (tests / "job.py").write_text(_SCRIPT, encoding="utf-8")
     env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    p = subprocess.run([sys.executable, "job.py"], cwd=str(tests), env=env,
-                       capture_output=True, text=True, timeout=120)
+    p = subprocess.run([sys.executable, "job.py"], cwd=str(tests), env=env, capture_output=True, text=True, timeout=120)
     assert p.returncode == 0, p.stderr[-2000:]
-    cache_dir = next(line.split(" ", 1)[1] for line in p.stdout.splitlines()
-                     if line.startswith("CACHE_DIR"))
-    assert os.path.normcase(os.path.realpath(cache_dir)) == \
-        os.path.normcase(os.path.realpath(root / "shared_cache")), cache_dir
+    cache_dir = next(line.split(" ", 1)[1] for line in p.stdout.splitlines() if line.startswith("CACHE_DIR"))
+    assert os.path.normcase(os.path.realpath(cache_dir)) == os.path.normcase(os.path.realpath(root / "shared_cache")), (
+        cache_dir
+    )

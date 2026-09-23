@@ -11,6 +11,7 @@ The critical guard is :func:`test_reassign_accumulator_reexecutes_on_upstream_ed
 which proves the trust does NOT leak into genuine upstream edits (no
 under-invalidation).
 """
+
 import pytest
 
 pytestmark = [pytest.mark.loops, pytest.mark.mutations]
@@ -20,11 +21,13 @@ pytestmark = [pytest.mark.loops, pytest.mark.mutations]
 def test_reassign_accumulator_generator_not_redrained(nb_runner):
     """Core fix: ``total = total + v`` over a one-shot generator survives a
     plain downstream re-run (no edits) — the generator is not re-drained."""
-    nb_runner.create_notebook([
-        "g = (i for i in range(6))",              # sum(0..5) = 15, one-shot
-        "total = 0\nfor v in g:\n    total = total + v",
-        "print(f'total={total}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            "g = (i for i in range(6))",  # sum(0..5) = 15, one-shot
+            "total = 0\nfor v in g:\n    total = total + v",
+            "print(f'total={total}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "total=15" in nb_runner.get_output(3), nb_runner.get_output(3)
@@ -40,11 +43,13 @@ def test_reassign_accumulator_generator_not_redrained(nb_runner):
 @pytest.mark.timeout(90)
 def test_augmented_accumulator_generator_not_redrained(nb_runner):
     """Control (augmented ``+=``): behaves the same as the plain-reassign case."""
-    nb_runner.create_notebook([
-        "g = (i for i in range(6))",
-        "total = 0\nfor v in g:\n    total += v",
-        "print(f'total={total}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            "g = (i for i in range(6))",
+            "total = 0\nfor v in g:\n    total += v",
+            "print(f'total={total}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "total=15" in nb_runner.get_output(3), nb_runner.get_output(3)
@@ -64,12 +69,14 @@ def test_reassign_accumulator_reexecutes_on_upstream_edit(nb_runner):
     stale ``total``.  Uses a re-usable list iterable so the correct re-execution
     is observable.
     """
-    nb_runner.create_notebook([
-        "factor = 2",
-        "src = [1, 2, 3, 4]",
-        "total = 0\nfor b in src:\n    total = total + factor * b",
-        "print(f'total={total}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            "factor = 2",
+            "src = [1, 2, 3, 4]",
+            "total = 0\nfor b in src:\n    total = total + factor * b",
+            "print(f'total={total}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "total=20" in nb_runner.get_output(4), nb_runner.get_output(4)  # 2*10
@@ -85,11 +92,13 @@ def test_reassign_accumulator_reexecutes_on_upstream_edit(nb_runner):
 def test_inplace_append_accumulator_generator_not_redrained(nb_runner):
     """Control (in-place ``.append``): the existing trust path is not regressed
     — a one-shot generator consumed by an append accumulator stays correct."""
-    nb_runner.create_notebook([
-        "g = (i for i in range(6))",
-        "results = []\nfor v in g:\n    results.append(v)",
-        "print(f'results={results}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            "g = (i for i in range(6))",
+            "results = []\nfor v in g:\n    results.append(v)",
+            "print(f'results={results}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "results=[0, 1, 2, 3, 4, 5]" in nb_runner.get_output(3), nb_runner.get_output(3)

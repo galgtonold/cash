@@ -14,6 +14,7 @@ coming back.
 `benchmarks/results/` is gitignored, so this comparison works from a clean
 checkout.
 """
+
 from __future__ import annotations
 
 import csv
@@ -33,8 +34,7 @@ _COLUMNS = [
     ("ndarray (disk)", "ndarray_dense", "disk"),
     ("raw bytes (disk)", "bytes", "disk"),
 ]
-_SIZES = {"1 KB": 1_000, "1 MB": 1_000_000,
-          "10 MB": 10_000_000, "100 MB": 100_000_000}
+_SIZES = {"1 KB": 1_000, "1 MB": 1_000_000, "10 MB": 10_000_000, "100 MB": 100_000_000}
 
 
 @pytest.fixture(scope="module")
@@ -48,9 +48,7 @@ def measured() -> dict[tuple[str, str, int], float]:
         for r in csv.DictReader(fh):
             if r["error"]:
                 continue
-            out[(r["family"], r["backend_kind"], int(r["target_bytes"]))] = (
-                float(r["deserialize_seconds"]) * 1000
-            )
+            out[(r["family"], r["backend_kind"], int(r["target_bytes"]))] = float(r["deserialize_seconds"]) * 1000
     assert out, "the frozen matrix parsed to nothing"
     return out
 
@@ -60,7 +58,7 @@ def table_rows() -> dict[str, list[str]]:
     """The restore-cost table, parsed out of the page."""
     text = PAGE.read_text(encoding="utf-8")
     start = text.index("**Deserialise time")
-    body = text[start:text.index("\n\n", text.index("| 100 MB"))]
+    body = text[start : text.index("\n\n", text.index("| 100 MB"))]
     rows = {}
     for line in body.splitlines():
         m = re.match(r"\|\s*(\d+ [KM]B)\s*\|(.+)\|", line)
@@ -92,17 +90,15 @@ def test_every_quoted_restore_cost_matches_the_frozen_matrix(measured, table_row
             # 5% or 1ms, whichever is looser — the page rounds for readability.
             if abs(actual - quoted) > max(1.0, quoted * 0.05):
                 problems.append(
-                    f"{size_label} / {col_label}: page says {quoted} ms, "
-                    f"frozen matrix says {actual:.2f} ms"
+                    f"{size_label} / {col_label}: page says {quoted} ms, frozen matrix says {actual:.2f} ms"
                 )
-    assert not problems, "benchmarks.md disagrees with the measured data:\n  " + \
-        "\n  ".join(problems)
+    assert not problems, "benchmarks.md disagrees with the measured data:\n  " + "\n  ".join(problems)
 
 
 def test_the_page_does_not_quote_an_unsourced_speedup():
     """The old page led with ~190x etc. Those matched nothing in the repo."""
     text = PAGE.read_text(encoding="utf-8")
-    body = text[text.index("## What a restore costs"):]
+    body = text[text.index("## What a restore costs") :]
     stray = re.findall(r"~\s*\d{2,}(?:[–-]\d+)?\s*×", body)
     assert not stray, (
         f"unsourced speedup figures reappeared below the restore-cost section: "

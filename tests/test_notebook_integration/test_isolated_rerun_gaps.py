@@ -62,7 +62,6 @@ _GAP3 = "re-executes on its own previous output. See module docstring."
 
 
 class TestIsolatedRerunGaps:
-
     # ---- object pure-reassignment that is NOT accidentally idempotent ----
     # FIXED: the stale-value guard's executed_input_lineages branch restores the
     # cell-entry base before these self-modifying single statements re-run.
@@ -85,11 +84,14 @@ class TestIsolatedRerunGaps:
 
     # ---- object mutate+reassign (Bug A: gate excludes via modified_objects) ----
 
-    @pytest.mark.xfail(reason="Bug A: cell both mutates (df['c']=) and reassigns "
-                              "(df=df.rename); the var is in modified_objects so the "
-                              "reassigned-names gate excludes it. Re-run reads the renamed "
-                              "frame -> KeyError. Same idempotency tension as the "
-                              "downstream-advancement case.", strict=False)
+    @pytest.mark.xfail(
+        reason="Bug A: cell both mutates (df['c']=) and reassigns "
+        "(df=df.rename); the var is in modified_objects so the "
+        "reassigned-names gate excludes it. Re-run reads the renamed "
+        "frame -> KeyError. Same idempotency tension as the "
+        "downstream-advancement case.",
+        strict=False,
+    )
     def test_object_mutate_then_reassign_nonidempotent(self, nb_runner):
         _two_cell(
             nb_runner,

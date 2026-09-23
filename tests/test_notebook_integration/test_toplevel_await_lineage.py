@@ -21,6 +21,7 @@ Covered here:
 Note: the cell is executed EXACTLY ONCE (ipykernel drives the coroutine on
 its live loop); cash only runs its non-execution pre/post phases around it.
 """
+
 import textwrap
 
 import pytest
@@ -30,16 +31,18 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
 
 def test_toplevel_await_selfmod_isolated_rerun_is_idempotent(nb_runner):
     """(i) ``x = await bump(x)`` resets to its from-start value on re-run."""
-    nb_runner.create_notebook([
-        textwrap.dedent("""\
+    nb_runner.create_notebook(
+        [
+            textwrap.dedent("""\
             import asyncio
             x = 1
             async def bump(v):
                 await asyncio.sleep(0)
                 return v + 1
         """),
-        "x = await bump(x)\nprint(f'x={x}')",
-    ])
+            "x = await bump(x)\nprint(f'x={x}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "x=2" in nb_runner.get_output(2), f"first run: {nb_runner.get_output(2)!r}"
@@ -49,39 +52,42 @@ def test_toplevel_await_selfmod_isolated_rerun_is_idempotent(nb_runner):
     # runs, so it does not accumulate to 3.
     nb_runner.run_cell(2)
     assert "x=2" in nb_runner.get_output(2), (
-        f"top-level-await self-mod not idempotent on isolated re-run: "
-        f"{nb_runner.get_output(2)!r}"
+        f"top-level-await self-mod not idempotent on isolated re-run: {nb_runner.get_output(2)!r}"
     )
 
 
 def test_async_def_edit_then_isolated_rerun_of_await_cell_picks_up_new_body(nb_runner):
     """(ii) editing the async def, then re-running only the awaiting cell,
     must use the new function body (upstream reconstruction)."""
-    nb_runner.create_notebook([
-        "import asyncio",
-        textwrap.dedent("""\
+    nb_runner.create_notebook(
+        [
+            "import asyncio",
+            textwrap.dedent("""\
             async def compute(x):
                 await asyncio.sleep(0)
                 return x + 1
         """),
-        "result = await compute(10)\nprint(f'result={result}')",
-    ])
+            "result = await compute(10)\nprint(f'result={result}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "result=11" in nb_runner.get_output(3), f"first run: {nb_runner.get_output(3)!r}"
 
-    nb_runner.set_cell_source(2, textwrap.dedent("""\
+    nb_runner.set_cell_source(
+        2,
+        textwrap.dedent("""\
         async def compute(x):
             await asyncio.sleep(0)
             return x + 100
-    """))
+    """),
+    )
     # Isolated re-run of ONLY the awaiting cell: its upstream check sees the
     # edited ``compute`` source and re-executes the def cell, so the await
     # runs against the new body.
     nb_runner.run_cell(3)
     assert "result=110" in nb_runner.get_output(3), (
-        f"await cell used a stale async def after an upstream edit: "
-        f"{nb_runner.get_output(3)!r}"
+        f"await cell used a stale async def after an upstream edit: {nb_runner.get_output(3)!r}"
     )
 
 
@@ -89,26 +95,27 @@ def test_asyncio_run_bridge_selfmod_isolated_rerun_is_idempotent(nb_runner):
     """(iii) sync-bridge control: ``asyncio.run`` via a thread pool, self-mod,
     isolated re-run stays idempotent (this cell has no top-level await, so it
     exercises the sync path and must keep working)."""
-    nb_runner.create_notebook([
-        textwrap.dedent("""\
+    nb_runner.create_notebook(
+        [
+            textwrap.dedent("""\
             import asyncio
             from concurrent.futures import ThreadPoolExecutor
             total = 5
             async def add_ten(v):
                 return v + 10
         """),
-        textwrap.dedent("""\
+            textwrap.dedent("""\
             with ThreadPoolExecutor(max_workers=1) as _ex:
                 total = _ex.submit(asyncio.run, add_ten(total)).result()
             print(f'total={total}')
         """),
-    ])
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "total=15" in nb_runner.get_output(2), f"first run: {nb_runner.get_output(2)!r}"
 
     nb_runner.run_cell(2)
     assert "total=15" in nb_runner.get_output(2), (
-        f"asyncio.run bridge self-mod not idempotent on isolated re-run: "
-        f"{nb_runner.get_output(2)!r}"
+        f"asyncio.run bridge self-mod not idempotent on isolated re-run: {nb_runner.get_output(2)!r}"
     )

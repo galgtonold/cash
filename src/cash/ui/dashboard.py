@@ -9,6 +9,7 @@ import logging
 try:
     import ipywidgets as widgets
     from IPython.display import clear_output, display
+
     HAS_WIDGETS = True
 except ImportError:
     HAS_WIDGETS = False
@@ -18,6 +19,7 @@ try:
     import io
 
     import matplotlib.pyplot as plt
+
     HAS_MATPLOTLIB = True
 except ImportError:
     HAS_MATPLOTLIB = False
@@ -25,6 +27,7 @@ except ImportError:
 from ..analytics import AnalyticsManager
 
 logger = logging.getLogger(__name__)
+
 
 def show_analytics_dashboard(mgr: AnalyticsManager | None = None):
     """
@@ -49,12 +52,7 @@ def show_analytics_dashboard(mgr: AnalyticsManager | None = None):
     stats_output = widgets.Output()
 
     # Controls
-    refresh_btn = widgets.Button(
-        description='Refresh',
-        icon='refresh',
-        button_style='info',
-        tooltip='Refresh stats'
-    )
+    refresh_btn = widgets.Button(description="Refresh", icon="refresh", button_style="info", tooltip="Refresh stats")
 
     def render_stats(_=None):
         with stats_output:
@@ -66,10 +64,10 @@ def show_analytics_dashboard(mgr: AnalyticsManager | None = None):
             daily_savings = mgr.get_daily_savings()
 
             # Session Stats Widget
-            s_hits = session_stats.get('hits', 0)
-            session_stats.get('misses', 0)
-            s_total = session_stats.get('total_events', 0)
-            s_saved = session_stats.get('total_saved_time', 0)
+            s_hits = session_stats.get("hits", 0)
+            session_stats.get("misses", 0)
+            s_total = session_stats.get("total_events", 0)
+            s_saved = session_stats.get("total_saved_time", 0)
             s_rate = (s_hits / s_total * 100) if s_total > 0 else 0
 
             session_html = f"""
@@ -82,11 +80,11 @@ def show_analytics_dashboard(mgr: AnalyticsManager | None = None):
             """
 
             # Global Stats Widget
-            g_hits = global_stats.get('hits', 0)
-            g_total = global_stats.get('total_events', 0)
-            g_saved = global_stats.get('total_saved_time', 0)
+            g_hits = global_stats.get("hits", 0)
+            g_total = global_stats.get("total_events", 0)
+            g_saved = global_stats.get("total_saved_time", 0)
             g_rate = (g_hits / g_total * 100) if g_total > 0 else 0
-            g_sessions = global_stats.get('total_sessions', 0)
+            g_sessions = global_stats.get("total_sessions", 0)
 
             global_html = f"""
             <div style="border: 1px solid #ccc; padding: 10px; border-radius: 5px; width: 45%; display: inline-block; vertical-align: top;">
@@ -108,18 +106,18 @@ def show_analytics_dashboard(mgr: AnalyticsManager | None = None):
                 # Check if we have enough data (at least one point)
                 if dates:
                     plt.figure(figsize=(8, 3))
-                    plt.bar(dates, savings, color='#006644', alpha=0.7)
-                    plt.title('Daily Time Savings (Last 7 Days)')
-                    plt.ylabel('Seconds')
+                    plt.bar(dates, savings, color="#006644", alpha=0.7)
+                    plt.title("Daily Time Savings (Last 7 Days)")
+                    plt.ylabel("Seconds")
                     plt.xticks(rotation=45)
                     plt.tight_layout()
-                    plt.grid(axis='y', linestyle='--', alpha=0.3)
+                    plt.grid(axis="y", linestyle="--", alpha=0.3)
 
                     # Capture plot to widget
                     buf = io.BytesIO()
-                    plt.savefig(buf, format='png')
+                    plt.savefig(buf, format="png")
                     buf.seek(0)
-                    img_str = base64.b64encode(buf.read()).decode('ascii')
+                    img_str = base64.b64encode(buf.read()).decode("ascii")
                     img_html = f'<div style="margin-top: 20px; text-align: center;"><img src="data:image/png;base64,{img_str}" /></div>'
                     display(widgets.HTML(img_html))
                     plt.close()
@@ -134,7 +132,13 @@ def show_analytics_dashboard(mgr: AnalyticsManager | None = None):
     render_stats()
 
     # Layout
-    display(widgets.VBox([
-        widgets.HBox([header, refresh_btn], layout=widgets.Layout(justify_content='space-between', align_items='center')),
-        stats_output
-    ]))
+    display(
+        widgets.VBox(
+            [
+                widgets.HBox(
+                    [header, refresh_btn], layout=widgets.Layout(justify_content="space-between", align_items="center")
+                ),
+                stats_output,
+            ]
+        )
+    )

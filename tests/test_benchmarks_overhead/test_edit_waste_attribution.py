@@ -14,6 +14,7 @@ The guard is a floor on the recompute cost. The risk of a guard like this
 is that it quietly disables the check it protects, so the control below
 matters more than the positive case.
 """
+
 from __future__ import annotations
 
 from benchmarks._edit_scenarios import (
@@ -25,17 +26,14 @@ from benchmarks._overhead_results import StatementMetric
 
 
 def _m(code, status, seconds):
-    return StatementMetric(code=code, execution_time=seconds,
-                           total_time=seconds, status=status)
+    return StatementMetric(code=code, execution_time=seconds, total_time=seconds, status=status)
 
 
 def _attribute(recompute_seconds):
     """One restorable statement downstream of the edit, recomputed after it."""
     scenario = EditScenario(kind="null-assign", site=0, label="null-assign@cell0")
-    control = {0: [_m("edited = 1", "COMPUTED", 0.0)],
-               1: [_m("heavy = work()", "RESTORED", 0.5)]}
-    edited = {0: [_m("edited = 1", "COMPUTED", 0.0)],
-              1: [_m("heavy = work()", "COMPUTED", recompute_seconds)]}
+    control = {0: [_m("edited = 1", "COMPUTED", 0.0)], 1: [_m("heavy = work()", "RESTORED", 0.5)]}
+    edited = {0: [_m("edited = 1", "COMPUTED", 0.0)], 1: [_m("heavy = work()", "COMPUTED", recompute_seconds)]}
     return attribute_waste(scenario, control, edited)
 
 

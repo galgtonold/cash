@@ -13,6 +13,7 @@ CAS-120, round 17: four of five testers could not.
   where ``cash clear --entry`` wants an entry id, and could not list the files
   an entry depends on.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -35,9 +36,15 @@ def _run(tmp_path, body, **env_extra):
     env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
     env["CASH_CACHE_DIR"] = str(tmp_path / ".cash")
     env.update(env_extra)
-    return subprocess.run([sys.executable, str(script)], capture_output=True,
-                          text=True, cwd=str(tmp_path), env=env,
-                          encoding="utf-8", errors="replace")
+    return subprocess.run(
+        [sys.executable, str(script)],
+        capture_output=True,
+        text=True,
+        cwd=str(tmp_path),
+        env=env,
+        encoding="utf-8",
+        errors="replace",
+    )
 
 
 _FAST_JOB = textwrap.dedent("""
@@ -52,6 +59,7 @@ _FAST_JOB = textwrap.dedent("""
 
 
 # -- where it prints ---------------------------------------------------------
+
 
 def test_the_summary_goes_to_stderr_not_into_the_programs_output(tmp_path):
     out = _run(tmp_path, _FAST_JOB, CASH_SUMMARY="1")
@@ -84,10 +92,13 @@ def test_cash_debug_prints_each_decision_in_a_plain_script(tmp_path):
 
 def test_cash_debug_uses_the_applications_logging_when_there_is_some(tmp_path):
     """No second handler: the app's format and destination win."""
-    body = textwrap.dedent("""
+    body = (
+        textwrap.dedent("""
         import logging, sys
         logging.basicConfig(stream=sys.stdout, format="APP %(name)s %(message)s")
-    """) + _FAST_JOB
+    """)
+        + _FAST_JOB
+    )
     out = _run(tmp_path, body, CASH_DEBUG="1")
     assert "APP cash.calls MISS" in out.stdout
     assert "cash.calls:" not in out.stderr, "a duplicate handler was added"
@@ -107,6 +118,7 @@ def test_no_per_call_lines_without_being_asked(tmp_path):
 
 # -- what it says ------------------------------------------------------------
 
+
 @pytest.fixture
 def c(tmp_path):
     return Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
@@ -122,29 +134,32 @@ def test_each_reason_is_named(c, tmp_path):
         with open(path, encoding="utf-8") as f:
             return len(f.read()) * g["FACTOR"]
 
-    length(str(data))                        # no entry yet
-    length(str(data))                        # hit
+    length(str(data))  # no entry yet
+    length(str(data))  # hit
     data.write_text("abcdef", encoding="utf-8")
-    length(str(data))                        # file changed
-    length(str(data) + "")                   # hit
+    length(str(data))  # file changed
+    length(str(data) + "")  # hit
     other = tmp_path / "other.txt"
     other.write_text("x", encoding="utf-8")
-    length(str(other))                       # new arguments
+    length(str(other))  # new arguments
 
-    assert length.cache_info()["miss_reasons"] == {
-        "no entry yet": 1, "file changed": 1, "new arguments": 1}
+    assert length.cache_info()["miss_reasons"] == {"no entry yet": 1, "file changed": 1, "new arguments": 1}
 
 
 def test_a_changed_global_is_a_state_change(c, tmp_path, monkeypatch):
     """A real file: a function with no retrievable source has no globals to fold."""
-    (tmp_path / "why_mod.py").write_text(textwrap.dedent("""
+    (tmp_path / "why_mod.py").write_text(
+        textwrap.dedent("""
         SCALE = 2
 
         def scaled(x):
             return x * SCALE
-    """), encoding="utf-8")
+    """),
+        encoding="utf-8",
+    )
     monkeypatch.syspath_prepend(str(tmp_path))
     import why_mod
+
     try:
         scaled = c.cache(assume_safe=True)(why_mod.scaled)
         scaled(3)
@@ -183,6 +198,7 @@ def test_the_summary_does_not_report_a_cheap_result_as_ram_only(c):
     of disk. Both of these are written now -- decorating a function is the
     decision to cache it -- so neither may be described as RAM-only, and no
     floor may be named: there is no setting behind that sentence any more."""
+
     @c.cache(assume_safe=True)
     def fast(n):
         return n
@@ -243,6 +259,7 @@ def _summary_blocks(text: str) -> dict[str, str]:
 
 # -- explain() and inspect ---------------------------------------------------
 
+
 def test_explain_names_the_moved_part_of_the_key(c):
     @c.cache(assume_safe=True)
     def f(x):
@@ -259,7 +276,7 @@ def test_explain_gives_the_entry_id_cash_clear_takes(c, tmp_path):
 
     @c.cache(assume_safe=True)
     def read(path):
-        time.sleep(0.2)                      # past the floor, so it reaches disk
+        time.sleep(0.2)  # past the floor, so it reaches disk
         with open(path, encoding="utf-8") as f:
             return f.read()
 
@@ -271,9 +288,12 @@ def test_explain_gives_the_entry_id_cash_clear_takes(c, tmp_path):
 
     c.shutdown()
     listing = subprocess.run(
-        [sys.executable, "-m", "cash", "inspect", str(tmp_path / ".cash"),
-         "--function", "read"],
-        capture_output=True, text=True, encoding="utf-8", errors="replace")
+        [sys.executable, "-m", "cash", "inspect", str(tmp_path / ".cash"), "--function", "read"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
     assert e.entry_id in listing.stdout, listing.stdout + listing.stderr
     assert "reads:" in listing.stdout and data.name in listing.stdout
 
@@ -299,8 +319,15 @@ def _calls(tmp_path, body, *args):
     script.write_text(body, encoding="utf-8")
     env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
     env.update(CASH_CACHE_DIR=str(tmp_path / ".cash"), CASH_VERBOSE="1")
-    p = subprocess.run([sys.executable, str(script), *args], capture_output=True, text=True,
-                       cwd=str(tmp_path), env=env, encoding="utf-8", errors="replace")
+    p = subprocess.run(
+        [sys.executable, str(script), *args],
+        capture_output=True,
+        text=True,
+        cwd=str(tmp_path),
+        env=env,
+        encoding="utf-8",
+        errors="replace",
+    )
     assert p.returncode == 0, p.stderr[-2000:]
     return [line for line in p.stderr.splitlines() if "cash.calls:" in line]
 

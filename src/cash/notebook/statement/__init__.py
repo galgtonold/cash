@@ -28,18 +28,19 @@ and don't belong inside ``statement/``.
 
 from __future__ import annotations
 
-from .processor import (
-    DecoratorCallMetric,
-    ProcessResult,
-    StatementCacheMetadata,
-    StatementProcessor,
-)
-
 # Private re-exports kept for test files that patch / import via the package
 # path (e.g. ``from cash.notebook.statement import _TeeWriter``). These are
 # not part of the public surface — the leading underscore is the signal —
 # but co-locating the re-export here keeps test paths stable.
-from .processor import _ProcessResultRequired, _TeeWriter, _tee_output  # noqa: F401
+from .processor import (  # noqa: F401
+    DecoratorCallMetric,
+    ProcessResult,
+    StatementCacheMetadata,
+    StatementProcessor,
+    _ProcessResultRequired,
+    _tee_output,
+    _TeeWriter,
+)
 
 __all__ = [
     "DecoratorCallMetric",

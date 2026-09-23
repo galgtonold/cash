@@ -56,12 +56,14 @@ def surface(cash, **over):
 
 # --- the null control --------------------------------------------------
 
+
 def test_identical_source_gives_identical_surface(cash):
     """Without this, every assertion below could pass for the wrong reason."""
     assert surface(cash) == surface(cash)
 
 
 # --- gap 1: the field default_factory itself ---------------------------
+
 
 def test_default_factory_body_change_is_seen(cash):
     """`A()` genuinely produces a different value; the digest must move."""
@@ -77,6 +79,7 @@ def test_plain_field_default_change_is_seen(cash):
 
 
 # --- gap 2: code reached THROUGH folded code ---------------------------
+
 
 def test_class_reached_via_default_factory_is_seen(cash):
     """The reported case: editing B changes what A() yields."""
@@ -103,6 +106,7 @@ def test_class_referenced_from_a_method_body_is_seen(cash):
 
 
 # --- controls against over-invalidation --------------------------------
+
 
 def test_annotation_only_reference_is_followed(cash):
     """A class named only in a type hint is followed, like code the body loads.
@@ -144,6 +148,7 @@ def test_stdlib_reference_is_not_followed(cash):
 
 # --- traversal must terminate ------------------------------------------
 
+
 def test_mutual_reference_terminates(cash):
     """A <-> B referencing each other must not loop forever."""
     src = """
@@ -184,7 +189,7 @@ import linecache
 import shutil
 import sys
 
-MODULE = '''
+MODULE = """
 from dataclasses import dataclass, field
 
 class B:
@@ -203,7 +208,7 @@ class A:
 @cash_instance.cache
 def compute(n):
     return A()
-'''
+"""
 
 
 def _load_module(work, cash_instance, b_expr):
@@ -271,6 +276,5 @@ def test_end_to_end_does_not_warn_about_the_reached_class(tmp_path, work):
     with warnings.catch_warnings(record=True) as log:
         warnings.simplefilter("always")
         _run(work, cash_instance, "")
-    impurity = [w for w in log if "scope_mutation" in str(w.message)
-                or "side effects" in str(w.message)]
+    impurity = [w for w in log if "scope_mutation" in str(w.message) or "side effects" in str(w.message)]
     assert not impurity, f"unexpected impurity warning: {[str(w.message) for w in impurity]}"

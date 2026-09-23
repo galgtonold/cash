@@ -2,13 +2,14 @@
 Round 3 Batch 4: Real-world data science patterns, kernel restart scenarios,
 out-of-order execution, annotation directives, and complex mutation patterns.
 
-These tests focus on realistic notebook workflows that data scientists 
+These tests focus on realistic notebook workflows that data scientists
 commonly use, including pandas transformations, numpy array operations,
 and iterative refinement patterns.
 """
 
-import pytest
 import time
+
+import pytest
 
 
 @pytest.mark.core
@@ -20,11 +21,13 @@ class TestPandasPipelinePatterns:
         csv_path = tmp_path / "sales.csv"
         csv_path.write_text("product,qty,price\nA,10,1.5\nB,5,3.0\nA,8,1.5\nB,12,3.0\n")
 
-        nb_runner.create_notebook([
-            f"import pandas as pd\ndf = pd.read_csv(r'{csv_path.as_posix()}')",
-            "df['total'] = df['qty'] * df['price']",
-            "summary = df.groupby('product')['total'].sum().to_dict()\nprint(summary)",
-        ])
+        nb_runner.create_notebook(
+            [
+                f"import pandas as pd\ndf = pd.read_csv(r'{csv_path.as_posix()}')",
+                "df['total'] = df['qty'] * df['price']",
+                "summary = df.groupby('product')['total'].sum().to_dict()\nprint(summary)",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -37,11 +40,13 @@ class TestPandasPipelinePatterns:
         csv_path = tmp_path / "people.csv"
         csv_path.write_text("name,age,city\nAlice,30,NYC\nBob,25,LA\nCharlie,35,NYC\nDiana,28,LA\n")
 
-        nb_runner.create_notebook([
-            f"import pandas as pd\ndf = pd.read_csv(r'{csv_path.as_posix()}')",
-            "nyc_df = df[df['city'] == 'NYC']",
-            "nyc_over_30 = nyc_df[nyc_df['age'] >= 30]\nprint(nyc_over_30['name'].tolist())",
-        ])
+        nb_runner.create_notebook(
+            [
+                f"import pandas as pd\ndf = pd.read_csv(r'{csv_path.as_posix()}')",
+                "nyc_df = df[df['city'] == 'NYC']",
+                "nyc_over_30 = nyc_df[nyc_df['age'] >= 30]\nprint(nyc_over_30['name'].tolist())",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -54,10 +59,12 @@ class TestPandasPipelinePatterns:
         csv_path = tmp_path / "data.csv"
         csv_path.write_text("val\n10\n20\n30\n")
 
-        nb_runner.create_notebook([
-            f"import pandas as pd\ndf = pd.read_csv(r'{csv_path.as_posix()}')",
-            "total = df['val'].sum()\nprint(f'total = {total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                f"import pandas as pd\ndf = pd.read_csv(r'{csv_path.as_posix()}')",
+                "total = df['val'].sum()\nprint(f'total = {total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total = 60" in nb_runner.get_output(2)
@@ -77,21 +84,25 @@ class TestNumpyPatterns:
 
     def test_array_creation_and_operations(self, nb_runner):
         """Create arrays in cell 1, operate in cell 2."""
-        nb_runner.create_notebook([
-            "import numpy as np\na = np.array([1, 2, 3, 4, 5])",
-            "b = a * 2\nc = np.sum(b)\nprint(f'sum = {c}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import numpy as np\na = np.array([1, 2, 3, 4, 5])",
+                "b = a * 2\nc = np.sum(b)\nprint(f'sum = {c}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "sum = 30" in nb_runner.get_output(2)
 
     def test_matrix_operations(self, nb_runner):
         """Matrix multiply across cells."""
-        nb_runner.create_notebook([
-            "import numpy as np\nA = np.array([[1, 2], [3, 4]])",
-            "B = np.array([[5, 6], [7, 8]])",
-            "C = A @ B\nprint(C.tolist())",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import numpy as np\nA = np.array([[1, 2], [3, 4]])",
+                "B = np.array([[5, 6], [7, 8]])",
+                "C = A @ B\nprint(C.tolist())",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -101,37 +112,38 @@ class TestNumpyPatterns:
 
     def test_numpy_random_with_seed(self, nb_runner):
         """Seeded random should be reproducible and cacheable."""
-        nb_runner.create_notebook([
-            "import numpy as np\nnp.random.seed(42)",
-            "vals = np.random.rand(3)\nprint([round(v, 4) for v in vals])",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import numpy as np\nnp.random.seed(42)",
+                "vals = np.random.rand(3)\nprint([round(v, 4) for v in vals])",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
         out1 = nb_runner.get_output(2)
-        
+
         # Re-run — should produce same output (from cache or same seed)
         nb_runner.run_all()
         out2 = nb_runner.get_output(2)
-        
+
         # Both should contain the same values
         assert out1 == out2 or "0.3745" in out2, f"Inconsistent: {out1} vs {out2}"
 
 
 @pytest.mark.core
-
-
-
 @pytest.mark.core
 class TestAnnotationDirectives:
     """Test @cash: annotation directives."""
 
     def test_no_cache_annotation(self, nb_runner):
         """@cash:no-cache should force execution every time."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "# @cash:no-cache\nimport time\nt = time.time()\nprint(f't = {t}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "# @cash:no-cache\nimport time\nt = time.time()\nprint(f't = {t}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -148,9 +160,11 @@ class TestAnnotationDirectives:
 
     def test_persist_annotation(self, nb_runner, tmp_path):
         """@cash:persist should force disk storage."""
-        nb_runner.create_notebook([
-            "# @cash:persist\nx = 42\nprint(f'x = {x}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "# @cash:persist\nx = 42\nprint(f'x = {x}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "x = 42" in nb_runner.get_output(1)
@@ -162,28 +176,34 @@ class TestMultiStatementCells:
 
     def test_cell_with_function_def_and_usage(self, nb_runner):
         """Define and use a function in the same cell."""
-        nb_runner.create_notebook([
-            "def double(x):\n    return x * 2\n\nresult = double(21)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def double(x):\n    return x * 2\n\nresult = double(21)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 42" in nb_runner.get_output(1)
 
     def test_cell_with_multiple_assignments(self, nb_runner):
         """Multiple assignments in one cell, used in the next."""
-        nb_runner.create_notebook([
-            "a = 1\nb = 2\nc = 3\nd = a + b + c",
-            "print(f'd = {d}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 1\nb = 2\nc = 3\nd = a + b + c",
+                "print(f'd = {d}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "d = 6" in nb_runner.get_output(2)
 
     def test_long_cell_with_intermediate_vars(self, nb_runner):
         """10-statement cell with intermediate calculations."""
-        nb_runner.create_notebook([
-            "x = 1\nx = x + 1\nx = x * 2\nx = x + 3\nx = x * 2\nx = x - 1\nx = x // 3\nx = x + 10\nx = x * 2\nprint(f'x = {x}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 1\nx = x + 1\nx = x * 2\nx = x + 3\nx = x * 2\nx = x - 1\nx = x // 3\nx = x + 10\nx = x * 2\nprint(f'x = {x}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -197,26 +217,29 @@ class TestReassignmentPatterns:
 
     def test_reassign_same_variable_different_cells(self, nb_runner):
         """Assign x in cell 1, reassign in cell 2, use in cell 3."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "x = x * 2",
-            "print(f'x = {x}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "x = x * 2",
+                "print(f'x = {x}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "x = 20" in nb_runner.get_output(3)
 
     def test_reassign_with_different_type(self, nb_runner):
         """Assign x as int, then reassign as string."""
-        nb_runner.create_notebook([
-            "x = 42",
-            "x = str(x) + ' is the answer'",
-            "print(x)",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 42",
+                "x = str(x) + ' is the answer'",
+                "print(x)",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "42 is the answer" in nb_runner.get_output(3)
-
 
 
 @pytest.mark.core
@@ -225,10 +248,12 @@ class TestComplexDataStructures:
 
     def test_nested_dict_of_lists(self, nb_runner):
         """Nested dict creation and access."""
-        nb_runner.create_notebook([
-            "data = {'users': [{'name': 'Alice', 'scores': [90, 85]}, {'name': 'Bob', 'scores': [78, 92]}]}",
-            "avg_scores = {u['name']: sum(u['scores'])/len(u['scores']) for u in data['users']}\nprint(avg_scores)",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = {'users': [{'name': 'Alice', 'scores': [90, 85]}, {'name': 'Bob', 'scores': [78, 92]}]}",
+                "avg_scores = {u['name']: sum(u['scores'])/len(u['scores']) for u in data['users']}\nprint(avg_scores)",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -238,10 +263,12 @@ class TestComplexDataStructures:
 
     def test_namedtuple_pattern(self, nb_runner):
         """NamedTuple creation and usage."""
-        nb_runner.create_notebook([
-            "from collections import namedtuple\nPoint = namedtuple('Point', ['x', 'y'])",
-            "p1 = Point(3, 4)\np2 = Point(6, 8)\ndist = ((p2.x - p1.x)**2 + (p2.y - p1.y)**2)**0.5\nprint(f'dist = {dist}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from collections import namedtuple\nPoint = namedtuple('Point', ['x', 'y'])",
+                "p1 = Point(3, 4)\np2 = Point(6, 8)\ndist = ((p2.x - p1.x)**2 + (p2.y - p1.y)**2)**0.5\nprint(f'dist = {dist}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -249,11 +276,13 @@ class TestComplexDataStructures:
 
     def test_dataclass_pattern(self, nb_runner):
         """Dataclass definition and usage across cells."""
-        nb_runner.create_notebook([
-            "from dataclasses import dataclass\n\n@dataclass\nclass Employee:\n    name: str\n    salary: float\n    dept: str",
-            "emp1 = Employee('Alice', 90000, 'Eng')\nemp2 = Employee('Bob', 85000, 'Eng')\nemp3 = Employee('Charlie', 75000, 'Sales')",
-            "eng_avg = (emp1.salary + emp2.salary) / 2\nprint(f'eng avg = {eng_avg}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from dataclasses import dataclass\n\n@dataclass\nclass Employee:\n    name: str\n    salary: float\n    dept: str",
+                "emp1 = Employee('Alice', 90000, 'Eng')\nemp2 = Employee('Bob', 85000, 'Eng')\nemp3 = Employee('Charlie', 75000, 'Sales')",
+                "eng_avg = (emp1.salary + emp2.salary) / 2\nprint(f'eng avg = {eng_avg}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -264,23 +293,26 @@ class TestComplexDataStructures:
 class TestImportPatterns:
     """Test various import patterns and their caching."""
 
-
     def test_from_import_as_alias(self, nb_runner):
         """from X import Y as Z."""
-        nb_runner.create_notebook([
-            "from math import sqrt as sq",
-            "r = sq(256)\nprint(f'r = {r}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from math import sqrt as sq",
+                "r = sq(256)\nprint(f'r = {r}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "r = 16.0" in nb_runner.get_output(2)
 
     def test_multiple_imports_one_cell(self, nb_runner):
         """Multiple import statements in one cell."""
-        nb_runner.create_notebook([
-            "import math\nimport os\nimport json",
-            "data = json.dumps({'pi': round(math.pi, 4), 'cwd': os.sep})\nprint(data)",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import math\nimport os\nimport json",
+                "data = json.dumps({'pi': round(math.pi, 4), 'cwd': os.sep})\nprint(data)",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -294,11 +326,13 @@ class TestCachingEfficiency:
 
     def test_second_run_uses_cache(self, nb_runner):
         """Second run_all should be faster or produce same output from cache."""
-        nb_runner.create_notebook([
-            "import time\nstart = time.time()\ntime.sleep(0.1)\ncompute_time = time.time() - start",
-            "x = 42",  # Simple computation
-            "print(f'x = {x}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import time\nstart = time.time()\ntime.sleep(0.1)\ncompute_time = time.time() - start",
+                "x = 42",  # Simple computation
+                "print(f'x = {x}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "x = 42" in nb_runner.get_output(3)
@@ -309,10 +343,12 @@ class TestCachingEfficiency:
 
     def test_unchanged_cells_skip(self, nb_runner):
         """Running unchanged cells should skip re-execution."""
-        nb_runner.create_notebook([
-            "x = 100",
-            "y = x * 2\nprint(f'y = {y}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 100",
+                "y = x * 2\nprint(f'y = {y}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "y = 200" in nb_runner.get_output(2)
@@ -338,10 +374,12 @@ class TestFromImportClassReload:
             "        return 3.14 * self.r ** 2\n"
         )
 
-        nb_runner.create_notebook([
-            "from shapes import Circle",
-            "c = Circle(5)\nprint(f'area = {c.area()}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from shapes import Circle",
+                "c = Circle(5)\nprint(f'area = {c.area()}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -368,10 +406,12 @@ class TestFromImportClassReload:
         mod_path = tmp_path / "config.py"
         mod_path.write_text("VERSION = '1.0'\n")
 
-        nb_runner.create_notebook([
-            "from config import VERSION",
-            "print(f'Version: {VERSION}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from config import VERSION",
+                "print(f'Version: {VERSION}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 

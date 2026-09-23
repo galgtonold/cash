@@ -15,11 +15,13 @@ class TestRestartThenEditCells:
 
     def test_restart_then_edit_root(self, nb_runner):
         """Restart kernel, then edit root cell."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "y = x * 2",
-            "z = y + 5\nprint(f'z = {z}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "y = x * 2",
+                "z = y + 5\nprint(f'z = {z}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "z = 25" in nb_runner.get_output(3)
@@ -34,11 +36,13 @@ class TestRestartThenEditCells:
 
     def test_restart_then_edit_leaf(self, nb_runner):
         """Restart kernel, then edit leaf cell."""
-        nb_runner.create_notebook([
-            "a = 5",
-            "b = a + 10",
-            "result = b * 3\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 5",
+                "b = a + 10",
+                "result = b * 3\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 45" in nb_runner.get_output(3)
@@ -56,10 +60,12 @@ class TestEditThenRestartCells:
 
     def test_edit_then_restart_run(self, nb_runner):
         """Edit, restart, run uses edited code."""
-        nb_runner.create_notebook([
-            "val = 1",
-            "out = val + 10\nprint(f'out = {out}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "val = 1",
+                "out = val + 10\nprint(f'out = {out}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "out = 11" in nb_runner.get_output(2)
@@ -72,10 +78,12 @@ class TestEditThenRestartCells:
 
     def test_edit_run_restart_run_should_restore(self, nb_runner):
         """Edit, run, restart, run restores from cache."""
-        nb_runner.create_notebook([
-            "data = [1, 2, 3]",
-            "total = sum(data)\nprint(f'total = {total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = [1, 2, 3]",
+                "total = sum(data)\nprint(f'total = {total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total = 6" in nb_runner.get_output(2)
@@ -95,10 +103,12 @@ class TestMultipleRestartsWithEdits:
 
     def test_edit_restart_edit_restart(self, nb_runner):
         """Edit, restart, edit again, restart again."""
-        nb_runner.create_notebook([
-            "n = 1",
-            "result = n * 100\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "n = 1",
+                "result = n * 100\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 100" in nb_runner.get_output(2)

@@ -19,6 +19,7 @@ analysis boundary (the ``open`` shim once poisoned a cache key; a psutil call
 once made ``/proc/meminfo`` a tracked dependency), which is why the guard is
 a module check rather than a special case for this one shim.
 """
+
 from __future__ import annotations
 
 import warnings
@@ -51,12 +52,10 @@ def test_is_user_code_still_recurses_when_cash_analyses_itself():
 def test_analyzer_does_not_attribute_cash_internals_to_the_user():
     report = get_analyzer().analyze(_user_function_that_reads_a_file)
     offenders = [
-        i for i in report.issues
-        if "cash.notebook" in str(i) or "file_tracker" in str(i) or "_track_path" in str(i)
+        i for i in report.issues if "cash.notebook" in str(i) or "file_tracker" in str(i) or "_track_path" in str(i)
     ]
     assert not offenders, (
-        "the analyzer walked into cash's own file-tracking shim and reported it "
-        f"as the user's impurity: {offenders}"
+        f"the analyzer walked into cash's own file-tracking shim and reported it as the user's impurity: {offenders}"
     )
 
 
@@ -74,8 +73,5 @@ def test_reading_a_file_through_the_shim_emits_no_impurity_warning():
 
         reads(__file__)
 
-    impurity = [
-        w for w in caught
-        if type(w.message).__name__ == "CashImpurityWarning"
-    ]
+    impurity = [w for w in caught if type(w.message).__name__ == "CashImpurityWarning"]
     assert not impurity, [str(w.message)[:200] for w in impurity]

@@ -1,6 +1,8 @@
 """Batch 95 – datetime and time complex patterns."""
 
-import textwrap, pytest
+import textwrap
+
+import pytest
 
 pytestmark = [pytest.mark.stress, pytest.mark.integration]
 
@@ -10,8 +12,9 @@ class TestDatetimePatterns:
 
     def test_datetime_arithmetic(self, nb_runner):
         """Date arithmetic with timedelta."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from datetime import datetime, timedelta, date
                 start = date(2024, 1, 15)
                 end = start + timedelta(days=90)
@@ -19,8 +22,9 @@ class TestDatetimePatterns:
                 mid = start + timedelta(days=diff // 2)
                 is_leap = (date(start.year, 12, 31) - date(start.year, 1, 1)).days == 365
             """),
-            "print(f'end={end} diff={diff} mid={mid} leap={is_leap}')",
-        ])
+                "print(f'end={end} diff={diff} mid={mid} leap={is_leap}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -30,8 +34,9 @@ class TestDatetimePatterns:
 
     def test_datetime_formatting(self, nb_runner):
         """strftime/strptime formatting."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from datetime import datetime
                 dt = datetime(2024, 6, 15, 14, 30, 0)
                 iso = dt.isoformat()
@@ -39,8 +44,9 @@ class TestDatetimePatterns:
                 parsed = datetime.strptime('2024-12-25 08:00', '%Y-%m-%d %H:%M')
                 parsed_str = parsed.strftime('%A, %B %d')
             """),
-            "print(f'iso={iso}')\nprint(f'fmt={formatted}')\nprint(f'parsed={parsed_str}')",
-        ])
+                "print(f'iso={iso}')\nprint(f'fmt={formatted}')\nprint(f'parsed={parsed_str}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -50,8 +56,9 @@ class TestDatetimePatterns:
 
     def test_date_range_generation(self, nb_runner):
         """Generate date ranges and business days."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from datetime import date, timedelta
                 start = date(2024, 1, 1)
                 end = date(2024, 1, 15)
@@ -66,8 +73,9 @@ class TestDatetimePatterns:
                 total = len(all_days)
                 biz = len(business_days)
             """),
-            "print(f'total={total} business={biz}')",
-        ])
+                "print(f'total={total} business={biz}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -76,16 +84,18 @@ class TestDatetimePatterns:
 
     def test_datetime_propagation(self, nb_runner):
         """Date computation with upstream change propagation."""
-        nb_runner.create_notebook([
-            "year = 2024",
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                "year = 2024",
+                textwrap.dedent("""\
                 from datetime import date
                 jan1 = date(year, 1, 1)
                 dec31 = date(year, 12, 31)
                 days_in_year = (dec31 - jan1).days + 1
             """),
-            "print(f'year={year} days={days_in_year}')",
-        ])
+                "print(f'year={year} days={days_in_year}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "year=2024 days=366" in nb_runner.get_output(3)  # leap year
@@ -96,8 +106,9 @@ class TestDatetimePatterns:
 
     def test_time_zones_naive(self, nb_runner):
         """Timezone-naive datetime operations."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from datetime import datetime, timedelta
                 meetings = [
                     datetime(2024, 3, 15, 9, 0),
@@ -111,8 +122,9 @@ class TestDatetimePatterns:
                     gaps.append(gap.total_seconds() / 60)
                 total_meeting_span = (meetings[-1] - meetings[0]).total_seconds() / 3600
             """),
-            "print(f'gaps_min={gaps}')\nprint(f'span_hrs={total_meeting_span}')",
-        ])
+                "print(f'gaps_min={gaps}')\nprint(f'span_hrs={total_meeting_span}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)

@@ -38,7 +38,7 @@ This is a badge from a cell where the upstream `df` was restored, the intermedia
 
 What you're looking at:
 
-<!-- claim: cash/notebook/badge_renderer/view_builder.py:_compute_stats @6a018e4d, cash/notebook/badge_renderer/view_builder.py:_overhead_section @67bf94ef -->
+<!-- claim: cash/notebook/badge_renderer/view_builder.py:_compute_stats @059abbbf, cash/notebook/badge_renderer/view_builder.py:_overhead_section @d2e9d4c3 -->
 1. **Header line** — the collapsed view. Shows the cell-level status (`EXECUTED` here), the total time and the **net** saving (`0.42s · saved 3.38s`), a tiny sparkline, and counter chips (`exec 1`, `cached 2`). The header saving is net: it subtracts this cell's own Cash overhead from the gross recompute the restores avoided, so it can read a little below the sum of the per-row savings (that difference is the overhead row at the bottom). Click the header to expand and see the panel below.
 2. **Upstream context** — a collapsed pill at the top of the panel labeled "upstream context · 1 step · ↑2.85s". Click to expand and see the upstream rows (statements from earlier cells that Cash had to re-check or re-restore for this cell to be valid).
 3. **Current cell** — the section labeled `CURRENT CELL`. Each row is a statement in *this* cell with its per-row status — `restored` (green rail) for `features = encode(df)`, `computed` (ochre rail) for `preds = decorated_predict(features)`. Click any row for a detail tooltip showing the cache key, storage tiers, miss reason, and `@cash.cache` hit ratio (`2/3 cache hits` here).
@@ -141,7 +141,7 @@ nothing beats naming the wrong thing.
 
 **Why:** Cash tracks files passed to common I/O calls (`pd.read_csv`, `np.load`, `open`, `Path.read_text`, `joblib.load`, `pickle.load`, `json.load`, and others) and records each file's size and a content hash. The file's **contents** differ from what was recorded when the cache was populated. The size is checked first because it proves a change cheaply; when the size matches, the content hash decides.
 
-<!-- claim: cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @bab80523, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456 -->
+<!-- claim: cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @3b5f9ef9, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456 -->
 **Fix:** If you changed the file on purpose, the recompute is correct. For a file up to 256 MiB (`file_hash_full_max_bytes`), a bumped mtime alone will *not* trigger this — a sync tool or a notebook autosave plugin that rewrites the file byte-for-byte leaves the cache valid, so there's nothing to exclude. If you see this badge for such a file without having changed it, the bytes really did move: check for a process rewriting it with different content.
 
 A larger file is different. Cash hashes three regions of it rather than every byte, and the timestamps are what cover the rest — so touching it, or re-downloading an identical copy, recomputes once. See [large objects are hashed by sampling](known-limitations.md#large-objects-are-hashed-by-sampling); raise `file_hash_full_max_bytes` if a big input is rewritten unchanged often enough to matter.
@@ -260,7 +260,7 @@ suspects are:
   current time or a directory listing whose order changes,
 - a local module you keep editing, when the statement uses it directly.
 
-<!-- claim: cash/notebook/statement/miss_guard.py:MissGuard.cause @fde6ecee -->
+<!-- claim: cash/notebook/statement/miss_guard.py:MissGuard.cause @ce6fa03a -->
 The row names what kept changing, in brackets: the input or inputs whose
 lineage moved most often between those runs (`` `features` changed each run``),
 or "something outside its inputs" -- a file the statement reads, or the code

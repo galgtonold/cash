@@ -37,6 +37,7 @@ answer keying on the whole module never gave.
 Pure AST over the file, so the runtime and the upstream simulation, which
 must compute identical keys, get identical answers from the same file.
 """
+
 from __future__ import annotations
 
 import ast
@@ -52,13 +53,22 @@ from ..source_norm import stat_has_settled, unparse_without_docstrings
 __all__ = ["closure_digest", "static_attribute_reads"]
 
 #: Names whose use means the code can reach the module namespace by string.
-_DYNAMIC_CALLS = frozenset({
-    'globals', 'locals', 'vars', 'exec', 'eval', 'compile',
-    'setattr', 'delattr', '__import__',
-})
+_DYNAMIC_CALLS = frozenset(
+    {
+        "globals",
+        "locals",
+        "vars",
+        "exec",
+        "eval",
+        "compile",
+        "setattr",
+        "delattr",
+        "__import__",
+    }
+)
 
 #: Attributes whose use means the same, through an object.
-_DYNAMIC_ATTRS = frozenset({'__dict__', 'modules'})
+_DYNAMIC_ATTRS = frozenset({"__dict__", "modules"})
 
 #: Calls whose result differs between two runs of identical source. Import-
 #: time code calling one (``STAMP = time.time()``) gets a new value on every
@@ -67,14 +77,28 @@ _DYNAMIC_ATTRS = frozenset({'__dict__', 'modules'})
 #: Keying on the whole module never met this: it reloaded only on a change,
 #: which re-keyed everything. Any of these in a closure makes it unbounded, the
 #: old behaviour, rather than open a stale value the old scheme could not.
-_NONDETERMINISTIC_TAILS = frozenset({
-    'now', 'utcnow', 'today', 'time', 'time_ns', 'perf_counter', 'monotonic',
-    'process_time', 'uuid1', 'uuid4', 'urandom', 'getpid', 'token_hex',
-    'token_bytes', 'token_urlsafe',
-})
-_NONDETERMINISTIC_ROOTS = frozenset({'random', 'secrets'})
+_NONDETERMINISTIC_TAILS = frozenset(
+    {
+        "now",
+        "utcnow",
+        "today",
+        "time",
+        "time_ns",
+        "perf_counter",
+        "monotonic",
+        "process_time",
+        "uuid1",
+        "uuid4",
+        "urandom",
+        "getpid",
+        "token_hex",
+        "token_bytes",
+        "token_urlsafe",
+    }
+)
+_NONDETERMINISTIC_ROOTS = frozenset({"random", "secrets"})
 
-_DIRECTIVE = re.compile(r'#\s*@cash:')
+_DIRECTIVE = re.compile(r"#\s*@cash:")
 
 
 @dataclass(frozen=True)
@@ -100,9 +124,9 @@ def _bound_names(stmt: ast.stmt) -> tuple[set[str], bool]:
     if isinstance(stmt, (ast.Import, ast.ImportFrom)):
         names = set()
         for alias in stmt.names:
-            if alias.name == '*':
+            if alias.name == "*":
                 return set(), False
-            names.add(alias.asname or alias.name.split('.')[0])
+            names.add(alias.asname or alias.name.split(".")[0])
         return names, True
     if isinstance(stmt, ast.Assign):
         names = set()
@@ -119,8 +143,7 @@ def _bound_names(stmt: ast.stmt) -> tuple[set[str], bool]:
         return {stmt.target.id}, True
     # Anything else runs code at import time. It is always in the closure, and
     # it may still bind names (`if FLAG: def f(): ...`, `for x in ...`).
-    names = {n.id for n in ast.walk(stmt)
-             if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+    names = {n.id for n in ast.walk(stmt) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
     for n in ast.walk(stmt):
         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             names.add(n.name)
@@ -146,8 +169,7 @@ def _is_nondeterministic_call(node: ast.AST) -> bool:
     if not isinstance(node, ast.Call):
         return False
     chain = _dotted(node.func)
-    return bool(chain) and (chain[-1] in _NONDETERMINISTIC_TAILS
-                            or any(p in _NONDETERMINISTIC_ROOTS for p in chain))
+    return bool(chain) and (chain[-1] in _NONDETERMINISTIC_TAILS or any(p in _NONDETERMINISTIC_ROOTS for p in chain))
 
 
 def _is_dynamic(stmt: ast.stmt, runs_at_import: bool = True) -> bool:
@@ -171,8 +193,7 @@ def _is_dynamic(stmt: ast.stmt, runs_at_import: bool = True) -> bool:
             return True
     if runs_at_import or not isinstance(stmt, _FUNCTIONS):
         return any(_is_nondeterministic_call(node) for node in ast.walk(stmt))
-    at_import = [*stmt.decorator_list, *stmt.args.defaults,
-                 *(d for d in stmt.args.kw_defaults if d is not None)]
+    at_import = [*stmt.decorator_list, *stmt.args.defaults, *(d for d in stmt.args.kw_defaults if d is not None)]
     return any(_is_nondeterministic_call(node) for part in at_import for node in ast.walk(part))
 
 
@@ -184,13 +205,16 @@ def _called_at_import(statements: tuple[ast.stmt, ...]) -> set[str]:
     defs = {s.name: s for s in statements if isinstance(s, _FUNCTIONS)}
 
     def calls(nodes) -> set[str]:
-        return {n.func.id for part in nodes for n in ast.walk(part)
-                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in defs}
+        return {
+            n.func.id
+            for part in nodes
+            for n in ast.walk(part)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in defs
+        }
 
     pending = calls(s for s in statements if not isinstance(s, _FUNCTIONS))
     for fn in defs.values():
-        pending |= calls([*fn.decorator_list, *fn.args.defaults,
-                          *(d for d in fn.args.kw_defaults if d is not None)])
+        pending |= calls([*fn.decorator_list, *fn.args.defaults, *(d for d in fn.args.kw_defaults if d is not None)])
     reached: set[str] = set()
     while pending:
         name = pending.pop()
@@ -211,20 +235,20 @@ def _analyse(source: str) -> _Analysis | None:
     opaque = False
     for i, stmt in enumerate(statements):
         names, plain = _bound_names(stmt)
-        if isinstance(stmt, ast.ImportFrom) and any(a.name == '*' for a in stmt.names):
+        if isinstance(stmt, ast.ImportFrom) and any(a.name == "*" for a in stmt.names):
             opaque = True
         if not plain:
             effectful.add(i)
         for name in names:
             binders.setdefault(name, []).append(i)
-            if name in ('__getattr__', '__dir__'):
+            if name in ("__getattr__", "__dir__"):
                 opaque = True
     bound = frozenset(binders)
     import_called = _called_at_import(statements)
     reads = tuple(
-        frozenset(n.id for n in ast.walk(stmt)
-                  if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
-                  and n.id in bound)
+        frozenset(
+            n.id for n in ast.walk(stmt) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id in bound
+        )
         for stmt in statements
     )
     return _Analysis(
@@ -232,8 +256,7 @@ def _analyse(source: str) -> _Analysis | None:
         binders={k: tuple(v) for k, v in binders.items()},
         reads=reads,
         effectful=frozenset(effectful),
-        dynamic=tuple(_is_dynamic(s, not isinstance(s, _FUNCTIONS) or s.name in import_called)
-                      for s in statements),
+        dynamic=tuple(_is_dynamic(s, not isinstance(s, _FUNCTIONS) or s.name in import_called) for s in statements),
         directives=tuple(ln.strip() for ln in source.splitlines() if _DIRECTIVE.search(ln)),
         opaque=opaque,
     )
@@ -253,7 +276,7 @@ def _analysis_for(path: str) -> _Analysis | None:
         return cached[2]
     settled = stat_has_settled(st)
     try:
-        with open(path, encoding='utf-8') as fh:
+        with open(path, encoding="utf-8") as fh:
             analysis = _analyse(fh.read())
     except (OSError, UnicodeDecodeError):
         analysis = None
@@ -305,7 +328,7 @@ def _digest(analysis: _Analysis, names: Iterable[str]) -> str | None:
     if not names or analysis.opaque:
         return None
     if any(name not in analysis.binders for name in names):
-        return None                 # not bound literally: cannot say what it is
+        return None  # not bound literally: cannot say what it is
     # Start from the requested names AND everything import-time code reads:
     # effectful statements are in every closure, so what they reach is too.
     included: set[int] = set(analysis.effectful)
@@ -326,12 +349,12 @@ def _digest(analysis: _Analysis, names: Iterable[str]) -> str | None:
     if any(analysis.dynamic[i] for i in included):
         return None
     h = hashlib.sha256()
-    h.update(("names:" + ",".join(names) + "\n").encode('utf-8'))
+    h.update(("names:" + ",".join(names) + "\n").encode("utf-8"))
     for i in sorted(included):
-        h.update(unparse_without_docstrings(ast.unparse(analysis.statements[i])).encode('utf-8'))
+        h.update(unparse_without_docstrings(ast.unparse(analysis.statements[i])).encode("utf-8"))
         h.update(b"\n")
     for line in analysis.directives:
-        h.update(line.encode('utf-8'))
+        h.update(line.encode("utf-8"))
         h.update(b"\n")
     return h.hexdigest()
 
@@ -366,13 +389,12 @@ def _static_attribute_reads_uncached(code: str, name: str) -> set[str] | None:
     attrs: set[str] = set()
     covered: set[int] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) \
-                and node.value.id == name:
-            if not isinstance(node.ctx, ast.Load) or node.attr.startswith('__'):
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == name:
+            if not isinstance(node.ctx, ast.Load) or node.attr.startswith("__"):
                 return None
             attrs.add(node.attr)
             covered.add(id(node.value))
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and node.id == name and id(node) not in covered:
-            return None             # a bare use, or a rebinding
+            return None  # a bare use, or a rebinding
     return attrs or None

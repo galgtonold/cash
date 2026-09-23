@@ -15,19 +15,22 @@ repays all of them.
 
 Counted with ``os.write`` from inside the slow function.
 """
+
 from pathlib import Path
 
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.restore, pytest.mark.timeout(180)]
 
-SETUP = ("import os, time\n"
-         "def slow_score(seed):\n"
-         "    fd = os.open('runs.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND)\n"
-         "    os.write(fd, b'x')\n"
-         "    os.close(fd)\n"
-         "    time.sleep(0.3)\n"
-         "    return seed * 1.5")
+SETUP = (
+    "import os, time\n"
+    "def slow_score(seed):\n"
+    "    fd = os.open('runs.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND)\n"
+    "    os.write(fd, b'x')\n"
+    "    os.close(fd)\n"
+    "    time.sleep(0.3)\n"
+    "    return seed * 1.5"
+)
 # The statement's own entry is what the guard governs; the call inside it has
 # a cache of its own, which r23s1's comprehension did not get (#225).
 SCORE = "# @cash:no-cache-calls\nscore = slow_score(SEED)\nprint('SCORE', score)"
@@ -42,7 +45,7 @@ def test_a_slow_small_result_is_restored_after_six_upstream_edits(nb_runner):
     nb_runner.create_notebook(["import cash\n%cash_on", SETUP, "SEED = 0", SCORE])
     nb_runner.start_kernel()
     nb_runner.run_all()
-    for seed in range(1, 6):              # five more keys, none seen before
+    for seed in range(1, 6):  # five more keys, none seen before
         nb_runner.set_cell_source(3, f"SEED = {seed}")
         nb_runner.run_cells([3, 4])
     assert "SCORE 7.5" in nb_runner.get_output(4)

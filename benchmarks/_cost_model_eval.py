@@ -3,12 +3,12 @@
 Splits joining + scoring + report-rendering from the CLI orchestrator
 so the logic is unit-testable without a live IPython shell.
 """
+
 from __future__ import annotations
 
 import statistics
 from dataclasses import dataclass
 from typing import Any, Literal
-
 
 PolicyDecision = Literal["cache", "skip-floor", "skip-cost", "skip-other"]
 OracleDecision = Literal["cache", "skip"]
@@ -17,6 +17,7 @@ OracleDecision = Literal["cache", "skip"]
 @dataclass
 class CellDecision:
     """One per (cell, repeat) from the instrumented cold run."""
+
     cell_id: int
     repeat: int
     t_compute: float
@@ -32,6 +33,7 @@ class CellDecision:
 @dataclass
 class CellRestore:
     """One per (cell, repeat) from the force-cache warm run."""
+
     cell_id: int
     repeat: int
     t_restore_actual: float | None
@@ -75,33 +77,31 @@ def join_residuals(
         oracle = classify_oracle(d.t_compute, actual, epsilon_write, min_savings_pct)
         abs_err = abs(actual - pred) if pred == pred else float("nan")
         rel_err = (abs_err / actual) if (pred == pred and actual > 0) else float("nan")
-        rows.append({
-            "cell_id": d.cell_id,
-            "repeat": d.repeat,
-            "family": d.family or "unknown",
-            "size_mb": (d.est_obj_size_bytes or 0) / 1e6,
-            "t_compute": d.t_compute,
-            "t_restore_predicted": pred,
-            "t_restore_actual": actual,
-            "abs_err": abs_err,
-            "rel_err": rel_err,
-            "policy_decision": d.policy_decision,
-            "oracle_decision": oracle,
-            "expected_label": d.expected_label,
-        })
+        rows.append(
+            {
+                "cell_id": d.cell_id,
+                "repeat": d.repeat,
+                "family": d.family or "unknown",
+                "size_mb": (d.est_obj_size_bytes or 0) / 1e6,
+                "t_compute": d.t_compute,
+                "t_restore_predicted": pred,
+                "t_restore_actual": actual,
+                "abs_err": abs_err,
+                "rel_err": rel_err,
+                "policy_decision": d.policy_decision,
+                "oracle_decision": oracle,
+                "expected_label": d.expected_label,
+            }
+        )
     return rows
 
 
 def score_confusion_matrix(rows: list[dict[str, Any]]) -> dict[str, float]:
     """TP/TN/FP/FN counts. Policy 'cache' = predicted positive."""
-    tp = sum(1 for r in rows
-             if r["policy_decision"] == "cache" and r["oracle_decision"] == "cache")
-    fn = sum(1 for r in rows
-             if r["policy_decision"].startswith("skip") and r["oracle_decision"] == "cache")
-    tn = sum(1 for r in rows
-             if r["policy_decision"].startswith("skip") and r["oracle_decision"] == "skip")
-    fp = sum(1 for r in rows
-             if r["policy_decision"] == "cache" and r["oracle_decision"] == "skip")
+    tp = sum(1 for r in rows if r["policy_decision"] == "cache" and r["oracle_decision"] == "cache")
+    fn = sum(1 for r in rows if r["policy_decision"].startswith("skip") and r["oracle_decision"] == "cache")
+    tn = sum(1 for r in rows if r["policy_decision"].startswith("skip") and r["oracle_decision"] == "skip")
+    fp = sum(1 for r in rows if r["policy_decision"] == "cache" and r["oracle_decision"] == "skip")
     total = tp + tn + fp + fn
     acc = (tp + tn) / total if total else 0.0
     return {"TP": tp, "TN": tn, "FP": fp, "FN": fn, "accuracy": acc}
@@ -119,10 +119,14 @@ def _family_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         n = len(errs_sorted)
         median = statistics.median(errs_sorted)
         p95 = errs_sorted[int(0.95 * (n - 1))] if n > 0 else float("nan")
-        out.append({
-            "family": family, "n": n,
-            "median_rel_err": median, "p95_rel_err": p95,
-        })
+        out.append(
+            {
+                "family": family,
+                "n": n,
+                "median_rel_err": median,
+                "p95_rel_err": p95,
+            }
+        )
     return out
 
 
@@ -139,8 +143,7 @@ def render_report(
     """
     lines: list[str] = []
     lines.append("# Cost-Model Validation Report\n")
-    lines.append(f"**Cells:** {n_cells} | **Repeats:** {n_repeats} | "
-                 f"**Accuracy:** {cm['accuracy']*100:.1f}%\n")
+    lines.append(f"**Cells:** {n_cells} | **Repeats:** {n_repeats} | **Accuracy:** {cm['accuracy'] * 100:.1f}%\n")
 
     lines.append("## Confusion matrix\n")
     lines.append("| | oracle=cache | oracle=skip |")
@@ -160,7 +163,7 @@ def render_report(
         lines.append(
             f"| {r['cell_id']} | {r['family']} | {r['size_mb']:.1f} | "
             f"{r['t_restore_predicted']:.3f} | {r['t_restore_actual']:.3f} | "
-            f"{r['abs_err']:.3f} | {r['rel_err']*100:.0f}% |"
+            f"{r['abs_err']:.3f} | {r['rel_err'] * 100:.0f}% |"
         )
     lines.append("")
 
@@ -168,29 +171,29 @@ def render_report(
     lines.append("| family | n | median rel err | p95 rel err |")
     lines.append("|---|---|---|---|")
     for fs in _family_summary(residuals):
-        lines.append(f"| {fs['family']} | {fs['n']} | "
-                     f"{fs['median_rel_err']*100:.0f}% | "
-                     f"{fs['p95_rel_err']*100:.0f}% |")
+        lines.append(
+            f"| {fs['family']} | {fs['n']} | {fs['median_rel_err'] * 100:.0f}% | {fs['p95_rel_err'] * 100:.0f}% |"
+        )
     lines.append("")
 
     lines.append("## Counterfactual wall-clock\n")
-    headroom = ((wall["warm_policy"] - wall["warm_oracle"]) / wall["warm_policy"]
-                if wall["warm_policy"] > 0 else 0.0)
+    headroom = (wall["warm_policy"] - wall["warm_oracle"]) / wall["warm_policy"] if wall["warm_policy"] > 0 else 0.0
     lines.append(f"- Cold (no cache): **{wall['cold']:.1f}s**")
     lines.append(f"- Warm under current policy: **{wall['warm_policy']:.1f}s**")
     lines.append(f"- Warm under oracle policy: **{wall['warm_oracle']:.1f}s**")
-    lines.append(f"- Headroom: **{headroom*100:.1f}%** of the warm wall could be reclaimed "
-                 f"by a perfect cache-or-skip oracle.\n")
+    lines.append(
+        f"- Headroom: **{headroom * 100:.1f}%** of the warm wall could be reclaimed "
+        f"by a perfect cache-or-skip oracle.\n"
+    )
 
     lines.append("## Findings\n")
-    worst_family = max(_family_summary(residuals),
-                       key=lambda f: f["median_rel_err"], default=None)
+    worst_family = max(_family_summary(residuals), key=lambda f: f["median_rel_err"], default=None)
     if worst_family is not None:
         lines.append(
             f"- The cost model's worst-fit family in this run is "
             f"**`{worst_family['family']}`** "
-            f"(median rel err {worst_family['median_rel_err']*100:.0f}%, "
-            f"p95 {worst_family['p95_rel_err']*100:.0f}%, n={worst_family['n']})."
+            f"(median rel err {worst_family['median_rel_err'] * 100:.0f}%, "
+            f"p95 {worst_family['p95_rel_err'] * 100:.0f}%, n={worst_family['n']})."
         )
     lines.append(
         f"- Policy made **{int(cm['FP'])} false-positive caches** "
@@ -201,7 +204,9 @@ def render_report(
     if headroom < 0.05:
         lines.append("- Headroom is under 5% - the policy is essentially as good as the oracle on this workload.")
     elif headroom < 0.20:
-        lines.append("- Headroom is meaningful but not large; targeted family remapping or refit could close most of it.")
+        lines.append(
+            "- Headroom is meaningful but not large; targeted family remapping or refit could close most of it."
+        )
     else:
         lines.append("- Headroom is large; the policy is leaving substantial wall-clock on the table.")
     lines.append("")

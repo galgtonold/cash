@@ -19,18 +19,18 @@ class TestCSVFileWithEdits:
         csv_path.write_text("a,b\n1,2\n3,4\n5,6\n")
         csv_str = str(csv_path).replace("\\", "/")
 
-        nb_runner.create_notebook([
-            f"import pandas as pd\ndf = pd.read_csv('{csv_str}')",
-            "result = df['a'].sum()\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                f"import pandas as pd\ndf = pd.read_csv('{csv_str}')",
+                "result = df['a'].sum()\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 9" in nb_runner.get_output(2)
 
         # Edit processing to use column b
-        nb_runner.set_cell_source(
-            2, "result = df['b'].sum()\nprint(f'result = {result}')"
-        )
+        nb_runner.set_cell_source(2, "result = df['b'].sum()\nprint(f'result = {result}')")
         nb_runner.run_all()
         assert "result = 12" in nb_runner.get_output(2)
 
@@ -40,10 +40,12 @@ class TestCSVFileWithEdits:
         csv_path.write_text("x\n10\n20\n30\n")
         csv_str = str(csv_path).replace("\\", "/")
 
-        nb_runner.create_notebook([
-            f"import pandas as pd\ndf = pd.read_csv('{csv_str}')",
-            "total = df['x'].sum()\nprint(f'total = {total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                f"import pandas as pd\ndf = pd.read_csv('{csv_str}')",
+                "total = df['x'].sum()\nprint(f'total = {total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total = 60" in nb_runner.get_output(2)
@@ -61,19 +63,19 @@ class TestCSVFileWithEdits:
         csv_path.write_text("val\n1\n2\n3\n")
         csv_str = str(csv_path).replace("\\", "/")
 
-        nb_runner.create_notebook([
-            f"import pandas as pd\ndf = pd.read_csv('{csv_str}')",
-            "result = df['val'].sum()\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                f"import pandas as pd\ndf = pd.read_csv('{csv_str}')",
+                "result = df['val'].sum()\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 6" in nb_runner.get_output(2)
 
         # Change both file and code
         csv_path.write_text("val\n10\n20\n30\n")
-        nb_runner.set_cell_source(
-            2, "result = df['val'].mean()\nprint(f'result = {result}')"
-        )
+        nb_runner.set_cell_source(2, "result = df['val'].mean()\nprint(f'result = {result}')")
         nb_runner.shutdown()
         nb_runner.start_kernel()
         nb_runner.run_all()
@@ -89,18 +91,18 @@ class TestJSONFileWithEdits:
         json_path.write_text('{"scale": 2, "offset": 10}')
         json_str = str(json_path).replace("\\", "/")
 
-        nb_runner.create_notebook([
-            f"import json\nwith open('{json_str}') as f:\n    config = json.load(f)",
-            "result = config['scale'] * 5 + config['offset']\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                f"import json\nwith open('{json_str}') as f:\n    config = json.load(f)",
+                "result = config['scale'] * 5 + config['offset']\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 20" in nb_runner.get_output(2)
 
         # Edit processing
-        nb_runner.set_cell_source(
-            2, "result = config['scale'] ** 3 + config['offset']\nprint(f'result = {result}')"
-        )
+        nb_runner.set_cell_source(2, "result = config['scale'] ** 3 + config['offset']\nprint(f'result = {result}')")
         nb_runner.run_all()
         assert "result = 18" in nb_runner.get_output(2)
 
@@ -114,18 +116,18 @@ class TestTextFileWithEdits:
         txt_path.write_text("hello\nworld\nfoo\nbar\n")
         txt_str = str(txt_path).replace("\\", "/")
 
-        nb_runner.create_notebook([
-            f"with open('{txt_str}') as f:\n    lines = f.read().strip().split('\\n')",
-            "count = len(lines)\nprint(f'count = {count}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                f"with open('{txt_str}') as f:\n    lines = f.read().strip().split('\\n')",
+                "count = len(lines)\nprint(f'count = {count}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "count = 4" in nb_runner.get_output(2)
 
         # Edit processing
-        nb_runner.set_cell_source(
-            2, "total_chars = sum(len(l) for l in lines)\nprint(f'chars = {total_chars}')"
-        )
+        nb_runner.set_cell_source(2, "total_chars = sum(len(l) for l in lines)\nprint(f'chars = {total_chars}')")
         nb_runner.run_all()
         assert "chars = 16" in nb_runner.get_output(2)
 
@@ -135,10 +137,12 @@ class TestTextFileWithEdits:
         txt_path.write_text("alpha\nbeta\n")
         txt_str = str(txt_path).replace("\\", "/")
 
-        nb_runner.create_notebook([
-            f"with open('{txt_str}') as f:\n    content = f.read().strip()",
-            "word_count = len(content.split())\nprint(f'words = {word_count}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                f"with open('{txt_str}') as f:\n    content = f.read().strip()",
+                "word_count = len(content.split())\nprint(f'words = {word_count}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "words = 2" in nb_runner.get_output(2)

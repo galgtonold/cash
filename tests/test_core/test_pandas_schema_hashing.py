@@ -4,10 +4,10 @@
 ``Series.name``, or index names — so renamed frames/series and empty frames of
 any schema collided into one cache entry and returned each other's results.
 """
+
 from __future__ import annotations
 
 import pandas as pd
-import pytest
 
 from cash import Cash, FileBackend
 

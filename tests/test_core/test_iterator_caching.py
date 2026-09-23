@@ -5,11 +5,10 @@ then returns a fresh wrapper (_ChunkedCachedIterator on cache hit)
 that preserves the iterator protocol. Each call yields a fresh,
 independent iterator over the cached values.
 """
+
 from __future__ import annotations
 
 import asyncio
-import time
-import types
 import warnings
 
 import pytest
@@ -90,9 +89,7 @@ def test_returned_value_satisfies_iterator_protocol(tmp_path):
 
     result = gen()
     # iter(x) is x — what the user expects from a generator/iterator.
-    assert iter(result) is result, (
-        f"cached iterator must satisfy iter(x) is x; got type {type(result).__name__}"
-    )
+    assert iter(result) is result, f"cached iterator must satisfy iter(x) is x; got type {type(result).__name__}"
 
 
 def test_send_raises_attribute_error(tmp_path):
@@ -168,8 +165,11 @@ def test_collections_pass_through_unchanged(tmp_path):
     # All should hit on the second call and return the same type as
     # they did on the first call.
     for fn, expected_type in (
-        (f_list, list), (f_dict, dict), (f_set, set),
-        (f_tuple, tuple), (f_str, str),
+        (f_list, list),
+        (f_dict, dict),
+        (f_set, set),
+        (f_tuple, tuple),
+        (f_str, str),
     ):
         r1 = fn()
         r2 = fn()
@@ -224,6 +224,7 @@ def test_cache_persists_across_instances(tmp_path):
     smart-persistence floor (which gates short calls from reaching disk).
     """
     from cash.backends.file_backend import FileBackend
+
     store = str(tmp_path / "store")
     c1 = Cash(backend=FileBackend(store, flush_interval=0), register_magic=False)
     n = {"calls": 0}
@@ -235,6 +236,7 @@ def test_cache_persists_across_instances(tmp_path):
         def gen():
             n["calls"] += 1
             yield from [10, 20, 30]
+
         return gen
 
     g1 = _make(c1, n)
@@ -248,9 +250,7 @@ def test_cache_persists_across_instances(tmp_path):
     assert r == [10, 20, 30]
     # The first instance computed once; the second should hit the
     # persisted list and not recompute.
-    assert n["calls"] == 1, (
-        f"second instance should have hit the persisted cache (calls={n['calls']})"
-    )
+    assert n["calls"] == 1, f"second instance should have hit the persisted cache (calls={n['calls']})"
 
 
 def test_cache_if_predicate_sees_materialized_list_for_iterator_function(tmp_path):
@@ -299,11 +299,13 @@ def test_chunked_iterator_lazy_chunk_reads():
     """The iterator must only fetch a chunk when iteration enters it."""
     from cash.core import _ChunkedCachedIterator
 
-    backend = _FakeBackend({
-        "K:chunk_0": [1, 2, 3],
-        "K:chunk_1": [4, 5, 6],
-        "K:chunk_2": [7, 8, 9],
-    })
+    backend = _FakeBackend(
+        {
+            "K:chunk_0": [1, 2, 3],
+            "K:chunk_1": [4, 5, 6],
+            "K:chunk_2": [7, 8, 9],
+        }
+    )
 
     class _FakeCash:
         def __init__(self, backend):
@@ -389,18 +391,19 @@ def test_chunked_iterator_missing_chunk_finishes_from_the_function():
     from cash.core import _ChunkedCachedIterator
     from cash.exceptions import CacheBackendError
 
-    backend = _FakeBackend({
-        "K:chunk_0": [1, 2],
-        # chunk_1 is missing on purpose
-        "K:chunk_2": [5, 6],
-    })
+    backend = _FakeBackend(
+        {
+            "K:chunk_0": [1, 2],
+            # chunk_1 is missing on purpose
+            "K:chunk_2": [5, 6],
+        }
+    )
 
     class _FakeCash:
         def __init__(self, backend):
             self.backend = backend
 
-    it = _ChunkedCachedIterator(_FakeCash(backend), "K", n_chunks=3,
-                                recompute=lambda: iter([1, 2, 3, 4, 5, 6]))
+    it = _ChunkedCachedIterator(_FakeCash(backend), "K", n_chunks=3, recompute=lambda: iter([1, 2, 3, 4, 5, 6]))
     assert list(it) == [1, 2, 3, 4, 5, 6]
 
     blind = _ChunkedCachedIterator(_FakeCash(backend), "K", n_chunks=3)
@@ -474,10 +477,12 @@ def test_chunked_storage_persists_manifest_metadata(tmp_path):
     # Find the canonical cache key for this call. We don't introspect
     # private internals — instead, iterate backend entries and find the
     # manifest (the one without a :chunk_N suffix).
-    all_keys = [e['key'] for e in c.backend.list_entries() if e.get('key')]
-    manifest_keys = [k for k in all_keys
-                     if k.startswith("tests.test_core.test_iterator_caching")
-                     and not k.rsplit(":", 1)[-1].startswith("chunk_")]
+    all_keys = [e["key"] for e in c.backend.list_entries() if e.get("key")]
+    manifest_keys = [
+        k
+        for k in all_keys
+        if k.startswith("tests.test_core.test_iterator_caching") and not k.rsplit(":", 1)[-1].startswith("chunk_")
+    ]
     assert len(manifest_keys) == 1, f"expected exactly one manifest, got {manifest_keys}"
     canonical_key = manifest_keys[0]
 
@@ -524,11 +529,10 @@ def test_chunked_storage_byte_threshold_closes_chunk_early(tmp_path):
     assert n["calls"] == 1
 
     # Verify multiple chunks were written.
-    all_keys = [e['key'] for e in c.backend.list_entries() if e.get('key')]
+    all_keys = [e["key"] for e in c.backend.list_entries() if e.get("key")]
     chunk_keys = [k for k in all_keys if ":chunk_" in k]
     assert len(chunk_keys) >= 2, (
-        f"expected the 4 KiB byte threshold to produce multiple chunks "
-        f"from 20 × 1 KiB items; got {chunk_keys}"
+        f"expected the 4 KiB byte threshold to produce multiple chunks from 20 × 1 KiB items; got {chunk_keys}"
     )
 
     r2 = list(gen())
@@ -566,13 +570,13 @@ def test_cache_if_bypass_warning_fires_on_partial_last_chunk(tmp_path):
     assert predicate_calls["n"] == 0  # bypassed
 
     ineffective = [
-        w for w in captured
+        w
+        for w in captured
         if issubclass(w.category, CashCacheIneffectiveWarning)
         and getattr(w.message, "code", None) == "CACHE-IF-BYPASSED"
     ]
     assert len(ineffective) == 1, (
-        f"expected one cache_if-bypassed warning for partial chunk_1, got "
-        f"{[str(w.message) for w in captured]}"
+        f"expected one cache_if-bypassed warning for partial chunk_1, got {[str(w.message) for w in captured]}"
     )
 
 
@@ -642,23 +646,20 @@ def test_cache_if_warning_fires_on_multi_chunk_transition(tmp_path):
     assert r == list(range(25))
 
     # Predicate should NOT have been consulted (multi-chunk).
-    assert predicate_calls["n"] == 0, (
-        f"predicate was called on multi-chunk result: {predicate_calls['n']} times"
-    )
+    assert predicate_calls["n"] == 0, f"predicate was called on multi-chunk result: {predicate_calls['n']} times"
 
     # Exactly one CashCacheIneffectiveWarning about cache_if bypass.
     ineffective = [
-        w for w in captured
+        w
+        for w in captured
         if issubclass(w.category, CashCacheIneffectiveWarning)
         and getattr(w.message, "code", None) == "CACHE-IF-BYPASSED"
     ]
-    assert len(ineffective) == 1, (
-        f"expected one cache_if-bypassed warning, got "
-        f"{[str(w.message) for w in captured]}"
-    )
+    assert len(ineffective) == 1, f"expected one cache_if-bypassed warning, got {[str(w.message) for w in captured]}"
 
     # The result was cached despite the predicate returning False.
     n_calls = {"x": 0}
+
     @c.cache(chunk_max_items=10, cache_if=predicate)
     def gen2():
         n_calls["x"] += 1
@@ -685,8 +686,7 @@ def test_cache_if_single_chunk_predicate_honored(tmp_path):
     list(gen(0))
     list(gen(0))
     assert n_calls["x"] == 2, (
-        f"empty result with cache_if=lambda r: len(r) > 0 should not "
-        f"be cached (calls={n_calls['x']})"
+        f"empty result with cache_if=lambda r: len(r) > 0 should not be cached (calls={n_calls['x']})"
     )
 
     # Non-empty — predicate True — cached.
@@ -793,6 +793,7 @@ def test_chunked_persists_across_instances(tmp_path):
         def gen():
             n["x"] += 1
             yield from range(25)
+
         return gen
 
     g1 = _make(c1, n_calls)
@@ -806,9 +807,7 @@ def test_chunked_persists_across_instances(tmp_path):
     g2 = _make(c2, n_calls)
     r = list(g2())
     assert r == list(range(25))
-    assert n_calls["x"] == 1, (
-        f"second instance must hit the chunked cache (calls={n_calls['x']})"
-    )
+    assert n_calls["x"] == 1, f"second instance must hit the chunked cache (calls={n_calls['x']})"
     c2.shutdown()
 
 
@@ -844,12 +843,8 @@ def test_chunked_storage_works_under_use_locking(tmp_path):
     # Most direct check: assert the returned value is a chunked iterator,
     # not a dict.
     result = gen()
-    assert not isinstance(result, dict), (
-        f"got raw manifest dict instead of iterator wrapper: {type(result).__name__}"
-    )
-    assert isinstance(result, _ChunkedCachedIterator), (
-        f"expected iterator wrapper, got {type(result).__name__}"
-    )
+    assert not isinstance(result, dict), f"got raw manifest dict instead of iterator wrapper: {type(result).__name__}"
+    assert isinstance(result, _ChunkedCachedIterator), f"expected iterator wrapper, got {type(result).__name__}"
     assert list(result) == list(range(25))
     assert n["calls"] == 1  # still a hit
 
@@ -868,6 +863,7 @@ def test_use_locking_dispatches_chunked_on_locked_hit(tmp_path):
     manifest dict; with the fix, they see a _ChunkedCachedIterator.
     """
     from unittest.mock import patch
+
     from cash.core import _ChunkedCachedIterator
 
     c = Cash(cache_dir=str(tmp_path), register_magic=False, use_locking=True)
@@ -904,9 +900,7 @@ def test_use_locking_dispatches_chunked_on_locked_hit(tmp_path):
     with patch.object(c.backend, "get", side_effect=fake_get):
         result = gen()
 
-    assert not isinstance(result, dict), (
-        f"locked path returned raw manifest dict: {type(result).__name__}"
-    )
+    assert not isinstance(result, dict), f"locked path returned raw manifest dict: {type(result).__name__}"
     assert isinstance(result, _ChunkedCachedIterator), (
         f"expected _ChunkedCachedIterator from locked path, got {type(result).__name__}"
     )
@@ -936,24 +930,18 @@ def test_chunked_chunks_inherit_manifest_ttl(tmp_path):
     # Inspect chunk metadata directly via backend.list_entries.
     entries = backend.list_entries()
     chunk_entries = [
-        e for e in entries
-        if "test_chunked_chunks_inherit_manifest_ttl" in e["key"]
-        and ":chunk_" in e["key"]
+        e for e in entries if "test_chunked_chunks_inherit_manifest_ttl" in e["key"] and ":chunk_" in e["key"]
     ]
-    assert len(chunk_entries) >= 1, (
-        f"expected at least one chunk entry; got {chunk_entries}"
-    )
+    assert len(chunk_entries) >= 1, f"expected at least one chunk entry; got {chunk_entries}"
 
     # Each chunk must carry the manifest's ttl=3600.
     for chunk_entry in chunk_entries:
-        _, metadata = backend.get(chunk_entry["key"]), None
         # backend.get returns (metadata, value); list_entries gives us
         # only the key. Re-fetch the metadata explicitly.
         metadata_actual, _ = backend.get(chunk_entry["key"])
         assert metadata_actual is not None
         assert metadata_actual.get("ttl") == 3600, (
-            f"chunk {chunk_entry['key']} missing ttl=3600 "
-            f"(got ttl={metadata_actual.get('ttl')!r})"
+            f"chunk {chunk_entry['key']} missing ttl=3600 (got ttl={metadata_actual.get('ttl')!r})"
         )
 
     backend.shutdown()
@@ -976,9 +964,7 @@ def test_chunked_chunks_with_no_ttl_have_none(tmp_path):
 
     entries = backend.list_entries()
     chunk_entries = [
-        e for e in entries
-        if "test_chunked_chunks_with_no_ttl_have_none" in e["key"]
-        and ":chunk_" in e["key"]
+        e for e in entries if "test_chunked_chunks_with_no_ttl_have_none" in e["key"] and ":chunk_" in e["key"]
     ]
     assert len(chunk_entries) >= 1
 
@@ -987,8 +973,7 @@ def test_chunked_chunks_with_no_ttl_have_none(tmp_path):
         assert metadata_actual is not None
         # ttl key may be absent or explicitly None — both are equivalent.
         assert metadata_actual.get("ttl") is None, (
-            f"chunk {chunk_entry['key']} has unexpected ttl="
-            f"{metadata_actual.get('ttl')!r}; expected None"
+            f"chunk {chunk_entry['key']} has unexpected ttl={metadata_actual.get('ttl')!r}; expected None"
         )
 
     backend.shutdown()
@@ -996,10 +981,12 @@ def test_chunked_chunks_with_no_ttl_have_none(tmp_path):
 
 def _chunked_gen(cache, counter):
     """Defined in a helper so __qualname__ is stable across Cash instances."""
+
     @cache.cache(chunk_max_items=3)
     def gen():
         counter["calls"] += 1
         yield from range(10)
+
     return gen
 
 
@@ -1022,16 +1009,14 @@ def _cache_then_break_a_chunk(tmp_path, monkeypatch, *, use_locking):
     monkeypatch.setattr(Cash, "_write_one_chunk", spy)
 
     counter = {"calls": 0}
-    writer = Cash(backend=FileBackend(store, flush_interval=0),
-                  register_magic=False, use_locking=use_locking)
+    writer = Cash(backend=FileBackend(store, flush_interval=0), register_magic=False, use_locking=use_locking)
     first = list(_chunked_gen(writer, counter)())
     assert first == list(range(10))
     assert len(written) >= 2, f"expected a chunked write, got {written!r}"
 
-    writer.backend.delete(written[-1])          # the manifest outlives its chunk
+    writer.backend.delete(written[-1])  # the manifest outlives its chunk
 
-    reader = Cash(backend=FileBackend(store, flush_interval=0),
-                  register_magic=False, use_locking=use_locking)
+    reader = Cash(backend=FileBackend(store, flush_interval=0), register_magic=False, use_locking=use_locking)
     return _chunked_gen(reader, counter), counter, counter["calls"]
 
 
@@ -1041,8 +1026,7 @@ def test_a_missing_chunk_recomputes_on_the_default_path(tmp_path, monkeypatch):
 
     Without this arm the locking test below could pass because chunking never
     engaged, rather than because the guard ran."""
-    reader, counter, before = _cache_then_break_a_chunk(
-        tmp_path, monkeypatch, use_locking=False)
+    reader, counter, before = _cache_then_break_a_chunk(tmp_path, monkeypatch, use_locking=False)
     assert list(reader()) == list(range(10))
     assert counter["calls"] == before + 1, "expected a recompute, not a served entry"
 
@@ -1053,7 +1037,6 @@ def test_a_missing_chunk_recomputes_with_use_locking_too(tmp_path, monkeypatch):
     `use_locking=True` a manifest missing a chunk yielded a SHORT iterator and
     no recompute. Truncated data, silently: no error, no warning, and an empty
     or partial result is easy to mistake for a real one."""
-    reader, counter, before = _cache_then_break_a_chunk(
-        tmp_path, monkeypatch, use_locking=True)
+    reader, counter, before = _cache_then_break_a_chunk(tmp_path, monkeypatch, use_locking=True)
     assert list(reader()) == list(range(10)), "served a truncated cached result"
     assert counter["calls"] == before + 1, "expected a recompute, not a served entry"

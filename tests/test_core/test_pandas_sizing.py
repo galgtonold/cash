@@ -4,6 +4,7 @@ Cash sized every stored frame twice -- the RAM tier's cap and the restore-cost
 estimate -- through ``memory_usage``, which spends nearly all its time building
 a result Series: 18% of a loop over a thousand small files (round 23).
 """
+
 from __future__ import annotations
 
 import sys
@@ -31,8 +32,10 @@ def _cases():
     yield "category", pd.DataFrame({"c": pd.Categorical(["a", "b", "c"] * (N // 3))})
     yield "datetime tz", pd.DataFrame({"t": pd.date_range("2026-01-01", periods=N, freq="min", tz="UTC")})
     yield "object index", pd.DataFrame({"a": np.arange(N)}, index=[f"k{i}" for i in range(N)])
-    yield "multiindex", pd.DataFrame({"a": np.arange(N)},
-                                     index=pd.MultiIndex.from_arrays([np.arange(N) % 7, np.arange(N)]))
+    yield (
+        "multiindex",
+        pd.DataFrame({"a": np.arange(N)}, index=pd.MultiIndex.from_arrays([np.arange(N) % 7, np.arange(N)])),
+    )
     yield "empty", pd.DataFrame({"a": pd.Series([], dtype="int64")})
     yield "nullable int", pd.DataFrame({"a": pd.array(range(N), dtype="Int64")})
     yield "series", pd.Series(np.array([f"v{i}" for i in range(N)], dtype=object))
@@ -73,6 +76,7 @@ def test_neither_sizing_builds_a_memory_usage_series(monkeypatch):
 
     def refuse(*_a, **_k):
         raise AssertionError("memory_usage was called")
+
     monkeypatch.setattr(pd.DataFrame, "memory_usage", refuse)
     monkeypatch.setattr(pd.Series, "memory_usage", refuse)
     assert estimate_object_size(frame) == expected

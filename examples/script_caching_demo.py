@@ -16,13 +16,13 @@ What this demonstrates:
     5. Dependency chain invalidation
 """
 
-import time
 import os
 import sys
 import tempfile
+import time
 
 # Ensure cash is importable
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from cash import Cash, FileDataSource
 
@@ -35,6 +35,7 @@ cash = Cash(cache_dir=cache_dir, register_magic=False)
 # =============================================================================
 # 1. Basic Function Caching
 # =============================================================================
+
 
 @cash.cache
 def expensive_computation(n):
@@ -62,12 +63,13 @@ start = time.time()
 result2 = expensive_computation(30)
 time2 = time.time() - start
 print(f"  Result: {result2}, Time: {time2:.3f}s (cached!)")
-print(f"  Speedup: {time1/max(time2, 0.001):.0f}x\n")
+print(f"  Speedup: {time1 / max(time2, 0.001):.0f}x\n")
 
 
 # =============================================================================
 # 2. TTL (Time-to-Live)
 # =============================================================================
+
 
 @cash.cache(ttl=2)  # Cache expires after 2 seconds
 def get_timestamp():
@@ -101,7 +103,7 @@ print()
 
 # Create a temporary data file
 data_file = os.path.join(tempfile.gettempdir(), "cash_demo_data.txt")
-with open(data_file, 'w') as f:
+with open(data_file, "w") as f:
     f.write("10\n20\n30\n")
 
 data_source = FileDataSource(data_file)
@@ -127,7 +129,7 @@ result2 = process_data()
 print(f"  Sum: {result2} (cached - file unchanged)")
 
 # Modify the file
-with open(data_file, 'w') as f:
+with open(data_file, "w") as f:
     f.write("100\n200\n300\n")
 
 # Update the data source state
@@ -141,6 +143,7 @@ print()
 # =============================================================================
 # 4. Multiple Arguments & Keyword Arguments
 # =============================================================================
+
 
 @cash.cache
 def transform(data, multiplier=1, offset=0):

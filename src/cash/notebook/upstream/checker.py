@@ -10,15 +10,32 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from ...diagnostics import log_diagnostic, warn_diagnostic_explicit
-from ...exceptions import (AmbiguousCellError, CashUpstreamSyntaxWarning,
-                           ForwardReferenceError, UpstreamStateError)
-from ..server_discovery import get_notebook_cells, get_notebook_cells_with_ids
+from ...exceptions import AmbiguousCellError, CashUpstreamSyntaxWarning, ForwardReferenceError, UpstreamStateError
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from ..analysis import CodeAnalyzer
+from ..annotations import extract_annotations_for_statements, parse_annotation_line
 from ..cache_key import statement_source_hash
 from ..cache_status import CacheStatus
-from ..annotations import extract_annotations_for_statements, parse_annotation_line
-from ..staleness import StalenessTracker
+from ..cacheability import (
+    _called_function_names,
+    alias_mutation_sources,
+    aliased_sources,
+    analyze_statement,
+    called_function_global_mutations,
+    crossref_reassigned_vars,
+    function_arg_mutations,
+    mutating_partials,
+    object_protocol_mutations,
+    partial_arg_mutations,
+    reduce_free_mutations,
+    selfref_inplace_write_vars,
+    standalone_call_arg_targets,
+    standalone_method_mutation_receivers,
+    stateful_closure_vars,
+    stateful_self_functions,
+    subscript_view_bindings,
+)
+from ..control_structures import is_control_structure
 from ..randomness import (
     get_drawing_rng_modules,
     get_seeding_rng_modules,
@@ -26,35 +43,16 @@ from ..randomness import (
     rng_lineage_fingerprint,
     seed_cells_not_yet_run,
 )
-from ..cacheability import (
-    alias_mutation_sources,
-    aliased_sources,
-    analyze_statement,
-    crossref_reassigned_vars,
-    subscript_view_bindings,
-    function_arg_mutations,
-    called_function_global_mutations,
-    stateful_self_functions,
-    stateful_closure_vars,
-    partial_arg_mutations,
-    mutating_partials,
-    reduce_free_mutations,
-    object_protocol_mutations,
-    _called_function_names,
-    standalone_call_arg_targets,
-    standalone_method_mutation_receivers,
-    selfref_inplace_write_vars,
-)
+from ..server_discovery import get_notebook_cells, get_notebook_cells_with_ids
+from ..staleness import StalenessTracker
 from .simulator import (  # noqa: F401  re-exports for tests + downstream modules
-    NotebookSimulator,
     _BUILTIN_NAMES,
     _FORWARD_PROBE_PLACEHOLDER,
+    NotebookSimulator,
     _IncrementalStartResult,
-    _SimulationCacheEntry,
-    _TraceEntry,
     _normalize_stmt,
+    _SimulationCacheEntry,
 )
-from ..control_structures import is_control_structure
 
 if TYPE_CHECKING:
     from ..statement import ProcessResult
@@ -66,14 +64,16 @@ def _is_live_ndarray(val: Any) -> bool:
     """True if *val* is a numpy ndarray (so ``v = val[slice]`` is a view, not a
     copy). Duck-typed by type module/name to avoid importing numpy here."""
     t = type(val)
-    return t.__name__ == 'ndarray' and t.__module__.split('.')[0] == 'numpy'
+    return t.__name__ == "ndarray" and t.__module__.split(".")[0] == "numpy"
 
 
 class UpstreamResult(NamedTuple):
     """Result of upstream checking and re-execution."""
+
     metrics: list[ProcessResult]
     restore_time: float
     execution_time: float
+
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +82,7 @@ logger = logging.getLogger(__name__)
 def _cell_reads(cell_code: str) -> frozenset[str]:
     """The names a cell reads that it does not bind first (by its source)."""
     try:
-        clean = CodeAnalyzer.strip_magics(cell_code.replace('\r\n', '\n'))
+        clean = CodeAnalyzer.strip_magics(cell_code.replace("\r\n", "\n"))
         inputs, _ = CodeAnalyzer.analyze_code_block(clean)
     except (SyntaxError, ValueError, TypeError):
         return frozenset()
@@ -108,7 +108,7 @@ def _nocache_written_vars(cell_code: str) -> set[str]:
 
     written: set[str] = set()
     for node in tree.body:
-        ann = annotations.get(getattr(node, 'lineno', -1))
+        ann = annotations.get(getattr(node, "lineno", -1))
         if ann is None or not ann.no_cache:
             continue
         try:
@@ -121,7 +121,7 @@ def _nocache_written_vars(cell_code: str) -> set[str]:
     return written
 
 
-def _bound_by(fn: 'ast.AST') -> set[str]:
+def _bound_by(fn: "ast.AST") -> set[str]:
     """Names a function or lambda binds itself: parameters and local targets.
 
     Only these can be subtracted safely. A name assigned in the body is bound
@@ -129,10 +129,9 @@ def _bound_by(fn: 'ast.AST') -> set[str]:
     on something no cell above could possibly provide.
     """
     bound: set[str] = set()
-    args = getattr(fn, 'args', None)
+    args = getattr(fn, "args", None)
     if args is not None:
-        for a in (*getattr(args, 'posonlyargs', []), *args.args,
-                  *args.kwonlyargs):
+        for a in (*getattr(args, "posonlyargs", []), *args.args, *args.kwonlyargs):
             bound.add(a.arg)
         for extra in (args.vararg, args.kwarg):
             if extra is not None:
@@ -145,7 +144,7 @@ def _bound_by(fn: 'ast.AST') -> set[str]:
     return bound
 
 
-def _names_called_at_module_level(tree: 'ast.Module') -> set[str]:
+def _names_called_at_module_level(tree: "ast.Module") -> set[str]:
     """Bare names this cell CALLS while it runs, ignoring deferred bodies.
 
     ``print(use_it())`` calls ``use_it``; a call written inside a function or
@@ -154,10 +153,9 @@ def _names_called_at_module_level(tree: 'ast.Module') -> set[str]:
     """
     called: set[str] = set()
 
-    def walk(node: 'ast.AST') -> None:
+    def walk(node: "ast.AST") -> None:
         for child in ast.iter_child_nodes(node):
-            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef,
-                                  ast.ClassDef, ast.Lambda)):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
                 continue
             if isinstance(child, ast.Call) and isinstance(child.func, ast.Name):
                 called.add(child.func.id)
@@ -183,7 +181,14 @@ class UpstreamChecker:
         variable_lineage: Maps variable names to their lineage hash (includes input dependencies)
     """
 
-    def __init__(self, shell: ShellProtocol, cash_instance: CashInstanceProtocol | None = None, debug: bool = False, compute_hash_fn: Callable[[Any], str] | None = None, tracking_state: TrackingState | None = None) -> None:
+    def __init__(
+        self,
+        shell: ShellProtocol,
+        cash_instance: CashInstanceProtocol | None = None,
+        debug: bool = False,
+        compute_hash_fn: Callable[[Any], str] | None = None,
+        tracking_state: TrackingState | None = None,
+    ) -> None:
         self.shell: ShellProtocol = shell
         self.cash_instance: CashInstanceProtocol | None = cash_instance
         self.debug = debug
@@ -263,7 +268,13 @@ class UpstreamChecker:
         if hasattr(self, "simulator"):
             self.simulator.set_tracking_state(state)
 
-    def _find_current_cell_index(self, cell_code: str, notebook_cells: list[str], cell_id: str | None = None, cells_with_ids: list[tuple[str, str]] = None) -> int | None:
+    def _find_current_cell_index(
+        self,
+        cell_code: str,
+        notebook_cells: list[str],
+        cell_id: str | None = None,
+        cells_with_ids: list[tuple[str, str]] = None,
+    ) -> int | None:
         """Find the index of the current cell in the notebook.
 
         Uses a chain of matching strategies: ID match → exact content →
@@ -289,12 +300,14 @@ class UpstreamChecker:
                     return i
 
             if self.debug:
-                logger.debug("[UPSTREAM_DEBUG] Cell ID %s not found in notebook, falling back to content match", cell_id)
+                logger.debug(
+                    "[UPSTREAM_DEBUG] Cell ID %s not found in notebook, falling back to content match", cell_id
+                )
 
         # Strategies 2-4: content matching with progressive normalization
         content_matchers = [
             lambda cell: cell == cell_code,
-            lambda cell: cell.replace('\r\n', '\n') == cell_code.replace('\r\n', '\n'),
+            lambda cell: cell.replace("\r\n", "\n") == cell_code.replace("\r\n", "\n"),
             lambda cell: cell.strip() == cell_code.strip(),
         ]
         for matcher in content_matchers:
@@ -309,9 +322,14 @@ class UpstreamChecker:
 
         # Multiple matches with no resolvable cell ID — ambiguous
         if self.debug:
-            logger.debug("[UPSTREAM_DEBUG] Ambiguous cell content (matches=%s). Unable to safely determine upstream context.", matches)
+            logger.debug(
+                "[UPSTREAM_DEBUG] Ambiguous cell content (matches=%s). Unable to safely determine upstream context.",
+                matches,
+            )
 
-        raise AmbiguousCellError(f"Ambiguous cell execution! The current cell content appears {len(matches)} times in the notebook and no cell ID could be resolved. Please ensure cells are unique or save the notebook.")
+        raise AmbiguousCellError(
+            f"Ambiguous cell execution! The current cell content appears {len(matches)} times in the notebook and no cell ID could be resolved. Please ensure cells are unique or save the notebook."
+        )
 
     def check_and_reexecute(
         self,
@@ -321,7 +339,7 @@ class UpstreamChecker:
         global_ttl: int | None = None,
         cell_id: str | None = None,
         progress_callback: Callable[..., None] | None = None,
-        control_structure_callback: Callable[..., Any] | None = None
+        control_structure_callback: Callable[..., Any] | None = None,
     ) -> UpstreamResult:
         """
         Check if any upstream statements have changed and re-execute them if needed.
@@ -369,6 +387,7 @@ class UpstreamChecker:
         # once per cell check.
         self._notebook_path_for_staleness = notebook_path
         from cash.notebook import server_discovery as _sd
+
         self.staleness.note_source(_sd.last_cell_source())
 
         # Phase 1 — Lineage-based staleness check (diagnostic-only).
@@ -389,7 +408,7 @@ class UpstreamChecker:
         # `d.update`) so Phase 2 can restore a no-lineage in-place accumulator.
         # The classifier re-simulates this cell to tell its own earlier run
         # apart from an upstream edit (MismatchClassifier._current_cell_reproduces).
-        classifier = getattr(self.simulator, '_classifier', None)
+        classifier = getattr(self.simulator, "_classifier", None)
         if classifier is not None:
             classifier.current_cell_code = cell_code
         try:
@@ -407,10 +426,10 @@ class UpstreamChecker:
             # key converge (measured: [1, 1] where inline gives [1]).
             _cell_resolver = None
             if _called_function_names(ast.parse(cell_code)):
-                _cell_resolver = self._notebook_function_sources(
-                    cell_code, notebook_path).get
-            current_cell_mutated = set(analyze_statement(
-                cell_code, None, resolve_source=_cell_resolver).all_mutated_vars)
+                _cell_resolver = self._notebook_function_sources(cell_code, notebook_path).get
+            current_cell_mutated = set(
+                analyze_statement(cell_code, None, resolve_source=_cell_resolver).all_mutated_vars
+            )
             # A `# @cash: no-cache` statement opts out of caching AND of the
             # idempotent-rerun input restoration: its self-modifying vars must
             # accumulate on re-run (the documented "always recompute" contract),
@@ -424,9 +443,9 @@ class UpstreamChecker:
             # is restored to its cell-entry base. Scoped to METHOD receivers (NOT
             # subscript/attr writes) so ``df['col']=..`` keeps its per-statement
             # cache. Same no-cache opt-out as the other self-write sets.
-            current_cell_method_receivers = set(
-                standalone_method_mutation_receivers(ast.parse(cell_code))
-            ) - nocache_vars
+            current_cell_method_receivers = (
+                set(standalone_method_mutation_receivers(ast.parse(cell_code))) - nocache_vars
+            )
             # Self-referential in-place subscript/attr writes (``df['a']=df['a']*2``,
             # ``df['a']+=1``, ``df.iloc[i,j]+=x``) are non-idempotent: re-running
             # applies the op again, so a lineage-carrying receiver (DataFrame) must
@@ -434,24 +453,20 @@ class UpstreamChecker:
             # New-column writes read from OTHER columns (``df['VolAdj']=...``) are
             # NOT self-referential and keep their per-statement cache. Same
             # no-cache opt-out (a no-cache self-write must advance, not reset).
-            current_cell_selfref_vars = set(
-                selfref_inplace_write_vars(ast.parse(cell_code))
-            ) - nocache_vars
+            current_cell_selfref_vars = set(selfref_inplace_write_vars(ast.parse(cell_code))) - nocache_vars
             # A variable passed to a user-defined helper that mutates the
             # corresponding parameter in place (``def add(d): d.append(x)`` +
             # ``add(data)``) is mutated even though the cell never names the
             # mutation — static one-level body analysis attributes it back to the
             # argument so it resets on isolated re-run instead of accumulating
-            #. Treated like a method receiver (force-reset + self-write).
+            # . Treated like a method receiver (force-reset + self-write).
             # Only resolve the (notebook-wide) function sources when the current
             # cell actually has a bare-Expr call candidate, so the common case
             # pays nothing.
             current_cell_stateful_funcs: set[str] = set()
             if standalone_call_arg_targets(ast.parse(cell_code)):
                 func_sources = self._notebook_function_sources(cell_code, notebook_path)
-                func_arg_muts = function_arg_mutations(
-                    ast.parse(cell_code), func_sources.get
-                ) - nocache_vars
+                func_arg_muts = function_arg_mutations(ast.parse(cell_code), func_sources.get) - nocache_vars
                 current_cell_mutated |= func_arg_muts
                 current_cell_method_receivers |= func_arg_muts
             # Everything that needs the notebook-wide function sources and is
@@ -481,10 +496,14 @@ class UpstreamChecker:
                 #
                 # The narrow gate is not a smaller version of the fix, it is the
                 # half that makes the other half diverge.
-                func_global_muts = called_function_global_mutations(
-                    ast.parse(cell_code), func_sources_all.get,
-                    include_control_bodies=True,
-                ) - nocache_vars
+                func_global_muts = (
+                    called_function_global_mutations(
+                        ast.parse(cell_code),
+                        func_sources_all.get,
+                        include_control_bodies=True,
+                    )
+                    - nocache_vars
+                )
                 current_cell_mutated |= func_global_muts
                 required_inputs = required_inputs | func_global_muts
                 # A called function that carries mutable state on its own object
@@ -493,9 +512,9 @@ class UpstreamChecker:
                 # accumulating across calls. Force-reset the function so its
                 # ``def`` re-runs and recreates fresh state on an isolated
                 # re-run (B).
-                current_cell_stateful_funcs = set(
-                    stateful_self_functions(ast.parse(cell_code), func_sources_all.get)
-                ) - nocache_vars
+                current_cell_stateful_funcs = (
+                    set(stateful_self_functions(ast.parse(cell_code), func_sources_all.get)) - nocache_vars
+                )
                 # A closure variable (``c = make_counter()``) whose factory returns
                 # an inner function that mutates factory-local state accumulates
                 # across calls; force-reset it so ``c = make_counter()`` re-runs
@@ -510,15 +529,13 @@ class UpstreamChecker:
                         parsed = ast.parse(src)
                     except (SyntaxError, ValueError):
                         return None
-                    if parsed.body and isinstance(
-                        parsed.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)
-                    ):
+                    if parsed.body and isinstance(parsed.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)):
                         return parsed.body[0]
                     return None
 
-                current_cell_stateful_funcs |= set(
-                    stateful_closure_vars(ast.parse(cell_code), _resolve_var_factory)
-                ) - nocache_vars
+                current_cell_stateful_funcs |= (
+                    set(stateful_closure_vars(ast.parse(cell_code), _resolve_var_factory)) - nocache_vars
+                )
                 # Hidden mutation through functools.partial (a bound mutable arg,
                 # or the target's free var) or a function passed to functools.reduce
                 # — the higher-order caller invokes it, so the mutation happens but
@@ -526,9 +543,7 @@ class UpstreamChecker:
                 # cell's inputs so its producer's base is restored.
                 partial_bindings = self._notebook_partial_bindings(cell_code, notebook_path)
                 hidden_muts = (
-                    partial_arg_mutations(
-                        ast.parse(cell_code), partial_bindings.get, func_sources_all.get
-                    )
+                    partial_arg_mutations(ast.parse(cell_code), partial_bindings.get, func_sources_all.get)
                     | reduce_free_mutations(ast.parse(cell_code), func_sources_all.get)
                 ) - nocache_vars
                 current_cell_mutated |= hidden_muts
@@ -536,11 +551,10 @@ class UpstreamChecker:
                 # A partial that binds a MUTATED arg captured the arg's OBJECT, so
                 # resetting the arg name is not enough — force-reset the partial
                 # too so its producer re-binds it to the fresh arg.
-                current_cell_stateful_funcs |= set(
-                    mutating_partials(
-                        ast.parse(cell_code), partial_bindings.get, func_sources_all.get
-                    )
-                ) - nocache_vars
+                current_cell_stateful_funcs |= (
+                    set(mutating_partials(ast.parse(cell_code), partial_bindings.get, func_sources_all.get))
+                    - nocache_vars
+                )
             # Object-protocol hidden state: a with-statement, a
             # custom-dunder op (``s[k]=v`` / ``del s[k]`` / ``v=s[k]`` / ``a(x)``),
             # a constructor, a decorated call, or an instance / class method whose
@@ -555,18 +569,13 @@ class UpstreamChecker:
             # analysis is a no-op when nothing resolves to a notebook class /
             # decorated function, so this only gates the (memoised) source scans.
             has_op_trigger = any(
-                isinstance(n, (ast.Call, ast.Subscript, ast.Delete,
-                               ast.With, ast.AsyncWith))
-                for n in ast.walk(op_tree)
+                isinstance(n, (ast.Call, ast.Subscript, ast.Delete, ast.With, ast.AsyncWith)) for n in ast.walk(op_tree)
             )
             # A top-level ``class Sub(Base):`` defining a subclass triggers the
             # base's ``__init_subclass__`` hook during CLASS CREATION — a hidden
             # mutation with no Call/Subscript/etc. node of its own — so gate the
             # object-protocol scan on a based class def too.
-            has_op_trigger = has_op_trigger or any(
-                isinstance(n, ast.ClassDef) and n.bases
-                for n in op_tree.body
-            )
+            has_op_trigger = has_op_trigger or any(isinstance(n, ast.ClassDef) and n.bases for n in op_tree.body)
             if has_op_trigger:
                 class_sources = self._notebook_class_sources(cell_code, notebook_path)
                 op_func_sources = self._notebook_function_sources(cell_code, notebook_path)
@@ -603,15 +612,16 @@ class UpstreamChecker:
                         parsed = ast.parse(src)
                     except (SyntaxError, ValueError):
                         return None
-                    if parsed.body and isinstance(
-                        parsed.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)
-                    ):
+                    if parsed.body and isinstance(parsed.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)):
                         return parsed.body[0]
                     return None
 
                 op_resets = object_protocol_mutations(
-                    op_tree, class_sources.get, _instance_class,
-                    op_func_sources.get, _op_var_factory,
+                    op_tree,
+                    class_sources.get,
+                    _instance_class,
+                    op_func_sources.get,
+                    _op_var_factory,
                     decorated_class=_decorated_class,
                 )
                 # The free-var channel resets via the A content-base path,
@@ -654,8 +664,11 @@ class UpstreamChecker:
                             continue
                         try:
                             other = object_protocol_mutations(
-                                ast.parse(_code), class_sources.get,
-                                _instance_class, op_func_sources.get, _op_var_factory,
+                                ast.parse(_code),
+                                class_sources.get,
+                                _instance_class,
+                                op_func_sources.get,
+                                _op_var_factory,
                             )
                         except (SyntaxError, ValueError):
                             continue
@@ -683,12 +696,8 @@ class UpstreamChecker:
             # df2['a']*2``) is still excluded and keeps its cache.
             alias_tree = ast.parse(cell_code)
             current_cell_mutated |= alias_mutation_sources(alias_tree) - nocache_vars
-            current_cell_selfref_vars |= aliased_sources(
-                alias_tree, current_cell_selfref_vars
-            ) - nocache_vars
-            current_cell_method_receivers |= aliased_sources(
-                alias_tree, current_cell_method_receivers
-            ) - nocache_vars
+            current_cell_selfref_vars |= aliased_sources(alias_tree, current_cell_selfref_vars) - nocache_vars
+            current_cell_method_receivers |= aliased_sources(alias_tree, current_cell_method_receivers) - nocache_vars
             # A numpy ``v = arr[slice]`` binding is a VIEW sharing arr's memory, so
             # mutating v (``v += 1``, ``v[i] = x``) mutates arr in place. A list
             # slice is a COPY, so this is gated on arr being a live ndarray at
@@ -699,7 +708,8 @@ class UpstreamChecker:
                 user_ns = self.shell.user_ns
                 mutated_here = analyze_statement(cell_code, None).all_mutated_vars
                 current_cell_mutated |= {
-                    base for alias, base in view_bindings.items()
+                    base
+                    for alias, base in view_bindings.items()
                     if alias in mutated_here and _is_live_ndarray(user_ns.get(base))
                 } - nocache_vars
             # Names reassigned from a permutation of their own prior values
@@ -724,7 +734,10 @@ class UpstreamChecker:
         # Simulates the notebook statement-by-statement and compares the resulting
         # virtual lineage against the actual in-memory state to find changed code.
         all_metrics, total_restore_time, total_execution_time = self._check_notebook_based(
-            cell_code, required_inputs, process_statement_callback, global_ttl,
+            cell_code,
+            required_inputs,
+            process_statement_callback,
+            global_ttl,
             notebook_path=notebook_path,
             current_cell_outputs=current_cell_outputs,
             current_cell_reassigned=current_cell_reassigned,
@@ -752,8 +765,10 @@ class UpstreamChecker:
         """
         try:
             tree = self.simulator.get_cached_ast(last_executed_code)
-            if tree and len(tree.body) == 1 and isinstance(
-                tree.body[0], (ast.For, ast.While, ast.If, ast.With, ast.Try)
+            if (
+                tree
+                and len(tree.body) == 1
+                and isinstance(tree.body[0], (ast.For, ast.While, ast.If, ast.With, ast.Try))
             ):
                 return None
         except (SyntaxError, ValueError, AttributeError):
@@ -764,32 +779,23 @@ class UpstreamChecker:
         if var_name in stmt_inputs:
             return None
 
-        input_lineages = [
-            self.variable_lineage[inp]
-            for inp in stmt_inputs
-            if inp in self.variable_lineage
-        ]
+        input_lineages = [self.variable_lineage[inp] for inp in stmt_inputs if inp in self.variable_lineage]
 
         source_hash = statement_source_hash(last_executed_code)
 
         func_lineage_component = ""
-        function_tracker = self.function_tracker if hasattr(self, 'function_tracker') else None
+        function_tracker = self.function_tracker if hasattr(self, "function_tracker") else None
         if function_tracker is not None:
             try:
-                func_source_hashes = function_tracker.get_callable_source_hashes(
-                    stmt_inputs, self.shell.user_ns
-                )
+                func_source_hashes = function_tracker.get_callable_source_hashes(stmt_inputs, self.shell.user_ns)
                 if func_source_hashes:
                     func_parts = [f"{k}:{v}" for k, v in sorted(func_source_hashes.items())]
                     func_lineage_component = ":" + ":".join(func_parts)
             except (AttributeError, TypeError):
                 pass
 
-        expected_lineage_str = (
-            f"{source_hash}:{':'.join(sorted(input_lineages))}"
-            f"{func_lineage_component}"
-        )
-        return hashlib.sha256(expected_lineage_str.encode('utf-8')).hexdigest()
+        expected_lineage_str = f"{source_hash}:{':'.join(sorted(input_lineages))}{func_lineage_component}"
+        return hashlib.sha256(expected_lineage_str.encode("utf-8")).hexdigest()
 
     def _resolve_notebook_path(self) -> str | None:
         """Resolve the current notebook path once per cell's upstream check.
@@ -808,6 +814,7 @@ class UpstreamChecker:
             get_notebook_path,
             warn_notebook_not_found_once,
         )
+
         path = get_notebook_path()
         if path is None:
             warn_notebook_not_found_once()
@@ -829,13 +836,13 @@ class UpstreamChecker:
 
     def _notebook_function_sources(self, cell_code: str, notebook_path: str | None) -> dict[str, str]:
         """Map ``{function_name: source}`` for every top-level ``def`` across the
-        notebook cells plus the current cell.
+         notebook cells plus the current cell.
 
-        Resolves from cell SOURCE (the source of truth) rather than
-        ``inspect.getsource`` — the latter fails for cell-defined functions under
-        nbclient (no linecache entry). Used by :func:`function_arg_mutations`
-       . The current cell is included so a helper defined and used in the
-        same cell still resolves; later same-name defs win (last definition).
+         Resolves from cell SOURCE (the source of truth) rather than
+         ``inspect.getsource`` — the latter fails for cell-defined functions under
+         nbclient (no linecache entry). Used by :func:`function_arg_mutations`
+        . The current cell is included so a helper defined and used in the
+         same cell still resolves; later same-name defs win (last definition).
         """
         sources: dict[str, str] = {}
         cells = self._notebook_cells_for(notebook_path)
@@ -917,9 +924,12 @@ class UpstreamChecker:
             except (SyntaxError, ValueError):
                 continue
             for node in tree.body:
-                if (isinstance(node, ast.Assign) and len(node.targets) == 1
-                        and isinstance(node.targets[0], ast.Name)
-                        and isinstance(node.value, ast.Name)):
+                if (
+                    isinstance(node, ast.Assign)
+                    and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and isinstance(node.value, ast.Name)
+                ):
                     aliases[node.targets[0].id] = node.value.id
         return aliases
 
@@ -939,10 +949,13 @@ class UpstreamChecker:
             except (SyntaxError, ValueError):
                 continue
             for node in tree.body:
-                if (isinstance(node, ast.Assign) and len(node.targets) == 1
-                        and isinstance(node.targets[0], ast.Name)
-                        and isinstance(node.value, ast.Call)
-                        and isinstance(node.value.func, ast.Name)):
+                if (
+                    isinstance(node, ast.Assign)
+                    and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and isinstance(node.value, ast.Call)
+                    and isinstance(node.value.func, ast.Name)
+                ):
                     factories[node.targets[0].id] = node.value.func.id
         return factories
 
@@ -960,14 +973,18 @@ class UpstreamChecker:
             except (SyntaxError, ValueError):
                 continue
             for node in tree.body:
-                if not (isinstance(node, ast.Assign) and len(node.targets) == 1
-                        and isinstance(node.targets[0], ast.Name)
-                        and isinstance(node.value, ast.Call)):
+                if not (
+                    isinstance(node, ast.Assign)
+                    and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and isinstance(node.value, ast.Call)
+                ):
                     continue
                 call = node.value
                 func = call.func
-                is_partial = ((isinstance(func, ast.Name) and func.id == 'partial')
-                              or (isinstance(func, ast.Attribute) and func.attr == 'partial'))
+                is_partial = (isinstance(func, ast.Name) and func.id == "partial") or (
+                    isinstance(func, ast.Attribute) and func.attr == "partial"
+                )
                 if is_partial and call.args and isinstance(call.args[0], ast.Name):
                     f_name = call.args[0].id
                     bound = [a.id if isinstance(a, ast.Name) else None for a in call.args[1:]]
@@ -1010,16 +1027,18 @@ class UpstreamChecker:
             last_executed_code = self.executed_cell_codes[var_name]
             try:
                 expected_lineage = self._compute_expected_var_lineage(
-                    var_name, last_executed_code,
+                    var_name,
+                    last_executed_code,
                 )
                 if expected_lineage is None:
                     continue
                 current_lineage = self.variable_lineage[var_name]
                 if expected_lineage != current_lineage:
                     logger.debug(
-                        "[UPSTREAM] Variable '%s' has lineage mismatch "
-                        "(expected=%s, actual=%s). Deferring to Phase 2.",
-                        var_name, expected_lineage[:8], current_lineage[:8],
+                        "[UPSTREAM] Variable '%s' has lineage mismatch (expected=%s, actual=%s). Deferring to Phase 2.",
+                        var_name,
+                        expected_lineage[:8],
+                        current_lineage[:8],
                     )
             except (KeyError, TypeError, ValueError, SyntaxError, AttributeError):
                 logger.debug("[UPSTREAM] Error in lineage check for variable '%s'", var_name)
@@ -1050,9 +1069,10 @@ class UpstreamChecker:
         """Reset in-memory lineages that are "ahead" of the cached virtual lineage."""
         if self.debug:
             logger.debug(
-                "[UPSTREAM_DEBUG]   Downstream advancement fallback: "
-                "overlap_vars=%s, cache_idx=%s, last_cell_index=%s",
-                overlap_vars, cache_idx, self.last_cell_index,
+                "[UPSTREAM_DEBUG]   Downstream advancement fallback: overlap_vars=%s, cache_idx=%s, last_cell_index=%s",
+                overlap_vars,
+                cache_idx,
+                self.last_cell_index,
             )
         for var_name in overlap_vars:
             if var_name not in cached_virtual_lineage or var_name not in self.variable_lineage:
@@ -1064,7 +1084,9 @@ class UpstreamChecker:
                     logger.debug(
                         "[UPSTREAM_DEBUG]   -> Downstream advancement fallback: "
                         "resetting '%s' lineage from %s to virtual %s",
-                        var_name, actual_hash[:8], virtual_hash[:8],
+                        var_name,
+                        actual_hash[:8],
+                        virtual_hash[:8],
                     )
                 self.lineage.reset_to(var_name, virtual_hash)
 
@@ -1121,16 +1143,14 @@ class UpstreamChecker:
         missing_inputs: set[str] = set()
         if required_inputs:
             for inp in required_inputs:
-                if inp in _BUILTIN_NAMES or inp.startswith('_'):
+                if inp in _BUILTIN_NAMES or inp.startswith("_"):
                     continue
                 if inp not in self.shell.user_ns:
                     missing_inputs.add(inp)
 
         if missing_inputs and notebook_cells:
             if self.debug:
-                logger.debug(
-                    "[UPSTREAM_DEBUG]   Unsaved cell has missing inputs: %s", missing_inputs
-                )
+                logger.debug("[UPSTREAM_DEBUG]   Unsaved cell has missing inputs: %s", missing_inputs)
                 logger.debug(
                     "[UPSTREAM_DEBUG]   Treating all %d saved cells as upstream",
                     len(notebook_cells),
@@ -1138,11 +1158,10 @@ class UpstreamChecker:
             return len(notebook_cells)
 
         # DOWNSTREAM ADVANCEMENT FALLBACK (unsaved cell, no missing inputs)
-        self._handle_downstream_advancement_fallback(
-            cell_id, required_inputs, current_cell_outputs
-        )
+        self._handle_downstream_advancement_fallback(cell_id, required_inputs, current_cell_outputs)
 
         from ..server_discovery import invalidate_notebook_path_cache
+
         invalidate_notebook_path_cache()
         return None
 
@@ -1178,11 +1197,10 @@ class UpstreamChecker:
             logger.debug("[UPSTREAM_DEBUG] Found %d notebook cells", len(notebook_cells))
 
         cells_with_ids = get_notebook_cells_with_ids(notebook_path)
-        cell_id = getattr(self, '_current_cell_id', None)
+        cell_id = getattr(self, "_current_cell_id", None)
 
         current_cell_idx = self._resolve_current_cell_idx(
-            cell_code, notebook_cells, cell_id, cells_with_ids,
-            required_inputs, current_cell_outputs
+            cell_code, notebook_cells, cell_id, cells_with_ids, required_inputs, current_cell_outputs
         )
         if current_cell_idx is not None:
             self.last_cell_index = current_cell_idx
@@ -1209,9 +1227,7 @@ class UpstreamChecker:
             cell_code, notebook_cells, cell_id=cell_id, cells_with_ids=cells_with_ids
         )
         if current_cell_idx is None:
-            return self._handle_unsaved_cell(
-                cell_code, cell_id, required_inputs, current_cell_outputs, notebook_cells
-            )
+            return self._handle_unsaved_cell(cell_code, cell_id, required_inputs, current_cell_outputs, notebook_cells)
         return current_cell_idx
 
     def _evict_orphaned_definitions(self, notebook_cells: list[str], cell_code: str) -> None:
@@ -1246,10 +1262,9 @@ class UpstreamChecker:
 
         user_ns = self.shell.user_ns
         orphaned = {
-            v for v in set(self.variable_lineage) - produced
-            if v in user_ns
-            and not v.startswith('_')
-            and not isinstance(user_ns[v], types.ModuleType)
+            v
+            for v in set(self.variable_lineage) - produced
+            if v in user_ns and not v.startswith("_") and not isinstance(user_ns[v], types.ModuleType)
         }
         if not orphaned:
             return
@@ -1266,11 +1281,19 @@ class UpstreamChecker:
 
         state = self._tracking_state
         dict_attrs = (
-            'variable_lineage', 'executed_input_lineages', 'current_session_hashes',
-            'variable_hashes', 'variable_sources', 'executed_cell_codes',
-            'executed_cell_hashes', 'executed_file_deps', 'executed_file_mtimes',
-            'granular_preserved_vars', 'module_attribute_deps', 'from_import_sources',
-            'from_import_components',
+            "variable_lineage",
+            "executed_input_lineages",
+            "current_session_hashes",
+            "variable_hashes",
+            "variable_sources",
+            "executed_cell_codes",
+            "executed_cell_hashes",
+            "executed_file_deps",
+            "executed_file_mtimes",
+            "granular_preserved_vars",
+            "module_attribute_deps",
+            "from_import_sources",
+            "from_import_components",
         )
         for var in to_evict:
             self.shell.user_ns.pop(var, None)
@@ -1310,7 +1333,7 @@ class UpstreamChecker:
         "do not refuse anything".
         """
         try:
-            tree = ast.parse(CodeAnalyzer.strip_magics(cell_code.replace('\r\n', '\n')))
+            tree = ast.parse(CodeAnalyzer.strip_magics(cell_code.replace("\r\n", "\n")))
         except (SyntaxError, ValueError):
             return None
 
@@ -1323,8 +1346,7 @@ class UpstreamChecker:
                     # Evaluated now; the body is not -- unless this cell also
                     # calls it, in which case the body runs before the cell is
                     # over and its free names are read now.
-                    for sub in (*child.decorator_list, *child.args.defaults,
-                                *(d for d in child.args.kw_defaults if d)):
+                    for sub in (*child.decorator_list, *child.args.defaults, *(d for d in child.args.kw_defaults if d)):
                         visit_expr(sub, into)
                     if child.name in called_here:
                         _absorb_body(child, into)
@@ -1336,8 +1358,7 @@ class UpstreamChecker:
                 if isinstance(child, ast.Lambda):
                     # Reached other than as a call argument (stored, bound to
                     # a name): only its defaults run now.
-                    for sub in (*child.args.defaults,
-                                *(d for d in child.args.kw_defaults if d)):
+                    for sub in (*child.args.defaults, *(d for d in child.args.kw_defaults if d)):
                         visit_expr(sub, into)
                     continue
                 if isinstance(child, ast.Call):
@@ -1372,8 +1393,11 @@ class UpstreamChecker:
         return names
 
     def _refuse_forward_references(
-        self, notebook_cells: list[str], cell_code: str,
-        current_cell_idx: int, required_inputs: set[str],
+        self,
+        notebook_cells: list[str],
+        cell_code: str,
+        current_cell_idx: int,
+        required_inputs: set[str],
     ) -> None:
         """Raise when this cell reads a name only a LATER cell binds.
 
@@ -1427,15 +1451,14 @@ class UpstreamChecker:
             except (SyntaxError, ValueError):
                 return  # can't be sure what binds what — never refuse on a guess
             if idx <= current_cell_idx or idx >= len(notebook_cells):
-                above |= outs        # the current cell's own bindings included
+                above |= outs  # the current cell's own bindings included
             else:
                 for name in outs:
                     below.setdefault(name, idx)
 
         user_ns = self.shell.user_ns
         forward = sorted(
-            (name, below[name]) for name in required_inputs
-            if name in below and name not in above and name in user_ns
+            (name, below[name]) for name in required_inputs if name in below and name not in above and name in user_ns
         )
         if not forward:
             return
@@ -1477,7 +1500,7 @@ class UpstreamChecker:
         for idx in range(min(current_cell_idx, len(notebook_cells))):
             raw = notebook_cells[idx]
             try:
-                clean = CodeAnalyzer.strip_magics(raw.replace('\r\n', '\n'))
+                clean = CodeAnalyzer.strip_magics(raw.replace("\r\n", "\n"))
             except (ValueError, TypeError):
                 continue
             if not clean.strip():
@@ -1485,15 +1508,15 @@ class UpstreamChecker:
             try:
                 ast.parse(clean)
             except SyntaxError:
-                broken[idx] = hashlib.sha256(raw.encode('utf-8')).hexdigest()
+                broken[idx] = hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
         for idx, cell_hash in broken.items():
             if self._warned_broken_cells.get(idx) == cell_hash:
                 continue  # already warned about this exact break — stay quiet
             raw = notebook_cells[idx]
-            snippet = next((ln.strip() for ln in raw.splitlines() if ln.strip()), '')
+            snippet = next((ln.strip() for ln in raw.splitlines() if ln.strip()), "")
             if len(snippet) > 60:
-                snippet = snippet[:57] + '...'
+                snippet = snippet[:57] + "..."
             what = (
                 f"cell {idx + 1} has a syntax error and could not be parsed "
                 f"({snippet!r}), so it is skipped and any cell depending on it "
@@ -1515,7 +1538,9 @@ class UpstreamChecker:
                 code="NOTEBOOK-CELL-SYNTAX",
                 what=what,
                 fix=fix,
-                filename='<cash>', lineno=idx + 1, registry=None,
+                filename="<cash>",
+                lineno=idx + 1,
+                registry=None,
             )
 
         # Replace the ledger with exactly the current break set: a fixed cell
@@ -1528,8 +1553,8 @@ class UpstreamChecker:
         """Sum ``total_time`` from a list of metric dicts."""
         total = 0.0
         for metrics in executed_metrics:
-            if metrics and 'total_time' in metrics:
-                total += metrics['total_time']
+            if metrics and "total_time" in metrics:
+                total += metrics["total_time"]
         return total
 
     def _check_notebook_based(
@@ -1548,7 +1573,7 @@ class UpstreamChecker:
         current_cell_stateful_funcs: set[str] | None = None,
         current_cell_nocache_vars: set[str] | None = None,
         progress_callback: Callable[..., None] | None = None,
-        control_structure_callback: Callable[..., Any] | None = None
+        control_structure_callback: Callable[..., Any] | None = None,
     ) -> UpstreamResult:
         """
         Check if upstream notebook content differs from executed state.
@@ -1564,7 +1589,8 @@ class UpstreamChecker:
             if notebook_cells is None or current_cell_idx is None:
                 return UpstreamResult([], 0.0, 0.0)
             self._tracking_state.read_by_later_cells = frozenset().union(
-                *(_cell_reads(code) for code in notebook_cells[current_cell_idx + 1:]))
+                *(_cell_reads(code) for code in notebook_cells[current_cell_idx + 1 :])
+            )
 
             # disclose any unparseable UPSTREAM cell BEFORE simulating.
             # The simulator skips such a cell (VirtualLineage._simulate_one_cell)
@@ -1583,7 +1609,10 @@ class UpstreamChecker:
             # invisible-while-it-works shape, so it is checked in the same
             # place, but it raises -- see `_refuse_forward_references`.
             self._refuse_forward_references(
-                notebook_cells, cell_code, current_cell_idx, required_inputs,
+                notebook_cells,
+                cell_code,
+                current_cell_idx,
+                required_inputs,
             )
 
             if self.debug:
@@ -1602,12 +1631,15 @@ class UpstreamChecker:
                 current_cell_selfref_vars=current_cell_selfref_vars,
                 current_cell_crossref_reassigned=current_cell_crossref_reassigned,
                 current_cell_stateful_funcs=current_cell_stateful_funcs,
-                current_cell_nocache_vars=current_cell_nocache_vars
+                current_cell_nocache_vars=current_cell_nocache_vars,
             )
 
             if self.debug:
-                logger.debug("[UPSTREAM_DEBUG] Simulation result: %s stmts to re-execute, %s stmts restored from cache",
-                      len(statements_to_reexecute), len(restored_info))
+                logger.debug(
+                    "[UPSTREAM_DEBUG] Simulation result: %s stmts to re-execute, %s stmts restored from cache",
+                    len(statements_to_reexecute),
+                    len(restored_info),
+                )
 
             # ADR-017: a bare ``np.random.seed(N)`` binds no variable,
             # so the simulator never links it to a downstream draw. If the
@@ -1621,24 +1653,30 @@ class UpstreamChecker:
             # them for the badge (Stage 2 of the randomness UX).
             _before_rng_prepend = set(statements_to_reexecute)
             statements_to_reexecute = self._prepend_stale_seed_cells(
-                cell_code, notebook_cells, statements_to_reexecute, current_cell_idx,
+                cell_code,
+                notebook_cells,
+                statements_to_reexecute,
+                current_cell_idx,
             )
 
             # A draw re-executed because an ORDINARY input changed (not the seed)
             # must still run from its top-to-bottom stream position; re-establish
             # its upstream RNG chain when the seed itself isn't being re-run.
             statements_to_reexecute = self._prepend_rng_chain_for_reexecuted_draws(
-                notebook_cells, statements_to_reexecute, current_cell_idx,
+                notebook_cells,
+                statements_to_reexecute,
+                current_cell_idx,
             )
             rng_rerun = {
-                s for s in statements_to_reexecute
-                if s not in _before_rng_prepend and self._cell_touches_rng(s)
+                s for s in statements_to_reexecute if s not in _before_rng_prepend and self._cell_touches_rng(s)
             }
 
             executed_metrics = []
             if statements_to_reexecute:
                 executed_metrics = self._reexecute_statements(
-                    statements_to_reexecute, process_statement_callback, global_ttl,
+                    statements_to_reexecute,
+                    process_statement_callback,
+                    global_ttl,
                     progress_callback=progress_callback,
                     restored_info=restored_info,
                     control_structure_callback=control_structure_callback,
@@ -1678,9 +1716,7 @@ class UpstreamChecker:
             raise
         except (KeyError, TypeError, ValueError, OSError) as e:
             logger.debug("[UPSTREAM] Error in notebook-based checking: %s", e)
-            raise UpstreamStateError(
-                f"Failed to restore or simulate upstream state: {e}"
-            ) from e
+            raise UpstreamStateError(f"Failed to restore or simulate upstream state: {e}") from e
 
     def _lineage_records(self) -> dict[str, tuple]:
         """Each variable's recorded lineage and input-lineage map, as held now.
@@ -1689,8 +1725,7 @@ class UpstreamChecker:
         so ``is`` tells a re-recording apart even when the lineage came out the
         same.
         """
-        return {v: (h, self.executed_input_lineages.get(v))
-                for v, h in self.variable_lineage.items()}
+        return {v: (h, self.executed_input_lineages.get(v)) for v, h in self.variable_lineage.items()}
 
     def _rerecorded_since(self, before: dict[str, tuple]) -> set[str]:
         """Variables this upstream pass recorded again (re-executed or restored)."""
@@ -1721,19 +1756,23 @@ class UpstreamChecker:
         producing_code = self.executed_cell_codes.get(var_name)
         if producing_code is None:
             return True
-        normalized_code = re.sub(r'# __iteration_context__:.*?\n', '', producing_code).strip()
+        normalized_code = re.sub(r"# __iteration_context__:.*?\n", "", producing_code).strip()
         if normalized_code not in cumulative_stmt_codes:
             if self.debug:
                 logger.debug(
-                    "[UPSTREAM_DEBUG] Skipping sync for '%s' in cache entry %d: "
-                    "producing code not in cells 0..%d",
-                    var_name, idx, idx,
+                    "[UPSTREAM_DEBUG] Skipping sync for '%s' in cache entry %d: producing code not in cells 0..%d",
+                    var_name,
+                    idx,
+                    idx,
                 )
             return False
         return True
 
     def plan_cell_run(
-        self, nodes: list, raw_cell: str, occurrence_counts: dict[str, int],
+        self,
+        nodes: list,
+        raw_cell: str,
+        occurrence_counts: dict[str, int],
     ) -> dict[int, dict] | None:
         """Which of a run of assignments in the cell being run need not run.
 
@@ -1761,27 +1800,47 @@ class UpstreamChecker:
             for node in nodes:
                 before = len(trace)
                 vl._simulate_one_node(
-                    0, node, counts, virtual_lineage, virtual_modules, trace,
-                    set(), set(), lookup_times, set(), {}, raw_cell=raw_cell,
+                    0,
+                    node,
+                    counts,
+                    virtual_lineage,
+                    virtual_modules,
+                    trace,
+                    set(),
+                    set(),
+                    lookup_times,
+                    set(),
+                    {},
+                    raw_cell=raw_cell,
                 )
                 if len(trace) != before + 1:
                     return None
             if any(entry[5] for entry in trace):
-                return None          # a file it reads changed: run it
+                return None  # a file it reads changed: run it
             final: dict[str, str] = {}
             for entry in trace:
                 final.update(entry[4])
             if set(final) != set().union(*(entry[1] for entry in trace)):
                 return None
-            broken = {name for name, lineage in final.items()
-                      if name not in self.shell.user_ns
-                      or self.variable_lineage.get(name) != lineage}
+            broken = {
+                name
+                for name, lineage in final.items()
+                if name not in self.shell.user_ns or self.variable_lineage.get(name) != lineage
+            }
             restored_by_index: dict[int, dict] = {}
             run: list[int] = []
             if broken:
                 run, restored, _ = classifier._backward_scan_pass(
-                    trace, broken, set(), virtual_lineage, virtual_modules, set(),
-                    False, False, {entry[0] for entry in trace}, lookup_times,
+                    trace,
+                    broken,
+                    set(),
+                    virtual_lineage,
+                    virtual_modules,
+                    set(),
+                    False,
+                    False,
+                    {entry[0] for entry in trace},
+                    lookup_times,
                 )
                 while True:
                     size = len(run)
@@ -1790,16 +1849,22 @@ class UpstreamChecker:
                     # producer runs too. The live value may be a LATER version the
                     # scan restored -- ``is_big = sales['a'] > ...`` ran on the
                     # final ``sales`` otherwise.
-                    run = sorted(set(run) | {
-                        p for i in run for v in (trace[i][2] or ())
-                        if (p := planner._latest_producer(trace, v, before=i)) is not None})
+                    run = sorted(
+                        set(run)
+                        | {
+                            p
+                            for i in run
+                            for v in (trace[i][2] or ())
+                            if (p := planner._latest_producer(trace, v, before=i)) is not None
+                        }
+                    )
                     run = planner._complete_later_producers(run, trace)
                     if len(run) == size:
                         break
                 for info in restored:
-                    position = info.get('position')
+                    position = info.get("position")
                     if isinstance(position, int):
-                        info['is_upstream'] = False
+                        info["is_upstream"] = False
                         restored_by_index[position] = info
             run_set = set(run)
             planned: dict[int, dict] = {}
@@ -1807,14 +1872,14 @@ class UpstreamChecker:
                 if i in run_set:
                     continue
                 planned[i] = restored_by_index.get(i) or {
-                    'code': entry[0],
-                    'status': CacheStatus.SKIPPED,
-                    'is_upstream': False,
-                    'saved_time': 0.0,
-                    'total_time': 0.0,
+                    "code": entry[0],
+                    "status": CacheStatus.SKIPPED,
+                    "is_upstream": False,
+                    "saved_time": 0.0,
+                    "total_time": 0.0,
                 }
             if broken and not restored_by_index:
-                return None          # nothing on disk to jump to: run as usual
+                return None  # nothing on disk to jump to: run as usual
             return planned
         except Exception:  # noqa: BLE001 - a plan that cannot be made is the ordinary run
             logger.debug("[UPSTREAM] cell run plan failed", exc_info=True)
@@ -1907,10 +1972,15 @@ class UpstreamChecker:
                 updated = True
 
         if updated and self.debug:
-            logger.debug("[UPSTREAM_DEBUG] Synced simulation cache lineages with runtime state (scoped to producing code)")
+            logger.debug(
+                "[UPSTREAM_DEBUG] Synced simulation cache lineages with runtime state (scoped to producing code)"
+            )
 
     def _prepend_stale_seed_cells(
-        self, cell_code: str, notebook_cells: list[str], statements: list[str],
+        self,
+        cell_code: str,
+        notebook_cells: list[str],
+        statements: list[str],
         current_cell_idx: int | None,
     ) -> list[str]:
         """Schedule an edited-but-not-rerun seed cell ahead of a draw (ADR-017).
@@ -1961,7 +2031,10 @@ class UpstreamChecker:
             return statements
 
     def _prepend_rng_chain_for_reexecuted_draws(
-        self, notebook_cells: list[str], statements: list[str], current_cell_idx: int | None,
+        self,
+        notebook_cells: list[str],
+        statements: list[str],
+        current_cell_idx: int | None,
     ) -> list[str]:
         """Re-establish the RNG stream before a *re-executed* upstream draw (ADR-017).
 
@@ -2032,15 +2105,13 @@ class UpstreamChecker:
             # before it re-runs to advance the stream; it and everything after
             # stay in the plan.
             boundary = next(
-                (k for k, (idx, is_draw) in enumerate(rng_positions)
-                 if is_draw and all_stmts[idx] in already),
+                (k for k, (idx, is_draw) in enumerate(rng_positions) if is_draw and all_stmts[idx] in already),
                 None,
             )
             if boundary is None:
                 return statements
 
-            chain = {idx for idx, _is_draw in rng_positions[:boundary]
-                     if all_stmts[idx] not in already}
+            chain = {idx for idx, _is_draw in rng_positions[:boundary] if all_stmts[idx] not in already}
             if not chain:
                 return statements
             selected = self._with_input_definitions(chain, all_stmts, already)
@@ -2062,7 +2133,10 @@ class UpstreamChecker:
             return statements
 
     def _with_input_definitions(
-        self, chain: set[int], all_stmts: list[str], already: set[str],
+        self,
+        chain: set[int],
+        all_stmts: list[str],
+        already: set[str],
     ) -> set[int]:
         """Widen an RNG chain to include the definitions its statements read.
 
@@ -2114,8 +2188,7 @@ class UpstreamChecker:
                             continue
                         for out in outs:
                             definers.setdefault(out, []).append(j)
-                nearest = next(
-                    (j for j in reversed(definers.get(name, [])) if j < idx), None)
+                nearest = next((j for j in reversed(definers.get(name, [])) if j < idx), None)
                 if nearest is None or nearest in selected:
                     continue
                 if all_stmts[nearest] in already:
@@ -2139,8 +2212,8 @@ class UpstreamChecker:
         wanted = {s.strip() for s in rng_rerun}
         for m in executed_metrics:
             try:
-                if m.get('code', '').strip() in wanted:
-                    m['miss_reason'] = "re-run to restore the random stream"
+                if m.get("code", "").strip() in wanted:
+                    m["miss_reason"] = "re-run to restore the random stream"
             except (AttributeError, TypeError):  # pragma: no cover - defensive
                 continue
 
@@ -2152,7 +2225,7 @@ class UpstreamChecker:
         an indirect draw is treated like a direct one on re-run.
         """
         modules = set(get_drawing_rng_modules(cell_code))
-        digest = hashlib.sha256(cell_code.encode('utf-8')).hexdigest()
+        digest = hashlib.sha256(cell_code.encode("utf-8")).hexdigest()
         modules |= self._tracking_state.observed_rng_cells.get(digest, set())
         return modules
 
@@ -2172,7 +2245,7 @@ class UpstreamChecker:
         one escape hatch users are told to reach for silently does nothing.
         """
         for line in cell_code.splitlines():
-            if not line.strip().startswith('#'):
+            if not line.strip().startswith("#"):
                 continue
             ann = parse_annotation_line(line)
             if ann is not None and ann.no_cache:
@@ -2183,11 +2256,14 @@ class UpstreamChecker:
         """True if *src* seeds or draws — statically or by prior observation."""
         if get_seeding_rng_modules(src) or get_drawing_rng_modules(src):
             return True
-        digest = hashlib.sha256(src.encode('utf-8')).hexdigest()
+        digest = hashlib.sha256(src.encode("utf-8")).hexdigest()
         return bool(self._tracking_state.observed_rng_cells.get(digest))
 
     def _restore_position_rng_state(
-        self, cell_code: str, notebook_cells: list[str], current_cell_idx: int | None,
+        self,
+        cell_code: str,
+        notebook_cells: list[str],
+        current_cell_idx: int | None,
     ) -> None:
         """Restore the RNG to the state it holds just before this cell (ADR-018).
 
@@ -2220,13 +2296,12 @@ class UpstreamChecker:
             # Safe to prefer because the fingerprint expires it as soon as the
             # seed behind it changes, the same lineage check that invalidates any
             # other value.
-            own = self._tracking_state.rng_pre_states.get(
-                hashlib.sha256(cell_code.encode('utf-8')).hexdigest()
-            )
+            own = self._tracking_state.rng_pre_states.get(hashlib.sha256(cell_code.encode("utf-8")).hexdigest())
             if own is not None:
                 own_state, own_fingerprint = own
                 if own_fingerprint == rng_lineage_fingerprint(
-                    self.variable_lineage, drawing,
+                    self.variable_lineage,
+                    drawing,
                 ):
                     restore_rng_state(own_state)
                     return
@@ -2241,7 +2316,7 @@ class UpstreamChecker:
                 src = notebook_cells[idx]
                 if not self._cell_touches_rng(src):
                     continue
-                digest = hashlib.sha256(src.encode('utf-8')).hexdigest()
+                digest = hashlib.sha256(src.encode("utf-8")).hexdigest()
                 state = post_states.get(digest)
                 if state is not None:
                     restore_rng_state(state)
@@ -2265,7 +2340,7 @@ class UpstreamChecker:
         order: dict[str, int] = {}
         for cell in notebook_cells or ():
             try:
-                tree = ast.parse(CodeAnalyzer.strip_magics(cell.replace('\r\n', '\n')))
+                tree = ast.parse(CodeAnalyzer.strip_magics(cell.replace("\r\n", "\n")))
             except (SyntaxError, ValueError):
                 continue
             for node in tree.body:
@@ -2279,8 +2354,8 @@ class UpstreamChecker:
 
         def place(item):
             i, m = item
-            code = m.get('upstream_statement') or m.get('code') or ''
-            code = re.sub(r'#\s*__iteration_context__:[^\n]*\n', '', code).strip()
+            code = m.get("upstream_statement") or m.get("code") or ""
+            code = re.sub(r"#\s*__iteration_context__:[^\n]*\n", "", code).strip()
             return (order.get(code, end), i)
 
         return [m for _, m in sorted(enumerate(metrics), key=place)]
@@ -2296,12 +2371,13 @@ class UpstreamChecker:
         from its cell as a direct run reads it. Only statements that carry one.
         """
         from ..annotations import get_statement_annotations
+
         found: dict[str, Any] = {}
         for cell in notebook_cells or ():
             if "@cash:" not in cell:
                 continue
             try:
-                clean = CodeAnalyzer.strip_magics(cell.replace('\r\n', '\n'))
+                clean = CodeAnalyzer.strip_magics(cell.replace("\r\n", "\n"))
                 tree = ast.parse(clean)
             except (SyntaxError, ValueError):
                 continue
@@ -2340,7 +2416,7 @@ class UpstreamChecker:
             # and a stdout line for troubleshooting and integration tests.
             if self.debug:
                 logger.debug("[UPSTREAM] Auto-executing: %s...", stmt_code[:50])
-                stmt_short = stmt_code.split('\n')[0][:40]
+                stmt_short = stmt_code.split("\n")[0][:40]
                 if len(stmt_code) > 40:
                     stmt_short += "..."
                 print(f"Cash: Auto-executing upstream statement: {stmt_short}")
@@ -2354,14 +2430,17 @@ class UpstreamChecker:
                     if self.debug:
                         logger.debug("[UPSTREAM] Delegating control structure to per-iteration processor")
                     ctrl_annotation = (annotations or {}).get(stmt_code)
-                    ctrl_result = (control_structure_callback(ctrl_node, ttl=global_ttl, silent=True,
-                                                              inherited_annotation=ctrl_annotation)
-                                   if ctrl_annotation is not None else
-                                   control_structure_callback(ctrl_node, ttl=global_ttl, silent=True))
+                    ctrl_result = (
+                        control_structure_callback(
+                            ctrl_node, ttl=global_ttl, silent=True, inherited_annotation=ctrl_annotation
+                        )
+                        if ctrl_annotation is not None
+                        else control_structure_callback(ctrl_node, ttl=global_ttl, silent=True)
+                    )
                     for m in ctrl_result.metrics:
                         if m:
-                            m['is_upstream'] = True
-                            m.setdefault('upstream_statement', stmt_code)
+                            m["is_upstream"] = True
+                            m.setdefault("upstream_statement", stmt_code)
                             executed_metrics.append(m)
                     if not ctrl_result.success:
                         raise ctrl_result.error or RuntimeError("Error in upstream control structure")
@@ -2374,14 +2453,15 @@ class UpstreamChecker:
                     # (round 21, replay acceptance corpus). A failure still
                     # surfaces: the processor reports it in ``result['error']``.
                     stmt_annotation = (annotations or {}).get(stmt_code)
-                    result = (process_callback(stmt_code, global_ttl, silent=True,
-                                               annotation=stmt_annotation)
-                              if stmt_annotation is not None else
-                              process_callback(stmt_code, global_ttl, silent=True))
+                    result = (
+                        process_callback(stmt_code, global_ttl, silent=True, annotation=stmt_annotation)
+                        if stmt_annotation is not None
+                        else process_callback(stmt_code, global_ttl, silent=True)
+                    )
                     if self.debug:
                         logger.debug("[UPSTREAM] Callback result for '%s...': %s", stmt_code[:20], result)
                     if result:
-                        result['is_upstream'] = True  # Mark as upstream so badge categorizes correctly
+                        result["is_upstream"] = True  # Mark as upstream so badge categorizes correctly
                         executed_metrics.append(result)
                         # The processor reports statement failures via the
                         # 'error' field instead of raising - surface those
@@ -2390,16 +2470,18 @@ class UpstreamChecker:
                         # and nothing below could tell a NameError from it --
                         # every round-25 repair failure took this path and got
                         # "fix the upstream cell" for a cell with nothing wrong.
-                        error = result.get('error')
+                        error = result.get("error")
                         if error:
-                            text = (f"{type(error).__name__}: {error}"
-                                    if isinstance(error, BaseException) else str(error))
+                            text = (
+                                f"{type(error).__name__}: {error}" if isinstance(error, BaseException) else str(error)
+                            )
                             raise UpstreamStateError(
                                 self._format_upstream_failure(
-                                    stmt_code, text,
+                                    stmt_code,
+                                    text,
                                     planning_gap=self._planning_gap_for(
-                                        error, statements[:stmt_idx],
-                                        stmt_code=stmt_code, notebook_cells=notebook_cells),
+                                        error, statements[:stmt_idx], stmt_code=stmt_code, notebook_cells=notebook_cells
+                                    ),
                                 )
                             )
             except UpstreamStateError:
@@ -2422,10 +2504,11 @@ class UpstreamChecker:
                 logger.error("[ERROR] Failed to auto-execute statement: %s", e)
                 raise UpstreamStateError(
                     self._format_upstream_failure(
-                        stmt_code, f"{type(e).__name__}: {e}",
+                        stmt_code,
+                        f"{type(e).__name__}: {e}",
                         planning_gap=self._planning_gap_for(
-                            e, statements[:stmt_idx],
-                            stmt_code=stmt_code, notebook_cells=notebook_cells),
+                            e, statements[:stmt_idx], stmt_code=stmt_code, notebook_cells=notebook_cells
+                        ),
                     )
                 ) from e
 
@@ -2440,8 +2523,12 @@ class UpstreamChecker:
         return executed_metrics
 
     def _planning_gap_for(
-        self, exc: object, already_scheduled: list[str], *,
-        stmt_code: str | None = None, notebook_cells: list[str] | None = None,
+        self,
+        exc: object,
+        already_scheduled: list[str],
+        *,
+        stmt_code: str | None = None,
+        notebook_cells: list[str] | None = None,
     ) -> str | None:
         """Say so when the failure is a gap in cash's repair, not the user's code.
 
@@ -2471,8 +2558,7 @@ class UpstreamChecker:
             if missing is None:
                 return None
             kind, name = missing
-            producer = self._unscheduled_producer(
-                kind, name, stmt_code, already_scheduled, notebook_cells)
+            producer = self._unscheduled_producer(kind, name, stmt_code, already_scheduled, notebook_cells)
             if producer is not None:
                 code, cell_no = producer
                 first = code.split("\n")[0][:60]
@@ -2484,8 +2570,7 @@ class UpstreamChecker:
                     f"something wrong with your code - to continue, {run_it} yourself "
                     f"and then this cell again (or Restart & Run All), and please report it"
                 )
-            ran_before = {c for c in (self.executed_cell_codes or {}).values()
-                          if isinstance(c, str)}
+            ran_before = {c for c in (self.executed_cell_codes or {}).values() if isinstance(c, str)}
             if stmt_code and stmt_code in ran_before:
                 return (
                     "NOTE: this exact statement ran without error before, so cash most "
@@ -2514,23 +2599,30 @@ class UpstreamChecker:
         return None
 
     def _unscheduled_producer(
-        self, kind: str, name: str, stmt_code: str | None,
-        already_scheduled: list[str], notebook_cells: list[str] | None,
+        self,
+        kind: str,
+        name: str,
+        stmt_code: str | None,
+        already_scheduled: list[str],
+        notebook_cells: list[str] | None,
     ) -> tuple[str, int | None] | None:
         """The last statement above *stmt_code*, not re-run first, writing *name*."""
         scheduled = set(already_scheduled)
         reads: set[str] = set()
         if stmt_code:
             try:
-                reads = {n.id for n in ast.walk(ast.parse(stmt_code))
-                         if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+                reads = {
+                    n.id
+                    for n in ast.walk(ast.parse(stmt_code))
+                    if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+                }
             except SyntaxError:
                 reads = set()
         if notebook_cells and stmt_code:
             found: tuple[str, int | None] | None = None
             for cell_idx, cell in enumerate(notebook_cells):
                 try:
-                    tree = ast.parse(CodeAnalyzer.strip_magics(cell.replace('\r\n', '\n')))
+                    tree = ast.parse(CodeAnalyzer.strip_magics(cell.replace("\r\n", "\n")))
                 except (SyntaxError, ValueError):
                     continue
                 for node in tree.body:
@@ -2573,7 +2665,7 @@ class UpstreamChecker:
                 if str(sub.slice.value) == name:
                     return True
             elif kind == "key":
-                return True   # ``results[name] = ...`` in the loop that fills it
+                return True  # ``results[name] = ...`` in the loop that fills it
         return False
 
     def _known_producers(self) -> list[tuple[str, set[str]]]:
@@ -2591,7 +2683,9 @@ class UpstreamChecker:
 
     @staticmethod
     def _format_upstream_failure(
-        stmt_code: str, error_text: str, planning_gap: str | None = None,
+        stmt_code: str,
+        error_text: str,
+        planning_gap: str | None = None,
     ) -> str:
         """One-line, embeddable message for an upstream statement failure.
 
@@ -2599,9 +2693,9 @@ class UpstreamChecker:
         ``raise ...('''<msg>''')`` statement, so the message must stay a
         single line and must not contain a triple quote.
         """
-        stmt_short = stmt_code.split('\n')[0][:60]
-        if len(stmt_code) > 60 or '\n' in stmt_code:
-            stmt_short += '...'
+        stmt_short = stmt_code.split("\n")[0][:60]
+        if len(stmt_code) > 60 or "\n" in stmt_code:
+            stmt_short += "..."
 
         # "fix the upstream cell" is right for a statement that genuinely
         # raised, and actively misleading for a NameError. That one usually
@@ -2629,7 +2723,7 @@ class UpstreamChecker:
         )
         if planning_gap:
             msg = f"{msg} {planning_gap}."
-        return msg.replace("'''", '"""').replace('\n', ' ')
+        return msg.replace("'''", '"""').replace("\n", " ")
 
     def _try_parse_control_structure(self, code: str) -> ast.AST | None:
         """Parse code and return the AST node if it's a single control structure."""
@@ -2637,4 +2731,3 @@ class UpstreamChecker:
         if tree and len(tree.body) == 1 and is_control_structure(tree.body[0]):
             return tree.body[0]
         return None
-

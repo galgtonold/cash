@@ -14,6 +14,7 @@ numpy array. `frozen=True` is the explicit way back to the fast path for those:
   use (every use under CASH_DEBUG), and a change warns KEY-FROZEN-MUTATED
   and falls back to content hashing for that object.
 """
+
 from __future__ import annotations
 
 import os
@@ -58,6 +59,7 @@ def test_a_frozen_result_is_keyed_without_hashing_it(c, monkeypatch):
     # The key's payload is pickled; a frozen model enters it as its tag, so
     # the bytes pickled stay tiny whatever the model holds.
     import pickle
+
     sizes = []
     real = pickle.dumps
 
@@ -73,6 +75,7 @@ def test_a_frozen_result_is_keyed_without_hashing_it(c, monkeypatch):
 
 def test_an_unfrozen_result_is_keyed_by_content(c):
     """The control: without the declaration, a mutation reaches the key."""
+
     @c.cache
     def train():
         return Model([1, 2, 3])
@@ -90,7 +93,8 @@ def test_an_unfrozen_result_is_keyed_by_content(c):
 def test_a_frozen_result_hits_across_processes(tmp_path):
     """Keyed by the producer's identity, which is the same in every process."""
     script = tmp_path / "job.py"
-    script.write_text(textwrap.dedent('''
+    script.write_text(
+        textwrap.dedent("""
         import sys, time
         import cash
 
@@ -110,11 +114,15 @@ def test_a_frozen_result_hits_across_processes(tmp_path):
             return sum(model.weights)
 
         print(score(train(1000)))
-    '''), encoding="utf-8")
+    """),
+        encoding="utf-8",
+    )
     env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
     env.update(CASH_CACHE_DIR=str(tmp_path / ".cash"), PYTHONDONTWRITEBYTECODE="1")
-    runs = [subprocess.run([sys.executable, str(script)], capture_output=True, text=True,
-                           env=env, timeout=120) for _ in range(2)]
+    runs = [
+        subprocess.run([sys.executable, str(script)], capture_output=True, text=True, env=env, timeout=120)
+        for _ in range(2)
+    ]
     assert [r.stdout.strip() for r in runs] == ["499500", "499500"]
     assert "[RUN]" in runs[0].stderr and "[RUN]" not in runs[1].stderr
 
@@ -122,6 +130,7 @@ def test_a_frozen_result_hits_across_processes(tmp_path):
 def test_an_unpicklable_frozen_result_can_still_be_passed_on(c):
     """Content hashing cannot key an object holding a lock; its producer's
     identity can, which is what made this work before round 18."""
+
     class Holder:
         def __init__(self):
             self.lock = threading.Lock()
@@ -156,7 +165,7 @@ def test_a_frozen_numpy_result_comes_back_read_only(c):
     assert not a.flags.writeable
     with pytest.raises(ValueError):
         a[0] = 99.0
-    b = grid(5)                                  # the restored copy too
+    b = grid(5)  # the restored copy too
     assert not b.flags.writeable
 
 
@@ -198,7 +207,7 @@ def test_mutating_a_frozen_result_is_caught_by_the_audit(c, monkeypatch):
 
     m = train()
     assert total(m) == 6
-    m.weights.append(4)                          # breaks the promise
+    m.weights.append(4)  # breaks the promise
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
         got = total(m)

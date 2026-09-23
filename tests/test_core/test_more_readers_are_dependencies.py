@@ -14,17 +14,17 @@ family and is deliberately NOT tracked: cash's own storage and the import
 machinery read through it, and recording those made a module's ``.pyc`` and the
 cache's own entries look like a function's data. It stays a documented gap.
 """
+
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 import textwrap
 
 import pytest
 
-PROGRAM = textwrap.dedent('''
+PROGRAM = textwrap.dedent("""
     import json, linecache, os, time
     import cash
     cash.configure(cache_dir=CACHE)
@@ -44,12 +44,13 @@ PROGRAM = textwrap.dedent('''
         return linecache.getline(path, 1).strip()
 
     print(json.dumps([via_dataset(), via_linecache()]))
-''')
+""")
 
 
 def _data(tmp_path, rows, text):
     pa = pytest.importorskip("pyarrow")
     import pyarrow.parquet as pq
+
     parts = tmp_path / "data" / "parts"
     parts.mkdir(parents=True, exist_ok=True)
     pq.write_table(pa.table({"x": list(range(rows))}), str(parts / f"p{rows}.parquet"))
@@ -60,9 +61,9 @@ def _run(tmp_path):
     script = tmp_path / "run.py"
     script.write_text(
         PROGRAM.replace("CACHE", repr(str(tmp_path / ".cash"))).replace("DATA", repr(str(tmp_path / "data"))),
-        encoding="utf-8")
-    done = subprocess.run([sys.executable, str(script)], capture_output=True, text=True,
-                          timeout=180, cwd=str(tmp_path))
+        encoding="utf-8",
+    )
+    done = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=180, cwd=str(tmp_path))
     assert done.returncode == 0, done.stderr[-1500:]
     return json.loads(done.stdout.strip().splitlines()[-1])
 

@@ -15,8 +15,9 @@ the cascade to earlier statements that produce the same variable but are
 fully overwritten.
 """
 
-import pytest
 import time
+
+import pytest
 
 pytestmark = pytest.mark.upstream
 
@@ -30,32 +31,28 @@ class TestSkipOverwrittenVariable:
         x = {'b': 123} followed by x['a'] = f(0), executing a cell that uses x
         should NOT execute the try/except block — only the later redefinition chain.
         """
-        nb_runner.create_notebook([
-            # Cell 1: Define x in try/except (should NOT be executed)
-            (
-                "import time\n"
-                "try:\n"
-                "    print('hi')\n"
-                "    asdf = 235\n"
-                "    raise ValueError('This is a test error')\n"
-                "    x = 123\n"
-                "except ValueError as e:\n"
-                "    print(f'Value error occurred: {e}')\n"
-                "    time.sleep(1)  # Slow operation to detect if executed\n"
-            ),
-            # Cell 2: Define c (dependency of f)
-            "c = 122",
-            # Cell 3: Define f that depends on c, then fully redefine x
-            (
-                "def f(a):\n"
-                "    return c + a\n"
-                "\n"
-                "x = {'b': 123}\n"
-                "x['a'] = f(0)"
-            ),
-            # Cell 4: Use x (this is the cell we'll execute)
-            "x",
-        ])
+        nb_runner.create_notebook(
+            [
+                # Cell 1: Define x in try/except (should NOT be executed)
+                (
+                    "import time\n"
+                    "try:\n"
+                    "    print('hi')\n"
+                    "    asdf = 235\n"
+                    "    raise ValueError('This is a test error')\n"
+                    "    x = 123\n"
+                    "except ValueError as e:\n"
+                    "    print(f'Value error occurred: {e}')\n"
+                    "    time.sleep(1)  # Slow operation to detect if executed\n"
+                ),
+                # Cell 2: Define c (dependency of f)
+                "c = 122",
+                # Cell 3: Define f that depends on c, then fully redefine x
+                ("def f(a):\n    return c + a\n\nx = {'b': 123}\nx['a'] = f(0)"),
+                # Cell 4: Use x (this is the cell we'll execute)
+                "x",
+            ]
+        )
         nb_runner.start_kernel()
 
         # Run all cells first
@@ -92,14 +89,16 @@ class TestSkipOverwrittenVariable:
         If x is defined as x=10 in cell 1, then fully redefined as x=20 in cell 2,
         executing a cell that uses x should only execute cell 2's definition.
         """
-        nb_runner.create_notebook([
-            # Cell 1: Define x (should NOT be executed when later redefined)
-            "x = 10\nprint('cell1_executed')",
-            # Cell 2: Fully redefine x
-            "x = 20\nprint('cell2_executed')",
-            # Cell 3: Use x
-            "print(f'x = {x}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                # Cell 1: Define x (should NOT be executed when later redefined)
+                "x = 10\nprint('cell1_executed')",
+                # Cell 2: Fully redefine x
+                "x = 20\nprint('cell2_executed')",
+                # Cell 3: Use x
+                "print(f'x = {x}')",
+            ]
+        )
         nb_runner.start_kernel()
 
         # Run all cells first
@@ -117,9 +116,7 @@ class TestSkipOverwrittenVariable:
 
         # Check that cell 1 was NOT re-executed (cell1_executed should not appear)
         raw = nb_runner.get_raw_output(3)
-        assert "cell1_executed" not in raw, (
-            f"Earlier assignment was unnecessarily re-executed. Raw: {raw[:500]}"
-        )
+        assert "cell1_executed" not in raw, f"Earlier assignment was unnecessarily re-executed. Raw: {raw[:500]}"
 
     def test_mutation_after_redefinition_still_works(self, nb_runner):
         """
@@ -127,16 +124,18 @@ class TestSkipOverwrittenVariable:
         the mutation chain should work correctly but NOT cascade past
         the full redefinition.
         """
-        nb_runner.create_notebook([
-            # Cell 1: First definition (should be skipped)
-            "x = [1, 2, 3]\nprint('original_def')",
-            # Cell 2: Full redefinition
-            "x = [10, 20, 30]",
-            # Cell 3: Mutation (needs x from cell 2)
-            "x.append(40)",
-            # Cell 4: Use x
-            "print(f'x = {x}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                # Cell 1: First definition (should be skipped)
+                "x = [1, 2, 3]\nprint('original_def')",
+                # Cell 2: Full redefinition
+                "x = [10, 20, 30]",
+                # Cell 3: Mutation (needs x from cell 2)
+                "x.append(40)",
+                # Cell 4: Use x
+                "print(f'x = {x}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -153,6 +152,4 @@ class TestSkipOverwrittenVariable:
 
         # Cell 1 should NOT have been executed
         raw = nb_runner.get_raw_output(4)
-        assert "original_def" not in raw, (
-            f"Original definition was unnecessarily re-executed. Raw: {raw[:500]}"
-        )
+        assert "original_def" not in raw, f"Original definition was unnecessarily re-executed. Raw: {raw[:500]}"

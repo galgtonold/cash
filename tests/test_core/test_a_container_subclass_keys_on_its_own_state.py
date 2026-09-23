@@ -7,6 +7,7 @@ one entry, and a ``dict`` subclass carrying ``self.source`` served the first
 caller's answer for every source. Pickle carries both, so this was signal cash
 had and dropped.
 """
+
 from __future__ import annotations
 
 from collections import defaultdict

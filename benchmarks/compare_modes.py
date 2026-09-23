@@ -7,11 +7,11 @@ relative overhead as a fraction of off-mode time.
 Usage:
     python benchmarks/compare_modes.py <results-dir> <notebook-stem>
 """
+
 from __future__ import annotations
 
 import argparse
 import statistics
-import sys
 from collections import defaultdict
 from pathlib import Path
 
@@ -59,14 +59,13 @@ def build_table(results_dir: Path, notebook_stem: str) -> str:
         diff = c - o
         ratio = (diff / o) if o > 0 else float("inf")
         lines.append(
-            f"| cell {idx} | {o*1000:.2f} | {c*1000:.2f} | {w*1000:.2f} "
-            f"| {diff*1000:+.2f} | {ratio:+.1%} |"
+            f"| cell {idx} | {o * 1000:.2f} | {c * 1000:.2f} | {w * 1000:.2f} | {diff * 1000:+.2f} | {ratio:+.1%} |"
         )
     diff = total_cold - total_off
     ratio = (diff / total_off) if total_off > 0 else float("inf")
     lines.append(
-        f"| **TOTAL** | **{total_off*1000:.2f}** | **{total_cold*1000:.2f}** "
-        f"| **{total_warm*1000:.2f}** | **{diff*1000:+.2f}** | **{ratio:+.1%}** |"
+        f"| **TOTAL** | **{total_off * 1000:.2f}** | **{total_cold * 1000:.2f}** "
+        f"| **{total_warm * 1000:.2f}** | **{diff * 1000:+.2f}** | **{ratio:+.1%}** |"
     )
     return "\n".join(lines)
 

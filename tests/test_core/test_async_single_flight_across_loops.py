@@ -8,6 +8,7 @@ Measured: 4 loops x 4 awaits ran the body 16 times where one loop runs it once.
 That is worse than one compute per loop, and the feature exists so an expensive
 idempotent call (a paid API request) happens once.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -35,6 +36,7 @@ def counted(tmp_path):
 def _await_many(fn, key, times):
     async def main():
         return await asyncio.gather(*[fn(key) for _ in range(times)])
+
     return asyncio.run(main())
 
 
@@ -49,8 +51,7 @@ def test_one_loop_computes_once(counted):
 def test_several_loops_compute_once(counted):
     expensive, runs = counted
     results: list[list[int]] = []
-    threads = [threading.Thread(target=lambda: results.append(_await_many(expensive, 2, 4)))
-               for _ in range(4)]
+    threads = [threading.Thread(target=lambda: results.append(_await_many(expensive, 2, 4))) for _ in range(4)]
     for t in threads:
         t.start()
     for t in threads:

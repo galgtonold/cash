@@ -40,15 +40,12 @@ from collections.abc import Callable, Mapping
 from types import ModuleType as _ModuleType
 from typing import Any
 
+from cash.notebook._trace import trace_event
 from cash.notebook.annotations import CacheAnnotation
+from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.cacheability import analyze_statement, callee_source_global_mutations
 from cash.notebook.cacheability_decision import decide_cacheability
-from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.call_interception import CallSite, _names_read
-from cash.notebook.file_tracker import FileAccessTracker
-from cash.notebook.object_hashing import compute_hash, compute_hash_full, estimate_object_size, is_identity_fallback_hash
-from cash.notebook.randomness import capture_rng_state, rng_modules_changed
-from cash.notebook._trace import trace_event
 from cash.notebook.call_refs import (
     DIGEST_FIELD,
     ESTIMATED_FIELD,
@@ -56,6 +53,14 @@ from cash.notebook.call_refs import (
     UNHASHED_PREFIX,
     digest_and_size,
 )
+from cash.notebook.file_tracker import FileAccessTracker
+from cash.notebook.object_hashing import (
+    compute_hash,
+    compute_hash_full,
+    estimate_object_size,
+    is_identity_fallback_hash,
+)
+from cash.notebook.randomness import capture_rng_state, rng_modules_changed
 
 logger = logging.getLogger(__name__)
 
@@ -282,10 +287,7 @@ def callee_mutated_globals(fn) -> tuple[str, ...]:
     # actually bound and is not a module. `import` order or a `del` can change
     # that between calls, and the memo above is about the SOURCE, not the
     # namespace.
-    return tuple(
-        n for n in cached
-        if n in globals_dict and not isinstance(globals_dict[n], _ModuleType)
-    )
+    return tuple(n for n in cached if n in globals_dict and not isinstance(globals_dict[n], _ModuleType))
 
 
 def call_cache_key(
@@ -517,12 +519,9 @@ def call_cache_key(
     # shape) no longer starts with `"__"` itself, so a bare check here would
     # silently stop enforcing this exact guard for the only caller that
     # actually reaches it today.
-    filtered_loop_vars = {
-        name: value for name, value in loop_vars.items() if not _is_dunder_loop_var(name)
-    }
+    filtered_loop_vars = {name: value for name, value in loop_vars.items() if not _is_dunder_loop_var(name)}
 
-    if (not arg_digests and not filtered_loop_vars and not site.stmt_identity
-            and not global_digests and not by_content):
+    if not arg_digests and not filtered_loop_vars and not site.stmt_identity and not global_digests and not by_content:
         return base
     # Length-prefixed and `|`-delimited deliberately: `":".join(["a", "b"])`
     # and `":".join(["a:b"])` are the same string, so an undelimited join
@@ -554,12 +553,8 @@ def call_cache_key(
         # Marked, so a key without the statement can never equal one with it.
         parts.append("by=content")
     elif site.stmt_identity:
-        parts.append(
-            "stmt=" + hashlib.sha256(site.stmt_identity.encode("utf-8")).hexdigest()
-        )
-    return "call:" + hashlib.sha256(
-        (base + "|" + "|".join(parts)).encode("utf-8")
-    ).hexdigest()
+        parts.append("stmt=" + hashlib.sha256(site.stmt_identity.encode("utf-8")).hexdigest())
+    return "call:" + hashlib.sha256((base + "|" + "|".join(parts)).encode("utf-8")).hexdigest()
 
 
 #: Below this, a call is not worth a key, a store, or a timer.
@@ -608,6 +603,7 @@ class _ForwardingTee:
     (what ``print`` and the overwhelming majority of callees use) are the
     channels this class covers.
     """
+
     __slots__ = ("_real", "_chunks")
 
     def __init__(self, real_stream: Any) -> None:
@@ -709,9 +705,21 @@ _IDENTITY_FREE = frozenset({int, float, complex, bool, str, bytes, type(None)})
 #: Values whose content is all there is to them: nothing about them can change
 #: while their hash stays put. The test :func:`_keys_by_content` applies to
 #: everything a call reads before keying it without its statement.
-_PLAIN_ATOMS = (int, float, complex, str, bytes, type(None), _decimal.Decimal,
-                _fractions.Fraction, _dt.date, _dt.time, _dt.timedelta,
-                _pathlib.PurePath, range)
+_PLAIN_ATOMS = (
+    int,
+    float,
+    complex,
+    str,
+    bytes,
+    type(None),
+    _decimal.Decimal,
+    _fractions.Fraction,
+    _dt.date,
+    _dt.time,
+    _dt.timedelta,
+    _pathlib.PurePath,
+    range,
+)
 #: How many values one call may have looked at before the answer is "not
 #: plain" -- a long list is keyed the old way rather than walked.
 _PLAIN_BUDGET = 10_000
@@ -748,8 +756,7 @@ def _is_plain_data(value, budget: list[int]) -> bool:
     if type(value) in (list, tuple, set, frozenset):
         return all(_is_plain_data(item, budget) for item in value)
     if type(value) is dict:
-        return all(_is_plain_data(k, budget) and _is_plain_data(v, budget)
-                   for k, v in value.items())
+        return all(_is_plain_data(k, budget) and _is_plain_data(v, budget) for k, v in value.items())
     return False
 
 
@@ -761,8 +768,7 @@ def _code_names(code: _types.CodeType) -> frozenset[str]:
     ``os.open`` would read as the global ``open`` -- cash's file-tracking
     wrapper in a notebook.
     """
-    names = {ins.argval for ins in _dis.get_instructions(code)
-             if ins.opname in ("LOAD_GLOBAL", "LOAD_NAME")}
+    names = {ins.argval for ins in _dis.get_instructions(code) if ins.opname in ("LOAD_GLOBAL", "LOAD_NAME")}
     for const in code.co_consts:
         if isinstance(const, _types.CodeType):
             names |= _code_names(const)
@@ -771,10 +777,10 @@ def _code_names(code: _types.CodeType) -> frozenset[str]:
 
 def _plain_or_code(value, seen: set[int], budget: list[int]) -> bool:
     if isinstance(value, _types.FunctionType):
-        if (getattr(value, '_is_file_tracker_patch', False)
-                or getattr(value, '_cash_cached', False)):
-            return True          # cash's own: keyed or tracked by cash itself
+        if getattr(value, "_is_file_tracker_patch", False) or getattr(value, "_cash_cached", False):
+            return True  # cash's own: keyed or tracked by cash itself
         from cash.notebook.file_tracker import _is_user_file
+
         filename = getattr(value.__code__, "co_filename", "") or ""
         # A cell's code has a `<cash-...>` / `<ipython-...>` name: the user's.
         if filename and not filename.startswith("<") and not _is_user_file(filename):
@@ -806,7 +812,7 @@ def _callee_state_is_plain(fn, seen: set[int], budget: list[int]) -> bool:
     for cell in fn.__closure__ or ():
         try:
             contents = cell.cell_contents
-        except ValueError:       # an empty cell: nothing bound yet
+        except ValueError:  # an empty cell: nothing bound yet
             continue
         if not _plain_or_code(contents, seen, budget):
             return False
@@ -822,6 +828,7 @@ def _nbytes(value) -> int:
     pd = sys.modules.get("pandas")
     if pd is not None and isinstance(value, (pd.DataFrame, pd.Series)):
         from cash._sizing import pandas_nbytes
+
         sized = pandas_nbytes(value)
         if sized is not None:
             return int(sized)
@@ -856,8 +863,10 @@ def _warnings_at_the_caller():
     location as the default filter would. A filter that turns warnings into
     errors is left to act as it would: recording would swallow the exception.
     """
-    if any(action == "error" and category is Warning and message is None and module is None
-           for action, message, category, module, _lineno in warnings.filters):
+    if any(
+        action == "error" and category is Warning and message is None and module is None
+        for action, message, category, module, _lineno in warnings.filters
+    ):
         yield
         return
     catcher = warnings.catch_warnings(record=True)
@@ -871,8 +880,9 @@ def _warnings_at_the_caller():
             filename, lineno = w.filename, w.lineno
             if _in_cash(filename):
                 frame = sys._getframe(1)
-                while frame is not None and (_in_cash(frame.f_code.co_filename)
-                                             or frame.f_code.co_filename == contextlib.__file__):
+                while frame is not None and (
+                    _in_cash(frame.f_code.co_filename) or frame.f_code.co_filename == contextlib.__file__
+                ):
                     frame = frame.f_back
                 if frame is not None:
                     # The line is read from linecache, where cash registered
@@ -881,8 +891,13 @@ def _warnings_at_the_caller():
                     filename, lineno = frame.f_code.co_filename, frame.f_lineno
             try:
                 warnings.warn_explicit(
-                    w.message, w.category, filename, lineno,
-                    registry=_WARNING_REGISTRIES.setdefault(filename, {}), source=w.source)
+                    w.message,
+                    w.category,
+                    filename,
+                    lineno,
+                    registry=_WARNING_REGISTRIES.setdefault(filename, {}),
+                    source=w.source,
+                )
             except Exception:  # noqa: BLE001 - relaying a warning never breaks the call
                 logger.debug("call unit: could not relay a warning", exc_info=True)
                 try:
@@ -914,8 +929,9 @@ def _global_names_reached(fn, seen: set[int] | None = None, depth: int = 0) -> s
     return names
 
 
-def _loop_vars_the_call_can_read(fn, site: CallSite, loop_vars: Mapping[str, object],
-                                 name_digests: Mapping[str, str] | None) -> dict[str, object]:
+def _loop_vars_the_call_can_read(
+    fn, site: CallSite, loop_vars: Mapping[str, object], name_digests: Mapping[str, str] | None
+) -> dict[str, object]:
     """The enclosing loops' variables a content-keyed call can still read
     without them being in its key.
 
@@ -947,8 +963,7 @@ def _loop_vars_the_call_can_read(fn, site: CallSite, loop_vars: Mapping[str, obj
     return kept
 
 
-def _keys_by_content(fn, site: CallSite, args: tuple, kwargs: dict,
-                     loop_vars: Mapping[str, object]) -> bool:
+def _keys_by_content(fn, site: CallSite, args: tuple, kwargs: dict, loop_vars: Mapping[str, object]) -> bool:
     """Whether the call may be keyed on what it receives (see
     :func:`call_cache_key`'s *by_content*).
 
@@ -961,11 +976,9 @@ def _keys_by_content(fn, site: CallSite, args: tuple, kwargs: dict,
     budget = [_PLAIN_BUDGET]
     if not all(_is_plain_data(value, budget) for value in combined):
         return False
-    if not all(_is_plain_data(value, budget) for name, value in loop_vars.items()
-               if not _is_dunder_loop_var(name)):
+    if not all(_is_plain_data(value, budget) for name, value in loop_vars.items() if not _is_dunder_loop_var(name)):
         return False
-    computed = sum(_nbytes(combined[pos]) for pos in site.computed_arg_positions
-                   if pos < len(combined))
+    computed = sum(_nbytes(combined[pos]) for pos in site.computed_arg_positions if pos < len(combined))
     if computed > _CONTENT_KEY_MAX_BYTES:
         return False
     return _callee_state_is_plain(fn, set(), budget)
@@ -1082,8 +1095,7 @@ class CallUnit:
         exception form would silently install a 1-SECOND floor there and cache
         nothing. ``_COST_FLOOR_S`` stays the default and the fallback.
         """
-        value = getattr(
-            getattr(self._cash, "config", None), "call_cost_floor_seconds", None)
+        value = getattr(getattr(self._cash, "config", None), "call_cost_floor_seconds", None)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             return float(value)
         return _COST_FLOOR_S
@@ -1170,13 +1182,17 @@ class CallUnit:
                     # Too dear to cache, or a hit could not save a quarter of
                     # the call: a hit pays the key and lookup, then the restore
                     # (round 25, r25s5: 4.4 ms calls, ~4 ms to key).
-                    run.plain = (cached > (1 + _OVERHEAD_FACTOR) * plain
-                                 or keyed >= _HIT_MUST_SAVE * plain)
+                    run.plain = cached > (1 + _OVERHEAD_FACTOR) * plain or keyed >= _HIT_MUST_SAVE * plain
                     run.decided = True
-                    trace_event("call_site_decided", source=site.source, calls=run.calls,
-                                cached_ms=round(cached * 1000, 3),
-                                keyed_ms=round(keyed * 1000, 3),
-                                plain_ms=round(plain * 1000, 3), plain=run.plain)
+                    trace_event(
+                        "call_site_decided",
+                        source=site.source,
+                        calls=run.calls,
+                        cached_ms=round(cached * 1000, 3),
+                        keyed_ms=round(keyed * 1000, 3),
+                        plain_ms=round(plain * 1000, 3),
+                        plain=run.plain,
+                    )
                 self.last_returned = (None, id(result), site.source)
                 return result
             self._last_compute = None
@@ -1205,10 +1221,15 @@ class CallUnit:
             if self._last_compute is not None:
                 run.compute_s += self._last_compute
                 run.computed += 1
-            if (not run.decided and run.calls >= _GUARD_AFTER_CALLS and run.computed
-                    and run.compute_s / run.computed < _GUARD_CHEAP_BELOW_S):
+            if (
+                not run.decided
+                and run.calls >= _GUARD_AFTER_CALLS
+                and run.computed
+                and run.compute_s / run.computed < _GUARD_CHEAP_BELOW_S
+            ):
                 run.probing = True
             return result
+
         return _entry
 
     def wrap(self, fn, site: CallSite):
@@ -1225,7 +1246,9 @@ class CallUnit:
             key_started = _time.perf_counter()
             mutated_globals = callee_mutated_globals(fn)
             key = self._build_key(
-                site, args, kwargs,
+                site,
+                args,
+                kwargs,
                 self._global_digests(fn, mutated_globals) if mutated_globals else None,
                 # A callee that writes globals keys on their state: the old way.
                 fn=None if mutated_globals else fn,
@@ -1319,7 +1342,8 @@ class CallUnit:
             arg_hashes_before = self._hash_args(args, kwargs)
             started = _time.perf_counter()
             call_tracker = FileAccessTracker(
-                getattr(fn, '__globals__', None), propagate_to_parent=True,
+                getattr(fn, "__globals__", None),
+                propagate_to_parent=True,
             )
             with call_tracker:
                 result, stdout_text, stderr_text = self._call_capturing_output(fn, args, kwargs)
@@ -1341,8 +1365,11 @@ class CallUnit:
                 # catches "mutated but returned a *different* object", which
                 # a hit would silently skip.
                 self._refused.add(key)
-            elif (elapsed >= self._cost_floor_s() and self._storable(result, args, kwargs)
-                  and self._restore_pays(result, elapsed)):
+            elif (
+                elapsed >= self._cost_floor_s()
+                and self._storable(result, args, kwargs)
+                and self._restore_pays(result, elapsed)
+            ):
                 # CAS-260: the callee's writes to its own globals, captured as
                 # an END STATE. Snapshotting the final value needs no ordering
                 # and no idempotence, which is why this is tractable where
@@ -1359,7 +1386,9 @@ class CallUnit:
                     self._refused.add(key)
                 else:
                     self._store(
-                        key, result, elapsed,
+                        key,
+                        result,
+                        elapsed,
                         file_deps=frozenset(call_tracker.get_accessed_files()),
                         remote_deps=frozenset(call_tracker.get_accessed_remote_urls()),
                         stdout=stdout_text,
@@ -1419,6 +1448,7 @@ class CallUnit:
             return
         try:
             from cash.notebook.file_tracker import _active_tracker
+
             tracker = _active_tracker.get()
         except Exception:  # noqa: BLE001 - tracking is best-effort
             return
@@ -1650,9 +1680,9 @@ class CallUnit:
                 except Exception:  # noqa: BLE001 - a restore must never crash
                     logger.debug("call unit: could not restore global %r", name)
 
-    def _build_key(self, site: CallSite, args: tuple, kwargs: dict,
-                   global_digests: Mapping[str, str] | None = None,
-                   fn=None) -> str | None:
+    def _build_key(
+        self, site: CallSite, args: tuple, kwargs: dict, global_digests: Mapping[str, str] | None = None, fn=None
+    ) -> str | None:
         """The call's key. With *fn*, keyed on what it receives when
         :func:`_keys_by_content` allows it."""
         if site.has_unpacking and fn is not None:
@@ -1787,8 +1817,7 @@ class CallUnit:
                 digests[name] = compute_hash_full(combined[pos])
         return digests
 
-    def _arg_digests(self, site: CallSite, args: tuple, kwargs: dict,
-                     full: bool = False) -> list[str]:
+    def _arg_digests(self, site: CallSite, args: tuple, kwargs: dict, full: bool = False) -> list[str]:
         """Content hashes of the live arguments at ``site.computed_arg_positions``.
 
         Positions are in ``(*args, *kwargs.values())`` order, matching how
@@ -1828,6 +1857,7 @@ class CallUnit:
         """
         try:
             from .cost_model import estimated_restore_time
+
             size = estimate_object_size(result)
             predicted = estimated_restore_time(type(result).__name__, size, "disk")
         except Exception:  # noqa: BLE001 - no prediction: store, as before
@@ -1851,8 +1881,9 @@ class CallUnit:
             self._cash.backend.delete(key)
         except Exception:  # noqa: BLE001 - reclaiming is best effort; the refusal holds
             pass
-        logger.debug("[CALL_UNIT] hit on %s took %.2fs to save %.2fs: dropped, runs plain",
-                     key[:16], hit_cost, saved or 0.0)
+        logger.debug(
+            "[CALL_UNIT] hit on %s took %.2fs to save %.2fs: dropped, runs plain", key[:16], hit_cost, saved or 0.0
+        )
 
     def _storable(self, result, args, kwargs) -> bool:
         """Refuse values whose *identity* is load-bearing.
@@ -1905,6 +1936,7 @@ class CallUnit:
                     return False
         try:
             from .cacheability_decision import identity_coupled_reason
+
             return identity_coupled_reason("<intercepted call>", result) is None
         except Exception:  # noqa: BLE001 - never let the predicate break the call
             return True
@@ -2021,7 +2053,11 @@ class CallUnit:
         return True
 
     def _store(
-        self, key: str, value, elapsed: float, *,
+        self,
+        key: str,
+        value,
+        elapsed: float,
+        *,
         file_deps: frozenset[str] = frozenset(),
         remote_deps: frozenset[str] = frozenset(),
         stdout: str = "",
@@ -2068,6 +2104,7 @@ class CallUnit:
         if file_deps or remote_deps:
             try:
                 from cash.notebook.file_dep_snapshot import snapshot_dependencies
+
                 snap = snapshot_dependencies(file_deps, remote_deps)
             except Exception:  # noqa: BLE001 - never let dep snapshotting break the store
                 snap = None
@@ -2090,8 +2127,7 @@ class CallUnit:
         # keeping, and pickling it for a digest took 2.6 s of 3.7.
         if elapsed >= _REF_MIN_COMPUTE_S and not callee_globals:
             estimate = self._too_big_to_digest(value, elapsed, plain_value)
-            found = (digest_and_size(value) if estimate is None
-                     else (UNHASHED_PREFIX + uuid.uuid4().hex, estimate))
+            found = digest_and_size(value) if estimate is None else (UNHASHED_PREFIX + uuid.uuid4().hex, estimate)
             if found:
                 metadata[DIGEST_FIELD], metadata[SIZE_FIELD] = found
                 if estimate is not None:
@@ -2138,9 +2174,10 @@ class CallUnit:
         statement's plain value, whose reference needs no digest."""
         from cash._sizing import pickled_size_estimate
         from cash.backends.value_policy import worth_its_bytes
+
         estimate = pickled_size_estimate(value)
         if not estimate:
-            return None                 # nothing to estimate from: digest as before
+            return None  # nothing to estimate from: digest as before
         if not plain_value and worth_its_bytes(estimate // 2, elapsed):
             return None
         trace_event("call_digest_skipped", bytes_estimated=estimate, seconds=round(elapsed, 3))
@@ -2162,10 +2199,10 @@ class CallUnit:
             if site_id in self._keyed_this_run:
                 return
             self._keyed_this_run.add(site_id)
-            lineages = getattr(ctx, 'variable_lineage', None) or {}
+            lineages = getattr(ctx, "variable_lineage", None) or {}
             parts = {name: lineages.get(name) for name in site.free_names}
             for i, digest in enumerate(arg_digests or ()):
-                parts[f'argument {i + 1}'] = digest
+                parts[f"argument {i + 1}"] = digest
             for name, digest in (global_digests or {}).items():
                 parts[name] = digest
             seen = self._site_parts.get(site_id)
@@ -2173,8 +2210,7 @@ class CallUnit:
             if not seen or seen[0] == key:
                 self._site_reason.pop(site_id, None)
                 return
-            moved = sorted(name for name in set(parts) | set(seen[1])
-                           if parts.get(name) != seen[1].get(name))
+            moved = sorted(name for name in set(parts) | set(seen[1]) if parts.get(name) != seen[1].get(name))
             # The key moved with no named part of it moving: something else did
             # (a file the callee reads, the callee's own source). Naming
             # nothing beats naming the wrong thing.
@@ -2185,7 +2221,7 @@ class CallUnit:
 
     @staticmethod
     def _site_id(site: CallSite) -> tuple[str, int, str]:
-        return (site.source, site.occurrence_index, getattr(site, 'stmt_identity', ''))
+        return (site.source, site.occurrence_index, getattr(site, "stmt_identity", ""))
 
     def _why_missed(self, site: CallSite) -> str | None:
         """Which named part of this call's key moved since it was last keyed.
@@ -2210,8 +2246,9 @@ class CallUnit:
         except Exception:  # noqa: BLE001
             return f"{getattr(fn, '__module__', '?')}.{getattr(fn, '__qualname__', '?')}"
 
-    def _record(self, func_name, site: CallSite, key, *, cache_hit, elapsed, time_saved=0.0,
-                ran_plain=False, stored=True) -> None:
+    def _record(
+        self, func_name, site: CallSite, key, *, cache_hit, elapsed, time_saved=0.0, ran_plain=False, stored=True
+    ) -> None:
         """Emit the SAME event shape ``drain_decorator_calls`` returns.
 
         Keeping the contract identical is what lets the badge, the ``@cache``
@@ -2223,26 +2260,28 @@ class CallUnit:
         to keep in sync with the badge any more (see the note on
         ``CallCache.__init__`` where ``wrapped_names`` used to live).
         """
-        self.call_log.append({
-            "func_name": func_name,
-            "cache_hit": cache_hit,
-            "execution_time": elapsed,
-            "time_saved": time_saved,
-            "args_hash": "",
-            "cache_key": key,
-            "timestamp": _time.time(),
-            "call_source": site.source,
-            "occurrence_index": site.occurrence_index,
-            "intercepted": True,
-            # Run without the cache by the many-cheap-calls guard.
-            "ran_plain": ran_plain,
-            # A miss whose result went to the cache. False for a call below
-            # the cost floor or refused: the badge has nothing to say about it.
-            "stored": bool(stored),
-            # Why this call was not served: which part of its key moved since
-            # the site was last keyed. Only on a miss, and only when known.
-            "miss_reason": None if cache_hit else self._why_missed(site),
-        })
+        self.call_log.append(
+            {
+                "func_name": func_name,
+                "cache_hit": cache_hit,
+                "execution_time": elapsed,
+                "time_saved": time_saved,
+                "args_hash": "",
+                "cache_key": key,
+                "timestamp": _time.time(),
+                "call_source": site.source,
+                "occurrence_index": site.occurrence_index,
+                "intercepted": True,
+                # Run without the cache by the many-cheap-calls guard.
+                "ran_plain": ran_plain,
+                # A miss whose result went to the cache. False for a call below
+                # the cost floor or refused: the badge has nothing to say about it.
+                "stored": bool(stored),
+                # Why this call was not served: which part of its key moved since
+                # the site was last keyed. Only on a miss, and only when known.
+                "miss_reason": None if cache_hit else self._why_missed(site),
+            }
+        )
 
     def drain(self) -> list[dict]:
         events, self.call_log = self.call_log, []

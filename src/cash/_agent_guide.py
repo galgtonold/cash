@@ -5,6 +5,7 @@ A test (``tests/test_core/test_agent_guide_sync.py``) keeps the two byte-for-byt
 identical, so editing one without the other fails CI. Ships inside the package so
 ``cash.help()`` works for an installed user, where the ``docs/`` tree is absent.
 """
+
 from __future__ import annotations
 
 import sys

@@ -17,8 +17,9 @@ Fix: When a variable is a required input but NOT also an output of the
 current cell, reject any "valid downstream extension" and force restoration
 to the upstream-simulated state.
 """
-import pytest
+
 import pandas as pd
+import pytest
 
 pytestmark = [pytest.mark.upstream, pytest.mark.mutations]
 
@@ -39,16 +40,18 @@ def test_display_cell_shows_upstream_state_not_downstream(nb_runner, tmp_path):
     csv_path_str = str(csv_path).replace("\\", "/")
     pd.DataFrame({"A": [1, 2, 3], "Close": [100, 200, 300]}).to_csv(csv_path, index=False)
 
-    nb_runner.create_notebook([
-        # Cell 1: imports
-        "import pandas as pd",
-        # Cell 2: load data
-        f"df = pd.read_csv('{csv_path_str}')\nprint(list(df.columns))",
-        # Cell 3: display cell (bare expression + print)
-        "print(f'Columns at cell 3: {list(df.columns)}')",
-        # Cell 4: mutate df by adding a new column
-        "df['SMA'] = df['Close'].rolling(2).mean()\nprint(f'Columns at cell 4: {list(df.columns)}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            # Cell 1: imports
+            "import pandas as pd",
+            # Cell 2: load data
+            f"df = pd.read_csv('{csv_path_str}')\nprint(list(df.columns))",
+            # Cell 3: display cell (bare expression + print)
+            "print(f'Columns at cell 3: {list(df.columns)}')",
+            # Cell 4: mutate df by adding a new column
+            "df['SMA'] = df['Close'].rolling(2).mean()\nprint(f'Columns at cell 4: {list(df.columns)}')",
+        ]
+    )
     nb_runner.start_kernel()
 
     # Run all cells in order
@@ -66,10 +69,7 @@ def test_display_cell_shows_upstream_state_not_downstream(nb_runner, tmp_path):
     # Now re-run cell 3 — should restore df to pre-cell-4 state
     nb_runner.run_cell(3)
     out3_rerun = nb_runner.get_output(3)
-    assert "SMA" not in out3_rerun, (
-        f"Cell 3 re-run should NOT show SMA column (downstream mutation). "
-        f"Got: {out3_rerun}"
-    )
+    assert "SMA" not in out3_rerun, f"Cell 3 re-run should NOT show SMA column (downstream mutation). Got: {out3_rerun}"
 
 
 def test_display_cell_correct_after_multiple_downstream_mutations(nb_runner, tmp_path):
@@ -79,25 +79,24 @@ def test_display_cell_correct_after_multiple_downstream_mutations(nb_runner, tmp
     """
     csv_path = tmp_path / "data.csv"
     csv_path_str = str(csv_path).replace("\\", "/")
-    pd.DataFrame({
-        "Ticker": ["AAPL", "MSFT", "GOOGL"],
-        "Close": [150.0, 300.0, 2800.0]
-    }).to_csv(csv_path, index=False)
+    pd.DataFrame({"Ticker": ["AAPL", "MSFT", "GOOGL"], "Close": [150.0, 300.0, 2800.0]}).to_csv(csv_path, index=False)
 
-    nb_runner.create_notebook([
-        # Cell 1: imports
-        "import pandas as pd\nimport numpy as np",
-        # Cell 2: load
-        f"df = pd.read_csv('{csv_path_str}')\nprint(f'Loaded columns: {{list(df.columns)}}')",
-        # Cell 3: sort (df = df.sort_values, self-assignment)
-        "df = df.sort_values('Ticker')\nprint(f'Sorted columns: {{list(df.columns)}}')",
-        # Cell 4: display
-        "print(f'Display columns: {{list(df.columns)}}')",
-        # Cell 5: add column 1
-        "df['VolAdj'] = df['Close'] * 1.1\nprint(f'After VolAdj: {{list(df.columns)}}')",
-        # Cell 6: add column 2
-        "df['SMA'] = df['Close'].rolling(2).mean()\nprint(f'After SMA: {{list(df.columns)}}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            # Cell 1: imports
+            "import pandas as pd\nimport numpy as np",
+            # Cell 2: load
+            f"df = pd.read_csv('{csv_path_str}')\nprint(f'Loaded columns: {{list(df.columns)}}')",
+            # Cell 3: sort (df = df.sort_values, self-assignment)
+            "df = df.sort_values('Ticker')\nprint(f'Sorted columns: {{list(df.columns)}}')",
+            # Cell 4: display
+            "print(f'Display columns: {{list(df.columns)}}')",
+            # Cell 5: add column 1
+            "df['VolAdj'] = df['Close'] * 1.1\nprint(f'After VolAdj: {{list(df.columns)}}')",
+            # Cell 6: add column 2
+            "df['SMA'] = df['Close'].rolling(2).mean()\nprint(f'After SMA: {{list(df.columns)}}')",
+        ]
+    )
     nb_runner.start_kernel()
 
     # Run all cells
@@ -112,12 +111,8 @@ def test_display_cell_correct_after_multiple_downstream_mutations(nb_runner, tmp
     # Re-run cell 4 — should show df state BEFORE cells 5 and 6
     nb_runner.run_cell(4)
     out4_rerun = nb_runner.get_output(4)
-    assert "VolAdj" not in out4_rerun, (
-        f"Cell 4 re-run should NOT have VolAdj column. Got: {out4_rerun}"
-    )
-    assert "SMA" not in out4_rerun, (
-        f"Cell 4 re-run should NOT have SMA column. Got: {out4_rerun}"
-    )
+    assert "VolAdj" not in out4_rerun, f"Cell 4 re-run should NOT have VolAdj column. Got: {out4_rerun}"
+    assert "SMA" not in out4_rerun, f"Cell 4 re-run should NOT have SMA column. Got: {out4_rerun}"
 
 
 def test_self_assignment_cell_still_works_with_downstream_mutations(nb_runner, tmp_path):
@@ -127,21 +122,20 @@ def test_self_assignment_cell_still_works_with_downstream_mutations(nb_runner, t
     """
     csv_path = tmp_path / "data.csv"
     csv_path_str = str(csv_path).replace("\\", "/")
-    pd.DataFrame({
-        "Name": ["Charlie", "Alice", "Bob"],
-        "Score": [85, 95, 90]
-    }).to_csv(csv_path, index=False)
+    pd.DataFrame({"Name": ["Charlie", "Alice", "Bob"], "Score": [85, 95, 90]}).to_csv(csv_path, index=False)
 
-    nb_runner.create_notebook([
-        # Cell 1: imports
-        "import pandas as pd",
-        # Cell 2: load
-        f"df = pd.read_csv('{csv_path_str}')\nprint(f'Loaded: {{list(df.columns)}}')",
-        # Cell 3: self-assignment (df is both input and output)
-        "df = df.sort_values('Name')\nprint('Sorted: ' + str(df['Name'].tolist()))",
-        # Cell 4: downstream mutation
-        "df['Grade'] = ['A', 'B', 'A']\nprint('With grade: ' + str(list(df.columns)))",
-    ])
+    nb_runner.create_notebook(
+        [
+            # Cell 1: imports
+            "import pandas as pd",
+            # Cell 2: load
+            f"df = pd.read_csv('{csv_path_str}')\nprint(f'Loaded: {{list(df.columns)}}')",
+            # Cell 3: self-assignment (df is both input and output)
+            "df = df.sort_values('Name')\nprint('Sorted: ' + str(df['Name'].tolist()))",
+            # Cell 4: downstream mutation
+            "df['Grade'] = ['A', 'B', 'A']\nprint('With grade: ' + str(list(df.columns)))",
+        ]
+    )
     nb_runner.start_kernel()
 
     # Run all cells

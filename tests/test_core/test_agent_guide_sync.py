@@ -4,6 +4,7 @@
 wheel) and ``docs/for-coding-agents.md`` (the website page) are one document. This
 test keeps them byte-identical so editing one without the other fails CI.
 """
+
 import os
 from pathlib import Path
 
@@ -28,6 +29,7 @@ def test_agent_guide_matches_docs_page():
 
 def test_cash_help_returns_the_guide():
     import cash
+
     assert cash.help() == AGENT_GUIDE
 
 
@@ -47,7 +49,11 @@ def test_cash_help_survives_a_legacy_codepage_console():
     env = dict(os.environ, PYTHONIOENCODING="cp1252")
     cp = subprocess.run(
         [sys.executable, "-c", "import cash; cash.help()"],
-        capture_output=True, text=True, env=env, encoding="cp1252", errors="replace",
+        capture_output=True,
+        text=True,
+        env=env,
+        encoding="cp1252",
+        errors="replace",
     )
     assert cp.returncode == 0, f"cash.help() crashed under cp1252 stdout:\n{cp.stderr}"
     assert "UnicodeEncodeError" not in cp.stderr

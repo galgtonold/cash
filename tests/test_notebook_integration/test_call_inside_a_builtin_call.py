@@ -7,24 +7,29 @@ wrapped at runtime, and ``score`` inside it was never considered -- so an
 unchanged re-run refitted every model. ``rows.append(score(...))`` and
 ``w = score(...)`` were always reused.
 """
+
 from pathlib import Path
 
 import pytest
 
 pytestmark = [pytest.mark.integration]
 
-SETUP = ("import time\n"
-         "def score(c, a):\n"
-         "    open('calls.log', 'a').write(f'score {c} {a}\\n')\n"
-         "    time.sleep(0.05)\n"
-         "    return c * a\n"
-         "CUTOFFS = (1, 2, 3)\n"
-         "GRID = (10, 20)")
-LOOP = ("rows = []\n"
-        "for c in CUTOFFS:\n"
-        "    for a in GRID:\n"
-        "        rows.append(dict(cutoff=c, alpha=a, err=score(c, a)))\n"
-        "print(sum(r['err'] for r in rows))")
+SETUP = (
+    "import time\n"
+    "def score(c, a):\n"
+    "    open('calls.log', 'a').write(f'score {c} {a}\\n')\n"
+    "    time.sleep(0.05)\n"
+    "    return c * a\n"
+    "CUTOFFS = (1, 2, 3)\n"
+    "GRID = (10, 20)"
+)
+LOOP = (
+    "rows = []\n"
+    "for c in CUTOFFS:\n"
+    "    for a in GRID:\n"
+    "        rows.append(dict(cutoff=c, alpha=a, err=score(c, a)))\n"
+    "print(sum(r['err'] for r in rows))"
+)
 
 
 def _calls(runner) -> list[str]:

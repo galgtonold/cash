@@ -14,27 +14,29 @@ class TestNestedDictEdits:
 
     def test_edit_nested_key(self, nb_runner):
         """Change a nested dict key."""
-        nb_runner.create_notebook([
-            "config = {'db': {'host': 'localhost', 'port': 5432}}",
-            "addr = f\"{config['db']['host']}:{config['db']['port']}\"\nprint(f'addr = {addr}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "config = {'db': {'host': 'localhost', 'port': 5432}}",
+                "addr = f\"{config['db']['host']}:{config['db']['port']}\"\nprint(f'addr = {addr}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "addr = localhost:5432" in nb_runner.get_output(2)
 
         # Change the host
-        nb_runner.set_cell_source(
-            1, "config = {'db': {'host': '10.0.0.1', 'port': 5432}}"
-        )
+        nb_runner.set_cell_source(1, "config = {'db': {'host': '10.0.0.1', 'port': 5432}}")
         nb_runner.run_all()
         assert "addr = 10.0.0.1:5432" in nb_runner.get_output(2)
 
     def test_add_nested_level(self, nb_runner):
         """Add a deeper nesting level."""
-        nb_runner.create_notebook([
-            "data = {'a': 1}",
-            "total = sum(v if isinstance(v, int) else sum(v.values()) for v in data.values())\nprint(f'total = {total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = {'a': 1}",
+                "total = sum(v if isinstance(v, int) else sum(v.values()) for v in data.values())\nprint(f'total = {total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total = 1" in nb_runner.get_output(2)
@@ -46,10 +48,12 @@ class TestNestedDictEdits:
 
     def test_edit_dict_comprehension_source(self, nb_runner):
         """Edit dict comprehension inputs."""
-        nb_runner.create_notebook([
-            "keys = ['a', 'b', 'c']\nvals = [1, 2, 3]",
-            "mapping = dict(zip(keys, vals))\nprint(f'mapping = {mapping}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "keys = ['a', 'b', 'c']\nvals = [1, 2, 3]",
+                "mapping = dict(zip(keys, vals))\nprint(f'mapping = {mapping}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "'a': 1" in nb_runner.get_output(2)
@@ -62,14 +66,15 @@ class TestNestedDictEdits:
 class TestNestedListEdits:
     """Edit cells producing/consuming nested lists."""
 
-
     def test_nested_list_processing_chain(self, nb_runner):
         """Chain of nested list operations."""
-        nb_runner.create_notebook([
-            "raw = [[1, 2, 3], [4, 5, 6]]",
-            "sums = [sum(row) for row in raw]",
-            "total = sum(sums)\nprint(f'total = {total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "raw = [[1, 2, 3], [4, 5, 6]]",
+                "sums = [sum(row) for row in raw]",
+                "total = sum(sums)\nprint(f'total = {total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total = 21" in nb_runner.get_output(3)

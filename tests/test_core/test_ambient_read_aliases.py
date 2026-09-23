@@ -6,6 +6,7 @@ Round 19 (r19s3, r19s4): ``import datetime as _dt; _dt.datetime.now()``,
 froze a timestamp into every later result with no warning, while the
 canonical spellings warned.
 """
+
 from __future__ import annotations
 
 import importlib
@@ -60,11 +61,15 @@ def _load(tmp_path, monkeypatch, body, extra=""):
     # tests that got one name imported each other's module (CI, Windows 3.11).
     name = f"ambient_{uuid.uuid4().hex}"
     (tmp_path / f"{name}.py").write_text(
-        HEADER + extra + textwrap.dedent(f"""
+        HEADER
+        + extra
+        + textwrap.dedent(f"""
 
         def stamp(n):
             return {body}
-        """), encoding="utf-8")
+        """),
+        encoding="utf-8",
+    )
     monkeypatch.syspath_prepend(str(tmp_path))
     try:
         return importlib.import_module(name)
@@ -94,14 +99,17 @@ def test_a_pandas_clock_read_warns(tmp_path, monkeypatch, spelling):
     assert _ambient_warnings(tmp_path, mod.stamp), f"{PANDAS_SPELLINGS[spelling]} froze silently"
 
 
-@pytest.mark.parametrize("body, extra", [
-    ("Clock().now()", "class Clock:\n    def now(self):\n        return 1\n"),
-    ("Stamp.now()", "class Stamp:\n    @staticmethod\n    def now():\n        return 1\n"),
-    ("pd.to_datetime('2024-01-01')", "import pandas as pd\n"),
-    ('_time.strftime("%Y-%m", _time.gmtime(n))', ""),   # formats the time it is given
-    ("_time.localtime(n)", ""),                         # converts a timestamp
-    ("_time.ctime(n)", ""),
-])
+@pytest.mark.parametrize(
+    "body, extra",
+    [
+        ("Clock().now()", "class Clock:\n    def now(self):\n        return 1\n"),
+        ("Stamp.now()", "class Stamp:\n    @staticmethod\n    def now():\n        return 1\n"),
+        ("pd.to_datetime('2024-01-01')", "import pandas as pd\n"),
+        ('_time.strftime("%Y-%m", _time.gmtime(n))', ""),  # formats the time it is given
+        ("_time.localtime(n)", ""),  # converts a timestamp
+        ("_time.ctime(n)", ""),
+    ],
+)
 def test_a_now_that_is_not_the_clock_does_not_warn(tmp_path, monkeypatch, body, extra):
     """Control: resolution goes through what the name IS -- the user's own
     `now`, and a date parsed from a fixed string, are not ambient reads."""

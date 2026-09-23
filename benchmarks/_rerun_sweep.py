@@ -8,6 +8,7 @@ other nine workloads.
 Usage:
     python benchmarks/_rerun_sweep.py <results-dir> [--repeats N]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -48,9 +49,15 @@ def main() -> int:
             # warm runs then restored almost nothing and it looked like cash
             # was failing to reuse anything.
             cmd = [
-                sys.executable, str(DRIVER), nb, "--mode", mode,
-                "--repeats", str(args.repeats),
-                "--results-dir", str(out),
+                sys.executable,
+                str(DRIVER),
+                nb,
+                "--mode",
+                mode,
+                "--repeats",
+                str(args.repeats),
+                "--results-dir",
+                str(out),
             ]
             # UTF-8 for the child: on Windows it would otherwise inherit
             # cp1252 and every notebook that prints a non-ASCII character
@@ -67,9 +74,16 @@ def main() -> int:
                 # raised here, and `p.stdout` comes back empty -- which is
                 # survivable for a run that succeeds and silently loses the
                 # error tail for one that fails.
-                p = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True,
-                                   encoding="utf-8", errors="replace",
-                                   timeout=args.timeout, env=env)
+                p = subprocess.run(
+                    cmd,
+                    cwd=REPO,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=args.timeout,
+                    env=env,
+                )
             except subprocess.TimeoutExpired:
                 print(f"TIMEOUT {nb} [{mode}]", flush=True)
                 failures.append(f"{nb} [{mode}]: timeout")

@@ -26,6 +26,7 @@ correctness boundary for zero speedup. These tests pin the invariant that
 matters: the body's expensive call must not re-fire on a warm re-run. The
 counter is the witness; the badge is not (it is itself restored on a hit).
 """
+
 import pytest
 
 pytestmark = [pytest.mark.loops, pytest.mark.mutations, pytest.mark.timeout(180)]
@@ -34,21 +35,14 @@ SETUP = "import cash\n%cash_on\n%cash_badge print\nimport time"
 
 
 def _slow_def(counter):
-    return (
-        "def slow(e):\n"
-        f"    open(r'{counter}', 'a').write('X')\n"
-        "    time.sleep(0.03)\n"
-        "    return e * 10"
-    )
+    return f"def slow(e):\n    open(r'{counter}', 'a').write('X')\n    time.sleep(0.03)\n    return e * 10"
 
 
 def _cold_warm_calls(nb_runner, tmp_path, loop_src, tail, loop_idx=4):
     """Run the notebook, then re-run ONLY the loop cell. Returns (cold, warm)
     counts of real body calls, measured from outside the kernel."""
     counter = tmp_path / "calls.log"
-    nb_runner.create_notebook(
-        [SETUP, _slow_def(counter), "items = [1, 2, 3, 4, 5]", loop_src, tail]
-    )
+    nb_runner.create_notebook([SETUP, _slow_def(counter), "items = [1, 2, 3, 4, 5]", loop_src, tail])
     nb_runner.start_kernel()
     nb_runner.run_all()
     cold = len(counter.read_bytes()) if counter.exists() else 0
@@ -62,9 +56,8 @@ def _cold_warm_calls(nb_runner, tmp_path, loop_src, tail, loop_idx=4):
 def test_append_accumulator_skips_work_on_rerun(nb_runner, tmp_path):
     """CAS-145 control: the plain append accumulator."""
     cold, warm, tail = _cold_warm_calls(
-        nb_runner, tmp_path,
-        "out = []\nfor e in items:\n    out.append(slow(e))",
-        "print(f'out={out}')")
+        nb_runner, tmp_path, "out = []\nfor e in items:\n    out.append(slow(e))", "print(f'out={out}')"
+    )
     assert "out=[10, 20, 30, 40, 50]" in tail
     assert (cold, warm) == (5, 0), f"append accumulator: cold={cold} warm={warm}"
 
@@ -72,9 +65,8 @@ def test_append_accumulator_skips_work_on_rerun(nb_runner, tmp_path):
 def test_scalar_reduction_skips_work_on_rerun(nb_runner, tmp_path):
     """``total = total + slow(e)`` — loop-carried scalar, no list."""
     cold, warm, tail = _cold_warm_calls(
-        nb_runner, tmp_path,
-        "total = 0\nfor e in items:\n    total = total + slow(e)",
-        "print(f'total={total}')")
+        nb_runner, tmp_path, "total = 0\nfor e in items:\n    total = total + slow(e)", "print(f'total={total}')"
+    )
     assert "total=150" in tail
     assert (cold, warm) == (5, 0), f"scalar reduction: cold={cold} warm={warm}"
 
@@ -82,9 +74,8 @@ def test_scalar_reduction_skips_work_on_rerun(nb_runner, tmp_path):
 def test_scalar_reduction_augassign_skips_work_on_rerun(nb_runner, tmp_path):
     """The ``total += slow(e)`` form of the same recurrence."""
     cold, warm, tail = _cold_warm_calls(
-        nb_runner, tmp_path,
-        "total = 0\nfor e in items:\n    total += slow(e)",
-        "print(f'total={total}')")
+        nb_runner, tmp_path, "total = 0\nfor e in items:\n    total += slow(e)", "print(f'total={total}')"
+    )
     assert "total=150" in tail
     assert (cold, warm) == (5, 0), f"scalar AugAssign: cold={cold} warm={warm}"
 
@@ -96,10 +87,11 @@ def test_equity_curve_recurrence_skips_work_on_rerun(nb_runner, tmp_path):
     would corrupt the running total, not just the final sum.
     """
     cold, warm, tail = _cold_warm_calls(
-        nb_runner, tmp_path,
-        "curve = []\nacc = 0\nfor e in items:\n"
-        "    acc = acc + slow(e)\n    curve.append(acc)",
-        "print(f'curve={curve} acc={acc}')")
+        nb_runner,
+        tmp_path,
+        "curve = []\nacc = 0\nfor e in items:\n    acc = acc + slow(e)\n    curve.append(acc)",
+        "print(f'curve={curve} acc={acc}')",
+    )
     assert "curve=[10, 30, 60, 100, 150] acc=150" in tail
     assert (cold, warm) == (5, 0), f"equity curve: cold={cold} warm={warm}"
 
@@ -107,10 +99,11 @@ def test_equity_curve_recurrence_skips_work_on_rerun(nb_runner, tmp_path):
 def test_equity_curve_augassign_skips_work_on_rerun(nb_runner, tmp_path):
     """AugAssign form of the equity curve."""
     cold, warm, tail = _cold_warm_calls(
-        nb_runner, tmp_path,
-        "curve = []\nacc = 0\nfor e in items:\n"
-        "    acc += slow(e)\n    curve.append(acc)",
-        "print(f'curve={curve} acc={acc}')")
+        nb_runner,
+        tmp_path,
+        "curve = []\nacc = 0\nfor e in items:\n    acc += slow(e)\n    curve.append(acc)",
+        "print(f'curve={curve} acc={acc}')",
+    )
     assert "curve=[10, 30, 60, 100, 150] acc=150" in tail
     assert (cold, warm) == (5, 0), f"equity curve AugAssign: cold={cold} warm={warm}"
 
@@ -118,12 +111,16 @@ def test_equity_curve_augassign_skips_work_on_rerun(nb_runner, tmp_path):
 def test_equity_curve_caches_with_seeds_in_a_previous_cell(nb_runner, tmp_path):
     """Seeds living in a different cell from the loop still skip the work."""
     counter = tmp_path / "calls.log"
-    nb_runner.create_notebook([
-        SETUP, _slow_def(counter), "items = [1, 2, 3, 4, 5]",
-        "curve = []\nacc = 0",
-        "for e in items:\n    acc = acc + slow(e)\n    curve.append(acc)",
-        "print(f'curve={curve} acc={acc}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            _slow_def(counter),
+            "items = [1, 2, 3, 4, 5]",
+            "curve = []\nacc = 0",
+            "for e in items:\n    acc = acc + slow(e)\n    curve.append(acc)",
+            "print(f'curve={curve} acc={acc}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     cold = len(counter.read_bytes())

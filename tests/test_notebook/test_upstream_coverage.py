@@ -17,21 +17,20 @@ Tests cover:
 - set_tracking_state
 """
 
-import hashlib
 import os
 import time
 import types
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from cash.notebook._protocols import TrackingState
 from cash.notebook.upstream import NotebookSimulator, UpstreamChecker
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_checker(**kwargs):
     """Create an UpstreamChecker with a mock shell."""
@@ -54,6 +53,7 @@ def _make_checker(**kwargs):
 # ===========================================================================
 # _compute_expected_var_lineage
 # ===========================================================================
+
 
 class TestComputeExpectedVarLineage:
     """Test lineage hash computation for a variable from its defining code."""
@@ -137,11 +137,20 @@ class TestComputeExpectedVarLineage:
 # _handle_lineage_mismatch
 # ===========================================================================
 
+
 class TestHandleLineageMismatch:
     """Test lineage mismatch handling (the notebook-based pass 2 version)."""
 
-    def _call_mismatch(self, checker, var_name="x", actual="actual", virtual="virtual",
-                       broken_vars=None, simulation_trace=None, notebook_cells=None):
+    def _call_mismatch(
+        self,
+        checker,
+        var_name="x",
+        actual="actual",
+        virtual="virtual",
+        broken_vars=None,
+        simulation_trace=None,
+        notebook_cells=None,
+    ):
         """Helper to call _handle_lineage_mismatch with all required args."""
         if broken_vars is None:
             broken_vars = set()
@@ -193,12 +202,13 @@ class TestHandleLineageMismatch:
         """Should search simulation trace for the variable's last statement."""
         checker = _make_checker()
         trace = [("x = 1", {"x"}, {}, {}, {}, {})]
-        broken = self._call_mismatch(checker, var_name="x", simulation_trace=trace)
+        self._call_mismatch(checker, var_name="x", simulation_trace=trace)
 
 
 # ===========================================================================
 # _check_lineage_based
 # ===========================================================================
+
 
 class TestCheckLineageBased:
     """Test the lineage-based staleness check (Phase 1).
@@ -252,6 +262,7 @@ class TestCheckLineageBased:
 # _resolve_input_lineage
 # ===========================================================================
 
+
 class TestResolveInputLineage:
     """Test the priority-based input lineage resolution."""
 
@@ -259,9 +270,7 @@ class TestResolveInputLineage:
         """Virtual lineage should be checked first."""
         checker = _make_checker()
         checker.variable_lineage["x"] = "runtime_hash"
-        result = checker.simulator._virtual_lineage._resolve_input_lineage(
-            "x", {"x": "virtual_hash"}, set()
-        )
+        result = checker.simulator._virtual_lineage._resolve_input_lineage("x", {"x": "virtual_hash"}, set())
         assert result == "virtual_hash"
 
     def test_falls_back_to_variable_lineage(self):
@@ -304,6 +313,7 @@ class TestResolveInputLineage:
 # _resolve_virtual_input_lineages
 # ===========================================================================
 
+
 class TestResolveVirtualInputLineages:
     """Test virtual input lineage resolution for all inputs of a statement."""
 
@@ -311,9 +321,7 @@ class TestResolveVirtualInputLineages:
         checker = _make_checker()
         checker.variable_lineage["a"] = "hash_a"
         checker.variable_lineage["b"] = "hash_b"
-        result = checker.simulator._virtual_lineage._resolve_virtual_input_lineages(
-            "x = a + b", {"a", "b"}, {}, set()
-        )
+        result = checker.simulator._virtual_lineage._resolve_virtual_input_lineages("x = a + b", {"a", "b"}, {}, set())
         assert len(result) == 2
         assert "hash_a" in result
         assert "hash_b" in result
@@ -345,6 +353,7 @@ class TestResolveVirtualInputLineages:
 # ===========================================================================
 # _stat_file_deps
 # ===========================================================================
+
 
 class TestStatFileDeps:
     """Test static file dependency stat helper."""
@@ -378,6 +387,7 @@ class TestStatFileDeps:
 # _check_file_deps_for_restore
 # ===========================================================================
 
+
 class TestCheckFileDepsForRestore:
     """Test file dependency validation for virtual restore."""
 
@@ -387,7 +397,7 @@ class TestCheckFileDepsForRestore:
         checker = _make_checker()
         mtime = os.path.getmtime(str(f))
         result = checker.simulator._virtual_lineage._check_file_deps_for_restore(
-            {str(f): {'mtime': mtime}}, time.time()
+            {str(f): {"mtime": mtime}}, time.time()
         )
         assert result is None  # None means all fresh
 
@@ -396,7 +406,8 @@ class TestCheckFileDepsForRestore:
         f.write_text("content")
         checker = _make_checker()
         result = checker.simulator._virtual_lineage._check_file_deps_for_restore(
-            {str(f): {'mtime': 0.0}}, time.time()  # old mtime → stale
+            {str(f): {"mtime": 0.0}},
+            time.time(),  # old mtime → stale
         )
         assert result is not None  # Tuple means failure
         assert isinstance(result, tuple)
@@ -404,7 +415,7 @@ class TestCheckFileDepsForRestore:
     def test_missing_file(self, tmp_path):
         checker = _make_checker()
         result = checker.simulator._virtual_lineage._check_file_deps_for_restore(
-            {str(tmp_path / "gone.csv"): {'mtime': 1.0}}, time.time()
+            {str(tmp_path / "gone.csv"): {"mtime": 1.0}}, time.time()
         )
         assert result is not None
 
@@ -417,6 +428,7 @@ class TestCheckFileDepsForRestore:
 # ===========================================================================
 # _check_lineage_consistency
 # ===========================================================================
+
 
 class TestCheckLineageConsistency:
     """Test output lineage consistency validation."""
@@ -449,23 +461,20 @@ class TestCheckLineageConsistency:
     def test_no_expected_lineages(self):
         checker = _make_checker()
         metadata = {"output_lineages": {"x": "hash"}}
-        result = checker.simulator._virtual_lineage._check_lineage_consistency(
-            metadata, {}, None, time.time()
-        )
+        result = checker.simulator._virtual_lineage._check_lineage_consistency(metadata, {}, None, time.time())
         assert result is None  # No expected lineages → pass
 
     def test_no_output_lineages_in_metadata(self):
         checker = _make_checker()
         metadata = {}  # No output_lineages key
-        result = checker.simulator._virtual_lineage._check_lineage_consistency(
-            metadata, {}, {"x": "hash"}, time.time()
-        )
+        result = checker.simulator._virtual_lineage._check_lineage_consistency(metadata, {}, {"x": "hash"}, time.time())
         assert result is None
 
 
 # ===========================================================================
 # _get_metadata_only
 # ===========================================================================
+
 
 class TestGetMetadataOnly:
     """Test metadata-only backend access."""
@@ -485,9 +494,11 @@ class TestGetMetadataOnly:
         assert result == {"key": "value"}
         mock_backend.get_metadata.assert_called_once_with("test_key")
 
+
 # ===========================================================================
 # reset_caches
 # ===========================================================================
+
 
 class TestResetCaches:
     """Test cache clearing."""
@@ -506,6 +517,7 @@ class TestResetCaches:
 # ===========================================================================
 # set_tracking_state
 # ===========================================================================
+
 
 class TestSetTrackingState:
     """Test tracking state wiring."""
@@ -533,6 +545,7 @@ class TestSetTrackingState:
 # ===========================================================================
 # _resolve_fallback_cache_idx
 # ===========================================================================
+
 
 class TestResolveFallbackCacheIdx:
     """Test downstream advancement fallback index resolution."""
@@ -581,6 +594,7 @@ class TestResolveFallbackCacheIdx:
 # _reset_advanced_lineages
 # ===========================================================================
 
+
 class TestResetAdvancedLineages:
     """Test resetting lineages that are 'ahead' of cached virtual lineage."""
 
@@ -616,34 +630,30 @@ class TestResetAdvancedLineages:
 # _handle_downstream_advancement_fallback
 # ===========================================================================
 
+
 class TestHandleDownstreamAdvancementFallback:
     """Test downstream advancement fallback logic."""
 
     def test_no_op_without_simulation_cache(self):
         checker = _make_checker()
         # Should not raise
-        checker._handle_downstream_advancement_fallback(
-            cell_id=None, required_inputs={"x"}, current_cell_outputs={"x"}
-        )
+        checker._handle_downstream_advancement_fallback(cell_id=None, required_inputs={"x"}, current_cell_outputs={"x"})
 
     def test_no_op_without_overlap(self):
         checker = _make_checker()
         checker.simulator._virtual_lineage._simulation_cache = [MagicMock()]
-        checker._handle_downstream_advancement_fallback(
-            cell_id=None, required_inputs={"a"}, current_cell_outputs={"b"}
-        )
+        checker._handle_downstream_advancement_fallback(cell_id=None, required_inputs={"a"}, current_cell_outputs={"b"})
 
     def test_no_op_with_empty_inputs(self):
         checker = _make_checker()
         checker.simulator._virtual_lineage._simulation_cache = [MagicMock()]
-        checker._handle_downstream_advancement_fallback(
-            cell_id=None, required_inputs=set(), current_cell_outputs={"x"}
-        )
+        checker._handle_downstream_advancement_fallback(cell_id=None, required_inputs=set(), current_cell_outputs={"x"})
 
 
 # ===========================================================================
 # Module source component (shared with the runtime via lineage_formula)
 # ===========================================================================
+
 
 class TestModuleSourceComponent:
     """The simulator's module component is the runtime's: one function."""
@@ -651,6 +661,7 @@ class TestModuleSourceComponent:
     @staticmethod
     def _component(tracker, value, name, code="x = 1"):
         from cash.notebook.lineage_formula import module_source_component
+
         return module_source_component(tracker, value, name, code)
 
     def test_no_function_tracker(self):
@@ -706,6 +717,7 @@ class TestModuleSourceComponent:
     def test_a_name_from_a_tracked_module_carries_its_source(self, tmp_path, monkeypatch):
         """`from helpers import clean` -- the case the simulator used to miss."""
         import sys
+
         mod_file = tmp_path / "zz_helpers_mod.py"
         mod_file.write_text("def clean(x): return x\nTHRESHOLD = 3\n")
         mod = types.ModuleType("zz_helpers_mod")
@@ -722,9 +734,11 @@ class TestModuleSourceComponent:
         assert self._component(tracker, mod.clean, "clean", code).startswith(":from_sym_src:")
         assert self._component(tracker, 3, "THRESHOLD", code).startswith(":from_sym_src:")
 
+
 # ===========================================================================
 # UpstreamChecker initialization
 # ===========================================================================
+
 
 class TestUpstreamCheckerInit:
     """Test constructor and defaults."""

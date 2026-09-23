@@ -4,11 +4,11 @@
 discriminator (per-iteration loop keys), a difference outside the sample
 collided two keys. These tests pin that compute_hash_full sees every byte.
 """
+
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from cash.notebook.object_hashing import compute_hash, compute_hash_full
 
@@ -16,7 +16,7 @@ from cash.notebook.object_hashing import compute_hash, compute_hash_full
 def test_ndarray_out_of_sample_difference_distinct():
     a = np.zeros(2000)
     b = np.zeros(2000)
-    b[1000] = 5.0                       # outside compute_hash's flat[:100] sample
+    b[1000] = 5.0  # outside compute_hash's flat[:100] sample
     assert compute_hash(a) == compute_hash(b), "precondition: sampled hash collides"
     assert compute_hash_full(a) != compute_hash_full(b)
 
@@ -24,7 +24,7 @@ def test_ndarray_out_of_sample_difference_distinct():
 def test_dataframe_tail_difference_distinct():
     df1 = pd.DataFrame({"v": range(1000)})
     df2 = df1.copy()
-    df2.iloc[999, 0] = -1               # outside compute_hash's head(5) sample
+    df2.iloc[999, 0] = -1  # outside compute_hash's head(5) sample
     assert compute_hash(df1) == compute_hash(df2), "precondition: sampled hash collides"
     assert compute_hash_full(df1) != compute_hash_full(df2)
 
@@ -32,7 +32,7 @@ def test_dataframe_tail_difference_distinct():
 def test_large_list_middle_difference_distinct():
     l1 = list(range(1000))
     l2 = list(range(1000))
-    l2[500] = -1                        # outside the head5/tail5 sample
+    l2[500] = -1  # outside the head5/tail5 sample
     assert compute_hash(l1) == compute_hash(l2), "precondition: sampled hash collides"
     assert compute_hash_full(l1) != compute_hash_full(l2)
 
@@ -60,5 +60,6 @@ def test_noncontiguous_array_hashable_and_content_true():
 
 def test_unpicklable_falls_back_gracefully():
     import threading
+
     h = compute_hash_full(threading.Lock())
     assert isinstance(h, str) and len(h) == 64

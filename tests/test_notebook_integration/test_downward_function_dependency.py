@@ -25,6 +25,7 @@ callees into the call site's key: a second dependency mechanism alongside the
 existing input-lineage one, with real over-invalidation risk. Deliberately not
 attempted as a patch.
 """
+
 import pytest
 
 pytestmark = pytest.mark.libraries
@@ -44,9 +45,7 @@ def test_callee_above_caller_propagates_an_edit(nb_runner):
 
     nb_runner.set_cell_source(2, "def b(n):\n    return n + 10")
     nb_runner.run_cell(4)
-    assert "r=26" in nb_runner.get_output(4), (
-        f"callee above the caller must propagate: {nb_runner.get_output(4)!r}"
-    )
+    assert "r=26" in nb_runner.get_output(4), f"callee above the caller must propagate: {nb_runner.get_output(4)!r}"
 
 
 def test_callee_above_caller_surfaces_its_removal(nb_runner):
@@ -101,9 +100,7 @@ def test_callee_below_caller_propagates_an_edit_on_isolated_rerun(nb_runner):
 
     nb_runner.set_cell_source(3, "def b(n):\n    return n + 10")
     nb_runner.run_cell(4)
-    assert "r=26" in nb_runner.get_output(4), (
-        f"callee below the caller must propagate: {nb_runner.get_output(4)!r}"
-    )
+    assert "r=26" in nb_runner.get_output(4), f"callee below the caller must propagate: {nb_runner.get_output(4)!r}"
 
 
 def test_callee_below_caller_surfaces_its_removal(nb_runner):

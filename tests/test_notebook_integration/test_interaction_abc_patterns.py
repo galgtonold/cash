@@ -13,11 +13,13 @@ class TestABCPatterns:
 
     def test_abc_concrete_edit(self, nb_runner):
         """Edit concrete implementation of ABC."""
-        nb_runner.create_notebook([
-            "from abc import ABC, abstractmethod\nclass Shape(ABC):\n    @abstractmethod\n    def area(self):\n        pass",
-            "class Circle(Shape):\n    def __init__(self, r):\n        self.r = r\n    def area(self):\n        return 3.14 * self.r ** 2",
-            "c = Circle(5)\nprint(f'area = {c.area()}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from abc import ABC, abstractmethod\nclass Shape(ABC):\n    @abstractmethod\n    def area(self):\n        pass",
+                "class Circle(Shape):\n    def __init__(self, r):\n        self.r = r\n    def area(self):\n        return 3.14 * self.r ** 2",
+                "c = Circle(5)\nprint(f'area = {c.area()}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "area = 78.5" in nb_runner.get_output(3)
@@ -31,11 +33,13 @@ class TestABCPatterns:
 
     def test_switch_implementation(self, nb_runner):
         """Switch between different concrete implementations."""
-        nb_runner.create_notebook([
-            "from abc import ABC, abstractmethod\nclass Formatter(ABC):\n    @abstractmethod\n    def format(self, text):\n        pass",
-            "class UpperFormatter(Formatter):\n    def format(self, text):\n        return text.upper()",
-            "fmt = UpperFormatter()\nresult = fmt.format('hello world')\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from abc import ABC, abstractmethod\nclass Formatter(ABC):\n    @abstractmethod\n    def format(self, text):\n        pass",
+                "class UpperFormatter(Formatter):\n    def format(self, text):\n        return text.upper()",
+                "fmt = UpperFormatter()\nresult = fmt.format('hello world')\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = HELLO WORLD" in nb_runner.get_output(3)
@@ -50,11 +54,13 @@ class TestABCPatterns:
 
     def test_abc_with_default_method(self, nb_runner):
         """ABC with default method, override in subclass."""
-        nb_runner.create_notebook([
-            "from abc import ABC, abstractmethod\nclass Processor(ABC):\n    @abstractmethod\n    def process(self, data):\n        pass\n    def describe(self):\n        return 'base processor'",
-            "class Doubler(Processor):\n    def process(self, data):\n        return [x * 2 for x in data]",
-            "p = Doubler()\nout = p.process([1, 2, 3])\ndesc = p.describe()\nprint(f'out={out} desc={desc}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from abc import ABC, abstractmethod\nclass Processor(ABC):\n    @abstractmethod\n    def process(self, data):\n        pass\n    def describe(self):\n        return 'base processor'",
+                "class Doubler(Processor):\n    def process(self, data):\n        return [x * 2 for x in data]",
+                "p = Doubler()\nout = p.process([1, 2, 3])\ndesc = p.describe()\nprint(f'out={out} desc={desc}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "out=[2, 4, 6]" in nb_runner.get_output(3)

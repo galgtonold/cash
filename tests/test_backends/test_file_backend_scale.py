@@ -26,20 +26,20 @@ first cell.
 The performance half of this is measured in ``benchmarks/bench_cache_scale.py``.
 What is pinned here is the behaviour that makes it safe.
 """
+
 from __future__ import annotations
 
 import glob
 import os
-import pickle
-from collections import deque
 import threading
 import time
+from collections import deque
 
 import pytest
 
 from cash.backends import FileBackend
+from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry
 from cash.backends.file_backend import CACHE_FORMAT_VERSION
-from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry, read_entry
 
 
 def _seed(cache_dir, n, payload=b"x" * 256):
@@ -51,17 +51,20 @@ def _seed(cache_dir, n, payload=b"x" * 256):
     wiped itself.
     """
     cache_dir.mkdir(parents=True, exist_ok=True)
-    (cache_dir / "CACHE_VERSION").write_text(str(CACHE_FORMAT_VERSION),
-                                             encoding="utf-8")
+    (cache_dir / "CACHE_VERSION").write_text(str(CACHE_FORMAT_VERSION), encoding="utf-8")
     path_of = FileBackend(str(cache_dir))._get_path
     keys = []
     for i in range(n):
         key = f"mod.f:state:{i}:args"
         keys.append(key)
-        meta = {"key": key, "size": len(payload),
-                "created_at": time.time(),
-                "last_access": time.time() + i,
-                "access_count": 1, "storage": ["DISK"]}
+        meta = {
+            "key": key,
+            "size": len(payload),
+            "created_at": time.time(),
+            "last_access": time.time() + i,
+            "access_count": 1,
+            "storage": ["DISK"],
+        }
         with open(path_of(key), "wb") as fh:
             fh.write(pack_entry(meta, payload))
     return keys
@@ -73,15 +76,14 @@ def test_opening_a_cache_does_not_read_every_entry(tmp_path):
     _seed(cache, 25)
 
     backend = FileBackend(str(cache))
-    backend.get("mod.f:state:0:args")          # forces _ensure_initialized
+    backend.get("mod.f:state:0:args")  # forces _ensure_initialized
 
     assert len(backend._metadata_cache) <= 1, (
         f"init loaded {len(backend._metadata_cache)} metadata entries; it should "
         f"load none, and `get` should have cached only the key it was asked for"
     )
     assert not backend._evict_queue, (
-        "opening a cache ranked it for eviction; only a write that trips the "
-        "cap should pay for that"
+        "opening a cache ranked it for eviction; only a write that trips the cap should pay for that"
     )
 
 
@@ -95,9 +97,8 @@ def test_the_size_total_is_still_right(tmp_path):
     cache = tmp_path / "cache"
     _seed(cache, 20)
 
-    backend = FileBackend(str(cache), max_size_bytes=10 ** 9)
-    backend.set("trigger", b"z" * 100,
-                {"size": 100, "created_at": time.time(), "last_access": time.time()})
+    backend = FileBackend(str(cache), max_size_bytes=10**9)
+    backend.set("trigger", b"z" * 100, {"size": 100, "created_at": time.time(), "last_access": time.time()})
     backend._writes.wait_all()
 
     assert backend._current_size_bytes == _on_disk(cache)
@@ -116,7 +117,7 @@ def test_a_key_is_still_readable_without_being_preloaded(tmp_path):
         writer.set(f"mod.f:state:{i}:args", {"payload": i})
     writer._writes.wait_all()
 
-    reader = FileBackend(str(cache))          # fresh: nothing preloaded
+    reader = FileBackend(str(cache))  # fresh: nothing preloaded
     metadata, value = reader.get("mod.f:state:7:args")
     assert value == {"payload": 7}
     assert metadata is not None and metadata["key"] == "mod.f:state:7:args"
@@ -137,14 +138,11 @@ def test_eviction_reaches_entries_this_process_never_touched(tmp_path):
     before = len(list(cache.glob(f"*{ENTRY_SUFFIX}")))
 
     tight = FileBackend(str(cache), max_size_bytes=100_000)
-    tight.set("newcomer", b"y" * 5_000,
-              {"size": 5_000, "created_at": time.time(), "last_access": time.time()})
+    tight.set("newcomer", b"y" * 5_000, {"size": 5_000, "created_at": time.time(), "last_access": time.time()})
     tight._writes.wait_all()
 
     after = len(list(cache.glob(f"*{ENTRY_SUFFIX}")))
-    assert after < before, (
-        "eviction freed nothing: it can only see keys this process touched"
-    )
+    assert after < before, "eviction freed nothing: it can only see keys this process touched"
     assert len(tight._metadata_cache) <= 1, (
         f"eviction pulled {len(tight._metadata_cache)} entries into memory; it "
         f"ranks from the directory now and should hold nothing extra"
@@ -163,17 +161,15 @@ def test_deleting_an_untouched_key_updates_the_size(tmp_path):
     _seed(cache, 5)
 
     backend = FileBackend(str(cache))
-    backend.get("mod.f:state:0:args")          # cache exactly one key
+    backend.get("mod.f:state:0:args")  # cache exactly one key
     before = backend._current_size_bytes
 
-    victim = "mod.f:state:3:args"              # never touched by this process
+    victim = "mod.f:state:3:args"  # never touched by this process
 
     on_disk = os.path.getsize(backend._get_path(victim))
 
     backend.delete(victim)
-    assert backend._current_size_bytes == before - on_disk, (
-        "the size total did not drop by what was actually removed"
-    )
+    assert backend._current_size_bytes == before - on_disk, "the size total did not drop by what was actually removed"
 
 
 def _count_scans(backend):
@@ -196,8 +192,7 @@ def _count_scans(backend):
 
 
 def _on_disk(cache_dir):
-    return sum(f.stat().st_size for f in cache_dir.iterdir()
-               if f.suffix == ENTRY_SUFFIX)
+    return sum(f.stat().st_size for f in cache_dir.iterdir() if f.suffix == ENTRY_SUFFIX)
 
 
 def test_a_read_only_process_never_walks_the_directory(tmp_path):
@@ -216,7 +211,7 @@ def test_a_read_only_process_never_walks_the_directory(tmp_path):
     cache = tmp_path / "cache"
     _seed(cache, 30)
 
-    backend = FileBackend(str(cache), max_size_bytes=10 ** 9)
+    backend = FileBackend(str(cache), max_size_bytes=10**9)
     scans = _count_scans(backend)
 
     backend.get("mod.f:state:0:args")
@@ -232,11 +227,10 @@ def test_an_uncapped_backend_never_walks_the_directory_at_all(tmp_path):
     cache = tmp_path / "cache"
     _seed(cache, 10)
 
-    backend = FileBackend(str(cache))          # max_size_bytes=None
+    backend = FileBackend(str(cache))  # max_size_bytes=None
     scans = _count_scans(backend)
 
-    backend.set("newcomer", b"y" * 100,
-                {"size": 100, "created_at": time.time(), "last_access": time.time()})
+    backend.set("newcomer", b"y" * 100, {"size": 100, "created_at": time.time(), "last_access": time.time()})
     backend._writes.wait_all()
 
     assert scans == []
@@ -253,11 +247,10 @@ def test_the_first_write_establishes_the_total_exactly_once(tmp_path):
     cache = tmp_path / "cache"
     _seed(cache, 20)
 
-    backend = FileBackend(str(cache), max_size_bytes=10 ** 9)
+    backend = FileBackend(str(cache), max_size_bytes=10**9)
     scans = _count_scans(backend)
 
-    backend.set("newcomer", b"y" * 1_000,
-                {"size": 1_000, "created_at": time.time(), "last_access": time.time()})
+    backend.set("newcomer", b"y" * 1_000, {"size": 1_000, "created_at": time.time(), "last_access": time.time()})
     backend._writes.wait_all()
 
     assert len(scans) == 1, f"the first write walked the directory {len(scans)}x"
@@ -266,8 +259,7 @@ def test_the_first_write_establishes_the_total_exactly_once(tmp_path):
         "never see the 20 entries that were already there"
     )
 
-    backend.set("newcomer2", b"y" * 1_000,
-                {"size": 1_000, "created_at": time.time(), "last_access": time.time()})
+    backend.set("newcomer2", b"y" * 1_000, {"size": 1_000, "created_at": time.time(), "last_access": time.time()})
     backend._writes.wait_all()
 
     assert len(scans) == 1, "the walk repeated; it is supposed to latch"
@@ -295,8 +287,7 @@ def test_eviction_frees_what_it_needs_and_not_much_more(tmp_path):
     # Over the cap by about two entries' worth.
     cap = int(entry_bytes * 30)
     backend = FileBackend(str(cache), max_size_bytes=cap)
-    backend.set("newcomer", b"y" * 100,
-                {"size": 100, "created_at": time.time(), "last_access": time.time()})
+    backend.set("newcomer", b"y" * 100, {"size": 100, "created_at": time.time(), "last_access": time.time()})
     backend._writes.wait_all()
 
     target = cap * 0.9
@@ -346,16 +337,16 @@ def test_eviction_never_waits_on_a_write_it_cannot_reach(tmp_path):
     def slow_for_newcomer(key, *args, **kwargs):
         if key == "newcomer":
             running.set()
-            time.sleep(1.0)        # hold the worker so the resubmit queues up
+            time.sleep(1.0)  # hold the worker so the resubmit queues up
         return real_write(key, *args, **kwargs)
 
     backend._write_cache_files = slow_for_newcomer
 
     backend.set("newcomer", payload, meta(50.0))
     assert running.wait(10), "the slow write never started; fixture is broken"
-    backend.set("victim", payload, meta(2.0))   # queued BEHIND newcomer
+    backend.set("victim", payload, meta(2.0))  # queued BEHIND newcomer
 
-    backend._writes.wait_all()                  # hangs forever without the fix
+    backend._writes.wait_all()  # hangs forever without the fix
 
     assert backend.get("victim")[1] == payload, (
         "the key with a queued write was evicted; its write should have "
@@ -381,6 +372,7 @@ def test_ranking_reads_no_entry_files(tmp_path):
     backend = FileBackend(str(cache), max_size_bytes=40_000)
     opened = []
     import cash.backends.entry_format as ef
+
     real = ef.read_entry
 
     def counting_read(path, **kw):
@@ -416,9 +408,7 @@ def test_ranking_is_oldest_first(tmp_path):
     backend.get("old")
     backend._rebuild_evict_queue()
     order = [backend._paths[p] for p, _size, _m in backend._evict_queue]
-    assert order == ["mid", "new", "old"], (
-        f"a read did not refresh the ranking: {order}"
-    )
+    assert order == ["mid", "new", "old"], f"a read did not refresh the ranking: {order}"
     backend.shutdown()
 
 
@@ -440,8 +430,7 @@ def test_the_ranking_is_reused_across_eviction_passes(tmp_path):
     backend.shutdown()
 
     cache2 = tmp_path / "cache2"
-    backend = FileBackend(str(cache2), flush_interval=0,
-                          max_size_bytes=entry_bytes * 40)
+    backend = FileBackend(str(cache2), flush_interval=0, max_size_bytes=entry_bytes * 40)
     rebuilds = []
     real = backend._rebuild_evict_queue
 
@@ -560,17 +549,17 @@ def test_uniform_sizes_are_plain_lru(tmp_path):
 # The ranking is a snapshot. A read AFTER it was taken must still protect.
 # ---------------------------------------------------------------------------
 
+
 def _seed_equal(cache_dir, n, size=64 * 1024):
     """*n* entries of one size, oldest-first by name, written through the API."""
     b = FileBackend(str(cache_dir), max_size_bytes=None, flush_interval=0)
     base = time.time() - 10_000
     for i in range(n):
-        b.set(f"e{i}", b"x" * size,
-              {"size": size, "created_at": base + i, "last_access": base + i})
+        b.set(f"e{i}", b"x" * size, {"size": size, "created_at": base + i, "last_access": base + i})
     b._writes.wait_all()
     for i in range(n):
         p = b._get_path(f"e{i}")
-        os.utime(p, (base + i, base + i))       # deterministic age order
+        os.utime(p, (base + i, base + i))  # deterministic age order
     b.shutdown()
 
 
@@ -594,12 +583,12 @@ def test_a_read_protects_an_entry_already_queued_for_eviction(tmp_path):
     b = FileBackend(str(cache), max_size_bytes=10 * size, flush_interval=0)
     b._ensure_size_scanned()
     b._rebuild_evict_queue()
-    assert b._paths.get(b._evict_queue[0][0]) is None or True   # queue is built
+    assert b._paths.get(b._evict_queue[0][0]) is None or True  # queue is built
 
-    b.get("e0")                    # the oldest, and at the head of the queue
+    b.get("e0")  # the oldest, and at the head of the queue
     b._flush_metadata()
 
-    for i in range(4):             # force eviction
+    for i in range(4):  # force eviction
         b.set(f"new{i}", b"x" * size, {"size": size})
     b._writes.wait_all()
 
@@ -608,9 +597,7 @@ def test_a_read_protects_an_entry_already_queued_for_eviction(tmp_path):
         "an entry read after it was queued was still evicted; the ranking is a "
         "snapshot and nothing re-checked it at the point of use"
     )
-    assert os.path.basename(b._get_path("e1")) not in alive, (
-        "e1 was never read and should have gone instead"
-    )
+    assert os.path.basename(b._get_path("e1")) not in alive, "e1 was never read and should have gone instead"
     b.shutdown()
 
 
@@ -627,9 +614,7 @@ def test_an_unread_entry_is_still_evicted(tmp_path):
         b.set(f"new{i}", b"x" * size, {"size": size})
     b._writes.wait_all()
 
-    assert b._current_size_bytes <= 6 * size, (
-        "the cache stayed over its cap: nothing could be evicted"
-    )
+    assert b._current_size_bytes <= 6 * size, "the cache stayed over its cap: nothing could be evicted"
     b.shutdown()
 
 
@@ -648,10 +633,9 @@ def test_an_in_process_read_protects_before_the_flusher_runs(tmp_path):
     b._rebuild_evict_queue()
     before = os.path.getmtime(b._get_path("e0"))
 
-    b.get("e0")                    # NO flush: only the in-memory signal moves
+    b.get("e0")  # NO flush: only the in-memory signal moves
     assert os.path.getmtime(b._get_path("e0")) == before, (
-        "fixture is wrong: the read reached mtime, so this arm is not testing "
-        "the in-memory signal"
+        "fixture is wrong: the read reached mtime, so this arm is not testing the in-memory signal"
     )
 
     for i in range(4):
@@ -678,18 +662,16 @@ def test_another_processs_read_protects_through_mtime(tmp_path):
     b._rebuild_evict_queue()
 
     victim = b._get_path("e0")
-    b._metadata_cache.clear()                  # nothing known in-process
+    b._metadata_cache.clear()  # nothing known in-process
     b._paths.clear()
-    os.utime(victim, (time.time(), time.time()))   # "another process read it"
+    os.utime(victim, (time.time(), time.time()))  # "another process read it"
 
     for i in range(4):
         b.set(f"new{i}", b"x" * size, {"size": size})
     b._writes.wait_all()
 
     alive = {f.name for f in os.scandir(cache) if f.name.endswith(ENTRY_SUFFIX)}
-    assert os.path.basename(victim) in alive, (
-        "a read by another process left a newer mtime and was ignored"
-    )
+    assert os.path.basename(victim) in alive, "a read by another process left a newer mtime and was ignored"
     b.shutdown()
 
 
@@ -697,9 +679,11 @@ def test_another_processs_read_protects_through_mtime(tmp_path):
 # When the cache holds a handful of large results, say so
 # ---------------------------------------------------------------------------
 
+
 def _warning_text(backend):
     """Trigger the ineffective-cache warning and return its message."""
     import warnings
+
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         backend._warned_evict_after_write = False
@@ -717,14 +701,12 @@ def test_dominant_size_is_byte_weighted_not_the_mean(tmp_path):
     would stay quiet precisely where the advice matters.
     """
     b = FileBackend(str(tmp_path / "c"), max_size_bytes=80 * 1024 * 1024)
-    b._evict_queue = deque([(f"/big", 64 * 1024 * 1024, 0.0)]
-                           + [(f"/c{i}", 2 * 1024, 0.0) for i in range(3000)])
+    b._evict_queue = deque([("/big", 64 * 1024 * 1024, 0.0)] + [(f"/c{i}", 2 * 1024, 0.0) for i in range(3000)])
 
     dominant = b._dominant_entry_size()
     mean = (64 * 1024 * 1024 + 3000 * 2 * 1024) / 3001
     assert dominant == 64 * 1024 * 1024, (
-        f"got {dominant}, expected the 64MB entry that IS the cache; the mean "
-        f"would have said {mean:.0f}"
+        f"got {dominant}, expected the 64MB entry that IS the cache; the mean would have said {mean:.0f}"
     )
 
     # And the difference is visible in the message, not just in the helper: a
@@ -737,7 +719,7 @@ def test_dominant_size_is_byte_weighted_not_the_mean(tmp_path):
 
 
 def test_dominant_size_is_none_with_nothing_ranked(tmp_path):
-    b = FileBackend(str(tmp_path / "c"), max_size_bytes=10 ** 9)
+    b = FileBackend(str(tmp_path / "c"), max_size_bytes=10**9)
     assert b._dominant_entry_size() is None
     b.shutdown()
 
@@ -766,9 +748,7 @@ def test_many_entries_fitting_gets_no_shape_advice(tmp_path):
 
     text = _warning_text(b)
     assert text, "the warning itself should still fire"
-    assert "summary of those results" not in text, (
-        f"advice was added for a cache that holds ~16000 entries: {text}"
-    )
+    assert "summary of those results" not in text, f"advice was added for a cache that holds ~16000 entries: {text}"
     b.shutdown()
 
 
@@ -790,8 +770,7 @@ def test_a_healthy_small_entry_cache_never_warns_at_all(tmp_path):
         b._writes.wait_all()
 
     assert not [w for w in caught if "evicting entries" in str(w.message)], (
-        "a healthy small-entry cache warned; ~15 entries fit and turnover is "
-        "ordinary LRU"
+        "a healthy small-entry cache warned; ~15 entries fit and turnover is ordinary LRU"
     )
     b.shutdown()
 
@@ -871,7 +850,6 @@ def test_eviction_breaks_mtime_ties_by_write_order(tmp_path):
     order = [b._paths.get(p) for p, _s, _m in b._evict_queue]
 
     assert order == [f"k{i}" for i in range(10)], (
-        "eviction ranked a tied-mtime burst by directory order, not by when "
-        f"the entries were written; got {order}"
+        f"eviction ranked a tied-mtime burst by directory order, not by when the entries were written; got {order}"
     )
     b.shutdown()

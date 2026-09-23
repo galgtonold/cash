@@ -17,6 +17,7 @@ still reads it"): before it, any method call on a global kept it out of the key.
 98142ef then added a second channel, the instance a bound method carries, so
 both have to honour the waiver.
 """
+
 from __future__ import annotations
 
 import os
@@ -28,7 +29,7 @@ import pytest
 
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
 
-LLM = textwrap.dedent('''
+LLM = textwrap.dedent("""
     import time
 
     class Ledger:
@@ -44,9 +45,9 @@ LLM = textwrap.dedent('''
         time.sleep(0.3)  # @cash:assume-safe
         LEDGER.record(){WAIVER}
         return prompt.upper()
-''')
+""")
 
-MAIN = textwrap.dedent('''
+MAIN = textwrap.dedent("""
     import cash
     import llm
 
@@ -68,15 +69,16 @@ MAIN = textwrap.dedent('''
     llm.LEDGER.__init__()
     run()
     print("AGAIN", llm.LEDGER.calls)
-''')
+""")
 
 
 def _run(tmp_path, waiver):
     (tmp_path / "llm.py").write_text(LLM.replace("{WAIVER}", waiver))
     (tmp_path / "main.py").write_text(MAIN)
     env = dict(os.environ, CASH_CACHE_DIR=str(tmp_path / ".cash"), PYTHONWARNINGS="always")
-    proc = subprocess.run([sys.executable, "main.py"], cwd=tmp_path, env=env,
-                          capture_output=True, text=True, timeout=120)
+    proc = subprocess.run(
+        [sys.executable, "main.py"], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120
+    )
     assert proc.returncode == 0, proc.stderr
     return proc.stdout, proc.stderr
 

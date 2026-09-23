@@ -24,7 +24,6 @@ from pathlib import Path
 
 import pytest
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CI_YML = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 TESTS_DIR = REPO_ROOT / "tests"
@@ -35,8 +34,8 @@ TESTS_DIR = REPO_ROOT / "tests"
 # makes test_every_test_directory_is_accounted_for fail.
 EXPECTED_EXCLUSIONS = {
     "test_notebook_integration",  # ~793 kernel-spinning files; smoke subset covers headlines
-    "test_wheel_gate",            # builds a wheel + real Jupyter server; release gate
-    "docs",                       # dedicated docs-parity job (needs docs-test extras)
+    "test_wheel_gate",  # builds a wheel + real Jupyter server; release gate
+    "docs",  # dedicated docs-parity job (needs docs-test extras)
 }
 
 
@@ -53,7 +52,7 @@ def unit_step() -> str:
     if m is None:
         # Fall back to "everything from the step header to the next '- name:'".
         start = text.index("- name: Run unit tests")
-        rest = text[start + 1:]
+        rest = text[start + 1 :]
         nxt = rest.find("- name:")
         return rest[:nxt] if nxt != -1 else rest
     return m.group("body")
@@ -120,8 +119,7 @@ class TestExclusionsAreHonest:
         """A stale --ignore hides that its target vanished or was renamed."""
         for name in _ignored_paths(unit_step):
             assert (TESTS_DIR / name).exists(), (
-                f"ci.yml ignores tests/{name}, which no longer exists. "
-                "Remove the stale --ignore."
+                f"ci.yml ignores tests/{name}, which no longer exists. Remove the stale --ignore."
             )
 
     def test_exclusions_match_the_documented_set(self, unit_step):
@@ -140,20 +138,13 @@ class TestExclusionsAreHonest:
         This is the test that would have caught CAS-152: it fails the moment a
         directory exists that CI neither runs nor names.
         """
-        on_disk = {
-            p.name
-            for p in TESTS_DIR.iterdir()
-            if p.is_dir() and not p.name.startswith("__")
-        }
+        on_disk = {p.name for p in TESTS_DIR.iterdir() if p.is_dir() and not p.name.startswith("__")}
         unaccounted = on_disk - _ignored_paths(unit_step)
         # Everything not ignored IS run, because the step targets tests/.
         # So this only checks the inverse: nothing is ignored that isn't real.
         assert _ignored_paths(unit_step) <= on_disk, (
-            f"ci.yml ignores directories that do not exist: "
-            f"{sorted(_ignored_paths(unit_step) - on_disk)}"
+            f"ci.yml ignores directories that do not exist: {sorted(_ignored_paths(unit_step) - on_disk)}"
         )
         # Sanity: the directories we expect to be covered really are.
         for name in ("test_core", "test_backends", "test_ui", "test_notebook"):
-            assert name in unaccounted, (
-                f"tests/{name} is not being run by CI — it is excluded or gone."
-            )
+            assert name in unaccounted, f"tests/{name} is not being run by CI — it is excluded or gone."

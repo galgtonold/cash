@@ -6,6 +6,7 @@ second got the memoised rows, read nothing, and stored no file dependency --
 after the data changed it kept serving the old total, 2 of 2, while the same
 job without the memo was right.
 """
+
 from __future__ import annotations
 
 import functools
@@ -77,7 +78,7 @@ def test_the_second_consumer_of_a_memoised_parse_invalidates_when_the_file_chang
 
     _write(data, [10, 20, 30, 40])
     if hasattr(parse, "cache_clear"):
-        parse.cache_clear()           # what a new process starts with
+        parse.cache_clear()  # what a new process starts with
     _MEMO.clear()
     assert total_b(str(data)) == 40, "the memo's consumer served the old maximum"
     assert calls["b"] == 2
@@ -90,12 +91,12 @@ def test_a_memo_filled_from_an_older_file_is_not_stored_as_the_new_answer(tmp_pa
     data = tmp_path / "data.txt"
     _write(data, [1, 2, 3])
     total_a, total_b, calls = _consumers(Cash(cache_dir=str(tmp_path / "cache")), parse)
-    assert total_a(str(data)) == 6               # fills the memo from [1, 2, 3]
+    assert total_a(str(data)) == 6  # fills the memo from [1, 2, 3]
 
-    _write(data, [10, 20, 30, 40])               # the memo is NOT cleared
-    assert total_b(str(data)) == 3               # the memo's answer, as without cash
+    _write(data, [10, 20, 30, 40])  # the memo is NOT cleared
+    assert total_b(str(data)) == 3  # the memo's answer, as without cash
     if hasattr(parse, "cache_clear"):
-        parse.cache_clear()                      # what a new process starts with
+        parse.cache_clear()  # what a new process starts with
     _MEMO.clear()
     assert total_b(str(data)) == 40, "the old memo's answer was stored for the new file"
 
@@ -109,15 +110,15 @@ def test_a_memo_keyed_by_path_does_not_tie_one_file_to_another(tmp_path, parse):
     _write(second, [5, 6])
     total_a, total_b, calls = _consumers(Cash(cache_dir=str(tmp_path / "cache")), parse)
 
-    total_a(str(second))                 # the memo reads `second` here
-    assert total_b(str(first)) == 2      # reads `first` through... the memo reads it live
-    total_a(str(first))                  # memoised: nothing read in this call
+    total_a(str(second))  # the memo reads `second` here
+    assert total_b(str(first)) == 2  # reads `first` through... the memo reads it live
+    total_a(str(first))  # memoised: nothing read in this call
     _write(second, [50, 60])
     assert total_a(str(first)) == 3
     assert calls["a"] == 2, "an edit to another file invalidated a memoised consumer"
 
 
-_SETTINGS_APP = '''
+_SETTINGS_APP = """
 import functools, json, os, sys, time
 import cash
 
@@ -137,7 +138,7 @@ def convert(amount):
 if __name__ == "__main__":
     print("starting with rate", get_settings()["rate"], file=sys.stderr)
     print(convert(100.0))
-'''
+"""
 
 
 def test_settings_a_memo_read_before_the_first_cached_call_are_an_input(tmp_path):
@@ -159,12 +160,12 @@ def test_settings_a_memo_read_before_the_first_cached_call_are_an_input(tmp_path
         settings.write_text(json.dumps({"rate": rate}), encoding="utf-8")
         st = os.stat(settings)
         os.utime(settings, ns=(st.st_atime_ns, st.st_mtime_ns + int(rate * 10) * 2_000_000_000))
-        run = subprocess.run([sys.executable, str(app)], cwd=tmp_path, env=env,
-                             capture_output=True, text=True, timeout=120)
+        run = subprocess.run(
+            [sys.executable, str(app)], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120
+        )
         assert run.returncode == 0, run.stderr[-2000:]
         got.append((float(run.stdout.strip().splitlines()[-1]), "RAN" in run.stderr))
     assert got == [(110.0, True), (130.0, True), (140.0, True)], "a settings edit was ignored"
     # Control: nothing changed, so the fourth run is served from disk.
-    run = subprocess.run([sys.executable, str(app)], cwd=tmp_path, env=env,
-                         capture_output=True, text=True, timeout=120)
+    run = subprocess.run([sys.executable, str(app)], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120)
     assert "RAN" not in run.stderr, "the entry never reached disk: this test proves nothing"

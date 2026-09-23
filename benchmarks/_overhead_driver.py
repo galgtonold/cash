@@ -5,10 +5,13 @@ runs cells via ``shell.run_cell``, and times each one. Captures
 per-statement ``ProcessResult`` data when cash is enabled via a monkey-patch
 on ``StatementProcessor.process``.
 """
+
 from __future__ import annotations
 
 import time
 from pathlib import Path
+
+from IPython.core.interactiveshell import InteractiveShell
 
 # Pre-import cash BEFORE creating any InteractiveShell so its
 # ``_auto_load_in_ipython`` side effect fires once now (no shell active →
@@ -19,9 +22,6 @@ from pathlib import Path
 # (because the notebook itself imports cash). The bench was measuring
 # something other than what its mode flag claimed.
 import cash  # noqa: F401 — side-effect import: neutralise IPython auto-load
-
-from IPython.core.interactiveshell import InteractiveShell
-
 from benchmarks._overhead_io import CodeCell
 from benchmarks._overhead_results import CellTiming, StatementMetric
 
@@ -38,6 +38,7 @@ def new_cash_session(cache_dir: Path | str):
     kernel actually does.
     """
     from cash.core import Cash
+
     return Cash(cache_dir=str(cache_dir), register_magic=False)
 
 
@@ -109,16 +110,17 @@ def run_notebook(
         # run_cell swallows exceptions into the result object. A cell that
         # dies still returns a timing, so an unrecorded error reads as a fast
         # cell rather than a broken run.
-        exc = getattr(exec_result, "error_in_exec", None) or getattr(
-            exec_result, "error_before_exec", None)
-        timings.append(CellTiming(
-            index=cell.index,
-            notebook_cell_index=cell.notebook_cell_index,
-            wall_seconds=t1 - t0,
-            source_chars=len(cell.source),
-            statement_metrics=cell_metrics,
-            error=f"{type(exc).__name__}: {exc}" if exc is not None else None,
-        ))
+        exc = getattr(exec_result, "error_in_exec", None) or getattr(exec_result, "error_before_exec", None)
+        timings.append(
+            CellTiming(
+                index=cell.index,
+                notebook_cell_index=cell.notebook_cell_index,
+                wall_seconds=t1 - t0,
+                source_chars=len(cell.source),
+                statement_metrics=cell_metrics,
+                error=f"{type(exc).__name__}: {exc}" if exc is not None else None,
+            )
+        )
 
     if cash_enabled and not statement_sink:
         # Cash was asked for and processed nothing. The cells still ran, and
@@ -136,8 +138,7 @@ def run_notebook(
     return timings
 
 
-def _enable_cash(shell, cache_dir: Path, sink: list[StatementMetric],
-                 session=None) -> None:
+def _enable_cash(shell, cache_dir: Path, sink: list[StatementMetric], session=None) -> None:
     """Initialise cash on ``shell`` and install a tee on
     ``StatementProcessor.process_statement`` so each cell's per-statement
     ``ProcessResult`` is appended to ``sink``.
@@ -164,22 +165,22 @@ def _enable_cash(shell, cache_dir: Path, sink: list[StatementMetric],
             status = result.get("status", "UNKNOWN")
             # CacheStatus is an enum; convert to its string value when needed.
             status_str = status.value if hasattr(status, "value") else str(status)
-            sink.append(StatementMetric(
-                code=str(result.get("code", code))[:200],
-                execution_time=float(result.get("execution_time", 0.0)),
-                total_time=float(result.get("total_time", 0.0)),
-                status=status_str,
-                cost_model_size_bytes=result.get("cost_model_size_bytes"),
-                cost_model_restore_seconds=result.get("cost_model_restore_seconds"),
-                cost_model_type_name=result.get("cost_model_type_name"),
-                cost_model_family=result.get("cost_model_family"),
-                uncacheable_reasons=[
-                    str(r) for r in (result.get("uncacheable_reasons") or [])
-                ],
-                skipped_reason=result.get("skipped_reason"),
-                miss_reason=result.get("miss_reason"),
-                storage=[str(s) for s in (result.get("storage") or [])],
-            ))
+            sink.append(
+                StatementMetric(
+                    code=str(result.get("code", code))[:200],
+                    execution_time=float(result.get("execution_time", 0.0)),
+                    total_time=float(result.get("total_time", 0.0)),
+                    status=status_str,
+                    cost_model_size_bytes=result.get("cost_model_size_bytes"),
+                    cost_model_restore_seconds=result.get("cost_model_restore_seconds"),
+                    cost_model_type_name=result.get("cost_model_type_name"),
+                    cost_model_family=result.get("cost_model_family"),
+                    uncacheable_reasons=[str(r) for r in (result.get("uncacheable_reasons") or [])],
+                    skipped_reason=result.get("skipped_reason"),
+                    miss_reason=result.get("miss_reason"),
+                    storage=[str(s) for s in (result.get("storage") or [])],
+                )
+            )
         except Exception:  # noqa: BLE001 — tee must never break user code
             pass
         return result
@@ -191,8 +192,7 @@ def _enable_cash(shell, cache_dir: Path, sink: list[StatementMetric],
     # at Cash construction time. A caller-supplied ``session`` is reused as-is,
     # keeping its RAM tier (and everything the cost model left there) alive
     # across runs.
-    cash_instance = session if session is not None else Cash(
-        cache_dir=str(cache_dir), register_magic=False)
+    cash_instance = session if session is not None else Cash(cache_dir=str(cache_dir), register_magic=False)
     magics = CashMagics(shell=shell, cash_instance=cash_instance)
     shell.register_magics(magics)
     # Enable auto-caching (no TTL needed for the benchmark).

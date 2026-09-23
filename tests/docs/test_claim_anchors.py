@@ -23,6 +23,7 @@ would either stall unrelated code work or teach people to re-pin without
 reading, which manufactures false assurance. So drift is advisory here and
 blocking at release, where ``CASH_CLAIMS_STRICT=1`` is set.
 """
+
 from __future__ import annotations
 
 import os
@@ -89,8 +90,7 @@ def test_no_fingerprint_drift():
         return
     message = (
         f"{len(drifted)} doc claim(s) rest on code that has changed. Re-read "
-        f"each, then `python scripts/claims.py --accept <page> --yes`:\n"
-        + _fmt(drifted)
+        f"each, then `python scripts/claims.py --accept <page> --yes`:\n" + _fmt(drifted)
     )
     if STRICT:
         pytest.fail(message)
@@ -104,8 +104,7 @@ def test_manifest_covers_every_published_page():
     manifest = set(load_manifest())
     actual = {p.relative_to(REPO_ROOT).as_posix() for p in published_pages()}
     assert manifest == actual, (
-        f"manifest/page mismatch — missing: {sorted(actual - manifest)}, "
-        f"stale: {sorted(manifest - actual)}"
+        f"manifest/page mismatch — missing: {sorted(actual - manifest)}, stale: {sorted(manifest - actual)}"
     )
 
 
@@ -158,8 +157,7 @@ def test_no_mistyped_claim_keyword():
             )
     assert not problems, (
         "Comments that look like claim anchors but don't parse as one -- the "
-        "claim they meant to ground is completely ungrounded:\n"
-        + "\n".join(problems)
+        "claim they meant to ground is completely ungrounded:\n" + "\n".join(problems)
     )
 
 
@@ -200,9 +198,9 @@ def test_no_unfilled_placeholder_survives():
 @pytest.mark.parametrize(
     "bad_comment",
     [
-        "<!-- claims: mod.py:foo @? -->",   # plural keyword typo
-        "<!-- Claim: mod.py:foo @? -->",    # wrong case
-        "<!-- claim mod.py:foo @? -->",     # missing colon
+        "<!-- claims: mod.py:foo @? -->",  # plural keyword typo
+        "<!-- Claim: mod.py:foo @? -->",  # wrong case
+        "<!-- claim mod.py:foo @? -->",  # missing colon
     ],
 )
 def test_mistyped_claim_keyword_guard_actually_fires(tmp_path, monkeypatch, bad_comment):
@@ -256,9 +254,7 @@ def test_mistyped_claim_keyword_guard_tolerates_a_fenced_example(tmp_path, monke
     page = tmp_path / "docs" / "bad.md"
     page.parent.mkdir(parents=True)
     page.write_text(
-        "```markdown\n"
-        "<!-- claims: mod.py:foo @? -->\n"
-        "```\n",
+        "```markdown\n<!-- claims: mod.py:foo @? -->\n```\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(_mod, "published_pages", lambda: [page])
@@ -301,9 +297,7 @@ def test_unfilled_placeholder_guard_tolerates_a_fenced_example(tmp_path, monkeyp
     page = tmp_path / "docs" / "bad.md"
     page.parent.mkdir(parents=True)
     page.write_text(
-        "```markdown\n"
-        "<!-- claim: mod.py:foo @? -->\n"
-        "```\n",
+        "```markdown\n<!-- claim: mod.py:foo @? -->\n```\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(_mod, "published_pages", lambda: [page])
@@ -321,11 +315,7 @@ def test_unfilled_placeholder_guard_still_fires_beside_a_fenced_example(tmp_path
     page = tmp_path / "docs" / "bad.md"
     page.parent.mkdir(parents=True)
     page.write_text(
-        "```markdown\n"
-        "<!-- claim: mod.py:foo @? -->\n"
-        "```\n"
-        "\n"
-        "Some prose with a stray @? in it.\n",
+        "```markdown\n<!-- claim: mod.py:foo @? -->\n```\n\nSome prose with a stray @? in it.\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(_mod, "published_pages", lambda: [page])

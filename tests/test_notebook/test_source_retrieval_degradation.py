@@ -28,7 +28,6 @@ import cash
 from cash.exceptions import SOURCE_RETRIEVAL_ERRORS
 from cash.notebook.analysis import CodeAnalyzer
 
-
 # Prose that fails to tokenize on EVERY supported Python.
 #
 # Choosing this content is not incidental. A bare apostrophe ("doesn't") opens
@@ -46,8 +45,7 @@ from cash.notebook.analysis import CodeAnalyzer
 # prose looks like, the triple quote because it is what makes the test honest
 # on 3.10 and 3.11.
 NON_PYTHON_SOURCE = (
-    "Cash doesn't tokenize this line as Python.\n"
-    "Nor this one: ''' opens a string literal that never closes.\n"
+    "Cash doesn't tokenize this line as Python.\nNor this one: ''' opens a string literal that never closes.\n"
 )
 
 
@@ -100,9 +98,7 @@ class TestSourceRetrievalDegrades:
         exec(compile("def demo(x):\n    return x * 2\n", str(doc), "exec"), ns_a)
         exec(compile("def demo(x):\n    return x * 3\n", str(doc), "exec"), ns_b)
 
-        assert CodeAnalyzer.get_source_hash(ns_a["demo"]) != CodeAnalyzer.get_source_hash(
-            ns_b["demo"]
-        )
+        assert CodeAnalyzer.get_source_hash(ns_a["demo"]) != CodeAnalyzer.get_source_hash(ns_b["demo"])
 
     def test_find_called_functions_degrades_to_empty(self, tmp_path):
         demo = _func_from_non_python_file(tmp_path)
@@ -119,12 +115,7 @@ class TestDecoratorSurvivesNonPythonSource:
 
         instance = cash.Cash(cache_dir=str(tmp_path / "cache"))
         namespace: dict = {"cash_instance": instance}
-        source = (
-            "@cash_instance.cache\n"
-            "def compute(x):\n"
-            "    calls.append(x)\n"
-            "    return x * 2\n"
-        )
+        source = "@cash_instance.cache\ndef compute(x):\n    calls.append(x)\n    return x * 2\n"
         namespace["calls"] = []
 
         # Before the fix this raised TokenError out of the decorator.
@@ -140,12 +131,7 @@ class TestDecoratorSurvivesNonPythonSource:
 
         instance = cash.Cash(cache_dir=str(tmp_path / "cache"))
         namespace: dict = {"cash_instance": instance, "calls": []}
-        source = (
-            "@cash_instance.cache\n"
-            "def compute(x):\n"
-            "    calls.append(x)\n"
-            "    return x * 2\n"
-        )
+        source = "@cash_instance.cache\ndef compute(x):\n    calls.append(x)\n    return x * 2\n"
         exec(compile(source, str(doc), "exec"), namespace)
 
         compute = namespace["compute"]
@@ -162,8 +148,6 @@ class TestErrorTupleContract:
 
         assert TokenError in SOURCE_RETRIEVAL_ERRORS
 
-    @pytest.mark.parametrize(
-        "exc", [OSError, TypeError, SyntaxError, IndentationError, UnicodeDecodeError]
-    )
+    @pytest.mark.parametrize("exc", [OSError, TypeError, SyntaxError, IndentationError, UnicodeDecodeError])
     def test_covers_known_failure_modes(self, exc):
         assert issubclass(exc, SOURCE_RETRIEVAL_ERRORS)

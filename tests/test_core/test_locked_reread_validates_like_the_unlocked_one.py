@@ -22,6 +22,7 @@ silently. Twice means the duplication is the defect, so the locked path now
 calls the same function the unlocked one does, and these tests pin that the two
 agree.
 """
+
 from __future__ import annotations
 
 import os
@@ -33,7 +34,6 @@ import time
 import pytest
 
 from cash import Cash
-
 
 _CHILD = """
 import json, os, sys, time
@@ -71,12 +71,10 @@ def project(tmp_path):
 
 
 def _run(script, mode, tmp_path, config):
-    env = dict(os.environ,
-               CASH_CACHE_DIR=str(tmp_path / f"cache_{mode}"),
-               PROBE_CONFIG=str(config))
-    proc = subprocess.run([sys.executable, str(script), mode], env=env,
-                          cwd=str(tmp_path), capture_output=True, text=True,
-                          timeout=300)
+    env = dict(os.environ, CASH_CACHE_DIR=str(tmp_path / f"cache_{mode}"), PROBE_CONFIG=str(config))
+    proc = subprocess.run(
+        [sys.executable, str(script), mode], env=env, cwd=str(tmp_path), capture_output=True, text=True, timeout=300
+    )
     assert proc.returncode == 0, proc.stderr[-2000:]
     return proc.stdout.strip(), proc.stderr.count("RAN")
 
@@ -100,9 +98,7 @@ def test_editing_a_tracked_file_invalidates_in_every_mode(project, tmp_path, mod
     config.write_text('{"model": "MODEL-B"}', encoding="utf-8")
 
     result, ran = _run(script, mode, tmp_path, config)
-    assert result == "RESULT MODEL-B:q1", (
-        f"mode={mode} served the answer computed from the old file"
-    )
+    assert result == "RESULT MODEL-B:q1", f"mode={mode} served the answer computed from the old file"
     assert ran == 1
 
 
@@ -112,8 +108,7 @@ def test_the_locked_path_still_serves_a_valid_entry(tmp_path):
     The locked re-read is the single-flight payoff -- the follower has to be
     served the leader's value, not compute its own.
     """
-    c = Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False,
-             use_locking=True)
+    c = Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False, use_locking=True)
     runs: list[int] = []
 
     @c.cache(assume_safe=True)
@@ -129,8 +124,7 @@ def test_the_locked_path_still_serves_a_valid_entry(tmp_path):
 
 def test_an_expired_entry_still_recomputes_under_the_lock(tmp_path):
     """The TTL check the locked path already had must survive the refactor."""
-    c = Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False,
-             use_locking=True)
+    c = Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False, use_locking=True)
     runs: list[int] = []
 
     @c.cache(ttl=1, assume_safe=True)

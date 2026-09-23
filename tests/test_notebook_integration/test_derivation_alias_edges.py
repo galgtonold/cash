@@ -64,9 +64,7 @@ def test_cas115_groupby_reflects_post_creation_frame_mutation(nb_runner):
         "df.iloc[999, 1] = 0",
         "print('sums=', g['v'].sum().to_dict())",
     ]
-    plain, cash = _plain_then_cash(
-        nb_runner, cells, edit_idx=3, edit_src="df.iloc[999, 1] = 5", out_idx=4
-    )
+    plain, cash = _plain_then_cash(nb_runner, cells, edit_idx=3, edit_src="df.iloc[999, 1] = 5", out_idx=4)
     assert "sums=" in plain
     assert plain in cash, f"groupby aggregate stale after frame edit: plain={plain!r} cash={cash!r}"
 
@@ -80,9 +78,7 @@ def test_cas89_view_mutation_invalidates_base_consumer(nb_runner):
         "b[:] = 9",
         "print('asum=', int(a.sum()))",
     ]
-    plain, cash = _plain_then_cash(
-        nb_runner, cells, edit_idx=3, edit_src="b[:] = 7", out_idx=4
-    )
+    plain, cash = _plain_then_cash(nb_runner, cells, edit_idx=3, edit_src="b[:] = 7", out_idx=4)
     assert "asum=" in plain
     assert plain in cash, f"base consumer stale after view edit: plain={plain!r} cash={cash!r}"
 
@@ -96,9 +92,7 @@ def test_control_a_copy_does_not_invalidate_base(nb_runner):
         "v += 3",
         "print('asum=', int(a.sum()))",
     ]
-    plain, cash = _plain_then_cash(
-        nb_runner, cells, edit_idx=3, edit_src="v += 4", out_idx=4
-    )
+    plain, cash = _plain_then_cash(nb_runner, cells, edit_idx=3, edit_src="v += 4", out_idx=4)
     # arange(100).sum() == 4950 regardless of the edit to the copy.
     assert plain == "asum= 4950", plain
     assert plain in cash, f"copy edit wrongly changed base consumer: plain={plain!r} cash={cash!r}"
@@ -114,9 +108,7 @@ def test_control_b_view_of_view_chains_to_root_base(nb_runner):
         "w[:] = 0",
         "print('asum=', int(a.sum()))",
     ]
-    plain, cash = _plain_then_cash(
-        nb_runner, cells, edit_idx=4, edit_src="w[:] = 1", out_idx=5
-    )
+    plain, cash = _plain_then_cash(nb_runner, cells, edit_idx=4, edit_src="w[:] = 1", out_idx=5)
     assert "asum=" in plain
     assert plain in cash, f"root base stale after view-of-view edit: plain={plain!r} cash={cash!r}"
 
@@ -130,9 +122,7 @@ def test_control_c_unrelated_var_stays_cached(nb_runner):
         "b[:] = 9",
         "print('other_sum=', int(other.sum()), 'asum=', int(a.sum()))",
     ]
-    plain, cash = _plain_then_cash(
-        nb_runner, cells, edit_idx=3, edit_src="b[:] = 7", out_idx=4
-    )
+    plain, cash = _plain_then_cash(nb_runner, cells, edit_idx=3, edit_src="b[:] = 7", out_idx=4)
     # other is arange(50).sum() == 1225 in every run; a changes with the edit.
     assert "other_sum= 1225" in plain, plain
     assert plain in cash, f"unrelated-var consumer diverged from plain: plain={plain!r} cash={cash!r}"

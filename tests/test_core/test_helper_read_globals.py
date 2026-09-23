@@ -18,6 +18,7 @@ Two consequences, and the second is the expensive one:
 The registry lives in `helper_registry.py` because same-module globals go down
 the other branch and never showed the defect.
 """
+
 from __future__ import annotations
 
 import warnings
@@ -36,8 +37,7 @@ def _warnings_from(fn, *args):
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
         fn(*args)
-        return [str(w.message) for w in rec
-                if issubclass(type(w.message), CashImpurityWarning)]
+        return [str(w.message) for w in rec if issubclass(type(w.message), CashImpurityWarning)]
 
 
 def test_a_registry_read_by_a_helper_is_not_reported_as_mutated(tmp_path):

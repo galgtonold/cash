@@ -14,6 +14,7 @@ exactly as they do for ``fig`` and ``ax``, which the history already leaves
 out. So no history ever matched and the chart read as stale whenever some
 other repair made the planner ask.
 """
+
 import pytest
 
 pytest.importorskip("pandas")
@@ -46,8 +47,7 @@ def test_an_unrelated_repair_does_not_call_the_chart_stale(nb_runner, tmp_path):
     nb_runner.run_cell(7)
     raw = nb_runner.get_raw_output(7)
     assert "OUT 50 90" in nb_runner.get_output(7), raw
-    assert "STALE FILE" not in raw, (
-        "the chart's data did not change, and it was called stale:\n" + raw)
+    assert "STALE FILE" not in raw, "the chart's data did not change, and it was called stale:\n" + raw
 
 
 def test_a_chart_whose_data_changed_is_still_called_stale(nb_runner, tmp_path):
@@ -60,4 +60,5 @@ def test_a_chart_whose_data_changed_is_still_called_stale(nb_runner, tmp_path):
     nb_runner.run_cell(7)
     raw = nb_runner.get_raw_output(7)
     assert "STALE FILE" in raw and "a.png" in raw, (
-        "the plotted data changed and the chart was not called stale:\n" + raw)
+        "the plotted data changed and the chart was not called stale:\n" + raw
+    )

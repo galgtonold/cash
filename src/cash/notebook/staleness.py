@@ -15,6 +15,7 @@ the cell being RUN is the edited one. Edit cell 3, run cell 7, and cell 7 still
 matches the file. Detectors for that case were designed and rejected during
 design -- in-kernel detection cannot reach it. This is a floor.
 """
+
 from __future__ import annotations
 
 import os
@@ -32,8 +33,7 @@ class StalenessTracker:
         # saved .ipynb, i.e. cash CANNOT see unsaved edits; the live readers can.
         self._source: str | None = None
 
-    def observe(self, *, running_code: str, file_code: str | None,
-                notebook_path: str | None) -> bool:
+    def observe(self, *, running_code: str, file_code: str | None, notebook_path: str | None) -> bool:
         """Compare what is running against what the file says, and remember.
 
         Returns True on exactly the call that flips the verdict from fresh to
@@ -52,12 +52,12 @@ class StalenessTracker:
             self.reset()
 
         if file_code is None or notebook_path is None or mtime is None:
-            return False            # no proof available; not the same as "fresh"
+            return False  # no proof available; not the same as "fresh"
         file_code = _undo_magic_line_strip(running_code, file_code)
         if _normalise(running_code) == _normalise(file_code):
             return False
         if self._stale:
-            return False            # already known; do not re-notify
+            return False  # already known; do not re-notify
 
         self._stale = True
         self._saved_at = mtime
@@ -96,7 +96,7 @@ class StalenessTracker:
 #: ``%%cash ttl=60``), including its trailing newline when present. The
 #: negative lookahead keeps a differently-named magic (``%%cash_variant``)
 #: from matching.
-_CASH_CELL_MAGIC_LINE = re.compile(r'^%%cash(?![A-Za-z0-9_])[^\n]*\n?')
+_CASH_CELL_MAGIC_LINE = re.compile(r"^%%cash(?![A-Za-z0-9_])[^\n]*\n?")
 
 
 def _undo_magic_line_strip(running_code: str, file_code: str) -> str:
@@ -116,10 +116,10 @@ def _undo_magic_line_strip(running_code: str, file_code: str) -> str:
     stripping only the file's copy would introduce a mismatch instead of
     removing one.
     """
-    if running_code.lstrip().startswith('%%'):
+    if running_code.lstrip().startswith("%%"):
         return file_code
     match = _CASH_CELL_MAGIC_LINE.match(file_code)
-    return file_code[match.end():] if match else file_code
+    return file_code[match.end() :] if match else file_code
 
 
 def _normalise(code: str) -> str:
@@ -138,7 +138,7 @@ def _mtime(path: str | None) -> float | None:
     try:
         return os.stat(path).st_mtime
     except OSError:
-        return None                 # degrade, never raise
+        return None  # degrade, never raise
 
 
 def _to_ascii(text: str) -> str:

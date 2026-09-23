@@ -9,11 +9,11 @@ invariants land in a later refactor.
 
 from __future__ import annotations
 
-import inspect
 import ast
-import importlib.util
 import builtins
 import hashlib
+import importlib.util
+import inspect
 import logging
 import os
 import re
@@ -23,29 +23,10 @@ import types
 from collections.abc import Callable, Iterable
 from typing import Any
 
+from ...source_norm import source_identity_digest
 from ...utils import resolve_file_dep_path
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from ..analysis import CodeAnalyzer
-from ..cacheability import (
-    RECEIVER_READONLY_WRITE_METHODS,
-    assigned_method_call_receivers,
-    called_function_global_mutations,
-    fits_its_receiver,
-    is_pandas_plot_call,
-    top_level_call_argument_bases,
-    bare_call_argument_names,
-    bare_call_arguments,
-    function_arg_mutations,
-    standalone_call_arg_targets,
-    chain_is_pure,
-    standalone_method_call_inner_methods,
-    module_setting_receivers,
-    standalone_method_call_receivers,
-    standalone_method_mutation_receivers,
-)
-from ..cacheability_decision import receiver_is_identity_coupled
-from ..file_dep_snapshot import _LISTING_MIN_FILES, file_dep_is_fresh, stats_from_listings
-from ...source_norm import source_identity_digest
 from ..cache_key import (
     CacheKeyContext,
     VirtualCallable,
@@ -58,7 +39,26 @@ from ..cache_key import (
     virtual_namespace,
 )
 from ..cache_status import CacheStatus
+from ..cacheability import (
+    RECEIVER_READONLY_WRITE_METHODS,
+    assigned_method_call_receivers,
+    bare_call_argument_names,
+    bare_call_arguments,
+    called_function_global_mutations,
+    chain_is_pure,
+    fits_its_receiver,
+    function_arg_mutations,
+    is_pandas_plot_call,
+    module_setting_receivers,
+    standalone_call_arg_targets,
+    standalone_method_call_inner_methods,
+    standalone_method_call_receivers,
+    standalone_method_mutation_receivers,
+    top_level_call_argument_bases,
+)
+from ..cacheability_decision import receiver_is_identity_coupled
 from ..control_structures import extract_target_names, get_control_structure_type, is_control_structure
+from ..file_dep_snapshot import _LISTING_MIN_FILES, file_dep_is_fresh, stats_from_listings
 from ..lineage_formula import (
     callable_source_component,
     module_read_lineage,
@@ -66,20 +66,26 @@ from ..lineage_formula import (
     output_lineage,
 )
 from ..randomness import (
-    observed_rng_reads,
     hidden_lineage_reads,
     hidden_lineage_writes,
     hidden_write_lineage,
+    observed_rng_reads,
 )
 from ..statement.derivation_edges import bump_derived_lineages
 from ..statement.file_deps import compute_file_hash_component
 from ..statement.processor import _is_control_body
 from ._types import (
     IncrementalStartResult as _IncrementalStartResult,
+)
+from ._types import (
     RestoreCollector,
-    SimulationCacheEntry as _SimulationCacheEntry,
-    TraceEntry as _TraceEntry,
     apply_collected_mutations,
+)
+from ._types import (
+    SimulationCacheEntry as _SimulationCacheEntry,
+)
+from ._types import (
+    TraceEntry as _TraceEntry,
 )
 
 __all__ = ["VirtualLineage"]
@@ -87,21 +93,52 @@ __all__ = ["VirtualLineage"]
 logger = logging.getLogger(__name__)
 
 # Canonical built-ins to skip during lineage tracking (mirrors upstream.py).
-_BUILTIN_NAMES: frozenset[str] = frozenset({
-    'get_ipython', '__builtins__', 'print', 'range',
-    'len', 'enumerate', 'zip', 'map', 'filter',
-    'sorted', 'reversed', 'list', 'dict', 'set',
-    'str', 'int', 'float', 'bool', 'type', 'isinstance',
-    'hasattr', 'getattr', 'setattr', 'open', 'sum', 'min', 'max',
-    'ValueError', 'TypeError', 'KeyError', 'IndexError',
-    'AttributeError', 'RuntimeError', 'Exception',
-    'True', 'False', 'None',
-})
+_BUILTIN_NAMES: frozenset[str] = frozenset(
+    {
+        "get_ipython",
+        "__builtins__",
+        "print",
+        "range",
+        "len",
+        "enumerate",
+        "zip",
+        "map",
+        "filter",
+        "sorted",
+        "reversed",
+        "list",
+        "dict",
+        "set",
+        "str",
+        "int",
+        "float",
+        "bool",
+        "type",
+        "isinstance",
+        "hasattr",
+        "getattr",
+        "setattr",
+        "open",
+        "sum",
+        "min",
+        "max",
+        "ValueError",
+        "TypeError",
+        "KeyError",
+        "IndexError",
+        "AttributeError",
+        "RuntimeError",
+        "Exception",
+        "True",
+        "False",
+        "None",
+    }
+)
 
 
 def _normalize_stmt(s: str) -> str:
     """Strip iteration-context comments and whitespace for code comparison."""
-    s = re.sub(r'# __iteration_context__:.*?\n', '', s)
+    s = re.sub(r"# __iteration_context__:.*?\n", "", s)
     return s.strip()
 
 
@@ -120,6 +157,7 @@ class _InputHashes(dict):
     the key, at the statement's position, but nowhere else -- so they ride
     alongside, read back only when the key is rebuilt from the trace.
     """
+
     __slots__ = ("callee_lineages",)
 
     def __init__(self, own: dict[str, str], callee_lineages: dict[str, str]) -> None:
@@ -149,6 +187,7 @@ _FILE_STATE_THIS_RUN: dict = {}
 def _file_state_this_run() -> dict | None:
     """This cell run's per-file memo, or None outside a run."""
     from .. import file_dep_snapshot as _fds
+
     epoch = _fds._HASH_EPOCH
     if epoch is None:
         return None
@@ -167,8 +206,13 @@ def forget_file_state_this_run() -> None:
 def _snapshot_token(stored: Any) -> Any:
     """What identifies a recorded snapshot, cheaply."""
     if isinstance(stored, dict):
-        return (stored.get("hash"), stored.get("size"), stored.get("mtime_ns", stored.get("mtime")),
-                stored.get("remote"), stored.get("absent"))
+        return (
+            stored.get("hash"),
+            stored.get("size"),
+            stored.get("mtime_ns", stored.get("mtime")),
+            stored.get("remote"),
+            stored.get("absent"),
+        )
     return repr(stored)
 
 
@@ -301,7 +345,7 @@ class VirtualLineage:
         sources: dict[str, str] = {}
         for code in notebook_cells:
             try:
-                tree = ast.parse(code.replace('\r\n', '\n'))
+                tree = ast.parse(code.replace("\r\n", "\n"))
             except (SyntaxError, ValueError):
                 continue
             for node in tree.body:
@@ -323,7 +367,7 @@ class VirtualLineage:
         the simulation, desyncing it from the runtime (which already uses
         ``inspect``) and reverting the mutation on a cross-cell restore.
         """
-        srcs = getattr(self, '_sim_func_sources', None)
+        srcs = getattr(self, "_sim_func_sources", None)
         if srcs is not None:
             s = srcs.get(name)
             if s is not None:
@@ -384,13 +428,13 @@ class VirtualLineage:
         except (SyntaxError, ValueError, RecursionError):
             return set()
         ns = self.shell.user_ns
-        return {
-            n for n in names
-            if n in ns and not isinstance(ns[n], types.ModuleType)
-        }
+        return {n for n in names if n in ns and not isinstance(ns[n], types.ModuleType)}
 
     def _mutation_receivers(
-        self, stmt_code: str, tree: ast.Module, virtual_modules: set[str] | None = None,
+        self,
+        stmt_code: str,
+        tree: ast.Module,
+        virtual_modules: set[str] | None = None,
     ) -> set[str]:
         """Receivers of standalone method calls in *tree* that mutate, per the
         runtime's broad-precise classification.
@@ -427,10 +471,7 @@ class VirtualLineage:
         fam: set[str] = set()
         try:
             if standalone_call_arg_targets(tree):
-                fam = {
-                    v for v in function_arg_mutations(tree, self._resolve_sim_function_source)
-                    if not is_module(v)
-                }
+                fam = {v for v in function_arg_mutations(tree, self._resolve_sim_function_source) if not is_module(v)}
         except (SyntaxError, ValueError, RecursionError):
             fam = set()
         candidates = standalone_method_call_receivers(tree)
@@ -440,8 +481,11 @@ class VirtualLineage:
         # Mirror the runtime: an Axes/Figure handed to a call is drawn on, by
         # a plain function (``forest(axes[0], df)``) too -- so it is decided
         # before the no-method-call early return, exactly as there.
-        drawn_args = {name for name in top_level_call_argument_bases(tree)
-                      if receiver_is_identity_coupled(self.shell.user_ns.get(name))}
+        drawn_args = {
+            name
+            for name in top_level_call_argument_bases(tree)
+            if receiver_is_identity_coupled(self.shell.user_ns.get(name))
+        }
         # Arguments of a bare call the runtime OBSERVED being changed
         # (`im.add_qc(df)`, `sc.tl.leiden(hv)` -- see the runtime's
         # `_classify_method_mutations`). Only its recorded verdict can say so:
@@ -458,9 +502,8 @@ class VirtualLineage:
         # it, so `sc.pp.calculate_qc_metrics(adata, inplace=True)` was never
         # replayed before its readers -- a KeyError, and with
         # `heapq.heapify(xs)` a silently wrong `xs[0]` (round 30, r30s4).
-        absent_args = {n for n in bare_call_argument_names(tree)
-                       if n not in self.shell.user_ns} - drawn_args
-        if not candidates and not assigned and not drawn_args and not arg_candidates                 and not absent_args:
+        absent_args = {n for n in bare_call_argument_names(tree) if n not in self.shell.user_ns} - drawn_args
+        if not candidates and not assigned and not drawn_args and not arg_candidates and not absent_args:
             return fam
         tier1 = standalone_method_mutation_receivers(tree)
         inner = standalone_method_call_inner_methods(tree)
@@ -490,8 +533,7 @@ class VirtualLineage:
             if receiver_is_identity_coupled(receiver):
                 receivers.add(base)  # Axes/Figure draw method mutates it
                 continue
-            if (chain_is_pure(method, inner.get((base, method), frozenset()))
-                    or is_pandas_plot_call(method, receiver)):
+            if chain_is_pure(method, inner.get((base, method), frozenset())) or is_pandas_plot_call(method, receiver):
                 continue
             if verdict is not None:
                 if base in verdict:
@@ -519,7 +561,7 @@ class VirtualLineage:
         self._simulation_cache.clear()
         self._simulation_cell_hashes.clear()
         self._ast_cache.clear()
-        self.__dict__.pop('_import_bindings_memo', None)
+        self.__dict__.pop("_import_bindings_memo", None)
 
     def _get_metadata_only(self, cache_key: str) -> dict | None:
         """Get only metadata for a cache key without deserializing the full value.
@@ -547,7 +589,7 @@ class VirtualLineage:
             return None
         if len(self._ast_cache) >= self._ast_cache_max_size:
             keys = list(self._ast_cache.keys())
-            for evict_key in keys[:len(keys) // 4]:
+            for evict_key in keys[: len(keys) // 4]:
                 del self._ast_cache[evict_key]
         self._ast_cache[code] = tree
         return tree
@@ -603,9 +645,10 @@ class VirtualLineage:
             if abs(st.st_mtime - stored_mtime) > 0.01:
                 if self.debug:
                     logger.debug(
-                        "[UPSTREAM_DEBUG] File dependency changed: %s "
-                        "(cached mtime=%s, current=%s)",
-                        resolved, stored_mtime, st.st_mtime,
+                        "[UPSTREAM_DEBUG] File dependency changed: %s (cached mtime=%s, current=%s)",
+                        resolved,
+                        stored_mtime,
+                        st.st_mtime,
                     )
                 return True
         return False
@@ -622,16 +665,17 @@ class VirtualLineage:
         first_changed_cell = 0
         cache_had_hash_mismatch = False
         for idx in range(min(current_cell_idx, len(self._simulation_cache))):
-            cell_code = notebook_cells[idx].replace('\r\n', '\n')
-            cell_hash = hashlib.sha256(cell_code.encode('utf-8')).hexdigest()
+            cell_code = notebook_cells[idx].replace("\r\n", "\n")
+            cell_hash = hashlib.sha256(cell_code.encode("utf-8")).hexdigest()
             cached = self._simulation_cache[idx]
             if cached.cell_code_hash != cell_hash:
                 cache_had_hash_mismatch = True
                 if self.debug:
                     logger.debug(
-                        "[UPSTREAM_DEBUG] Hash mismatch in cell %d "
-                        "(cached=%s, current=%s). Re-simulating from here.",
-                        idx, cached.cell_code_hash[:12], cell_hash[:12],
+                        "[UPSTREAM_DEBUG] Hash mismatch in cell %d (cached=%s, current=%s). Re-simulating from here.",
+                        idx,
+                        cached.cell_code_hash[:12],
+                        cell_hash[:12],
                     )
                 break
             cached_file_deps = cached.cell_file_deps
@@ -665,8 +709,8 @@ class VirtualLineage:
         for idx in range(cache_range_end, current_cell_idx):
             if idx not in self._simulation_cell_hashes:
                 continue
-            cell_code = notebook_cells[idx].replace('\r\n', '\n')
-            cell_hash = hashlib.sha256(cell_code.encode('utf-8')).hexdigest()
+            cell_code = notebook_cells[idx].replace("\r\n", "\n")
+            cell_hash = hashlib.sha256(cell_code.encode("utf-8")).hexdigest()
             if self._simulation_cell_hashes[idx] != cell_hash:
                 if self.debug:
                     logger.debug(
@@ -699,7 +743,8 @@ class VirtualLineage:
         if self.debug:
             logger.debug(
                 "[UPSTREAM_DEBUG] Incremental simulation: reusing cache for cells 0-%d, simulating from cell %d",
-                first_changed_cell - 1, first_changed_cell,
+                first_changed_cell - 1,
+                first_changed_cell,
             )
         return virtual_lineage, virtual_modules, simulation_trace, vars_mutated_by_loops, vars_with_stale_files
 
@@ -728,7 +773,8 @@ class VirtualLineage:
             logger.debug(
                 "[UPSTREAM_DEBUG] _simulate_and_find_changes: current_cell_idx=%d, "
                 "had_prior_cache=%s, cache_size=%d, cell_hashes_size=%d",
-                current_cell_idx, had_prior_cache,
+                current_cell_idx,
+                had_prior_cache,
                 len(self._simulation_cache) if self._simulation_cache else 0,
                 len(self._simulation_cell_hashes),
             )
@@ -747,18 +793,20 @@ class VirtualLineage:
         # upstream CODE modification, which would withdraw trust from every
         # loop in the notebook.
         state = self._tracking_state
-        generation = getattr(state, 'module_generation', 0)
+        generation = getattr(state, "module_generation", 0)
         reloaded: set[str] = set()
-        if generation != getattr(self, '_simulated_module_generation', 0):
+        if generation != getattr(self, "_simulated_module_generation", 0):
             self._simulated_module_generation = generation
-            reloaded = set(getattr(state, 'reloaded_names', set()))
+            reloaded = set(getattr(state, "reloaded_names", set()))
             state.reloaded_names = set()
             reader = _first_cell_reading(notebook_cells, current_cell_idx, reloaded)
             if reader is not None and reader < first_changed_cell:
                 first_changed_cell = reader
                 if self.debug:
-                    logger.debug("[UPSTREAM_DEBUG] A tracked module was reloaded; "
-                                 "re-simulating from cell %d, its first reader.", reader)
+                    logger.debug(
+                        "[UPSTREAM_DEBUG] A tracked module was reloaded; re-simulating from cell %d, its first reader.",
+                        reader,
+                    )
 
         # Check the lightweight hash cache for cells beyond the main cache range.
         if not cache_had_hash_mismatch and self._simulation_cell_hashes:
@@ -770,9 +818,9 @@ class VirtualLineage:
         # Without this, stale file deps would cause ALL cached state to be lost,
         # even for cells before the stale cell.
         if first_changed_cell > 0 and self._simulation_cache and first_changed_cell <= len(self._simulation_cache):
-            (virtual_lineage, virtual_modules,
-             simulation_trace, vars_mutated_by_loops,
-             vars_with_stale_files) = self._restore_cached_state(first_changed_cell)
+            (virtual_lineage, virtual_modules, simulation_trace, vars_mutated_by_loops, vars_with_stale_files) = (
+                self._restore_cached_state(first_changed_cell)
+            )
         # The cells kept from the cache include the import, so a reloaded
         # module's name still carries its PRE-edit lineage there. A loop that
         # read it recorded its outcome against that lineage and found it
@@ -806,7 +854,7 @@ class VirtualLineage:
         all_notebook_stmts: set[str] = set()
         for cell_code in notebook_cells:
             try:
-                clean_code = CodeAnalyzer.strip_magics(cell_code.replace('\r\n', '\n'))
+                clean_code = CodeAnalyzer.strip_magics(cell_code.replace("\r\n", "\n"))
                 if clean_code.strip():
                     tree = self._get_cached_ast(clean_code)
                     if tree is not None:
@@ -855,15 +903,25 @@ class VirtualLineage:
                         continue
 
                     if mem_code not in statements_to_reexecute:
-                         logger.debug("[UPSTREAM] Re-applying unsaved extension for '%s'", var_name)
-                         statements_to_reexecute.append(mem_code)
+                        logger.debug("[UPSTREAM] Re-applying unsaved extension for '%s'", var_name)
+                        statements_to_reexecute.append(mem_code)
 
     # Control-structure wrapper prefixes. Delimited (space or colon) so a plain
     # identifier that merely begins with a keyword (``elsewhere = ...``,
     # ``exception = ...``) is NOT mistaken for a wrapper and wrongly skipped.
     _CTRL_PREFIXES = (
-        'for ', 'while ', 'async for ', 'if ', 'elif ', 'else:',
-        'with ', 'async with ', 'try:', 'except ', 'except:', 'finally:',
+        "for ",
+        "while ",
+        "async for ",
+        "if ",
+        "elif ",
+        "else:",
+        "with ",
+        "async with ",
+        "try:",
+        "except ",
+        "except:",
+        "finally:",
     )
 
     def _loop_accumulators_with_external_init(
@@ -943,12 +1001,11 @@ class VirtualLineage:
             accs = outputs & vars_mutated_by_loops
             if not accs or not stmt_code.lstrip().startswith(self._CTRL_PREFIXES):
                 continue
-            recorded = outcomes.get(hashlib.sha256(stmt_code.encode('utf-8')).hexdigest())
+            recorded = outcomes.get(hashlib.sha256(stmt_code.encode("utf-8")).hexdigest())
             if recorded is None:
                 continue
             for inp in inputs:
-                if (inp in outputs or inp in loop_target_vars or inp in vars_derived_from_loops
-                        or inp in _BUILTIN_NAMES):
+                if inp in outputs or inp in loop_target_vars or inp in vars_derived_from_loops or inp in _BUILTIN_NAMES:
                     continue
                 if isinstance(self.shell.user_ns.get(inp), types.ModuleType):
                     continue
@@ -1001,7 +1058,7 @@ class VirtualLineage:
                 ctx=CacheKeyContext(
                     variable_lineage=self.variable_lineage,
                     user_ns=self.shell.user_ns,
-                    function_tracker=self.function_tracker if hasattr(self, 'function_tracker') else None,
+                    function_tracker=self.function_tracker if hasattr(self, "function_tracker") else None,
                     virtual_lineage=_key_lineages(input_hashes),
                     virtual_modules=virtual_modules,
                     compute_hash_fn=self.compute_hash_fn,
@@ -1011,35 +1068,37 @@ class VirtualLineage:
             )
             metadata = self._get_metadata_only(cache_key)
             if metadata:
-                saved_time = metadata.get('execution_time', 0.0)
-                is_metadata_only = metadata.get('metadata_only', False)
+                saved_time = metadata.get("execution_time", 0.0)
+                is_metadata_only = metadata.get("metadata_only", False)
                 if self.debug:
                     logger.debug(
                         "[UPSTREAM] Skipped stmt [%d] hit cache. Saved: %ss (metadata_only=%s)",
-                        i, saved_time, is_metadata_only,
+                        i,
+                        saved_time,
+                        is_metadata_only,
                     )
                 entry: dict = {
-                    'code': stmt_code,
-                    'status': CacheStatus.SKIPPED,
-                    'saved_time': saved_time,
-                    'is_upstream': True,
-                    'source': 'Skipped',
-                    'position': i,
-                    'has_cache': True,
+                    "code": stmt_code,
+                    "status": CacheStatus.SKIPPED,
+                    "saved_time": saved_time,
+                    "is_upstream": True,
+                    "source": "Skipped",
+                    "position": i,
+                    "has_cache": True,
                 }
-                if 'storage' in metadata:
-                    entry['storage'] = metadata['storage']
+                if "storage" in metadata:
+                    entry["storage"] = metadata["storage"]
                 return entry
             if self.debug:
                 logger.debug("[UPSTREAM] Skipped stmt [%d] miss cache. Key: %s", i, cache_key)
             return {
-                'code': stmt_code,
-                'status': CacheStatus.SKIPPED,
-                'saved_time': 0.0,
-                'is_upstream': True,
-                'source': 'Skipped',
-                'position': i,
-                'has_cache': False,
+                "code": stmt_code,
+                "status": CacheStatus.SKIPPED,
+                "saved_time": 0.0,
+                "is_upstream": True,
+                "source": "Skipped",
+                "position": i,
+                "has_cache": False,
             }
         except (KeyError, TypeError, OSError, ValueError) as e:
             if self.debug:
@@ -1064,10 +1123,10 @@ class VirtualLineage:
         restored_indices = set()
         restored_outputs = set()
         for info in restored_statements_info:
-            if 'position' in info:
-                restored_indices.add(info['position'])
-                if 'restored_vars' in info:
-                    restored_outputs.update(info['restored_vars'])
+            if "position" in info:
+                restored_indices.add(info["position"])
+                if "restored_vars" in info:
+                    restored_outputs.update(info["restored_vars"])
 
         dependency_chain: set[int] = set()
         if restored_outputs:
@@ -1112,12 +1171,12 @@ class VirtualLineage:
             # init must run alongside it, else the accumulation doubles; skipping
             # is only safe for pure incremental extension of a cached loop.
             return False
-        is_loop_updated = (out_var in scheduled_iteration_outputs or out_var in vars_mutated_by_loops)
+        is_loop_updated = out_var in scheduled_iteration_outputs or out_var in vars_mutated_by_loops
         if not is_loop_updated:
             return False
         stripped = stmt_code.strip()
         empty_init_pattern = re.compile(
-            rf'^{re.escape(out_var)}\s*=\s*(\{{\}}|\[\]|set\(\)|dict\(\)|list\(\)|frozenset\(\))$'
+            rf"^{re.escape(out_var)}\s*=\s*(\{{\}}|\[\]|set\(\)|dict\(\)|list\(\)|frozenset\(\))$"
         )
         if not empty_init_pattern.match(stripped):
             return False
@@ -1132,7 +1191,8 @@ class VirtualLineage:
             if self.debug:
                 logger.debug(
                     "[UPSTREAM] Skipping accumulator init '%.40s' - already has %d items in memory",
-                    stmt_code, len(existing_val),
+                    stmt_code,
+                    len(existing_val),
                 )
             return True
         return False
@@ -1148,7 +1208,7 @@ class VirtualLineage:
         if not vars_mutated_by_loops:
             return set()
         patterns = {
-            mv: re.compile(rf'\b{re.escape(mv)}\s*(?:\.\s*\w+\s*\(|\[[^\]]*\]\s*=(?!=))')
+            mv: re.compile(rf"\b{re.escape(mv)}\s*(?:\.\s*\w+\s*\(|\[[^\]]*\]\s*=(?!=))")
             for mv in vars_mutated_by_loops
         }
         fully_rerun_mutated: set[str] = set()
@@ -1178,7 +1238,7 @@ class VirtualLineage:
         accumulator already exists in memory with data, re-running the init would
         wipe accumulated state. Returns a filtered copy of *stmts_to_run_indices*.
         """
-        iteration_context_pattern = re.compile(r'# __iteration_context__: ([a-f0-9]+)')
+        iteration_context_pattern = re.compile(r"# __iteration_context__: ([a-f0-9]+)")
         scheduled_iteration_outputs: dict[str, list] = {}
         for idx in stmts_to_run_indices:
             stmt_code, outputs, *_ = simulation_trace[idx]
@@ -1188,7 +1248,9 @@ class VirtualLineage:
                     scheduled_iteration_outputs.setdefault(out, []).append(idx)
 
         fully_rerun_mutated = self._loop_vars_fully_rescheduled(
-            stmts_to_run_indices, simulation_trace, vars_mutated_by_loops,
+            stmts_to_run_indices,
+            simulation_trace,
+            vars_mutated_by_loops,
             iteration_context_pattern,
         )
 
@@ -1200,14 +1262,19 @@ class VirtualLineage:
         # runs alongside the loop.  (Pure incremental extension keeps the init
         # unscheduled and is handled by the removal pass below.)
         stmts_to_run_indices = self._schedule_missing_accumulator_inits(
-            stmts_to_run_indices, simulation_trace, fully_rerun_mutated,
+            stmts_to_run_indices,
+            simulation_trace,
+            fully_rerun_mutated,
         )
 
         indices_to_remove: set[int] = set()
         for idx in stmts_to_run_indices:
             if self._is_reinit_to_skip(
-                idx, simulation_trace, scheduled_iteration_outputs,
-                vars_mutated_by_loops, iteration_context_pattern,
+                idx,
+                simulation_trace,
+                scheduled_iteration_outputs,
+                vars_mutated_by_loops,
+                iteration_context_pattern,
                 fully_rerun_mutated,
             ):
                 indices_to_remove.add(idx)
@@ -1234,9 +1301,7 @@ class VirtualLineage:
             return stmts_to_run_indices
         scheduled = set(stmts_to_run_indices)
         empty_init_patterns = {
-            mv: re.compile(
-                rf'^{re.escape(mv)}\s*=\s*(\{{\}}|\[\]|set\(\)|dict\(\)|list\(\)|frozenset\(\))$'
-            )
+            mv: re.compile(rf"^{re.escape(mv)}\s*=\s*(\{{\}}|\[\]|set\(\)|dict\(\)|list\(\)|frozenset\(\))$")
             for mv in fully_rerun_mutated
         }
         additional: list[int] = []
@@ -1271,15 +1336,20 @@ class VirtualLineage:
         for mv in vars_mutated_by_loops:
             if mv not in self.executed_cell_codes:
                 continue
-            exec_code = re.sub(r'# __iteration_context__:.*?\n', '', self.executed_cell_codes[mv]).strip()
+            exec_code = re.sub(r"# __iteration_context__:.*?\n", "", self.executed_cell_codes[mv]).strip()
             if self.debug:
                 logger.debug("[UPSTREAM_DEBUG] Checking loop trust for '%s': exec_code=%s", mv, repr(exec_code[:60]))
                 matching = [sc for sc in simulation_trace_codes if exec_code in sc or sc in exec_code]
-                logger.debug("[UPSTREAM_DEBUG]   Partial matches in simulation_trace_codes: %s", [repr(m[:60]) for m in matching])
+                logger.debug(
+                    "[UPSTREAM_DEBUG]   Partial matches in simulation_trace_codes: %s", [repr(m[:60]) for m in matching]
+                )
             if exec_code and exec_code not in simulation_trace_codes:
                 if self.debug:
-                    logger.debug("[UPSTREAM_DEBUG] Loop-mutated var '%s' was produced by code "
-                          "not found on disk (unsaved edit or stale execution). Distrusting ALL loop-derived vars.", mv)
+                    logger.debug(
+                        "[UPSTREAM_DEBUG] Loop-mutated var '%s' was produced by code "
+                        "not found on disk (unsaved edit or stale execution). Distrusting ALL loop-derived vars.",
+                        mv,
+                    )
                 return True
         return False
 
@@ -1317,7 +1387,7 @@ class VirtualLineage:
         """
         simulation_trace_codes: set[str] = set()
         for stmt_code, _, _, _, _, _ in simulation_trace:
-            normalized = re.sub(r'# __iteration_context__:.*?\n', '', stmt_code).strip()
+            normalized = re.sub(r"# __iteration_context__:.*?\n", "", stmt_code).strip()
             simulation_trace_codes.add(normalized)
             try:
                 tree = self._get_cached_ast(normalized)
@@ -1377,12 +1447,22 @@ class VirtualLineage:
         """
         try:
             if is_control_structure(node):
-                self._simulate_control_structure(node, virtual_lineage, virtual_modules, simulation_trace, stmt_lookup_times, vars_mutated_by_loops, loop_target_vars=loop_target_vars, vars_with_stale_files=vars_with_stale_files)
+                self._simulate_control_structure(
+                    node,
+                    virtual_lineage,
+                    virtual_modules,
+                    simulation_trace,
+                    stmt_lookup_times,
+                    vars_mutated_by_loops,
+                    loop_target_vars=loop_target_vars,
+                    vars_with_stale_files=vars_with_stale_files,
+                )
                 return
 
             stmt_code = ast.unparse(node)
             if raw_cell is not None:
                 from ..ipython.cell_executor import CellExecutor
+
                 if CellExecutor._expr_has_trailing_semicolon(raw_cell, node):
                     stmt_code += ";"
         except (ValueError, TypeError, AttributeError) as e:
@@ -1405,7 +1485,10 @@ class VirtualLineage:
             input_hashes = _InputHashes(input_hashes, callee_lineages)
 
         outputs, lookup_time, files_stale, stmt_file_deps = self._update_virtual_lineage(
-            stmt_code, virtual_lineage, virtual_modules, occurrence_index=occurrence_index,
+            stmt_code,
+            virtual_lineage,
+            virtual_modules,
+            occurrence_index=occurrence_index,
         )
 
         if stmt_file_deps:
@@ -1415,7 +1498,9 @@ class VirtualLineage:
 
         if outputs:
             produced_lineages = {out: virtual_lineage[out] for out in outputs if out in virtual_lineage}
-            simulation_trace.append(_TraceEntry(stmt_code, outputs, inputs, input_hashes, produced_lineages, files_stale))
+            simulation_trace.append(
+                _TraceEntry(stmt_code, outputs, inputs, input_hashes, produced_lineages, files_stale)
+            )
             if lookup_time > 0:
                 stmt_lookup_times[stmt_code] = lookup_time
         else:
@@ -1432,8 +1517,8 @@ class VirtualLineage:
             # kernel, so after a restart the call vanished from the trace and
             # a figure was rebuilt without it (round 21, replay corpus).
             from ..cacheability import statement_writes_files
-            if statement_writes_files(stmt_code) or (
-                    isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)):
+
+            if statement_writes_files(stmt_code) or (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)):
                 simulation_trace.append(_TraceEntry(stmt_code, outputs, inputs, input_hashes, {}, files_stale))
 
     def _simulate_one_cell(
@@ -1455,7 +1540,7 @@ class VirtualLineage:
         *new_cache_entries*, *vars_mutated_by_loops*, *vars_with_stale_files*,
         and *stmt_lookup_times* in-place.
         """
-        cell_hash = hashlib.sha256(cell_code.encode('utf-8')).hexdigest()
+        cell_hash = hashlib.sha256(cell_code.encode("utf-8")).hexdigest()
         trace_start = len(simulation_trace)
         cell_file_deps: dict = {}
 
@@ -1467,23 +1552,25 @@ class VirtualLineage:
         # consumer's inputs are reconstructed, while a reset BELOW is never
         # simulated. Without this the liveness gate would resurrect a
         # reset variable as a phantom restore (test_reset_magic_no_phantom_restore).
-        for line in cell_code.split('\n'):
-            if line.strip().startswith('%reset'):
+        for line in cell_code.split("\n"):
+            if line.strip().startswith("%reset"):
                 virtual_lineage.clear()
                 virtual_modules.clear()
 
         try:
             clean_cell_code = CodeAnalyzer.strip_magics(cell_code)
             if not clean_cell_code.strip():
-                new_cache_entries.append(_SimulationCacheEntry(
-                    cell_code_hash=cell_hash,
-                    virtual_lineage=dict(virtual_lineage),
-                    virtual_modules=set(virtual_modules),
-                    trace_segment=[],
-                    vars_mutated_by_loops=set(),
-                    vars_with_stale_files=set(),
-                    cell_file_deps={},
-                ))
+                new_cache_entries.append(
+                    _SimulationCacheEntry(
+                        cell_code_hash=cell_hash,
+                        virtual_lineage=dict(virtual_lineage),
+                        virtual_modules=set(virtual_modules),
+                        trace_segment=[],
+                        vars_mutated_by_loops=set(),
+                        vars_with_stale_files=set(),
+                        cell_file_deps={},
+                    )
+                )
                 return
 
             tree = self._get_cached_ast(clean_cell_code)
@@ -1498,14 +1585,21 @@ class VirtualLineage:
                 # from-start execution. Stop here so the simulation does not
                 # register a post-raise assignment (``z = 1; raise; z = 2``) as
                 # the variable's producer and later reconstruct that dead value
-                #.
+                # .
                 if isinstance(node, ast.Raise):
                     break
                 self._simulate_one_node(
-                    i, node, cell_stmt_occurrence_counts,
-                    virtual_lineage, virtual_modules, simulation_trace,
-                    vars_mutated_by_loops, vars_with_stale_files,
-                    stmt_lookup_times, loop_target_vars, cell_file_deps,
+                    i,
+                    node,
+                    cell_stmt_occurrence_counts,
+                    virtual_lineage,
+                    virtual_modules,
+                    simulation_trace,
+                    vars_mutated_by_loops,
+                    vars_with_stale_files,
+                    stmt_lookup_times,
+                    loop_target_vars,
+                    cell_file_deps,
                     raw_cell=clean_cell_code,
                 )
 
@@ -1541,15 +1635,17 @@ class VirtualLineage:
             if isinstance(entry, _TraceEntry):
                 entry.cell = i
         cell_trace_segment = simulation_trace[trace_start:]
-        new_cache_entries.append(_SimulationCacheEntry(
-            cell_code_hash=cell_hash,
-            virtual_lineage=dict(virtual_lineage),
-            virtual_modules=set(virtual_modules),
-            trace_segment=cell_trace_segment,
-            vars_mutated_by_loops=set(vars_mutated_by_loops),
-            vars_with_stale_files=set(vars_with_stale_files),
-            cell_file_deps=dict(cell_file_deps),
-        ))
+        new_cache_entries.append(
+            _SimulationCacheEntry(
+                cell_code_hash=cell_hash,
+                virtual_lineage=dict(virtual_lineage),
+                virtual_modules=set(virtual_modules),
+                trace_segment=cell_trace_segment,
+                vars_mutated_by_loops=set(vars_mutated_by_loops),
+                vars_with_stale_files=set(vars_with_stale_files),
+                cell_file_deps=dict(cell_file_deps),
+            )
+        )
 
     def _simulate_cells_pass1(
         self,
@@ -1571,12 +1667,18 @@ class VirtualLineage:
         # their argument (headless: inspect.getsource has no linecache entry).
         self._sim_func_sources = self._build_function_sources(notebook_cells)
         for i in range(first_changed_cell, current_cell_idx):
-            cell_code = notebook_cells[i].replace('\r\n', '\n')
+            cell_code = notebook_cells[i].replace("\r\n", "\n")
             self._simulate_one_cell(
-                i, cell_code,
-                simulation_trace, virtual_lineage, virtual_modules,
-                new_cache_entries, vars_mutated_by_loops, vars_with_stale_files,
-                stmt_lookup_times, loop_target_vars,
+                i,
+                cell_code,
+                simulation_trace,
+                virtual_lineage,
+                virtual_modules,
+                new_cache_entries,
+                vars_mutated_by_loops,
+                vars_with_stale_files,
+                stmt_lookup_times,
+                loop_target_vars,
             )
 
         # Update simulation cache for future incremental simulation.
@@ -1596,9 +1698,9 @@ class VirtualLineage:
         # doesn't falsely detect a modification from a stale hash left over
         # from a previous run_all().
         if current_cell_idx < len(notebook_cells):
-            current_cell_code = notebook_cells[current_cell_idx].replace('\r\n', '\n')
+            current_cell_code = notebook_cells[current_cell_idx].replace("\r\n", "\n")
             self._simulation_cell_hashes[current_cell_idx] = hashlib.sha256(
-                current_cell_code.encode('utf-8')
+                current_cell_code.encode("utf-8")
             ).hexdigest()
 
     def _collect_loop_mutation_info(
@@ -1629,9 +1731,9 @@ class VirtualLineage:
             vars_mutated_by_loops.update(mutated_vars)
         elif isinstance(node, (ast.If, ast.With, ast.AsyncWith, ast.Try)):
             direct_body: list = []
-            for attr in ('body', 'orelse', 'finalbody'):
+            for attr in ("body", "orelse", "finalbody"):
                 direct_body.extend(getattr(node, attr, []) or [])
-            for handler in getattr(node, 'handlers', []) or []:
+            for handler in getattr(node, "handlers", []) or []:
                 direct_body.extend(handler.body)
             mutated_vars = self._find_loop_mutated_vars(direct_body, set())
             vars_mutated_by_loops.update(mutated_vars)
@@ -1654,14 +1756,15 @@ class VirtualLineage:
         input_lineages_sorted = sorted(input_hashes.values())
         for mv in mutated_vars:
             if mv not in outputs and mv in inputs:
-                combined = source_hash + ':' + ':'.join(input_lineages_sorted)
-                new_lineage = hashlib.sha256(combined.encode('utf-8')).hexdigest()
+                combined = source_hash + ":" + ":".join(input_lineages_sorted)
+                new_lineage = hashlib.sha256(combined.encode("utf-8")).hexdigest()
                 virtual_lineage[mv] = new_lineage
                 extra_outputs.add(mv)
                 if self.debug:
                     logger.debug(
                         "[UPSTREAM_DEBUG] Loop-mutated var '%s' virtual lineage updated to %s...",
-                        mv, new_lineage[:12],
+                        mv,
+                        new_lineage[:12],
                     )
         return extra_outputs
 
@@ -1726,26 +1829,37 @@ class VirtualLineage:
         split_k = self._loop_split_k(node)
         if split_k is not None:
             from ..loop_split import split_nodes
+
             try:
                 halves = split_nodes(node, split_k)
-            except ValueError:          # for/else -- not splittable
+            except ValueError:  # for/else -- not splittable
                 halves = ()
             if halves:
                 if self.debug:
-                    logger.debug(
-                        "[UPSTREAM_DEBUG] loop split at k=%d -> simulating "
-                        "head and tail separately", split_k)
+                    logger.debug("[UPSTREAM_DEBUG] loop split at k=%d -> simulating head and tail separately", split_k)
                 for half in halves:
                     self._simulate_one_control_unit(
-                        half, virtual_lineage, virtual_modules, simulation_trace,
-                        stmt_lookup_times, vars_mutated_by_loops, loop_target_vars,
-                        vars_with_stale_files)
+                        half,
+                        virtual_lineage,
+                        virtual_modules,
+                        simulation_trace,
+                        stmt_lookup_times,
+                        vars_mutated_by_loops,
+                        loop_target_vars,
+                        vars_with_stale_files,
+                    )
                 return
 
         self._simulate_one_control_unit(
-            node, virtual_lineage, virtual_modules, simulation_trace,
-            stmt_lookup_times, vars_mutated_by_loops, loop_target_vars,
-            vars_with_stale_files)
+            node,
+            virtual_lineage,
+            virtual_modules,
+            simulation_trace,
+            stmt_lookup_times,
+            vars_mutated_by_loops,
+            loop_target_vars,
+            vars_with_stale_files,
+        )
 
     def _loop_split_k(self, node: ast.AST) -> int | None:
         """Persisted split point for *node*, or ``None`` if it is not split.
@@ -1759,8 +1873,9 @@ class VirtualLineage:
             return None
         try:
             from ..loop_split import is_split_half, loop_source_hash, store_for_backend
+
             if is_split_half(node):
-                return None            # never split a half; that recurses
+                return None  # never split a half; that recurses
             if self._split_store is None:
                 backend = self.cash_instance.backend if self.cash_instance else None
                 self._split_store = store_for_backend(backend)
@@ -1818,8 +1933,7 @@ class VirtualLineage:
         # What the runtime left behind when it last ran this very structure
         # (see TrackingState.control_outcomes): the files it read, and the
         # lineages it produced.
-        recorded = self._tracking_state.control_outcomes.get(
-            hashlib.sha256(stmt_code.encode('utf-8')).hexdigest())
+        recorded = self._tracking_state.control_outcomes.get(hashlib.sha256(stmt_code.encode("utf-8")).hexdigest())
         if recorded is None:
             recorded = self._persisted_control_outcome(stmt_code, virtual_lineage)
         if recorded is not None:
@@ -1863,12 +1977,16 @@ class VirtualLineage:
                 all_outputs = all_outputs | set(recorded[1])
 
         if self.debug:
-            cs_type = get_control_structure_type(node) if node else 'unknown'
-            logger.debug("[UPSTREAM_DEBUG] Simulating %s as single unit: %s... Outputs: %s", cs_type, stmt_code[:60], all_outputs)
+            cs_type = get_control_structure_type(node) if node else "unknown"
+            logger.debug(
+                "[UPSTREAM_DEBUG] Simulating %s as single unit: %s... Outputs: %s", cs_type, stmt_code[:60], all_outputs
+            )
 
         if all_outputs:
             produced_lineages = {out: virtual_lineage[out] for out in all_outputs if out in virtual_lineage}
-            simulation_trace.append(_TraceEntry(stmt_code, all_outputs, inputs, input_hashes, produced_lineages, files_stale))
+            simulation_trace.append(
+                _TraceEntry(stmt_code, all_outputs, inputs, input_hashes, produced_lineages, files_stale)
+            )
             if lookup_time > 0:
                 stmt_lookup_times[stmt_code] = lookup_time
         elif self._may_write_files(node, stmt_code):
@@ -1884,22 +2002,25 @@ class VirtualLineage:
         See ``mutation_verdict_key``. Kept in ``mutation_verdicts`` once read,
         where the runtime overwrites it when the statement runs again.
         """
-        backend = getattr(self.cash_instance, 'backend', None) if self.cash_instance else None
-        if backend is None or not hasattr(backend, 'get_metadata'):
+        backend = getattr(self.cash_instance, "backend", None) if self.cash_instance else None
+        if backend is None or not hasattr(backend, "get_metadata"):
             return None
         from ..cache_key import mutation_verdict_key
+
         try:
             record = backend.get_metadata(mutation_verdict_key(source_hash))
         except (OSError, TypeError, ValueError, AttributeError):
             return None
-        if not record or not record.get('mutation_verdict'):
+        if not record or not record.get("mutation_verdict"):
             return None
-        verdict = set(record.get('receivers') or ())
+        verdict = set(record.get("receivers") or ())
         self.mutation_verdicts.setdefault(source_hash, verdict)
         return verdict
 
     def _persisted_control_outcome(
-        self, stmt_code: str, virtual_lineage: dict[str, str],
+        self,
+        stmt_code: str,
+        virtual_lineage: dict[str, str],
     ) -> tuple[dict[str, str], dict[str, str], frozenset[str], str] | None:
         """A loop's outcome from an earlier kernel, when it may still be trusted.
 
@@ -1909,23 +2030,28 @@ class VirtualLineage:
         checked by the caller, exactly as for the session's own record. Any
         doubt returns None, and the loop is replayed.
         """
-        backend = getattr(self.cash_instance, 'backend', None) if self.cash_instance else None
-        if backend is None or not hasattr(backend, 'get_metadata'):
+        backend = getattr(self.cash_instance, "backend", None) if self.cash_instance else None
+        if backend is None or not hasattr(backend, "get_metadata"):
             return None
         from ..cache_key import control_outcome_key
+
         try:
             record = backend.get_metadata(control_outcome_key(stmt_code))
         except (OSError, TypeError, ValueError, AttributeError):
             return None
-        if not record or not record.get('control_outcome') or record.get('code') != stmt_code:
+        if not record or not record.get("control_outcome") or record.get("code") != stmt_code:
             return None
         try:
-            for name, then in (record.get('callees') or {}).items():
-                now = virtual_lineage.get(name) or self.variable_lineage.get(name) or 'ABSENT'
+            for name, then in (record.get("callees") or {}).items():
+                now = virtual_lineage.get(name) or self.variable_lineage.get(name) or "ABSENT"
                 if now != then:
                     return None
-            return (dict(record['entry']), dict(record['left']),
-                    frozenset(record['files']), str(record['file_component']))
+            return (
+                dict(record["entry"]),
+                dict(record["left"]),
+                frozenset(record["files"]),
+                str(record["file_component"]),
+            )
         except (KeyError, TypeError, ValueError, AttributeError):
             return None
 
@@ -1934,17 +2060,21 @@ class VirtualLineage:
         """A write in the text, or a call to something that might be a
         user function that writes (the planner decides which)."""
         from ..cacheability import statement_writes_files
+
         if statement_writes_files(stmt_code):
             return True
-        return any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-                   and not hasattr(builtins, n.func.id)
-                   for n in ast.walk(node))
+        return any(
+            isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and not hasattr(builtins, n.func.id)
+            for n in ast.walk(node)
+        )
 
     # -- Helpers for _update_virtual_lineage ----------------------------------
 
     @staticmethod
     def _validate_file_freshness(
-        hist_files: dict[str, Any], debug: bool = False, memo_key: str | None = None,
+        hist_files: dict[str, Any],
+        debug: bool = False,
+        memo_key: str | None = None,
     ) -> bool:
         """Return True if all historical file dependencies are still fresh.
 
@@ -1962,6 +2092,7 @@ class VirtualLineage:
         repeat the answer.
         """
         from .. import file_dep_snapshot as _fds
+
         epoch = _fds._HASH_EPOCH
         memo = _FRESH_ENTRY_VERDICTS
         if memo_key is not None and epoch is not None:
@@ -2027,7 +2158,7 @@ class VirtualLineage:
         try:
             if self.compute_hash_fn:
                 return self.compute_hash_fn(val)
-            return hashlib.sha256(str(val).encode('utf-8')).hexdigest()
+            return hashlib.sha256(str(val).encode("utf-8")).hexdigest()
         except (TypeError, ValueError):
             logger.debug("[UPSTREAM] Failed to compute hash for input '%s'", inp)
             return None
@@ -2048,7 +2179,7 @@ class VirtualLineage:
             logger.debug("[LINEAGE_DEBUG] Detected inputs: %s", sorted_inputs)
 
         for inp in sorted_inputs:
-            if inp in {'get_ipython', '__builtins__'}:
+            if inp in {"get_ipython", "__builtins__"}:
                 continue
 
             is_module = inp in virtual_modules
@@ -2060,7 +2191,11 @@ class VirtualLineage:
 
             if val is not None and not is_module:
                 try:
-                    if isinstance(val, types.ModuleType) or callable(val) and (inp.startswith('_') or hasattr(val, '__self__')):
+                    if (
+                        isinstance(val, types.ModuleType)
+                        or callable(val)
+                        and (inp.startswith("_") or hasattr(val, "__self__"))
+                    ):
                         is_module = True
                 except (TypeError, AttributeError):
                     logger.debug("Type check failed for input variable %s", inp)
@@ -2069,16 +2204,20 @@ class VirtualLineage:
             # those attributes reach (`lineage_formula.module_read_lineage`);
             # this must reach the same value from the same arguments, or every
             # statement reading a module "changed" in the simulation alone.
-            narrowed = module_read_lineage(
-                getattr(self, 'function_tracker', None), inp, val, stmt_code)
-            lineage = narrowed if narrowed is not None else \
-                self._resolve_input_lineage(inp, virtual_lineage, virtual_modules)
+            narrowed = module_read_lineage(getattr(self, "function_tracker", None), inp, val, stmt_code)
+            lineage = (
+                narrowed if narrowed is not None else self._resolve_input_lineage(inp, virtual_lineage, virtual_modules)
+            )
 
             if lineage:
                 input_lineages_all.append(lineage)
 
         if self.debug:
-            logger.debug("[LINEAGE_DEBUG] input_lineages_all (%s): %s", len(input_lineages_all), [ln[:12]+'...' for ln in input_lineages_all])
+            logger.debug(
+                "[LINEAGE_DEBUG] input_lineages_all (%s): %s",
+                len(input_lineages_all),
+                [ln[:12] + "..." for ln in input_lineages_all],
+            )
 
         return input_lineages_all
 
@@ -2088,8 +2227,7 @@ class VirtualLineage:
 
         Once per path per cell run (``_stats_this_run``), and from a directory
         listing where many share a directory."""
-        return {p: st.st_mtime for p, (_resolved, st) in _stats_this_run(hist_files).items()
-                if st is not None}
+        return {p: st.st_mtime for p, (_resolved, st) in _stats_this_run(hist_files).items() if st is not None}
 
     def _apply_cache_hit_propagation(
         self,
@@ -2136,12 +2274,13 @@ class VirtualLineage:
                         if self.debug:
                             logger.debug(
                                 "[LINEAGE_DEBUG] Propagated module '%s' lineage (from cache): %s...",
-                                out, lineage_val[:12],
+                                out,
+                                lineage_val[:12],
                             )
         # Mid-simulation drain: same reasoning as in _propagate_import_lineage.
         apply_collected_mutations(self._restores, self._tracking_state)
         stmt_file_deps = self._stat_file_deps(hist_files)
-        return ('hit', 0.0, stmt_file_deps)
+        return ("hit", 0.0, stmt_file_deps)
 
     def _collect_historical_file_deps(
         self,
@@ -2187,7 +2326,7 @@ class VirtualLineage:
         file_deps_to_check = set()
 
         if not self.cash_instance:
-            return ('miss', cache_lookup_time, files_stale, stmt_file_deps, file_deps_to_check)
+            return ("miss", cache_lookup_time, files_stale, stmt_file_deps, file_deps_to_check)
 
         try:
             if self.debug:
@@ -2198,17 +2337,27 @@ class VirtualLineage:
             cache_lookup_time = time_module.time() - t_lookup
 
             if metadata:
-                hist_files = metadata.get('file_dependencies', {})
-                output_lineages = metadata.get('output_lineages', {})
-                files_valid = not hist_files or self._validate_file_freshness(hist_files, self.debug, memo_key=cache_key)
+                hist_files = metadata.get("file_dependencies", {})
+                output_lineages = metadata.get("output_lineages", {})
+                files_valid = not hist_files or self._validate_file_freshness(
+                    hist_files, self.debug, memo_key=cache_key
+                )
 
                 if files_valid and output_lineages:
                     self._last_hit_bumped = set()
                     _sentinel, _, hit_file_deps = self._apply_cache_hit_propagation(
-                        stmt_code, cache_key, outputs, inputs, virtual_lineage, virtual_modules,
-                        is_import, metadata, hist_files, output_lineages,
+                        stmt_code,
+                        cache_key,
+                        outputs,
+                        inputs,
+                        virtual_lineage,
+                        virtual_modules,
+                        is_import,
+                        metadata,
+                        hist_files,
+                        output_lineages,
                     )
-                    return ('hit', cache_lookup_time, hit_file_deps, self._last_hit_bumped)
+                    return ("hit", cache_lookup_time, hit_file_deps, self._last_hit_bumped)
 
                 if not files_valid:
                     files_stale = True
@@ -2216,7 +2365,8 @@ class VirtualLineage:
                 if self.debug:
                     logger.debug(
                         "[UPSTREAM] Forward prop aborted. files_valid=%s, output_lineages keys=%s",
-                        files_valid, list(output_lineages.keys()) if output_lineages else 'None/Empty',
+                        files_valid,
+                        list(output_lineages.keys()) if output_lineages else "None/Empty",
                     )
 
                 if hist_files:
@@ -2227,7 +2377,7 @@ class VirtualLineage:
             if self.debug:
                 logger.debug("[UPSTREAM] Virtual lookup failed: %s", e)
 
-        return ('miss', cache_lookup_time, files_stale, stmt_file_deps, file_deps_to_check)
+        return ("miss", cache_lookup_time, files_stale, stmt_file_deps, file_deps_to_check)
 
     def _build_file_hash_component(self, file_deps_to_check: set[str], stmt_file_deps: dict[str, float]) -> str:
         """Build the file hash component string from file dependencies.
@@ -2247,14 +2397,17 @@ class VirtualLineage:
                 file_components.append(f"{file_path}:{stat.st_mtime}:{stat.st_size}")
                 stmt_file_deps[file_path] = stat.st_mtime
         if file_components:
-            return ":" + hashlib.sha256(",".join(file_components).encode('utf-8')).hexdigest()
+            return ":" + hashlib.sha256(",".join(file_components).encode("utf-8")).hexdigest()
         return ""
 
     #: See ``_virtual_callables``.
     _VIRTUAL_CALLABLES_MAX = 4096
 
     def _register_virtual_callable(
-        self, stmt_code: str, tree: ast.Module | None, virtual_lineage: dict[str, str],
+        self,
+        stmt_code: str,
+        tree: ast.Module | None,
+        virtual_lineage: dict[str, str],
     ) -> None:
         """Remember a simulated ``def`` under its lineage (see ``VirtualCallable``).
 
@@ -2273,19 +2426,23 @@ class VirtualLineage:
         if not lineage or virtual_callable_key(lineage, node.name) in self._virtual_callables:
             return
         try:
-            module = compile(stmt_code, '<cash-simulated>', 'exec', dont_inherit=True)
+            module = compile(stmt_code, "<cash-simulated>", "exec", dont_inherit=True)
         except (SyntaxError, ValueError):
             return
-        code = next((c for c in module.co_consts
-                     if isinstance(c, types.CodeType) and c.co_name == node.name), None)
+        code = next((c for c in module.co_consts if isinstance(c, types.CodeType) and c.co_name == node.name), None)
         if code is None:
             return
         if len(self._virtual_callables) >= self._VIRTUAL_CALLABLES_MAX:
             self._virtual_callables.clear()
-        self._virtual_callables[virtual_callable_key(lineage, node.name)] = VirtualCallable(source_identity_digest(stmt_code), code)
+        self._virtual_callables[virtual_callable_key(lineage, node.name)] = VirtualCallable(
+            source_identity_digest(stmt_code), code
+        )
 
     def _register_imported_callables(
-        self, tree: ast.Module | None, virtual_lineage: dict[str, str], stmt_code: str = '',
+        self,
+        tree: ast.Module | None,
+        virtual_lineage: dict[str, str],
+        stmt_code: str = "",
     ) -> None:
         """Remember what a simulated ``from X import Y`` binds, as the live object would count.
 
@@ -2301,7 +2458,7 @@ class VirtualLineage:
         """
         if tree is None:
             return
-        tracker = getattr(self, 'function_tracker', None)
+        tracker = getattr(self, "function_tracker", None)
         for node in tree.body:
             if not isinstance(node, ast.ImportFrom) or node.level or not node.module:
                 continue
@@ -2319,18 +2476,19 @@ class VirtualLineage:
                         digest = tracker.get_function_source_hash(obj)
                     except Exception:  # noqa: BLE001 - a digest we cannot take is one we do not claim
                         continue
-                    code = getattr(obj, '__code__', None)
+                    code = getattr(obj, "__code__", None)
                     is_class = isinstance(obj, type)
                 else:
                     entry = self._import_bindings(stmt_code).get(name) if stmt_code else None
-                    if not entry or entry.get('module'):
+                    if not entry or entry.get("module"):
                         continue
-                    digest, is_class, code = entry.get('digest'), bool(entry.get('is_class')), None
-                    if entry.get('code'):
+                    digest, is_class, code = entry.get("digest"), bool(entry.get("is_class")), None
+                    if entry.get("code"):
                         import base64
                         import marshal
+
                         try:
-                            code = marshal.loads(base64.b64decode(entry['code']))
+                            code = marshal.loads(base64.b64decode(entry["code"]))
                         except (ValueError, EOFError, TypeError):
                             code = None
                 if digest is None:
@@ -2338,23 +2496,30 @@ class VirtualLineage:
                 if is_class:
                     self._imported_classes[virtual_callable_key(lineage, name)] = digest
                 elif isinstance(code, types.CodeType):
-                    self._virtual_callables.setdefault(virtual_callable_key(lineage, name), VirtualCallable(digest, code))
+                    self._virtual_callables.setdefault(
+                        virtual_callable_key(lineage, name), VirtualCallable(digest, code)
+                    )
 
     def _virtual_callee_lineages(
-        self, inputs: set[str], virtual_lineage: dict[str, str], virtual_modules: set[str],
+        self,
+        inputs: set[str],
+        virtual_lineage: dict[str, str],
+        virtual_modules: set[str],
     ) -> dict[str, str] | None:
         """Lineages, here, of the globals read by callees that exist only as simulated defs."""
         user_ns = self.shell.user_ns
         if not self._virtual_callables or all(name in user_ns for name in inputs):
             return None
-        virtual = virtual_namespace(self._virtual_callables, virtual_lineage,
-                                    self.variable_lineage, virtual_modules)
+        virtual = virtual_namespace(self._virtual_callables, virtual_lineage, self.variable_lineage, virtual_modules)
         deps = called_function_dependencies(sorted(inputs), user_ns, self.variable_lineage, virtual)
-        found = dict(dep.split(':', 1) for dep in deps)
-        return {name: lin for name, lin in found.items() if lin != 'ABSENT'} or None
+        found = dict(dep.split(":", 1) for dep in deps)
+        return {name: lin for name, lin in found.items() if lin != "ABSENT"} or None
 
     def absent_callee_globals(
-        self, inputs: set[str], virtual_lineage: dict[str, str], virtual_modules: set[str],
+        self,
+        inputs: set[str],
+        virtual_lineage: dict[str, str],
+        virtual_modules: set[str],
     ) -> set[str]:
         """Names the callees in *inputs* read that the kernel does not hold.
 
@@ -2364,10 +2529,13 @@ class VirtualLineage:
         the cell had run fine. Modules included: the def's cell imported them.
         """
         from ..cache_key import called_function_globals
+
         user_ns = self.shell.user_ns
-        virtual = (virtual_namespace(self._virtual_callables, virtual_lineage,
-                                     self.variable_lineage, virtual_modules)
-                   if self._virtual_callables else None)
+        virtual = (
+            virtual_namespace(self._virtual_callables, virtual_lineage, self.variable_lineage, virtual_modules)
+            if self._virtual_callables
+            else None
+        )
         names = called_function_globals(inputs, user_ns, virtual, keep_modules=True)
         return {name for name in names if name not in user_ns}
 
@@ -2381,7 +2549,7 @@ class VirtualLineage:
         for name in inputs:
             if name in user_ns:
                 continue
-            lineage = virtual_lineage.get(name) or self.variable_lineage.get(name) or ''
+            lineage = virtual_lineage.get(name) or self.variable_lineage.get(name) or ""
             key = virtual_callable_key(lineage, name)
             virtual = self._virtual_callables.get(key)
             if virtual is not None:
@@ -2413,7 +2581,7 @@ class VirtualLineage:
         A callee that is only a simulated def contributes its digest as the
         live function would (``_virtual_callable_hashes``).
         """
-        function_tracker = getattr(self, 'function_tracker', None)
+        function_tracker = getattr(self, "function_tracker", None)
         user_ns = self.shell.user_ns
         try:
             func_component = callable_source_component(function_tracker, inputs, user_ns)
@@ -2427,7 +2595,10 @@ class VirtualLineage:
             func_component = ""
         return {
             out: output_lineage(
-                source_hash, input_lineages_all, file_hash_component, func_component,
+                source_hash,
+                input_lineages_all,
+                file_hash_component,
+                func_component,
                 module_source_component(function_tracker, user_ns.get(out), out, stmt_code, tree),
             )
             for out in outputs
@@ -2436,13 +2607,13 @@ class VirtualLineage:
     def _collect_session_file_deps(self, outputs: set[str]) -> set[str]:
         """Return file dependencies from the current session for *outputs*."""
         file_deps: set[str] = set()
-        if hasattr(self, 'executed_file_deps') and self.executed_file_deps:
+        if hasattr(self, "executed_file_deps") and self.executed_file_deps:
             for out in outputs:
                 if out in self.executed_file_deps:
                     file_deps.update(self.executed_file_deps[out])
         return file_deps
 
-    def _bound_modules(self, outputs: set[str], tree: ast.Module | None, stmt_code: str = '') -> set[str]:
+    def _bound_modules(self, outputs: set[str], tree: ast.Module | None, stmt_code: str = "") -> set[str]:
         """The names an import statement binds to a MODULE.
 
         ``import x`` always binds one. ``from m import name`` usually binds a
@@ -2458,9 +2629,9 @@ class VirtualLineage:
         """
         if tree is None:
             return set(outputs)
-        from_bound = {alias.asname or alias.name
-                      for node in tree.body if isinstance(node, ast.ImportFrom)
-                      for alias in node.names}
+        from_bound = {
+            alias.asname or alias.name for node in tree.body if isinstance(node, ast.ImportFrom) for alias in node.names
+        }
         user_ns = self.shell.user_ns
         recorded = self._import_bindings(stmt_code) if stmt_code and (from_bound - set(user_ns)) else {}
 
@@ -2468,7 +2639,7 @@ class VirtualLineage:
             if out in user_ns:
                 return isinstance(user_ns[out], types.ModuleType)
             if out in recorded:
-                return bool(recorded[out].get('module'))
+                return bool(recorded[out].get("module"))
             return True
 
         return {out for out in outputs if out not in from_bound or is_module(out)}
@@ -2476,23 +2647,24 @@ class VirtualLineage:
     def _import_bindings(self, stmt_code: str) -> dict[str, dict]:
         """What *stmt_code* (a ``from`` import) bound when it last ran -- see
         ``import_bindings_key`` -- or ``{}``. Memoized; cleared with the caches."""
-        memo = self.__dict__.setdefault('_import_bindings_memo', {})
+        memo = self.__dict__.setdefault("_import_bindings_memo", {})
         if stmt_code in memo:
             return memo[stmt_code]
         found: dict[str, dict] = {}
-        backend = getattr(self.cash_instance, 'backend', None) if self.cash_instance else None
-        if backend is not None and hasattr(backend, 'get_metadata'):
+        backend = getattr(self.cash_instance, "backend", None) if self.cash_instance else None
+        if backend is not None and hasattr(backend, "get_metadata"):
             from ..cache_key import import_bindings_key
+
             try:
                 record = backend.get_metadata(import_bindings_key(stmt_code))
             except (OSError, TypeError, ValueError, AttributeError):
                 record = None
-            if record and record.get('import_bindings') and record.get('code') == stmt_code:
-                found = dict(record.get('bindings') or {})
+            if record and record.get("import_bindings") and record.get("code") == stmt_code:
+                found = dict(record.get("bindings") or {})
                 found = {k: v for k, v in found.items() if isinstance(v, dict)}
-                if record.get('magic') != importlib.util.MAGIC_NUMBER.hex():
+                if record.get("magic") != importlib.util.MAGIC_NUMBER.hex():
                     for entry in found.values():
-                        entry.pop('code', None)     # another interpreter's bytecode
+                        entry.pop("code", None)  # another interpreter's bytecode
         memo[stmt_code] = found
         return found
 
@@ -2528,14 +2700,21 @@ class VirtualLineage:
                 if self.debug:
                     logger.debug(
                         "[LINEAGE_DEBUG] Propagated module '%s' lineage to variable_lineage: %s...",
-                        out, lineage_by_out[out][:12],
+                        out,
+                        lineage_by_out[out][:12],
                     )
         # Mid-simulation drain: subsequent statements' compute_cache_key reads
         # variable_lineage to include module components, so the write must be
         # visible before the next _update_virtual_lineage call.
         apply_collected_mutations(self._restores, self._tracking_state)
 
-    def _update_virtual_lineage(self, stmt_code: str, virtual_lineage: dict[str, str], virtual_modules: set[str] = None, occurrence_index: int = 0) -> tuple[set[str], float, bool, dict[str, float]]:
+    def _update_virtual_lineage(
+        self,
+        stmt_code: str,
+        virtual_lineage: dict[str, str],
+        virtual_modules: set[str] = None,
+        occurrence_index: int = 0,
+    ) -> tuple[set[str], float, bool, dict[str, float]]:
         """
         Update virtual lineage based on statement execution.
         Returns tuple of (output variables, cache_lookup_time_seconds, files_stale, file_deps).
@@ -2557,8 +2736,8 @@ class VirtualLineage:
             # or the two engines disagree about what the statement reads and
             # writes and ADR-007's identical-key rule breaks (CAS-265).
             inputs, outputs = CodeAnalyzer.analyze_code_block(
-                stmt_code, resolve_source=self._resolve_sim_function_source,
-                user_ns=self.shell.user_ns)
+                stmt_code, resolve_source=self._resolve_sim_function_source, user_ns=self.shell.user_ns
+            )
 
             # Mirror the runtime: a top-level bare-Expr method call
             # (lst.append(x), bus.on(fn)) carries no Store target, so
@@ -2586,7 +2765,7 @@ class VirtualLineage:
                             virtual_modules.discard(tgt.id)
 
             stripped = stmt_code.strip()
-            is_import = stripped.startswith(('import ', 'from '))
+            is_import = stripped.startswith(("import ", "from "))
             if is_import:
                 virtual_modules.update(self._bound_modules(outputs, mutation_tree, stmt_code))
 
@@ -2608,7 +2787,7 @@ class VirtualLineage:
                     ctx=CacheKeyContext(
                         variable_lineage=self.variable_lineage,
                         user_ns=self.shell.user_ns,
-                        function_tracker=self.function_tracker if hasattr(self, 'function_tracker') else None,
+                        function_tracker=self.function_tracker if hasattr(self, "function_tracker") else None,
                         virtual_lineage=virtual_lineage,
                         virtual_modules=virtual_modules,
                         compute_hash_fn=self.compute_hash_fn,
@@ -2645,7 +2824,7 @@ class VirtualLineage:
                 ctx=CacheKeyContext(
                     variable_lineage=self.variable_lineage,
                     user_ns=self.shell.user_ns,
-                    function_tracker=self.function_tracker if hasattr(self, 'function_tracker') else None,
+                    function_tracker=self.function_tracker if hasattr(self, "function_tracker") else None,
                     virtual_lineage=virtual_lineage,
                     virtual_modules=virtual_modules,
                     compute_hash_fn=self.compute_hash_fn,
@@ -2670,7 +2849,7 @@ class VirtualLineage:
                 stmt_code, cache_key, outputs, inputs, virtual_lineage, virtual_modules, is_import
             )
 
-            if cache_result[0] == 'hit':
+            if cache_result[0] == "hit":
                 _, cache_lookup_time, stmt_file_deps, hit_bumped = cache_result
                 # Union derivation-bumped vars so this cached mutation statement
                 # is still recorded as a producer of the aliased base.
@@ -2695,15 +2874,29 @@ class VirtualLineage:
 
             # Compute output lineage hashes
             lineage_by_out = self._compute_virtual_output_lineages(
-                source_hash, input_lineages_all, file_hash_component, inputs, outputs,
-                stmt_code, mutation_tree, virtual_lineage,
+                source_hash,
+                input_lineages_all,
+                file_hash_component,
+                inputs,
+                outputs,
+                stmt_code,
+                mutation_tree,
+                virtual_lineage,
             )
 
-            if self.debug and ('sort' in stmt_code or 'VolAdj' in stmt_code or 'read_csv' in stmt_code or 'exists' in stmt_code):
+            if self.debug and (
+                "sort" in stmt_code or "VolAdj" in stmt_code or "read_csv" in stmt_code or "exists" in stmt_code
+            ):
                 logger.debug("[LINEAGE_CALC] Statement: %s...", stmt_code[:40])
                 logger.debug("[LINEAGE_CALC]   source_hash: %s...", source_hash[:16])
-                logger.debug("[LINEAGE_CALC]   sorted(input_lineages_all): %s", [h[:12]+'...' for h in sorted(input_lineages_all)])
-                logger.debug("[LINEAGE_CALC]   file_hash_component: %s...", file_hash_component[:20] if file_hash_component else '(empty)')
+                logger.debug(
+                    "[LINEAGE_CALC]   sorted(input_lineages_all): %s",
+                    [h[:12] + "..." for h in sorted(input_lineages_all)],
+                )
+                logger.debug(
+                    "[LINEAGE_CALC]   file_hash_component: %s...",
+                    file_hash_component[:20] if file_hash_component else "(empty)",
+                )
                 logger.debug("[LINEAGE_CALC]   => lineages: %s", {v: h[:16] for v, h in lineage_by_out.items()})
 
             # Update virtual state
@@ -2774,14 +2967,16 @@ class VirtualLineage:
         start_time: float,
     ) -> tuple[set, float, float] | None:
         """Check output lineage consistency.  Returns failure tuple or None."""
-        if not file_deps and expected_lineages and 'output_lineages' in metadata:
+        if not file_deps and expected_lineages and "output_lineages" in metadata:
             for var, expected_hash in expected_lineages.items():
-                cached_hash = metadata['output_lineages'].get(var)
+                cached_hash = metadata["output_lineages"].get(var)
                 if cached_hash and cached_hash != expected_hash:
                     if self.debug:
                         logger.debug(
                             "[UPSTREAM] Restore failed: Lineage mismatch for %s. Exp: %s, Cached: %s",
-                            var, expected_hash[:8], cached_hash[:8],
+                            var,
+                            expected_hash[:8],
+                            cached_hash[:8],
                         )
                     return set(), time_module.time() - start_time, 0.0
         return None
@@ -2804,9 +2999,9 @@ class VirtualLineage:
         nothing is confirmed, so the conservative empty-guard below stays in
         force. Absence of evidence is not treated as evidence.
         """
-        if file_deps or not expected_lineages or 'output_lineages' not in metadata:
+        if file_deps or not expected_lineages or "output_lineages" not in metadata:
             return frozenset()
-        cached = metadata['output_lineages']
+        cached = metadata["output_lineages"]
         return frozenset(
             var
             for var, expected_hash in expected_lineages.items()
@@ -2843,15 +3038,16 @@ class VirtualLineage:
                                 "[UPSTREAM] Restore BLOCKED for '%s': cached value is empty "
                                 "but in-memory has %d items, and its lineage is unconfirmed. "
                                 "Keeping in-memory value.",
-                                var, len(existing),
+                                var,
+                                len(existing),
                             )
                         continue
                 except (TypeError, AttributeError):
                     pass
             self.shell.user_ns[var] = val
             restored_vars.add(var)
-            if 'output_lineages' in metadata:
-                new_lineage = metadata['output_lineages'].get(var)
+            if "output_lineages" in metadata:
+                new_lineage = metadata["output_lineages"].get(var)
                 if var in self.lineage and new_lineage is not None:
                     # Buffer a value-coupled restore so apply_collected_mutations
                     # routes through lineage.record, attaching _cash_lineage_hash
@@ -2889,13 +3085,13 @@ class VirtualLineage:
         executed_cell_codes, executed_cell_hashes, executed_input_lineages,
         executed_file_deps, and variable_lineage.
         """
-        output_lineages = metadata.get('output_lineages', {}) if 'output_lineages' in metadata else {}
-        stored_code = metadata.get('code', metadata.get('cell_code'))
-        stored_hash = metadata.get('source_hash', metadata.get('cell_hash'))
+        output_lineages = metadata.get("output_lineages", {}) if "output_lineages" in metadata else {}
+        stored_code = metadata.get("code", metadata.get("cell_code"))
+        stored_hash = metadata.get("source_hash", metadata.get("cell_hash"))
 
         # Resolve file deps once.
         resolved_paths: set[str] = set()
-        file_deps_meta = metadata.get('file_dependencies', {})
+        file_deps_meta = metadata.get("file_dependencies", {})
         if file_deps_meta:
             for stored_path in file_deps_meta:
                 resolved = resolve_file_dep_path(stored_path)
@@ -2938,7 +3134,7 @@ class VirtualLineage:
             return
 
         try:
-            current_cell_code = notebook_cells[current_cell_idx].replace('\r\n', '\n')
+            current_cell_code = notebook_cells[current_cell_idx].replace("\r\n", "\n")
             tree = ast.parse(current_cell_code)
         except (IndexError, SyntaxError):
             return
@@ -2986,7 +3182,7 @@ class VirtualLineage:
                     ctx=CacheKeyContext(
                         variable_lineage=self.variable_lineage,
                         user_ns=self.shell.user_ns,
-                        function_tracker=self.function_tracker if hasattr(self, 'function_tracker') else None,
+                        function_tracker=self.function_tracker if hasattr(self, "function_tracker") else None,
                         virtual_lineage=input_hashes,
                         virtual_modules=virtual_modules,
                         compute_hash_fn=self.compute_hash_fn,
@@ -3000,7 +3196,7 @@ class VirtualLineage:
                 if metadata and cached_data is not None:
                     # Verify file deps are still valid (mtime + size, both
                     # forms — see _validate_file_freshness for rationale).
-                    file_deps = metadata.get('file_dependencies', {})
+                    file_deps = metadata.get("file_dependencies", {})
                     deps_valid = self._validate_file_freshness(file_deps, self.debug, memo_key=cache_key)
 
                     if deps_valid:
@@ -3017,20 +3213,22 @@ class VirtualLineage:
                             for var in produced:
                                 if var in virtual_lineage:
                                     self._restores.record_restore(
-                                        var_name=var, lineage_hash=virtual_lineage[var],
+                                        var_name=var,
+                                        lineage_hash=virtual_lineage[var],
                                     )
                                     # Drain so subsequent statements probing the
                                     # cache see the placeholder lineage.
                                     apply_collected_mutations(
-                                        self._restores, self._tracking_state,
+                                        self._restores,
+                                        self._tracking_state,
                                     )
                                 if var not in self.shell.user_ns:
                                     self.shell.user_ns[var] = _FORWARD_PROBE_PLACEHOLDER
                             if self.debug:
                                 logger.debug(
-                                    "[UPSTREAM] Forward probe: cache hit for '%s' "
-                                    "resolves broken vars: %s",
-                                    stmt_code[:50], produced,
+                                    "[UPSTREAM] Forward probe: cache hit for '%s' resolves broken vars: %s",
+                                    stmt_code[:50],
+                                    produced,
                                 )
 
             except (KeyError, TypeError, ValueError, OSError):
@@ -3040,12 +3238,21 @@ class VirtualLineage:
             broken_vars -= resolved_by_cache
             if self.debug:
                 logger.debug(
-                    "[UPSTREAM] Forward probe eliminated %d broken vars: %s. "
-                    "Remaining: %s",
-                    len(resolved_by_cache), resolved_by_cache, broken_vars,
+                    "[UPSTREAM] Forward probe eliminated %d broken vars: %s. Remaining: %s",
+                    len(resolved_by_cache),
+                    resolved_by_cache,
+                    broken_vars,
                 )
 
-    def _try_virtual_restore(self, stmt_code: str, outputs: set[str], inputs: set[str], input_hashes: dict[str, str], virtual_modules: set[str] | None = None, expected_lineages: dict[str, str] | None = None) -> tuple[set[str], float, float]:
+    def _try_virtual_restore(
+        self,
+        stmt_code: str,
+        outputs: set[str],
+        inputs: set[str],
+        input_hashes: dict[str, str],
+        virtual_modules: set[str] | None = None,
+        expected_lineages: dict[str, str] | None = None,
+    ) -> tuple[set[str], float, float]:
         """Attempt to restore a statement using virtual input hashes.
 
         Directly queries backend and updates memory if successful.
@@ -3071,7 +3278,7 @@ class VirtualLineage:
                 ctx=CacheKeyContext(
                     variable_lineage=self.variable_lineage,
                     user_ns=self.shell.user_ns,
-                    function_tracker=self.function_tracker if hasattr(self, 'function_tracker') else None,
+                    function_tracker=self.function_tracker if hasattr(self, "function_tracker") else None,
                     virtual_lineage=_key_lineages(input_hashes),
                     virtual_modules=virtual_modules,
                     compute_hash_fn=self.compute_hash_fn,
@@ -3090,14 +3297,15 @@ class VirtualLineage:
             if cached_data is not None:
                 # Call results the entry refers to rather than copies (call_refs).
                 from cash.notebook.call_refs import resolve_call_refs
+
                 cached_data = resolve_call_refs(cached_data, self.cash_instance.backend)
 
             # Extract saved execution time
-            saved_time = metadata.get('execution_time', 0.0) if metadata else 0.0
+            saved_time = metadata.get("execution_time", 0.0) if metadata else 0.0
 
             if metadata and cached_data is not None:
                 # 3. Check file dependencies (Critical!)
-                file_deps = metadata.get('file_dependencies', {})
+                file_deps = metadata.get("file_dependencies", {})
                 fail = self._check_file_deps_for_restore(file_deps, start_time)
                 if fail is not None:
                     return fail
@@ -3112,7 +3320,7 @@ class VirtualLineage:
 
                 # 4. Success! Restore into shell.
                 # Cache stores variables under 'variables' key (see _store_in_cache)
-                variables_to_restore = cached_data.get('variables', {})
+                variables_to_restore = cached_data.get("variables", {})
                 restored_vars = self._restore_vars_from_cache(
                     variables_to_restore,
                     metadata,
@@ -3138,7 +3346,7 @@ class VirtualLineage:
         try:
             normalized_mem_code = _normalize_stmt(mem_code)
             for cell_code in notebook_cells:
-                clean_cell = CodeAnalyzer.strip_magics(cell_code.replace('\r\n', '\n'))
+                clean_cell = CodeAnalyzer.strip_magics(cell_code.replace("\r\n", "\n"))
                 if not clean_cell.strip():
                     continue
                 try:
@@ -3180,7 +3388,7 @@ class VirtualLineage:
             producing_code = self.executed_cell_codes.get(vname)
             if producing_code is None:
                 continue
-            normalized_prod = re.sub(r'# __iteration_context__:.*?\n', '', producing_code).strip()
+            normalized_prod = re.sub(r"# __iteration_context__:.*?\n", "", producing_code).strip()
             if normalized_prod in simulation_trace_codes:
                 directly_mismatched.add(vname)
             elif vname in virtual_lineage:
@@ -3190,8 +3398,7 @@ class VirtualLineage:
                 # (``docs['topic'] = ...``) found the frame ahead by its own
                 # earlier write and rebuilt everything derived from it (r23s4).
                 is_downstream = any(
-                    normalized_prod in notebook_cells[di]
-                    for di in range(current_cell_idx, len(notebook_cells))
+                    normalized_prod in notebook_cells[di] for di in range(current_cell_idx, len(notebook_cells))
                 )
                 if not is_downstream:
                     directly_mismatched.add(vname)
@@ -3242,11 +3449,14 @@ class VirtualLineage:
             logger.debug(
                 "[UPSTREAM_DEBUG] Transitive mismatch propagation (unsaved edit): "
                 "root mismatches = %s, tainted dependents = %s",
-                directly_mismatched_vars, vars_tainted,
+                directly_mismatched_vars,
+                vars_tainted,
             )
         return vars_tainted
 
-    def _is_valid_extension(self, code: str, actual_lineage: str, virtual_lineage: dict[str, str], required_dependency: str | None = None) -> bool:
+    def _is_valid_extension(
+        self, code: str, actual_lineage: str, virtual_lineage: dict[str, str], required_dependency: str | None = None
+    ) -> bool:
         """
         Check if the 'actual_lineage' is a valid derivation from the 'virtual_lineage' state.
         This verifies if executing 'code' using 'virtual_lineage' inputs produces 'actual_lineage'.
@@ -3256,40 +3466,38 @@ class VirtualLineage:
         This distinguishes valid extensions (x = x + 1) from conflicting redefinitions (x = 5).
         """
         try:
-             inputs, outputs = CodeAnalyzer.analyze_code_block(code)
+            inputs, outputs = CodeAnalyzer.analyze_code_block(code)
 
-             if required_dependency and required_dependency not in inputs:
-                 return False
+            if required_dependency and required_dependency not in inputs:
+                return False
 
-             input_lineages = []
-             # Note: CodeAnalyzer inputs are a set. We sort for deterministic hashing order.
-             # However, the lineage hash construction below sorts them anyway.
-             sorted_inputs = sorted(inputs)
-             for inp in sorted_inputs:
-                 if inp in _BUILTIN_NAMES:
-                     continue
+            input_lineages = []
+            # Note: CodeAnalyzer inputs are a set. We sort for deterministic hashing order.
+            # However, the lineage hash construction below sorts them anyway.
+            sorted_inputs = sorted(inputs)
+            for inp in sorted_inputs:
+                if inp in _BUILTIN_NAMES:
+                    continue
 
-                 if inp in virtual_lineage:
-                     input_lineages.append(virtual_lineage[inp])
-                 elif inp in self.variable_lineage:
-                     # Fallback to memory if virtual missing (external var not in notebook)
-                     input_lineages.append(self.variable_lineage[inp])
-                 else:
-                     # Input missing entirely. Cannot verify.
-                     return False
+                if inp in virtual_lineage:
+                    input_lineages.append(virtual_lineage[inp])
+                elif inp in self.variable_lineage:
+                    # Fallback to memory if virtual missing (external var not in notebook)
+                    input_lineages.append(self.variable_lineage[inp])
+                else:
+                    # Input missing entirely. Cannot verify.
+                    return False
 
-             source_hash = statement_source_hash(code)
-             # Route through the shared func-inclusive projection (matches the
-             # recorder in statement/lineage.py) so an unsaved edit that calls a
-             # user-defined function is not spuriously rejected for lacking the
-             # function-source component. A hand-rolled sha256(code)+input_lineages
-             # omitted it, so any function-routed edit always projected != recorded
-             # and was wrongly discarded. [layer 1]
-             projected = self._compute_virtual_output_lineages(
-                 source_hash, input_lineages, "", inputs, outputs, code
-             )
+            source_hash = statement_source_hash(code)
+            # Route through the shared func-inclusive projection (matches the
+            # recorder in statement/lineage.py) so an unsaved edit that calls a
+            # user-defined function is not spuriously rejected for lacking the
+            # function-source component. A hand-rolled sha256(code)+input_lineages
+            # omitted it, so any function-routed edit always projected != recorded
+            # and was wrongly discarded. [layer 1]
+            projected = self._compute_virtual_output_lineages(source_hash, input_lineages, "", inputs, outputs, code)
 
-             return actual_lineage in projected.values()
+            return actual_lineage in projected.values()
 
         except (KeyError, TypeError, ValueError, SyntaxError):
             return False
@@ -3297,21 +3505,19 @@ class VirtualLineage:
     @staticmethod
     def _iter_body_nodes(node: ast.AST):
         """Yield all body statements of a control structure (recursively)."""
-        for attr in ('body', 'orelse', 'finalbody'):
+        for attr in ("body", "orelse", "finalbody"):
             for child in getattr(node, attr, []) or []:
                 yield child
                 if is_control_structure(child):
                     yield from VirtualLineage._iter_body_nodes(child)
         # ast.Try handlers
-        for handler in getattr(node, 'handlers', []) or []:
+        for handler in getattr(node, "handlers", []) or []:
             for child in handler.body:
                 yield child
                 if is_control_structure(child):
                     yield from VirtualLineage._iter_body_nodes(child)
 
-    def _recurse_control_structure_mutations(
-        self, body_node: ast.AST, loop_targets: set[str]
-    ) -> set[str]:
+    def _recurse_control_structure_mutations(self, body_node: ast.AST, loop_targets: set[str]) -> set[str]:
         """Recurse into a nested control structure and return its mutated vars."""
         if isinstance(body_node, ast.For):
             nested_targets = extract_target_names(body_node.target)
@@ -3356,9 +3562,7 @@ class VirtualLineage:
         for body_node in body_nodes:
             if is_control_structure(body_node):
                 # Recurse into nested control structures
-                mutated_vars.update(
-                    self._recurse_control_structure_mutations(body_node, loop_targets)
-                )
+                mutated_vars.update(self._recurse_control_structure_mutations(body_node, loop_targets))
             else:
                 # Use analyze_statement for precise in-place mutation detection.
                 # This catches: .append(), .update(), [key]=val, +=, obj.attr=val
@@ -3393,13 +3597,12 @@ def _first_cell_reading(notebook_cells: list[str], limit: int, names: set[str]) 
         return None
     for idx in range(min(limit, len(notebook_cells))):
         try:
-            tree = ast.parse(CodeAnalyzer.strip_magics(notebook_cells[idx].replace('\r\n', '\n')))
+            tree = ast.parse(CodeAnalyzer.strip_magics(notebook_cells[idx].replace("\r\n", "\n")))
         except (SyntaxError, ValueError, TypeError):
-            return idx          # cannot tell: assume it reads them
+            return idx  # cannot tell: assume it reads them
         for node in ast.walk(tree):
             if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in names:
                 return idx
-            if isinstance(node, ast.ImportFrom) and any(
-                    (alias.asname or alias.name) in names for alias in node.names):
+            if isinstance(node, ast.ImportFrom) and any((alias.asname or alias.name) in names for alias in node.names):
                 return idx
     return None

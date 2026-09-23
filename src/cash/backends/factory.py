@@ -19,6 +19,7 @@ Three input shapes:
    → a single backend of that type, built from the per-backend
    simple-mode connection fields (``redis_host`` / ``s3_bucket`` / ...).
 """
+
 from __future__ import annotations
 
 import logging
@@ -55,6 +56,7 @@ def build_backend_from_config(config: "CashConfig") -> CacheBackend:
 # the RAM tier keeps its own modest auto cap either way.
 # ---------------------------------------------------------------------------
 
+
 def _sqlite_db_path(cache_dir: str) -> str:
     """The database file for a cache directory: ``<cache_dir>/cache.db``.
 
@@ -72,7 +74,8 @@ def _sqlite_db_path(cache_dir: str) -> str:
         logger.warning(
             "[SQLITE] using the database at %s, where an older cash wrote it; "
             "move it to %s for `cash info` and `cash inspect` to see it",
-            cache_dir, os.path.join(cache_dir + ".d", "cache.db"),
+            cache_dir,
+            os.path.join(cache_dir + ".d", "cache.db"),
         )
         return cache_dir
     try:
@@ -94,6 +97,7 @@ def _resolve_disk_cap(config: "CashConfig") -> int | None:
     if explicit is not None:
         return explicit
     from .adaptive_caps import resolve_disk_cap
+
     return resolve_disk_cap(config.cache_dir)
 
 
@@ -116,12 +120,14 @@ def _resolve_ram_cap(config: "CashConfig") -> int:
     tier should stay a small fraction of system memory regardless.
     """
     from .adaptive_caps import resolve_ram_cap
+
     return resolve_ram_cap()
 
 
 # ---------------------------------------------------------------------------
 # Single-backend construction (simple mode, non-default backend)
 # ---------------------------------------------------------------------------
+
 
 def _build_single_backend(backend_type: str, config: "CashConfig") -> CacheBackend:
     """Build one bare backend instance from the simple-mode top-level fields."""
@@ -155,14 +161,14 @@ def _build_single_backend(backend_type: str, config: "CashConfig") -> CacheBacke
             prefix=config.s3_prefix,
         )
     raise ValueError(
-        f"Unknown backend type {backend_type!r}. "
-        "Set config.backend to one of: tiered, memory, file, sqlite, redis, s3."
+        f"Unknown backend type {backend_type!r}. Set config.backend to one of: tiered, memory, file, sqlite, redis, s3."
     )
 
 
 # ---------------------------------------------------------------------------
 # Default tiered stack (RAM + file) — built from the top-level fields
 # ---------------------------------------------------------------------------
+
 
 def _build_default_tiered(config: "CashConfig") -> TieredBackend:
     ram = InMemoryBackend(
@@ -260,6 +266,7 @@ def _build_smart_persistence_policy(config: "CashConfig"):
 # Advanced-mode: build from explicit tier list
 # ---------------------------------------------------------------------------
 
+
 def _build_tiered_from_tier_list(config: "CashConfig") -> TieredBackend:
     backends: list[CacheBackend] = []
     for tier in config.tiers:
@@ -325,11 +332,13 @@ def _build_tier(tier: "TierConfig", config: "CashConfig") -> CacheBackend:
 # importing this module.
 # ---------------------------------------------------------------------------
 
+
 def _build_redis(**kwargs: Any) -> CacheBackend:
     try:
         from .redis_backend import RedisBackend
     except ImportError as exc:
         from cash.exceptions import DependencyNotFoundError
+
         raise DependencyNotFoundError(
             "Redis backend requires `pip install cash-lib[redis]` (the `redis` package)."
         ) from exc
@@ -342,9 +351,8 @@ def _build_s3(*, bucket: str, region: str, prefix: str) -> CacheBackend:
         from .s3_backend import S3Backend
     except ImportError as exc:
         from cash.exceptions import DependencyNotFoundError
-        raise DependencyNotFoundError(
-            "S3 backend requires `pip install cash-lib[s3]` (the `boto3` package)."
-        ) from exc
+
+        raise DependencyNotFoundError("S3 backend requires `pip install cash-lib[s3]` (the `boto3` package).") from exc
     if not bucket:
         raise ValueError("S3 backend requires a non-empty bucket name (set s3_bucket)")
     kwargs: dict[str, Any] = {"bucket": bucket, "prefix": prefix}

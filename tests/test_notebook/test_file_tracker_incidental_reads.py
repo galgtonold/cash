@@ -12,6 +12,7 @@ changed had its ``savefig`` replayed alone -- a blank chart.
 Each drop has a control arm: the same kind of read that IS the user's data
 stays tracked.
 """
+
 from __future__ import annotations
 
 import importlib
@@ -40,7 +41,8 @@ def fake_site(tmp_path, monkeypatch):
     pkg = site / "fakelib"
     pkg.mkdir(parents=True)
     (pkg / "res.txt").write_text("resource", encoding="utf-8")
-    (pkg / "__init__.py").write_text(textwrap.dedent("""
+    (pkg / "__init__.py").write_text(
+        textwrap.dedent("""
         import os
         HERE = os.path.dirname(__file__)
 
@@ -54,13 +56,18 @@ def fake_site(tmp_path, monkeypatch):
 
         def probe(path):
             return os.path.exists(path)
-    """), encoding="utf-8")
-    (site / "fakelib_importer.py").write_text(textwrap.dedent("""
+    """),
+        encoding="utf-8",
+    )
+    (site / "fakelib_importer.py").write_text(
+        textwrap.dedent("""
         import os
         CONFIG = os.environ["FAKELIB_CONFIG"]
         with open(CONFIG, encoding="utf-8") as fh:
             SETTING = fh.read()
-    """), encoding="utf-8")
+    """),
+        encoding="utf-8",
+    )
     root = os.path.normcase(str(site)).replace("\\", "/").rstrip("/") + "/"
     # raising=False: the fails-first control runs this against a tracker
     # that has neither function.
@@ -91,13 +98,13 @@ def _run(fn, user_ns=None):
 
 # --- package metadata ---------------------------------------------------------
 
+
 def test_a_package_metadata_lookup_is_not_tracked(tmp_path, monkeypatch):
     """``importlib.metadata`` lists the sys.path entry and reads METADATA."""
     root = tmp_path / "meta_root"
     info = root / "zzfake_dist-1.2.3.dist-info"
     info.mkdir(parents=True)
-    (info / "METADATA").write_text("Metadata-Version: 2.1\nName: zzfake-dist\nVersion: 1.2.3\n",
-                                   encoding="utf-8")
+    (info / "METADATA").write_text("Metadata-Version: 2.1\nName: zzfake-dist\nVersion: 1.2.3\n", encoding="utf-8")
     monkeypatch.syspath_prepend(str(root))
     import importlib.metadata as md
 
@@ -108,8 +115,10 @@ def test_a_package_metadata_lookup_is_not_tracked(tmp_path, monkeypatch):
 
 # --- a library reading its own files -----------------------------------------
 
+
 def test_a_library_reading_its_own_resource_is_not_tracked(fake_site):
     import fakelib
+
     tracker = _run(fakelib.load_resource)
     assert not _has(_norm(tracker.get_accessed_files()), fake_site / "fakelib" / "res.txt")
 
@@ -117,6 +126,7 @@ def test_a_library_reading_its_own_resource_is_not_tracked(fake_site):
 def test_a_library_reading_the_users_file_is_tracked(fake_site, user_file):
     """Control: `PIL.Image.open(p)` / `pd.read_csv(p)` read the user's data."""
     import fakelib
+
     tracker = _run(lambda: fakelib.read(str(user_file)))
     assert _has(_norm(tracker.get_accessed_files()), user_file)
 
@@ -124,6 +134,7 @@ def test_a_library_reading_the_users_file_is_tracked(fake_site, user_file):
 def test_an_installed_tool_reading_its_own_data_is_tracked_for_its_own_functions(fake_site):
     """Control: for the tool's OWN cached functions its data files are inputs."""
     import fakelib
+
     tracker = _run(fakelib.load_resource, user_ns={"__name__": "fakelib.pipeline"})
     assert _has(_norm(tracker.get_accessed_files()), fake_site / "fakelib" / "res.txt")
 
@@ -135,8 +146,7 @@ def test_another_packages_data_read_by_the_standard_library_is_not_tracked(fake_
     tracker = _run(lambda: open(res, encoding="utf-8").read())
     assert not _has(_norm(tracker.get_accessed_files()), res)
     # ... but for the package's own cached functions it is still an input
-    tracker = _run(lambda: open(res, encoding="utf-8").read(),
-                   user_ns={"__name__": "fakelib.pipeline"})
+    tracker = _run(lambda: open(res, encoding="utf-8").read(), user_ns={"__name__": "fakelib.pipeline"})
     assert _has(_norm(tracker.get_accessed_files()), res)
 
 
@@ -147,6 +157,7 @@ def test_a_notebook_namespace_has_no_own_package():
 
 def test_a_library_probing_for_an_optional_file_of_its_own_is_not_an_absent_dependency(fake_site):
     import fakelib
+
     missing = fake_site / "fakelib" / "optional.cfg"
     tracker = _run(lambda: fakelib.probe(str(missing)))
     assert not tracker.absent_files, tracker.absent_files
@@ -155,6 +166,7 @@ def test_a_library_probing_for_an_optional_file_of_its_own_is_not_an_absent_depe
 def test_a_library_probing_for_the_users_file_is_an_absent_dependency(fake_site, tmp_path):
     """Control: `fakelib.probe(p)` asks about the user's path."""
     import fakelib
+
     tracker = _run(lambda: fakelib.probe(str(tmp_path / "later.csv")))
     assert tracker.absent_files
 
@@ -168,8 +180,8 @@ def test_the_user_probing_for_a_file_is_still_an_absent_dependency(tmp_path):
 
 # --- a library being imported -------------------------------------------------
 
-def test_a_file_read_while_an_installed_library_imports_is_not_tracked(
-        fake_site, tmp_path, monkeypatch):
+
+def test_a_file_read_while_an_installed_library_imports_is_not_tracked(fake_site, tmp_path, monkeypatch):
     cfg = tmp_path / "fakelibrc"
     cfg.write_text("x", encoding="utf-8")
     monkeypatch.setenv("FAKELIB_CONFIG", str(cfg))
@@ -184,8 +196,8 @@ def test_a_user_module_reading_its_config_at_import_is_tracked(tmp_path, monkeyp
     cfg = proj / "settings.toml"
     cfg.write_text("x = 1", encoding="utf-8")
     (proj / "zz_user_settings.py").write_text(
-        f"with open({str(cfg)!r}, encoding='utf-8') as fh:\n    VALUE = fh.read()\n",
-        encoding="utf-8")
+        f"with open({str(cfg)!r}, encoding='utf-8') as fh:\n    VALUE = fh.read()\n", encoding="utf-8"
+    )
     monkeypatch.syspath_prepend(str(proj))
     sys.modules.pop("zz_user_settings", None)
     try:
@@ -196,6 +208,7 @@ def test_a_user_module_reading_its_config_at_import_is_tracked(tmp_path, monkeyp
 
 
 # --- the interpreter's own files -----------------------------------------------
+
 
 def test_reading_a_standard_library_file_is_not_tracked():
     src = os.path.join(os.path.dirname(os.__file__), "json", "__init__.py")
@@ -209,6 +222,7 @@ def test_reading_a_standard_library_file_is_not_tracked():
 
 
 # --- a write that reads back ----------------------------------------------------
+
 
 @pytest.mark.parametrize("mode", ["w+b", "w+", "x+b"])
 def test_opening_for_write_plus_is_not_a_read(tmp_path, mode):

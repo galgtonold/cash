@@ -13,12 +13,14 @@ class TestTemplateFormatMap:
 
     def test_template_substitute(self, nb_runner):
         """string.Template substitution with caching."""
-        nb_runner.create_notebook([
-            "from string import Template",
-            "tmpl = Template('Hello, $name! You are $age years old.')",
-            "data = {'name': 'Alice', 'age': 30}",
-            "result = tmpl.substitute(data)\nprint(f'result={result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from string import Template",
+                "tmpl = Template('Hello, $name! You are $age years old.')",
+                "data = {'name': 'Alice', 'age': 30}",
+                "result = tmpl.substitute(data)\nprint(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(4)
@@ -31,12 +33,14 @@ class TestTemplateFormatMap:
 
     def test_template_edit_data(self, nb_runner):
         """Edit template data, verify output changes."""
-        nb_runner.create_notebook([
-            "from string import Template",
-            "tmpl = Template('$item costs $$${price}')",
-            "data = {'item': 'Book', 'price': '25'}",
-            "result = tmpl.substitute(data)\nprint(f'result={result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from string import Template",
+                "tmpl = Template('$item costs $$${price}')",
+                "data = {'item': 'Book', 'price': '25'}",
+                "result = tmpl.substitute(data)\nprint(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(4)
@@ -49,11 +53,13 @@ class TestTemplateFormatMap:
 
     def test_format_map(self, nb_runner):
         """str.format_map with caching."""
-        nb_runner.create_notebook([
-            "template = '{city} has {pop} people'",
-            "data = {'city': 'NYC', 'pop': '8M'}",
-            "result = template.format_map(data)\nprint(f'result={result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "template = '{city} has {pop} people'",
+                "data = {'city': 'NYC', 'pop': '8M'}",
+                "result = template.format_map(data)\nprint(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(3)

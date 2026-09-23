@@ -51,35 +51,41 @@ __all__ = [
 #: opaque identity, or a conservative "assume impure"), so widening it only
 #: converts a crash into the degradation those sites were written to perform.
 SOURCE_RETRIEVAL_ERRORS: tuple[type[BaseException], ...] = (
-    OSError,            # file missing / not on disk (builtins, C extensions)
-    TypeError,          # object has no source to speak of
-    TokenError,         # file does not tokenize as Python (see above)
-    SyntaxError,        # file tokenizes but does not parse
-    IndentationError,   # SyntaxError subclass; listed for the reader
-    UnicodeDecodeError, # ValueError subclass; file is not decodable text
-    ValueError,         # e.g. inspect given a built-in with a bogus lineno
+    OSError,  # file missing / not on disk (builtins, C extensions)
+    TypeError,  # object has no source to speak of
+    TokenError,  # file does not tokenize as Python (see above)
+    SyntaxError,  # file tokenizes but does not parse
+    IndentationError,  # SyntaxError subclass; listed for the reader
+    UnicodeDecodeError,  # ValueError subclass; file is not decodable text
+    ValueError,  # e.g. inspect given a built-in with a bogus lineno
 )
 
 
 class CashError(Exception):
     """Base exception for all Cash errors."""
 
+
 # ---------------------------------------------------------------------------
 # Backend / storage errors
 # ---------------------------------------------------------------------------
 
+
 class CacheBackendError(CashError):
     """Raised on backend I/O failures (disk, S3, Redis, SQLite)."""
+
 
 class CacheSerializationError(CashError):
     """Raised when a value cannot be serialized or deserialized for caching."""
 
+
 class CacheExpiredError(CashError):
     """Raised when a cache entry has exceeded its TTL."""
+
 
 # ---------------------------------------------------------------------------
 # Dependency errors
 # ---------------------------------------------------------------------------
+
 
 class DependencyNotFoundError(CashError, ImportError):
     """Raised when an optional backend dependency is missing.
@@ -88,12 +94,15 @@ class DependencyNotFoundError(CashError, ImportError):
     that existing ``except ImportError`` handlers continue to work.
     """
 
+
 # ---------------------------------------------------------------------------
 # Notebook-specific errors
 # ---------------------------------------------------------------------------
 
+
 class AmbiguousCellError(CashError):
     """Raised when a notebook cell cannot be uniquely identified."""
+
 
 class UpstreamStateError(CashError):
     """Raised when upstream cell state cannot be restored or simulated."""
@@ -106,8 +115,10 @@ class ForwardReferenceError(CashError):
     later cell has already run, and a run from the top raises ``NameError``.
     """
 
+
 class CacheKeyComputationError(CashError):
     """Raised when a cache key cannot be computed for a statement."""
+
 
 class CashImpureFunctionError(CashError):
     """Raised on first call when caching cannot be guaranteed correct.
@@ -128,9 +139,11 @@ class CashImpureFunctionError(CashError):
     callee with ``@cash.mark_pure(callee)``, or refactor to a static call.
     """
 
+
 # ---------------------------------------------------------------------------
 # Warnings (not errors — runtime advisories surfaced via warnings.warn)
 # ---------------------------------------------------------------------------
+
 
 class CashWarning(UserWarning):
     """Base class for all Cash-emitted warnings.
@@ -140,6 +153,7 @@ class CashWarning(UserWarning):
         import cash
         warnings.filterwarnings("error", category=cash.CashWarning)
     """
+
 
 class CashCacheIneffectiveWarning(CashWarning):
     """The cache is not doing anything useful for this call.
@@ -161,6 +175,7 @@ class CashCacheIneffectiveWarning(CashWarning):
     asked to cache, and the notice is informational.
     """
 
+
 class CashUpstreamSyntaxWarning(CashWarning):
     """An upstream notebook cell could not be parsed (a half-written cell the
     user has saved but not run).
@@ -172,12 +187,14 @@ class CashUpstreamSyntaxWarning(CashWarning):
     telling the user why.
     """
 
+
 class CashCacheStoreFailedWarning(CashWarning):
     """Compute succeeded but the backend rejected the write.
 
     Typical causes: serializer cannot handle the return type, disk
     full, Redis disconnected mid-set, S3 credential expiry.
     """
+
 
 class CashImpurityWarning(CashCacheIneffectiveWarning):
     """The decorated function (or a module-bounded helper) has

@@ -45,7 +45,7 @@ class _MultiBackendMixin:
         via _MultiBackendMixin — not duplicated in individual backend classes.
         """
         for backend in self.backends:
-            if hasattr(backend, 'set_metadata_only'):
+            if hasattr(backend, "set_metadata_only"):
                 backend.set_metadata_only(key, metadata)
 
     def delete(self, key: str) -> None:
@@ -61,7 +61,7 @@ class _MultiBackendMixin:
         entries = []
         for backend in self.backends:
             for entry in backend.list_entries():
-                key = entry.get('key')
+                key = entry.get("key")
                 if key not in seen_keys:
                     seen_keys.add(key)
                     entries.append(entry)
@@ -106,7 +106,8 @@ class _MultiBackendMixin:
             except Exception as e:  # noqa: BLE001 — best-effort cleanup
                 logger.warning(
                     "Shutdown failed for backend %s: %s",
-                    type(backend).__name__, e,
+                    type(backend).__name__,
+                    e,
                 )
 
     def cleanup_expired(self, is_expired: Callable[[dict[str, Any]], bool]) -> int:
@@ -114,7 +115,7 @@ class _MultiBackendMixin:
         seen_keys = set()
         for backend in self.backends:
             for entry in list(backend.list_entries()):
-                key = entry.get('key')
+                key = entry.get("key")
                 if key in seen_keys:
                     continue
                 seen_keys.add(key)
@@ -150,6 +151,8 @@ class CascadingBackend(_MultiBackendMixin, CacheBackend):
                 return metadata, value
         return None, None
 
-    def set(self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None) -> None:
+    def set(
+        self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None
+    ) -> None:
         for backend in self.backends:
             backend.set(key, value, metadata, serializer)

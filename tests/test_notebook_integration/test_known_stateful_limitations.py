@@ -20,6 +20,7 @@ Fixed, kept as regression tests:
 * ``test_global_keyword_mutation_rerun`` and ``test_mutable_default_arg_rerun`` —
   CAS-49 family via CAS-93: definition statements always re-execute.
 """
+
 import pytest
 
 pytestmark = pytest.mark.upstream
@@ -36,10 +37,12 @@ pytestmark = pytest.mark.upstream
 # bug long after the bug is gone, and an xfail is the one kind that stays
 # quiet while it does.
 def test_function_hidden_global_mutation_rerun(nb_runner):
-    nb_runner.create_notebook([
-        "c = {'n': 0}\ndef tick():\n    c['n'] += 1\n    return c['n']",
-        "r = tick()\nprint(r)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "c = {'n': 0}\ndef tick():\n    c['n'] += 1\n    return c['n']",
+            "r = tick()\nprint(r)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "1" in nb_runner.get_output(2)
@@ -53,10 +56,12 @@ def test_function_hidden_global_mutation_rerun(nb_runner):
 # re-seeded and `list(g)` sees the full sequence again instead of an empty
 # generator.
 def test_exhausted_generator_rerun(nb_runner):
-    nb_runner.create_notebook([
-        "g = (i for i in range(3))",
-        "vals = list(g)\nprint(vals)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "g = (i for i in range(3))",
+            "vals = list(g)\nprint(vals)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "[0, 1, 2]" in nb_runner.get_output(2)
@@ -68,10 +73,12 @@ def test_exhausted_generator_rerun(nb_runner):
 # now, so the isolated re-run re-runs `def inc()` and the upstream chain
 # re-seeds `g` — the hidden global mutation no longer accumulates.
 def test_global_keyword_mutation_rerun(nb_runner):
-    nb_runner.create_notebook([
-        "g = 0\ndef inc():\n    global g\n    g += 1",
-        "inc()\nprint(g)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "g = 0\ndef inc():\n    global g\n    g += 1",
+            "inc()\nprint(g)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "1" in nb_runner.get_output(2)
@@ -83,10 +90,12 @@ def test_global_keyword_mutation_rerun(nb_runner):
 # now, so the isolated re-run recreates the function object — and with it a
 # FRESH mutable default — instead of reusing the accumulated one.
 def test_mutable_default_arg_rerun(nb_runner):
-    nb_runner.create_notebook([
-        "def acc(x, bucket=[]):\n    bucket.append(x)\n    return bucket",
-        "r = acc(1)\nprint(r)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "def acc(x, bucket=[]):\n    bucket.append(x)\n    return bucket",
+            "r = acc(1)\nprint(r)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "[1]" in nb_runner.get_output(2)

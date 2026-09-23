@@ -19,8 +19,7 @@ class JsonFormatter(logging.Formatter):
         }
 
         # Include extra fields if present
-        for key in ("event", "duration_ms", "cache_key", "status",
-                     "variable", "module", "cell_id", "backend"):
+        for key in ("event", "duration_ms", "cache_key", "status", "variable", "module", "cell_id", "backend"):
             val = getattr(record, key, None)
             if val is not None:
                 log_entry[key] = val
@@ -47,15 +46,14 @@ class CashLogHandler(logging.Handler):
             "level": record.levelname,
             "msg": record.getMessage(),
         }
-        for key in ("event", "duration_ms", "cache_key", "status",
-                     "variable", "module"):
+        for key in ("event", "duration_ms", "cache_key", "status", "variable", "module"):
             val = getattr(record, key, None)
             if val is not None:
                 entry[key] = val
 
         self.records.append(entry)
         if len(self.records) > self.MAX_ENTRIES:
-            self.records = self.records[-self.MAX_ENTRIES:]
+            self.records = self.records[-self.MAX_ENTRIES :]
 
     def get_events(self, event_type: str | None = None, limit: int = 50) -> list[dict]:
         """Retrieve recent log events, optionally filtered."""
@@ -66,9 +64,7 @@ class CashLogHandler(logging.Handler):
         self.records.clear()
 
 
-def setup_logging(level: int = logging.INFO,
-                  json_output: bool = False,
-                  log_file: str | None = None) -> CashLogHandler:
+def setup_logging(level: int = logging.INFO, json_output: bool = False, log_file: str | None = None) -> CashLogHandler:
     """Configure the ``cash`` logger hierarchy.
 
     Args:
@@ -96,9 +92,7 @@ def setup_logging(level: int = logging.INFO,
     if json_output:
         console.setFormatter(JsonFormatter())
     else:
-        console.setFormatter(logging.Formatter(
-            "[%(name)s] %(message)s"
-        ))
+        console.setFormatter(logging.Formatter("[%(name)s] %(message)s"))
     cash_logger.addHandler(console)
 
     # Optional file handler

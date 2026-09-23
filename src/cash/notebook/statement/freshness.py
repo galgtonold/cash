@@ -100,12 +100,12 @@ class CacheFreshnessChecker:
 
     def check_cache(
         self,
-        tracking_state: 'TrackingState',
+        tracking_state: "TrackingState",
         cache_key: str,
         ttl: int | None,
         inputs: set[str] | None = None,
         epoch: Any = None,
-    ) -> tuple['StatementCacheMetadata | None', Any | None, float]:
+    ) -> tuple["StatementCacheMetadata | None", Any | None, float]:
         """Look up *cache_key* and run freshness checks.
 
         Returns ``(metadata, cached_data, check_time)``.  When the entry
@@ -119,17 +119,12 @@ class CacheFreshnessChecker:
         # its inputs, so the two passes below checked every file twice. One
         # answer per (path, snapshot) until a statement executes or the cell
         # changes (``forget_file_answers``); stats from directory listings too.
-        if (not isinstance(epoch, int) or epoch != self._epoch
-                or time.monotonic() - self._answered_at > _ANSWERS_LAST_S):
+        if not isinstance(epoch, int) or epoch != self._epoch or time.monotonic() - self._answered_at > _ANSWERS_LAST_S:
             self.forget_file_answers(epoch)
 
         t3 = time.time()
         raw_metadata, cached_data = self._backend.get(cache_key)
-        metadata = (
-            StatementCacheMetadata.from_dict(raw_metadata)
-            if raw_metadata is not None
-            else None
-        )
+        metadata = StatementCacheMetadata.from_dict(raw_metadata) if raw_metadata is not None else None
         cache_check_time = time.time() - t3
 
         if cached_data and metadata:
@@ -147,6 +142,7 @@ class CacheFreshnessChecker:
             if cached_data:
                 # Call results the entry refers to rather than copies (call_refs).
                 from cash.notebook.call_refs import resolve_call_refs
+
                 cached_data = resolve_call_refs(cached_data, self._backend)
 
         return metadata, cached_data, cache_check_time
@@ -168,26 +164,25 @@ class CacheFreshnessChecker:
                 memo_key = (fpath, repr(sorted(stored.items())) if isinstance(stored, dict) else repr(stored))
             except TypeError:
                 memo_key = None
-        checked = getattr(self, '_checked', None)
+        checked = getattr(self, "_checked", None)
         if memo_key is not None and checked is not None and memo_key in checked:
             return checked[memo_key]
         answer = None
-        if isinstance(stored, dict) and 'size' in stored:
+        if isinstance(stored, dict) and "size" in stored:
             # A local snapshot checked where it was recorded first: the stat
             # that decides freshness also says the file is there, which is all
             # ``resolve_file_dep_path``'s ``exists`` was asking -- one syscall
             # per dependency per lookup instead of two (a re-run of statements
             # derived from 3,000 files made 72,000; round 23). A path that is
             # not there any more goes through the relocation fallbacks as before.
-            listed = getattr(self, '_listed', None)
-            is_fresh, reason = file_dep_is_fresh(
-                fpath, stored, full_hash_max, listed.get(fpath) if listed else None)
-            if reason != 'unreadable':
+            listed = getattr(self, "_listed", None)
+            is_fresh, reason = file_dep_is_fresh(fpath, stored, full_hash_max, listed.get(fpath) if listed else None)
+            if reason != "unreadable":
                 answer = (fpath, is_fresh, reason)
         if answer is None:
             resolved = resolve_file_dep_path(fpath)
             if resolved is None:
-                answer = (None, False, 'missing')
+                answer = (None, False, "missing")
             else:
                 answer = (resolved, *file_dep_is_fresh(resolved, stored, full_hash_max))
         if memo_key is not None and checked is not None:
@@ -203,14 +198,18 @@ class CacheFreshnessChecker:
         cell (round 25, r25s4). Comparing the whole set runs in C.
         """
         return len(deps) >= _SET_MEMO_MIN and any(
-            len(known) == len(deps) and known == deps for known in self._fresh_sets)
+            len(known) == len(deps) and known == deps for known in self._fresh_sets
+        )
 
     def _remember_fresh(self, deps: dict) -> None:
         if len(deps) >= _SET_MEMO_MIN and len(self._fresh_sets) < 16:
             self._fresh_sets.append(deps)
 
     def _invalidate_if_ttl_expired(
-        self, metadata: 'StatementCacheMetadata', cached_data: Any, ttl: int,
+        self,
+        metadata: "StatementCacheMetadata",
+        cached_data: Any,
+        ttl: int,
     ) -> Any:
         """Return None if the cache entry has exceeded *ttl* seconds, else return *cached_data*."""
         timestamp = metadata.timestamp or 0
@@ -226,7 +225,9 @@ class CacheFreshnessChecker:
         return cached_data
 
     def _invalidate_if_direct_file_changed(
-        self, metadata: 'StatementCacheMetadata', cached_data: Any,
+        self,
+        metadata: "StatementCacheMetadata",
+        cached_data: Any,
     ) -> Any:
         """Return None if any direct file dep in *metadata* is missing or modified."""
         file_deps = metadata.file_dependencies or {}
@@ -237,8 +238,9 @@ class CacheFreshnessChecker:
             # Many files: read their directories once rather than stat each
             # (see ``stats_from_listings``). Taken at the first lookup that
             # needs them, as current as the stats they replace.
-            unlisted = [p for p, s in file_deps.items()
-                        if isinstance(s, dict) and 'size' in s and p not in self._listed]
+            unlisted = [
+                p for p, s in file_deps.items() if isinstance(s, dict) and "size" in s and p not in self._listed
+            ]
             if len(unlisted) >= _LISTING_MIN_FILES:
                 self._listed.update(stats_from_listings(unlisted))
         for fpath, stored in file_deps.items():
@@ -264,7 +266,7 @@ class CacheFreshnessChecker:
         self._remember_fresh(file_deps)
         return cached_data
 
-    def _source_file_deps(self, tracking_state: 'TrackingState', input_var: str) -> dict | None:
+    def _source_file_deps(self, tracking_state: "TrackingState", input_var: str) -> dict | None:
         """The file dependencies *input_var*'s producer recorded, or None.
 
         Read ONCE per input, and from metadata alone. Fetched through
@@ -276,15 +278,19 @@ class CacheFreshnessChecker:
         source_cache_key = tracking_state.variable_sources.get(input_var)
         if not source_cache_key:
             return None
-        peek = getattr(self._backend, 'peek_metadata', None)
+        peek = getattr(self._backend, "peek_metadata", None)
         raw_source_meta = peek(source_cache_key) if peek is not None else self._backend.get(source_cache_key)[0]
         if not raw_source_meta:
             return None
         return StatementCacheMetadata.from_dict(raw_source_meta).file_dependencies or {}
 
     def _input_file_changed(
-        self, tracking_state: 'TrackingState', input_var: str, fpath: str,
-        source_file_deps: dict | None | object = _UNSET, full_hash_max: int | None = None,
+        self,
+        tracking_state: "TrackingState",
+        input_var: str,
+        fpath: str,
+        source_file_deps: dict | None | object = _UNSET,
+        full_hash_max: int | None = None,
     ) -> bool:
         """Return True if *fpath* (a dep of *input_var*) has been modified since it was cached.
 
@@ -322,12 +328,16 @@ class CacheFreshnessChecker:
             if self.debug:
                 logger.debug(
                     "[CACHE DEBUG] Input '%s' source file stale (%s): %s",
-                    input_var, reason, resolved,
+                    input_var,
+                    reason,
+                    resolved,
                 )
             return True
         return False
 
-    def _invalidate_if_input_file_changed(self, tracking_state: 'TrackingState', inputs: set[str], cached_data: Any) -> Any:
+    def _invalidate_if_input_file_changed(
+        self, tracking_state: "TrackingState", inputs: set[str], cached_data: Any
+    ) -> Any:
         """Return None if any file dep of an input variable has changed since it was computed."""
         full_hash_max = None
         for input_var in inputs:
@@ -340,8 +350,7 @@ class CacheFreshnessChecker:
             if full_hash_max is None:
                 full_hash_max = _full_hash_max_bytes()
             for fpath in paths:
-                if self._input_file_changed(tracking_state, input_var, fpath,
-                                            source_file_deps, full_hash_max):
+                if self._input_file_changed(tracking_state, input_var, fpath, source_file_deps, full_hash_max):
                     return None
             if paths and len(paths) >= len(source_file_deps) and all(p in paths for p in source_file_deps):
                 self._remember_fresh(source_file_deps)

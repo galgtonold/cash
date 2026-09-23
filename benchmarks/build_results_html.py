@@ -11,6 +11,7 @@ Writes:
 The HTML is fully self-contained (inline CSS, inline SVG charts, no external
 JS or fonts). Open it directly in a browser.
 """
+
 from __future__ import annotations
 
 import csv
@@ -86,6 +87,7 @@ def median_per_cell(stem: str, mode: str) -> tuple[dict[int, float], float, int]
 
 def load_coeffs() -> dict[tuple[str, str, str], tuple[float, float]]:
     from cash.notebook.cost_model import _COEFFS
+
     return _COEFFS
 
 
@@ -111,23 +113,27 @@ def acceptance_rows(per_nb: dict[str, dict]) -> list[dict]:
     syn_off_total = syn["off_total"]
     syn_cold_total = syn["cold_total"]
     syn_budget = max(syn_off_total + 0.050, syn_off_total * 1.2)
-    rows.append({
-        "id": "C1",
-        "name": "synthetic_micro cold ≤ max(off + 50 ms, off × 1.2)",
-        "pass": syn_cold_total <= syn_budget,
-        "detail": (
-            f"cold={syn_cold_total*1000:.0f} ms, off={syn_off_total*1000:.0f} ms, "
-            f"budget={syn_budget*1000:.0f} ms — "
-            f"{(syn_cold_total-syn_off_total)*1000:+.0f} ms overhead "
-            f"({(syn_cold_total-syn_off_total)/syn_off_total*100:+.0f}%)"
-        ),
-        "caveat": (
-            "100 trivial statements in one cell — each pays ~3 ms of cash "
-            "machinery. The 20 % rule can never hold on cells whose own "
-            "compute is near-zero; what we want to enforce is that per-stmt "
-            "overhead doesn't bloat further."
-        ) if syn_cold_total > syn_budget else "",
-    })
+    rows.append(
+        {
+            "id": "C1",
+            "name": "synthetic_micro cold ≤ max(off + 50 ms, off × 1.2)",
+            "pass": syn_cold_total <= syn_budget,
+            "detail": (
+                f"cold={syn_cold_total * 1000:.0f} ms, off={syn_off_total * 1000:.0f} ms, "
+                f"budget={syn_budget * 1000:.0f} ms — "
+                f"{(syn_cold_total - syn_off_total) * 1000:+.0f} ms overhead "
+                f"({(syn_cold_total - syn_off_total) / syn_off_total * 100:+.0f}%)"
+            ),
+            "caveat": (
+                "100 trivial statements in one cell — each pays ~3 ms of cash "
+                "machinery. The 20 % rule can never hold on cells whose own "
+                "compute is near-zero; what we want to enforce is that per-stmt "
+                "overhead doesn't bloat further."
+            )
+            if syn_cold_total > syn_budget
+            else "",
+        }
+    )
 
     # C2: cfd_simulation_demo warm is materially faster than cold.
     # Pre-isolation we compared warm to off and saw warm ≈ off (pathology);
@@ -137,69 +143,70 @@ def acceptance_rows(per_nb: dict[str, dict]) -> list[dict]:
     cfd_cold = per_nb["cfd_simulation_demo"]["cold_total"]
     cfd_warm = per_nb["cfd_simulation_demo"]["warm_total"]
     cfd_ratio = (cfd_cold / cfd_warm) if cfd_warm > 0 else float("inf")
-    rows.append({
-        "id": "C2",
-        "name": "cfd_simulation_demo warm at least 3× faster than cold",
-        "pass": cfd_warm > 0 and cfd_cold / cfd_warm >= 3,
-        "detail": (
-            f"cold={cfd_cold:.1f}s, warm={cfd_warm:.1f}s → "
-            f"warm is {cfd_ratio:.1f}× faster"
-        ),
-        "caveat": "",
-    })
+    rows.append(
+        {
+            "id": "C2",
+            "name": "cfd_simulation_demo warm at least 3× faster than cold",
+            "pass": cfd_warm > 0 and cfd_cold / cfd_warm >= 3,
+            "detail": (f"cold={cfd_cold:.1f}s, warm={cfd_warm:.1f}s → warm is {cfd_ratio:.1f}× faster"),
+            "caveat": "",
+        }
+    )
 
     # C3: financial_analysis_demo warm at least 3× faster than cold.
     fin_cold = per_nb["financial_analysis_demo"]["cold_total"]
     fin_warm = per_nb["financial_analysis_demo"]["warm_total"]
     fin_ratio = (fin_cold / fin_warm) if fin_warm > 0 else float("inf")
-    rows.append({
-        "id": "C3",
-        "name": "financial_analysis_demo warm at least 3× faster than cold",
-        "pass": fin_warm > 0 and fin_cold / fin_warm >= 3,
-        "detail": (
-            f"cold={fin_cold:.1f}s, warm={fin_warm:.1f}s → "
-            f"warm is {fin_ratio:.1f}× faster"
-        ),
-        "caveat": "",
-    })
+    rows.append(
+        {
+            "id": "C3",
+            "name": "financial_analysis_demo warm at least 3× faster than cold",
+            "pass": fin_warm > 0 and fin_cold / fin_warm >= 3,
+            "detail": (f"cold={fin_cold:.1f}s, warm={fin_warm:.1f}s → warm is {fin_ratio:.1f}× faster"),
+            "caveat": "",
+        }
+    )
 
     # C4: file_tracking_demo warm at least 3× faster than cold.
     ft_cold = per_nb["file_tracking_demo"]["cold_total"]
     ft_warm = per_nb["file_tracking_demo"]["warm_total"]
     ft_ratio = (ft_cold / ft_warm) if ft_warm > 0 else float("inf")
-    rows.append({
-        "id": "C4",
-        "name": "file_tracking_demo warm at least 3× faster than cold",
-        "pass": ft_warm > 0 and ft_cold / ft_warm >= 3,
-        "detail": (
-            f"cold={ft_cold:.1f}s, warm={ft_warm:.1f}s → "
-            f"warm is {ft_ratio:.1f}× faster"
-        ),
-        "caveat": "",
-    })
+    rows.append(
+        {
+            "id": "C4",
+            "name": "file_tracking_demo warm at least 3× faster than cold",
+            "pass": ft_warm > 0 and ft_cold / ft_warm >= 3,
+            "detail": (f"cold={ft_cold:.1f}s, warm={ft_warm:.1f}s → warm is {ft_ratio:.1f}× faster"),
+            "caveat": "",
+        }
+    )
 
     # C5: All unit tests pass.
-    rows.append({
-        "id": "C5",
-        "name": "All tests/test_notebook/ pass",
-        "pass": True,
-        "detail": "1304 passed, 9 skipped, 7 xfailed, 1 xpassed (last verified at "
-                  "commit 8133e29 — the policy-floor fix)",
-        "caveat": "",
-    })
+    rows.append(
+        {
+            "id": "C5",
+            "name": "All tests/test_notebook/ pass",
+            "pass": True,
+            "detail": "1304 passed, 9 skipped, 7 xfailed, 1 xpassed (last verified at "
+            "commit 8133e29 — the policy-floor fix)",
+            "caveat": "",
+        }
+    )
 
     # C6: synthetic_micro cold under 500 ms — don't regress beyond a small
     # margin from the post-Strategy-1 baseline. (The pre-Strategy-1 number
     # was ~2.1s, post-Strategy-1 ~326ms; after cost-model wiring + policy
     # floor we're allowing some slack.)
     syn_cold_ms = syn_cold_total * 1000
-    rows.append({
-        "id": "C6",
-        "name": "synthetic_micro cold ≤ 500 ms (no regression vs Strategy 1)",
-        "pass": syn_cold_ms <= 500.0,
-        "detail": f"cold total = {syn_cold_ms:.1f} ms",
-        "caveat": "",
-    })
+    rows.append(
+        {
+            "id": "C6",
+            "name": "synthetic_micro cold ≤ 500 ms (no regression vs Strategy 1)",
+            "pass": syn_cold_ms <= 500.0,
+            "detail": f"cold total = {syn_cold_ms:.1f} ms",
+            "caveat": "",
+        }
+    )
 
     # C7 + C8: the 20% rule on production-shaped notebooks. These come from
     # examples/large_scale_projects/, picked because they're self-contained
@@ -221,21 +228,25 @@ def acceptance_rows(per_nb: dict[str, dict]) -> list[dict]:
         nb_cold = info["cold_total"]
         nb_budget = max(nb_off + 0.050, nb_off * 1.2)
         delta_ms = (nb_cold - nb_off) * 1000
-        rows.append({
-            "id": crit_id,
-            "name": f"{friendly} cold ≤ max(off + 50 ms, off × 1.2)",
-            "pass": nb_cold <= nb_budget,
-            "detail": (
-                f"cold={nb_cold*1000:.0f} ms, off={nb_off*1000:.0f} ms, "
-                f"budget={nb_budget*1000:.0f} ms — "
-                f"{delta_ms:+.0f} ms overhead"
-            ),
-            "caveat": (
-                "Small absolute overhead — within the 'barely noticeable' "
-                "range the spec's per-cell budget was designed for. The "
-                "violation is by " + f"{(nb_cold - nb_budget)*1000:.0f} ms."
-            ) if nb_cold > nb_budget else "",
-        })
+        rows.append(
+            {
+                "id": crit_id,
+                "name": f"{friendly} cold ≤ max(off + 50 ms, off × 1.2)",
+                "pass": nb_cold <= nb_budget,
+                "detail": (
+                    f"cold={nb_cold * 1000:.0f} ms, off={nb_off * 1000:.0f} ms, "
+                    f"budget={nb_budget * 1000:.0f} ms — "
+                    f"{delta_ms:+.0f} ms overhead"
+                ),
+                "caveat": (
+                    "Small absolute overhead — within the 'barely noticeable' "
+                    "range the spec's per-cell budget was designed for. The "
+                    "violation is by " + f"{(nb_cold - nb_budget) * 1000:.0f} ms."
+                )
+                if nb_cold > nb_budget
+                else "",
+            }
+        )
 
     return rows
 
@@ -284,6 +295,7 @@ def svg_log_log_chart(
     all_xs = [x for pts in points_by_family.values() for x, _ in pts]
     all_ys = [y for pts in points_by_family.values() for _, y in pts]
     import math
+
     xmin, xmax = math.log10(min(all_xs)), math.log10(max(all_xs))
     ymin, ymax = math.log10(min(all_ys)), math.log10(max(all_ys))
     # round outwards
@@ -296,47 +308,50 @@ def svg_log_log_chart(
     def sy(y):
         return pad_t + plot_h - (math.log10(y) - ymin) / (ymax - ymin) * plot_h
 
-    out = [f'<svg viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg" '
-           f'style="font-family:system-ui,sans-serif;font-size:11px">']
-    out.append(f'<text x="{width/2}" y="20" text-anchor="middle" font-weight="600" font-size="13">{escape(title)}</text>')
+    out = [
+        f'<svg viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg" '
+        f'style="font-family:system-ui,sans-serif;font-size:11px">'
+    ]
+    out.append(
+        f'<text x="{width / 2}" y="20" text-anchor="middle" font-weight="600" font-size="13">{escape(title)}</text>'
+    )
 
     # axes
-    out.append(f'<line x1="{pad_l}" y1="{pad_t}" x2="{pad_l}" y2="{pad_t+plot_h}" stroke="#666" />')
-    out.append(f'<line x1="{pad_l}" y1="{pad_t+plot_h}" x2="{pad_l+plot_w}" y2="{pad_t+plot_h}" stroke="#666" />')
+    out.append(f'<line x1="{pad_l}" y1="{pad_t}" x2="{pad_l}" y2="{pad_t + plot_h}" stroke="#666" />')
+    out.append(f'<line x1="{pad_l}" y1="{pad_t + plot_h}" x2="{pad_l + plot_w}" y2="{pad_t + plot_h}" stroke="#666" />')
 
     # x ticks
     for xe in range(int(xmin), int(xmax) + 1):
-        x = sx(10 ** xe)
-        out.append(f'<line x1="{x}" y1="{pad_t+plot_h}" x2="{x}" y2="{pad_t+plot_h+4}" stroke="#666" />')
-        label = _fmt_bytes(10 ** xe)
-        out.append(f'<text x="{x}" y="{pad_t+plot_h+18}" text-anchor="middle" fill="#444">{label}</text>')
-    out.append(f'<text x="{pad_l+plot_w/2}" y="{height-6}" text-anchor="middle" fill="#444">object size</text>')
+        x = sx(10**xe)
+        out.append(f'<line x1="{x}" y1="{pad_t + plot_h}" x2="{x}" y2="{pad_t + plot_h + 4}" stroke="#666" />')
+        label = _fmt_bytes(10**xe)
+        out.append(f'<text x="{x}" y="{pad_t + plot_h + 18}" text-anchor="middle" fill="#444">{label}</text>')
+    out.append(f'<text x="{pad_l + plot_w / 2}" y="{height - 6}" text-anchor="middle" fill="#444">object size</text>')
 
     # y ticks
     for ye in range(int(ymin), int(ymax) + 1):
-        y = sy(10 ** ye)
-        out.append(f'<line x1="{pad_l-4}" y1="{y}" x2="{pad_l}" y2="{y}" stroke="#666" />')
-        label = _fmt_time(10 ** ye)
-        out.append(f'<text x="{pad_l-8}" y="{y+3}" text-anchor="end" fill="#444">{label}</text>')
-    out.append(f'<text x="14" y="{pad_t+plot_h/2}" text-anchor="middle" fill="#444" '
-               f'transform="rotate(-90 14,{pad_t+plot_h/2})">wall time</text>')
+        y = sy(10**ye)
+        out.append(f'<line x1="{pad_l - 4}" y1="{y}" x2="{pad_l}" y2="{y}" stroke="#666" />')
+        label = _fmt_time(10**ye)
+        out.append(f'<text x="{pad_l - 8}" y="{y + 3}" text-anchor="end" fill="#444">{label}</text>')
+    out.append(
+        f'<text x="14" y="{pad_t + plot_h / 2}" text-anchor="middle" fill="#444" '
+        f'transform="rotate(-90 14,{pad_t + plot_h / 2})">wall time</text>'
+    )
 
     # grid lines (light)
     for xe in range(int(xmin), int(xmax) + 1):
-        x = sx(10 ** xe)
-        out.append(f'<line x1="{x}" y1="{pad_t}" x2="{x}" y2="{pad_t+plot_h}" stroke="#eee" />')
+        x = sx(10**xe)
+        out.append(f'<line x1="{x}" y1="{pad_t}" x2="{x}" y2="{pad_t + plot_h}" stroke="#eee" />')
     for ye in range(int(ymin), int(ymax) + 1):
-        y = sy(10 ** ye)
-        out.append(f'<line x1="{pad_l}" y1="{y}" x2="{pad_l+plot_w}" y2="{y}" stroke="#eee" />')
+        y = sy(10**ye)
+        out.append(f'<line x1="{pad_l}" y1="{y}" x2="{pad_l + plot_w}" y2="{y}" stroke="#eee" />')
 
     # family lines + points
     for family, pts in sorted(points_by_family.items()):
         pts.sort()
         col = _FAMILY_COLOURS.get(family, "#444")
-        d = " ".join(
-            f"{'M' if i == 0 else 'L'} {sx(x):.1f} {sy(y):.1f}"
-            for i, (x, y) in enumerate(pts)
-        )
+        d = " ".join(f"{'M' if i == 0 else 'L'} {sx(x):.1f} {sy(y):.1f}" for i, (x, y) in enumerate(pts))
         out.append(f'<path d="{d}" stroke="{col}" stroke-width="1.5" fill="none" opacity="0.85" />')
         for x, y in pts:
             out.append(f'<circle cx="{sx(x):.1f}" cy="{sy(y):.1f}" r="2.5" fill="{col}" />')
@@ -347,7 +362,7 @@ def svg_log_log_chart(
         ly = pad_t + 10 + i * 18
         col = _FAMILY_COLOURS.get(family, "#444")
         out.append(f'<circle cx="{leg_x}" cy="{ly}" r="4" fill="{col}" />')
-        out.append(f'<text x="{leg_x+10}" y="{ly+4}" fill="#222">{escape(family)}</text>')
+        out.append(f'<text x="{leg_x + 10}" y="{ly + 4}" fill="#222">{escape(family)}</text>')
 
     out.append("</svg>")
     return "\n".join(out)
@@ -355,11 +370,11 @@ def svg_log_log_chart(
 
 def _fmt_bytes(n: float) -> str:
     if n >= 1e9:
-        return f"{n/1e9:g} GB"
+        return f"{n / 1e9:g} GB"
     if n >= 1e6:
-        return f"{n/1e6:g} MB"
+        return f"{n / 1e6:g} MB"
     if n >= 1e3:
-        return f"{n/1e3:g} KB"
+        return f"{n / 1e3:g} KB"
     return f"{n:g} B"
 
 
@@ -367,10 +382,10 @@ def _fmt_time(s: float) -> str:
     if s >= 1:
         return f"{s:g} s"
     if s >= 1e-3:
-        return f"{s*1e3:g} ms"
+        return f"{s * 1e3:g} ms"
     if s >= 1e-6:
-        return f"{s*1e6:g} µs"
-    return f"{s*1e9:g} ns"
+        return f"{s * 1e6:g} µs"
+    return f"{s * 1e9:g} ns"
 
 
 def per_notebook_table_html(stem: str, off, cold, warm, off_total, cold_total, warm_total):
@@ -389,10 +404,10 @@ def per_notebook_table_html(stem: str, off, cold, warm, off_total, cold_total, w
         rows_html.append(
             f'<tr class="{row_class}">'
             f"<td>cell {idx}</td>"
-            f"<td>{o*1000:.2f}</td>"
-            f"<td>{c*1000:.2f}</td>"
-            f"<td>{w*1000:.2f}</td>"
-            f"<td>{diff*1000:+.2f}</td>"
+            f"<td>{o * 1000:.2f}</td>"
+            f"<td>{c * 1000:.2f}</td>"
+            f"<td>{w * 1000:.2f}</td>"
+            f"<td>{diff * 1000:+.2f}</td>"
             f"<td>{ratio_cell}</td>"
             f"</tr>"
         )
@@ -401,18 +416,18 @@ def per_notebook_table_html(stem: str, off, cold, warm, off_total, cold_total, w
     rows_html.append(
         f'<tr class="total">'
         f"<td><b>TOTAL</b></td>"
-        f"<td><b>{off_total*1000:.2f}</b></td>"
-        f"<td><b>{cold_total*1000:.2f}</b></td>"
-        f"<td><b>{(warm_total*1000):.2f}</b></td>"
-        f"<td><b>{totals_diff*1000:+.2f}</b></td>"
+        f"<td><b>{off_total * 1000:.2f}</b></td>"
+        f"<td><b>{cold_total * 1000:.2f}</b></td>"
+        f"<td><b>{(warm_total * 1000):.2f}</b></td>"
+        f"<td><b>{totals_diff * 1000:+.2f}</b></td>"
         f"<td><b>{('—' if totals_ratio == float('inf') else f'{totals_ratio:+.1%}')}</b></td>"
         f"</tr>"
     )
     return (
-        f'<table class="bench"><thead>'
-        f"<tr><th>cell</th><th>off (ms)</th><th>cold (ms)</th>"
-        f"<th>warm (ms)</th><th>cold-off (ms)</th><th>(cold-off)/off</th></tr>"
-        f"</thead><tbody>" + "".join(rows_html) + "</tbody></table>"
+        '<table class="bench"><thead>'
+        "<tr><th>cell</th><th>off (ms)</th><th>cold (ms)</th>"
+        "<th>warm (ms)</th><th>cold-off (ms)</th><th>(cold-off)/off</th></tr>"
+        "</thead><tbody>" + "".join(rows_html) + "</tbody></table>"
     )
 
 
@@ -425,16 +440,16 @@ def fit_summary_html(coeffs):
             f"<td><code>{escape(family)}</code></td>"
             f"<td>{escape(backend)}</td>"
             f"<td>{escape(op)}</td>"
-            f"<td>{a*1000:+.3f}</td>"
-            f"<td>{b*1e9:.3f}</td>"
-            f"<td>{pred_100mb*1000:.1f}</td>"
+            f"<td>{a * 1000:+.3f}</td>"
+            f"<td>{b * 1e9:.3f}</td>"
+            f"<td>{pred_100mb * 1000:.1f}</td>"
             f"</tr>"
         )
     return (
-        f'<table class="fit"><thead>'
-        f"<tr><th>family</th><th>backend</th><th>op</th>"
-        f"<th>a (ms)</th><th>b (ns/B)</th><th>pred @100MB (ms)</th></tr>"
-        f"</thead><tbody>" + "".join(rows) + "</tbody></table>"
+        '<table class="fit"><thead>'
+        "<tr><th>family</th><th>backend</th><th>op</th>"
+        "<th>a (ms)</th><th>b (ns/B)</th><th>pred @100MB (ms)</th></tr>"
+        "</thead><tbody>" + "".join(rows) + "</tbody></table>"
     )
 
 
@@ -514,14 +529,14 @@ def build(matrix: list[dict], coeffs: dict, per_nb: dict, criteria: list[dict]) 
         '<p class="muted">'
         "Offline-tuned cache-or-not heuristic. Empirically-fitted serialize/deserialize "
         "constants replace the hardcoded throughput estimates. "
-        f"Measurement matrix: 84 cells (7 type families × 6 sizes × 2 backends), "
-        f"5 repeats per cell."
+        "Measurement matrix: 84 cells (7 type families × 6 sizes × 2 backends), "
+        "5 repeats per cell."
         "</p>"
     )
     parts.append(
         f'<div class="card headline">'
         f"<strong>Headline:</strong> The cfd_simulation_demo warm-mode pathology is gone. "
-        f"Warm now runs <strong>{cfd['off_total']/cfd['warm_total']:.1f}×</strong> faster "
+        f"Warm now runs <strong>{cfd['off_total'] / cfd['warm_total']:.1f}×</strong> faster "
         f"than off ({cfd['warm_total']:.1f}s vs {cfd['off_total']:.1f}s) — previously warm was "
         f"<i>slower</i> than off, which was the specific bug that motivated this whole project."
         f"</div>"
@@ -545,25 +560,31 @@ def build(matrix: list[dict], coeffs: dict, per_nb: dict, criteria: list[dict]) 
     parts.append("<h2>Per-notebook wall time</h2>")
     parts.append(
         '<p class="muted">Median across 3 repeats with the first discarded as warmup. '
-        'Red rows exceed the per-cell budget <code>max(off + 50ms, off × 1.2)</code> '
-        '— these are the 2 cells that fail criterion C1, both extreme many-statement cases.</p>'
+        "Red rows exceed the per-cell budget <code>max(off + 50ms, off × 1.2)</code> "
+        "— these are the 2 cells that fail criterion C1, both extreme many-statement cases.</p>"
     )
     for stem, _path in NOTEBOOKS:
         info = per_nb[stem]
         parts.append(f"<h3>{escape(stem)}</h3>")
-        parts.append(per_notebook_table_html(
-            stem,
-            info["off"], info["cold"], info["warm"],
-            info["off_total"], info["cold_total"], info["warm_total"],
-        ))
+        parts.append(
+            per_notebook_table_html(
+                stem,
+                info["off"],
+                info["cold"],
+                info["warm"],
+                info["off_total"],
+                info["cold_total"],
+                info["warm_total"],
+            )
+        )
 
     # Fit summary
     parts.append("<h2>Fitted cost-model constants</h2>")
     parts.append(
         '<p class="muted">From <code>benchmarks/fit_cost_model.py</code> applied to the frozen '
-        'matrix CSV. <code>predicted_seconds = a + b × size_bytes</code>. '
-        'A 100 MB object\'s predicted time is shown for at-a-glance comparison. '
-        'The slowest family per (backend, op) is what <code>_GENERIC</code> aliases.</p>'
+        "matrix CSV. <code>predicted_seconds = a + b × size_bytes</code>. "
+        "A 100 MB object's predicted time is shown for at-a-glance comparison. "
+        "The slowest family per (backend, op) is what <code>_GENERIC</code> aliases.</p>"
     )
     parts.append(fit_summary_html(coeffs))
 
@@ -571,32 +592,28 @@ def build(matrix: list[dict], coeffs: dict, per_nb: dict, criteria: list[dict]) 
     parts.append("<h2>Measured serialize / deserialize cost vs object size</h2>")
     parts.append(
         '<p class="muted">Log-log. The slope is throughput; the y-intercept is per-call '
-        'fixed cost. The disk-backend curves have meaningful intercepts (~1–10 ms) — that '
-        'fixed cost is the per-statement floor the cost model now correctly accounts for. '
-        'RAM curves bottom out at sub-µs for trivially-small objects.</p>'
+        "fixed cost. The disk-backend curves have meaningful intercepts (~1–10 ms) — that "
+        "fixed cost is the per-statement floor the cost model now correctly accounts for. "
+        "RAM curves bottom out at sub-µs for trivially-small objects.</p>"
     )
     parts.append('<div class="chart-row">')
-    parts.append(svg_log_log_chart(matrix, "disk", "serialize",
-                                   "Disk · serialize"))
-    parts.append(svg_log_log_chart(matrix, "disk", "deserialize",
-                                   "Disk · deserialize"))
+    parts.append(svg_log_log_chart(matrix, "disk", "serialize", "Disk · serialize"))
+    parts.append(svg_log_log_chart(matrix, "disk", "deserialize", "Disk · deserialize"))
     parts.append("</div>")
     parts.append('<div class="chart-row">')
-    parts.append(svg_log_log_chart(matrix, "ram", "serialize",
-                                   "RAM (deepcopy) · serialize"))
-    parts.append(svg_log_log_chart(matrix, "ram", "deserialize",
-                                   "RAM (deepcopy) · deserialize"))
+    parts.append(svg_log_log_chart(matrix, "ram", "serialize", "RAM (deepcopy) · serialize"))
+    parts.append(svg_log_log_chart(matrix, "ram", "deserialize", "RAM (deepcopy) · deserialize"))
     parts.append("</div>")
 
     # Footer
     parts.append("<h2>Source</h2>")
     parts.append(
         '<p class="muted">Generated by <code>benchmarks/build_results_html.py</code>. '
-        'Frozen dataset: <code>benchmarks/results/ser_deser_matrix.frozen.csv</code> (committed). '
-        'Bench result JSONs: <code>benchmarks/results/*.json</code> (gitignored). '
-        'Cost-model constants live in <code>src/cash/notebook/cost_model.py</code>; '
-        'the policy that uses them is <code>_should_skip_large_object_caching</code> '
-        'in <code>src/cash/notebook/statement_processor.py</code>.'
+        "Frozen dataset: <code>benchmarks/results/ser_deser_matrix.frozen.csv</code> (committed). "
+        "Bench result JSONs: <code>benchmarks/results/*.json</code> (gitignored). "
+        "Cost-model constants live in <code>src/cash/notebook/cost_model.py</code>; "
+        "the policy that uses them is <code>_should_skip_large_object_caching</code> "
+        "in <code>src/cash/notebook/statement_processor.py</code>."
         "</p>"
     )
 
@@ -614,8 +631,12 @@ def main() -> int:
         cold, cold_total, _ = median_per_cell(stem, "cold")
         warm, warm_total, _ = median_per_cell(stem, "warm")
         per_nb[stem] = {
-            "off": off, "cold": cold, "warm": warm,
-            "off_total": off_total, "cold_total": cold_total, "warm_total": warm_total,
+            "off": off,
+            "cold": cold,
+            "warm": warm,
+            "off_total": off_total,
+            "cold_total": cold_total,
+            "warm_total": warm_total,
         }
 
     criteria = acceptance_rows(per_nb)

@@ -41,12 +41,13 @@ def gdsf_value(metadata: MetadataDict | dict, size: int) -> float:
     seven orders of magnitude, so a 4% step costs no ranking that matters,
     and ties fall through to recency as they should.
     """
-    cost = metadata.get('execution_time') or 0.0
+    cost = metadata.get("execution_time") or 0.0
     if cost <= 0:
         cost = UNKNOWN_COST_S
-    hits = metadata.get('access_count', 0) + 1
+    hits = metadata.get("access_count", 0) + 1
     value = hits * cost / max(1, size)
     return 2.0 ** (math.floor(math.log2(value) * _GDSF_STEPS_PER_OCTAVE) / _GDSF_STEPS_PER_OCTAVE)
+
 
 # Serializes the one-time, per-instance creation of a backend's in-process
 # per-key lock registry (see ``CacheBackend._inprocess_key_lock``). A single
@@ -115,6 +116,7 @@ def reset_discarded_writes(keep: int = 0) -> None:
     with _DISCARDED_LOCK:
         del _DISCARDED_WRITES[keep:]
 
+
 # The metadata channel backends actually see: an opaque dict they round-trip
 # without inspecting (the channel is polymorphic — both CacheMetadata and the
 # notebook layer's StatementCacheMetadata flow through it as plain dicts). The
@@ -135,6 +137,7 @@ def _shutdown_write_timeout() -> float:
     """
     try:
         from ..config import get_config
+
         value = float(get_config().shutdown_write_timeout)
     except Exception:  # noqa: BLE001 - teardown, or a config that cannot load
         return _DEFAULT_SHUTDOWN_WRITE_TIMEOUT
@@ -217,7 +220,9 @@ class _DaemonWriterPool:
         if len(self._threads) >= self._max_workers:
             return
         thread = threading.Thread(
-            target=self._work, name="cash-cache-writer", daemon=True,
+            target=self._work,
+            name="cash-cache-writer",
+            daemon=True,
         )
         self._threads.append(thread)
         thread.start()
@@ -225,7 +230,7 @@ class _DaemonWriterPool:
     def _work(self) -> None:
         while True:
             item = self._queue.get()
-            if item is None:                      # shutdown sentinel
+            if item is None:  # shutdown sentinel
                 return
             future, fn, args, kwargs = item
             if not future.set_running_or_notify_cancel():
@@ -380,6 +385,7 @@ class PendingWrites:
             # and the cache directory became that entry's dependency -- one
             # recompute per pool worker per run (round 19).
             from cash.notebook.file_tracker import untracked
+
             try:
                 with untracked():
                     future.set_result(self._run_task(key, fn, args, kwargs))
@@ -481,7 +487,7 @@ class PendingWrites:
             return
         try:
             future.result()
-        except BaseException as exc:      # noqa: BLE001 - reported, never propagated
+        except BaseException as exc:  # noqa: BLE001 - reported, never propagated
             with self._lock:
                 # Only drop the future we actually waited on: a later submit
                 # for the same key may already have replaced it, and throwing
@@ -494,6 +500,7 @@ class PendingWrites:
             # and is deferred alongside it for the same reason.
             from cash.diagnostics import warn_diagnostic
             from cash.exceptions import CashCacheStoreFailedWarning
+
             warn_diagnostic(
                 CashCacheStoreFailedWarning,
                 "STORE-FAILED",
@@ -607,7 +614,9 @@ class PendingWrites:
         logger.warning(
             "Cash: %d cache write(s) failed and were discarded; those entries "
             "are absent, so the work will be recomputed. First failure: %s: %s",
-            len(failed), type(failed[0][1]).__name__, failed[0][1],
+            len(failed),
+            type(failed[0][1]).__name__,
+            failed[0][1],
         )
         for key, exc in failed:
             logger.debug("  failed write key=%r: %s: %s", key, type(exc).__name__, exc)
@@ -645,6 +654,7 @@ class PendingWrites:
             unfinished = sum(1 for f in self._pending.values() if not f.done())
         from ..diagnostics import warn_diagnostic
         from ..exceptions import CashCacheStoreFailedWarning
+
         try:
             warn_diagnostic(
                 CashCacheStoreFailedWarning,
@@ -661,7 +671,8 @@ class PendingWrites:
         except Exception:  # noqa: BLE001 - never raise out of an atexit path
             logger.warning(
                 "Cash abandoned %d cache write(s) after %gs at shutdown.",
-                unfinished, timeout,
+                unfinished,
+                timeout,
             )
 
 
@@ -744,11 +755,7 @@ class CacheMetadata:
 
     def to_dict(self) -> dict[str, Any]:
         """Plain dict of set fields, omitting ``None`` (the wire format)."""
-        return {
-            f.name: value
-            for f in fields(self)
-            if (value := getattr(self, f.name)) is not None
-        }
+        return {f.name: value for f in fields(self) if (value := getattr(self, f.name)) is not None}
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> CacheMetadata:
@@ -884,11 +891,11 @@ class CacheBackend(ABC):
         """
         if metadata is None:
             metadata = {}
-        metadata['key'] = key
+        metadata["key"] = key
         now = time.time()
-        metadata.setdefault('created_at', now)
-        metadata.setdefault('last_access', now)
-        metadata.setdefault('access_count', 0)
+        metadata.setdefault("created_at", now)
+        metadata.setdefault("last_access", now)
+        metadata.setdefault("access_count", 0)
         return metadata
 
     def _promotion_size_cap(self) -> int | None:

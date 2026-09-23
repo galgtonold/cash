@@ -45,20 +45,12 @@ _HIT_MARKERS = ("[CACHE_HIT_DEBUG]", "Cache hit", "RESTORED", "Restored", "SKIPP
 # 1. writer cell edited -> run_all -> reader must see new bytes
 # ---------------------------------------------------------------------------
 
+
 def test_writer_edit_run_all_reader_fresh(nb_runner, tmp_path):
     data = tmp_path / "data.txt"
     p = _p(data)
-    writer_v1 = (
-        "rows = 'a\\n1\\n2\\n'\n"
-        f"with open('{p}', 'w') as f:\n"
-        "    f.write(rows)\n"
-        "print('wrote', len(rows))"
-    )
-    reader = (
-        f"with open('{p}') as f:\n"
-        "    body = f.read()\n"
-        "print('body =', body.strip().replace('\\n', '|'))"
-    )
+    writer_v1 = f"rows = 'a\\n1\\n2\\n'\nwith open('{p}', 'w') as f:\n    f.write(rows)\nprint('wrote', len(rows))"
+    reader = f"with open('{p}') as f:\n    body = f.read()\nprint('body =', body.strip().replace('\\n', '|'))"
     nb_runner.create_notebook([writer_v1, reader])
     nb_runner.start_kernel()
     nb_runner.enable_debug()
@@ -66,12 +58,7 @@ def test_writer_edit_run_all_reader_fresh(nb_runner, tmp_path):
     assert "body = a|1|2" in nb_runner.get_output(2)
 
     # Edit the writer: different rows, DIFFERENT byte size (avoids CAS-10).
-    writer_v2 = (
-        "rows = 'a\\n7\\n8\\n9\\n'\n"
-        f"with open('{p}', 'w') as f:\n"
-        "    f.write(rows)\n"
-        "print('wrote', len(rows))"
-    )
+    writer_v2 = f"rows = 'a\\n7\\n8\\n9\\n'\nwith open('{p}', 'w') as f:\n    f.write(rows)\nprint('wrote', len(rows))"
     nb_runner.set_cell_source(1, writer_v2)
     nb_runner.run_all()
     out = nb_runner.get_output(2)
@@ -84,6 +71,7 @@ def test_writer_edit_run_all_reader_fresh(nb_runner, tmp_path):
 # ---------------------------------------------------------------------------
 # 2. write + read in the SAME cell
 # ---------------------------------------------------------------------------
+
 
 def test_write_and_read_same_cell(nb_runner, tmp_path):
     data = tmp_path / "roundtrip.txt"
@@ -114,9 +102,7 @@ def test_write_and_read_same_cell(nb_runner, tmp_path):
     nb_runner.set_cell_source(1, cell_v2)
     nb_runner.run_all()
     out = nb_runner.get_output(1)
-    assert "echo = x=42-longer" in out, (
-        f"Same-cell write+read served stale echo after payload edit. Got: {out!r}"
-    )
+    assert "echo = x=42-longer" in out, f"Same-cell write+read served stale echo after payload edit. Got: {out!r}"
     assert "len = 11" in nb_runner.get_output(2)
 
 
@@ -124,19 +110,12 @@ def test_write_and_read_same_cell(nb_runner, tmp_path):
 # 3. to_csv writer edited -> run ONLY the last cell (isolated downstream run)
 # ---------------------------------------------------------------------------
 
+
 def test_tocsv_writer_edit_isolated_downstream_run(nb_runner, tmp_path):
     csv = tmp_path / "made.csv"
     p = _p(csv)
-    writer_v1 = (
-        "import pandas as pd\n"
-        f"pd.DataFrame({{'v': [1, 2, 3]}}).to_csv('{p}', index=False)\n"
-        "print('wrote v1')"
-    )
-    reader = (
-        "import pandas as pd\n"
-        f"df = pd.read_csv('{p}')\n"
-        "print('vals =', df['v'].tolist())"
-    )
+    writer_v1 = f"import pandas as pd\npd.DataFrame({{'v': [1, 2, 3]}}).to_csv('{p}', index=False)\nprint('wrote v1')"
+    reader = f"import pandas as pd\ndf = pd.read_csv('{p}')\nprint('vals =', df['v'].tolist())"
     consumer = "print('total =', int(df['v'].sum()))"
     nb_runner.create_notebook([writer_v1, reader, consumer])
     nb_runner.start_kernel()
@@ -146,9 +125,7 @@ def test_tocsv_writer_edit_isolated_downstream_run(nb_runner, tmp_path):
 
     # Edit the writer (different rows AND row count -> different size).
     writer_v2 = (
-        "import pandas as pd\n"
-        f"pd.DataFrame({{'v': [10, 20, 30, 40]}}).to_csv('{p}', index=False)\n"
-        "print('wrote v2')"
+        f"import pandas as pd\npd.DataFrame({{'v': [10, 20, 30, 40]}}).to_csv('{p}', index=False)\nprint('wrote v2')"
     )
     nb_runner.set_cell_source(1, writer_v2)
 
@@ -168,19 +145,12 @@ def test_tocsv_writer_edit_isolated_downstream_run(nb_runner, tmp_path):
 # 3a. BOUNDARY: writer edited -> isolated re-run of the READER cell itself
 # ---------------------------------------------------------------------------
 
+
 def test_writer_edit_isolated_rerun_of_reader_itself(nb_runner, tmp_path):
     csv = tmp_path / "made3.csv"
     p = _p(csv)
-    writer_v1 = (
-        "import pandas as pd\n"
-        f"pd.DataFrame({{'v': [1, 2, 3]}}).to_csv('{p}', index=False)\n"
-        "print('wrote v1')"
-    )
-    reader = (
-        "import pandas as pd\n"
-        f"df = pd.read_csv('{p}')\n"
-        "print('vals =', df['v'].tolist())"
-    )
+    writer_v1 = f"import pandas as pd\npd.DataFrame({{'v': [1, 2, 3]}}).to_csv('{p}', index=False)\nprint('wrote v1')"
+    reader = f"import pandas as pd\ndf = pd.read_csv('{p}')\nprint('vals =', df['v'].tolist())"
     nb_runner.create_notebook([writer_v1, reader])
     nb_runner.start_kernel()
     nb_runner.enable_debug()
@@ -188,9 +158,7 @@ def test_writer_edit_isolated_rerun_of_reader_itself(nb_runner, tmp_path):
     assert "vals = [1, 2, 3]" in nb_runner.get_output(2)
 
     writer_v2 = (
-        "import pandas as pd\n"
-        f"pd.DataFrame({{'v': [10, 20, 30, 40]}}).to_csv('{p}', index=False)\n"
-        "print('wrote v2')"
+        f"import pandas as pd\npd.DataFrame({{'v': [10, 20, 30, 40]}}).to_csv('{p}', index=False)\nprint('wrote v2')"
     )
     nb_runner.set_cell_source(1, writer_v2)
     # Re-run the READER cell directly (what a user does after editing the
@@ -198,8 +166,7 @@ def test_writer_edit_isolated_rerun_of_reader_itself(nb_runner, tmp_path):
     nb_runner.run_cell(2)
     out = nb_runner.get_output(2)
     assert "vals = [10, 20, 30, 40]" in out, (
-        f"Isolated re-run of the READER cell after editing the writer cell "
-        f"served stale file content. Got: {out!r}"
+        f"Isolated re-run of the READER cell after editing the writer cell served stale file content. Got: {out!r}"
     )
 
 
@@ -208,6 +175,7 @@ def test_writer_edit_isolated_rerun_of_reader_itself(nb_runner, tmp_path):
 #     upstream sim MUST re-execute the edited writer. Does the reader then see
 #     the post-write file, or was its staleness decided on the pre-write mtime?
 # ---------------------------------------------------------------------------
+
 
 def test_writer_reexecuted_midrun_reader_must_see_new_file(nb_runner, tmp_path):
     pkl = tmp_path / "both.pkl"
@@ -220,10 +188,7 @@ def test_writer_reexecuted_midrun_reader_must_see_new_file(nb_runner, tmp_path):
         "print('dumped', len(payload['nums']))"
     )
     reader = (
-        "import pickle\n"
-        f"with open('{p}', 'rb') as f:\n"
-        "    loaded = pickle.load(f)\n"
-        "print('loaded =', loaded['nums'])"
+        f"import pickle\nwith open('{p}', 'rb') as f:\n    loaded = pickle.load(f)\nprint('loaded =', loaded['nums'])"
     )
     # Consumer references BOTH payload (writer var) and loaded (reader var):
     # the upstream simulation is forced to re-execute the edited writer.
@@ -250,19 +215,12 @@ def test_writer_reexecuted_midrun_reader_must_see_new_file(nb_runner, tmp_path):
 #     path recover where the isolated-downstream-run path serves stale?)
 # ---------------------------------------------------------------------------
 
+
 def test_tocsv_writer_edit_run_all_boundary(nb_runner, tmp_path):
     csv = tmp_path / "made2.csv"
     p = _p(csv)
-    writer_v1 = (
-        "import pandas as pd\n"
-        f"pd.DataFrame({{'v': [1, 2, 3]}}).to_csv('{p}', index=False)\n"
-        "print('wrote v1')"
-    )
-    reader = (
-        "import pandas as pd\n"
-        f"df = pd.read_csv('{p}')\n"
-        "print('vals =', df['v'].tolist())"
-    )
+    writer_v1 = f"import pandas as pd\npd.DataFrame({{'v': [1, 2, 3]}}).to_csv('{p}', index=False)\nprint('wrote v1')"
+    reader = f"import pandas as pd\ndf = pd.read_csv('{p}')\nprint('vals =', df['v'].tolist())"
     consumer = "print('total =', int(df['v'].sum()))"
     nb_runner.create_notebook([writer_v1, reader, consumer])
     nb_runner.start_kernel()
@@ -271,31 +229,29 @@ def test_tocsv_writer_edit_run_all_boundary(nb_runner, tmp_path):
     assert "total = 6" in nb_runner.get_output(3)
 
     writer_v2 = (
-        "import pandas as pd\n"
-        f"pd.DataFrame({{'v': [10, 20, 30, 40]}}).to_csv('{p}', index=False)\n"
-        "print('wrote v2')"
+        f"import pandas as pd\npd.DataFrame({{'v': [10, 20, 30, 40]}}).to_csv('{p}', index=False)\nprint('wrote v2')"
     )
     nb_runner.set_cell_source(1, writer_v2)
     nb_runner.run_all()
     out = nb_runner.get_output(3)
-    assert "total = 100" in out, (
-        f"Even run_all after editing the to_csv writer served a stale total. "
-        f"Got: {out!r}"
-    )
+    assert "total = 100" in out, f"Even run_all after editing the to_csv writer served a stale total. Got: {out!r}"
 
 
 # ---------------------------------------------------------------------------
 # 4. pathlib read_text channel
 # ---------------------------------------------------------------------------
 
+
 def test_pathlib_read_text_external_modification(nb_runner, tmp_path):
     data = tmp_path / "plib.txt"
     data.write_text("alpha")
     p = _p(data)
-    nb_runner.create_notebook([
-        f"from pathlib import Path\ntxt = Path('{p}').read_text()",
-        "print('txt =', txt)",
-    ])
+    nb_runner.create_notebook(
+        [
+            f"from pathlib import Path\ntxt = Path('{p}').read_text()",
+            "print('txt =', txt)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_debug()
     nb_runner.run_all()
@@ -306,8 +262,7 @@ def test_pathlib_read_text_external_modification(nb_runner, tmp_path):
     nb_runner.run_all()
     out = nb_runner.get_output(2)
     assert "txt = bravo-longer" in out, (
-        f"pathlib Path.read_text() modification NOT detected (pathlib read "
-        f"channel untracked?). Got: {out!r}"
+        f"pathlib Path.read_text() modification NOT detected (pathlib read channel untracked?). Got: {out!r}"
     )
 
 
@@ -315,15 +270,19 @@ def test_pathlib_read_text_external_modification(nb_runner, tmp_path):
 # 5. numpy np.load channel
 # ---------------------------------------------------------------------------
 
+
 def test_numpy_load_external_npy_rewrite(nb_runner, tmp_path):
     import numpy as np
+
     npy = tmp_path / "arr.npy"
     np.save(npy, np.array([1, 2, 3]))
     p = _p(npy)
-    nb_runner.create_notebook([
-        f"import numpy as np\narr = np.load('{p}')\nprint('n =', arr.shape[0])",
-        "print('s =', int(arr.sum()))",
-    ])
+    nb_runner.create_notebook(
+        [
+            f"import numpy as np\narr = np.load('{p}')\nprint('n =', arr.shape[0])",
+            "print('s =', int(arr.sum()))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_debug()
     nb_runner.run_all()
@@ -344,14 +303,17 @@ def test_numpy_load_external_npy_rewrite(nb_runner, tmp_path):
 # 6. file deleted between runs -> graceful error, not stale restore
 # ---------------------------------------------------------------------------
 
+
 def test_deleted_file_errors_not_stale(nb_runner, tmp_path):
     data = tmp_path / "gone.txt"
     data.write_text("still-here")
     p = _p(data)
-    nb_runner.create_notebook([
-        f"txt = open('{p}').read()\nprint('txt =', txt)",
-        "print('len =', len(txt))",
-    ])
+    nb_runner.create_notebook(
+        [
+            f"txt = open('{p}').read()\nprint('txt =', txt)",
+            "print('len =', len(txt))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_debug()
     nb_runner.run_all()
@@ -370,11 +332,7 @@ def test_deleted_file_errors_not_stale(nb_runner, tmp_path):
         # The cell must carry the natural FileNotFoundError as its error
         # output (nbclient's CellExecutionError str() only embeds stdout, so
         # check the error outputs directly).
-        enames = [
-            o.get("ename")
-            for o in nb_runner.get_cell(1).outputs
-            if o.get("output_type") == "error"
-        ]
+        enames = [o.get("ename") for o in nb_runner.get_cell(1).outputs if o.get("output_type") == "error"]
         assert "FileNotFoundError" in enames, (
             f"Re-run after file deletion errored, but not with the natural "
             f"FileNotFoundError a fresh run raises. Error outputs: {enames}. "
@@ -394,14 +352,17 @@ def test_deleted_file_errors_not_stale(nb_runner, tmp_path):
 # 7. touch-only (mtime changed, content+size identical) -> should stay cached
 # ---------------------------------------------------------------------------
 
+
 def test_touch_only_mtime_should_stay_cached(nb_runner, tmp_path):
     data = tmp_path / "touched.txt"
     data.write_text("constant-content")
     p = _p(data)
-    nb_runner.create_notebook([
-        f"blob = open('{p}').read()",
-        "print('blen =', len(blob))",
-    ])
+    nb_runner.create_notebook(
+        [
+            f"blob = open('{p}').read()",
+            "print('blen =', len(blob))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_debug()
     nb_runner.enable_persist()
@@ -438,8 +399,10 @@ def test_touch_only_mtime_should_stay_cached(nb_runner, tmp_path):
 # 8. chdir + relative path: different file with the same relative name
 # ---------------------------------------------------------------------------
 
+
 def test_chdir_relative_path_different_file(nb_runner, tmp_path):
     import pandas as pd
+
     dira = tmp_path / "dira"
     dirb = tmp_path / "dirb"
     dira.mkdir()
@@ -447,12 +410,14 @@ def test_chdir_relative_path_different_file(nb_runner, tmp_path):
     pd.DataFrame({"v": [1, 2, 3]}).to_csv(dira / "data.csv", index=False)
     pd.DataFrame({"v": [100, 200, 300, 400]}).to_csv(dirb / "data.csv", index=False)
 
-    nb_runner.create_notebook([
-        "import os\nimport pandas as pd",
-        f"os.chdir(r'{_p(dira)}')",
-        "df = pd.read_csv('data.csv')\nprint('vals =', df['v'].tolist())",
-        "print('total =', int(df['v'].sum()))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import os\nimport pandas as pd",
+            f"os.chdir(r'{_p(dira)}')",
+            "df = pd.read_csv('data.csv')\nprint('vals =', df['v'].tolist())",
+            "print('total =', int(df['v'].sum()))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_debug()
     nb_runner.run_all()
@@ -474,6 +439,7 @@ def test_chdir_relative_path_different_file(nb_runner, tmp_path):
 # 9. glob comprehension: one file rewritten, then a NEW file appears
 # ---------------------------------------------------------------------------
 
+
 def test_glob_many_files_change_and_new_file(nb_runner, tmp_path):
     gdir = tmp_path / "gdir"
     gdir.mkdir()
@@ -481,14 +447,16 @@ def test_glob_many_files_change_and_new_file(nb_runner, tmp_path):
     (gdir / "d2.num").write_text("2")
     (gdir / "d3.num").write_text("3")
     gp = _p(gdir)
-    nb_runner.create_notebook([
-        (
-            "import glob\n"
-            f"vals = [int(open(fp).read()) for fp in sorted(glob.glob('{gp}/*.num'))]\n"
-            "print('vals =', vals)"
-        ),
-        "print('total =', sum(vals))",
-    ])
+    nb_runner.create_notebook(
+        [
+            (
+                "import glob\n"
+                f"vals = [int(open(fp).read()) for fp in sorted(glob.glob('{gp}/*.num'))]\n"
+                "print('vals =', vals)"
+            ),
+            "print('total =', sum(vals))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_debug()
     nb_runner.run_all()
@@ -501,8 +469,7 @@ def test_glob_many_files_change_and_new_file(nb_runner, tmp_path):
     out1 = nb_runner.get_output(1)
     out2 = nb_runner.get_output(2)
     assert "vals = [1, 222, 3]" in out1 and "total = 226" in out2, (
-        f"Rewriting ONE of the globbed files was not detected. "
-        f"Got cell1: {out1!r}, cell2: {out2!r}"
+        f"Rewriting ONE of the globbed files was not detected. Got cell1: {out1!r}, cell2: {out2!r}"
     )
 
     # Phase B: a NEW file appears in the globbed directory.
@@ -522,15 +489,18 @@ def test_glob_many_files_change_and_new_file(nb_runner, tmp_path):
 # 10. two cells read the same file; external modification refreshes both
 # ---------------------------------------------------------------------------
 
+
 def test_two_cells_read_same_file_both_refresh(nb_runner, tmp_path):
     data = tmp_path / "shared.txt"
     data.write_text("aaa")
     p = _p(data)
-    nb_runner.create_notebook([
-        f"s1 = open('{p}').read()\nprint('s1 =', s1)",
-        f"s2 = open('{p}').read()\nprint('s2 =', s2)",
-        "print('combo =', s1, s2)",
-    ])
+    nb_runner.create_notebook(
+        [
+            f"s1 = open('{p}').read()\nprint('s1 =', s1)",
+            f"s2 = open('{p}').read()\nprint('s2 =', s2)",
+            "print('combo =', s1, s2)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_debug()
     nb_runner.run_all()
@@ -543,8 +513,7 @@ def test_two_cells_read_same_file_both_refresh(nb_runner, tmp_path):
     out2 = nb_runner.get_output(2)
     out3 = nb_runner.get_output(3)
     assert "s1 = bbbbbb" in out1 and "s2 = bbbbbb" in out2 and "combo = bbbbbb bbbbbb" in out3, (
-        f"One or both readers of the SAME modified file served stale content. "
-        f"Got: {out1!r} / {out2!r} / {out3!r}"
+        f"One or both readers of the SAME modified file served stale content. Got: {out1!r} / {out2!r} / {out3!r}"
     )
 
 
@@ -552,17 +521,20 @@ def test_two_cells_read_same_file_both_refresh(nb_runner, tmp_path):
 # 11. StringIO read_csv (no file path involved)
 # ---------------------------------------------------------------------------
 
+
 def test_stringio_read_csv_lineage(nb_runner):
-    nb_runner.create_notebook([
-        "csv_text = 'v\\n1\\n2\\n'",
-        (
-            "import pandas as pd\n"
-            "from io import StringIO\n"
-            "df = pd.read_csv(StringIO(csv_text))\n"
-            "print('vals =', df['v'].tolist())"
-        ),
-        "print('total =', int(df['v'].sum()))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "csv_text = 'v\\n1\\n2\\n'",
+            (
+                "import pandas as pd\n"
+                "from io import StringIO\n"
+                "df = pd.read_csv(StringIO(csv_text))\n"
+                "print('vals =', df['v'].tolist())"
+            ),
+            "print('total =', int(df['v'].sum()))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_debug()
     nb_runner.run_all()
@@ -573,14 +545,14 @@ def test_stringio_read_csv_lineage(nb_runner):
     out2 = nb_runner.get_output(2)
     out3 = nb_runner.get_output(3)
     assert "vals = [5, 6, 7]" in out2 and "total = 18" in out3, (
-        f"StringIO-based read_csv did not refresh after upstream string edit. "
-        f"Got: {out2!r} / {out3!r}"
+        f"StringIO-based read_csv did not refresh after upstream string edit. Got: {out2!r} / {out3!r}"
     )
 
 
 # ---------------------------------------------------------------------------
 # 12. pickle round-trip: writer edited -> isolated run of last cell
 # ---------------------------------------------------------------------------
+
 
 def test_pickle_roundtrip_writer_edit_isolated_run(nb_runner, tmp_path):
     pkl = tmp_path / "payload.pkl"
@@ -593,10 +565,7 @@ def test_pickle_roundtrip_writer_edit_isolated_run(nb_runner, tmp_path):
         "print('dumped', len(payload['nums']))"
     )
     reader = (
-        "import pickle\n"
-        f"with open('{p}', 'rb') as f:\n"
-        "    loaded = pickle.load(f)\n"
-        "print('loaded =', loaded['nums'])"
+        f"import pickle\nwith open('{p}', 'rb') as f:\n    loaded = pickle.load(f)\nprint('loaded =', loaded['nums'])"
     )
     consumer = "print('lsum =', sum(loaded['nums']))"
     nb_runner.create_notebook([writer_v1, reader, consumer])
@@ -610,6 +579,5 @@ def test_pickle_roundtrip_writer_edit_isolated_run(nb_runner, tmp_path):
     nb_runner.run_cell(3)
     out = nb_runner.get_output(3)
     assert "lsum = 100" in out, (
-        f"Isolated downstream run after editing the pickle writer served a "
-        f"stale sum. Got: {out!r}"
+        f"Isolated downstream run after editing the pickle writer served a stale sum. Got: {out!r}"
     )

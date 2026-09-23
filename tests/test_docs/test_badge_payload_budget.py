@@ -9,9 +9,9 @@ mutates one stored output in place. A code path that renders without a
 `display_id` falls through to `display(HTML(html))` and creates a fresh output
 every time, which would quietly multiply a notebook's size.
 """
+
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 
@@ -34,8 +34,7 @@ def executed(tmp_path_factory):
 
     work = tmp_path_factory.mktemp("badgebudget")
     nb = nbformat.read(NOTEBOOK, as_version=4)
-    NotebookClient(nb, timeout=600, kernel_name="python3",
-                   resources={"metadata": {"path": str(work)}}).execute()
+    NotebookClient(nb, timeout=600, kernel_name="python3", resources={"metadata": {"path": str(work)}}).execute()
     return nb
 
 
@@ -62,6 +61,6 @@ def test_stylesheet_is_a_minority_of_the_saved_notebook(executed):
     share = css / len(text)
     assert share < 0.60, (
         f"the badge stylesheet is {share:.0%} of the notebook "
-        f"({css/1024:.0f} KB of {len(text)/1024:.0f} KB); it was 67% before "
+        f"({css / 1024:.0f} KB of {len(text) / 1024:.0f} KB); it was 67% before "
         f"minification and should now be about 49.7%"
     )

@@ -30,7 +30,8 @@ def _plotcell(n):
 
 def _plot_count(cell):
     return sum(
-        1 for o in cell.get("outputs", [])
+        1
+        for o in cell.get("outputs", [])
         if o.get("output_type") == "display_data" and "image/png" in o.get("data", {})
     )
 
@@ -45,6 +46,5 @@ def test_plt_show_not_duplicated_on_changed_rerun(nb_runner):
     nb_runner.set_cell_source(2, _plotcell(5))
     nb_runner.run_cell(2)
     assert _plot_count(nb_runner.get_cell(2)) == 1, (
-        "a changed re-run must not replay a stale cached plt.show() figure "
-        "alongside the freshly drawn one"
+        "a changed re-run must not replay a stale cached plt.show() figure alongside the freshly drawn one"
     )

@@ -12,6 +12,7 @@ got the previous test's entry whenever it shared a worker with
 "flaky" test, round 28). A result for a DIFFERENT file with DIFFERENT content
 came back without the function running.
 """
+
 from pathlib import Path
 
 from cash import Cash

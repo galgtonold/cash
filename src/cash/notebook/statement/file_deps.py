@@ -49,6 +49,7 @@ _SCALAR_TYPES = (int, float, str, bool, bytes, type(None))
 # Pure helpers (used by both StatementFileDeps and StatementLineageBuilder)
 # ---------------------------------------------------------------------------
 
+
 def compute_file_hash_component(
     accessed_files: set[str],
     accessed_remote: set[str] | None = None,
@@ -100,19 +101,19 @@ def compute_file_hash_component(
             continue  # gone, or never a file
         display_path = canonical_path
         if notebook_dir:
-            head, _, name = canonical_path.rpartition('/')
+            head, _, name = canonical_path.rpartition("/")
             if head not in rel_dirs:
                 try:
                     # A drive or filesystem root keeps its separator: `C:` alone
                     # means the current directory on C:.
-                    root = head + '/' if (not head or head.endswith(':')) else head
+                    root = head + "/" if (not head or head.endswith(":")) else head
                     rel_dirs[head] = normalize_path(os.path.relpath(root, notebook_dir))
                 except (ValueError, OSError):
                     rel_dirs[head] = None  # Cross-drive relpath fails on Windows; keep absolute
             rel_dir = rel_dirs[head]
             if rel_dir is not None:
-                rel_path = name if rel_dir == '.' else f"{rel_dir}/{name}"
-                if not rel_path.startswith('../../../'):
+                rel_path = name if rel_dir == "." else f"{rel_dir}/{name}"
+                if not rel_path.startswith("../../../"):
                     display_path = rel_path
         if stats_out is not None:
             stats_out[f] = stat
@@ -130,7 +131,7 @@ def compute_file_hash_component(
         file_components.append(f"{url}:{RemoteFileDataSource(url).state_token()}")
 
     if file_components:
-        component = ":" + hashlib.sha256(",".join(file_components).encode('utf-8')).hexdigest()
+        component = ":" + hashlib.sha256(",".join(file_components).encode("utf-8")).hexdigest()
         logger.debug("[FILE_HASH] Final hash component: %s...", component[:50])
         return component
     return ""
@@ -190,19 +191,17 @@ def _module_identity(raw: bytes) -> bytes:
     today can be made worse by this.
     """
     try:
-        text = raw.decode('utf-8')
+        text = raw.decode("utf-8")
         tree = ast.parse(text)
         drop_docstrings(tree, module=True)
         rendered = ast.unparse(tree)
     except (UnicodeDecodeError, SyntaxError, ValueError, AttributeError, RecursionError):
         return raw
     from ..annotations import ANNOTATION_PATTERN
+
     parts = [rendered]
-    parts.extend(
-        line.strip() for line in text.splitlines()
-        if ANNOTATION_PATTERN.search(line)
-    )
-    return "\n".join(parts).encode('utf-8')
+    parts.extend(line.strip() for line in text.splitlines() if ANNOTATION_PATTERN.search(line))
+    return "\n".join(parts).encode("utf-8")
 
 
 def _identity_digest(path: str) -> str | None:
@@ -216,7 +215,7 @@ def _identity_digest(path: str) -> str | None:
         return cached[2]
     settled = stat_has_settled(st)
     try:
-        with open(path, 'rb') as fh:
+        with open(path, "rb") as fh:
             raw = fh.read()
     except OSError:
         return None
@@ -243,19 +242,20 @@ def read_module_source_hash(mod_file: str, dep_files: set[str] | None = None) ->
     if not dep_files:
         return own
     hasher = hashlib.sha256()
-    hasher.update(own.encode('utf-8'))
+    hasher.update(own.encode("utf-8"))
     for dep_path in sorted(dep_files):
         dep = _identity_digest(dep_path)
         if dep is None:
             logger.debug("[MODULE_HASH] Could not read dependency file: %s", dep_path)
             continue
-        hasher.update(dep.encode('utf-8'))
+        hasher.update(dep.encode("utf-8"))
     return hasher.hexdigest()
 
 
 # ---------------------------------------------------------------------------
 # StatementFileDeps
 # ---------------------------------------------------------------------------
+
 
 class StatementFileDeps:
     """Stateful per-statement file-dependency tracker.
@@ -273,7 +273,7 @@ class StatementFileDeps:
 
     def update_for_var(
         self,
-        tracking_state: 'TrackingState',
+        tracking_state: "TrackingState",
         var_name: str,
         accessed_files: set[str] | None,
         inputs: set[str],
@@ -327,7 +327,7 @@ class StatementFileDeps:
         # 2. Propagate file dependencies from input variables (unless output is scalar).
         self.inherit_from_inputs(tracking_state, var_name, inputs, value)
 
-    def inherit_from_inputs(self, tracking_state: 'TrackingState', var_name: str, inputs: set[str], value: Any) -> None:
+    def inherit_from_inputs(self, tracking_state: "TrackingState", var_name: str, inputs: set[str], value: Any) -> None:
         """Propagate file deps from *inputs* to *var_name*, skipping scalar outputs."""
         executed_file_deps = tracking_state.executed_file_deps
         executed_file_mtimes = tracking_state.executed_file_mtimes
@@ -346,19 +346,22 @@ class StatementFileDeps:
                 if self.debug:
                     logger.debug(
                         "[CACHE DEBUG] Propagated file deps from '%s' to '%s': %s",
-                        input_var, var_name, executed_file_deps[input_var],
+                        input_var,
+                        var_name,
+                        executed_file_deps[input_var],
                     )
         elif self.debug and any(iv in executed_file_deps for iv in inputs):
             logger.debug(
                 "[FILE_DEPS] Skipping file dep propagation for scalar '%s' (type: %s)",
-                var_name, type(value).__name__,
+                var_name,
+                type(value).__name__,
             )
 
     def restore_from_metadata(
         self,
-        tracking_state: 'TrackingState',
+        tracking_state: "TrackingState",
         restored_vars: dict,
-        metadata: 'StatementCacheMetadata | None',
+        metadata: "StatementCacheMetadata | None",
     ) -> None:
         """Propagate file deps from cached metadata back into the tracking dicts."""
         if not metadata:
@@ -370,10 +373,7 @@ class StatementFileDeps:
 
         # ``executed_file_mtimes`` historically holds {path: float}; flatten
         # the new {'mtime': ..., 'size': ...} form back to a bare mtime here.
-        mtime_map = {
-            path: split_file_dep_value(stored)[0]
-            for path, stored in file_deps.items()
-        }
+        mtime_map = {path: split_file_dep_value(stored)[0] for path, stored in file_deps.items()}
         executed_file_deps = tracking_state.executed_file_deps
         executed_file_mtimes = tracking_state.executed_file_mtimes
         # A restored value is exactly the entry's value: its files are the

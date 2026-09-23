@@ -1,6 +1,8 @@
 """Batch 94 – pathlib and file system operations."""
 
-import textwrap, pytest
+import textwrap
+
+import pytest
 
 pytestmark = [pytest.mark.stress, pytest.mark.integration, pytest.mark.files]
 
@@ -12,9 +14,10 @@ class TestPathlibPatterns:
         """Path construction, existence checks, iteration."""
         work = tmp_path / "fs_test"
         work.mkdir()
-        work_str = str(work).replace('\\', '/')
-        nb_runner.create_notebook([
-            textwrap.dedent(f"""\
+        work_str = str(work).replace("\\", "/")
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent(f"""\
                 from pathlib import Path
                 base = Path('{work_str}')
                 # Create directory structure
@@ -25,15 +28,16 @@ class TestPathlibPatterns:
                 (base / 'data' / 'input.txt').write_text('data here')
                 (base / 'README.md').write_text('# Project')
             """),
-            textwrap.dedent(f"""\
+                textwrap.dedent(f"""\
                 from pathlib import Path
                 base = Path('{work_str}')
                 all_files = sorted([p.name for p in base.rglob('*') if p.is_file()])
                 py_files = sorted([p.name for p in base.glob('**/*.py')])
                 readme_exists = (base / 'README.md').exists()
             """),
-            "print(f'all={all_files}')\nprint(f'py={py_files}')\nprint(f'readme={readme_exists}')",
-        ])
+                "print(f'all={all_files}')\nprint(f'py={py_files}')\nprint(f'readme={readme_exists}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(3)
@@ -46,9 +50,10 @@ class TestPathlibPatterns:
         """Path parts: stem, suffix, parent."""
         work = tmp_path / "path_parts"
         work.mkdir()
-        work_str = str(work).replace('\\', '/')
-        nb_runner.create_notebook([
-            textwrap.dedent(f"""\
+        work_str = str(work).replace("\\", "/")
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent(f"""\
                 from pathlib import Path
                 p = Path('{work_str}') / 'archive' / 'data_2024.csv.gz'
                 stem = p.stem
@@ -57,8 +62,9 @@ class TestPathlibPatterns:
                 parent_name = p.parent.name
                 parts_count = len(p.parts)
             """),
-            "print(f'stem={stem} suffix={suffix} suffixes={suffixes} parent={parent_name}')",
-        ])
+                "print(f'stem={stem} suffix={suffix} suffixes={suffixes} parent={parent_name}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -75,15 +81,16 @@ class TestFileSystemOps:
         """Write files, read back, process."""
         work = tmp_path / "rw_test"
         work.mkdir()
-        work_str = str(work).replace('\\', '/')
-        nb_runner.create_notebook([
-            textwrap.dedent(f"""\
+        work_str = str(work).replace("\\", "/")
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent(f"""\
                 from pathlib import Path
                 base = Path('{work_str}')
                 for i in range(5):
                     (base / f'log_{{i}}.txt').write_text(f'Entry {{i}}: value={{i*10}}')
             """),
-            textwrap.dedent(f"""\
+                textwrap.dedent(f"""\
                 from pathlib import Path
                 base = Path('{work_str}')
                 contents = []
@@ -91,8 +98,9 @@ class TestFileSystemOps:
                     contents.append(f.read_text())
                 total_files = len(contents)
             """),
-            "print(f'files={total_files}')\nprint(f'first={contents[0]}')\nprint(f'last={contents[-1]}')",
-        ])
+                "print(f'files={total_files}')\nprint(f'first={contents[0]}')\nprint(f'last={contents[-1]}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(3)
@@ -104,16 +112,17 @@ class TestFileSystemOps:
         """Process data through temp files."""
         work = tmp_path / "temp_proc"
         work.mkdir()
-        work_str = str(work).replace('\\', '/')
-        nb_runner.create_notebook([
-            textwrap.dedent(f"""\
+        work_str = str(work).replace("\\", "/")
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent(f"""\
                 from pathlib import Path
                 import json
                 data = {{'items': [1, 2, 3, 4, 5], 'meta': 'test'}}
                 path = Path('{work_str}') / 'data.json'
                 path.write_text(json.dumps(data))
             """),
-            textwrap.dedent(f"""\
+                textwrap.dedent(f"""\
                 from pathlib import Path
                 import json
                 path = Path('{work_str}') / 'data.json'
@@ -121,8 +130,9 @@ class TestFileSystemOps:
                 total = sum(loaded['items'])
                 meta = loaded['meta']
             """),
-            "print(f'total={total} meta={meta}')",
-        ])
+                "print(f'total={total} meta={meta}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(3)

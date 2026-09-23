@@ -14,6 +14,7 @@ halves are asserted here so the page cannot drift away from the engine.
 **Counted, not timed.** Wall-clock cannot distinguish "recomputed" from
 "restored but slow", so each helper appends a line to a log file the test reads.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.upstream]
@@ -48,14 +49,16 @@ def score(feats, thr):
         fh.write("score\\n")
     return [f for f in feats if f > thr]
 """
-    nb_runner.create_notebook([
-        "%cash_badge print",                      # 1 — text badge, so it is readable
-        setup,                                    # 2 — helpers
-        "THRESHOLD = 10",                         # 3 — the parameter
-        "features = build_features()\n"           # 4 — expensive, THRESHOLD-independent
-        "flagged  = score(features, THRESHOLD)",  #     cheap, THRESHOLD-dependent
-        "print('N', len(flagged))",               # 5 — downstream
-    ])
+    nb_runner.create_notebook(
+        [
+            "%cash_badge print",  # 1 — text badge, so it is readable
+            setup,  # 2 — helpers
+            "THRESHOLD = 10",  # 3 — the parameter
+            "features = build_features()\n"  # 4 — expensive, THRESHOLD-independent
+            "flagged  = score(features, THRESHOLD)",  #     cheap, THRESHOLD-dependent
+            "print('N', len(flagged))",  # 5 — downstream
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "N 9" in nb_runner.get_output(5), "baseline Run All is wrong"
@@ -80,8 +83,7 @@ def test_only_the_threshold_dependent_statement_reruns(threshold_notebook):
         f"claims it does not (before={before}, after={after})"
     )
     assert after.get("score", 0) == before["score"] + 1, (
-        f"the THRESHOLD-dependent statement did not re-run exactly once "
-        f"(before={before}, after={after})"
+        f"the THRESHOLD-dependent statement did not re-run exactly once (before={before}, after={after})"
     )
 
 

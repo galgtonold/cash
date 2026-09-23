@@ -12,6 +12,7 @@ it, and entries rank as if their cost were unknown.
 10 MB cap and ~1 MB values throughout, so each docstring's arithmetic can be
 checked by hand.
 """
+
 from __future__ import annotations
 
 import os
@@ -140,7 +141,7 @@ def test_a_new_cheap_value_is_a_candidate_before_the_next_ranking(tmp_path):
     for i in range(2):
         _put(b, f"filler-{i}", MB, 0.001)
     for i in range(8):
-        _put(b, f"good-{i}", MB, 1.0)            # the 10th write takes the ranking
+        _put(b, f"good-{i}", MB, 1.0)  # the 10th write takes the ranking
     assert not _held(b, "filler-0"), "precondition: the ranking has been taken"
     _put(b, "bulky", 4 * MB, 0.01)
 
@@ -356,8 +357,8 @@ def test_clear_removes_the_index(tmp_path):
     _put(b, "k", MB, 1.0)
     b._rank_index.flush()
     assert (cache / INDEX).exists(), "precondition: a write records a rank"
-    _put(b, "buffered", MB, 1.0)          # a record still in the buffer
+    _put(b, "buffered", MB, 1.0)  # a record still in the buffer
     b.clear()
-    b.shutdown()                          # shutdown flushes the buffer
+    b.shutdown()  # shutdown flushes the buffer
 
     assert not (cache / INDEX).exists()

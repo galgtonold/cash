@@ -46,6 +46,7 @@ class CashNotebookDiscoveryWarning(CashWarning):
         warnings.filterwarnings("ignore", category=cash.CashWarning)
     """
 
+
 # Session-level cache for notebook path discovery.
 #
 # Discovery is expensive: it queries the Jupyter Server REST API (an HTTP
@@ -111,6 +112,7 @@ def _a_live_reader_can_answer() -> bool:
     """
     try:
         from . import live_cells
+
         return live_cells.latest_cells() is not None or _in_colab()
     except Exception as e:  # noqa: BLE001 - an advisory gate must never break a cell
         logger.debug("[UTILS] live-reader probe failed: %s", e)
@@ -155,7 +157,10 @@ def warn_notebook_not_found_once() -> None:
     # the log is not the one person without a handle to look up.
     log_diagnostic(logger, "NOTEBOOK-NOT-FOUND", what, fix)
     warn_diagnostic(
-        CashNotebookDiscoveryWarning, "NOTEBOOK-NOT-FOUND", what, fix,
+        CashNotebookDiscoveryWarning,
+        "NOTEBOOK-NOT-FOUND",
+        what,
+        fix,
     )
 
 
@@ -210,21 +215,21 @@ def extract_notebook_path_from_vscode_cell_id(cell_id: str) -> str | None:
 
     Returns the decoded filesystem path if the URI matches, else ``None``.
     """
-    if not cell_id or not cell_id.startswith('vscode-notebook-cell:'):
+    if not cell_id or not cell_id.startswith("vscode-notebook-cell:"):
         return None
     try:
         # Strip the fragment (#W2sZmlsZQ==)
-        uri_part = cell_id.split('#')[0]
+        uri_part = cell_id.split("#")[0]
         # Remove scheme
-        path_part = uri_part.replace('vscode-notebook-cell:', '', 1)
+        path_part = uri_part.replace("vscode-notebook-cell:", "", 1)
         # URL-decode  (e.g. %3A → :, %20 → space)
         decoded = unquote(path_part)
         # On Windows the path looks like /c:/Users/...  → strip leading /
-        if len(decoded) > 2 and decoded[0] == '/' and decoded[2] == ':':
+        if len(decoded) > 2 and decoded[0] == "/" and decoded[2] == ":":
             decoded = decoded[1:]
         # Normalise separators
         decoded = os.path.normpath(decoded)
-        if os.path.exists(decoded) and decoded.endswith('.ipynb'):
+        if os.path.exists(decoded) and decoded.endswith(".ipynb"):
             return decoded
     except (ValueError, IndexError, OSError, UnicodeDecodeError):
         logger.debug("[UTILS] Failed to extract notebook path from VS Code cell ID: %s", cell_id)
@@ -235,9 +240,10 @@ def _try_vscode_path() -> str | None:
     """Return notebook path from VS Code's injected variable, or None."""
     try:
         from IPython import get_ipython
+
         ip = get_ipython()
-        if ip and hasattr(ip, 'user_ns') and '__vsc_ipynb_file__' in ip.user_ns:
-            return ip.user_ns['__vsc_ipynb_file__']
+        if ip and hasattr(ip, "user_ns") and "__vsc_ipynb_file__" in ip.user_ns:
+            return ip.user_ns["__vsc_ipynb_file__"]
     except (ImportError, AttributeError, KeyError):
         logger.debug("[UTILS] Failed to get notebook path from IPython user_ns")
     return None
@@ -262,6 +268,7 @@ def _try_ipynbname_path() -> str | None:
             warnings.filterwarnings("ignore", category=SyntaxWarning)
             warnings.filterwarnings("ignore", category=DeprecationWarning)
             import ipynbname
+
             return str(ipynbname.path())
     except Exception:  # noqa: BLE001 - a discovery library must never crash cash
         logger.debug("[UTILS] ipynbname not available or failed")
@@ -281,11 +288,13 @@ def _collect_running_servers() -> list:
         warnings.filterwarnings("ignore", category=DeprecationWarning)
         try:
             from jupyter_server import serverapp
+
             servers.extend(list(serverapp.list_running_servers()))
         except (ImportError, AttributeError):
             logger.debug("[UTILS] jupyter_server not available")
         try:
             from notebook import notebookapp
+
             servers.extend(list(notebookapp.list_running_servers()))
         except (ImportError, AttributeError):
             logger.debug("[UTILS] notebook.notebookapp not available")
@@ -296,15 +305,15 @@ def _search_servers_for_notebook(kernel_id: str) -> str | None:
     """Query running Jupyter servers to find the notebook matching kernel_id."""
     for server in _collect_running_servers():
         try:
-            url = server['url'].rstrip('/') + '/api/sessions'
-            token = server.get('token', '')
+            url = server["url"].rstrip("/") + "/api/sessions"
+            token = server.get("token", "")
             req = urllib.request.Request(url)
             if token:
-                req.add_header('Authorization', f'token {token}')
+                req.add_header("Authorization", f"token {token}")
             with urllib.request.urlopen(req, timeout=2) as response:
                 sessions = json.loads(response.read().decode())
                 for session in sessions:
-                    if session['kernel']['id'] == kernel_id:
+                    if session["kernel"]["id"] == kernel_id:
                         # ``notebook_dir`` is the CLASSIC notebook server's key.
                         # ``jupyter_server`` (i.e. every current JupyterLab) calls
                         # it ``root_dir``, so indexing ``notebook_dir`` raised a
@@ -316,18 +325,12 @@ def _search_servers_for_notebook(kernel_id: str) -> str | None:
                         # key and keep the legacy one as a fallback. Same for the
                         # session path: ``session['path']`` is current, the nested
                         # ``notebook`` dict is deprecated and may disappear.
-                        notebook_path = (
-                            session.get('path')
-                            or session.get('notebook', {}).get('path')
-                        )
-                        root_dir = (
-                            server.get('root_dir')
-                            or server.get('notebook_dir')
-                            or ''
-                        )
+                        notebook_path = session.get("path") or session.get("notebook", {}).get("path")
+                        root_dir = server.get("root_dir") or server.get("notebook_dir") or ""
                         if not notebook_path:
                             logger.debug(
-                                "[UTILS] Session for kernel %s carries no path", kernel_id,
+                                "[UTILS] Session for kernel %s carries no path",
+                                kernel_id,
                             )
                             continue
                         return os.path.join(root_dir, notebook_path)
@@ -338,13 +341,14 @@ def _search_servers_for_notebook(kernel_id: str) -> str | None:
             # while the request had actually returned 200.
             logger.debug(
                 "[UTILS] Failed to query sessions from server %s: %s",
-                server.get('url', '?'), exc,
+                server.get("url", "?"),
+                exc,
             )
         except KeyError as exc:
             logger.debug(
-                "[UTILS] Session payload from %s is missing key %s -- "
-                "unrecognised Jupyter server schema",
-                server.get('url', '?'), exc,
+                "[UTILS] Session payload from %s is missing key %s -- unrecognised Jupyter server schema",
+                server.get("url", "?"),
+                exc,
             )
     return None
 
@@ -413,6 +417,7 @@ def get_notebook_path() -> str | None:
 
     try:
         import ipykernel
+
         connection_file = ipykernel.get_connection_file()
         kernel_id = _kernel_id_from_connection_file(connection_file)
     except (ImportError, AttributeError, OSError, RuntimeError, IndexError, ValueError):
@@ -431,9 +436,9 @@ def get_notebook_path() -> str | None:
 
 
 # Tunables for the save-settle wait (see _wait_for_notebook_save).
-_SAVE_FRESH_WINDOW_S: float = 1.0      # only wait when the file changed this recently
-_SAVE_POLL_INTERVAL_S: float = 0.05    # re-stat cadence while a write is in flight
-_SAVE_MAX_WAIT_S: float = 1.0          # hard cap so we never block a run for long
+_SAVE_FRESH_WINDOW_S: float = 1.0  # only wait when the file changed this recently
+_SAVE_POLL_INTERVAL_S: float = 0.05  # re-stat cadence while a write is in flight
+_SAVE_MAX_WAIT_S: float = 1.0  # hard cap so we never block a run for long
 
 
 def _wait_for_notebook_save(notebook_path: str) -> None:
@@ -478,11 +483,11 @@ def _wait_for_notebook_save(notebook_path: str) -> None:
 
 def _extract_cell_entry(cell: dict, include_ids: bool) -> str | tuple[str | None, str]:
     """Extract a single notebook code cell as a string or (id, string) tuple."""
-    source = cell.get('source', [])
+    source = cell.get("source", [])
     if isinstance(source, list):
         source = "".join(source)
     if include_ids:
-        cell_id = cell.get('id', cell.get('metadata', {}).get('id', None))
+        cell_id = cell.get("id", cell.get("metadata", {}).get("id", None))
         return (cell_id, source)
     return source
 
@@ -520,6 +525,7 @@ def _try_extension_cells(include_ids: bool) -> list | None:
     """
     try:
         from cash.notebook.live_cells import latest_cells
+
         cells = latest_cells()
     except Exception as e:  # noqa: BLE001
         logger.debug("[UTILS] extension cell read failed: %s", e)
@@ -527,11 +533,7 @@ def _try_extension_cells(include_ids: bool) -> list | None:
     if not cells:
         return None
     try:
-        extracted = [
-            _extract_cell_entry(cell, include_ids)
-            for cell in cells
-            if cell.get("cell_type") == "code"
-        ]
+        extracted = [_extract_cell_entry(cell, include_ids) for cell in cells if cell.get("cell_type") == "code"]
     except Exception as e:  # noqa: BLE001
         logger.debug("[UTILS] extension cell shape unusable: %s", e)
         return None
@@ -575,12 +577,12 @@ def _labextension_installed() -> bool:
     """
     try:
         import site
+
         roots = [sys.prefix]
         user_base = site.getuserbase()
         if user_base:
             roots.append(user_base)
-        return any(os.path.isdir(os.path.join(root, *_LABEXT_RELPATH))
-                   for root in roots)
+        return any(os.path.isdir(os.path.join(root, *_LABEXT_RELPATH)) for root in roots)
     except Exception as e:  # noqa: BLE001 - a hint gate must never break %cash_on
         logger.debug("[UTILS] labextension probe failed: %s", e)
         return False
@@ -596,9 +598,9 @@ def _labextension_installed() -> bool:
 # a failure is cached longer so a frontend-less runtime (scheduled / headless
 # execution, where the request would block until timeout) does not pay that on
 # every cell.
-_COLAB_GET_IPYNB_TIMEOUT = 5.0   # seconds to wait for the frontend to answer
-_COLAB_CELLS_TTL = 2.0           # reuse a successful read across one resolution
-_COLAB_FAIL_TTL = 30.0           # back off after a failure (no frontend / timeout)
+_COLAB_GET_IPYNB_TIMEOUT = 5.0  # seconds to wait for the frontend to answer
+_COLAB_CELLS_TTL = 2.0  # reuse a successful read across one resolution
+_COLAB_FAIL_TTL = 30.0  # back off after a failure (no frontend / timeout)
 _colab_cells_cache: dict[bool, tuple[float, list | None]] = {}
 
 
@@ -627,14 +629,13 @@ def _try_colab_notebook_cells(include_ids: bool) -> list | None:
             return val
     try:
         from google.colab import _message  # type: ignore[import-not-found]
+
         resp = _message.blocking_request("get_ipynb", timeout_sec=_COLAB_GET_IPYNB_TIMEOUT)
         nb = resp.get("ipynb") if isinstance(resp, dict) else None
         if not isinstance(nb, dict):
             raise ValueError("unexpected get_ipynb response shape")
         cells = [
-            _extract_cell_entry(cell, include_ids)
-            for cell in nb.get("cells", [])
-            if cell.get("cell_type") == "code"
+            _extract_cell_entry(cell, include_ids) for cell in nb.get("cells", []) if cell.get("cell_type") == "code"
         ]
     except Exception as e:  # noqa: BLE001 - the Colab frontend API is best-effort
         logger.debug("[UTILS] Colab get_ipynb failed: %s", e)
@@ -733,11 +734,7 @@ def _try_vscode_backup_cells(notebook_path: str | None, include_ids: bool) -> li
         # entry is another product's undocumented format, and a malformed
         # (non-dict) entry must degrade to None like everything else here,
         # not raise out of a caller that has no reason to expect it.
-        extracted = [
-            _extract_cell_entry(cell, include_ids)
-            for cell in cells
-            if cell.get("cell_type") == "code"
-        ]
+        extracted = [_extract_cell_entry(cell, include_ids) for cell in cells if cell.get("cell_type") == "code"]
 
         if not extracted:
             # [] is not None: returned as-is it reads as "these ARE the live
@@ -780,7 +777,9 @@ def last_cell_source() -> str | None:
     return _last_cell_source
 
 
-def _read_notebook_code_cells(notebook_path: str | None = None, include_ids: bool = False) -> list[str] | list[tuple[str | None, str]]:
+def _read_notebook_code_cells(
+    notebook_path: str | None = None, include_ids: bool = False
+) -> list[str] | list[tuple[str | None, str]]:
     """
     Read code cells from the first reader in the chain that can answer.
 
@@ -873,13 +872,11 @@ def _read_notebook_code_cells(notebook_path: str | None = None, include_ids: boo
         # before reading so we never parse a half-written (stale) notebook.
         _wait_for_notebook_save(notebook_path)
 
-        with open(notebook_path, encoding='utf-8') as f:
+        with open(notebook_path, encoding="utf-8") as f:
             nb = json.load(f)
 
         cells = [
-            _extract_cell_entry(cell, include_ids)
-            for cell in nb.get('cells', [])
-            if cell.get('cell_type') == 'code'
+            _extract_cell_entry(cell, include_ids) for cell in nb.get("cells", []) if cell.get("cell_type") == "code"
         ]
     except Exception as e:
         logger.error("Error reading notebook file: %s", e)

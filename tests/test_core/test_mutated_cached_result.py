@@ -14,6 +14,7 @@ hash is reused while an exact copy-on-write check says the frame is unchanged,
 so the common case (the same frame passed along a pipeline) still pays for one
 hash, not one per call.
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -29,8 +30,7 @@ np = pytest.importorskip("numpy")
 
 pytestmark = pytest.mark.core
 
-needs_cow = pytest.mark.skipif(
-    not _is_cow_pandas(pd.DataFrame()), reason="pandas copy-on-write is not active")
+needs_cow = pytest.mark.skipif(not _is_cow_pandas(pd.DataFrame()), reason="pandas copy-on-write is not active")
 
 
 @pytest.fixture
@@ -46,6 +46,7 @@ class Params:
 
 def test_a_mutated_params_object_from_a_cached_call(c):
     """r18s2's sweep idiom: one returned params object, mutated per iteration."""
+
     @c.cache
     def make_params():
         return Params()
@@ -64,6 +65,7 @@ def test_a_mutated_params_object_from_a_cached_call(c):
 
 def test_a_mutated_frame_from_a_cached_call(c):
     """The known-limitations example, now fixed for scripts."""
+
     @c.cache
     def load():
         return pd.DataFrame({"a": [1, 2, 3]})
@@ -79,8 +81,9 @@ def test_a_mutated_frame_from_a_cached_call(c):
 
 
 def _frame():
-    return pd.DataFrame({"a": [1.0, 2.0, 3.0], "b": [4, 5, 6], "s": ["x", "y", "z"],
-                         "c": pd.Categorical(["p", "q", "p"])})
+    return pd.DataFrame(
+        {"a": [1.0, 2.0, 3.0], "b": [4, 5, 6], "s": ["x", "y", "z"], "c": pd.Categorical(["p", "q", "p"])}
+    )
 
 
 MUTATIONS = {
@@ -168,6 +171,7 @@ def test_an_unchanged_series_is_not_re_hashed(c, monkeypatch):
 @needs_cow
 def test_the_memo_lets_go_of_a_collected_frame(c):
     """It holds a shallow copy of each frame; that copy must not outlive the frame."""
+
     @c.cache
     def n(df):
         return len(df)
@@ -192,7 +196,7 @@ def test_a_statement_maintained_tag_is_still_trusted(c, monkeypatch):
         return real(value, type_name)
 
     monkeypatch.setattr(Cash, "_try_hash_pandas", staticmethod(counting))
-    monkeypatch.setattr("cash.core._COW_PANDAS", False)     # isolate from the CoW memo
+    monkeypatch.setattr("cash.core._COW_PANDAS", False)  # isolate from the CoW memo
 
     @c.cache
     def n(df):
@@ -218,5 +222,5 @@ def test_a_decorator_tag_alone_is_not_trusted(c, monkeypatch):
     df._cash_lineage_hash = "L1"
     df._cash_lineage_src = "decorator"
     assert n(df) == 6
-    df.loc[0, "a"] = 100.0     # the tag does not move
+    df.loc[0, "a"] = 100.0  # the tag does not move
     assert n(df) == n.__wrapped__(df)

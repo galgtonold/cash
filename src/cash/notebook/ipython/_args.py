@@ -22,6 +22,7 @@ than at each of the ~14 call sites:
   returning ``None`` for anything unrecognised so the caller can refuse
   loudly instead of guessing.
 """
+
 from __future__ import annotations
 
 __all__ = ["strip_inline_comment", "parse_mode"]

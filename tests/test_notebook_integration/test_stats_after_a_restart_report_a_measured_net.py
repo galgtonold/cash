@@ -7,6 +7,7 @@ was the right one; the lower bound tells me nothing."
 The cost of each computation is now kept beside the cache, so the kernel that
 restores it can still point at a measurement of what it cost.
 """
+
 import json
 
 import pytest
@@ -23,7 +24,7 @@ CELLS = [
 
 def _stats(runner, cell):
     raw = runner.get_output(cell)
-    return json.loads(raw[raw.index("{"):raw.rindex("}") + 1])
+    return json.loads(raw[raw.index("{") : raw.rindex("}") + 1])
 
 
 def test_the_net_after_a_restart_is_a_number(nb_runner):
@@ -38,8 +39,8 @@ def test_the_net_after_a_restart_is_a_number(nb_runner):
 
     data = _stats(nb_runner, 4)
     assert data["total_measured_saved"] >= 1.0, (
-        "the restart credited nothing to the measurement the first run took:\n"
-        + nb_runner.get_output(4))
+        "the restart credited nothing to the measurement the first run took:\n" + nb_runner.get_output(4)
+    )
     assert data["net_time_saved"] > 0, nb_runner.get_output(4)
 
     nb_runner.set_cell_source(4, "%cash_stats")

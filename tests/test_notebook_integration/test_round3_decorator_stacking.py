@@ -1,6 +1,8 @@
 """Batch 92 – decorator stacking and parameterized decorators."""
 
-import textwrap, pytest
+import textwrap
+
+import pytest
 
 pytestmark = [pytest.mark.stress, pytest.mark.integration]
 
@@ -10,8 +12,9 @@ class TestDecoratorStacking:
 
     def test_triple_decorator_stack(self, nb_runner):
         """Three decorators stacked on one function."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 def logger(fn):
                     def wrapper(*args, **kwargs):
                         result = fn(*args, **kwargs)
@@ -41,8 +44,9 @@ class TestDecoratorStacking:
                 r1 = compute(3, 4)
                 r2 = compute("x", 4)
             """),
-            "print(f'r1={r1}')\nprint(f'r2={r2}')",
-        ])
+                "print(f'r1={r1}')\nprint(f'r2={r2}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -51,8 +55,9 @@ class TestDecoratorStacking:
 
     def test_parameterized_decorator(self, nb_runner):
         """Decorator that takes arguments."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 def repeat(n):
                     def decorator(fn):
                         def wrapper(*args, **kwargs):
@@ -67,8 +72,9 @@ class TestDecoratorStacking:
 
                 output = greet("World")
             """),
-            "print(f'output={output}')",
-        ])
+                "print(f'output={output}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -77,8 +83,9 @@ class TestDecoratorStacking:
 
     def test_class_decorator(self, nb_runner):
         """Class used as a decorator."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class CacheDecorator:
                     def __init__(self, fn):
                         self.fn = fn
@@ -97,8 +104,9 @@ class TestDecoratorStacking:
                 r3 = expensive(50)
                 cache_size = len(expensive.cache)
             """),
-            "print(f'r1={r1} r2={r2} r3={r3} cache={cache_size}')",
-        ])
+                "print(f'r1={r1} r2={r2} r3={r3} cache={cache_size}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -109,9 +117,10 @@ class TestDecoratorStacking:
 
     def test_decorator_propagation(self, nb_runner):
         """Decorator behavior changes when upstream config changes."""
-        nb_runner.create_notebook([
-            "prefix = 'INFO'",
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                "prefix = 'INFO'",
+                textwrap.dedent("""\
                 def tag(fn):
                     def wrapper(*args, **kwargs):
                         return f"[{prefix}] {fn(*args, **kwargs)}"
@@ -123,8 +132,9 @@ class TestDecoratorStacking:
 
                 result = message("test message")
             """),
-            "print(f'result={result}')",
-        ])
+                "print(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "[INFO] test message" in nb_runner.get_output(3)
@@ -135,8 +145,9 @@ class TestDecoratorStacking:
 
     def test_wraps_preservation(self, nb_runner):
         """functools.wraps preserves function metadata."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from functools import wraps
 
                 def my_decorator(fn):
@@ -154,8 +165,9 @@ class TestDecoratorStacking:
                 doc = documented_fn.__doc__
                 result = documented_fn(5)
             """),
-            "print(f'name={name} doc={doc} result={result}')",
-        ])
+                "print(f'name={name} doc={doc} result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)

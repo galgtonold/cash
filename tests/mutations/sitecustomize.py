@@ -29,6 +29,7 @@ mutation was applied AND how many times the broken code was actually called.
 broken engine, or the engine was never exercised -- and only the call count
 tells them apart.
 """
+
 from __future__ import annotations
 
 import json
@@ -84,14 +85,17 @@ class _Applier:
             return
         try:
             with open(self._marker_path(), "w", encoding="utf-8") as fh:
-                json.dump({
-                    "mutation": self._mutation.name,
-                    "applied": self._done,
-                    "calls": self._calls,
-                    "pid": os.getpid(),
-                }, fh)
+                json.dump(
+                    {
+                        "mutation": self._mutation.name,
+                        "applied": self._done,
+                        "calls": self._calls,
+                        "pid": os.getpid(),
+                    },
+                    fh,
+                )
         except OSError:
-            pass          # a marker we cannot write must not break the kernel
+            pass  # a marker we cannot write must not break the kernel
 
     def find_spec(self, name, path=None, target=None):
         if self._done:
@@ -103,29 +107,28 @@ class _Applier:
         try:
             self._mutation.apply(mod, self._record)
             self._write()
-        except Exception as exc:      # noqa: BLE001 - report, never mask
+        except Exception as exc:  # noqa: BLE001 - report, never mask
             sys.stderr.write(f"[cash-mutation] {self._mutation.name} failed: {exc!r}\n")
         finally:
             try:
                 sys.meta_path.remove(self)
             except ValueError:
                 pass
-        return None       # never claims an import
+        return None  # never claims an import
 
 
 if _NAME:
     try:
         from _catalogue import CATALOGUE
-    except ImportError:                                   # pragma: no cover
+    except ImportError:  # pragma: no cover
         sys.stderr.write("[cash-mutation] catalogue not importable\n")
         CATALOGUE = {}
     _mutation = CATALOGUE.get(_NAME)
     if _mutation is None:
         sys.stderr.write(
-            f"[cash-mutation] unknown mutation {_NAME!r}; "
-            f"known: {', '.join(sorted(CATALOGUE)) or '(none)'}\n"
+            f"[cash-mutation] unknown mutation {_NAME!r}; known: {', '.join(sorted(CATALOGUE)) or '(none)'}\n"
         )
     else:
         _applier = _Applier(_mutation)
-        _applier._write()          # 'applied: false' until the target loads
+        _applier._write()  # 'applied: false' until the target loads
         sys.meta_path.insert(0, _applier)

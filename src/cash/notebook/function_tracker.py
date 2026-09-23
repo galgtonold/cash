@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 # Lazily computed set of stdlib/site-packages directory prefixes
 _STDLIB_SITE_PREFIXES: set[str] | None = None
 
+
 def _get_stdlib_site_prefixes() -> set[str]:
     """Get the set of directory prefixes for stdlib and site-packages.
 
@@ -38,17 +39,17 @@ def _get_stdlib_site_prefixes() -> set[str]:
     prefixes: set[str] = set()
 
     # stdlib paths
-    stdlib_path = sysconfig.get_path('stdlib')
+    stdlib_path = sysconfig.get_path("stdlib")
     if stdlib_path:
         prefixes.add(os.path.normcase(os.path.realpath(stdlib_path)))
-    platstdlib = sysconfig.get_path('platstdlib')
+    platstdlib = sysconfig.get_path("platstdlib")
     if platstdlib:
         prefixes.add(os.path.normcase(os.path.realpath(platstdlib)))
 
     # site-packages paths
-    for sp in site.getsitepackages() if hasattr(site, 'getsitepackages') else []:
+    for sp in site.getsitepackages() if hasattr(site, "getsitepackages") else []:
         prefixes.add(os.path.normcase(os.path.realpath(sp)))
-    user_site = site.getusersitepackages() if hasattr(site, 'getusersitepackages') else None
+    user_site = site.getusersitepackages() if hasattr(site, "getusersitepackages") else None
     if user_site:
         prefixes.add(os.path.normcase(os.path.realpath(user_site)))
 
@@ -80,14 +81,14 @@ def is_local_module(module: types.ModuleType) -> bool:
     Returns:
         True if the module's source file is outside stdlib/site-packages
     """
-    file_path = getattr(module, '__file__', None)
+    file_path = getattr(module, "__file__", None)
     if not file_path:
         return False
 
     # Must be a .py file (not .pyd, .so, .pyc without source)
-    if not file_path.endswith('.py'):
+    if not file_path.endswith(".py"):
         # Check if there's a corresponding .py for .pyc
-        if file_path.endswith(('.pyc', '.pyo')):
+        if file_path.endswith((".pyc", ".pyo")):
             py_path = file_path[:-1]  # .pyc -> .py
             if not os.path.isfile(py_path):
                 return False
@@ -99,16 +100,17 @@ def is_local_module(module: types.ModuleType) -> bool:
 
     return all(not real_path.startswith(prefix) for prefix in prefixes)
 
+
 def _collect_imported_names(tree: ast.AST) -> set[str]:
     """Return all module names (top-level and dotted) referenced by import statements in *tree*."""
     names: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                names.add(alias.name.split('.')[0])
+                names.add(alias.name.split(".")[0])
                 names.add(alias.name)
         elif isinstance(node, ast.ImportFrom) and node.module:
-            names.add(node.module.split('.')[0])
+            names.add(node.module.split(".")[0])
             names.add(node.module)
     return names
 
@@ -132,20 +134,20 @@ def _update_code_object_hash(h: Any, code_obj: Any) -> None:
     into nested code objects structurally instead.
     """
     h.update(code_obj.co_code)
-    h.update(str(code_obj.co_names).encode('utf-8'))
-    h.update(str(code_obj.co_varnames).encode('utf-8'))
+    h.update(str(code_obj.co_names).encode("utf-8"))
+    h.update(str(code_obj.co_varnames).encode("utf-8"))
     for const in code_obj.co_consts:
         if isinstance(const, types.CodeType):
             _update_code_object_hash(h, const)
         else:
-            h.update(repr(const).encode('utf-8'))
+            h.update(repr(const).encode("utf-8"))
 
 
 def _compute_bytecode_hash(func: Any) -> str | None:
     """Compute a hash from a function's bytecode when source is unavailable."""
-    code_obj = getattr(func, '__code__', None)
-    if code_obj is None and hasattr(func, '__wrapped__'):
-        code_obj = getattr(func.__wrapped__, '__code__', None)
+    code_obj = getattr(func, "__code__", None)
+    if code_obj is None and hasattr(func, "__wrapped__"):
+        code_obj = getattr(func.__wrapped__, "__code__", None)
     if code_obj is None:
         return None
     try:
@@ -155,7 +157,6 @@ def _compute_bytecode_hash(func: Any) -> str | None:
     except (AttributeError, TypeError, ValueError) as exc:
         logger.debug("[FUNC_TRACKER] Failed to compute bytecode hash for function: %s", exc)
         return None
-
 
 
 def _reload_from_source(module) -> None:
@@ -183,6 +184,7 @@ def _reload_from_source(module) -> None:
     finally:
         sys.pycache_prefix = previous
         shutil.rmtree(empty, ignore_errors=True)
+
 
 class FunctionTracker:
     """Tracks function source code for cache key computation.
@@ -219,7 +221,7 @@ class FunctionTracker:
         module_obj = sys.modules.get(func_module)
         if not module_obj:
             return False
-        file_path = getattr(module_obj, '__file__', None)
+        file_path = getattr(module_obj, "__file__", None)
         if not file_path or not os.path.isfile(file_path):
             return False
         try:
@@ -253,20 +255,20 @@ class FunctionTracker:
         # Skip built-in functions, C extensions, and special objects
         if isinstance(func, types.BuiltinFunctionType):
             return None
-        if isinstance(func, type) and func.__module__ == 'builtins':
+        if isinstance(func, type) and func.__module__ == "builtins":
             return None
 
         # Skip lambda (anonymous, can't get reliable source)
-        if hasattr(func, '__name__') and func.__name__ == '<lambda>':
+        if hasattr(func, "__name__") and func.__name__ == "<lambda>":
             return None
 
         # Check if this function is from a tracked module — if so, bypass id-cache
         # to ensure we always read fresh source from disk
-        func_module = getattr(func, '__module__', None)
+        func_module = getattr(func, "__module__", None)
         use_cache = not self._tracked_module_file_changed(func_module)
 
         # Check cache using id + qualname (id alone isn't enough since objects can be recycled)
-        cache_key = (id(func), getattr(func, '__qualname__', ''))
+        cache_key = (id(func), getattr(func, "__qualname__", ""))
         if use_cache and cache_key in self._source_cache:
             return self._source_cache[cache_key][0]
 
@@ -292,14 +294,10 @@ class FunctionTracker:
             source_hash = _compute_bytecode_hash(func)
             if source_hash is not None:
                 _evict_source_cache(self._source_cache, self.MAX_CACHE_SIZE)
-                self._source_cache[cache_key] = (source_hash, '<bytecode>')
+                self._source_cache[cache_key] = (source_hash, "<bytecode>")
                 return source_hash
 
-    def get_callable_source_hashes(
-        self,
-        input_names: set[str],
-        user_ns: dict[str, Any]
-    ) -> dict[str, str]:
+    def get_callable_source_hashes(self, input_names: set[str], user_ns: dict[str, Any]) -> dict[str, str]:
         """Get source hashes for all callable inputs.
 
         Given a set of input variable names, finds which ones are user-defined
@@ -326,11 +324,7 @@ class FunctionTracker:
 
         return result
 
-    def detect_changed_functions(
-        self,
-        user_ns: dict[str, Any],
-        tracked_names: set[str] | None = None
-    ) -> set[str]:
+    def detect_changed_functions(self, user_ns: dict[str, Any], tracked_names: set[str] | None = None) -> set[str]:
         """Detect functions whose source code has changed since last check.
 
         Args:
@@ -447,13 +441,14 @@ class FunctionTracker:
             The file path of the module, or None if not found
         """
         import sys
+
         self._tracked_modules.add(module_name)
 
         module = sys.modules.get(module_name)
         if module is None:
             return None
 
-        file_path = getattr(module, '__file__', None)
+        file_path = getattr(module, "__file__", None)
         if file_path and os.path.isfile(file_path):
             try:
                 mtime = os.path.getmtime(file_path)
@@ -468,7 +463,9 @@ class FunctionTracker:
                 logger.debug("Failed to read module file for tracking '%s'", module_name)
         return None
 
-    def _process_sub_modules(self, sub_module_names: set[str], module_name: str, visited: set[str], stack: list[str]) -> None:
+    def _process_sub_modules(
+        self, sub_module_names: set[str], module_name: str, visited: set[str], stack: list[str]
+    ) -> None:
         """Walk *sub_module_names*, recording local ones as deps of *module_name*."""
         for sub_name in sub_module_names:
             sub_mod = sys.modules.get(sub_name)
@@ -476,12 +473,14 @@ class FunctionTracker:
                 continue
             if not is_local_module(sub_mod):
                 continue
-            sub_file = getattr(sub_mod, '__file__', None)
+            sub_file = getattr(sub_mod, "__file__", None)
             if not sub_file or not os.path.isfile(sub_file):
                 continue
             self._register_sub_dependency(sub_name, sub_file, module_name, visited, stack)
 
-    def _register_sub_dependency(self, sub_name: str, sub_file: str, module_name: str, visited: set[str], stack: list[str]) -> None:
+    def _register_sub_dependency(
+        self, sub_name: str, sub_file: str, module_name: str, visited: set[str], stack: list[str]
+    ) -> None:
         """Record a sub-dependency file and schedule it for further walking."""
         norm_path = os.path.normcase(os.path.realpath(sub_file))
 
@@ -529,12 +528,12 @@ class FunctionTracker:
             if mod is None:
                 continue
 
-            mod_file = getattr(mod, '__file__', None)
+            mod_file = getattr(mod, "__file__", None)
             if not mod_file or not os.path.isfile(mod_file):
                 continue
 
             try:
-                with open(mod_file, encoding='utf-8') as f:
+                with open(mod_file, encoding="utf-8") as f:
                     source = f.read()
                 tree = ast.parse(source, filename=mod_file)
             except (SyntaxError, OSError, UnicodeDecodeError):
@@ -558,7 +557,7 @@ class FunctionTracker:
             mod = sys.modules.get(mod_name)
             if mod is None:
                 continue
-            mod_file = getattr(mod, '__file__', None)
+            mod_file = getattr(mod, "__file__", None)
             if mod_file and os.path.isfile(mod_file):
                 self._discover_transitive_dependencies(mod_name)
 
@@ -593,9 +592,7 @@ class FunctionTracker:
             hash_src = ast.dump(node.value) if node.value is not None else "annotation_only"
             return name, hash_src
         if isinstance(node, (ast.Import, ast.ImportFrom)):
-            import_names = [
-                f"__import__{alias.asname or alias.name}" for alias in node.names
-            ]
+            import_names = [f"__import__{alias.asname or alias.name}" for alias in node.names]
             return import_names, ast.dump(node)
         return [], None
 
@@ -621,7 +618,7 @@ class FunctionTracker:
             return {}
 
         try:
-            with open(file_path, encoding='utf-8') as f:
+            with open(file_path, encoding="utf-8") as f:
                 source = f.read()
             tree = ast.parse(source, filename=file_path)
         except (SyntaxError, OSError, UnicodeDecodeError):
@@ -632,7 +629,7 @@ class FunctionTracker:
         for node in ast.iter_child_nodes(tree):
             names, hash_source = FunctionTracker._symbol_names_and_hash_source(node)
             if names and hash_source:
-                h = hashlib.sha256(hash_source.encode('utf-8')).hexdigest()
+                h = hashlib.sha256(hash_source.encode("utf-8")).hexdigest()
                 for name in names:
                     hashes[name] = h
 
@@ -653,7 +650,7 @@ class FunctionTracker:
         module = sys.modules.get(module_name)
         if module is None:
             return {}
-        file_path = getattr(module, '__file__', None)
+        file_path = getattr(module, "__file__", None)
         hashes = self.compute_symbol_hashes(file_path)
         self._module_symbol_hashes[module_name] = hashes
         return hashes
@@ -673,7 +670,7 @@ class FunctionTracker:
         module = sys.modules.get(module_name)
         if module is None:
             return None
-        file_path = getattr(module, '__file__', None)
+        file_path = getattr(module, "__file__", None)
         new_hashes = self.compute_symbol_hashes(file_path)
 
         changed: set[str] = set()
@@ -717,6 +714,7 @@ class FunctionTracker:
         # edge and an edit to `build_table` left TABLE, and every reader of it,
         # counted as unchanged -- a lineage the invalidator could wrongly keep.
         from .module_symbols import _analysis_for
+
         analysis = _analysis_for(file_path)
         if analysis is None:
             return {}
@@ -775,17 +773,13 @@ class FunctionTracker:
         """Handle getattr(mod, 'attr') patterns, updating accesses/bare_uses in-place."""
         if not (
             isinstance(node.func, ast.Name)
-            and node.func.id == 'getattr'
+            and node.func.id == "getattr"
             and node.args
             and isinstance(node.args[0], ast.Name)
         ):
             return
         base = node.args[0].id
-        if (
-            len(node.args) >= 2
-            and isinstance(node.args[1], ast.Constant)
-            and isinstance(node.args[1].value, str)
-        ):
+        if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant) and isinstance(node.args[1].value, str):
             accesses.setdefault(base, set()).add(node.args[1].value)
         else:
             accesses[base] = set()
@@ -869,20 +863,20 @@ class FunctionTracker:
             # Fall back to full file hash
             module = sys.modules.get(module_name)
             if module is None:
-                return hashlib.sha256(b'unknown').hexdigest()
-            file_path = getattr(module, '__file__', None)
+                return hashlib.sha256(b"unknown").hexdigest()
+            file_path = getattr(module, "__file__", None)
             if not file_path or not os.path.isfile(file_path):
-                return hashlib.sha256(b'unknown').hexdigest()
+                return hashlib.sha256(b"unknown").hexdigest()
             try:
-                with open(file_path, 'rb') as f:
+                with open(file_path, "rb") as f:
                     return hashlib.sha256(f.read()).hexdigest()
             except OSError:
-                return hashlib.sha256(b'unknown').hexdigest()
+                return hashlib.sha256(b"unknown").hexdigest()
 
         # Compute hash from only the accessed symbols (sorted for determinism)
         hasher = hashlib.sha256()
         for attr in sorted(accessed_attrs):
-            sym_hash = symbol_hashes.get(attr, '')
+            sym_hash = symbol_hashes.get(attr, "")
             hasher.update(f"{attr}:{sym_hash}".encode())
             # Also include any __import__ symbols that might define this attr
             # (e.g., `from helper import func` makes `func` available)
@@ -898,7 +892,7 @@ class FunctionTracker:
             module = sys.modules.get(module_name)
             if module is None:
                 continue
-            file_path = getattr(module, '__file__', None)
+            file_path = getattr(module, "__file__", None)
             if not file_path or not os.path.isfile(file_path):
                 continue
             try:
@@ -908,7 +902,9 @@ class FunctionTracker:
             old_mtime = self._module_mtimes.get(module_name)
             logger.debug(
                 "[MODULE_CHECK] %s: current_mtime=%s, old_mtime=%s, changed=%s",
-                module_name, current_mtime, old_mtime,
+                module_name,
+                current_mtime,
+                old_mtime,
                 old_mtime is not None and current_mtime != old_mtime,
             )
             if old_mtime is not None and current_mtime != old_mtime:
@@ -935,7 +931,8 @@ class FunctionTracker:
                     changed.add(parent_mod)
                     logger.info(
                         "Sub-dependency '%s' changed → invalidating parent module '%s'",
-                        dep_path, parent_mod,
+                        dep_path,
+                        parent_mod,
                     )
                 self._dep_file_mtimes[dep_path] = current_mtime
             elif old_mtime is None:
@@ -978,7 +975,7 @@ class FunctionTracker:
 
             # Remove compiled .pyc file if it exists, so a later fresh
             # import is not served it either. Best-effort: see below.
-            file_path = getattr(module, '__file__', None)
+            file_path = getattr(module, "__file__", None)
             if file_path:
                 cache_file = importlib.util.cache_from_source(file_path)
                 if os.path.isfile(cache_file):
@@ -1061,7 +1058,7 @@ class FunctionTracker:
             mod = sys.modules.get(mod_name)
             if mod is None:
                 continue
-            mod_file = getattr(mod, '__file__', None)
+            mod_file = getattr(mod, "__file__", None)
             if not mod_file or not os.path.isfile(mod_file):
                 continue
             old_mtime = pre_check_mtimes.get(mod_name)
@@ -1092,7 +1089,9 @@ class FunctionTracker:
                 logger.debug("[GRANULAR] Module '%s': transitive dep change, full invalidation", mod_name)
         return per_module
 
-    def check_and_reload_changed_modules(self, user_ns: dict[str, Any]) -> tuple[dict[str, str], dict[str, set[str] | None]]:
+    def check_and_reload_changed_modules(
+        self, user_ns: dict[str, Any]
+    ) -> tuple[dict[str, str], dict[str, set[str] | None]]:
         """Check tracked modules for changes, reload if needed, and update user_ns.
 
         This is the main entry point for automatic import invalidation.
@@ -1136,7 +1135,7 @@ class FunctionTracker:
         result = {}
         for mod_name in reload_order:
             module = sys.modules.get(mod_name)
-            file_path = getattr(module, '__file__', 'unknown') if module else 'unknown'
+            file_path = getattr(module, "__file__", "unknown") if module else "unknown"
 
             if self.reload_module(mod_name):
                 result[mod_name] = file_path
@@ -1163,11 +1162,11 @@ class FunctionTracker:
             mod = sys.modules.get(mod_name)
             if mod is None:
                 continue
-            mod_file = getattr(mod, '__file__', None)
+            mod_file = getattr(mod, "__file__", None)
             if not mod_file or not os.path.isfile(mod_file):
                 continue
             try:
-                with open(mod_file, encoding='utf-8') as f:
+                with open(mod_file, encoding="utf-8") as f:
                     source = f.read()
                 tree = ast.parse(source)
             except (SyntaxError, OSError, UnicodeDecodeError):
@@ -1208,12 +1207,12 @@ class FunctionTracker:
             if mod is None:
                 imports_map[mod_name] = set()
                 continue
-            mod_file = getattr(mod, '__file__', None)
+            mod_file = getattr(mod, "__file__", None)
             if not mod_file or not os.path.isfile(mod_file):
                 imports_map[mod_name] = set()
                 continue
             try:
-                with open(mod_file, encoding='utf-8') as f:
+                with open(mod_file, encoding="utf-8") as f:
                     source = f.read()
                 tree = ast.parse(source)
             except (SyntaxError, OSError, UnicodeDecodeError):
@@ -1255,10 +1254,7 @@ class FunctionTracker:
         return FunctionTracker._kahn_sort_bottom_up(modules, imports_map)
 
     def _update_user_ns_from_module(
-        self,
-        module_name: str,
-        module: types.ModuleType,
-        user_ns: dict[str, Any]
+        self, module_name: str, module: types.ModuleType, user_ns: dict[str, Any]
     ) -> set[str]:
         """Update user_ns with fresh objects from a reloaded module.
 
@@ -1277,23 +1273,20 @@ class FunctionTracker:
         updated = set()
 
         for var_name, var_value in list(user_ns.items()):
-            if var_name.startswith('_'):
+            if var_name.startswith("_"):
                 continue
 
             # Check if this value came from the reloaded module
-            value_module = getattr(var_value, '__module__', None)
-            if value_module and (value_module == module_name or value_module.startswith(module_name + '.')):
-                obj_name = getattr(var_value, '__name__', None) or getattr(var_value, '__qualname__', None)
+            value_module = getattr(var_value, "__module__", None)
+            if value_module and (value_module == module_name or value_module.startswith(module_name + ".")):
+                obj_name = getattr(var_value, "__name__", None) or getattr(var_value, "__qualname__", None)
                 if obj_name:
                     # Try to get the fresh version from the reloaded module
                     fresh = getattr(module, obj_name, None)
                     if fresh is not None:
                         user_ns[var_name] = fresh
                         updated.add(var_name)
-                        logger.debug(
-                            "[AUTO_TRACK] Updated '%s' from reloaded module '%s'",
-                            var_name, module_name
-                        )
+                        logger.debug("[AUTO_TRACK] Updated '%s' from reloaded module '%s'", var_name, module_name)
 
         return updated
 
@@ -1330,6 +1323,7 @@ class FunctionTracker:
         _OpaqueCallVisitor(warnings, user_ns).visit(tree)
         return warnings
 
+
 class _OpaqueCallVisitor(ast.NodeVisitor):
     """AST visitor that detects call patterns Cash cannot statically track."""
 
@@ -1341,40 +1335,30 @@ class _OpaqueCallVisitor(ast.NodeVisitor):
         """Warn on getattr()() dynamic dispatch."""
         if isinstance(node.func, ast.Call):
             inner_func = node.func
-            if isinstance(inner_func.func, ast.Name) and inner_func.func.id == 'getattr':
-                self._warnings.append(
-                    "Dynamic dispatch via getattr()() — Cash cannot track which function is called"
-                )
+            if isinstance(inner_func.func, ast.Name) and inner_func.func.id == "getattr":
+                self._warnings.append("Dynamic dispatch via getattr()() — Cash cannot track which function is called")
 
     def _check_subscript_call(self, node: ast.Call) -> None:
         """Warn on registry['key']() / funcs[0]() patterns."""
         if isinstance(node.func, ast.Subscript):
             base = _get_ast_base_name(node.func.value)
             if base:
-                self._warnings.append(
-                    f"Indexed call {base}[...]() — Cash cannot track which function is called"
-                )
+                self._warnings.append(f"Indexed call {base}[...]() — Cash cannot track which function is called")
 
     def _check_eval_exec(self, node: ast.Call) -> None:
         """Warn on eval()/exec() with embedded function calls."""
-        if not (isinstance(node.func, ast.Name) and node.func.id in ('eval', 'exec')):
+        if not (isinstance(node.func, ast.Name) and node.func.id in ("eval", "exec")):
             return
         if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
             try:
                 inner_tree = ast.parse(node.args[0].value)
                 has_calls = any(isinstance(n, ast.Call) for n in ast.walk(inner_tree))
                 if has_calls:
-                    self._warnings.append(
-                        f"{node.func.id}() with function calls — Cash cannot track source changes"
-                    )
+                    self._warnings.append(f"{node.func.id}() with function calls — Cash cannot track source changes")
             except SyntaxError:
-                self._warnings.append(
-                    f"{node.func.id}() with dynamic code — Cash cannot track source changes"
-                )
+                self._warnings.append(f"{node.func.id}() with dynamic code — Cash cannot track source changes")
         elif node.args and not isinstance(node.args[0], ast.Constant):
-            self._warnings.append(
-                f"{node.func.id}() with dynamic expression — Cash cannot track source changes"
-            )
+            self._warnings.append(f"{node.func.id}() with dynamic expression — Cash cannot track source changes")
 
     def visit_Call(self, node: ast.Call) -> None:
         self._check_getattr_dispatch(node)
@@ -1382,16 +1366,16 @@ class _OpaqueCallVisitor(ast.NodeVisitor):
         # Pattern 3: Higher-order function calls with user-defined callable args
         if isinstance(node.func, ast.Name):
             func_name = node.func.id
-            if func_name in ('apply', 'map', 'filter') or func_name not in _SAFE_HOF_NAMES:
+            if func_name in ("apply", "map", "filter") or func_name not in _SAFE_HOF_NAMES:
                 for arg in node.args:
                     if isinstance(arg, ast.Name) and arg.id in self._user_ns:
                         val = self._user_ns[arg.id]
                         if (
                             callable(val)
                             and not isinstance(val, type)
-                            and hasattr(val, '__module__')
-                            and val.__module__ not in ('builtins', None)
-                            and func_name in ('apply', 'map', 'filter', 'sorted', 'reduce')
+                            and hasattr(val, "__module__")
+                            and val.__module__ not in ("builtins", None)
+                            and func_name in ("apply", "map", "filter", "sorted", "reduce")
                         ):
                             pass  # Trackable via input variable system
         self._check_eval_exec(node)
@@ -1400,12 +1384,25 @@ class _OpaqueCallVisitor(ast.NodeVisitor):
 
 # Names of functions that are safe higher-order functions (their callable
 # arguments are still trackable via the input variable system)
-_SAFE_HOF_NAMES = frozenset({
-    'sorted', 'min', 'max', 'map', 'filter', 'reduce',
-    'functools.reduce', 'itertools.starmap',
-    # pandas HOFs
-    'apply', 'transform', 'agg', 'aggregate', 'pipe',
-})
+_SAFE_HOF_NAMES = frozenset(
+    {
+        "sorted",
+        "min",
+        "max",
+        "map",
+        "filter",
+        "reduce",
+        "functools.reduce",
+        "itertools.starmap",
+        # pandas HOFs
+        "apply",
+        "transform",
+        "agg",
+        "aggregate",
+        "pipe",
+    }
+)
+
 
 def _get_ast_base_name(node: ast.AST) -> str | None:
     """Get a human-readable name from an AST node."""
@@ -1415,4 +1412,3 @@ def _get_ast_base_name(node: ast.AST) -> str | None:
         base = _get_ast_base_name(node.value)
         return f"{base}.{node.attr}" if base else node.attr
     return None
-

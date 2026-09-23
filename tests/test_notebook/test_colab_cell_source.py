@@ -6,12 +6,11 @@ disables upstream auto-resolution (a downstream-only run NameErrors). Reading
 the live notebook JSON from the Colab frontend restores it. These tests fake a
 Colab runtime so the branch is exercised off Colab.
 """
+
 from __future__ import annotations
 
 import sys
 import types
-
-import pytest
 
 from cash.notebook import server_discovery as sd
 

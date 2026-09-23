@@ -17,6 +17,7 @@ will run again on every future run -- a standing, usually fixable property --
 but it was tallied only inside ``computed_count``, so a permanently uncacheable
 cell was indistinguishable from one the user had just edited.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -38,10 +39,10 @@ def _render_both(metrics: list[dict]) -> tuple[str, str]:
 # The two levels agree
 # ---------------------------------------------------------------------------
 
+
 def test_all_cached_cell_uses_one_word_at_both_levels() -> None:
     text, html = _render_both(
-        [{"code": "x = load()", "status": str(CacheStatus.RESTORED),
-          "total_time": 0.01, "saved_time": 0.5}]
+        [{"code": "x = load()", "status": str(CacheStatus.RESTORED), "total_time": 0.01, "saved_time": 0.5}]
     )
     word = theme.label_of(BadgeStatus.RESTORED.value)
     # Header plus the single row = two occurrences, not one of each vocabulary.
@@ -52,9 +53,7 @@ def test_all_cached_cell_uses_one_word_at_both_levels() -> None:
 
 
 def test_executed_cell_uses_one_word_at_both_levels() -> None:
-    text, html = _render_both(
-        [{"code": "x = work()", "status": str(CacheStatus.COMPUTED), "total_time": 0.3}]
-    )
+    text, html = _render_both([{"code": "x = work()", "status": str(CacheStatus.COMPUTED), "total_time": 0.3}])
     word = theme.label_of(BadgeStatus.COMPUTED.value)
     assert text.count(word) == 2, text
     assert word in html
@@ -75,8 +74,12 @@ def test_no_status_displays_its_raw_enum_value(status: BadgeStatus) -> None:
 # NOT CACHED — the row that will run again every time
 # ---------------------------------------------------------------------------
 
-_UNCACHEABLE = {"code": "print(df)", "status": str(CacheStatus.COMPUTED),
-                "total_time": 0.2, "uncacheable_reasons": ["has a side effect"]}
+_UNCACHEABLE = {
+    "code": "print(df)",
+    "status": str(CacheStatus.COMPUTED),
+    "total_time": 0.2,
+    "uncacheable_reasons": ["has a side effect"],
+}
 
 
 def test_uncacheable_row_says_so_in_both_renderers() -> None:
@@ -102,8 +105,7 @@ def test_header_names_the_uncacheable_work() -> None:
 def test_an_ordinary_executed_cell_claims_nothing_uncacheable() -> None:
     """The control. Without it the assertions above pass on a renderer that
     prints "not cached" unconditionally."""
-    metrics = [{"code": "x = work()", "status": str(CacheStatus.COMPUTED),
-                "total_time": 0.3}]
+    metrics = [{"code": "x = work()", "status": str(CacheStatus.COMPUTED), "total_time": 0.3}]
     badge = build_interactive_badge(metrics)
     text, html = render_text(badge), render_html(badge)
     assert badge.header.uncacheable_count == 0
@@ -113,8 +115,7 @@ def test_an_ordinary_executed_cell_claims_nothing_uncacheable() -> None:
 
 def test_a_fully_cached_cell_claims_nothing_uncacheable() -> None:
     badge = build_interactive_badge(
-        [{"code": "x = load()", "status": str(CacheStatus.RESTORED),
-          "total_time": 0.01, "saved_time": 0.5}]
+        [{"code": "x = load()", "status": str(CacheStatus.RESTORED), "total_time": 0.01, "saved_time": 0.5}]
     )
     assert badge.header.uncacheable_count == 0
     assert "not cached" not in render_text(badge).lower()
@@ -125,11 +126,14 @@ def test_the_count_matches_the_rows_below_it() -> None:
     have the summary contradict what the reader can count for themselves."""
     metrics = [
         _UNCACHEABLE,
-        {"code": "cheap = 1 + 1", "status": str(CacheStatus.COMPUTED),
-         "total_time": 0.0, "skipped_reason": "below the cost floor"},
+        {
+            "code": "cheap = 1 + 1",
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 0.0,
+            "skipped_reason": "below the cost floor",
+        },
         {"code": "y = work()", "status": str(CacheStatus.COMPUTED), "total_time": 0.4},
-        {"code": "z = load()", "status": str(CacheStatus.RESTORED),
-         "total_time": 0.01, "saved_time": 0.9},
+        {"code": "z = load()", "status": str(CacheStatus.RESTORED), "total_time": 0.01, "saved_time": 0.9},
     ]
     badge = build_interactive_badge(metrics)
     text = render_text(badge)

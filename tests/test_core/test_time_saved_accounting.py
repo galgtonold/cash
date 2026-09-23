@@ -4,6 +4,7 @@ the *avoided compute time*, not the cache-lookup time.
 Before the fix it summed the hit's own (microsecond) lookup duration, so it
 under-reported savings by ~4 orders of magnitude.
 """
+
 from __future__ import annotations
 
 import time
@@ -19,9 +20,9 @@ def test_total_time_saved_credits_avoided_compute(tmp_path):
         time.sleep(0.3)
         return x * 2
 
-    slow(1)            # miss (~0.3s compute, stored)
-    slow(1)            # hit
-    slow(1)            # hit
+    slow(1)  # miss (~0.3s compute, stored)
+    slow(1)  # hit
+    slow(1)  # hit
 
     info = slow.cache_info()
     assert info["hits"] == 2
@@ -39,7 +40,7 @@ def test_no_time_saved_on_pure_misses(tmp_path):
 
     f(1)
     f(2)
-    f(3)               # three distinct args -> all misses
+    f(3)  # three distinct args -> all misses
     info = f.cache_info()
     assert info["hits"] == 0
     assert info["total_time_saved"] == 0.0
@@ -57,17 +58,17 @@ def test_time_saved_survives_cross_instance_restore(tmp_path):
         time.sleep(0.25)
         return x * 2
 
-    slow(7)            # compute + persist
+    slow(7)  # compute + persist
 
     c2 = Cash(cache_dir=cache_dir)
 
     @c2.cache
-    def slow(x):       # noqa: F811 - same source -> same key space
+    def slow(x):  # noqa: F811 - same source -> same key space
         time.sleep(0.25)
         return x * 2
 
-    slow(7)            # warm-up (cold-key transition)
-    slow(7)            # restored hit
+    slow(7)  # warm-up (cold-key transition)
+    slow(7)  # restored hit
     info = slow.cache_info()
     assert info["hits"] >= 1
     assert info["total_time_saved"] > 0.15, info["total_time_saved"]

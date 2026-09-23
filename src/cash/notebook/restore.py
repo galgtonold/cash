@@ -24,8 +24,8 @@ from typing import TYPE_CHECKING, Any
 
 from ..utils import resolve_file_dep_path
 from ._protocols import ShellProtocol
-from .file_dep_snapshot import file_dep_is_fresh
 from .cache_status import CacheStatus
+from .file_dep_snapshot import file_dep_is_fresh
 from .object_hashing import compute_hash
 from .statement import ProcessResult
 
@@ -80,14 +80,14 @@ class Restorer:
 
         self._restoring.add(var_name)
         try:
-            if not isinstance(cached_data, dict) or 'variables' not in cached_data:
+            if not isinstance(cached_data, dict) or "variables" not in cached_data:
                 if self._debug:
                     print(f"[STATE] Invalid payload format for '{var_name}'")
                 return []
 
             self._ensure_inputs_current(var_name, metadata, restored_metrics)
 
-            restored_vars = cached_data['variables']
+            restored_vars = cached_data["variables"]
             if var_name in restored_vars:
                 self.shell.user_ns[var_name] = restored_vars[var_name]
                 self._restore_tracking_state(var_name, metadata, restored_vars)
@@ -112,7 +112,7 @@ class Restorer:
 
     def _is_available_in_builtins(self, var_name: str) -> bool:
         """Check if variable is available in __builtins__."""
-        builtins_ns = self.shell.user_ns.get('__builtins__')
+        builtins_ns = self.shell.user_ns.get("__builtins__")
         if not builtins_ns:
             return False
 
@@ -128,7 +128,7 @@ class Restorer:
         Called before restoring a cached variable — if files have changed the
         cached value is stale and must be recomputed.
         """
-        for fpath, stored in metadata.get('file_dependencies', {}).items():
+        for fpath, stored in metadata.get("file_dependencies", {}).items():
             resolved = resolve_file_dep_path(fpath)
             if resolved is None:
                 if self._debug:
@@ -152,7 +152,7 @@ class Restorer:
             hashes[var_name] = set()
         hashes[var_name].add(restored_hash)
 
-        output_lineages = metadata.get('output_lineages', {})
+        output_lineages = metadata.get("output_lineages", {})
         if var_name in output_lineages:
             self._tracking_state.lineage.record(
                 var_name,
@@ -160,11 +160,11 @@ class Restorer:
                 value=self.shell.user_ns.get(var_name),
             )
 
-        stored_code = metadata.get('code', metadata.get('cell_code'))
+        stored_code = metadata.get("code", metadata.get("cell_code"))
         if stored_code:
             self._tracking_state.executed_cell_codes[var_name] = stored_code
 
-        stored_hash = metadata.get('source_hash', metadata.get('cell_hash'))
+        stored_hash = metadata.get("source_hash", metadata.get("cell_hash"))
         if stored_hash:
             cell_hashes = self._tracking_state.executed_cell_hashes
             if var_name not in cell_hashes:
@@ -173,7 +173,7 @@ class Restorer:
                 cell_hashes[var_name] = {cell_hashes[var_name]}
             cell_hashes[var_name].add(stored_hash)
 
-        file_deps = metadata.get('file_dependencies', {})
+        file_deps = metadata.get("file_dependencies", {})
         if file_deps:
             file_dep_set = self._tracking_state.executed_file_deps
             if var_name not in file_dep_set:
@@ -189,31 +189,34 @@ class Restorer:
         even when the variable was hydrated from disk rather than freshly
         computed in this session.
         """
-        saved_time = metadata.get('execution_time', 0.0)
-        source = metadata.get('source', metadata.get('storage', 'Disk'))
+        saved_time = metadata.get("execution_time", 0.0)
+        source = metadata.get("source", metadata.get("storage", "Disk"))
         if isinstance(source, list):
-            source = source[0] if source else 'Disk'
+            source = source[0] if source else "Disk"
         return {
-            'code': metadata.get('code', f"# defined {var_name}"),
-            'status': CacheStatus.RESTORED,
-            'execution_time': 0.0,
-            'total_time': saved_time,
-            'saved_time': saved_time,
-            'error': None,
-            'restored_vars': list(restored_vars.keys()),
-            'inputs': list(metadata.get('inputs', [])),
-            'uncacheable_reasons': [],
-            'source': source,
-            'is_upstream': True,
-            'storage': [source],
+            "code": metadata.get("code", f"# defined {var_name}"),
+            "status": CacheStatus.RESTORED,
+            "execution_time": 0.0,
+            "total_time": saved_time,
+            "saved_time": saved_time,
+            "error": None,
+            "restored_vars": list(restored_vars.keys()),
+            "inputs": list(metadata.get("inputs", [])),
+            "uncacheable_reasons": [],
+            "source": source,
+            "is_upstream": True,
+            "storage": [source],
         }
 
     def _ensure_inputs_current(
-        self, var_name: str, metadata: dict, restored_metrics: list[ProcessResult],
+        self,
+        var_name: str,
+        metadata: dict,
+        restored_metrics: list[ProcessResult],
     ) -> None:
         """Recursively restore any stale input variables required by var_name."""
-        for input_var in metadata.get('inputs', []):
-            if input_var in (var_name, 'get_ipython', '__builtins__'):
+        for input_var in metadata.get("inputs", []):
+            if input_var in (var_name, "get_ipython", "__builtins__"):
                 continue
             if input_var not in self.shell.user_ns:
                 restored_metrics.extend(self.restore_variable(input_var))
@@ -243,6 +246,7 @@ class Restorer:
         metadata, cached_data = self._backend.get(cache_key)
         if cached_data:
             from cash.notebook.call_refs import resolve_call_refs
+
             cached_data = resolve_call_refs(cached_data, self._backend)
         if not cached_data:
             if self._debug:

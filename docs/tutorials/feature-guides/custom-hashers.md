@@ -52,7 +52,7 @@ def register_hasher(
 ) -> None: ...
 ```
 
-<!-- claim: cash/core.py:Cash._hash_callable_source @92e81388, cash/core.py:Cash.register_hasher @eed1ca57 -->
+<!-- claim: cash/core.py:Cash._hash_callable_source @0ea9711c, cash/core.py:Cash.register_hasher @eed1ca57 -->
 Two things happen on registration — once it is accepted, which for a type Cash
 content-hashes itself means passing `override=True` (see
 [below](#overriding-a-built-in-content-hasher)):
@@ -62,7 +62,7 @@ content-hashes itself means passing `override=True` (see
 
 Registering for `types.FunctionType`, `types.MethodType` or `functools.partial` is accepted but warns ([KEY-CALLABLE-HASHER](../../warnings.md#key-callable-hasher)): the hasher then covers every function passed to any cached function, and one keyed on the name gives every closure a factory makes the same cache entry. Pass what the closure captures as a plain argument instead.
 
-<!-- claim: cash/core.py:Cash._hash_arg_payload @c688c59c, cash/core.py:Cash._try_builtin_type_hash @9c5166b5 -->
+<!-- claim: cash/core.py:Cash._hash_arg_payload @6cf42ecf, cash/core.py:Cash._try_builtin_type_hash @964ede10 -->
 When a cached function runs, `_serialize_args` calls `_hash_arg_payload`, which walks each argument in this order — **the order matters, and it is not the one you might expect**:
 
 0. **Hashers registered with `override=True`.** Nothing else is consulted for a type you have explicitly taken over — see [overriding a built-in](#overriding-a-built-in-content-hasher).
@@ -138,7 +138,7 @@ Four properties, in priority order:
 
 - **Deterministic.** Same input, same hash, every time. No `id(obj)`, no `time.time()`, no `random.random()`, no `hash(str)` (PYTHONHASHSEED randomises that across processes). If your hasher returns a different string on two runs of the same Python script for the same input, every cache entry is a guaranteed miss.
 - **Total.** Capture every field that affects the function's output. If `MyModel` has a `temperature` knob and your hasher only reads `weights`, two models with different temperatures share a cache entry — your function returns the wrong answer.
-<!-- claim: cash/core.py:Cash._try_hash_numpy @b6b247ba -->
+<!-- claim: cash/core.py:Cash._try_hash_numpy @60c55bee -->
 - **Cheap, but never at the cost of correctness.** The hasher runs on every call, so it should be fast — but a hasher that only samples the data will collide two different inputs into a wrong cache hit. Cash's built-in `_try_hash_numpy` hashes the **full** buffer (plus shape, dtype and memory order) for this reason. Only sample if you can *guarantee* the sampled fields uniquely identify the value (e.g. a content version you control), never as a blind speed shortcut over raw bytes.
 - **Stable across processes.** Don't depend on the process-local hash seed, `id()`, memory addresses, or anything else that varies between Python invocations. The whole point of disk caching is sharing entries across runs.
 
@@ -193,7 +193,7 @@ A new `Engine` constructed for the same URL hashes the same way, so the cache su
 
 Cash ships with module-level fingerprinting for the dataframe ecosystem. These are *not* installed via `register_hasher` — they live in `_try_builtin_type_hash`, and as the dispatch order above shows they run **before** the user registry, so for these types the built-in always wins and a user registration is a no-op.
 
-<!-- claim: cash/core.py:Cash._try_builtin_type_hash @9c5166b5 broad="the table enumerates every type the builtin dispatcher recognises" -->
+<!-- claim: cash/core.py:Cash._try_builtin_type_hash @964ede10 broad="the table enumerates every type the builtin dispatcher recognises" -->
 | Type | Hash strategy | Source |
 |---|---|---|
 | `pandas.DataFrame`, `pandas.Series` | Schema (column / series / index names) **and** `pd.util.hash_pandas_object(value).values.tobytes()`, SHA-256'd together — so a column rename invalidates even with identical row values | `_try_hash_pandas` |

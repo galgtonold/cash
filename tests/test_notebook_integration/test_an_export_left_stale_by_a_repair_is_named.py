@@ -7,12 +7,12 @@ leaves a cell the user did not run alone too. The file kept the pre-edit
 numbers while the badge said "1 upstream step not re-run (what they built is
 already current)". Not re-writing is right; claiming it is current is not.
 """
+
 import pytest
 
 pytest.importorskip("pandas")
 
-pytestmark = [pytest.mark.integration, pytest.mark.upstream, pytest.mark.files,
-              pytest.mark.timeout(300)]
+pytestmark = [pytest.mark.integration, pytest.mark.upstream, pytest.mark.files, pytest.mark.timeout(300)]
 
 CELLS = [
     "import cash\n%cash_on\n%cash_badge print",

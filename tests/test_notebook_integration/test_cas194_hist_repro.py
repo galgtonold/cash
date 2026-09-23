@@ -8,6 +8,7 @@ call on a live matplotlib Axes/Figure draws on it, whatever it returns, so the
 fill statement is rebuilt with the figure. A sibling ``.plot()`` panel is the
 control — both must survive reconstruction.
 """
+
 import pytest
 
 pytest.importorskip("matplotlib")
@@ -21,18 +22,18 @@ SETUP = "import matplotlib.pyplot as plt\nimport numpy as np\nimport cash\n%cash
 def test_hist_panel_survives_figure_reconstruction(nb_runner, tmp_path):
     chart = (tmp_path / "panel.png").as_posix()
     blank = (tmp_path / "blank.png").as_posix()
-    nb_runner.create_notebook([
-        SETUP,
-        "data = np.arange(500) % 11",
-        "fig, (axp, axh) = plt.subplots(1, 2, figsize=(8, 3), dpi=100)",
-        "axp.plot(range(20), [i * i for i in range(20)])",   # artist-return control
-        "axh.hist(data, bins=11)",                            # data-tuple return
-        f"fig.savefig('{chart}')\n"
-        "print('LINES:', len(axp.lines), 'PATCH:', len(axh.patches))",
-        # A same-geometry blank baseline for the pixel check.
-        f"figb, axb = plt.subplots(1, 2, figsize=(8, 3), dpi=100)\n"
-        f"figb.savefig('{blank}')\nprint('blank saved')",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            "data = np.arange(500) % 11",
+            "fig, (axp, axh) = plt.subplots(1, 2, figsize=(8, 3), dpi=100)",
+            "axp.plot(range(20), [i * i for i in range(20)])",  # artist-return control
+            "axh.hist(data, bins=11)",  # data-tuple return
+            f"fig.savefig('{chart}')\nprint('LINES:', len(axp.lines), 'PATCH:', len(axh.patches))",
+            # A same-geometry blank baseline for the pixel check.
+            f"figb, axb = plt.subplots(1, 2, figsize=(8, 3), dpi=100)\nfigb.savefig('{blank}')\nprint('blank saved')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "LINES: 1 PATCH: 11" in nb_runner.get_output(6)
@@ -52,6 +53,7 @@ def test_hist_panel_survives_figure_reconstruction(nb_runner, tmp_path):
     # The chart on disk must not be a blank two-axes render.
     import numpy as np
     from matplotlib import image as mpimg
+
     chart_px = mpimg.imread(tmp_path / "panel.png")
     blank_px = mpimg.imread(tmp_path / "blank.png")
     differing = float((np.abs(chart_px - blank_px) > 0.01).any(axis=-1).mean())

@@ -12,6 +12,7 @@ problem than the hard-kill measurement suggests.
 Run with the ATOMIC write applied (git checkout 2fce7ea -- src/cash/backends/
 file_backend.py) — that is the configuration where loss is visible.
 """
+
 import os
 
 import pytest
@@ -22,8 +23,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(180)]
 def _chain_cells(cache_dir: str, sleep: float = 0.15):
     cdir = cache_dir.replace("\\", "/")
     return [
-        "import cash\nfrom cash import Cash, FileBackend\n"
-        f"c = Cash(backend=FileBackend(cache_dir='{cdir}'))",
+        f"import cash\nfrom cash import Cash, FileBackend\nc = Cash(backend=FileBackend(cache_dir='{cdir}'))",
         "import time\n"
         "def base(x):\n    return x + 1\n"
         "@c.cache\n"
@@ -36,15 +36,17 @@ def _chain_cells(cache_dir: str, sleep: float = 0.15):
         "def top(x):\n    return mid(x) + 100",
         "vals = [top(s) for s in (1, 2, 3)]\n"
         "info = top.cache_info()\n"
-        "print(f'RESULT hits={info[\"hits\"]} misses={info[\"misses\"]}')",
+        'print(f\'RESULT hits={info["hits"]} misses={info["misses"]}\')',
     ]
 
 
 def _counts(cache_dir):
     files = os.listdir(cache_dir) if os.path.isdir(cache_dir) else []
-    return (len([f for f in files if f.endswith(".entry")]),
-            len([f for f in files if f.endswith(".meta")]),
-            len([f for f in files if f.endswith(".part")]))
+    return (
+        len([f for f in files if f.endswith(".entry")]),
+        len([f for f in files if f.endswith(".meta")]),
+        len([f for f in files if f.endswith(".part")]),
+    )
 
 
 @pytest.mark.fresh_kernel
@@ -73,8 +75,8 @@ def test_probe_shutdown_path_durability(nb_runner, tmp_path, graceful):
 
     after = _counts(cache_dir)
     label = "GRACEFUL" if graceful else "HARD KILL"
-    print(f"\n  [{label}] before={before[0]}d/{before[1]}m/{before[2]}p  "
-          f"after={after[0]}d/{after[1]}m/{after[2]}p", flush=True)
-    print(f"  [{label}] VERDICT: "
-          f"{'ALL 9 LANDED' if after[0] >= 9 and after[1] >= 9 else 'ENTRIES LOST'}",
-          flush=True)
+    print(
+        f"\n  [{label}] before={before[0]}d/{before[1]}m/{before[2]}p  after={after[0]}d/{after[1]}m/{after[2]}p",
+        flush=True,
+    )
+    print(f"  [{label}] VERDICT: {'ALL 9 LANDED' if after[0] >= 9 and after[1] >= 9 else 'ENTRIES LOST'}", flush=True)

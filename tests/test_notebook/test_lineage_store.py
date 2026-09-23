@@ -1,9 +1,8 @@
 """Tests for LineageStore — the single seam for reading/writing variable lineage."""
+
 from __future__ import annotations
 
 import hashlib
-
-import pytest
 
 from cash.notebook.lineage_store import LineageStore
 
@@ -120,7 +119,9 @@ class TestResolvePriorityLadder:
     def test_falls_back_to_compute_hash_fn(self):
         store = LineageStore()
         result = store.resolve(
-            "x", value=42, virtual={},
+            "x",
+            value=42,
+            virtual={},
             compute_hash_fn=lambda v: f"computed:{v}",
         )
         assert result == "computed:42"
@@ -155,17 +156,20 @@ class TestTrackingStateWiring:
 
     def test_state_exposes_lineage_store(self):
         from cash.notebook._protocols import TrackingState
+
         state = TrackingState()
         assert isinstance(state.lineage, LineageStore)
 
     def test_dict_writes_visible_through_store(self):
         from cash.notebook._protocols import TrackingState
+
         state = TrackingState()
         state.variable_lineage["x"] = "h1"
         assert state.lineage.get("x") == "h1"
 
     def test_store_writes_visible_through_dict(self):
         from cash.notebook._protocols import TrackingState
+
         state = TrackingState()
         state.lineage.record("x", "h1")
         assert state.variable_lineage["x"] == "h1"

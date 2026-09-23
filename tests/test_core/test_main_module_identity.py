@@ -15,6 +15,7 @@ function name matching and the state hash not, so the entry still missed --
 with byte-identical digests either side. ``test_the_state_hash_agrees_too``
 is the arm that catches that specific half-fix.
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -34,9 +35,14 @@ def _script(tmp_path, name, body):
 
 
 def _run(path, tmp_path):
-    return subprocess.run([sys.executable, str(path)], capture_output=True,
-                          text=True, cwd=str(tmp_path), encoding="utf-8",
-                          errors="replace")
+    return subprocess.run(
+        [sys.executable, str(path)],
+        capture_output=True,
+        text=True,
+        cwd=str(tmp_path),
+        encoding="utf-8",
+        errors="replace",
+    )
 
 
 WORKER = """
@@ -58,10 +64,14 @@ WORKER = """
 def test_running_then_importing_reuses_the_result(tmp_path):
     """The headline, on real processes -- the only oracle that cannot be fooled."""
     _script(tmp_path, "worker", WORKER)
-    driver = _script(tmp_path, "driver", """
+    driver = _script(
+        tmp_path,
+        "driver",
+        """
         import worker
         worker.work(1)
-    """)
+    """,
+    )
 
     first = _run(tmp_path / "worker.py", tmp_path)
     assert first.returncode == 0, first.stderr
@@ -69,9 +79,7 @@ def test_running_then_importing_reuses_the_result(tmp_path):
 
     second = _run(driver, tmp_path)
     assert second.returncode == 0, second.stderr
-    assert "COMPUTED" not in second.stdout, (
-        "importing the script recomputed what running it had already cached"
-    )
+    assert "COMPUTED" not in second.stdout, "importing the script recomputed what running it had already cached"
 
 
 def test_the_state_hash_agrees_too(tmp_path):
@@ -82,7 +90,10 @@ def test_the_state_hash_agrees_too(tmp_path):
     naming the helper ``__main__.work`` inside the state hash.
     """
     _script(tmp_path, "worker", WORKER)
-    dump = _script(tmp_path, "dump", """
+    dump = _script(
+        tmp_path,
+        "dump",
+        """
         import json, sys
         target = sys.argv[1]
         if target == "direct":
@@ -98,14 +109,24 @@ def test_the_state_hash_agrees_too(tmp_path):
         c._analyze_dependencies(fn)
         state = c._state_hasher.compute(name, own_source_override=c._pin_own_source(fn))
         print(json.dumps({"name": name, "state": state}))
-    """)
+    """,
+    )
     import json
-    direct = json.loads(subprocess.run(
-        [sys.executable, str(dump), "direct"], capture_output=True, text=True,
-        cwd=str(tmp_path), encoding="utf-8").stdout.strip().splitlines()[-1])
-    imported = json.loads(subprocess.run(
-        [sys.executable, str(dump), "import"], capture_output=True, text=True,
-        cwd=str(tmp_path), encoding="utf-8").stdout.strip().splitlines()[-1])
+
+    direct = json.loads(
+        subprocess.run(
+            [sys.executable, str(dump), "direct"], capture_output=True, text=True, cwd=str(tmp_path), encoding="utf-8"
+        )
+        .stdout.strip()
+        .splitlines()[-1]
+    )
+    imported = json.loads(
+        subprocess.run(
+            [sys.executable, str(dump), "import"], capture_output=True, text=True, cwd=str(tmp_path), encoding="utf-8"
+        )
+        .stdout.strip()
+        .splitlines()[-1]
+    )
 
     assert direct["name"] == imported["name"], "the function name still disagrees"
     assert direct["state"] == imported["state"], (
@@ -117,7 +138,10 @@ def test_the_state_hash_agrees_too(tmp_path):
 def test_two_scripts_with_different_names_stay_apart(tmp_path):
     """The module qualifier still has to separate unrelated scripts."""
     for name, value in (("alpha", 10), ("beta", 999)):
-        _script(tmp_path, name, f"""
+        _script(
+            tmp_path,
+            name,
+            f"""
             import cash
             c = cash.Cash(cache_dir="cache")
 
@@ -128,7 +152,8 @@ def test_two_scripts_with_different_names_stay_apart(tmp_path):
                 return n * {value}
 
             print(F(1))
-        """)
+        """,
+        )
     assert _run(tmp_path / "alpha.py", tmp_path).stdout.strip() == "10"
     assert _run(tmp_path / "beta.py", tmp_path).stdout.strip() == "999"
 
@@ -178,28 +203,28 @@ def _program(tmp_path, **kw):
     _script(tmp_path, "prog", PROGRAM.format(**params))
     done = _run(tmp_path / "prog.py", tmp_path)
     assert done.returncode == 0, done.stderr
-    value = next(line.split()[1] for line in done.stdout.splitlines()
-                 if line.startswith("RESULT"))
+    value = next(line.split()[1] for line in done.stdout.splitlines() if line.startswith("RESULT"))
     return "COMPUTED" in done.stdout, value
 
 
 # work(1) == helper(1) + THRESHOLD + body_const == (1 + helper_const) + ...
-@pytest.mark.parametrize(("label", "second", "recomputes", "value"), [
-    ("nothing changed", {}, False, "2"),
-    ("a comment added", {"extra": "\n        # a note"}, False, "2"),
-    ("the body edited", {"body_const": 5}, True, "7"),
-    ("a helper edited", {"helper_const": 9}, True, "10"),
-    ("a read global changed", {"threshold": 7}, True, "9"),
-])
-def test_the_decorator_keeps_its_promises_under_main(
-        tmp_path, label, second, recomputes, value):
+@pytest.mark.parametrize(
+    ("label", "second", "recomputes", "value"),
+    [
+        ("nothing changed", {}, False, "2"),
+        ("a comment added", {"extra": "\n        # a note"}, False, "2"),
+        ("the body edited", {"body_const": 5}, True, "7"),
+        ("a helper edited", {"helper_const": 9}, True, "10"),
+        ("a read global changed", {"threshold": 7}, True, "9"),
+    ],
+)
+def test_the_decorator_keeps_its_promises_under_main(tmp_path, label, second, recomputes, value):
     ran, _ = _program(tmp_path)
     assert ran, "the priming run should have computed"
 
     ran, got = _program(tmp_path, **second)
     assert ran is recomputes, (
-        f"{label}: {'recomputed' if ran else 'restored'}, wanted "
-        f"{'recompute' if recomputes else 'restore'}"
+        f"{label}: {'recomputed' if ran else 'restored'}, wanted {'recompute' if recomputes else 'restore'}"
     )
     assert got == value, f"{label}: wrong answer ({got}, wanted {value})"
 
@@ -210,8 +235,7 @@ def test_the_decorator_keeps_its_promises_under_main(
 
 
 def test_a_function_from_a_real_module_is_untouched():
-    assert resolve_main_module(test_a_function_from_a_real_module_is_untouched) \
-        != "__main__"
+    assert resolve_main_module(test_a_function_from_a_real_module_is_untouched) != "__main__"
 
 
 def test_no_file_falls_back_to_main():
@@ -221,7 +245,7 @@ def test_no_file_falls_back_to_main():
     worse than leaving them as they are.
     """
     namespace: dict = {}
-    exec("def f(): pass", namespace)          # noqa: S102 - the case under test
+    exec("def f(): pass", namespace)  # noqa: S102 - the case under test
     assert resolve_main_module(namespace["f"]) == "__main__"
 
 
@@ -232,7 +256,7 @@ def test_it_reads_the_function_s_own_globals_not_the_entry_point():
     it was not defined in; the function's own globals are always right.
     """
     namespace = {"__file__": "/somewhere/else/defining_file.py"}
-    exec("def f(): pass", namespace)          # noqa: S102 - the case under test
+    exec("def f(): pass", namespace)  # noqa: S102 - the case under test
     assert resolve_main_module(namespace["f"]) == "defining_file"
 
 
@@ -240,5 +264,5 @@ def test_a_notebook_style_namespace_stays_main():
     """Jupyter's ``__main__`` is a user namespace, not a file."""
     c = cash.Cash(cache_dir=None)
     namespace: dict = {"__name__": "__main__"}
-    exec("def f(n): return n", namespace)     # noqa: S102 - the case under test
+    exec("def f(n): return n", namespace)  # noqa: S102 - the case under test
     assert c._get_func_key(namespace["f"]).startswith("__main__.")

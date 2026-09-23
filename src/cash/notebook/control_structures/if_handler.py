@@ -21,8 +21,8 @@ import hashlib
 import logging
 from typing import TYPE_CHECKING
 
-from . import helpers as _helpers
 from ..cache_status import CacheStatus
+from . import helpers as _helpers
 
 if TYPE_CHECKING:
     from ..statement import ProcessResult
@@ -77,8 +77,9 @@ class IfHandler:
             branch_body, branch_label = self._find_taken_branch(node)
 
             if self.debug:
-                logger.debug("[CONTROL] If per-statement: taking branch '%s', %s statements",
-                             branch_label, len(branch_body))
+                logger.debug(
+                    "[CONTROL] If per-statement: taking branch '%s', %s statements", branch_label, len(branch_body)
+                )
 
             # Build a context hash for cache key uniqueness (which branch)
             branch_hash = hashlib.sha256(branch_label.encode()).hexdigest()[:16]
@@ -86,7 +87,9 @@ class IfHandler:
             # A directive on the ``if``/``elif`` header scopes to the branch, so
             # it flows down into every statement in it.
             branch_annotation = _helpers.resolve_header_annotation(
-                raw_cell, node, inherited_annotation,
+                raw_cell,
+                node,
+                inherited_annotation,
             )
 
             # Build the full body_statements for badge display (only executed branch)
@@ -96,8 +99,14 @@ class IfHandler:
 
             for body_node in branch_body:
                 was_computed = self._execute_if_branch_stmt(
-                    body_node, branch_hash, branch_label, ttl, silent, all_metrics,
-                    raw_cell, branch_annotation,
+                    body_node,
+                    branch_hash,
+                    branch_label,
+                    ttl,
+                    silent,
+                    all_metrics,
+                    raw_cell,
+                    branch_annotation,
                 )
                 if was_computed:
                     computed_count += 1
@@ -112,9 +121,9 @@ class IfHandler:
             # Tag all metrics with body statements for the whole if block
             # (so the badge can show the header and which branch we took)
             for m in all_metrics:
-                m['control_type'] = 'if'
-                if 'body_statements' not in m:
-                    m['body_statements'] = body_stmts
+                m["control_type"] = "if"
+                if "body_statements" not in m:
+                    m["body_statements"] = body_stmts
 
             return ControlStructureResult(
                 success=True,
@@ -158,39 +167,48 @@ class IfHandler:
 
         if is_control_structure(body_node):
             result = self.dispatcher.process(
-                body_node, ttl, silent, None, raw_cell, branch_annotation,
+                body_node,
+                ttl,
+                silent,
+                None,
+                raw_cell,
+                branch_annotation,
             )
             _helpers.tag_control_metrics(result, branch_hash, branch_label, all_metrics)
             if not result.success:
                 err = result.error or RuntimeError("Error in nested control structure")
-                if not hasattr(err, '_cash_error_lineno'):
+                if not hasattr(err, "_cash_error_lineno"):
                     with contextlib.suppress(AttributeError, TypeError):
-                        err._cash_error_lineno = getattr(body_node, 'lineno', None)
+                        err._cash_error_lineno = getattr(body_node, "lineno", None)
                 raise err
             return result.computed_iterations > 0
         stmt_code = ast.unparse(body_node)
         modified_code = f"# control_context: {branch_hash}\n{stmt_code}"
         annotation = _helpers.resolve_statement_annotation(
-            raw_cell, body_node, branch_annotation,
+            raw_cell,
+            body_node,
+            branch_annotation,
         )
         # Never the cell's last expression -- see ForLoopHandler.
         metrics = self.statement_processor.process_statement(
-            modified_code, ttl, silent, annotation=annotation, is_last=False,
+            modified_code,
+            ttl,
+            silent,
+            annotation=annotation,
+            is_last=False,
         )
-        metrics['control_context'] = branch_hash
-        metrics['branch_label'] = branch_label
+        metrics["control_context"] = branch_hash
+        metrics["branch_label"] = branch_label
         _helpers.flush_metrics_output(metrics)
         all_metrics.append(metrics)
-        if metrics.get('status') == CacheStatus.ERROR:
-            err = metrics.get('error', RuntimeError(f"Error executing: {stmt_code}"))
+        if metrics.get("status") == CacheStatus.ERROR:
+            err = metrics.get("error", RuntimeError(f"Error executing: {stmt_code}"))
             with contextlib.suppress(AttributeError, TypeError):
-                err._cash_error_lineno = getattr(body_node, 'lineno', None)
+                err._cash_error_lineno = getattr(body_node, "lineno", None)
             raise err
-        return metrics.get('status') == CacheStatus.COMPUTED
+        return metrics.get("status") == CacheStatus.COMPUTED
 
-    def _find_taken_branch(
-        self, node: ast.If
-    ) -> tuple[list[ast.AST], str]:
+    def _find_taken_branch(self, node: ast.If) -> tuple[list[ast.AST], str]:
         """Walk if/elif/else chain and return (body_nodes, label) of the taken branch.
 
         Evaluates each condition in the user namespace. Returns the first branch
@@ -205,9 +223,7 @@ class IfHandler:
             try:
                 condition_result = eval(test_code, self.shell.user_ns, self.shell.user_ns)
             except Exception as e:
-                raise RuntimeError(
-                    f"Failed to evaluate if condition: {test_code}"
-                ) from e
+                raise RuntimeError(f"Failed to evaluate if condition: {test_code}") from e
 
             if condition_result:
                 keyword = "elif" if branch_idx > 0 else "if"

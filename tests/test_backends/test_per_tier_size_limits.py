@@ -8,6 +8,7 @@ unconstrained ones below it.
 The universal 1s compute floor stays in place — the size constraint is
 *on top* of it, not a replacement for it.
 """
+
 from __future__ import annotations
 
 from unittest.mock import patch
@@ -34,14 +35,17 @@ class TestBackendMaxSize:
 
     def test_redis_caps_at_10_MB(self):
         from cash.backends.redis_backend import RedisBackend
+
         assert RedisBackend.max_size_bytes == 10 * 1024 * 1024
 
     def test_sqlite_caps_at_100_MB(self):
         from cash.backends.sqlite_backend import SQLiteBackend
+
         assert SQLiteBackend.max_size_bytes == 100 * 1024 * 1024
 
     def test_s3_unbounded(self):
         from cash.backends.s3_backend import S3Backend
+
         assert S3Backend.max_size_bytes is None
 
 
@@ -54,6 +58,7 @@ class TestTieredPerTierSkip:
         _redis = pytest.importorskip("redis")
         with patch.object(_redis, "Redis", fakeredis.FakeStrictRedis):
             from cash.backends.redis_backend import RedisBackend
+
             yield RedisBackend(prefix="cash:cap:")
 
     def test_small_object_lands_in_every_tier(self, tmp_path, redis_backend):
@@ -115,6 +120,7 @@ class TestBareBackendIgnoresMaxSize:
         _redis = pytest.importorskip("redis")
         with patch.object(_redis, "Redis", fakeredis.FakeStrictRedis):
             from cash.backends.redis_backend import RedisBackend
+
             b = RedisBackend(prefix="cash:bare:")
             big = "x" * (15 * 1024 * 1024)
             # Should not raise — the cap is a tier-promotion hint, not a gate.
@@ -124,6 +130,7 @@ class TestBareBackendIgnoresMaxSize:
 
     def test_bare_sqlite_accepts_oversized_object(self, tmp_path):
         from cash.backends.sqlite_backend import SQLiteBackend
+
         b = SQLiteBackend(str(tmp_path / "c.db"))
         big = "x" * (150 * 1024 * 1024)  # > 100 MB cap
         b.set("big", big)

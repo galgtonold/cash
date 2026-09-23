@@ -21,6 +21,7 @@ folded in raw strides, which also split a strided view from its contiguous
 copy -- same values, same memory order, only `.flags` differs -- and made a
 function returning a view re-run its caller after every restore (CAS-123).
 """
+
 from __future__ import annotations
 
 import pytest
@@ -61,9 +62,7 @@ def test_c_and_f_ordered_arrays_do_not_share_an_entry(cash_instance):
     got_f = kernel(f)
 
     assert np.array_equal(got_c, np.ravel(c, order="A"))
-    assert np.array_equal(got_f, np.ravel(f, order="A")), (
-        "the F-ordered call was served the C-ordered result"
-    )
+    assert np.array_equal(got_f, np.ravel(f, order="A")), "the F-ordered call was served the C-ordered result"
     assert repr(got_c) != repr(got_f), "these two answers are genuinely different"
     assert len(ran) == 2, f"only {len(ran)} execution(s): the two collided"
 
@@ -121,12 +120,13 @@ def test_an_f_like_view_and_its_c_copy_are_distinguished(cash_instance):
         return np.ravel(x, order="K")
 
     view = np.asfortranarray(np.arange(24, dtype=np.float64).reshape(4, 6))[:, ::2]
-    copy = view.copy()                          # C-ordered
+    copy = view.copy()  # C-ordered
     assert not np.array_equal(np.ravel(view, order="K"), np.ravel(copy, order="K"))
 
     assert np.array_equal(kernel(view), np.ravel(view, order="K"))
     assert np.array_equal(kernel(copy), np.ravel(copy, order="K")), (
-        "the C-ordered copy was served the F-like view's result")
+        "the C-ordered copy was served the F-like view's result"
+    )
     assert len(ran) == 2
 
 

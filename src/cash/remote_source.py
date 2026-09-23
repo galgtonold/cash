@@ -45,7 +45,6 @@ from typing import Any
 # ``import cash``, paid by everyone whether or not they touch a URL. It is
 # imported inside the HTTP path instead. ``urllib.parse`` is cheap and needed to
 # recognise a scheme, so it stays up here.
-
 from .data_source import DataSource
 from .diagnostics import warn_diagnostic
 from .exceptions import CashCacheIneffectiveWarning, DependencyNotFoundError
@@ -61,9 +60,12 @@ DEFAULT_TIMEOUT = 10.0
 # over a version id because it changes on *content*, whereas a version id also
 # changes on a no-op re-upload - both are correct, ETag just recomputes less.
 _STRONG_INFO_KEYS = (
-    "ETag", "etag",
-    "VersionId", "version_id",
-    "generation", "Generation",
+    "ETag",
+    "etag",
+    "VersionId",
+    "version_id",
+    "generation",
+    "Generation",
     "content_settings_etag",
 )
 
@@ -153,9 +155,7 @@ class measured_validation:
             self._outer[1] += self._cell[1]
         if self._sink is not None and self.count:
             self._sink[self._key] = self._sink.get(self._key, 0.0) + self.seconds
-            self._sink[f"{self._key}_count"] = (
-                self._sink.get(f"{self._key}_count", 0) + self.count
-            )
+            self._sink[f"{self._key}_count"] = self._sink.get(f"{self._key}_count", 0) + self.count
 
 
 def _record_validation(seconds: float) -> None:
@@ -191,19 +191,13 @@ def validation_is_expensive(seconds: float, saved_seconds: float | None) -> bool
     return seconds > max(VALIDATION_WARN_FLOOR_SECONDS, VALIDATION_WARN_RATIO * saved_seconds)
 
 
-def warn_validation_cost_once(
-    label: str, count: int, seconds: float, saved_seconds: float | None
-) -> None:
+def warn_validation_cost_once(label: str, count: int, seconds: float, saved_seconds: float | None) -> None:
     """Warn a single time per *label* that freshness checking is costing real time."""
     if label in _warned_validation_cost:
         return
     if len(_warned_validation_cost) < 1024:
         _warned_validation_cost.add(label)
-    saved = (
-        f", against {saved_seconds:.2f}s of compute it avoids"
-        if saved_seconds and saved_seconds > 0
-        else ""
-    )
+    saved = f", against {saved_seconds:.2f}s of compute it avoids" if saved_seconds and saved_seconds > 0 else ""
     warn_diagnostic(
         CashCacheIneffectiveWarning,
         "REMOTE-FRESHNESS-COST",
@@ -298,9 +292,7 @@ def _http_token(url: str, timeout: float) -> str:
     if length is not None:
         _warn_weak_token(url, "no ETag or Last-Modified header")
         return f"size:{length}"
-    raise _NoTokenError(
-        "the response carried no ETag, Last-Modified or Content-Length header"
-    )
+    raise _NoTokenError("the response carried no ETag, Last-Modified or Content-Length header")
 
 
 def _fsspec_token(url: str, storage_options: dict[str, Any]) -> str:
@@ -311,7 +303,7 @@ def _fsspec_token(url: str, storage_options: dict[str, Any]) -> str:
         scheme = urllib.parse.urlsplit(url).scheme
         raise DependencyNotFoundError(
             f"tracking {scheme}:// objects requires fsspec and its {scheme} "
-            f"filesystem. Install them (for example `pip install \"cash-lib[s3]\"` "
+            f'filesystem. Install them (for example `pip install "cash-lib[s3]"` '
             f"and `pip install s3fs` for s3://), or track the object with a "
             f"custom DataSource."
         ) from exc
@@ -436,9 +428,11 @@ class RemoteFileDataSource(DataSource):
             return self.max_age
         try:
             from . import _global_cash
+
             if _global_cash is not None:
                 return float(_global_cash.config.remote_revalidate_max_age_seconds)
             import os
+
             return float(os.environ.get("CASH_REMOTE_REVALIDATE_MAX_AGE_SECONDS", 0.0))
         except Exception:  # noqa: BLE001 - a config problem must not break a read
             return 0.0

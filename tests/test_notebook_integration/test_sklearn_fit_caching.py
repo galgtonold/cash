@@ -22,6 +22,7 @@ one-repetition test came to confirm the wrong belief.
 
 ``# @cash:cache-fit`` opts back in to the CAS-138 machinery for users who want it.
 """
+
 import pytest
 from conftest import shows_cached
 
@@ -62,6 +63,7 @@ def _restart(nb_runner):
 # The DEFAULT: a bare fit is not cached
 # ----------------------------------------------------------------------
 
+
 def test_bare_fit_not_cached_by_default(nb_runner):
     """CAS-170: a bare ``clf.fit(X, y)`` is NOT CACHED and re-executes every run.
 
@@ -79,11 +81,15 @@ def test_bare_fit_not_cached_by_default(nb_runner):
     is unambiguous -- a second statement in the same cell (e.g. a ``print``) caches
     on its own and would put an unrelated ``CACHED`` line in the same badge.
     """
-    nb_runner.create_notebook([
-        SETUP, DATA, MODEL,
-        "clf.fit(X, y)",                                    # 4 (single statement)
-        "# @cash:no-cache\nprint('fitted', clf.n_estimators)",   # 5
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            DATA,
+            MODEL,
+            "clf.fit(X, y)",  # 4 (single statement)
+            "# @cash:no-cache\nprint('fitted', clf.n_estimators)",  # 5
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -94,9 +100,7 @@ def test_bare_fit_not_cached_by_default(nb_runner):
 
     nb_runner.run_cell(4)  # isolated re-run must RE-EXECUTE, never restore
     warm = nb_runner.get_output(4)
-    assert not shows_cached(warm), (
-        f"bare fit restored from cache without @cash:cache-fit: {warm!r}"
-    )
+    assert not shows_cached(warm), f"bare fit restored from cache without @cash:cache-fit: {warm!r}"
     assert "NOT CACHED" in warm, warm
     assert "In-place mutation" in warm, warm
 
@@ -130,25 +134,28 @@ def test_bare_fit_alias_survives_warm_reruns(nb_runner):
       ``backup_fit True`` next to a live ``same False``. Every print now carries
       its own directive, and the test asserts nothing in the probe was CACHED.
     """
-    nb_runner.create_notebook([
-        SETUP, DATA, MODEL,                       # 1, 2, 3
-        "backup = clf",                           # 4
-        "clf.fit(X, y)",                          # 5
-        "# @cash:no-cache\n"                      # 6
-        "print('clf_fit', hasattr(clf, 'classes_'))\n"
-        "# @cash:no-cache\n"
-        "print('backup_fit', hasattr(backup, 'classes_'))\n"
-        "# @cash:no-cache\n"
-        "print('same', clf is backup)",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            DATA,
+            MODEL,  # 1, 2, 3
+            "backup = clf",  # 4
+            "clf.fit(X, y)",  # 5
+            "# @cash:no-cache\n"  # 6
+            "print('clf_fit', hasattr(clf, 'classes_'))\n"
+            "# @cash:no-cache\n"
+            "print('backup_fit', hasattr(backup, 'classes_'))\n"
+            "# @cash:no-cache\n"
+            "print('same', clf is backup)",
+        ]
+    )
     nb_runner.start_kernel()
 
     for rep in range(4):  # 1 cold + 3 warm; the alias restore lands on warm #2
         nb_runner.run_all()
 
         assert not shows_cached(nb_runner.get_output(5)), (
-            f"rep {rep}: bare fit must not restore by default: "
-            f"{nb_runner.get_output(5)!r}"
+            f"rep {rep}: bare fit must not restore by default: {nb_runner.get_output(5)!r}"
         )
         out = nb_runner.get_output(6)
         assert not shows_cached(out), (
@@ -161,14 +168,13 @@ def test_bare_fit_alias_survives_warm_reruns(nb_runner):
             f"rep {rep}: `backup = clf` restored a copy, so the alias is no longer "
             f"the fitted estimator (CAS-184): {out!r}"
         )
-        assert "backup_fit True" in out, (
-            f"rep {rep}: alias left stale/unfitted (CAS-184): {out!r}"
-        )
+        assert "backup_fit True" in out, f"rep {rep}: alias left stale/unfitted (CAS-184): {out!r}"
 
 
 # ----------------------------------------------------------------------
 # The OPT-IN: # @cash:cache-fit restores the CAS-138 behaviour
 # ----------------------------------------------------------------------
+
 
 def test_cache_fit_annotation_opts_in(nb_runner):
     """``# @cash:cache-fit`` turns the CAS-138 path back on for one statement.
@@ -178,10 +184,14 @@ def test_cache_fit_annotation_opts_in(nb_runner):
     is self-referential (input + output), so the re-run re-derives the unfitted
     estimator upstream and the fit cell restores.
     """
-    nb_runner.create_notebook([
-        SETUP, DATA, MODEL,
-        "# @cash:cache-fit\nclf.fit(X, y)\nprint('fitted', clf.n_estimators)",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            DATA,
+            MODEL,
+            "# @cash:cache-fit\nclf.fit(X, y)\nprint('fitted', clf.n_estimators)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -209,17 +219,21 @@ def test_cache_fit_restores_in_place_when_receiver_is_live(nb_runner):
     aliases the freshly rebuilt (unfitted) ``clf`` right before the fit cell,
     which then lands a persisted-cache HIT.
     """
-    nb_runner.create_notebook([
-        SETUP, DATA, MODEL,                       # 1, 2, 3
-        "backup = clf",                           # 4
-        "# @cash:cache-fit\n"                     # 5
-        "# @cash:persist\n"
-        "clf.fit(X, y)",
-        "# @cash:no-cache\n"                      # 6
-        "print('clf_fit', hasattr(clf, 'classes_'))\n"
-        "print('backup_fit', hasattr(backup, 'classes_'))\n"
-        "print('same', clf is backup)",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            DATA,
+            MODEL,  # 1, 2, 3
+            "backup = clf",  # 4
+            "# @cash:cache-fit\n"  # 5
+            "# @cash:persist\n"
+            "clf.fit(X, y)",
+            "# @cash:no-cache\n"  # 6
+            "print('clf_fit', hasattr(clf, 'classes_'))\n"
+            "print('backup_fit', hasattr(backup, 'classes_'))\n"
+            "print('same', clf is backup)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -258,24 +272,24 @@ def test_cache_fit_pandas_input_restores_repeatedly(nb_runner):
     Still load-bearing for the opt-in path: without it, opting in is a net LOSS.
     """
     pytest.importorskip("pandas")
-    nb_runner.create_notebook([
-        SETUP,
-        "import pandas as pd\n"
-        "rs = np.random.RandomState(0)\n"
-        "X_train = pd.DataFrame(rs.rand(4000, 20), columns=[f'f{i}' for i in range(20)])\n"
-        "y_train = (X_train['f0'] > 0.5).astype(int)",
-        "clf = RandomForestClassifier(n_estimators=160, random_state=0)",
-        "# @cash:cache-fit\nclf.fit(X_train, y_train)",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            "import pandas as pd\n"
+            "rs = np.random.RandomState(0)\n"
+            "X_train = pd.DataFrame(rs.rand(4000, 20), columns=[f'f{i}' for i in range(20)])\n"
+            "y_train = (X_train['f0'] > 0.5).astype(int)",
+            "clf = RandomForestClassifier(n_estimators=160, random_state=0)",
+            "# @cash:cache-fit\nclf.fit(X_train, y_train)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
     for i in range(3):
         nb_runner.run_cell(4)  # isolated warm re-run -- must be a clean cache hit
         out = nb_runner.get_output(4)
-        assert shows_cached(out), (
-            f"pandas cache-fit warm re-run #{i + 1} did not restore: {out!r}"
-        )
+        assert shows_cached(out), f"pandas cache-fit warm re-run #{i + 1} did not restore: {out!r}"
         # THE discriminator: no upstream constructor re-execution. Without the fix
         # the drifted self-referential key forces the constructor to re-run upstream
         # every warm re-run; with it the receiver's lineage is reset in place.
@@ -308,17 +322,18 @@ def test_cache_fit_make_classification_split_restores_repeatedly(nb_runner):
     unpacked outputs each carry lineage into the self-referential key.
     """
     pytest.importorskip("pandas")
-    nb_runner.create_notebook([
-        SETUP,
-        "import pandas as pd\n"
-        "from sklearn.model_selection import train_test_split",
-        # >8 MiB so the fit inputs take compute_hash's sampling path (CAS-166).
-        "X, y = make_classification(n_samples=60000, n_features=20, random_state=42)",
-        "df = pd.DataFrame(X, columns=[f'f{i}' for i in range(20)])",
-        "X_train, X_test, y_train, y_test = train_test_split(df, y, random_state=42)",
-        "clf = RandomForestClassifier(n_estimators=40, random_state=42)",
-        "# @cash:cache-fit\n# @cash:persist\nclf.fit(X_train, y_train)",   # 7
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            "import pandas as pd\nfrom sklearn.model_selection import train_test_split",
+            # >8 MiB so the fit inputs take compute_hash's sampling path (CAS-166).
+            "X, y = make_classification(n_samples=60000, n_features=20, random_state=42)",
+            "df = pd.DataFrame(X, columns=[f'f{i}' for i in range(20)])",
+            "X_train, X_test, y_train, y_test = train_test_split(df, y, random_state=42)",
+            "clf = RandomForestClassifier(n_estimators=40, random_state=42)",
+            "# @cash:cache-fit\n# @cash:persist\nclf.fit(X_train, y_train)",  # 7
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -326,8 +341,7 @@ def test_cache_fit_make_classification_split_restores_repeatedly(nb_runner):
         nb_runner.run_cell(7)  # isolated warm re-run -- must be a clean cache hit
         out = nb_runner.get_output(7)
         assert shows_cached(out), (
-            f"make_classification cache-fit warm re-run #{i + 1} did not restore "
-            f"(CAS-171): {out!r}"
+            f"make_classification cache-fit warm re-run #{i + 1} did not restore (CAS-171): {out!r}"
         )
         # THE discriminator, and the half a plain shows_cached() check would miss: a
         # full upstream re-derivation restores too, so without this a silent
@@ -350,27 +364,25 @@ def test_cache_fit_constructor_edit_invalidates_cached_fit(nb_runner):
     the stale cached value. The check cell is ``@cash:no-cache`` so it reads the
     live namespace instead of replaying its run_all output.
     """
-    nb_runner.create_notebook([
-        SETUP,
-        DATA,
-        "clf = RandomForestClassifier(n_estimators=50, random_state=0)",   # 3
-        "# @cash:cache-fit\nclf.fit(X, y)",                                # 4
-        "# @cash:no-cache\nprint('n', clf.n_estimators)",                  # 5
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            DATA,
+            "clf = RandomForestClassifier(n_estimators=50, random_state=0)",  # 3
+            "# @cash:cache-fit\nclf.fit(X, y)",  # 4
+            "# @cash:no-cache\nprint('n', clf.n_estimators)",  # 5
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "n 50" in nb_runner.get_output(5), nb_runner.get_output(5)
 
     # Edit the constructor 50 -> 200. The cached fit must be invalidated and re-run
     # on the rebuilt estimator (NOT served stale from the n=50 cache entry).
-    nb_runner.set_cell_source(
-        3, "clf = RandomForestClassifier(n_estimators=200, random_state=0)"
-    )
+    nb_runner.set_cell_source(3, "clf = RandomForestClassifier(n_estimators=200, random_state=0)")
     nb_runner.run_cells([4, 5])
     out = nb_runner.get_output(5)
-    assert "n 200" in out, (
-        f"constructor edit did not invalidate the cached fit -- stale result served: {out!r}"
-    )
+    assert "n 200" in out, f"constructor edit did not invalidate the cached fit -- stale result served: {out!r}"
 
 
 def test_cache_fit_large_numpy_restores_after_restart(nb_runner):
@@ -383,13 +395,15 @@ def test_cache_fit_large_numpy_restores_after_restart(nb_runner):
     reproduce the drifted-disk case; after a real kernel restart the rebuilt
     estimator keys off the stable virtual lineage and RESTORES.
     """
-    nb_runner.create_notebook([
-        SETUP,
-        "X = np.random.RandomState(0).rand(110000, 10)\n"   # ~8.8 MiB > 8 MiB
-        "y = (X[:, 0] > 0.5).astype(int)",
-        "clf = RandomForestClassifier(n_estimators=12, random_state=0)",
-        "# @cash:cache-fit\n# @cash:persist\nclf.fit(X, y)\nprint('fitted', clf.n_estimators)",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            "X = np.random.RandomState(0).rand(110000, 10)\n"  # ~8.8 MiB > 8 MiB
+            "y = (X[:, 0] > 0.5).astype(int)",
+            "clf = RandomForestClassifier(n_estimators=12, random_state=0)",
+            "# @cash:cache-fit\n# @cash:persist\nclf.fit(X, y)\nprint('fitted', clf.n_estimators)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "fitted 12" in nb_runner.get_output(4)
@@ -404,15 +418,14 @@ def test_cache_fit_large_numpy_restores_after_restart(nb_runner):
 
     nb_runner.run_cell(4)
     out = nb_runner.get_output(4)
-    assert shows_cached(out), (
-        f"large cache-fit did not restore from disk after restart (CAS-166): {out!r}"
-    )
+    assert shows_cached(out), f"large cache-fit did not restore from disk after restart (CAS-166): {out!r}"
     assert "fitted 12" in out
 
 
 # ----------------------------------------------------------------------
 # Shapes that cache regardless of the directive (normal assignments)
 # ----------------------------------------------------------------------
+
 
 def test_reassign_fit_caches(nb_runner):
     """Form 2: ``clf = clf.fit(X, y)`` (add ``clf = ``) caches and restores on re-run.
@@ -421,10 +434,14 @@ def test_reassign_fit_caches(nb_runner):
     the in-place-mutation classifier are both irrelevant. It must keep caching
     WITHOUT any directive: the CAS-170 demotion is scoped to the bare-Expr form.
     """
-    nb_runner.create_notebook([
-        SETUP, DATA, MODEL,
-        "clf = clf.fit(X, y)\nprint('fitted', clf.n_estimators)",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            DATA,
+            MODEL,
+            "clf = clf.fit(X, y)\nprint('fitted', clf.n_estimators)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -441,12 +458,15 @@ def test_construct_fit_assign_restores_after_restart(nb_runner):
     probes the restore path itself, not the cost model's RAM-only decision for a
     cheap fit.
     """
-    nb_runner.create_notebook([
-        SETUP, DATA,
-        "# @cash:persist\n"
-        "m = RandomForestClassifier(n_estimators=160, random_state=0).fit(X, y)\n"
-        "print('n =', m.n_estimators)",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            DATA,
+            "# @cash:persist\n"
+            "m = RandomForestClassifier(n_estimators=160, random_state=0).fit(X, y)\n"
+            "print('n =', m.n_estimators)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "n = 160" in nb_runner.get_output(3)
@@ -465,17 +485,20 @@ def test_construct_fit_assign_restores_after_restart(nb_runner):
 # Gate tightness + lineage plumbing (unchanged by CAS-170)
 # ----------------------------------------------------------------------
 
+
 def test_non_estimator_mutation_still_refused(nb_runner):
     """The estimator gate is tight: a bare ``lst.append(x)`` STILL refuses to cache.
 
     Proves the ``fit``/``partial_fit`` + ``get_params`` gate did not loosen
     general in-place-mutation caching.
     """
-    nb_runner.create_notebook([
-        SETUP,
-        "lst = [1, 2, 3]",
-        "lst.append(4)\nprint('len', len(lst))",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            "lst = [1, 2, 3]",
+            "lst.append(4)\nprint('len', len(lst))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     out = nb_runner.get_output(3)
@@ -494,22 +517,22 @@ def test_downstream_invalidates_when_data_changes(nb_runner):
     of replaying the stale cached importances. Holds on the default (skip-cached)
     path: the lineage bump is what carries the change, not the cache entry.
     """
-    nb_runner.create_notebook([
-        SETUP,
-        "X, y = make_classification(n_samples=6000, n_features=20, random_state=0)",  # 2
-        MODEL,                                                                          # 3
-        "clf.fit(X, y)",                                                                # 4
-        "print('imp0', round(float(clf.feature_importances_[0]), 6))",                  # 5
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            "X, y = make_classification(n_samples=6000, n_features=20, random_state=0)",  # 2
+            MODEL,  # 3
+            "clf.fit(X, y)",  # 4
+            "print('imp0', round(float(clf.feature_importances_[0]), 6))",  # 5
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     first = nb_runner.get_output(5)
     assert "imp0" in first, first
 
     # Rebuild X, y from a DIFFERENT random_state (a genuine upstream data change).
-    nb_runner.set_cell_source(
-        2, "X, y = make_classification(n_samples=6000, n_features=20, random_state=7)"
-    )
+    nb_runner.set_cell_source(2, "X, y = make_classification(n_samples=6000, n_features=20, random_state=7)")
     nb_runner.run_cell(5)  # re-running downstream must re-fit on the new data
     second = nb_runner.get_output(5)
     assert "imp0" in second, second
@@ -530,25 +553,25 @@ def test_partial_fit_stays_cumulative(nb_runner):
     ``@cash:no-cache`` so it reads the live estimator.
     """
     pytest.importorskip("sklearn")
-    nb_runner.create_notebook([
-        "import numpy as np\n"
-        "from sklearn.linear_model import SGDClassifier\n"
-        "import cash\n"
-        "%cash_on\n"
-        "%cash_badge print",
-        "rs = np.random.RandomState(0)\n"
-        "Xa = rs.rand(100, 5); ya = (Xa[:, 0] > 0.5).astype(int)\n"
-        "Xb = rs.rand(60, 5); yb = (Xb[:, 0] > 0.5).astype(int)",
-        "clf = SGDClassifier(random_state=0)",
-        "clf.partial_fit(Xa, ya, classes=np.array([0, 1]))",   # 4
-        "clf.partial_fit(Xb, yb)",                             # 5
-        "# @cash:no-cache\nprint('t', int(clf.t_))",           # 6
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np\n"
+            "from sklearn.linear_model import SGDClassifier\n"
+            "import cash\n"
+            "%cash_on\n"
+            "%cash_badge print",
+            "rs = np.random.RandomState(0)\n"
+            "Xa = rs.rand(100, 5); ya = (Xa[:, 0] > 0.5).astype(int)\n"
+            "Xb = rs.rand(60, 5); yb = (Xb[:, 0] > 0.5).astype(int)",
+            "clf = SGDClassifier(random_state=0)",
+            "clf.partial_fit(Xa, ya, classes=np.array([0, 1]))",  # 4
+            "clf.partial_fit(Xb, yb)",  # 5
+            "# @cash:no-cache\nprint('t', int(clf.t_))",  # 6
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
-    assert "t 161" in nb_runner.get_output(6), (
-        f"cumulative partial_fit setup wrong: {nb_runner.get_output(6)!r}"
-    )
+    assert "t 161" in nb_runner.get_output(6), f"cumulative partial_fit setup wrong: {nb_runner.get_output(6)!r}"
 
     # Isolated re-run of the second partial_fit must not corrupt the cumulative state.
     nb_runner.run_cell(5)

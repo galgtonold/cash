@@ -48,6 +48,7 @@ shows three separate ``sub-call compute(next(it)): 0/1 hit`` lines and an
 ``@cash.cache: compute() [intercepted]`` summary, proving the call actually
 went through ``CallUnit``.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.loops]
@@ -166,10 +167,6 @@ def test_loop_carried_hidden_state_reuses_on_an_unchanged_rerun(nb_runner, tmp_p
 
     nb_runner.run_cell(3)
     output = nb_runner.get_output(3)
-    assert "OUT [0, 10, 20] CALLS [0, 1, 2]" in output, (
-        f"the rerun diverged from the uncached oracle:\n{output}"
-    )
+    assert "OUT [0, 10, 20] CALLS [0, 1, 2]" in output, f"the rerun diverged from the uncached oracle:\n{output}"
     rerun = len(ticks.read_bytes()) - len(cold)
-    assert rerun == 0, (
-        f"compute() ran {rerun} more time(s) on an unchanged rerun of the loop cell"
-    )
+    assert rerun == 0, f"compute() ran {rerun} more time(s) on an unchanged rerun of the loop cell"

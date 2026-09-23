@@ -11,6 +11,7 @@ A statement that does not import or assign a name cannot produce a module.
 Module SETTINGS (``plt.rcParams.update``, ``pd.set_option``) are a separate,
 deliberate route and are unaffected.
 """
+
 import ast
 import types
 

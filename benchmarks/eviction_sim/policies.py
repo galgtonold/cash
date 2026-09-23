@@ -16,6 +16,7 @@ plus the disk tier's size split. They are kept as the baseline the redesign
 was measured against; the shipped ranking is now ``GDSF`` (quantized, see
 ``cash.backends._base.gdsf_value``).
 """
+
 from __future__ import annotations
 
 import heapq
@@ -120,6 +121,7 @@ class CashCurrent(Policy):
     first whenever they alone can close the gap (``_evict_order``).
 
     ``crumbs=False`` and ``target=1.0`` are the two ablations."""
+
     name = "cash-now"
     CRUMB = 0.001
 
@@ -184,6 +186,7 @@ class CashRAM(LRU):
     so a value bigger than 0.9 x cap first flushes everything older, then
     itself. Every write is accepted (no size gate). The psutil pressure path
     (``_check_and_evict``) is not modelled: it depends on the host."""
+
     name = "cash-RAM-now"
 
     def insert(self, key, size, cost, meta):
@@ -210,6 +213,7 @@ class FIFO(LRU):
 
 class LFU(Policy):
     """LFU with LRU tie-break (and in-cache frequency only)."""
+
     name = "LFU"
 
     def __init__(self, cap):
@@ -255,6 +259,7 @@ class LFU(Policy):
 class SLRU(Policy):
     """Segmented LRU: probation (new) + protected (hit at least twice).
     The protected segment holds up to 80% of the bytes."""
+
     name = "SLRU"
     PROT = 0.8
 
@@ -301,6 +306,7 @@ class SLRU(Policy):
 
 class ARC(Policy):
     """Byte-weighted ARC (Megiddo & Modha), ghost lists sized in bytes."""
+
     name = "ARC"
 
     def __init__(self, cap):
@@ -378,6 +384,7 @@ class ARC(Policy):
 class S3FIFO(Policy):
     """S3-FIFO (Yang et al., SOSP'23): small FIFO (10%) + main FIFO with
     2-bit frequency + ghost FIFO. Byte-weighted."""
+
     name = "S3-FIFO"
     SMALL = 0.1
 
@@ -463,6 +470,7 @@ class S3FIFO(Policy):
 
 class SIEVE(Policy):
     """SIEVE (Zhang et al., NSDI'24): FIFO queue + visited bit + moving hand."""
+
     name = "SIEVE"
 
     def __init__(self, cap):
@@ -514,6 +522,7 @@ class RRIP(Policy):
     1/32 of the time.  Hit -> RRPV=0.  Victim: any RRPV==3 (oldest first),
     else age everyone.  DRRIP duels the two on sampled keys.
     """
+
     MAX = 3
 
     def __init__(self, cap, mode="S", seed=1):
@@ -574,6 +583,7 @@ class GDSF(Policy):
     """GreedyDual-Size-Frequency (Cherkasova'98):
     H = L + freq * cost / size; evict min H; L := H(victim).
     ``cost`` = net seconds saved by a hit."""
+
     name = "GDSF"
 
     def __init__(self, cap, use_freq=True):
@@ -638,6 +648,7 @@ class TouchedGDSF(GDSF):
     enumerate (loop iterations, call units, decorator calls) is simply
     ranked as plain GDSF ranks it.
     """
+
     name = "GDSF+touch"
 
     def hint(self, kind, **kw):
@@ -645,7 +656,7 @@ class TouchedGDSF(GDSF):
             return
         for key in kw["keys"]:
             if key in self.size:
-                self._push(key)          # H = L(now) + freq * cost / size
+                self._push(key)  # H = L(now) + freq * cost / size
 
 
 class SampledGDSF(GDSF):
@@ -662,7 +673,7 @@ class SampledGDSF(GDSF):
         self.k = k
         self.name = f"GDSF-sampled(k={k})"
         self.rng = random.Random(seed)
-        self.keys = []          # dense list for O(1) sampling
+        self.keys = []  # dense list for O(1) sampling
         self.pos = {}
 
     def _on_insert(self, key, size, cost, meta):
@@ -680,8 +691,7 @@ class SampledGDSF(GDSF):
                 self.pos[last] = i
 
     def _victim(self, protect):
-        cands = [k for k in (self.rng.choice(self.keys) for _ in range(min(self.k, len(self.keys))))
-                 if k != protect]
+        cands = [k for k in (self.rng.choice(self.keys) for _ in range(min(self.k, len(self.keys)))) if k != protect]
         if not cands:
             others = [k for k in self.keys if k != protect]
             return others[0] if others else None
@@ -829,7 +839,7 @@ class SupersedeAware(_DeadFirst):
 
     def _on_hit(self, key, size, cost, meta):
         super()._on_hit(key, size, cost, meta)
-        self._touch_slot(key, meta)   # an undo revives the old generation
+        self._touch_slot(key, meta)  # an undo revives the old generation
 
     def _on_insert(self, key, size, cost, meta):
         super()._on_insert(key, size, cost, meta)
@@ -882,10 +892,10 @@ class OwnerGC(_DeadFirst):
         super().__init__(cap, inner=inner, age_on_dead=False)
         self.grace = grace
         self.name = f"OwnerGC(grace={grace})+{inner.__name__}"
-        self.owner = {}          # key -> notebook
-        self.live = {}           # notebook -> set of keys
+        self.owner = {}  # key -> notebook
+        self.live = {}  # notebook -> set of keys
         self.runs = defaultdict(int)
-        self.last_live = {}      # key -> owner's run count when last live
+        self.last_live = {}  # key -> owner's run count when last live
 
     def hint(self, kind, **kw):
         if kind != "liveset":
@@ -897,7 +907,7 @@ class OwnerGC(_DeadFirst):
             self.last_live[k] = self.runs[nb]
             if k in self.g.size:
                 self.g.now = self.now
-                self.g._push(k)          # touch: re-base to the current clock
+                self.g._push(k)  # touch: re-base to the current clock
 
     def _on_insert(self, key, size, cost, meta):
         super()._on_insert(key, size, cost, meta)

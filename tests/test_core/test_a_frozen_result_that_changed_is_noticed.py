@@ -10,6 +10,7 @@ uncached run returns 106, five calls running, with no warning.
 occasional use ... and if it has changed ... KEY-FROZEN-MUTATED names the
 producer and the object is keyed by its contents from then on."
 """
+
 from __future__ import annotations
 
 import warnings
@@ -55,11 +56,14 @@ def test_an_unchanged_frozen_result_still_hits(pipeline):
     assert not ran
 
 
-@pytest.mark.parametrize("mutate, expected", [
-    (lambda m: m["w"].append(100), 106),
-    (lambda m: m.__setitem__("w", [1, 2, 3, 100]), 106),
-    (lambda m: m["w"].pop(), 3),
-])
+@pytest.mark.parametrize(
+    "mutate, expected",
+    [
+        (lambda m: m["w"].append(100), 106),
+        (lambda m: m.__setitem__("w", [1, 2, 3, 100]), 106),
+        (lambda m: m["w"].pop(), 3),
+    ],
+)
 def test_the_shapes_a_caller_changes(pipeline, mutate, expected):
     train, score = pipeline
     model = train(1)

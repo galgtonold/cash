@@ -28,15 +28,17 @@ Bug scenario (fixed by auto-tracking local modules before _capture_variables):
 Fix: call `auto_track_local_imports(code)` right after execution and BEFORE
 `_capture_variables` so the module is tracked from the very first execution.
 """
-import pytest
+
 import textwrap
+
+import pytest
 
 pytestmark = pytest.mark.modules
 
 
 def _extract_statuses(raw_output: str) -> list:
     """Extract caching statuses from raw debug output.
-    
+
     Looks for patterns like:
     - [ALREADY_EXECUTED] Skipping re-execution  → 'SKIPPED'
     - [CACHE_HIT_DEBUG] Cache hit              → 'RESTORED'
@@ -44,15 +46,15 @@ def _extract_statuses(raw_output: str) -> list:
     - [CACHE DEBUG] Executing (cache miss)     → 'EXECUTED'
     """
     statuses = []
-    for line in raw_output.split('\n'):
-        if '[ALREADY_EXECUTED] Skipping re-execution' in line:
-            statuses.append('SKIPPED')
-        elif '[CACHE_HIT_DEBUG] Cache hit' in line:
-            statuses.append('RESTORED')
-        elif 'SKIPPING redundant import' in line:
-            statuses.append('SKIPPED_IMPORT')
-        elif '[CACHE DEBUG] Executing (cache miss)' in line:
-            statuses.append('EXECUTED')
+    for line in raw_output.split("\n"):
+        if "[ALREADY_EXECUTED] Skipping re-execution" in line:
+            statuses.append("SKIPPED")
+        elif "[CACHE_HIT_DEBUG] Cache hit" in line:
+            statuses.append("RESTORED")
+        elif "SKIPPING redundant import" in line:
+            statuses.append("SKIPPED_IMPORT")
+        elif "[CACHE DEBUG] Executing (cache miss)" in line:
+            statuses.append("EXECUTED")
     return statuses
 
 
@@ -67,20 +69,24 @@ class TestModuleCachingConsistency:
         """
         # Create a simple local module in the work directory
         module_path = nb_runner.work_dir / "metrics.py"
-        module_path.write_text(textwrap.dedent("""\
+        module_path.write_text(
+            textwrap.dedent("""\
             _counter = 0
             def increment(n):
                 global _counter
                 _counter += n
                 return _counter
-        """))
+        """)
+        )
 
         # Create notebook that imports and uses the module
-        nb_runner.create_notebook([
-            "import metrics",
-            "result = metrics.increment(5)",
-            "print(f'Result: {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import metrics",
+                "result = metrics.increment(5)",
+                "print(f'Result: {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.enable_debug()
         # Persist-everything so the module-dependent statement is actually
@@ -100,7 +106,7 @@ class TestModuleCachingConsistency:
         out2_cell2_raw = nb_runner.get_raw_output(2)
 
         # Cell 2 (result = metrics.increment(5)) should NOT have a cache miss
-        assert 'Executing (cache miss)' not in out2_cell2_raw, (
+        assert "Executing (cache miss)" not in out2_cell2_raw, (
             f"Cell 2 had a cache miss on call 2 (should have been cached):\n{out2_cell2_raw}"
         )
 
@@ -112,9 +118,7 @@ class TestModuleCachingConsistency:
         statuses_2 = _extract_statuses(out2_cell2_raw)
         statuses_3 = _extract_statuses(out3_cell2_raw)
         assert statuses_2 == statuses_3, (
-            f"Caching statuses differ between call 2 and call 3.\n"
-            f"Call 2: {statuses_2}\n"
-            f"Call 3: {statuses_3}"
+            f"Caching statuses differ between call 2 and call 3.\nCall 2: {statuses_2}\nCall 3: {statuses_3}"
         )
 
     def test_multi_statement_cell_with_module(self, nb_runner, tmp_path):
@@ -124,21 +128,25 @@ class TestModuleCachingConsistency:
         """
         # Create local module
         module_path = nb_runner.work_dir / "metrics.py"
-        module_path.write_text(textwrap.dedent("""\
+        module_path.write_text(
+            textwrap.dedent("""\
             _counter = 0
             def increment(n):
                 global _counter
                 _counter += n
                 return _counter
-        """))
+        """)
+        )
 
         # Single cell with import + usage (multi-statement)
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 import metrics
                 print("Testing metrics module...")
                 print(metrics.increment(5))"""),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.enable_debug()
         # Persist-everything so the module-dependent statement is actually
@@ -158,7 +166,7 @@ class TestModuleCachingConsistency:
         out2_raw = nb_runner.get_raw_output(1)
 
         # No statement in the cell should have a cache miss
-        assert 'Executing (cache miss)' not in out2_raw, (
+        assert "Executing (cache miss)" not in out2_raw, (
             f"Cell had a cache miss on call 2 (should have been fully cached):\n{out2_raw}"
         )
 
@@ -170,9 +178,7 @@ class TestModuleCachingConsistency:
         statuses_2 = _extract_statuses(out2_raw)
         statuses_3 = _extract_statuses(out3_raw)
         assert statuses_2 == statuses_3, (
-            f"Caching statuses differ between call 2 and call 3.\n"
-            f"Call 2: {statuses_2}\n"
-            f"Call 3: {statuses_3}"
+            f"Caching statuses differ between call 2 and call 3.\nCall 2: {statuses_2}\nCall 3: {statuses_3}"
         )
 
     def test_from_import_cached_on_second_call(self, nb_runner, tmp_path):
@@ -181,16 +187,20 @@ class TestModuleCachingConsistency:
         """
         # Create local module
         module_path = nb_runner.work_dir / "helpers.py"
-        module_path.write_text(textwrap.dedent("""\
+        module_path.write_text(
+            textwrap.dedent("""\
             def double(x):
                 return x * 2
-        """))
+        """)
+        )
 
-        nb_runner.create_notebook([
-            "from helpers import double",
-            "result = double(21)",
-            "print(f'Answer: {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from helpers import double",
+                "result = double(21)",
+                "print(f'Answer: {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.enable_debug()
         # Persist-everything so the module-dependent statement is actually
@@ -209,7 +219,7 @@ class TestModuleCachingConsistency:
         out2_cell3_raw = nb_runner.get_raw_output(3)
 
         # Cell 3 should not have a cache miss
-        assert 'Executing (cache miss)' not in out2_cell3_raw, (
+        assert "Executing (cache miss)" not in out2_cell3_raw, (
             f"Cell 3 had a cache miss on call 2 (should have been cached):\n{out2_cell3_raw}"
         )
 
@@ -220,7 +230,5 @@ class TestModuleCachingConsistency:
         statuses_2 = _extract_statuses(out2_cell3_raw)
         statuses_3 = _extract_statuses(out3_cell3_raw)
         assert statuses_2 == statuses_3, (
-            f"Cell 3 statuses differ between call 2 and call 3.\n"
-            f"Call 2: {statuses_2}\n"
-            f"Call 3: {statuses_3}"
+            f"Cell 3 statuses differ between call 2 and call 3.\nCall 2: {statuses_2}\nCall 3: {statuses_3}"
         )

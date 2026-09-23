@@ -1,4 +1,5 @@
 """Tests for TTL (Time To Live) functionality."""
+
 import time
 
 import pytest
@@ -33,82 +34,82 @@ def test_default_ttl_applies_without_explicit_ttl(temp_cache_dir, clock):
     """
     backend = FileBackend(cache_dir=temp_cache_dir, default_ttl=2.0)
     cash = Cash(backend=backend, register_magic=False)
-    side_effect = {'count': 0}
+    side_effect = {"count": 0}
 
     @cash.cache
     def compute(x):
-        side_effect['count'] += 1
+        side_effect["count"] += 1
         return x * 2
 
     assert compute(10) == 20
-    assert side_effect['count'] == 1
+    assert side_effect["count"] == 1
     assert compute(10) == 20  # cache hit — no recompute
-    assert side_effect['count'] == 1
+    assert side_effect["count"] == 1
 
     clock[0] += 2.1  # past default_ttl
 
     assert compute(10) == 20  # default_ttl expired — recompute
-    assert side_effect['count'] == 2
+    assert side_effect["count"] == 2
 
     backend.clear()
 
 
 def test_ttl_expiration(cash_instance, clock):
-    '''Test that cached values expire after TTL.'''
-    side_effect = {'count': 0}
-    
+    """Test that cached values expire after TTL."""
+    side_effect = {"count": 0}
+
     @cash_instance.cache(ttl=2.0)
     def func_with_ttl(x):
-        side_effect['count'] += 1
+        side_effect["count"] += 1
         return x * 2
-    
+
     # First call - compute
     result1 = func_with_ttl(10)
     assert result1 == 20
-    assert side_effect['count'] == 1
-    
+    assert side_effect["count"] == 1
+
     # Second call - from cache
     result2 = func_with_ttl(10)
     assert result2 == 20
-    assert side_effect['count'] == 1, 'Should use cached value'
-    
+    assert side_effect["count"] == 1, "Should use cached value"
+
     clock[0] += 2.1  # past the ttl
 
     # Third call - recompute after expiration
     result3 = func_with_ttl(10)
     assert result3 == 20
-    assert side_effect['count'] == 2, 'Should recompute after TTL expires'
+    assert side_effect["count"] == 2, "Should recompute after TTL expires"
 
 
 def test_cleanup(cash_instance):
-    '''Test cleanup of expired cache entries.'''
-    
+    """Test cleanup of expired cache entries."""
+
     @cash_instance.cache(ttl=0.1)
     def short_ttl(x):
         return x
-    
+
     @cash_instance.cache(ttl=10)
     def long_ttl(x):
         return x
-    
+
     # Cache both
     short_ttl(1)
     long_ttl(2)
-    
+
     # Wait for short TTL to expire
     time.sleep(0.15)
-    
+
     # Cleanup expired items
     deleted = cash_instance.cleanup()
-    assert deleted == 1, 'Should delete one expired entry'
-    
+    assert deleted == 1, "Should delete one expired entry"
+
     # Verify long_ttl entry still exists
     assert len(cash_instance.backend._store) == 1
-    
+
     # Force cleanup with max_age
     deleted = cash_instance.cleanup(max_age=0.1)
-    assert deleted == 1, 'Should delete the remaining entry'
-    assert len(cash_instance.backend._store) == 0, 'All entries should be cleaned'
+    assert deleted == 1, "Should delete the remaining entry"
+    assert len(cash_instance.backend._store) == 0, "All entries should be cleaned"
 
 
 def test_a_file_tier_s_default_ttl_reaches_its_entries(temp_cache_dir, monkeypatch):
@@ -167,14 +168,15 @@ def test_lowering_a_tier_default_ttl_shortens_entries_already_written(temp_cache
         @c.cache(assume_safe=True)
         def f(x):
             runs.append(x)
-            time.sleep(0.15)        # past the persistence floor: the next run reads disk
+            time.sleep(0.15)  # past the persistence floor: the next run reads disk
             return x
+
         return f
 
     first = _tiered(monkeypatch, temp_cache_dir, 86400)
     make(first)(1)
     first.backend.backends[-1]._writes.wait_all()
-    later = _tiered(monkeypatch, temp_cache_dir, 5)     # the next run, config lowered
+    later = _tiered(monkeypatch, temp_cache_dir, 5)  # the next run, config lowered
     f = make(later)
     clock[0] += 3
     f(1)
@@ -189,14 +191,15 @@ def test_an_entry_expired_under_the_tier_default_says_so(temp_cache_dir, monkeyp
     """The file tier drops an expired entry on read, so the miss looked like an
     eviction -- "entry gone: evicted or cleared" -- in the reason and in
     explain(). It is recorded with the ttl it was written with now."""
+
     def body(x):
-        time.sleep(0.15)            # past the persistence floor: the next run reads disk
+        time.sleep(0.15)  # past the persistence floor: the next run reads disk
         return x
 
     c = _tiered(monkeypatch, temp_cache_dir, 5)
     c.cache(assume_safe=True)(body)(1)
     c.backend.backends[-1]._writes.wait_all()
-    fresh = _tiered(monkeypatch, temp_cache_dir, 5)    # a new process: no RAM copy
+    fresh = _tiered(monkeypatch, temp_cache_dir, 5)  # a new process: no RAM copy
     f = fresh.cache(assume_safe=True)(body)
     clock[0] += 9
     explanation = f.explain(1)
@@ -208,6 +211,7 @@ def test_cash_info_shows_a_tier_s_default_ttl(monkeypatch, capsys):
     from types import SimpleNamespace
 
     from cash.__main__ import cmd_info
+
     monkeypatch.setenv("CASH_TIER_0_TYPE", "memory")
     monkeypatch.setenv("CASH_TIER_1_TYPE", "file")
     monkeypatch.setenv("CASH_TIER_1_DEFAULT_TTL", "5")

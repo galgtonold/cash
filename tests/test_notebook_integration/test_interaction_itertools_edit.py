@@ -11,14 +11,14 @@ pytestmark = [pytest.mark.stress, pytest.mark.timeout(90)]
 class TestItertoolsEdits:
     """Itertools operation edit patterns."""
 
-
-
     def test_groupby_edit(self, nb_runner):
         """Edit data before groupby."""
-        nb_runner.create_notebook([
-            "from itertools import groupby\ndata = [('a', 1), ('a', 2), ('b', 3), ('b', 4)]",
-            "groups = {k: list(v) for k, v in groupby(data, key=lambda x: x[0])}\nresult = {k: len(v) for k, v in groups.items()}\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from itertools import groupby\ndata = [('a', 1), ('a', 2), ('b', 3), ('b', 4)]",
+                "groups = {k: list(v) for k, v in groupby(data, key=lambda x: x[0])}\nresult = {k: len(v) for k, v in groups.items()}\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)

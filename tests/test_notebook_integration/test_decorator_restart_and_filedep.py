@@ -10,6 +10,7 @@ cross-process / restart behaviour the unit tests can only approximate.
 * #11 — a file change invalidates a downstream cached function that only reads
   the file via a nested cached call.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(60)]
@@ -18,8 +19,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(60)]
 def _chain_cells(cache_dir: str, sleep: float = 0.15):
     cdir = cache_dir.replace("\\", "/")
     return [
-        "import cash\nfrom cash import Cash, FileBackend\n"
-        f"c = Cash(backend=FileBackend(cache_dir='{cdir}'))",
+        f"import cash\nfrom cash import Cash, FileBackend\nc = Cash(backend=FileBackend(cache_dir='{cdir}'))",
         # A real depends_on chain; the leaf does enough work to be worth caching.
         "import time\n"
         "def base(x):\n    return x + 1\n"
@@ -34,8 +34,8 @@ def _chain_cells(cache_dir: str, sleep: float = 0.15):
         # Consume the chain for a few args, then report stats.
         "vals = [top(s) for s in (1, 2, 3)]\n"
         "info = top.cache_info()\n"
-        "print(f'RESULT hits={info[\"hits\"]} misses={info[\"misses\"]} "
-        "saved={info[\"total_time_saved\"]:.3f} vals={vals}')",
+        'print(f\'RESULT hits={info["hits"]} misses={info["misses"]} '
+        'saved={info["total_time_saved"]:.3f} vals={vals}\')',
     ]
 
 
@@ -75,23 +75,26 @@ def test_decorator_file_dep_propagates_through_chain(nb_runner, tmp_path):
     dpath = str(data).replace("\\", "/")
     cdir = str(tmp_path / "cache").replace("\\", "/")
 
-    nb_runner.create_notebook([
-        "import cash\nfrom cash import Cash, FileBackend\n"
-        f"c = Cash(backend=FileBackend(cache_dir='{cdir}'))\n"
-        f"DATA = '{dpath}'",
-        "@c.cache\n"
-        "def load():\n"
-        "    with open(DATA) as f:\n        return f.read().strip()\n"
-        "@c.cache(depends_on=[load])\n"
-        "def upper():\n    return load().upper()",
-        "print('upper =', upper())",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import cash\nfrom cash import Cash, FileBackend\n"
+            f"c = Cash(backend=FileBackend(cache_dir='{cdir}'))\n"
+            f"DATA = '{dpath}'",
+            "@c.cache\n"
+            "def load():\n"
+            "    with open(DATA) as f:\n        return f.read().strip()\n"
+            "@c.cache(depends_on=[load])\n"
+            "def upper():\n    return load().upper()",
+            "print('upper =', upper())",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "upper = HELLO" in nb_runner.get_output(3)
 
     # Change the underlying file, then re-run only the consumer cell.
     import time
+
     time.sleep(0.05)
     data.write_text("world-changed")
 
@@ -105,22 +108,24 @@ def test_no_spurious_impurity_warnings_in_kernel(nb_runner, tmp_path):
     @c.cache(depends_on=[...]) decorator must not raise an impurity warning. We
     promote CashImpurityWarning to an error so any regression fails the cell."""
     cdir = str(tmp_path / "cache").replace("\\", "/")
-    nb_runner.create_notebook([
-        "import warnings\nimport cash\n"
-        "from cash import Cash, FileBackend, CashImpurityWarning\n"
-        "warnings.simplefilter('error', CashImpurityWarning)\n"  # warning -> exception
-        f"c = Cash(backend=FileBackend(cache_dir='{cdir}'))",
-        "import numpy as np\n"
-        "@c.cache\n"
-        "def build(n):\n"
-        "    pos = np.zeros(n)\n"          # fresh local array
-        "    for i in range(n):\n        pos[i] = i\n"   # #3 local subscript mutation
-        "    rows = []\n    rows.append(1)\n"            # #6 local list.append
-        "    return float(pos.sum()) + len(rows)\n"
-        "@c.cache(depends_on=[build])\n"   # #9 decorator line must not be analyzed
-        "def consume(n):\n    return build(n) + 1",
-        "print('OK', consume(5))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import warnings\nimport cash\n"
+            "from cash import Cash, FileBackend, CashImpurityWarning\n"
+            "warnings.simplefilter('error', CashImpurityWarning)\n"  # warning -> exception
+            f"c = Cash(backend=FileBackend(cache_dir='{cdir}'))",
+            "import numpy as np\n"
+            "@c.cache\n"
+            "def build(n):\n"
+            "    pos = np.zeros(n)\n"  # fresh local array
+            "    for i in range(n):\n        pos[i] = i\n"  # #3 local subscript mutation
+            "    rows = []\n    rows.append(1)\n"  # #6 local list.append
+            "    return float(pos.sum()) + len(rows)\n"
+            "@c.cache(depends_on=[build])\n"  # #9 decorator line must not be analyzed
+            "def consume(n):\n    return build(n) + 1",
+            "print('OK', consume(5))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     out = nb_runner.get_output(3)

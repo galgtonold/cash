@@ -12,6 +12,7 @@ These tests force that window deterministically rather than relying on timing,
 so they fail on every platform when the behaviour regresses. The original
 regression was invisible on Windows and only showed up on Linux and macOS.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -23,9 +24,8 @@ import time
 import pytest
 
 from cash.backends._base import PendingWrites
-from cash.backends.file_backend import FileBackend
 from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry, read_entry
-
+from cash.backends.file_backend import FileBackend
 
 SLOW = 0.5  # long enough that an unsynchronised reader loses the race every time
 
@@ -44,7 +44,9 @@ def slow_writes(monkeypatch):
 
 class TestCrossInstanceVisibility:
     def test_second_instance_waits_for_first_instances_pending_write(
-        self, tmp_path, slow_writes,
+        self,
+        tmp_path,
+        slow_writes,
     ):
         """A sibling backend must observe a write that is still in flight."""
         cache_dir = str(tmp_path / "c")
@@ -154,8 +156,7 @@ class TestAtomicWrites:
         backend._ensure_initialized()
         target = os.path.join(backend.cache_dir, f"probe{ENTRY_SUFFIX}")
 
-        monkeypatch.setattr(os, "replace",
-                            lambda *a, **kw: (_ for _ in ()).throw(OSError("boom")))
+        monkeypatch.setattr(os, "replace", lambda *a, **kw: (_ for _ in ()).throw(OSError("boom")))
         with pytest.raises(OSError):
             backend._atomic_write(target, b"x" * 4096)
 
@@ -169,8 +170,7 @@ class TestAtomicWrites:
         target = os.path.join(backend.cache_dir, f"probe{ENTRY_SUFFIX}")
         backend._atomic_write(target, b"original")
 
-        monkeypatch.setattr(os, "replace",
-                            lambda *a, **kw: (_ for _ in ()).throw(OSError("boom")))
+        monkeypatch.setattr(os, "replace", lambda *a, **kw: (_ for _ in ()).throw(OSError("boom")))
         with pytest.raises(OSError):
             backend._atomic_write(target, b"replacement")
 
@@ -183,11 +183,11 @@ class TestAtomicWrites:
         backend.set("k", "v")
         assert backend.get("k")[1] == "v"
         import glob as _glob
+
         stray = os.path.join(backend.cache_dir, ".tmp-orphan.part")
         with open(stray, "wb") as f:
             f.write(b"junk")
-        assert stray not in _glob.glob(
-            os.path.join(backend.cache_dir, f"*{ENTRY_SUFFIX}"))
+        assert stray not in _glob.glob(os.path.join(backend.cache_dir, f"*{ENTRY_SUFFIX}"))
         assert backend.get("k")[1] == "v"
 
 
@@ -280,7 +280,7 @@ def _writes_die_halfway():
             self._fh = fh
 
         def write(self, data):
-            self._fh.write(data[:len(data) // 2])
+            self._fh.write(data[: len(data) // 2])
             raise OSError("No space left on device")
 
         def __getattr__(self, name):
@@ -305,7 +305,7 @@ def _writes_die_halfway():
     real_write_all = fb._write_all
 
     def failing_write_all(fd, data):
-        real_write_all(fd, data[:len(data) // 2])
+        real_write_all(fd, data[: len(data) // 2])
         raise OSError("No space left on device")
 
     fb.open = failing_open
@@ -333,7 +333,9 @@ class TestAFailedWriteDoesNotDestroyWhatWasThere:
 
     @pytest.mark.expects_failed_writes
     def test_a_failed_rewrite_leaves_the_previous_value_readable(
-        self, tmp_path, monkeypatch,
+        self,
+        tmp_path,
+        monkeypatch,
     ):
         backend = FileBackend(cache_dir=str(tmp_path / "c"), flush_interval=0)
         backend.set("k", "v1")
@@ -346,8 +348,8 @@ class TestAFailedWriteDoesNotDestroyWhatWasThere:
         monkeypatch.setattr(FileBackend, "_replace_with_retry", staticmethod(denied))
 
         backend.set("k", "v2")
-        backend._writes.wait_all()          # this write fails
-        backend._metadata_cache.pop("k", None)   # force a read from disk
+        backend._writes.wait_all()  # this write fails
+        backend._metadata_cache.pop("k", None)  # force a read from disk
 
         assert backend.get("k")[1] == "v1", (
             "a failed rewrite destroyed the value that was already cached -- "
@@ -373,13 +375,14 @@ class TestAFailedWriteDoesNotDestroyWhatWasThere:
             backend._writes.wait_all()
 
         assert backend.get("fresh") == (None, None)
-        leftovers = [f for f in os.listdir(backend.cache_dir)
-                     if f.endswith(ENTRY_SUFFIX) or f.endswith(".part")]
+        leftovers = [f for f in os.listdir(backend.cache_dir) if f.endswith(ENTRY_SUFFIX) or f.endswith(".part")]
         assert leftovers == [], f"partial files left behind: {leftovers}"
 
     @pytest.mark.expects_failed_writes
     def test_a_write_that_dies_halfway_leaves_the_previous_value_readable(
-        self, tmp_path, monkeypatch,
+        self,
+        tmp_path,
+        monkeypatch,
     ):
         """The disk fills up mid-write. The entry that was already there survives.
 
@@ -411,7 +414,7 @@ class TestAFailedWriteDoesNotDestroyWhatWasThere:
         def dies_halfway(fd, data):
             if not armed["on"]:
                 return real_write_all(fd, data)
-            real_write_all(fd, data[:len(data) // 2])
+            real_write_all(fd, data[: len(data) // 2])
             raise OSError("No space left on device")
 
         monkeypatch.setattr(fb, "_write_all", dies_halfway)
@@ -420,7 +423,7 @@ class TestAFailedWriteDoesNotDestroyWhatWasThere:
         backend._writes.wait_all()
         armed["on"] = False
 
-        backend._metadata_cache.pop("k", None)   # force a read from disk
+        backend._metadata_cache.pop("k", None)  # force a read from disk
         assert backend.get("k")[1] == "v1", (
             "a write that died halfway destroyed the value that was already "
             "cached; the destination must not be touched until the swap"
@@ -491,18 +494,16 @@ class TestNewEntriesSkipTheRename:
         not a torn value, and not an exception.
         """
         backend = FileBackend(cache_dir=str(tmp_path / "c"), flush_interval=0)
-        backend.get("anything")               # creates the directory
+        backend.get("anything")  # creates the directory
         path = backend._get_path("k")
 
         blob = pack_entry({"key": "k", "size": 4}, b"vvvv")
         split = len(blob) - 4
-        with open(path, "wb") as fh:          # payload only, no header yet
+        with open(path, "wb") as fh:  # payload only, no header yet
             fh.seek(split)
             fh.write(blob[split:])
 
-        assert backend.get("k") == (None, None), (
-            "an entry with no header read as present"
-        )
+        assert backend.get("k") == (None, None), "an entry with no header read as present"
         with pytest.raises(Exception):
             read_entry(path, with_payload=False)
 

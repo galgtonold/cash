@@ -11,6 +11,7 @@ tests/test_notebook_integration/test_ram_tier_keeps_loop_entries.py.
 Every test uses a 10 MB cap and ~1 MB values, so the arithmetic in each
 docstring can be checked by hand.
 """
+
 from __future__ import annotations
 
 from cash.backends.memory_backend import InMemoryBackend
@@ -140,6 +141,7 @@ def test_pressure_eviction_ranks_an_unread_costly_result_above_a_cheap_read_one(
 # ---------------------------------------------------------------------------
 # A value the cap can never hold is refused, not allowed to empty the tier.
 # ---------------------------------------------------------------------------
+
 
 def _hot_tier():
     """Twenty 1 MB entries, each read once, under a 100 MB cap."""

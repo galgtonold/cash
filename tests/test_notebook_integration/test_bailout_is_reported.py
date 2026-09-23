@@ -15,18 +15,14 @@ a ``try/except SyntaxError``. Raising something that is NOT a SyntaxError --
 and not one of the three exception types with their own branches -- lands in
 ``_handle_pipeline_exception``'s final else, which is the bail-out under test.
 """
+
 import re
 
 import pytest
 
 pytestmark = pytest.mark.timeout(180)
 
-SETUP = (
-    "import cash\n"
-    "%cash_on\n"
-    "import warnings\n"
-    "warnings.simplefilter('always')"
-)
+SETUP = "import cash\n%cash_on\nimport warnings\nwarnings.simplefilter('always')"
 
 BREAK_THE_PIPELINE = (
     "from cash.notebook.analysis import CodeAnalyzer\n"
@@ -51,24 +47,18 @@ def test_a_bailout_tells_the_user_why(nb_runner):
 
     # The cell's own work must still happen -- cash steps aside, it does not
     # eat the cell. This is the half the user noticed was missing.
-    assert "answer 42" in out, (
-        f"the cell did not run after cash bailed out: {out!r}")
+    assert "answer 42" in out, f"the cell did not run after cash bailed out: {out!r}"
 
-    assert "NOTEBOOK-BAILOUT" in out, (
-        f"cash bailed out silently -- no diagnostic reached the cell: {out!r}")
-    assert "ValueError" in out, (
-        f"the diagnostic did not name the exception that caused it: {out!r}")
-    assert "probe: forced internal failure" in out, (
-        f"the diagnostic dropped the underlying message: {out!r}")
+    assert "NOTEBOOK-BAILOUT" in out, f"cash bailed out silently -- no diagnostic reached the cell: {out!r}"
+    assert "ValueError" in out, f"the diagnostic did not name the exception that caused it: {out!r}"
+    assert "probe: forced internal failure" in out, f"the diagnostic dropped the underlying message: {out!r}"
 
     # ...and the badge must agree with the warning rather than claim success.
     badge = _badge_html(r, 3)
-    labels = re.findall(r'c3-summary-label[^>]*>([^<]+)<', badge)
+    labels = re.findall(r"c3-summary-label[^>]*>([^<]+)<", badge)
     if labels:
-        assert "EXECUTED" not in labels, (
-            f"cash bailed out but the badge reported EXECUTED: {labels}")
-        assert "BYPASSED" in labels, (
-            f"a bailed-out cell should read BYPASSED, got {labels}")
+        assert "EXECUTED" not in labels, f"cash bailed out but the badge reported EXECUTED: {labels}"
+        assert "BYPASSED" in labels, f"a bailed-out cell should read BYPASSED, got {labels}"
 
 
 def _badge_html(runner, cell_num):
@@ -100,5 +90,4 @@ def test_a_healthy_cell_says_nothing_about_bailing_out(nb_runner):
 
     out = r.get_raw_output(2)
     assert "answer 42" in out
-    assert "NOTEBOOK-BAILOUT" not in out, (
-        f"a healthy cell reported a bail-out: {out!r}")
+    assert "NOTEBOOK-BAILOUT" not in out, f"a healthy cell reported a bail-out: {out!r}"

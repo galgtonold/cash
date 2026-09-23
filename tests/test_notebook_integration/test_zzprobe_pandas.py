@@ -33,14 +33,11 @@ def _rerun_probe(nb_runner, setup, cell, expect):
     nb_runner.create_notebook([setup, cell])
     nb_runner.start_kernel()
     nb_runner.run_all()
-    assert expect in nb_runner.get_output(2), \
-        f"first run_all: {nb_runner.get_output(2)!r}"
+    assert expect in nb_runner.get_output(2), f"first run_all: {nb_runner.get_output(2)!r}"
     nb_runner.run_all()
-    assert expect in nb_runner.get_output(2), \
-        f"second run_all (determinism): {nb_runner.get_output(2)!r}"
+    assert expect in nb_runner.get_output(2), f"second run_all (determinism): {nb_runner.get_output(2)!r}"
     nb_runner.run_cell(2)
-    assert expect in nb_runner.get_output(2), \
-        f"isolated re-run (idempotence): {nb_runner.get_output(2)!r}"
+    assert expect in nb_runner.get_output(2), f"isolated re-run (idempotence): {nb_runner.get_output(2)!r}"
 
 
 class TestSamplingRerunIdempotence:
@@ -108,11 +105,13 @@ class TestContentHashCollisionChannels:
     def test_flag_edit_colliding_ndarray_consumer_fresh(self, nb_runner):
         """Edit a flag cell so the produced array differs ONLY at index 500
         (outside the first-100 sample).  The consumer must print the new value."""
-        nb_runner.create_notebook([
-            "flag = 7",
-            "import numpy as np\narr = np.zeros(1000, dtype=int)\narr[500] = flag",
-            "print('probe=', int(arr[500]))",
-        ])
+        nb_runner.create_notebook(
+            [
+                "flag = 7",
+                "import numpy as np\narr = np.zeros(1000, dtype=int)\narr[500] = flag",
+                "print('probe=', int(arr[500]))",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.enable_debug()
         nb_runner.enable_persist()
@@ -120,17 +119,18 @@ class TestContentHashCollisionChannels:
         assert "probe= 7" in nb_runner.get_output(3), nb_runner.get_output(3)
         nb_runner.set_cell_source(1, "flag = 9")
         nb_runner.run_all()
-        assert "probe= 9" in nb_runner.get_output(3), \
-            f"stale consumer after flag edit: {nb_runner.get_output(3)!r}"
+        assert "probe= 9" in nb_runner.get_output(3), f"stale consumer after flag edit: {nb_runner.get_output(3)!r}"
 
     def test_flag_edit_colliding_dataframe_consumer_fresh(self, nb_runner):
         """Same attack through a 1000-row DataFrame differing only in row 700
         (outside the head-5 sample)."""
-        nb_runner.create_notebook([
-            "flag = 7",
-            "import pandas as pd\ndf = pd.DataFrame({'a': [0] * 1000})\ndf.iloc[700, 0] = flag",
-            "print('probe=', int(df.iloc[700, 0]))",
-        ])
+        nb_runner.create_notebook(
+            [
+                "flag = 7",
+                "import pandas as pd\ndf = pd.DataFrame({'a': [0] * 1000})\ndf.iloc[700, 0] = flag",
+                "print('probe=', int(df.iloc[700, 0]))",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.enable_debug()
         nb_runner.enable_persist()
@@ -138,19 +138,20 @@ class TestContentHashCollisionChannels:
         assert "probe= 7" in nb_runner.get_output(3), nb_runner.get_output(3)
         nb_runner.set_cell_source(1, "flag = 9")
         nb_runner.run_all()
-        assert "probe= 9" in nb_runner.get_output(3), \
-            f"stale consumer after flag edit: {nb_runner.get_output(3)!r}"
+        assert "probe= 9" in nb_runner.get_output(3), f"stale consumer after flag edit: {nb_runner.get_output(3)!r}"
 
     def test_reset_state_sampled_df_consumer_not_stale(self, nb_runner):
         """Provenance loss (reset_cash_state) forces lineage to be re-derived
         from the SAMPLED content hash.  A tail mutation (row 700, outside the
         head-5 sample) then collides with the pre-mutation hash -- the cached
         consumer must NOT serve the pre-mutation total."""
-        nb_runner.create_notebook([
-            "import pandas as pd\ndf = pd.DataFrame({'a': list(range(1000))})",
-            "pass",
-            "total = int(df['a'].sum())\nprint('total=', total)",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import pandas as pd\ndf = pd.DataFrame({'a': list(range(1000))})",
+                "pass",
+                "total = int(df['a'].sum())\nprint('total=', total)",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.enable_debug()
         nb_runner.enable_persist()
@@ -191,17 +192,18 @@ class TestContentHashCollisionChannels:
 
 
 class TestViewsNestedAndFriends:
-
     def test_np_view_mutation_edit_invalidates_base_consumer(self, nb_runner):
         """b = a[200:250] is a view; b[:] = k mutates `a` in a region outside
         a's first-100 hash sample.  Editing the mutation cell must refresh the
         consumer of `a`."""
-        nb_runner.create_notebook([
-            "import numpy as np\na = np.arange(300)",
-            "b = a[200:250]",
-            "b[:] = 9",
-            "print('asum=', int(a.sum()))",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import numpy as np\na = np.arange(300)",
+                "b = a[200:250]",
+                "b[:] = 9",
+                "print('asum=', int(a.sum()))",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.enable_debug()
         nb_runner.enable_persist()
@@ -210,8 +212,9 @@ class TestViewsNestedAndFriends:
         assert "asum= 34075" in nb_runner.get_output(4), nb_runner.get_output(4)
         nb_runner.set_cell_source(3, "b[:] = 7")
         nb_runner.run_all()
-        assert "asum= 33975" in nb_runner.get_output(4), \
+        assert "asum= 33975" in nb_runner.get_output(4), (
             f"stale a-consumer after editing view mutation: {nb_runner.get_output(4)!r}"
+        )
 
     def test_object_dtype_nested_list_rerun_idempotent(self, nb_runner):
         """Object-dtype column holds lists; head(5).values.tobytes() serialises
@@ -273,10 +276,8 @@ class TestViewsNestedAndFriends:
         nb_runner.enable_persist()
         nb_runner.run_all()
         got_orig = nb_runner.get_output(4).strip()
-        assert truth_orig in got_orig, \
-            f"cash diverges from plain kernel: plain={truth_orig!r} cash={got_orig!r}"
+        assert truth_orig in got_orig, f"cash diverges from plain kernel: plain={truth_orig!r} cash={got_orig!r}"
         nb_runner.set_cell_source(3, "df.iloc[999, 1] = 5")
         nb_runner.run_all()
         got_edit = nb_runner.get_output(4).strip()
-        assert truth_edit in got_edit, \
-            f"stale aggregate after mutation edit: plain={truth_edit!r} cash={got_edit!r}"
+        assert truth_edit in got_edit, f"stale aggregate after mutation edit: plain={truth_edit!r} cash={got_edit!r}"

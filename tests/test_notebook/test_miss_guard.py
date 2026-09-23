@@ -21,6 +21,7 @@ net-negative in-session but saves hugely across a restart is not a bug — it is
 the product. If the guard ever fires on a stable key, it has eaten the core value
 proposition, and that is a strictly worse outcome than the waste it prevents.
 """
+
 from __future__ import annotations
 
 import itertools
@@ -141,9 +142,9 @@ class TestReprobe:
         keys = (f"key-{i}" for i in itertools.count())
         _drive_to_guarded(guard, keys)
 
-        guard.observe("src", "stable", hit=False)   # first stable run: still churn
+        guard.observe("src", "stable", hit=False)  # first stable run: still churn
         assert guard.should_serialise("src") is False
-        guard.observe("src", "stable", hit=False)   # key repeats -> probe
+        guard.observe("src", "stable", hit=False)  # key repeats -> probe
         assert guard.should_serialise("src") is True
 
     def test_probe_write_leads_to_a_hit_which_unguards(self):
@@ -152,9 +153,9 @@ class TestReprobe:
         _drive_to_guarded(guard, keys)
 
         guard.observe("src", "stable", hit=False)
-        guard.observe("src", "stable", hit=False)   # probe writes the entry
+        guard.observe("src", "stable", hit=False)  # probe writes the entry
         assert guard.should_serialise("src") is True
-        guard.observe("src", "stable", hit=True)    # the write now pays off
+        guard.observe("src", "stable", hit=True)  # the write now pays off
         assert guard.is_guarded("src") is False
         assert guard.should_serialise("src") is True
 
@@ -208,9 +209,7 @@ class TestVerdictPersistence:
             guard.observe("src", "stable-key", hit=True)
         assert not (tmp_path / "_miss_guard.json").exists()
 
-    @pytest.mark.parametrize(
-        "content", ["not json at all", '{"version": 999, "guarded": ["src"]}', "[]"]
-    )
+    @pytest.mark.parametrize("content", ["not json at all", '{"version": 999, "guarded": ["src"]}', "[]"])
     def test_unreadable_store_degrades_to_no_guard(self, tmp_path, content):
         """The guard is an optimisation. Its failure mode must be 'no
         optimisation', never 'no cache'."""
@@ -291,9 +290,7 @@ class _Session:
         self.magics._statement_processor._CHEAP_WRITE_SHARE = 0.0
         self.magics._auto_cache_enabled = True
         self.metrics: list[dict] = []
-        self.magics._render_interactive_badge = (
-            lambda metrics, **kw: self.metrics.extend(metrics)
-        )
+        self.magics._render_interactive_badge = lambda metrics, **kw: self.metrics.extend(metrics)
 
         # Every backend.set is one serialisation of the value — the cost the
         # guard exists to stop paying.
@@ -351,13 +348,9 @@ class TestUnstableKeyStopsSerialising:
         before = len(session.serialised)
         for _ in range(N_PROBE - 2):  # guarded runs #2 .. #(R-1)
             session.run(next(keys))
-        assert len(session.serialised) == before, (
-            "guarded statement serialised before the re-probe was due"
-        )
+        assert len(session.serialised) == before, "guarded statement serialised before the re-probe was due"
         session.run(next(keys))  # guarded run #R
-        assert len(session.serialised) == before + 1, (
-            "the periodic re-probe never let a write through"
-        )
+        assert len(session.serialised) == before + 1, "the periodic re-probe never let a write through"
 
     def test_the_lookup_keeps_running_while_guarded(self, session):
         """Stop writing, keep hashing and keep looking up. The lookup is cheap,
@@ -381,9 +374,7 @@ class TestUnstableKeyStopsSerialising:
             session.run(next(keys))
 
         assert len(lookups) == 3, "a guarded statement must still be looked up"
-        assert len(session.serialised) == serialised_before, (
-            "...but must not be serialised"
-        )
+        assert len(session.serialised) == serialised_before, "...but must not be serialised"
 
     def test_badge_says_the_statement_stopped_caching_and_why(self, session):
         keys = _unstable()
@@ -450,8 +441,7 @@ class TestVerdictSurvivesKernelRestart:
             for _ in range(N_CHURN - 1):
                 second.run(next(keys))
             assert second.serialised == [], (
-                "the restarted kernel re-paid the serialisation the previous "
-                "session already proved worthless"
+                "the restarted kernel re-paid the serialisation the previous session already proved worthless"
             )
         finally:
             second.close()
@@ -474,12 +464,8 @@ class TestGuardedStatementCanRecover:
         # sampling threshold, ...). Nothing tells the guard; it must notice.
         statuses = [session.run("now-stable")["status"] for _ in range(4)]
 
-        assert len(session.serialised) == guarded_at + 1, (
-            "the re-probe should have let exactly one write through"
-        )
-        assert CacheStatus.RESTORED in statuses, (
-            f"a stabilised key never recovered to a cache hit: {statuses}"
-        )
+        assert len(session.serialised) == guarded_at + 1, "the re-probe should have let exactly one write through"
+        assert CacheStatus.RESTORED in statuses, f"a stabilised key never recovered to a cache hit: {statuses}"
         assert session.run("now-stable").get("skipped_reason") is None, (
             "the statement recovered but is still badged as guarded"
         )
@@ -493,22 +479,16 @@ class TestRestartSaverIsNeverGuarded:
     matter how many sessions it lives through.
     """
 
-    def test_stable_key_statement_hits_across_restarts_and_is_never_guarded(
-        self, cache_dir
-    ):
+    def test_stable_key_statement_hits_across_restarts_and_is_never_guarded(self, cache_dir):
         sessions_serialised = []
         for _ in range(N_CHURN + 3):  # more restarts than the guard's threshold
             s = _Session(cache_dir)
             try:
                 statuses = [s.run("stable-lineage")["status"] for _ in range(3)]
                 sessions_serialised.append(len(s.serialised))
-                assert statuses[-1] == CacheStatus.RESTORED, (
-                    f"a stable-key statement stopped hitting: {statuses}"
-                )
+                assert statuses[-1] == CacheStatus.RESTORED, f"a stable-key statement stopped hitting: {statuses}"
                 guard = s.magics._statement_processor._miss_guard
-                assert not any(
-                    guard.is_guarded(h) for h in guard._records
-                ), "a legitimate restart-saver was guarded"
+                assert not any(guard.is_guarded(h) for h in guard._records), "a legitimate restart-saver was guarded"
             finally:
                 s.close()
 
@@ -527,7 +507,7 @@ class TestRestartSaverIsNeverGuarded:
         s = _Session(cache_dir)
         try:
             for edit in range(N_CHURN * 3):
-                s.run(f"edit-{edit}")          # upstream changed -> miss, cache it
+                s.run(f"edit-{edit}")  # upstream changed -> miss, cache it
                 assert s.run(f"edit-{edit}")["status"] == CacheStatus.RESTORED
             guard = s.magics._statement_processor._miss_guard
             assert not any(guard.is_guarded(h) for h in guard._records)

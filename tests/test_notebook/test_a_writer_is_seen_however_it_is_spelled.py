@@ -25,6 +25,7 @@ The controls matter as much as the failing case: an installed package's method
 (``df.to_csv``) must NOT become a reason to refuse caching every statement that
 touches a DataFrame, and an append must stay a skippable effect.
 """
+
 from __future__ import annotations
 
 import sys
@@ -35,6 +36,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent))
 
 import _writer_lib  # noqa: E402
+
 from cash.notebook.cacheability import (  # noqa: E402
     statement_calls_user_writer,
     user_callee_writing_files,
@@ -61,20 +63,17 @@ def test_the_predicate_itself_was_never_the_problem():
 
 def test_a_bare_name_writer_is_seen(ns):
     """The shape that always worked -- a function defined in the notebook."""
-    assert statement_calls_user_writer("p = export_summary(d, 'out.json')", ns) \
-        == "export_summary"
+    assert statement_calls_user_writer("p = export_summary(d, 'out.json')", ns) == "export_summary"
 
 
 def test_a_module_spelled_writer_is_seen(ns):
     """r27s2's shape, and the one the docs promise: a project module."""
-    assert statement_calls_user_writer("p = tl.export_summary(d, 'out.json')", ns) \
-        == "export_summary"
+    assert statement_calls_user_writer("p = tl.export_summary(d, 'out.json')", ns) == "export_summary"
 
 
 def test_the_module_may_be_named_in_full(ns):
     """`import mypkg.helpers` then `mypkg.helpers.save(...)` is the same case."""
-    assert statement_calls_user_writer(
-        "p = _writer_lib.save_chart(fig, 'chart.png')", ns) == "save_chart"
+    assert statement_calls_user_writer("p = _writer_lib.save_chart(fig, 'chart.png')", ns) == "save_chart"
 
 
 def test_a_module_function_that_writes_nothing_is_not_a_writer(ns):

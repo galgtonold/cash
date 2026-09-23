@@ -25,6 +25,7 @@ must be identical to the verdict on the untouched original. Parity is the
 property that matters, and it is version-independent — it holds no matter which
 parameters ipykernel decides to probe for in the future.
 """
+
 import inspect
 
 import pytest
@@ -101,9 +102,7 @@ class TestIntrospectionParity:
         before = inspect.signature(getattr(real_shell, hook))
         _patch_cash_onto(real_shell)
         after = inspect.signature(getattr(real_shell, hook))
-        assert str(after) == str(before), (
-            f"shell.{hook} signature changed under cash: {after} != {before}"
-        )
+        assert str(after) == str(before), f"shell.{hook} signature changed under cash: {after} != {before}"
 
 
 class LegacyShell(Configurable):

@@ -15,6 +15,7 @@ re-running this write safe?"). Here the file IS read, so the gate steps aside.
 The oracle is a no-cash kernel: cash ON must leave the file byte-identical to
 cash OFF, both after ``run_all`` and after an upstream edit.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.upstream, pytest.mark.timeout(180)]
@@ -35,14 +36,13 @@ def _cells(audit_path, *, cash_on):
     ap = _p(audit_path)
     first = "import cash\n%cash_on\n%cash_badge print" if cash_on else "pass"
     return [
-        first,                                                                # 1
-        "scale = 2",                                                          # 2
-        "payload = scale * 21",                                               # 3
+        first,  # 1
+        "scale = 2",  # 2
+        "payload = scale * 21",  # 3
         # writer: APPEND mode, payload-dependent, call-expression receiver
-        f"open(r'{ap}', 'a').write(f'entry-{{payload}}\\n')\nwrote = True",   # 4
+        f"open(r'{ap}', 'a').write(f'entry-{{payload}}\\n')\nwrote = True",  # 4
         # reader of the SAME file -> puts the writer in the consumer's scope
-        f"# @cash:no-cache\nn_lines = len(open(r'{ap}').read().splitlines())\n"
-        f"print('LINES', n_lines)",                                           # 5
+        f"# @cash:no-cache\nn_lines = len(open(r'{ap}').read().splitlines())\nprint('LINES', n_lines)",  # 5
     ]
 
 
@@ -67,8 +67,7 @@ def test_append_with_call_receiver_matches_a_plain_kernel(nb_runner, tmp_path):
 
     after_edit = _lines(audit)
     assert after_edit == after_runall, (
-        f"upstream edit + running the READER re-fired the append: "
-        f"{after_runall!r} -> {after_edit!r}"
+        f"upstream edit + running the READER re-fired the append: {after_runall!r} -> {after_edit!r}"
     )
 
 

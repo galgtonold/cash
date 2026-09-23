@@ -8,6 +8,7 @@ observed "no write failures logged".
 
 Counts what actually reached disk after shutdown.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
@@ -16,8 +17,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
 def _chain_cells(cache_dir: str, sleep: float = 0.15):
     cdir = cache_dir.replace("\\", "/")
     return [
-        "import cash\nfrom cash import Cash, FileBackend\n"
-        f"c = Cash(backend=FileBackend(cache_dir='{cdir}'))",
+        f"import cash\nfrom cash import Cash, FileBackend\nc = Cash(backend=FileBackend(cache_dir='{cdir}'))",
         "import time\n"
         "def base(x):\n    return x + 1\n"
         "@c.cache\n"
@@ -30,7 +30,7 @@ def _chain_cells(cache_dir: str, sleep: float = 0.15):
         "def top(x):\n    return mid(x) + 100",
         "vals = [top(s) for s in (1, 2, 3)]\n"
         "info = top.cache_info()\n"
-        "print(f'RESULT hits={info[\"hits\"]} misses={info[\"misses\"]}')",
+        'print(f\'RESULT hits={info["hits"]} misses={info["misses"]}\')',
     ]
 
 
@@ -49,14 +49,12 @@ def test_probe_entries_on_disk_after_shutdown(nb_runner, tmp_path):
         data = [f for f in files if f.endswith(".entry")]
         meta = [f for f in files if f.endswith(".meta")]
         part = [f for f in files if f.endswith(".part")]
-        print(f"  {label}: {len(data)} .data  {len(meta)} .meta  {len(part)} .part",
-              flush=True)
+        print(f"  {label}: {len(data)} .data  {len(meta)} .meta  {len(part)} .part", flush=True)
         return len(data), len(meta)
 
-    before = counts("BEFORE shutdown")
+    counts("BEFORE shutdown")
     nb_runner.shutdown()
     after = counts("AFTER  shutdown")
 
-    print(f"\n  expected 9 data entries (top/mid/load x 3 args)", flush=True)
-    print(f"  VERDICT: {'ALL LANDED' if after[0] >= 9 else 'ENTRIES LOST — shutdown did not drain'}",
-          flush=True)
+    print("\n  expected 9 data entries (top/mid/load x 3 args)", flush=True)
+    print(f"  VERDICT: {'ALL LANDED' if after[0] >= 9 else 'ENTRIES LOST — shutdown did not drain'}", flush=True)

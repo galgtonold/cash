@@ -16,6 +16,7 @@ points to a control structure (for/while/if/with/try).
 """
 
 import time
+
 import pytest
 
 pytestmark = [pytest.mark.upstream, pytest.mark.timeout(60)]
@@ -30,29 +31,28 @@ class TestLineageCheckControlStructure:
         re-execute a for loop that hasn't changed. Previously, the lineage
         formula mismatch caused the for loop to re-execute every time.
         """
-        nb_runner.create_notebook([
-            # Cell 1: imports
-            "import numpy as np\nimport time",
-            # Cell 2: cash_on + debug
-            "%cash_on\n%cash_debug on",
-            # Cell 3: setup
-            (
-                "N = 10\n"
-                "data = np.zeros(N)"
-            ),
-            # Cell 4: for loop that modifies data (will run as single unit)
-            (
-                "result = np.zeros(N)\n"
-                "accumulator = 0.0\n"
-                "for i in range(1000):\n"
-                "    result = result + np.random.randn(N) * 0.001\n"
-                "    accumulator += np.sum(result)\n"
-                "p = result.sum()\n"
-                "print(f'Loop done: p={p:.4f}')"
-            ),
-            # Cell 5: downstream cell that uses p
-            "print(f'p = {p:.4f}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                # Cell 1: imports
+                "import numpy as np\nimport time",
+                # Cell 2: cash_on + debug
+                "%cash_on\n%cash_debug on",
+                # Cell 3: setup
+                ("N = 10\ndata = np.zeros(N)"),
+                # Cell 4: for loop that modifies data (will run as single unit)
+                (
+                    "result = np.zeros(N)\n"
+                    "accumulator = 0.0\n"
+                    "for i in range(1000):\n"
+                    "    result = result + np.random.randn(N) * 0.001\n"
+                    "    accumulator += np.sum(result)\n"
+                    "p = result.sum()\n"
+                    "print(f'Loop done: p={p:.4f}')"
+                ),
+                # Cell 5: downstream cell that uses p
+                "print(f'p = {p:.4f}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -80,35 +80,37 @@ class TestLineageCheckControlStructure:
         Mimics the exact CFD pattern: a for loop produces variables like p, u, v,
         and a downstream cell saves them. Second execution should be instant.
         """
-        nb_runner.create_notebook([
-            # Cell 1: imports
-            "import numpy as np\nimport time",
-            # Cell 2: cash_on
-            "%cash_on",
-            # Cell 3: setup
-            "N = 10\ndx = 0.1",
-            # Cell 4: for loop (runs as single unit due to many iterations)
-            (
-                "u = np.zeros(N)\n"
-                "v = np.zeros(N)\n"
-                "p = np.zeros(N)\n"
-                "residual_history = []\n"
-                "for step in range(5000):\n"
-                "    u = u + 0.001 * np.sin(np.linspace(0, np.pi, N))\n"
-                "    v = v + 0.0005 * np.cos(np.linspace(0, np.pi, N))\n"
-                "    p = u + v\n"
-                "    residual_history.append(np.max(np.abs(p)))\n"
-                "print(f'Done: {len(residual_history)} steps')"
-            ),
-            # Cell 5: post-processing with intermediates
-            (
-                "vorticity = (v[2:] - v[:-2]) / (2 * dx)\n"
-                "stream = np.cumsum(vorticity)\n"
-                "print(f'Vorticity range: [{vorticity.min():.4f}, {vorticity.max():.4f}]')"
-            ),
-            # Cell 6: downstream using stream and u
-            "print(f'stream sum: {stream.sum():.4f}, u max: {u.max():.4f}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                # Cell 1: imports
+                "import numpy as np\nimport time",
+                # Cell 2: cash_on
+                "%cash_on",
+                # Cell 3: setup
+                "N = 10\ndx = 0.1",
+                # Cell 4: for loop (runs as single unit due to many iterations)
+                (
+                    "u = np.zeros(N)\n"
+                    "v = np.zeros(N)\n"
+                    "p = np.zeros(N)\n"
+                    "residual_history = []\n"
+                    "for step in range(5000):\n"
+                    "    u = u + 0.001 * np.sin(np.linspace(0, np.pi, N))\n"
+                    "    v = v + 0.0005 * np.cos(np.linspace(0, np.pi, N))\n"
+                    "    p = u + v\n"
+                    "    residual_history.append(np.max(np.abs(p)))\n"
+                    "print(f'Done: {len(residual_history)} steps')"
+                ),
+                # Cell 5: post-processing with intermediates
+                (
+                    "vorticity = (v[2:] - v[:-2]) / (2 * dx)\n"
+                    "stream = np.cumsum(vorticity)\n"
+                    "print(f'Vorticity range: [{vorticity.min():.4f}, {vorticity.max():.4f}]')"
+                ),
+                # Cell 6: downstream using stream and u
+                "print(f'stream sum: {stream.sum():.4f}, u max: {u.max():.4f}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -124,9 +126,7 @@ class TestLineageCheckControlStructure:
         assert "stream sum:" in output6_2
 
         # Should be fast — no for loop re-execution
-        assert elapsed < 5.0, (
-            f"Second run took {elapsed:.1f}s — for loop was likely re-executed"
-        )
+        assert elapsed < 5.0, f"Second run took {elapsed:.1f}s — for loop was likely re-executed"
 
     def test_for_loop_still_reexecutes_when_inputs_change(self, nb_runner):
         """
@@ -134,19 +134,21 @@ class TestLineageCheckControlStructure:
         variable changes, the for loop SHOULD be scheduled for re-execution
         by the notebook-based checker (not the lineage-based one).
         """
-        nb_runner.create_notebook([
-            "import numpy as np",
-            "%cash_on",
-            "N = 10",
-            (
-                "result = np.zeros(N)\n"
-                "for i in range(100):\n"
-                "    result = result + 1\n"
-                "total = result.sum()\n"
-                "print(f'Total: {total}')"
-            ),
-            "print(f'Total is: {total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import numpy as np",
+                "%cash_on",
+                "N = 10",
+                (
+                    "result = np.zeros(N)\n"
+                    "for i in range(100):\n"
+                    "    result = result + 1\n"
+                    "total = result.sum()\n"
+                    "print(f'Total: {total}')"
+                ),
+                "print(f'Total is: {total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 

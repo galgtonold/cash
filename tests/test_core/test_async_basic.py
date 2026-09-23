@@ -1,9 +1,8 @@
 """Basic async support for @cash.cache."""
+
 from __future__ import annotations
 
 import asyncio
-
-import pytest
 
 from cash import Cash
 

@@ -48,6 +48,7 @@ are pinned here so none regresses silently:
   neighbours below for the false-positive shapes this closes, and
   ``_exec_source_for_node``'s own docstring for the full reasoning.
 """
+
 from __future__ import annotations
 
 import ast
@@ -82,20 +83,13 @@ def test_a_function_with_no_directive_is_left_alone():
     which internal path (re)creates it -- so this must return None, exactly
     as if the def/class recovery did not exist, even though the segment
     itself IS recoverable."""
-    cell = (
-        "def compute(v):\n"
-        "    return v * 2\n"
-    )
+    cell = "def compute(v):\n    return v * 2\n"
     node = _node(cell)
     assert _exec_source_for_node(cell, node, None) is None
 
 
 def test_a_function_with_the_directive_is_recovered_with_comments():
-    cell = (
-        "def audited(n):\n"
-        "    time.sleep(0.01)  # @cash:assume-safe - audited\n"
-        "    return n * 2\n"
-    )
+    cell = "def audited(n):\n    time.sleep(0.01)  # @cash:assume-safe - audited\n    return n * 2\n"
     node = _node(cell)
     result = _exec_source_for_node(cell, node, None)
     assert result == cell.rstrip("\n")
@@ -107,12 +101,7 @@ def test_the_decorator_is_not_dropped():
     span (anchored at `node.lineno`, the `def` keyword line since Python 3.8)
     silently drops the decorator, un-caching (and un-purity-checking) the
     function it executes."""
-    cell = (
-        "@c.cache\n"
-        "def audited(n):\n"
-        "    x = 1  # @cash:assume-safe\n"
-        "    return x\n"
-    )
+    cell = "@c.cache\ndef audited(n):\n    x = 1  # @cash:assume-safe\n    return x\n"
     node = _node(cell)
     result = _exec_source_for_node(cell, node, None)
     assert result == cell.rstrip("\n")
@@ -120,16 +109,7 @@ def test_the_decorator_is_not_dropped():
 
 
 def test_multiple_decorators_and_blank_lines_between_them_survive():
-    cell = (
-        "@a\n"
-        "\n"
-        "@b(\n"
-        "    1,\n"
-        ")\n"
-        "def audited(n):\n"
-        "    x = 1  # @cash:assume-safe\n"
-        "    return x\n"
-    )
+    cell = "@a\n\n@b(\n    1,\n)\ndef audited(n):\n    x = 1  # @cash:assume-safe\n    return x\n"
     node = _node(cell)
     result = _exec_source_for_node(cell, node, None)
     assert result == cell.rstrip("\n")
@@ -139,29 +119,19 @@ def test_multiple_decorators_and_blank_lines_between_them_survive():
 
 
 def test_an_async_function_with_the_directive_is_recovered():
-    cell = (
-        "async def audited(n):\n"
-        "    x = 1  # @cash:assume-safe\n"
-        "    return x\n"
-    )
+    cell = "async def audited(n):\n    x = 1  # @cash:assume-safe\n    return x\n"
     node = _node(cell)
     assert _exec_source_for_node(cell, node, None) == cell.rstrip("\n")
 
 
 def test_a_class_with_the_directive_is_recovered():
-    cell = (
-        "class Audited:\n"
-        "    x = compute()  # @cash:assume-safe\n"
-    )
+    cell = "class Audited:\n    x = compute()  # @cash:assume-safe\n"
     node = _node(cell)
     assert _exec_source_for_node(cell, node, None) == cell.rstrip("\n")
 
 
 def test_a_class_with_no_directive_is_left_alone():
-    cell = (
-        "class Plain:\n"
-        "    x = 1\n"
-    )
+    cell = "class Plain:\n    x = 1\n"
     node = _node(cell)
     assert _exec_source_for_node(cell, node, None) is None
 
@@ -170,11 +140,7 @@ def test_a_cash_directive_on_a_sibling_statement_does_not_leak_in():
     """The gate reads the RECOVERED SEGMENT for this node only. A directive
     on some other top-level statement in the same cell must not make an
     unrelated, undirected function's recovery fire."""
-    cell = (
-        "def plain(n):\n"
-        "    return n\n"
-        "x = 1  # @cash:assume-safe\n"
-    )
+    cell = "def plain(n):\n    return n\nx = 1  # @cash:assume-safe\n"
     node = _node(cell, index=0)
     assert _exec_source_for_node(cell, node, None) is None
 
@@ -194,13 +160,7 @@ def test_a_pep614_parenthesised_decorator_returns_none_not_uncompilable_text():
     ran fine on base ``479e30e``. This must return ``None`` instead, the
     same as any other unrecoverable segment, so the caller falls back to
     the unparsed form rather than text that cannot compile."""
-    cell = (
-        "@(\n"
-        "    c.cache\n"
-        ")\n"
-        "def f(n):\n"
-        "    return n  # @cash:assume-safe\n"
-    )
+    cell = "@(\n    c.cache\n)\ndef f(n):\n    return n  # @cash:assume-safe\n"
     node = _node(cell)
     assert _exec_source_for_node(cell, node, None) is None
 
@@ -214,15 +174,12 @@ def test_a_pep614_parenthesised_decorator_returns_none_not_uncompilable_text():
 # the same shape is still recovered, so these fail because they are not
 # directives, not because nothing is ever recovered any more.
 
+
 def test_a_docstring_mentioning_cash_syntax_is_not_a_directive():
     """A docstring that merely MENTIONS ``@cash:`` in prose is not a waiver.
     Before the fix, the bare substring check fired here anyway, putting this
     UNDIRECTED function on the recovery path."""
-    cell = (
-        'def f(n):\n'
-        '    """See the @cash: docs."""\n'
-        '    return n\n'
-    )
+    cell = 'def f(n):\n    """See the @cash: docs."""\n    return n\n'
     node = _node(cell)
     assert _exec_source_for_node(cell, node, None) is None
 
@@ -230,11 +187,7 @@ def test_a_docstring_mentioning_cash_syntax_is_not_a_directive():
 def test_a_string_literal_containing_the_substring_is_not_a_directive():
     """A run-time string value, not a comment -- ``inspect.getsource`` and the
     purity analyzer both see it, but it waives nothing."""
-    cell = (
-        'def f(n):\n'
-        '    msg = "@cash: not a directive"\n'
-        '    return n\n'
-    )
+    cell = 'def f(n):\n    msg = "@cash: not a directive"\n    return n\n'
     node = _node(cell)
     assert _exec_source_for_node(cell, node, None) is None
 
@@ -243,11 +196,7 @@ def test_a_prose_comment_mentioning_cash_syntax_is_not_a_directive():
     """An ordinary comment that happens to document cash's own annotation
     syntax, rather than invoke it. The exact shape a maintainer of THIS
     codebase would be most likely to write by accident."""
-    cell = (
-        'def f(n):\n'
-        '    # the @cash: system does this\n'
-        '    return n\n'
-    )
+    cell = "def f(n):\n    # the @cash: system does this\n    return n\n"
     node = _node(cell)
     assert _exec_source_for_node(cell, node, None) is None
 
@@ -260,12 +209,7 @@ def test_a_non_waiver_directive_between_the_decorator_and_def_is_not_recovered()
     ``_audited_lines`` recognises ``assume-safe`` only, so a comment
     documenting a DIFFERENT ``@cash:`` directive here (meaningless in this
     position regardless) must not fire the gate either."""
-    cell = (
-        "@c.cache\n"
-        "# @cash:no-cache - not real here, just documenting the syntax\n"
-        "def f(n):\n"
-        "    return n\n"
-    )
+    cell = "@c.cache\n# @cash:no-cache - not real here, just documenting the syntax\ndef f(n):\n    return n\n"
     node = _node(cell)
     assert _exec_source_for_node(cell, node, None) is None
 
@@ -275,10 +219,6 @@ def test_a_real_directive_alongside_the_false_positives_is_still_recovered():
     the ``@cash:`` text is now a REAL waiver. Recovery must still fire --
     the fix narrows the gate's TRIGGER, not its ability to recover a
     genuinely directed function."""
-    cell = (
-        'def f(n):\n'
-        '    time.sleep(0.01)  # @cash:assume-safe\n'
-        '    return n\n'
-    )
+    cell = "def f(n):\n    time.sleep(0.01)  # @cash:assume-safe\n    return n\n"
     node = _node(cell)
     assert _exec_source_for_node(cell, node, None) == cell.rstrip("\n")

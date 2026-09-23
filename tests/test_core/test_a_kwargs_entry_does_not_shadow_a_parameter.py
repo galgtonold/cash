@@ -7,6 +7,7 @@ value -- every such call shared one entry, and ``request("/b", url="x")``
 returned ``GET /a``. Same for a method whose caller passes ``self=`` through
 ``**kwargs``.
 """
+
 from __future__ import annotations
 
 import pytest

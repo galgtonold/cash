@@ -19,7 +19,7 @@ decides whether the call is reached, exactly as before.
 import ast
 import unittest
 
-from cash.notebook.call_interception import CallSite, HELPER_NAME, wrap_eligible_calls
+from cash.notebook.call_interception import HELPER_NAME, CallSite, wrap_eligible_calls
 
 
 def _rewrite(src: str) -> tuple[str, list[CallSite]]:
@@ -29,7 +29,6 @@ def _rewrite(src: str) -> tuple[str, list[CallSite]]:
 
 
 class TestRewrite(unittest.TestCase):
-
     def test_helper_name_is_dunder_private(self):
         """The injected name must not collide with anything a user would write."""
         self.assertTrue(HELPER_NAME.startswith("__cash"))
@@ -58,9 +57,7 @@ class TestRewrite(unittest.TestCase):
     def test_short_circuit_is_preserved(self):
         """The load-bearing case: `g` stays under the `or`, not hoisted above it."""
         out, sites = _rewrite("out.append(f() or g())")
-        self.assertEqual(
-            out, "out.append(__cash_call__(f, 0)() or __cash_call__(g, 1)())"
-        )
+        self.assertEqual(out, "out.append(__cash_call__(f, 0)() or __cash_call__(g, 1)())")
         self.assertEqual(len(sites), 2)
 
     def test_method_call_callee_is_wrapped_whole(self):
@@ -305,9 +302,7 @@ def test_selective_gate_wraps_only_the_accepted_call():
     survives, not just how many there are.
     """
     tree = ast.parse("out.append(compute(x) + other(y))")
-    new_tree, sites = wrap_eligible_calls(
-        tree, gate=lambda call: getattr(call.func, "id", None) == "compute"
-    )
+    new_tree, sites = wrap_eligible_calls(tree, gate=lambda call: getattr(call.func, "id", None) == "compute")
     out = ast.unparse(new_tree)
     assert out == "out.append(__cash_call__(compute, 0)(x) + other(y))"
     assert len(sites) == 1
@@ -334,9 +329,7 @@ def test_two_statements_with_identical_call_text_get_different_stmt_identity():
     or any change that derives it from something shared across statements
     rather than each statement's own AST node.
     """
-    tree = ast.parse(
-        "vals[step] = fetch_next(conn)\nother[step] = fetch_next(conn)\n"
-    )
+    tree = ast.parse("vals[step] = fetch_next(conn)\nother[step] = fetch_next(conn)\n")
     _, sites = wrap_eligible_calls(tree)
     assert len(sites) == 2
     assert sites[0].source == sites[1].source == "fetch_next(conn)"
@@ -379,9 +372,7 @@ def test_stmt_identity_excludes_an_injected_iteration_context_comment():
     text is nowhere in the resulting identity.
     """
     context_hash = "deadbeefcafef00d"
-    code_with_comment = (
-        f"# __iteration_context__: {context_hash}\nvals[step] = fetch_next(conn)"
-    )
+    code_with_comment = f"# __iteration_context__: {context_hash}\nvals[step] = fetch_next(conn)"
     tree = ast.parse(code_with_comment)
     _, sites = wrap_eligible_calls(tree)
     assert sites[0].stmt_identity == "vals[step] = fetch_next(conn)"

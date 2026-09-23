@@ -6,7 +6,7 @@ on-disk layer, with a promotion policy that decides what's worth writing down.
 
 ## The tiers
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend @33f3d324, cash/backends/memory_backend.py:InMemoryBackend, cash/backends/file_backend.py:FileBackend, cash/backends/sqlite_backend.py:SQLiteBackend, cash/backends/redis_backend.py:RedisBackend, cash/backends/s3_backend.py:S3Backend, cash/backends/cascading_backend.py:CascadingBackend broad="tier ordering and read-repair are properties of the class as a whole" -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend @81dd03b9, cash/backends/memory_backend.py:InMemoryBackend, cash/backends/file_backend.py:FileBackend, cash/backends/sqlite_backend.py:SQLiteBackend, cash/backends/redis_backend.py:RedisBackend, cash/backends/s3_backend.py:S3Backend, cash/backends/cascading_backend.py:CascadingBackend broad="tier ordering and read-repair are properties of the class as a whole" -->
 The default `TieredBackend` stacks two layers, fastest first:
 
 | Tier | Backend | Speed | Survives restart? |
@@ -115,7 +115,7 @@ file read that only discovers the entry is a skip marker.
 `persist_all=True` — bypasses the compute floor entirely. It does not escape the
 per-tier size caps below.
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.__init__ @7647a573, cash/backends/tiered_backend.py:TieredBackend._default_promotion_policy @7c228c64, cash/config.py:CashConfig.smart_persistence == True -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.__init__ @7647a573, cash/backends/tiered_backend.py:TieredBackend._default_promotion_policy @c919ec7c, cash/config.py:CashConfig.smart_persistence == True -->
 Two places the 0.1 s number quietly becomes 1.0 s. The 0.1 s floor is installed
 by the backend *factory* when `smart_persistence` is on (the default); setting
 `smart_persistence=False`, or constructing a `TieredBackend([...])` by hand,
@@ -141,14 +141,14 @@ The disk tier has a size cap (`max_cache_size`; by default a quarter of the
 room on the disk). Going over it is what makes Cash delete entries, and this
 section is about when and how that happens.
 
-<!-- claim: cash/backends/file_backend.py:FileBackend._do_set_sync @48041900, cash/backends/file_backend.py:FileBackend._check_and_evict @92057a04 -->
+<!-- claim: cash/backends/file_backend.py:FileBackend._do_set_sync @0e010aaf, cash/backends/file_backend.py:FileBackend._check_and_evict @92057a04 -->
 **Only a write can trigger eviction.** Each time an entry lands on disk, the
 background write thread adds its size to a running total and compares that
 total to the cap. If the cache is over, it deletes entries until the cache is
 back under **90%** of the cap. The extra 10% of room means the next few writes
 fit without each one starting another round.
 
-<!-- claim: cash/backends/file_backend.py:FileBackend._ensure_size_scanned @1ec3940e, cash/backends/file_backend.py:FileBackend.get @1d0ed922 -->
+<!-- claim: cash/backends/file_backend.py:FileBackend._ensure_size_scanned @1ec3940e, cash/backends/file_backend.py:FileBackend.get @a300927d -->
 **Reading never evicts.** A cache hit deletes nothing from disk to make room, however
 full the cache is. A process that only reads, such as a kernel restart that
 replays everything from cache, never even adds up the directory's size. That
@@ -166,7 +166,7 @@ of about equal worth go least recently used first.
 [Choosing a Backend](../tutorials/feature-guides/choosing-a-backend.md#filebackend)
 covers how that ranking is kept cheap on a directory of 100k files.
 
-<!-- claim: cash/backends/file_backend.py:FileBackend._touched_since @7dad895c -->
+<!-- claim: cash/backends/file_backend.py:FileBackend._touched_since @7f4b852e -->
 A few entries are passed over in a round:
 
 - **One that was read since the ranking was made.** The ranking is reused
@@ -221,7 +221,7 @@ standard `pickle` if `cloudpickle` isn't installed.
 
 ## A damaged entry is a miss
 
-<!-- claim: cash/backends/entry_format.py:pack_entry @edc87811, cash/backends/entry_format.py:_verify @7c4eaf0a -->
+<!-- claim: cash/backends/entry_format.py:pack_entry @f6d2f3e2, cash/backends/entry_format.py:_verify @47b26c8e -->
 Every persisted entry carries a crc32 of its payload, and every read that
 touches the payload checks it. An entry that does not match -- a half-written
 file, a bad sector, a sync client that merged two versions -- raises
@@ -264,7 +264,7 @@ backend precisely so existence and size can be established without touching the
 payload. `resolve()` is idempotent: the loader runs at most once.
 
 ??? question "How does cache metadata stay typed without locking the backends in?"
-    <!-- claim: cash/backends/_base.py:CacheMetadata @f10e21cf, cash/notebook/statement/_metadata.py:StatementCacheMetadata @48dbf512 broad="the frozen-dataclass-in, dict-on-the-wire contract is a property of both classes" -->
+    <!-- claim: cash/backends/_base.py:CacheMetadata @381f348f, cash/notebook/statement/_metadata.py:StatementCacheMetadata @cd79d868 broad="the frozen-dataclass-in, dict-on-the-wire contract is a property of both classes" -->
     Each entry carries metadata — execution time, size, ttl, type. Inside the
     cash layer that metadata is a **frozen dataclass** (`CacheMetadata` for the
     decorator layer, `StatementCacheMetadata` for the notebook layer), so call

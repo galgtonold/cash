@@ -7,22 +7,21 @@ tests pin the pure clamp arithmetic, the psutil-absent fallback, that the
 factory now gives the RAM and disk tiers *different* machine-scaled caps, and
 that an explicit ``max_cache_size`` still wins.
 """
+
 from __future__ import annotations
 
-import tempfile
 from types import SimpleNamespace
-
-import pytest
 
 from cash.backends import adaptive_caps as ac
 
-_MIB = 1024 ** 2
-_GIB = 1024 ** 3
+_MIB = 1024**2
+_GIB = 1024**3
 
 
 # ---------------------------------------------------------------------------
 # Pure disk-cap policy — every clamp branch, deterministic.
 # ---------------------------------------------------------------------------
+
 
 class TestAdaptiveDiskCap:
     def test_floor_branch_small_laptop(self):
@@ -56,6 +55,7 @@ class TestAdaptiveDiskCap:
 # Pure RAM-cap policy — clamps + psutil-absent fallback.
 # ---------------------------------------------------------------------------
 
+
 class TestAdaptiveRamCap:
     def test_fraction_branch(self):
         # 16 GiB RAM: 0.20·16 = 3.2 GiB, within [512 MiB, 4 GiB].
@@ -81,10 +81,12 @@ class TestAdaptiveRamCap:
 # Resolvers — mocked disk_usage / psutil, never the real machine.
 # ---------------------------------------------------------------------------
 
+
 class TestResolvers:
     def test_resolve_disk_cap_uses_mocked_free_space(self, monkeypatch, tmp_path):
         monkeypatch.setattr(
-            ac.shutil, "disk_usage",
+            ac.shutil,
+            "disk_usage",
             lambda p: SimpleNamespace(total=0, used=0, free=2048 * _GIB),
         )
         assert ac.resolve_disk_cap(str(tmp_path)) == 100 * _GIB  # ceiling
@@ -110,6 +112,7 @@ class TestResolvers:
     def test_resolve_ram_cap_psutil_import_absent(self, monkeypatch):
         # Simulate psutil being unimportable (bare install, CAS-129).
         import builtins
+
         real_import = builtins.__import__
 
         def blocked_import(name, *a, **k):
@@ -127,17 +130,21 @@ class TestResolvers:
 # and an explicit max_cache_size still pins the disk tier.
 # ---------------------------------------------------------------------------
 
+
 class TestFactoryCapWiring:
     def _build(self, config):
         from cash.backends.factory import build_backend_from_config
+
         return build_backend_from_config(config)
 
     def test_ram_and_disk_caps_differ_and_disk_exceeds_1gib(self, monkeypatch, tmp_path):
         from cash.backends import adaptive_caps
+
         # Big free disk → disk cap ≫ 1 GiB; modest RAM → its own smaller cap.
         monkeypatch.setattr(adaptive_caps, "_free_bytes_on_volume", lambda p: 500 * _GIB)
         monkeypatch.setattr(adaptive_caps, "_total_system_ram", lambda: 16 * _GIB)
         from cash.config import CashConfig
+
         backend = self._build(CashConfig(cache_dir=str(tmp_path / "c")))
         ram, disk = backend.backends[0], backend.backends[1]
         assert disk._max_size_bytes > _GIB, "the core fix: disk tier no longer 1 GiB"
@@ -148,8 +155,10 @@ class TestFactoryCapWiring:
 
     def test_explicit_max_cache_size_pins_disk_not_ram(self, monkeypatch, tmp_path):
         from cash.backends import adaptive_caps
+
         monkeypatch.setattr(adaptive_caps, "_total_system_ram", lambda: 16 * _GIB)
         from cash.config import CashConfig
+
         backend = self._build(CashConfig(cache_dir=str(tmp_path / "c"), max_cache_size=777_000))
         ram, disk = backend.backends[0], backend.backends[1]
         assert disk._max_size_bytes == 777_000  # explicit value honored

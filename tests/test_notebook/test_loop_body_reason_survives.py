@@ -13,6 +13,7 @@ Tested at the view/renderer layer rather than through a kernel because that is
 where the bug was -- the metric carried the reason the whole time. A test that
 drove a notebook would be testing the runtime, which was never broken.
 """
+
 from __future__ import annotations
 
 from cash.notebook.badge_renderer.renderers.text import _iteration_pseudo_row

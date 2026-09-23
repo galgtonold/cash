@@ -14,6 +14,7 @@ disk when restoring beats that, by the same cost-model rule.
 Observed in the kernel: reading the folder again binds ``parts``; restoring
 what was built from it does not.
 """
+
 from pathlib import Path
 
 import pytest
@@ -21,14 +22,17 @@ import pytest
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(600)]
 
 READS = 20
-SETUP = ("import glob\nimport time\nimport pandas as pd\n"
-         "def slow_read(f):\n    time.sleep(0.06)\n    return pd.read_csv(f)")
+SETUP = (
+    "import glob\nimport time\nimport pandas as pd\ndef slow_read(f):\n    time.sleep(0.06)\n    return pd.read_csv(f)"
+)
 # Every read is under the persistence floor on its own; together they are not.
 # A body of several statements, as r23s2's: cached per iteration, in RAM.
-LOAD = ("files = sorted(glob.glob('exports/*.csv'))\n"
-        "parts = []\n"
-        "for f in files:\n    d = slow_read(f)\n    d['source'] = f\n    parts.append(d)\n"
-        "raw = pd.concat(parts, ignore_index=True)")
+LOAD = (
+    "files = sorted(glob.glob('exports/*.csv'))\n"
+    "parts = []\n"
+    "for f in files:\n    d = slow_read(f)\n    d['source'] = f\n    parts.append(d)\n"
+    "raw = pd.concat(parts, ignore_index=True)"
+)
 LATEST = "latest = int(raw['v'].max())"
 SHOW = "print('LATEST', latest)"
 CELLS = ["import cash\n%cash_on", SETUP, LOAD, LATEST, SHOW]

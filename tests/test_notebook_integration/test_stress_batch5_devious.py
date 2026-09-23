@@ -13,8 +13,9 @@ code analysis findings. They target:
 - Fresh kernel restore with complex upstream
 """
 
-import pytest
 import time
+
+import pytest
 
 pytestmark = pytest.mark.stress
 
@@ -26,17 +27,19 @@ class TestContentHashEdgeCases:
         """
         BUG HYPOTHESIS: Content hash only samples first 5 rows.
         If row 6+ changes, external modification may not be detected.
-        
+
         This tests whether the system handles DataFrames correctly when
         changes occur beyond the sampled rows.
         """
-        nb_runner.create_notebook([
-            "import pandas as pd\ndf = pd.DataFrame({'a': list(range(20))})",
-            # Modify a value beyond row 5
-            "df.iloc[10, 0] = 999\nprint(f'val={df.iloc[10, 0]}')",
-            # Use df in downstream
-            "total = df['a'].sum()\nprint(f'total={total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import pandas as pd\ndf = pd.DataFrame({'a': list(range(20))})",
+                # Modify a value beyond row 5
+                "df.iloc[10, 0] = 999\nprint(f'val={df.iloc[10, 0]}')",
+                # Use df in downstream
+                "total = df['a'].sum()\nprint(f'total={total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "val=999" in nb_runner.get_output(2)
@@ -47,14 +50,16 @@ class TestContentHashEdgeCases:
         """
         Cell 1: x = [1,2,3] (list)
         Cell 2: y = len(x)
-        
+
         Change cell 1 to x = 42 (int). Cell 2: y = len(x) should fail.
         System should not return stale cached y=3.
         """
-        nb_runner.create_notebook([
-            "x = [1, 2, 3]",
-            "y = len(x)\nprint(f'y={y}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = [1, 2, 3]",
+                "y = len(x)\nprint(f'y={y}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "y=3" in nb_runner.get_output(2)
@@ -63,6 +68,7 @@ class TestContentHashEdgeCases:
         nb_runner.run_cell(1)
         # Cell 2 should detect x changed and re-execute (which will error)
         from nbclient.exceptions import CellExecutionError
+
         with pytest.raises(CellExecutionError):
             nb_runner.run_cell(2)
 
@@ -72,12 +78,14 @@ class TestContentHashEdgeCases:
         x = x + 10
         x = x * 2
         print(x)  # should be 22
-        
+
         Cache should track the final x, not intermediate values.
         """
-        nb_runner.create_notebook([
-            "x = 1\nx = x + 10\nx = x * 2\nprint(f'x={x}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 1\nx = x + 10\nx = x * 2\nprint(f'x={x}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_cell(1)
         assert "x=22" in nb_runner.get_output(1)
@@ -105,10 +113,12 @@ class TestContentHashEdgeCases:
     def test_134_self_assignment_chain_persist_all(self, nb_runner):
         """Everything persisted: each chain statement is cached, so the re-run
         restores them and stays correct."""
-        nb_runner.create_notebook([
-            "%cash_persist on\n" + self._CHAIN_SETUP,
-            self._CHAIN,
-        ])
+        nb_runner.create_notebook(
+            [
+                "%cash_persist on\n" + self._CHAIN_SETUP,
+                self._CHAIN,
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "['x', 'b']" in nb_runner.get_output(2)
@@ -119,10 +129,12 @@ class TestContentHashEdgeCases:
         """Default persistence: the sub-ms transforms are NOT cached (below the
         cost floor), so the re-run must restore the safe base and re-execute the
         cheap tail rather than recompute on the already-transformed frame."""
-        nb_runner.create_notebook([
-            self._CHAIN_SETUP,   # no %cash_persist
-            self._CHAIN,
-        ])
+        nb_runner.create_notebook(
+            [
+                self._CHAIN_SETUP,  # no %cash_persist
+                self._CHAIN,
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "['x', 'b']" in nb_runner.get_output(2)
@@ -134,14 +146,16 @@ class TestContentHashEdgeCases:
         Cell 1: x = 1
         Cell 2: x = 2
         Cell 3: y = x  (should use x=2, not x=1)
-        
+
         After modifying cell 1 to x=100, y should still be 2 (cell 2 unchanged).
         """
-        nb_runner.create_notebook([
-            "x = 1",
-            "x = 2",
-            "y = x\nprint(f'y={y}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 1",
+                "x = 2",
+                "y = x\nprint(f'y={y}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "y=2" in nb_runner.get_output(3)
@@ -156,15 +170,17 @@ class TestContentHashEdgeCases:
         Cell 1: results = {}
         Cell 2: loop populating results
         Cell 3: print results
-        
+
         If we modify cell 2 and re-run, cell 1's `results = {}` must execute
         to reset the accumulator. It should NOT be skipped.
         """
-        nb_runner.create_notebook([
-            "results = {}",
-            "for k in ['a', 'b']:\n    results[k] = 1",
-            "print(f'results={results}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "results = {}",
+                "for k in ['a', 'b']:\n    results[k] = 1",
+                "print(f'results={results}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "results={'a': 1, 'b': 1}" in nb_runner.get_output(3)
@@ -181,13 +197,15 @@ class TestContentHashEdgeCases:
         """
         Cell 1: total = 0; for x in [1,2,3]: total += x
         Cell 2: result = total * 2
-        
+
         Change loop to [10,20,30] → result should update.
         """
-        nb_runner.create_notebook([
-            "total = 0\nfor x in [1, 2, 3]:\n    total += x",
-            "result = total * 2\nprint(f'result={result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "total = 0\nfor x in [1, 2, 3]:\n    total += x",
+                "result = total * 2\nprint(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result=12" in nb_runner.get_output(2)
@@ -202,14 +220,16 @@ class TestContentHashEdgeCases:
         Cell 1: data = [1,2,3]
         Cell 2: result = {}; for x in data: result[x] = x*10
         Cell 3: print(result)
-        
+
         Modify cell 2's loop body, run only cell 3 → should detect change.
         """
-        nb_runner.create_notebook([
-            "data = [1, 2, 3]",
-            "result = {}\nfor x in data:\n    result[x] = x * 10",
-            "print(f'result={result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = [1, 2, 3]",
+                "result = {}\nfor x in data:\n    result[x] = x * 10",
+                "print(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "1: 10" in nb_runner.get_output(3)
@@ -228,15 +248,17 @@ class TestUpstreamSimulationDevious:
         Cell 1: flag = True
         Cell 2: if flag: x = 'yes' else: x = 'no'
         Cell 3: print(x)
-        
+
         Change flag to False, run only cell 3.
         Upstream simulation must eval condition with NEW flag value.
         """
-        nb_runner.create_notebook([
-            "flag = True",
-            "if flag:\n    x = 'yes'\nelse:\n    x = 'no'",
-            "print(f'x={x}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "flag = True",
+                "if flag:\n    x = 'yes'\nelse:\n    x = 'no'",
+                "print(f'x={x}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "x=yes" in nb_runner.get_output(3)
@@ -252,13 +274,15 @@ class TestUpstreamSimulationDevious:
         Change cell 3 (c) only, run cell 5 (e).
         Cells 1,2 should be skipped, 3,4,5 should recompute.
         """
-        nb_runner.create_notebook([
-            "a = 1",
-            "b = a + 1",
-            "c = b + 1",
-            "d = c + 1",
-            "e = d + 1\nprint(f'e={e}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 1",
+                "b = a + 1",
+                "c = b + 1",
+                "d = c + 1",
+                "e = d + 1\nprint(f'e={e}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "e=5" in nb_runner.get_output(5)
@@ -275,17 +299,19 @@ class TestUpstreamSimulationDevious:
         Cell 3: c = a + 1 (depends only on a)
         Cell 4: d = b + 1 (depends only on b)
         Cell 5: e = c + d
-        
+
         Change cell 1 (a), run cell 5.
         Cell 4 (d=b+1) should NOT be re-executed since b is unchanged.
         """
-        nb_runner.create_notebook([
-            "a = 10",
-            "b = 20",
-            "c = a + 1",
-            "d = b + 1",
-            "e = c + d\nprint(f'e={e}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 10",
+                "b = 20",
+                "c = a + 1",
+                "d = b + 1",
+                "e = c + d\nprint(f'e={e}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         # e = 11 + 21 = 32
@@ -301,12 +327,14 @@ class TestUpstreamSimulationDevious:
         Complex pipeline: data → transform → loop → aggregate
         Fresh kernel, run last cell.
         """
-        nb_runner.create_notebook([
-            "data = [1, 2, 3, 4, 5]",
-            "scaled = [x * 10 for x in data]",
-            "result = {}\nfor x in scaled:\n    result[x] = x ** 2",
-            "total = sum(result.values())\nprint(f'total={total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = [1, 2, 3, 4, 5]",
+                "scaled = [x * 10 for x in data]",
+                "result = {}\nfor x in scaled:\n    result[x] = x ** 2",
+                "total = sum(result.values())\nprint(f'total={total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         # scaled = [10,20,30,40,50], result = {10:100, 20:400, 30:900, 40:1600, 50:2500}
@@ -318,12 +346,14 @@ class TestUpstreamSimulationDevious:
 
     def test_143_modify_two_non_adjacent_cells(self, nb_runner):
         """Modify cells 1 and 3 (not cell 2), run cell 4."""
-        nb_runner.create_notebook([
-            "a = 1",
-            "b = 10",
-            "c = a + 100",
-            "d = b + c\nprint(f'd={d}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 1",
+                "b = 10",
+                "c = a + 100",
+                "d = b + c\nprint(f'd={d}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         # d = 10 + 101 = 111
@@ -343,14 +373,16 @@ class TestReexecutionPatterns:
         """
         Cell 1: lst = []
         Cell 2: lst.append(1); print(lst)
-        
+
         Running cell 2 multiple times should append each time
         (mutation, so should NOT be skipped).
         """
-        nb_runner.create_notebook([
-            "lst = []",
-            "lst.append(1)\nprint(f'lst={lst}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "lst = []",
+                "lst.append(1)\nprint(f'lst={lst}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "lst=[1]" in nb_runner.get_output(2)
@@ -367,14 +399,16 @@ class TestReexecutionPatterns:
         Cell 1: def f(): return 1
         Cell 2: x = f()
         Cell 3: print(x)
-        
+
         Redefine f in cell 1, run cell 3 only.
         """
-        nb_runner.create_notebook([
-            "def f():\n    return 1",
-            "x = f()",
-            "print(f'x={x}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def f():\n    return 1",
+                "x = f()",
+                "print(f'x={x}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "x=1" in nb_runner.get_output(3)
@@ -385,10 +419,12 @@ class TestReexecutionPatterns:
 
     def test_146_cell_output_is_expression(self, nb_runner):
         """Cell ends with expression (not print) — should display."""
-        nb_runner.create_notebook([
-            "x = 42",
-            "x + 1",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 42",
+                "x + 1",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -396,15 +432,16 @@ class TestReexecutionPatterns:
 
     def test_147_multiple_expressions_only_last_displays(self, nb_runner):
         """Multiple expressions — only last one displayed."""
-        nb_runner.create_notebook([
-            "x = 10\ny = 20",
-            "x\ny",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10\ny = 20",
+                "x\ny",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
         assert "20" in out
-
 
     def test_149_delete_variable_then_use_raises(self, nb_runner):
         """
@@ -418,11 +455,13 @@ class TestReexecutionPatterns:
         reference therefore raises NameError, exactly as it would in a plain
         Python session. (Intended semantics, not a restore bug.)
         """
-        nb_runner.create_notebook([
-            "x = 10",
-            "del x",
-            "print(f'x={x}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "del x",
+                "print(f'x={x}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_cell(1)
         nb_runner.run_cell(2)
@@ -431,20 +470,20 @@ class TestReexecutionPatterns:
         # nbclient's CellExecutionError keeps the error name/value in .ename /
         # .evalue (its str() only shows the cell source), so inspect those.
         err = exc.value
-        detail = (
-            f"{getattr(err, 'ename', '')} {getattr(err, 'evalue', '')} {err}"
-        )
+        detail = f"{getattr(err, 'ename', '')} {getattr(err, 'evalue', '')} {err}"
         assert "NameError" in detail or "not defined" in detail, (
             f"Expected NameError for a use-after-del, got: {detail[:300]}"
         )
 
     def test_150_overwrite_import_with_variable(self, nb_runner):
         """Import, then overwrite with variable, then use."""
-        nb_runner.create_notebook([
-            "import math",
-            "math = 42",
-            "print(f'math={math}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import math",
+                "math = 42",
+                "print(f'math={math}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "math=42" in nb_runner.get_output(3)
@@ -458,13 +497,15 @@ class TestComplexDataFlows:
         A→B (mutates A), A→C (reads A), B+C→D
         Mutation of A by B should not affect C's cached value.
         """
-        nb_runner.create_notebook([
-            "a = [1, 2, 3]",
-            "b = len(a)",  # reads a
-            "a.append(4)",  # mutates a  
-            "c = len(a)",  # reads mutated a
-            "d = b + c\nprint(f'd={d}, b={b}, c={c}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = [1, 2, 3]",
+                "b = len(a)",  # reads a
+                "a.append(4)",  # mutates a
+                "c = len(a)",  # reads mutated a
+                "d = b + c\nprint(f'd={d}, b={b}, c={c}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(5)
@@ -478,14 +519,16 @@ class TestComplexDataFlows:
         f2 = tmp_path / "file2.csv"
         f1.write_text("x\n1\n2\n")
         f2.write_text("x\n3\n4\n")
-        s1 = str(f1).replace('\\', '/')
-        s2 = str(f2).replace('\\', '/')
+        s1 = str(f1).replace("\\", "/")
+        s2 = str(f2).replace("\\", "/")
 
-        nb_runner.create_notebook([
-            f"import pandas as pd\ndf1 = pd.read_csv('{s1}')",
-            f"import pandas as pd\ndf2 = pd.read_csv('{s2}')",
-            "total = len(df1) + len(df2)\nprint(f'total={total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                f"import pandas as pd\ndf1 = pd.read_csv('{s1}')",
+                f"import pandas as pd\ndf2 = pd.read_csv('{s2}')",
+                "total = len(df1) + len(df2)\nprint(f'total={total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total=4" in nb_runner.get_output(3)
@@ -509,23 +552,26 @@ class TestComplexDataFlows:
         # sum(0..19) = 190
         assert "total=190" in nb_runner.get_output(1)
 
-
     def test_155_nested_data_structures(self, nb_runner):
         """Deeply nested data structures — caching handles correctly."""
-        nb_runner.create_notebook([
-            "data = {'level1': {'level2': {'level3': [1, 2, 3]}}}",
-            "inner = data['level1']['level2']['level3']\ntotal = sum(inner)\nprint(f'total={total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = {'level1': {'level2': {'level3': [1, 2, 3]}}}",
+                "inner = data['level1']['level2']['level3']\ntotal = sum(inner)\nprint(f'total={total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total=6" in nb_runner.get_output(2)
 
     def test_156_conditional_import_pattern(self, nb_runner):
         """Conditional import — only import if available."""
-        nb_runner.create_notebook([
-            "try:\n    import json\n    HAS_JSON = True\nexcept ImportError:\n    HAS_JSON = False",
-            "if HAS_JSON:\n    result = json.dumps({'a': 1})\nelse:\n    result = 'no json'\nprint(f'result={result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "try:\n    import json\n    HAS_JSON = True\nexcept ImportError:\n    HAS_JSON = False",
+                "if HAS_JSON:\n    result = json.dumps({'a': 1})\nelse:\n    result = 'no json'\nprint(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -533,11 +579,13 @@ class TestComplexDataFlows:
 
     def test_157_variable_used_in_own_definition(self, nb_runner):
         """x = [x for x in range(5)] — comprehension x shadows outer x."""
-        nb_runner.create_notebook([
-            "x = 'original'",
-            "y = [x for x in range(5)]\nprint(f'y={y}')",
-            "print(f'x={x}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 'original'",
+                "y = [x for x in range(5)]\nprint(f'y={y}')",
+                "print(f'x={x}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "y=[0, 1, 2, 3, 4]" in nb_runner.get_output(2)
@@ -546,20 +594,24 @@ class TestComplexDataFlows:
 
     def test_158_chained_assignment(self, nb_runner):
         """a = b = c = 10 — all three get same value and lineage."""
-        nb_runner.create_notebook([
-            "a = b = c = 10",
-            "total = a + b + c\nprint(f'total={total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = b = c = 10",
+                "total = a + b + c\nprint(f'total={total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total=30" in nb_runner.get_output(2)
 
     def test_159_starred_assignment(self, nb_runner):
         """a, *b = [1, 2, 3, 4] — starred unpacking."""
-        nb_runner.create_notebook([
-            "data = [1, 2, 3, 4, 5]",
-            "first, *rest = data\nprint(f'first={first}, rest={rest}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = [1, 2, 3, 4, 5]",
+                "first, *rest = data\nprint(f'first={first}, rest={rest}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "first=1" in nb_runner.get_output(2)
@@ -570,11 +622,13 @@ class TestComplexDataFlows:
         Run all. Modify cell 1. Run cell 3. Then REVERT cell 1. Run cell 3.
         Should use original cached values.
         """
-        nb_runner.create_notebook([
-            "x = 'original'",
-            "y = x + '_processed'",
-            "print(f'y={y}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 'original'",
+                "y = x + '_processed'",
+                "print(f'y={y}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "y=original_processed" in nb_runner.get_output(3)
@@ -593,10 +647,12 @@ class TestEdgeCasePatterns:
 
     def test_161_empty_string_variable(self, nb_runner):
         """Empty string as variable value."""
-        nb_runner.create_notebook([
-            "x = ''",
-            "y = len(x)\nprint(f'y={y}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = ''",
+                "y = len(x)\nprint(f'y={y}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "y=0" in nb_runner.get_output(2)
@@ -604,19 +660,23 @@ class TestEdgeCasePatterns:
     def test_162_very_long_variable_name(self, nb_runner):
         """Variable with a very long name."""
         long_name = "very_long_variable_name_" * 5 + "end"
-        nb_runner.create_notebook([
-            f"{long_name} = 42",
-            f"print(f'{long_name}={{{long_name}}}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                f"{long_name} = 42",
+                f"print(f'{long_name}={{{long_name}}}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "=42" in nb_runner.get_output(2)
 
     def test_163_cell_with_multiple_prints(self, nb_runner):
         """Multiple print statements — all output captured."""
-        nb_runner.create_notebook([
-            "print('line1')\nprint('line2')\nprint('line3')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "print('line1')\nprint('line2')\nprint('line3')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_cell(1)
         out = nb_runner.get_output(1)
@@ -628,20 +688,24 @@ class TestEdgeCasePatterns:
 
     def test_164_negative_and_zero_values(self, nb_runner):
         """Negative numbers and zero — edge values."""
-        nb_runner.create_notebook([
-            "a = -1\nb = 0\nc = -100",
-            "total = a + b + c\nprint(f'total={total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = -1\nb = 0\nc = -100",
+                "total = a + b + c\nprint(f'total={total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total=-101" in nb_runner.get_output(2)
 
     def test_165_boolean_as_input(self, nb_runner):
         """Boolean values as inputs."""
-        nb_runner.create_notebook([
-            "flag = True",
-            "result = 'yes' if flag else 'no'\nprint(f'result={result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "flag = True",
+                "result = 'yes' if flag else 'no'\nprint(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result=yes" in nb_runner.get_output(2)

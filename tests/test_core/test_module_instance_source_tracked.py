@@ -25,6 +25,7 @@ an excluded object is missed.
 Without the fix these tests HIT and return the OLD value -- run them through
 ``scripts/fails_first.py`` to confirm they can fail.
 """
+
 from __future__ import annotations
 
 import builtins
@@ -39,7 +40,7 @@ from cash.backends import FileBackend
 # OBJ (a user-class instance) is an element of a list literal assigned to a
 # local, then handed to a helper that calls its method -- pure-data use, so the
 # object flows through the global-data fold where the class-source channel runs.
-SINGLE = '''\
+SINGLE = """\
 import builtins
 _inst = builtins._CASH_TEST_INST
 
@@ -57,11 +58,11 @@ def f(x):
     builtins._CASH_TEST_CALLS.append(1)
     steps = [("a", OBJ)]
     return x + run(steps)
-'''
+"""
 
 # The edited method is on an object the read global merely HOLDS (Container.inner
 # is an Inner) -- two hops from the read global, mirroring the real pipeline.
-NESTED = '''\
+NESTED = """\
 import builtins
 _inst = builtins._CASH_TEST_INST
 
@@ -83,7 +84,7 @@ def f(x):
     builtins._CASH_TEST_CALLS.append(1)
     steps = [("a", OBJ)]
     return x + run(steps)
-'''
+"""
 
 
 _FILE_N = [0]

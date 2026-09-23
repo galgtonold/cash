@@ -153,7 +153,7 @@ which a top-to-bottom automated run doesn't need. The warning is expected under
 papermill, nbconvert, and CI — it's only worth investigating if you see it *in*
 JupyterLab or VS Code, where it means a stale runtime.
 
-<!-- claim: cash/core.py:Cash._surface_purity @f30def74 -->
+<!-- claim: cash/core.py:Cash._surface_purity @a4fc3aae -->
 **Fail the build on accidental impurity.** `@cash.cache(strict=True)` turns the
 purity analyzer's warnings into `CashImpureFunctionError` at first call, so a
 teammate caching a side-effecting function breaks CI instead of shipping a
@@ -170,7 +170,7 @@ cold, which is correct but slow. Options, in increasing order of setup:
   [Sharing a cache](sharing-caches.md) first, because a file-reading *notebook
   statement* still won't hit across machines, and the paths recorded by
   `@cash.cache` have to resolve the same way on each runner.
-<!-- claim: cash/__main__.py:cmd_clear @66d03200 -->
+<!-- claim: cash/__main__.py:cmd_clear @a2a0458b -->
 - Start clean deliberately with `python -m cash clear --all`, when a run must
   not be influenced by earlier state. The `--all` matters: bare
   `python -m cash clear` takes no default target, prints the subcommand's help
@@ -179,7 +179,7 @@ cold, which is correct but slow. Options, in increasing order of setup:
 
 ## Running as a service or a worker pool
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend._drop_ram_if_cleared @751b655a, cash/backends/factory.py:_build_tier @5ba0ae81 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend._drop_ram_if_cleared @eaca5300, cash/backends/factory.py:_build_tier @5ba0ae81 -->
 - **Clearing a live service.** `cash clear --all`, `--function` and `--entry`
   reach processes that are still running: each checks at most once a second
   whether its cache directory was cleared and, if so, drops what it holds in

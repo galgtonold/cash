@@ -9,16 +9,12 @@ If the directive covered the whole cell, an isolated re-run of that cell would
 append 3 more lines (all statements live). If it covers only the NEXT statement,
 the re-run appends 1 line and statements 2/3 replay from cache.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.timeout(180)]
 
-SETUP = (
-    "import cash\n"
-    "%cash_on\n"
-    "%cash_badge print\n"
-    "import time"
-)
+SETUP = "import cash\n%cash_on\n%cash_badge print\nimport time"
 
 
 def _bump_def(sink: str) -> str:
@@ -41,16 +37,15 @@ def test_leading_no_cache_covers_whole_cell(nb_runner, tmp_path):
     sink.write_text("")
     sink_s = str(sink).replace("\\", "/")
 
-    nb_runner.create_notebook([
-        SETUP,
-        _bump_def(sink_s),
-        # The natural spelling from the ticket: ONE directive at the top of the
-        # cell, followed by three top-level statements.
-        "# @cash:no-cache\n"
-        "a = bump('s1')\n"
-        "b = bump('s2')\n"
-        "c = bump('s3')",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            _bump_def(sink_s),
+            # The natural spelling from the ticket: ONE directive at the top of the
+            # cell, followed by three top-level statements.
+            "# @cash:no-cache\na = bump('s1')\nb = bump('s2')\nc = bump('s3')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -67,7 +62,7 @@ def test_leading_no_cache_covers_whole_cell(nb_runner, tmp_path):
             f"warm re-run #{run}: leading '# @cash:no-cache' did NOT cover the "
             f"whole cell.\n  expected {expected}\n  got      {got}\n"
             f"  -> statements that did NOT re-execute: "
-            f"{sorted(set(['s1','s2','s3']) - set(got[len(expected) - 3:]))}\n"
+            f"{sorted(set(['s1', 's2', 's3']) - set(got[len(expected) - 3 :]))}\n"
             f"  cell output: {nb_runner.get_output(3)!r}"
         )
 
@@ -79,14 +74,13 @@ def test_statement_adjacent_no_cache_still_scoped(nb_runner, tmp_path):
     sink.write_text("")
     sink_s = str(sink).replace("\\", "/")
 
-    nb_runner.create_notebook([
-        SETUP,
-        _bump_def(sink_s),
-        "a = bump('s1')\n"
-        "# @cash:no-cache\n"
-        "b = bump('s2')\n"
-        "c = bump('s3')",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            _bump_def(sink_s),
+            "a = bump('s1')\n# @cash:no-cache\nb = bump('s2')\nc = bump('s3')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert _tags(sink) == ["s1", "s2", "s3"], _tags(sink)
@@ -94,7 +88,5 @@ def test_statement_adjacent_no_cache_still_scoped(nb_runner, tmp_path):
     nb_runner.run_cell(3)
     got = _tags(sink)
     # Record whatever actually happens; s2 must at minimum re-fire.
-    assert "s2" in got[3:], (
-        f"the statement-adjacent no-cache statement did not re-execute: {got}"
-    )
+    assert "s2" in got[3:], f"the statement-adjacent no-cache statement did not re-execute: {got}"
     print(f"[CAS-189 control] after warm re-run, sink = {got}")

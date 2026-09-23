@@ -13,12 +13,14 @@ class TestDefaultdictPatterns:
 
     def test_defaultdict_list(self, nb_runner):
         """defaultdict(list) grouping pattern with caching."""
-        nb_runner.create_notebook([
-            "from collections import defaultdict",
-            "data = [('a', 1), ('b', 2), ('a', 3)]",
-            "dd = defaultdict(list)\nfor k, v in data:\n    dd[k].append(v)\nresult = dict(sorted(dd.items()))",
-            "print(f'result={result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from collections import defaultdict",
+                "data = [('a', 1), ('b', 2), ('a', 3)]",
+                "dd = defaultdict(list)\nfor k, v in data:\n    dd[k].append(v)\nresult = dict(sorted(dd.items()))",
+                "print(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(4)
@@ -31,12 +33,14 @@ class TestDefaultdictPatterns:
 
     def test_defaultdict_int_edit(self, nb_runner):
         """defaultdict(int) counting with edit."""
-        nb_runner.create_notebook([
-            "from collections import defaultdict",
-            "words = 'the cat sat on the mat the cat'.split()",
-            "counts = defaultdict(int)\nfor w in words:\n    counts[w] += 1\nmost = max(counts, key=counts.get)",
-            "print(f'most={most} count={counts[most]}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from collections import defaultdict",
+                "words = 'the cat sat on the mat the cat'.split()",
+                "counts = defaultdict(int)\nfor w in words:\n    counts[w] += 1\nmost = max(counts, key=counts.get)",
+                "print(f'most={most} count={counts[most]}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(4)
@@ -51,12 +55,14 @@ class TestDefaultdictPatterns:
 
     def test_defaultdict_nested(self, nb_runner):
         """Nested defaultdict pattern."""
-        nb_runner.create_notebook([
-            "from collections import defaultdict",
-            "data = [('US', 'NY', 100), ('US', 'CA', 200), ('UK', 'LN', 150)]",
-            "nested = defaultdict(lambda: defaultdict(int))\nfor country, city, val in data:\n    nested[country][city] = val\nus_total = sum(nested['US'].values())",
-            "print(f'us_total={us_total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from collections import defaultdict",
+                "data = [('US', 'NY', 100), ('US', 'CA', 200), ('UK', 'LN', 150)]",
+                "nested = defaultdict(lambda: defaultdict(int))\nfor country, city, val in data:\n    nested[country][city] = val\nus_total = sum(nested['US'].values())",
+                "print(f'us_total={us_total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(4)

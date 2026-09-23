@@ -16,6 +16,7 @@ a real bug -- different type, different behaviour downstream -- so the
 distinctness half of this file matters at least as much as the collapsing
 half.
 """
+
 from __future__ import annotations
 
 import sys
@@ -33,8 +34,7 @@ def _digest(literal: str) -> str:
 # identically to the first.
 SAME_VALUE = {
     "float spellings": ["0.5", "0.50", ".5", "0.500", "5e-1", "5E-1"],
-    "int bases and separators": ["1000", "1_000", "0x3e8", "0X3E8", "0o1750",
-                                 "0b1111101000"],
+    "int bases and separators": ["1000", "1_000", "0x3e8", "0X3E8", "0o1750", "0b1111101000"],
     "float exponents": ["1000.0", "1e3", "1E3", "1_000.0"],
     "complex": ["1j", "1J"],
 }
@@ -45,8 +45,7 @@ def test_one_value_has_one_digest(group):
     spellings = SAME_VALUE[group]
     digests = {_digest(s) for s in spellings}
     assert len(digests) == 1, (
-        f"{group}: {spellings} are the same value but produced "
-        f"{len(digests)} different cache keys"
+        f"{group}: {spellings} are the same value but produced {len(digests)} different cache keys"
     )
 
 
@@ -58,8 +57,7 @@ def test_the_two_spellings_really_are_one_value():
     """
     assert 0.5 == 0.50
     assert (0.5).hex() == (0.50).hex()
-    assert (compile("x = 0.5", "<s>", "exec").co_consts
-            == compile("x = 0.50", "<s>", "exec").co_consts)
+    assert compile("x = 0.5", "<s>", "exec").co_consts == compile("x = 0.50", "<s>", "exec").co_consts
 
 
 # Pairs that must NOT collapse. Type is behaviour: `1` and `1.0` index, divide
@@ -70,7 +68,7 @@ DISTINCT = [
     ("1.0", "1j"),
     ("0.5", "0.6"),
     ("1000", "10000"),
-    ("1", "1_0"),          # 1_0 is ten, not one
+    ("1", "1_0"),  # 1_0 is ten, not one
     ("0.1", "0.2"),
 ]
 
@@ -105,8 +103,9 @@ def test_hex_containing_an_e_is_not_read_as_a_float():
 
 def test_numbers_inside_strings_are_untouched():
     """Only NUMBER tokens are canonicalised; a string is data, not a literal."""
-    assert (normalize_source_for_hash('def f():\n    return "0.50"\n')
-            != normalize_source_for_hash('def f():\n    return "0.5"\n'))
+    assert normalize_source_for_hash('def f():\n    return "0.50"\n') != normalize_source_for_hash(
+        'def f():\n    return "0.5"\n'
+    )
 
 
 def test_the_normalizer_still_ignores_comments_and_layout():

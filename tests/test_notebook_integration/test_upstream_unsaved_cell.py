@@ -29,18 +29,20 @@ class TestUnsavedCellUpstream:
         4. Appending a new cell that uses the variable (simulates unsaved)
         5. Running just the new cell — it should resolve upstream deps
         """
-        nb_runner.create_notebook([
-            # Cell 1: Define a class and create instance
-            (
-                "class Test:\n"
-                "    def __init__(self):\n"
-                "        self.x = 1\n"
-                "        self.y = 2\n"
-                "\n"
-                "a = Test()\n"
-                "a.x = 126"
-            ),
-        ])
+        nb_runner.create_notebook(
+            [
+                # Cell 1: Define a class and create instance
+                (
+                    "class Test:\n"
+                    "    def __init__(self):\n"
+                    "        self.x = 1\n"
+                    "        self.y = 2\n"
+                    "\n"
+                    "a = Test()\n"
+                    "a.x = 126"
+                ),
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -56,9 +58,11 @@ class TestUnsavedCellUpstream:
         """
         Simple case: saved cells define x=42, unsaved cell prints x.
         """
-        nb_runner.create_notebook([
-            "x = 42",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 42",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -73,10 +77,12 @@ class TestUnsavedCellUpstream:
         Unsaved cell needs y, which depends on x from an earlier saved cell.
         Both should be resolved through upstream execution.
         """
-        nb_runner.create_notebook([
-            "x = 10",
-            "y = x * 3",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "y = x * 3",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -91,9 +97,11 @@ class TestUnsavedCellUpstream:
         If the unsaved cell's inputs are already in memory, no upstream
         execution should be needed (fast path).
         """
-        nb_runner.create_notebook([
-            "x = 99",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 99",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 

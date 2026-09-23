@@ -13,12 +13,14 @@ class TestFrozensetOps:
 
     def test_frozenset_intersection(self, nb_runner):
         """Frozenset intersection, verify caching."""
-        nb_runner.create_notebook([
-            "a = frozenset([1, 2, 3, 4, 5])",
-            "b = frozenset([3, 4, 5, 6, 7])",
-            "common = a & b\nresult = sorted(common)",
-            "print(f'common={result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = frozenset([1, 2, 3, 4, 5])",
+                "b = frozenset([3, 4, 5, 6, 7])",
+                "common = a & b\nresult = sorted(common)",
+                "print(f'common={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(4)
@@ -31,12 +33,14 @@ class TestFrozensetOps:
 
     def test_frozenset_union_edit(self, nb_runner):
         """Edit one frozenset, verify union updates."""
-        nb_runner.create_notebook([
-            "s1 = frozenset(['a', 'b', 'c'])",
-            "s2 = frozenset(['c', 'd', 'e'])",
-            "merged = s1 | s2\ncount = len(merged)",
-            "print(f'count={count}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "s1 = frozenset(['a', 'b', 'c'])",
+                "s2 = frozenset(['c', 'd', 'e'])",
+                "merged = s1 | s2\ncount = len(merged)",
+                "print(f'count={count}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(4)
@@ -49,11 +53,13 @@ class TestFrozensetOps:
 
     def test_frozenset_as_dict_key(self, nb_runner):
         """Use frozensets as dict keys (hashable)."""
-        nb_runner.create_notebook([
-            "key1 = frozenset([1, 2])\nkey2 = frozenset([3, 4])",
-            "lookup = {key1: 'first', key2: 'second'}",
-            "query = frozenset([1, 2])\nval = lookup[query]\nprint(f'val={val}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "key1 = frozenset([1, 2])\nkey2 = frozenset([3, 4])",
+                "lookup = {key1: 'first', key2: 'second'}",
+                "query = frozenset([1, 2])\nval = lookup[query]\nprint(f'val={val}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(3)

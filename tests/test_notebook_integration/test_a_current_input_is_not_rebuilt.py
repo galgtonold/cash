@@ -20,6 +20,7 @@ or re-ran what produced it:
 Observed with a mark set on the live value from outside the notebook: a value
 rebuilt by cash is a different object and does not carry it.
 """
+
 import pytest
 
 pytest.importorskip("pandas")
@@ -40,11 +41,13 @@ def _marked(nb_runner, name):
 
 
 def test_a_cell_writing_into_an_input_uses_the_live_value(nb_runner):
-    nb_runner.create_notebook([
-        ON,
-        "import pandas as pd\ndf = pd.DataFrame({'a': range(1000)})\ndf['b'] = df['a'] * 2",
-        "df['a'] = df['a'] + 1\nprint('SUM', int(df['a'].sum()))",
-    ])
+    nb_runner.create_notebook(
+        [
+            ON,
+            "import pandas as pd\ndf = pd.DataFrame({'a': range(1000)})\ndf['b'] = df['a'] * 2",
+            "df['a'] = df['a'] + 1\nprint('SUM', int(df['a'].sum()))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_cells([1, 2])
     _mark(nb_runner, "df")
@@ -56,11 +59,13 @@ def test_a_cell_writing_into_an_input_uses_the_live_value(nb_runner):
 
 
 def test_a_cell_reassigning_an_input_uses_the_live_value(nb_runner):
-    nb_runner.create_notebook([
-        ON,
-        "import pandas as pd\ndf = pd.DataFrame({'a': range(1000)})\ndf = df[df['a'] % 2 == 0]",
-        "df = df.rename(columns={'a': 'x'})\nprint('N', len(df))",
-    ])
+    nb_runner.create_notebook(
+        [
+            ON,
+            "import pandas as pd\ndf = pd.DataFrame({'a': range(1000)})\ndf = df[df['a'] % 2 == 0]",
+            "df = df.rename(columns={'a': 'x'})\nprint('N', len(df))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_cells([1, 2])
     _mark(nb_runner, "df")
@@ -73,12 +78,14 @@ def test_a_cell_reassigning_an_input_uses_the_live_value(nb_runner):
 
 
 def test_rerunning_a_cell_that_adds_a_column_keeps_what_came_from_the_frame(nb_runner):
-    nb_runner.create_notebook([
-        ON,
-        "import pandas as pd\ndocs = pd.DataFrame({'a': range(1000)})",
-        "feat = docs['a'] * 2",
-        "docs['topic'] = feat % 3\nprint('TOPICS', int(docs['topic'].sum()))",
-    ])
+    nb_runner.create_notebook(
+        [
+            ON,
+            "import pandas as pd\ndocs = pd.DataFrame({'a': range(1000)})",
+            "feat = docs['a'] * 2",
+            "docs['topic'] = feat % 3\nprint('TOPICS', int(docs['topic'].sum()))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     _mark(nb_runner, "feat")
@@ -91,12 +98,15 @@ def test_rerunning_a_cell_that_adds_a_column_keeps_what_came_from_the_frame(nb_r
 
 # What the first check is for: a re-run does not apply the cell twice.
 
+
 def test_rerunning_a_cell_writing_into_an_input_does_not_apply_it_twice(nb_runner):
-    nb_runner.create_notebook([
-        ON,
-        "import pandas as pd\ndf = pd.DataFrame({'a': range(1000)})\ndf['b'] = df['a'] * 2",
-        "df['a'] = df['a'] + 1\nprint('SUM', int(df['a'].sum()))",
-    ])
+    nb_runner.create_notebook(
+        [
+            ON,
+            "import pandas as pd\ndf = pd.DataFrame({'a': range(1000)})\ndf['b'] = df['a'] * 2",
+            "df['a'] = df['a'] + 1\nprint('SUM', int(df['a'].sum()))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     nb_runner.run_cell(3)
@@ -106,11 +116,13 @@ def test_rerunning_a_cell_writing_into_an_input_does_not_apply_it_twice(nb_runne
 
 
 def test_rerunning_a_cell_reassigning_an_input_does_not_apply_it_twice(nb_runner):
-    nb_runner.create_notebook([
-        ON,
-        "import pandas as pd\ndf = pd.DataFrame({'a': range(1000)})\ndf = df[df['a'] % 2 == 0]",
-        "df = df.iloc[1:]\nprint('N', len(df))",
-    ])
+    nb_runner.create_notebook(
+        [
+            ON,
+            "import pandas as pd\ndf = pd.DataFrame({'a': range(1000)})\ndf = df[df['a'] % 2 == 0]",
+            "df = df.iloc[1:]\nprint('N', len(df))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     nb_runner.run_cell(3)
@@ -124,12 +136,14 @@ def test_rerunning_a_cell_after_a_later_cell_wrote_its_input(nb_runner):
     back to its state at the cell's start, not left with the later cell's
     write. (Read through ``globals()``: a peek naming ``df`` is a cell at the
     notebook's end and would bring ``df`` up to date through cell 4.)"""
-    nb_runner.create_notebook([
-        ON,
-        "import pandas as pd\ndf = pd.DataFrame({'a': range(1000)})\ndf['b'] = df['a'] * 2",
-        "df['a'] = df['a'] + 1\nprint('SUM', int(df['a'].sum()))",
-        "df['a'] = df['a'] * 10",
-    ])
+    nb_runner.create_notebook(
+        [
+            ON,
+            "import pandas as pd\ndf = pd.DataFrame({'a': range(1000)})\ndf['b'] = df['a'] * 2",
+            "df['a'] = df['a'] + 1\nprint('SUM', int(df['a'].sum()))",
+            "df['a'] = df['a'] * 10",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     nb_runner.run_cell(3)

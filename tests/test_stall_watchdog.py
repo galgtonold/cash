@@ -10,6 +10,7 @@ machine, which is exactly how a safety net rots into a no-op unnoticed. These
 tests drive both branches directly. `_fire` is patched out throughout: the real
 one calls `os._exit`, which would take the test runner with it.
 """
+
 import time
 
 import pytest
@@ -79,11 +80,14 @@ def test_banner_names_the_stall_and_the_escape_hatch():
     assert "CASH_TEST_STALL_TIMEOUT" in banner
 
 
-@pytest.mark.parametrize("timeout,expected", [
-    (300.0, 5.0),    # long timeout -> capped poll, negligible overhead
-    (0.4, 0.1),      # short timeout -> responsive enough to be testable
-    (0.01, 0.05),    # floor, so the thread can never busy-spin
-])
+@pytest.mark.parametrize(
+    "timeout,expected",
+    [
+        (300.0, 5.0),  # long timeout -> capped poll, negligible overhead
+        (0.4, 0.1),  # short timeout -> responsive enough to be testable
+        (0.01, 0.05),  # floor, so the thread can never busy-spin
+    ],
+)
 def test_poll_interval_scales_with_timeout(timeout, expected):
     assert _StallWatchdog(timeout=timeout).poll_interval == pytest.approx(expected)
 
@@ -128,7 +132,7 @@ def test_a_patched_time_sleep_does_not_make_it_spin(monkeypatch):
     watchdog thread spun holding the GIL, the test beside it ran 10-100x
     slower, and pytest-timeout killed the worker -- "node down: Not properly
     terminated", a different test each run."""
-    w, fired = _watchdog(60)          # poll every 5s: a handful of wakes at most
+    w, fired = _watchdog(60)  # poll every 5s: a handful of wakes at most
     polls = [0]
     real = type(w).poll_interval
 

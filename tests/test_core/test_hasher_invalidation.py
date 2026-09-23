@@ -3,11 +3,10 @@ changing a registered hasher's body invalidates dependent cache entries,
 even when the new and old hasher produce the same hex output for the
 test input.
 """
+
 from __future__ import annotations
 
 import hashlib
-
-import pytest
 
 from cash import Cash
 
@@ -15,6 +14,7 @@ from cash import Cash
 class _Box:
     """Simple wrapper for testing — not a built-in type so it routes
     through the user-registered hasher path, not the built-in path."""
+
     def __init__(self, v):
         self.v = v
 
@@ -42,10 +42,7 @@ def test_same_hasher_body_preserves_cache_hit(tmp_path):
     # Re-register the SAME function. Source identical → same source hash → cache still hits.
     c.register_hasher(_Box, hasher)
     assert f(_Box(5)) == 10
-    assert n["calls"] == 1, (
-        f"re-registering an identical hasher should not invalidate the "
-        f"cache (calls={n['calls']})"
-    )
+    assert n["calls"] == 1, f"re-registering an identical hasher should not invalidate the cache (calls={n['calls']})"
 
 
 def test_different_hasher_body_invalidates_even_when_output_matches(tmp_path):
@@ -152,9 +149,7 @@ def test_hasher_exec_defined_function_uses_bytecode_fallback(tmp_path):
 
     ns = {}
     exec(
-        "import hashlib\n"
-        "def h(box):\n"
-        "    return hashlib.sha256(str(box.v).encode()).hexdigest()\n",
+        "import hashlib\ndef h(box):\n    return hashlib.sha256(str(box.v).encode()).hexdigest()\n",
         ns,
     )
     c.register_hasher(_Box, ns["h"])

@@ -1,4 +1,5 @@
 """Unit tests for the docs-parity harness."""
+
 from pathlib import Path
 
 import pytest
@@ -39,7 +40,7 @@ def test_extract_fences_detects_skip_annotation():
 
 
 def test_skip_annotation_without_reason_raises():
-    from tests.docs._annotations import parse_skip_annotation, MissingSkipReason
+    from tests.docs._annotations import MissingSkipReason, parse_skip_annotation
 
     with pytest.raises(MissingSkipReason):
         parse_skip_annotation("<!-- test:skip -->")
@@ -73,7 +74,7 @@ def test_run_page_skips_annotated_fences():
 
 
 def test_run_page_surfaces_exec_errors_with_location():
-    from tests.docs._harness import run_page, PageExecutionError
+    from tests.docs._harness import PageExecutionError, run_page
 
     broken = FIXTURES / "page_with_runtime_error.md"
     broken.write_text(
@@ -120,7 +121,7 @@ def test_infer_claims_handles_no_cache_marker():
 def test_infer_claims_respects_inline_miss_comments():
     from tests.docs._harness import infer_claims
 
-    src = '''
+    src = """
 import cash
 
 @cash.cache
@@ -130,7 +131,7 @@ def fetch(url, _seed=0):
 a = fetch("u1")        # First call: cache miss
 b = fetch("u1")        # Second call: cache hit
 c = fetch("u2")        # Cache miss: different args
-'''
+"""
     claims = infer_claims(src)
     fetch_claim = next(c for c in claims if c.function == "fetch")
     # 3 calls, 2 unique arg tuples -> 1 hit + 2 misses
@@ -155,23 +156,22 @@ def test_run_page_asserts_cache_hits_match_inferred_claims():
 def test_run_page_fails_when_documented_cache_hit_does_not_happen(monkeypatch):
     """If something breaks @cash.cache so it never caches, the harness
     must detect that the documented hit didn't happen."""
-    from tests.docs._harness import run_page, ClaimMismatchError
-    import cash
+    from tests.docs._harness import run_page
 
     # Patch register_hasher to no-op so caching is hobbled? No — too fragile.
     # Instead use a synthetic fixture where the doc claims a hit but the
     # code doesn't actually call the function twice.
     broken = FIXTURES / "page_claims_hit_no_actual_call.md"
     broken.write_text(
-        '# Broken Claim\n\n'
-        '```python\n'
-        'import cash\n\n'
-        '@cash.cache\n'
-        'def f(x):\n'
-        '    return x\n\n'
-        'a = f(1)   # First call: cache miss\n'
-        'b = f(1)   # Second call: cache hit\n'
-        '```\n',
+        "# Broken Claim\n\n"
+        "```python\n"
+        "import cash\n\n"
+        "@cash.cache\n"
+        "def f(x):\n"
+        "    return x\n\n"
+        "a = f(1)   # First call: cache miss\n"
+        "b = f(1)   # Second call: cache hit\n"
+        "```\n",
         encoding="utf-8",
     )
     try:
@@ -193,18 +193,13 @@ def test_inject_comment_executes_as_code():
 
     injected = FIXTURES / "page_with_inject.md"
     injected.write_text(
-        "# Inject Test\n\n"
-        "```python\n"
-        "x = 1\n"
-        "# test:inject: x = 99\n"
-        "y = x\n"
-        "```\n",
+        "# Inject Test\n\n```python\nx = 1\n# test:inject: x = 99\ny = x\n```\n",
         encoding="utf-8",
     )
     try:
         result = run_page(injected)
         assert result.namespace["x"] == 99
-        assert result.namespace["y"] == 99   # y = x after inject replaced x
+        assert result.namespace["y"] == 99  # y = x after inject replaced x
     finally:
         injected.unlink()
 
@@ -212,7 +207,7 @@ def test_inject_comment_executes_as_code():
 def test_run_page_fails_on_unexpected_cash_warning():
     """A fence that emits a CashWarning at runtime fails the page unless it
     opts in with test:expect-warning."""
-    from tests.docs._harness import run_page, PageWarningError
+    from tests.docs._harness import PageWarningError, run_page
 
     with pytest.raises(PageWarningError) as exc_info:
         run_page(FIXTURES / "page_with_warning.md")
@@ -246,10 +241,7 @@ def test_allow_unexercised_marker_requires_a_reason():
     from tests.docs._annotations import MissingSkipReason, find_allow_unexercised
 
     assert find_allow_unexercised("# Page\n\nno marker here\n") is None
-    assert (
-        find_allow_unexercised('<!-- test:allow-unexercised reason="signatures only" -->')
-        == "signatures only"
-    )
+    assert find_allow_unexercised('<!-- test:allow-unexercised reason="signatures only" -->') == "signatures only"
     with pytest.raises(MissingSkipReason):
         find_allow_unexercised("<!-- test:allow-unexercised -->")
 

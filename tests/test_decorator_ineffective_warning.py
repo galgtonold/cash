@@ -26,6 +26,7 @@ Both sides are now plain Python loops, so the ratio is a property of this
 file and the same everywhere. Realism about the pandas case lives where it
 was measured, in ``cash/effectiveness.py``.
 """
+
 from __future__ import annotations
 
 import warnings
@@ -82,8 +83,7 @@ def _run(cached, arg, calls=12):
         warnings.simplefilter("always")
         for _ in range(calls):
             cached(arg)
-        return [w for w in caught
-                if issubclass(w.category, CashCacheIneffectiveWarning)]
+        return [w for w in caught if issubclass(w.category, CashCacheIneffectiveWarning)]
 
 
 def test_it_warns_when_the_key_costs_more_than_the_work(tmp_path):
@@ -116,7 +116,7 @@ def test_it_stays_quiet_when_the_work_dominates(tmp_path):
     @cash.cache
     def dominant(payload):
         acc = 0
-        for i in range(120_000 * 8):        # ~8x the hasher, same bytecode
+        for i in range(120_000 * 8):  # ~8x the hasher, same bytecode
             acc = (acc * 31 + i) & 0xFFFFFFFF
         return acc + payload.n
 
@@ -134,13 +134,14 @@ def test_a_slow_first_call_does_not_convict_a_function_worth_caching(tmp_path, m
     It is sized off the body, so the mean clears the body on any host.
     """
     import time
+
     cash = _cash(tmp_path)
     cash.register_hasher(Payload, _costly_hash)
     analyze = cash._analyze_dependencies
 
     def work(n):
         acc = 0
-        for i in range(120_000 * 8):        # ~8x the hasher, same bytecode
+        for i in range(120_000 * 8):  # ~8x the hasher, same bytecode
             acc = (acc * 31 + i) & 0xFFFFFFFF
         return acc + n
 

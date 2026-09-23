@@ -29,6 +29,7 @@ the asymmetry is confirmed and P1's mechanism is right.
 
     python tests/test_notebook_integration/zzprobe_r14p1_uncacheable_reads_stale.py
 """
+
 from __future__ import annotations
 
 import shutil
@@ -40,8 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tests.test_notebook_integration.conftest import NotebookTestRunner  # noqa: E402
 
 SETUP = "import cash\n%cash_on"
-IMPORTS = ("import matplotlib\nmatplotlib.use('Agg')\n"
-           "import matplotlib.pyplot as plt")
+IMPORTS = "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt"
 
 
 def build(work: Path, marker: Path, png: Path, save_cell: str):
@@ -67,23 +67,21 @@ def run_arm(label: str, save_cell: str) -> str:
 
         # Edit the ROOT and run it -- exactly P1's move. Cell 4 (`derived`) is
         # deliberately NOT re-run by hand; that is what cash must handle.
-        runner.set_cell_source(3, "base = 100")     # 1-based
+        runner.set_cell_source(3, "base = 100")  # 1-based
         runner.run_cell(3)
         try:
             runner.run_cell(6)
             err = ""
-        except Exception as e:                       # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
             err = f"{type(e).__name__}: {str(e)[:80]}"
         second = marker.read_text(encoding="utf-8").strip() if marker.exists() else "<none>"
     finally:
         runner.shutdown()
         shutil.rmtree(work, ignore_errors=True)
 
-    verdict = ("STALE" if second == first else
-               "updated" if second == "300" else f"other({second})")
+    verdict = "STALE" if second == first else "updated" if second == "300" else f"other({second})"
     print(f"  {label}")
-    print(f"     before edit: {first}   after edit+rerun: {second}   -> {verdict}"
-          f"{'   raised ' + err if err else ''}")
+    print(f"     before edit: {first}   after edit+rerun: {second}   -> {verdict}{'   raised ' + err if err else ''}")
     return verdict
 
 
@@ -91,9 +89,7 @@ print("base 10 -> derived 30; after editing base to 100, derived must be 300.\n"
 
 a = run_arm(
     "A  uncacheable save cell (fig/ax + savefig + file write)",
-    "ax.set_title(f'V={{derived}}')\n"
-    "fig.savefig(r'{png}')\n"
-    "open(r'{marker}', 'w').write(str(derived))",
+    "ax.set_title(f'V={{derived}}')\nfig.savefig(r'{png}')\nopen(r'{marker}', 'w').write(str(derived))",
 )
 b = run_arm(
     "B  ordinary cacheable read (control)",

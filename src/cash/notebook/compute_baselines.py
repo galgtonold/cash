@@ -25,6 +25,7 @@ corrupt or future-versioned file leaves it empty, which means "no baseline",
 which is the pre-round-30 behaviour. The failure mode is a less informative
 number, never a wrong one.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -121,11 +122,11 @@ class ComputeBaselineStore:
         """Write the store out, if anything changed."""
         if not self._dirty or not self._path:
             return
-        doc = {"version": _STORE_VERSION,
-               "baselines": {k: round(v, 4) for k, v in sorted(self._baselines.items())}}
+        doc = {"version": _STORE_VERSION, "baselines": {k: round(v, 4) for k, v in sorted(self._baselines.items())}}
         tmp_path = f"{self._path}.{os.getpid()}.tmp"
         try:
             from cash.backends.file_backend import recreate_cache_dir
+
             recreate_cache_dir(os.path.dirname(self._path))
             with open(tmp_path, "w", encoding="utf-8") as fh:
                 json.dump(doc, fh)
@@ -169,6 +170,7 @@ def get_store(cache_dir: str | None) -> ComputeBaselineStore:
         # never relied upon.
         with contextlib.suppress(Exception):
             import atexit
+
             atexit.register(store.flush)
     return store
 
@@ -177,6 +179,7 @@ def store_for_backend(backend) -> ComputeBaselineStore | None:
     """Shared store for *backend*'s cache dir, or ``None`` if unresolvable."""
     try:
         from .statement.miss_guard import resolve_cache_dir
+
         return get_store(resolve_cache_dir(backend))
     except Exception:  # noqa: BLE001 - a baseline is a reporting nicety
         logger.debug("[BASELINES] could not resolve a store", exc_info=True)

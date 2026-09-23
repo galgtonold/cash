@@ -25,6 +25,7 @@ has been untouched for a while, and a digest is reused for a few seconds only,
 so "write it then read it twice" and "raise the threshold to be certain" both
 still behave.
 """
+
 from __future__ import annotations
 
 import os
@@ -79,19 +80,23 @@ def test_a_burst_of_checks_shares_a_digest(cash_instance, tmp_path, monkeypatch)
     def aggregate(n):
         return sum(read(str(i)) for i in range(n))
 
-    aggregate(3)                                # cold: computes and snapshots
-    aggregate.cache_clear()                     # the aggregate misses, its helpers hit
+    aggregate(3)  # cold: computes and snapshots
+    aggregate.cache_clear()  # the aggregate misses, its helpers hit
     hashed: list[int] = []
-    monkeypatch.setattr(file_dep_snapshot, "hashlib", types.SimpleNamespace(
-        sha256=lambda *a: hashed.append(1) or hashlib.sha256(*a)))
+    monkeypatch.setattr(
+        file_dep_snapshot, "hashlib", types.SimpleNamespace(sha256=lambda *a: hashed.append(1) or hashlib.sha256(*a))
+    )
     aggregate(3)
     assert len(runs) == 3, "the helpers did not hit"
     assert len(hashed) <= 1, f"one burst hashed its one input {len(hashed)} times"
 
 
-@pytest.mark.xfail(os.name == "nt", strict=True, reason="Windows: an edit that keeps the size and puts the mtime back is not seen once the file had settled -- a documented limitation (known-limitations: an edit that keeps size and timestamps); Linux and macOS catch it through the inode change time")
-def test_an_edit_that_keeps_size_and_mtime_is_seen_once_the_window_passes(
-        cash_instance, tmp_path, monkeypatch):
+@pytest.mark.xfail(
+    os.name == "nt",
+    strict=True,
+    reason="Windows: an edit that keeps the size and puts the mtime back is not seen once the file had settled -- a documented limitation (known-limitations: an edit that keeps size and timestamps); Linux and macOS catch it through the inode change time",
+)
+def test_an_edit_that_keeps_size_and_mtime_is_seen_once_the_window_passes(cash_instance, tmp_path, monkeypatch):
     """Round 20 (r20s5), and a documented limitation: in a running process, an
     edit that leaves the size and every timestamp alone (an np.memmap write on
     Windows; a write + os.utime back) is not seen while the digest is being
@@ -109,19 +114,23 @@ def test_an_edit_that_keeps_size_and_mtime_is_seen_once_the_window_passes(
             return fh.read(1)
 
     assert first_byte("a") == b"x"
-    assert first_byte("a") == b"x"             # warm: the digest is memoized now
+    assert first_byte("a") == b"x"  # warm: the digest is memoized now
     before = os.stat(path)
-    with open(path, "r+b") as fh:              # same size, then the mtime put back
+    with open(path, "r+b") as fh:  # same size, then the mtime put back
         fh.write(b"Z")
     os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
     assert os.stat(path).st_size == before.st_size
 
-    time.sleep(0.1)                            # the (shortened) window passes
+    time.sleep(0.1)  # the (shortened) window passes
     assert first_byte("a") == b"Z", "the old content was served after the window"
     assert len(runs) == 2
 
 
-@pytest.mark.xfail(os.name == "nt", strict=True, reason="Windows: an edit that keeps the size and puts the mtime back is not seen once the file had settled -- a documented limitation (known-limitations: an edit that keeps size and timestamps); Linux and macOS catch it through the inode change time")
+@pytest.mark.xfail(
+    os.name == "nt",
+    strict=True,
+    reason="Windows: an edit that keeps the size and puts the mtime back is not seen once the file had settled -- a documented limitation (known-limitations: an edit that keeps size and timestamps); Linux and macOS catch it through the inode change time",
+)
 def test_a_file_changed_during_the_call_is_recorded_as_the_body_read_it(cash_instance, tmp_path):
     """Round 20 (r20s5): an np.memmap write landed while a cached step was
     computing. The result, computed from the old bytes, was stored with the
@@ -135,15 +144,15 @@ def test_a_file_changed_during_the_call_is_recorded_as_the_body_read_it(cash_ins
     def first_byte(tag):
         with open(path, "rb") as fh:
             got = fh.read(1)
-        fd = os.open(path, os.O_RDWR)            # another writer, mid-call: same
-        try:                                     # size, and the mtime put back
+        fd = os.open(path, os.O_RDWR)  # another writer, mid-call: same
+        try:  # size, and the mtime put back
             os.write(fd, b"Z")
         finally:
             os.close(fd)
         os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
         return got
 
-    assert first_byte("a") == b"x"               # it read the old byte
+    assert first_byte("a") == b"x"  # it read the old byte
     # What a later process starts with: no digests (in this one, the documented
     # five-second window applies -- see the test above).
     file_dep_snapshot._HASH_MEMO.clear()
@@ -157,7 +166,7 @@ def test_an_edit_still_invalidates_with_the_memo_warm(cash_instance, tmp_path):
     read = _reader(cash_instance, runs, path)
 
     assert read("a") == 1024 * 1024
-    with open(path, "ab") as fh:                # ordinary edit: size and mtime move
+    with open(path, "ab") as fh:  # ordinary edit: size and mtime move
         fh.write(b"more")
 
     assert read("a") == 1024 * 1024 + 4
@@ -173,14 +182,13 @@ def test_a_freshly_written_file_is_not_memoized(cash_instance, tmp_path):
     file_dep_snapshot._HASH_MEMO.clear()
     file_dep_snapshot.file_content_hash(path)
 
-    assert not file_dep_snapshot._HASH_MEMO, (
-        "a file written a moment ago was memoized"
-    )
+    assert not file_dep_snapshot._HASH_MEMO, "a file written a moment ago was memoized"
 
 
 # --------------------------------------------------------------------------- #
 # The cost report                                                             #
 # --------------------------------------------------------------------------- #
+
 
 def test_expensive_local_validation_is_reported(cash_instance, tmp_path, monkeypatch):
     """Slow checking is now visible, with the same rule the remote path uses.

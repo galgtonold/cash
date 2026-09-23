@@ -13,11 +13,13 @@ class TestNumericPrecisionEdits:
 
     def test_rounding_edit(self, nb_runner):
         """Edit rounding precision, result changes."""
-        nb_runner.create_notebook([
-            "import math\nval = math.pi",
-            "precision = 2",
-            "result = round(val, precision)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import math\nval = math.pi",
+                "precision = 2",
+                "result = round(val, precision)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 3.14" in nb_runner.get_output(3)
@@ -28,10 +30,12 @@ class TestNumericPrecisionEdits:
 
     def test_formula_edit(self, nb_runner):
         """Edit formula, downstream result updates."""
-        nb_runner.create_notebook([
-            "a = 3\nb = 4",
-            "import math\nhyp = math.sqrt(a**2 + b**2)\nprint(f'hyp = {hyp}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 3\nb = 4",
+                "import math\nhyp = math.sqrt(a**2 + b**2)\nprint(f'hyp = {hyp}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "hyp = 5.0" in nb_runner.get_output(2)
@@ -42,10 +46,12 @@ class TestNumericPrecisionEdits:
 
     def test_statistics_edit(self, nb_runner):
         """Edit data, statistical measures update."""
-        nb_runner.create_notebook([
-            "data = [10, 20, 30, 40, 50]",
-            "import statistics\nmean = statistics.mean(data)\nstdev = round(statistics.stdev(data), 2)\nprint(f'mean={mean} stdev={stdev}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = [10, 20, 30, 40, 50]",
+                "import statistics\nmean = statistics.mean(data)\nstdev = round(statistics.stdev(data), 2)\nprint(f'mean={mean} stdev={stdev}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "mean=30" in nb_runner.get_output(2)

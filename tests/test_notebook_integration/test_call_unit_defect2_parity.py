@@ -28,6 +28,7 @@ the other, this test fails and flags the newly introduced asymmetry --
 which is the actual bug class this ticket cares about, not the specific
 wrong value.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.loops]

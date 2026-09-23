@@ -24,6 +24,7 @@ otherwise start lying.
 Scope: only what the harness *depends on*. Tests that assert an attribute is
 ABSENT (a removal guard) are correct as written and are not covered here.
 """
+
 from __future__ import annotations
 
 import dataclasses

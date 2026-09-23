@@ -1,6 +1,8 @@
 """Batch 85 – collections advanced: defaultdict, ChainMap, deque, Counter."""
 
-import textwrap, pytest
+import textwrap
+
+import pytest
 
 pytestmark = [pytest.mark.stress, pytest.mark.integration]
 
@@ -10,8 +12,9 @@ class TestDefaultDict:
 
     def test_defaultdict_grouping(self, nb_runner):
         """Group items using defaultdict(list)."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from collections import defaultdict
                 words = ['apple', 'banana', 'avocado', 'blueberry', 'cherry', 'apricot']
                 by_letter = defaultdict(list)
@@ -19,8 +22,9 @@ class TestDefaultDict:
                     by_letter[w[0]].append(w)
                 grouped = dict(by_letter)
             """),
-            "print(f'grouped={grouped}')",
-        ])
+                "print(f'grouped={grouped}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -30,8 +34,9 @@ class TestDefaultDict:
 
     def test_defaultdict_counter(self, nb_runner):
         """defaultdict(int) as a manual counter."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from collections import defaultdict
                 text = "hello world hello python world"
                 counts = defaultdict(int)
@@ -39,8 +44,9 @@ class TestDefaultDict:
                     counts[word] += 1
                 result = dict(counts)
             """),
-            "print(f'result={result}')",
-        ])
+                "print(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -53,8 +59,9 @@ class TestChainMap:
 
     def test_chainmap_layered_config(self, nb_runner):
         """ChainMap for layered configuration."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from collections import ChainMap
                 defaults = {'color': 'red', 'size': 10, 'font': 'Arial'}
                 user_prefs = {'color': 'blue', 'size': 14}
@@ -64,8 +71,9 @@ class TestChainMap:
                 final_size = config['size']
                 final_font = config['font']
             """),
-            "print(f'color={final_color} size={final_size} font={final_font}')",
-        ])
+                "print(f'color={final_color} size={final_size} font={final_font}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -79,8 +87,9 @@ class TestDeque:
 
     def test_deque_sliding_window(self, nb_runner):
         """Sliding window using deque with maxlen."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from collections import deque
                 data = [1, 5, 3, 8, 2, 9, 4, 7]
                 window_size = 3
@@ -91,8 +100,9 @@ class TestDeque:
                     if len(window) == window_size:
                         averages.append(round(sum(window) / window_size, 2))
             """),
-            "print(f'averages={averages}')",
-        ])
+                "print(f'averages={averages}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -101,8 +111,9 @@ class TestDeque:
 
     def test_deque_rotation(self, nb_runner):
         """deque rotate operations."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from collections import deque
                 d = deque([1, 2, 3, 4, 5])
                 d.rotate(2)
@@ -110,8 +121,9 @@ class TestDeque:
                 d.rotate(-3)
                 left = list(d)
             """),
-            "print(f'right={right}')\nprint(f'left={left}')",
-        ])
+                "print(f'right={right}')\nprint(f'left={left}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -124,8 +136,9 @@ class TestCounterAdvanced:
 
     def test_counter_operations(self, nb_runner):
         """Counter arithmetic operations."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from collections import Counter
                 a = Counter('aabbbcccc')
                 b = Counter('abcdddd')
@@ -140,8 +153,9 @@ class TestCounterAdvanced:
                     'union_d': union['d'],
                 }
             """),
-            "print(f'results={results}')",
-        ])
+                "print(f'results={results}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)

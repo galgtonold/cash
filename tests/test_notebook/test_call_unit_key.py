@@ -1,11 +1,15 @@
 """A call unit's key is order-independent — that IS the CAS-242 fix."""
+
 from cash.notebook.cache_key import CacheKeyContext
 from cash.notebook.call_interception import CallSite
 from cash.notebook.call_unit import call_cache_key
 
 
 def _site(
-    source="compute(x)", names=("compute", "x"), occ=0, computed_arg_positions=(),
+    source="compute(x)",
+    names=("compute", "x"),
+    occ=0,
+    computed_arg_positions=(),
     stmt_identity="",
 ):
     return CallSite(
@@ -70,10 +74,7 @@ def test_loop_vars_discriminate_iterations_with_no_varying_argument():
     ctx = _ctx({"conn": "aaa"}, {"conn": object(), "fetch_next": len})
     site = _site(source="fetch_next(conn)", names=("fetch_next", "conn"))
 
-    keys = {
-        call_cache_key(site, ctx=ctx, arg_digests=[], loop_vars={"_": i})
-        for i in range(3)
-    }
+    keys = {call_cache_key(site, ctx=ctx, arg_digests=[], loop_vars={"_": i}) for i in range(3)}
     assert len(keys) == 3
 
 
@@ -86,6 +87,7 @@ def test_reordering_the_iterable_preserves_every_items_key():
     build the keys a whole loop would produce in two different orders and
     compare the SETS. This fails the moment anything positional enters the key.
     """
+
     def keys_for(order):
         return {
             call_cache_key(
@@ -172,6 +174,7 @@ def test_loop_vars_use_the_full_hash_not_the_sampling_one():
     wrongness, no pre-existing cache required.
     """
     from cash.notebook.object_hashing import compute_hash, compute_hash_full
+
     assert compute_hash(_LONG_A) == compute_hash(_LONG_B), (
         "test setup is broken -- these two tuples must be SAMPLED-equal"
     )
@@ -228,11 +231,17 @@ def test_loop_vars_discriminate_via_precomputed_digest_when_available():
     ctx = _ctx({}, {"conn": object(), "fetch_next": len})
     site = _site(source="fetch_next(conn)", names=("fetch_next", "conn"))
     first = call_cache_key(
-        site, ctx=ctx, arg_digests=[], loop_vars={"t": _LONG_A},
+        site,
+        ctx=ctx,
+        arg_digests=[],
+        loop_vars={"t": _LONG_A},
         loop_var_digests={"t": compute_hash_full(_LONG_A)},
     )
     second = call_cache_key(
-        site, ctx=ctx, arg_digests=[], loop_vars={"t": _LONG_B},
+        site,
+        ctx=ctx,
+        arg_digests=[],
+        loop_vars={"t": _LONG_B},
         loop_var_digests={"t": compute_hash_full(_LONG_B)},
     )
 
@@ -264,17 +273,20 @@ def test_loop_vars_prefer_precomputed_digest_over_the_live_value():
     ctx = _ctx({}, {"conn": object(), "fetch_next": len})
 
     first = call_cache_key(
-        site, ctx=ctx, arg_digests=[], loop_vars={"t": same_value},
+        site,
+        ctx=ctx,
+        arg_digests=[],
+        loop_vars={"t": same_value},
         loop_var_digests={"t": "digest-AAAA"},
     )
     second = call_cache_key(
-        site, ctx=ctx, arg_digests=[], loop_vars={"t": same_value},
+        site,
+        ctx=ctx,
+        arg_digests=[],
+        loop_vars={"t": same_value},
         loop_var_digests={"t": "digest-BBBB"},
     )
-    assert first != second, (
-        "identical live value, different supplied digest -- the digest "
-        "was not consulted"
-    )
+    assert first != second, "identical live value, different supplied digest -- the digest was not consulted"
 
 
 def test_different_stmt_identity_gives_different_key():
@@ -296,14 +308,16 @@ def test_different_stmt_identity_gives_different_key():
     """
     ctx = _ctx({"conn": "aaa"}, {"conn": object(), "fetch_next": len})
     a = call_cache_key(
-        _site(source="fetch_next(conn)", names=("fetch_next", "conn"),
-              stmt_identity="vals[step] = fetch_next(conn)"),
-        ctx=ctx, arg_digests=[], loop_vars={"step": "a"},
+        _site(source="fetch_next(conn)", names=("fetch_next", "conn"), stmt_identity="vals[step] = fetch_next(conn)"),
+        ctx=ctx,
+        arg_digests=[],
+        loop_vars={"step": "a"},
     )
     b = call_cache_key(
-        _site(source="fetch_next(conn)", names=("fetch_next", "conn"),
-              stmt_identity="other[step] = fetch_next(conn)"),
-        ctx=ctx, arg_digests=[], loop_vars={"step": "a"},
+        _site(source="fetch_next(conn)", names=("fetch_next", "conn"), stmt_identity="other[step] = fetch_next(conn)"),
+        ctx=ctx,
+        arg_digests=[],
+        loop_vars={"step": "a"},
     )
     assert a != b
 
@@ -332,11 +346,14 @@ def test_same_stmt_identity_gives_the_same_key():
     distinct ids even though every field agrees).
     """
     ctx = _ctx({"conn": "aaa"}, {"conn": object(), "fetch_next": len})
+
     def _make_site():
         return _site(
-            source="fetch_next(conn)", names=("fetch_next", "conn"),
+            source="fetch_next(conn)",
+            names=("fetch_next", "conn"),
             stmt_identity="vals[step] = fetch_next(conn)",
         )
+
     first = call_cache_key(_make_site(), ctx=ctx, arg_digests=[], loop_vars={"step": "a"})
     second = call_cache_key(_make_site(), ctx=ctx, arg_digests=[], loop_vars={"step": "a"})
     assert first == second
@@ -364,10 +381,14 @@ def test_empty_stmt_identity_matches_pre_feature_key():
     """
     ctx = _ctx({"x": "aaa"}, {"x": 1, "compute": len})
     omitted = CallSite(
-        source="compute(x)", free_names=frozenset({"compute", "x"}), occurrence_index=0,
+        source="compute(x)",
+        free_names=frozenset({"compute", "x"}),
+        occurrence_index=0,
     )
     explicit_empty = CallSite(
-        source="compute(x)", free_names=frozenset({"compute", "x"}), occurrence_index=0,
+        source="compute(x)",
+        free_names=frozenset({"compute", "x"}),
+        occurrence_index=0,
         stmt_identity="",
     )
     with_omitted = call_cache_key(omitted, ctx=ctx, arg_digests=[], loop_vars={"x": 1})
@@ -392,7 +413,9 @@ def test_a_dunder_entry_in_loop_vars_cannot_reach_the_key():
     ctx = _ctx({"x": "hash-of-5"}, {"x": 5, "compute": len})
     clean = call_cache_key(_site(), ctx=ctx, arg_digests=[], loop_vars={"x": 5})
     polluted = call_cache_key(
-        _site(), ctx=ctx, arg_digests=[],
+        _site(),
+        ctx=ctx,
+        arg_digests=[],
         loop_vars={"x": 5, "__iterable_lineage__": "whole-iterable-hash"},
     )
     assert clean == polluted
@@ -420,7 +443,9 @@ def test_a_depth_prefixed_dunder_entry_in_loop_vars_cannot_reach_the_key():
     ctx = _ctx({"x": "hash-of-5"}, {"x": 5, "compute": len})
     clean = call_cache_key(_site(), ctx=ctx, arg_digests=[], loop_vars={"0:x": 5})
     polluted = call_cache_key(
-        _site(), ctx=ctx, arg_digests=[],
+        _site(),
+        ctx=ctx,
+        arg_digests=[],
         loop_vars={"0:x": 5, "0:__iterable_lineage__": "whole-iterable-hash"},
     )
     assert clean == polluted

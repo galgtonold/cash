@@ -1,6 +1,8 @@
 """Batch 91 – JSON/CSV data processing chains."""
 
-import textwrap, pytest
+import textwrap
+
+import pytest
 
 pytestmark = [pytest.mark.stress, pytest.mark.integration]
 
@@ -10,8 +12,9 @@ class TestJsonProcessing:
 
     def test_json_roundtrip(self, nb_runner):
         """JSON serialize/deserialize roundtrip."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 import json
                 data = {
                     'users': [
@@ -24,8 +27,9 @@ class TestJsonProcessing:
                 restored = json.loads(json_str)
                 match = data == restored
             """),
-            "print(f'match={match}')\nprint(f'users={len(restored[\"users\"])}')",
-        ])
+                "print(f'match={match}')\nprint(f'users={len(restored[\"users\"])}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -34,8 +38,9 @@ class TestJsonProcessing:
 
     def test_json_transform(self, nb_runner):
         """JSON transformation pipeline."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 import json
                 raw = '[{"name": "Alice", "score": 95}, {"name": "Bob", "score": 82}, {"name": "Charlie", "score": 78}]'
                 records = json.loads(raw)
@@ -44,8 +49,9 @@ class TestJsonProcessing:
                     r['grade'] = 'A' if r['score'] >= 90 else 'B' if r['score'] >= 80 else 'C'
                 grades = {r['name']: r['grade'] for r in records}
             """),
-            "print(f'grades={grades}')",
-        ])
+                "print(f'grades={grades}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -55,8 +61,9 @@ class TestJsonProcessing:
 
     def test_json_nested_query(self, nb_runner):
         """Query nested JSON structure."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 import json
                 config = {
                     'database': {
@@ -80,8 +87,9 @@ class TestJsonProcessing:
                 cache_port = get_nested(config, 'cache.port')
                 missing = get_nested(config, 'database.tertiary.host', 'N/A')
             """),
-            "print(f'primary={primary_host} cache_port={cache_port} missing={missing}')",
-        ])
+                "print(f'primary={primary_host} cache_port={cache_port} missing={missing}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -95,9 +103,10 @@ class TestCsvProcessing:
 
     def test_csv_write_read(self, nb_runner, tmp_path):
         """Write CSV, read back, transform."""
-        csv_path = str(tmp_path / "data" / "test.csv").replace('\\', '/')
-        nb_runner.create_notebook([
-            textwrap.dedent(f"""\
+        csv_path = str(tmp_path / "data" / "test.csv").replace("\\", "/")
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent(f"""\
                 import csv, os
                 os.makedirs(os.path.dirname('{csv_path}'), exist_ok=True)
                 rows = [
@@ -110,15 +119,16 @@ class TestCsvProcessing:
                 with open('{csv_path}', 'w', newline='') as f:
                     csv.writer(f).writerows(rows)
             """),
-            textwrap.dedent(f"""\
+                textwrap.dedent(f"""\
                 import csv
                 with open('{csv_path}', 'r') as f:
                     reader = csv.DictReader(f)
                     data = list(reader)
                 eng_avg = sum(int(r['salary']) for r in data if r['department'] == 'Engineering') / sum(1 for r in data if r['department'] == 'Engineering')
             """),
-            "print(f'count={len(data)} eng_avg={eng_avg}')",
-        ])
+                "print(f'count={len(data)} eng_avg={eng_avg}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(3)
@@ -127,9 +137,10 @@ class TestCsvProcessing:
 
     def test_csv_propagation(self, nb_runner, tmp_path):
         """CSV with upstream filter change propagation."""
-        csv_path = str(tmp_path / "data" / "scores.csv").replace('\\', '/')
-        nb_runner.create_notebook([
-            textwrap.dedent(f"""\
+        csv_path = str(tmp_path / "data" / "scores.csv").replace("\\", "/")
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent(f"""\
                 import csv, os
                 os.makedirs(os.path.dirname('{csv_path}'), exist_ok=True)
                 with open('{csv_path}', 'w', newline='') as f:
@@ -138,15 +149,16 @@ class TestCsvProcessing:
                     for name, score in [('A', 90), ('B', 75), ('C', 85), ('D', 60), ('E', 95)]:
                         w.writerow([name, score])
             """),
-            "min_score = 80",
-            textwrap.dedent(f"""\
+                "min_score = 80",
+                textwrap.dedent(f"""\
                 import csv
                 with open('{csv_path}', 'r') as f:
                     data = list(csv.DictReader(f))
                 passing = [r['name'] for r in data if int(r['score']) >= min_score]
             """),
-            "print(f'passing={passing}')",
-        ])
+                "print(f'passing={passing}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(4)

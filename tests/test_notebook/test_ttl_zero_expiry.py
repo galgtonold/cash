@@ -33,10 +33,10 @@ class _StubBackend:
 def _checker(age_seconds: float = 0.0, value: object = "cached-value"):
     """A checker whose single entry was stored *age_seconds* ago."""
     metadata = {
-        'key': 'k',
-        'timestamp': time.time() - age_seconds,
+        "key": "k",
+        "timestamp": time.time() - age_seconds,
         # No file deps: this suite is about TTL and nothing else.
-        'file_dependencies': {},
+        "file_dependencies": {},
     }
     return CacheFreshnessChecker(backend=_StubBackend(metadata, value))
 
@@ -45,7 +45,7 @@ def _check(checker: CacheFreshnessChecker, ttl):
     """Run a lookup with no inputs, so only the TTL branch can fire."""
     _metadata, cached_data, _elapsed = checker.check_cache(
         tracking_state=None,  # unreachable: the input-file check needs `inputs`
-        cache_key='k',
+        cache_key="k",
         ttl=ttl,
         inputs=None,
     )
@@ -67,7 +67,7 @@ def test_ttl_zero_reports_why_it_missed():
     checker = _checker(age_seconds=0.0)
     _check(checker, ttl=0)
     assert checker.last_miss_reason is not None
-    assert 'TTL' in checker.last_miss_reason
+    assert "TTL" in checker.last_miss_reason
 
 
 def test_ttl_none_never_expires():
@@ -85,7 +85,7 @@ def test_positive_ttl_still_expires_past_the_window():
     assert _check(_checker(age_seconds=120.0), ttl=60) is None
 
 
-@pytest.mark.parametrize('ttl', [0, 0.0])
+@pytest.mark.parametrize("ttl", [0, 0.0])
 def test_ttl_zero_expires_for_int_and_float(ttl):
     """``%cash_on ttl=0`` can deliver a float where a pragma delivers an int."""
     assert _check(_checker(age_seconds=0.0), ttl=ttl) is None

@@ -16,6 +16,7 @@ Real files in a real package, not `exec`-built modules: the resolution path
 runs through the module's `__file__` and `__globals__`, and a synthesised
 module reproduces neither.
 """
+
 from __future__ import annotations
 
 import os
@@ -32,9 +33,9 @@ def _project(tmp_path, bump_by):
     """A two-module project: the cached function is in one, the helper in the other."""
     pkg = tmp_path / "proj"
     pkg.mkdir(exist_ok=True)
-    (pkg / "helpers_x.py").write_text(
-        f"def bump(x):\n    return x + {bump_by}\n", encoding="utf-8")
-    (pkg / "main_x.py").write_text(textwrap.dedent("""
+    (pkg / "helpers_x.py").write_text(f"def bump(x):\n    return x + {bump_by}\n", encoding="utf-8")
+    (pkg / "main_x.py").write_text(
+        textwrap.dedent("""
         import time
         import cash
         from helpers_x import bump
@@ -46,15 +47,18 @@ def _project(tmp_path, bump_by):
             return bump(x)
 
         print("RESULT", pipeline(1), flush=True)
-    """), encoding="utf-8")
+    """),
+        encoding="utf-8",
+    )
     return pkg
 
 
 def _run(pkg, cache_dir):
     env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
     env["CASH_CACHE_DIR"] = str(cache_dir)
-    out = subprocess.run([sys.executable, str(pkg / "main_x.py")],
-                         cwd=str(pkg), capture_output=True, text=True, env=env)
+    out = subprocess.run(
+        [sys.executable, str(pkg / "main_x.py")], cwd=str(pkg), capture_output=True, text=True, env=env
+    )
     assert out.returncode == 0, out.stdout + out.stderr
     ran = "RAN" in out.stdout
     result = [ln for ln in out.stdout.splitlines() if ln.startswith("RESULT")][0]
@@ -73,7 +77,7 @@ def test_editing_a_helper_in_another_module_invalidates(tmp_path):
     assert not ran, "the control failed: an unedited run should HIT"
     assert warm == "2"
 
-    _project(tmp_path, bump_by=100)                 # edit the OTHER module
+    _project(tmp_path, bump_by=100)  # edit the OTHER module
     ran, after = _run(pkg, cache)
 
     assert ran, "editing a helper in another module did not invalidate"

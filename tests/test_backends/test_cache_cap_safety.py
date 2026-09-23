@@ -15,6 +15,7 @@ Plus the headline acceptance test: two medium objects that together bust the
 treadmill is gone. The baseline half of that test reproduces the treadmill on
 a small cap to prove the assertion discriminates.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -24,10 +25,10 @@ from cash.backends.memory_backend import InMemoryBackend
 from cash.backends.tiered_backend import TieredBackend
 from cash.exceptions import CashCacheIneffectiveWarning
 
-
 # ---------------------------------------------------------------------------
 # Oversize refusal
 # ---------------------------------------------------------------------------
+
 
 class TestOversizeRefusal:
     """The threshold is the WHOLE cap, and it moved there deliberately.
@@ -67,7 +68,7 @@ class TestOversizeRefusal:
         oversize = [w for w in rec if issubclass(w.category, CashCacheIneffectiveWarning)]
         assert len(oversize) == 1, "warn once/session, not per object"
         message = str(oversize[0].message)
-        assert "max_cache_size" in message                     # actionable
+        assert "max_cache_size" in message  # actionable
         assert "7.8 KiB" in message, f"the cap it was measured against: {message}"
         assert "8.8 KiB" in message, f"the size that was measured: {message}"
 
@@ -113,6 +114,7 @@ class TestOversizeRefusal:
 # Evict-after-write
 # ---------------------------------------------------------------------------
 
+
 class TestEvictAfterWrite:
     def test_warns_once_when_recent_entry_evicted(self, tmp_path):
         # Bare file backend (no tiered refusal) with a cap too small to hold
@@ -124,8 +126,8 @@ class TestEvictAfterWrite:
         with pytest.warns(CashCacheIneffectiveWarning) as rec:
             backend.set("a", val)
             backend.set("b", val)
-            backend.set("c", val)   # forces eviction of a recently-written entry
-            backend.set("d", val)   # keeps churning — must NOT warn again
+            backend.set("c", val)  # forces eviction of a recently-written entry
+            backend.set("d", val)  # keeps churning — must NOT warn again
             backend._writes.wait_all()
 
         churn = [w for w in rec if issubclass(w.category, CashCacheIneffectiveWarning)]
@@ -135,7 +137,7 @@ class TestEvictAfterWrite:
 
     def test_no_warning_when_cache_is_roomy(self, tmp_path, recwarn):
         # A generous cap never evicts these tiny entries → no warning.
-        backend = FileBackend(str(tmp_path / "c"), max_size_bytes=10 * 1024 ** 2, flush_interval=0)
+        backend = FileBackend(str(tmp_path / "c"), max_size_bytes=10 * 1024**2, flush_interval=0)
         for i in range(10):
             backend.set(f"k{i}", "x" * 100)
         backend._writes.wait_all()
@@ -146,6 +148,7 @@ class TestEvictAfterWrite:
 # ---------------------------------------------------------------------------
 # No-thrash acceptance — the treadmill is gone under the adaptive cap.
 # ---------------------------------------------------------------------------
+
 
 class TestNoThrashAcceptance:
     def test_baseline_small_cap_reproduces_treadmill(self, tmp_path):
@@ -164,30 +167,28 @@ class TestNoThrashAcceptance:
 
         a_present = backend.get("frame_a")[1] is not None
         b_present = backend.get("frame_b")[1] is not None
-        assert not (a_present and b_present), (
-            "baseline must NOT hold both — that's the treadmill we're removing"
-        )
+        assert not (a_present and b_present), "baseline must NOT hold both — that's the treadmill we're removing"
         backend.shutdown()
 
     def test_adaptive_cap_persists_both_frames(self, monkeypatch, tmp_path):
         """FIXED: the same two frames both persist and both restore once the
         disk tier is scaled to the machine instead of a flat 1 GiB."""
         from cash.backends import adaptive_caps
+
         # Big free disk → adaptive disk cap ≫ the two frames combined.
-        monkeypatch.setattr(adaptive_caps, "_free_bytes_on_volume", lambda p: 500 * 1024 ** 3)
+        monkeypatch.setattr(adaptive_caps, "_free_bytes_on_volume", lambda p: 500 * 1024**3)
         from cash.backends.factory import build_backend_from_config
         from cash.config import CashConfig
 
         backend = build_backend_from_config(CashConfig(cache_dir=str(tmp_path / "c")))
         disk = backend.backends[1]
-        assert disk._max_size_bytes > 1024 ** 3  # no longer the 1 GiB that thrashed
+        assert disk._max_size_bytes > 1024**3  # no longer the 1 GiB that thrashed
 
         frame = "x" * 5000
         # force_persist clears the compute floor deterministically; the frames
         # are far under the refusal threshold, so both reach disk.
         for key in ("frame_a", "frame_b"):
-            backend.set(key, frame, {"execution_time": 5.0, "size": len(frame),
-                                     "force_persist": True})
+            backend.set(key, frame, {"execution_time": 5.0, "size": len(frame), "force_persist": True})
         disk._writes.wait_all()
 
         # Both persisted to disk (survive a restart) ...

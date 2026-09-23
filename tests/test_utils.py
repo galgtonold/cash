@@ -1,8 +1,9 @@
 """Tests for utility functions (utils.py) and data sources (data_source.py)."""
+
 import json
 import os
 import time
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -19,6 +20,7 @@ def _reset_discovery_state():
     real once its tests stopped being randomised into a lucky order.
     """
     from cash.notebook import server_discovery as sd
+
     sd.invalidate_notebook_path_cache()
     yield
     sd.invalidate_notebook_path_cache()
@@ -30,6 +32,7 @@ class TestGetNotebookPath:
     def test_returns_none_without_ipython(self):
         """Returns None when no IPython/Jupyter available."""
         from cash.notebook.server_discovery import get_notebook_path
+
         # In a test environment, should return None
         result = get_notebook_path()
         assert result is None or isinstance(result, str)
@@ -38,16 +41,17 @@ class TestGetNotebookPath:
         """Returns VS Code injected notebook path if available."""
 
         mock_ip = MagicMock()
-        mock_ip.user_ns = {'__vsc_ipynb_file__': '/path/to/notebook.ipynb'}
+        mock_ip.user_ns = {"__vsc_ipynb_file__": "/path/to/notebook.ipynb"}
 
-        with patch('cash.notebook.server_discovery.get_ipython', return_value=mock_ip, create=True):
+        with patch("cash.notebook.server_discovery.get_ipython", return_value=mock_ip, create=True):
             # This test may not work due to import caching, but verifies the code path
             pass
 
     def test_returns_none_on_error(self):
         """Returns None when all detection methods fail."""
         from cash.notebook.server_discovery import get_notebook_path
-        with patch('cash.notebook.server_discovery.get_ipython', side_effect=Exception("no ipython"), create=True):
+
+        with patch("cash.notebook.server_discovery.get_ipython", side_effect=Exception("no ipython"), create=True):
             result = get_notebook_path()
             # Should handle error gracefully
             assert result is None or isinstance(result, str)
@@ -235,18 +239,18 @@ class TestGetNotebookPathEdgeCases:
         from cash.notebook.server_discovery import get_notebook_path
 
         mock_ip = MagicMock()
-        mock_ip.user_ns = {'__vsc_ipynb_file__': '/path/to/notebook.ipynb'}
+        mock_ip.user_ns = {"__vsc_ipynb_file__": "/path/to/notebook.ipynb"}
 
-        with patch('IPython.get_ipython', return_value=mock_ip):
+        with patch("IPython.get_ipython", return_value=mock_ip):
             result = get_notebook_path()
-            assert result == '/path/to/notebook.ipynb'
+            assert result == "/path/to/notebook.ipynb"
 
     def test_ipython_import_fails(self):
         """Returns None when IPython import fails."""
         from cash.notebook.server_discovery import get_notebook_path
 
         # Temporarily make IPython unimportable
-        with patch.dict('sys.modules', {'IPython': None}):
+        with patch.dict("sys.modules", {"IPython": None}):
             result = get_notebook_path()
             assert result is None or isinstance(result, str)
 
@@ -254,7 +258,7 @@ class TestGetNotebookPathEdgeCases:
         """_read_notebook_code_cells returns [] when no path detected."""
         from cash.notebook.server_discovery import _read_notebook_code_cells
 
-        with patch('cash.notebook.server_discovery.get_notebook_path', return_value=None):
+        with patch("cash.notebook.server_discovery.get_notebook_path", return_value=None):
             cells = _read_notebook_code_cells(None)
             assert cells == []
 
@@ -268,7 +272,7 @@ class TestGetNotebookPathEdgeCases:
         nb_path.write_text(json.dumps(nb))
 
         monkeypatch.chdir(tmp_path)
-        with patch('cash.notebook.server_discovery.get_notebook_path', return_value=None):
+        with patch("cash.notebook.server_discovery.get_notebook_path", return_value=None):
             # Should return empty list instead of picking up the notebook via glob
             cells = _read_notebook_code_cells(None)
             assert cells == []
@@ -379,6 +383,7 @@ class TestSafeText:
     def test_utf8_stream_passes_through(self):
         """A UTF-8 stream returns the input unchanged, even with emojis."""
         import io
+
         from cash.utils import safe_text
 
         stream = io.TextIOWrapper(io.BytesIO(), encoding="utf-8", write_through=True)
@@ -387,6 +392,7 @@ class TestSafeText:
     def test_cp1252_stream_replaces_emojis(self):
         """A cp1252 stream gets emojis replaced with ASCII fallbacks."""
         import io
+
         from cash.utils import safe_text
 
         stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", write_through=True)
@@ -400,6 +406,7 @@ class TestSafeText:
         """The original crash: printing safe_text(...) on cp1252 must not raise."""
         import io
         import sys
+
         from cash.utils import safe_text
 
         cp1252_stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", write_through=True)
@@ -415,6 +422,7 @@ class TestSafeText:
     def test_unknown_emoji_dropped_not_crash(self):
         """Characters without an ASCII fallback are dropped, never crash."""
         import io
+
         from cash.utils import safe_text
 
         stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", write_through=True)
@@ -426,6 +434,7 @@ class TestSafeText:
     def test_ascii_input_passes_through(self):
         """Pure-ASCII input is identity, regardless of stream encoding."""
         import io
+
         from cash.utils import safe_text
 
         stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", write_through=True)
@@ -434,6 +443,7 @@ class TestSafeText:
     def test_stdout_supports_unicode_utf8(self):
         """UTF-8 streams are reported as Unicode-capable."""
         import io
+
         from cash.utils import stdout_supports_unicode
 
         stream = io.TextIOWrapper(io.BytesIO(), encoding="utf-8", write_through=True)
@@ -442,6 +452,7 @@ class TestSafeText:
     def test_stdout_supports_unicode_cp1252(self):
         """cp1252 streams are reported as not Unicode-capable."""
         import io
+
         from cash.utils import stdout_supports_unicode
 
         stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", write_through=True)

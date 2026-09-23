@@ -24,6 +24,7 @@ the worker for whatever xdist schedules next — the very contamination
 ``.github/copilot-instructions.md`` forbids reintroducing. A fresh interpreter
 with the blocker installed before the first import is the honest test.
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -132,10 +133,7 @@ def test_processor_rich_output_raises_without_ipython(no_ipython_run):
         "processor._publish_rich_outputs silently dropped rich output instead "
         "of raising — the CAS-132 no-op stub is back:\n" + no_ipython_run.stdout
     )
-    line = next(
-        line for line in no_ipython_run.stdout.splitlines()
-        if line.startswith("PHASE2_PROCESSOR_RAISED")
-    )
+    line = next(line for line in no_ipython_run.stdout.splitlines() if line.startswith("PHASE2_PROCESSOR_RAISED"))
     assert "IPython" in line, f"error must name the missing dep: {line}"
 
 

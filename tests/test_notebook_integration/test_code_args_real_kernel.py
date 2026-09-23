@@ -49,6 +49,7 @@ below would pass against a build with the feature removed.
 ``assert_cash_active(False)`` is asserted rather than assumed, because ``cash
 autoload`` can leave a "cash-off" kernel with caching still live.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -66,16 +67,8 @@ _V2 = "class Schema:\n    def render(self):\n        return 'V2-EDITED'\n"
 # `RAN` is the recompute oracle; `RESULT` is the answer the user actually sees.
 # Counting alone would not show the harm -- the bug's symptom is a *stale
 # answer*, so both are asserted at the edit.
-_DEFS = (
-    "import cash\n"
-    "RAN = []\n"
-)
-_FUNC = (
-    "@cash.cache\n"
-    "def render_with(schema):\n"
-    "    RAN.append(1)\n"
-    "    return schema().render()\n"
-)
+_DEFS = "import cash\nRAN = []\n"
+_FUNC = "@cash.cache\ndef render_with(schema):\n    RAN.append(1)\n    return schema().render()\n"
 _CALL = "RESULT = render_with(Schema)\n"
 
 
@@ -103,19 +96,22 @@ def test_a_notebook_defined_class_has_no_source_but_is_still_user_code(nb_runner
     against a build where the whole feature had been deleted, since "no source
     available" is true either way.
     """
-    _bare_kernel(nb_runner, [
-        "import sys, inspect, cash",
-        _V1,
-        "MAIN_FILE = getattr(sys.modules['__main__'], '__file__', None)\n"
-        "try:\n"
-        "    inspect.getsource(Schema)\n"
-        "    SOURCE_ERR = None\n"
-        "except Exception as exc:\n"
-        "    SOURCE_ERR = type(exc).__name__\n"
-        "_c = cash.Cash()\n"
-        "IS_USER_CODE = _c._is_user_code_object(Schema)\n"
-        "DIGEST = _c._code_surface_hash(Schema)\n",
-    ]).run_all()
+    _bare_kernel(
+        nb_runner,
+        [
+            "import sys, inspect, cash",
+            _V1,
+            "MAIN_FILE = getattr(sys.modules['__main__'], '__file__', None)\n"
+            "try:\n"
+            "    inspect.getsource(Schema)\n"
+            "    SOURCE_ERR = None\n"
+            "except Exception as exc:\n"
+            "    SOURCE_ERR = type(exc).__name__\n"
+            "_c = cash.Cash()\n"
+            "IS_USER_CODE = _c._is_user_code_object(Schema)\n"
+            "DIGEST = _c._code_surface_hash(Schema)\n",
+        ],
+    ).run_all()
 
     assert nb_runner.peek("MAIN_FILE") == "None", (
         "a real kernel's __main__ is supposed to be file-less; if this ever "
@@ -161,7 +157,7 @@ def test_editing_a_notebook_defined_class_invalidates_the_decorator_cache(nb_run
         "broken."
     )
 
-    runner.run_cell(2)          # re-run the class cell, source unchanged
+    runner.run_cell(2)  # re-run the class cell, source unchanged
     runner.run_cell(4)
     assert runner.peek("len(RAN)") == "1", (
         "control: re-defining an IDENTICAL class must still HIT. A digest "
@@ -177,8 +173,7 @@ def test_editing_a_notebook_defined_class_invalidates_the_decorator_cache(nb_run
         "source-based path is back, or the user-code gate rejected __main__"
     )
     assert runner.peek("RESULT") == "'V2-EDITED'", (
-        "the call recomputed but the answer is stale, which is the harm this "
-        "feature exists to prevent"
+        "the call recomputed but the answer is stale, which is the harm this feature exists to prevent"
     )
 
 
@@ -194,26 +189,24 @@ def test_an_opaque_notebook_class_does_not_invalidate(nb_runner):
     plain_v1 = "class Plain:\n    def render(self):\n        return 'P1'\n"
     plain_v2 = "class Plain:\n    def render(self):\n        return 'P2'\n"
 
-    runner = _bare_kernel(nb_runner, [
-        _DEFS,
-        marked_v1,
-        plain_v1,
-        "@cash.cache\n"
-        "def takes(schema):\n"
-        "    RAN.append(1)\n"
-        "    return len(RAN)\n",
-        "M = takes(Marker)\n",
-        "P = takes(Plain)\n",
-    ])
+    runner = _bare_kernel(
+        nb_runner,
+        [
+            _DEFS,
+            marked_v1,
+            plain_v1,
+            "@cash.cache\ndef takes(schema):\n    RAN.append(1)\n    return len(RAN)\n",
+            "M = takes(Marker)\n",
+            "P = takes(Plain)\n",
+        ],
+    )
     runner.run_all()
     assert runner.peek("len(RAN)") == "2", "both first calls must run"
 
     runner.set_cell_source(2, marked_v2)
     runner.run_cell(2)
     runner.run_cell(5)
-    assert runner.peek("len(RAN)") == "2", (
-        "an @cash.opaque class must not contribute its code to the key"
-    )
+    assert runner.peek("len(RAN)") == "2", "an @cash.opaque class must not contribute its code to the key"
 
     runner.set_cell_source(3, plain_v2)
     runner.run_cell(3)

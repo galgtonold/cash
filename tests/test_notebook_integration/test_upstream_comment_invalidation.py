@@ -19,6 +19,7 @@ the commented-out line, the simulation should compute a different lineage for
 x (without the mutation), detect that the actual x has a stale lineage, and
 re-execute cell A before running cell B.
 """
+
 import pytest
 
 pytestmark = pytest.mark.upstream
@@ -35,10 +36,12 @@ class TestUpstreamCommentInvalidation:
         After commenting out x['a'] = 234 in cell 1 and running cell 2,
         x should be {} not {'a': 234}.
         """
-        nb_runner.create_notebook([
-            "x = {}\nx['a'] = 234\nprint(x)",
-            "print(x)",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = {}\nx['a'] = 234\nprint(x)",
+                "print(x)",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.enable_debug()
 
@@ -59,10 +62,7 @@ class TestUpstreamCommentInvalidation:
 
         # x should now be {} because the upstream checker should have re-executed
         # cell 1 with the commented-out line
-        assert "'a'" not in out2, (
-            f"Expected x to be empty dict {{}}, but got: {out2}\n"
-            f"Raw output:\n{out2_raw}"
-        )
+        assert "'a'" not in out2, f"Expected x to be empty dict {{}}, but got: {out2}\nRaw output:\n{out2_raw}"
 
     def test_add_line_to_upstream_invalidates_downstream(self, nb_runner):
         """
@@ -71,10 +71,12 @@ class TestUpstreamCommentInvalidation:
 
         Modify cell 1 to x = 20 and run cell 2 → should see 20.
         """
-        nb_runner.create_notebook([
-            "x = 10",
-            "print(f'x={x}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "print(f'x={x}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.enable_debug()
 
@@ -88,9 +90,7 @@ class TestUpstreamCommentInvalidation:
         # Run cell 2 only
         nb_runner.run_cell(2)
         out = nb_runner.get_output(2)
-        assert "x=20" in out, (
-            f"Expected x=20 after upstream modification, got: {out}"
-        )
+        assert "x=20" in out, f"Expected x=20 after upstream modification, got: {out}"
 
     def test_uncomment_line_in_upstream_invalidates_downstream(self, nb_runner):
         """
@@ -99,10 +99,12 @@ class TestUpstreamCommentInvalidation:
 
         Uncomment y = y * 10 → downstream should see 50.
         """
-        nb_runner.create_notebook([
-            "y = 5\n#y = y * 10",
-            "print(f'y={y}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "y = 5\n#y = y * 10",
+                "print(f'y={y}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.enable_debug()
 
@@ -116,9 +118,7 @@ class TestUpstreamCommentInvalidation:
         # Run cell 2 only
         nb_runner.run_cell(2)
         out = nb_runner.get_output(2)
-        assert "y=50" in out, (
-            f"Expected y=50 after uncommenting upstream line, got: {out}"
-        )
+        assert "y=50" in out, f"Expected y=50 after uncommenting upstream line, got: {out}"
 
     def test_multi_cell_chain_comment_invalidation(self, nb_runner):
         """
@@ -128,11 +128,13 @@ class TestUpstreamCommentInvalidation:
 
         Comment out data = data + [4] in cell 2, run cell 3 → should see [1, 2, 3].
         """
-        nb_runner.create_notebook([
-            "data = [1, 2, 3]",
-            "data = data + [4]\nprint(f'len={len(data)}')",
-            "print(data)",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = [1, 2, 3]",
+                "data = data + [4]\nprint(f'len={len(data)}')",
+                "print(data)",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.enable_debug()
 
@@ -147,6 +149,4 @@ class TestUpstreamCommentInvalidation:
         # Run cell 3 only - should detect cell 2 changed
         nb_runner.run_cell(3)
         out = nb_runner.get_output(3)
-        assert "4" not in out, (
-            f"Expected data without 4 after commenting out concat, got: {out}"
-        )
+        assert "4" not in out, f"Expected data without 4 after commenting out concat, got: {out}"

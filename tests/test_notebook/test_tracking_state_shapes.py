@@ -21,6 +21,7 @@ on which writer touches the value first -- the hook path bails out with a
 NOTEBOOK-BAILOUT warning, the magic path re-raises into the caller -- and a test
 that asserted one of those would be pinning the environment, not the contract.
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock

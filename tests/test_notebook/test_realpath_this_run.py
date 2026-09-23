@@ -5,6 +5,7 @@ every tracked read, lineage component and snapshot: 13% of a cell reading
 3,000 files (round 23). The memo lasts one cell run; outside a run, and in the
 next one, a path resolves afresh.
 """
+
 from __future__ import annotations
 
 import os

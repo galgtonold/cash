@@ -23,6 +23,7 @@ An inline redefinition produces class objects that already differ in ways the
 digest picks up, so the first version of this test passed against the unfixed
 code and proved nothing.
 """
+
 from __future__ import annotations
 
 import importlib
@@ -54,8 +55,7 @@ def spec_module(tmp_path, monkeypatch):
 
     def write(total_desc="Grand total", doc="Invoice fields.", extra=""):
         path.write_text(
-            MODULE.format(doc=doc, total_desc=total_desc,
-                          extra=textwrap.indent(extra, "    ")),
+            MODULE.format(doc=doc, total_desc=total_desc, extra=textwrap.indent(extra, "    ")),
             encoding="utf-8",
         )
         sys.modules.pop("spec_under_test", None)
@@ -74,6 +74,7 @@ def render(tmp_path):
     @c.cache
     def build(spec: type) -> str:
         from dataclasses import fields
+
         return " | ".join(f"{f.name}:{f.metadata['desc']}" for f in fields(spec))
 
     with warnings.catch_warnings():
@@ -94,8 +95,7 @@ def test_rewriting_a_field_description_invalidates(spec_module, render):
 def test_adding_a_field_invalidates(spec_module, render):
     """Control arm -- this one always worked, through __init__."""
     before = render(spec_module())
-    after = render(spec_module(
-        extra='currency: str = field(default="", metadata={"desc": "ISO code"})'))
+    after = render(spec_module(extra='currency: str = field(default="", metadata={"desc": "ISO code"})'))
     assert "currency" not in before
     assert "currency" in after
 
@@ -112,5 +112,4 @@ def test_a_comment_only_edit_still_hits(spec_module, render):
 
 
 def test_two_specs_differing_only_in_metadata_do_not_collide(spec_module, render):
-    assert render(spec_module(total_desc="alpha")) != render(
-        spec_module(total_desc="beta"))
+    assert render(spec_module(total_desc="alpha")) != render(spec_module(total_desc="beta"))

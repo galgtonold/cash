@@ -15,10 +15,12 @@ class TestErrorThenFixCells:
 
     def test_name_error_then_fix(self, nb_runner):
         """Cell causes NameError, fix it, run again."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "result = x + undefined_var\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "result = x + undefined_var\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_cell(1)
         with pytest.raises(CellExecutionError):
@@ -31,10 +33,12 @@ class TestErrorThenFixCells:
 
     def test_type_error_then_fix(self, nb_runner):
         """Cell causes TypeError, fix it."""
-        nb_runner.create_notebook([
-            "val = 'hello'",
-            "result = val + 10\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "val = 'hello'",
+                "result = val + 10\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_cell(1)
         with pytest.raises(CellExecutionError):
@@ -47,10 +51,12 @@ class TestErrorThenFixCells:
 
     def test_index_error_then_fix(self, nb_runner):
         """Cell causes IndexError, fix it."""
-        nb_runner.create_notebook([
-            "items = [1, 2, 3]",
-            "val = items[10]\nprint(f'val = {val}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "items = [1, 2, 3]",
+                "val = items[10]\nprint(f'val = {val}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_cell(1)
         with pytest.raises(CellExecutionError):
@@ -66,11 +72,13 @@ class TestErrorInMiddleChain:
 
     def test_error_in_cell2_fix_continue(self, nb_runner):
         """Error in cell 2 of 3, fix, continue."""
-        nb_runner.create_notebook([
-            "x = 5",
-            "y = x / 0  # will error",
-            "z = y + 1\nprint(f'z = {z}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 5",
+                "y = x / 0  # will error",
+                "z = y + 1\nprint(f'z = {z}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_cell(1)
         with pytest.raises(CellExecutionError):
@@ -86,10 +94,12 @@ class TestFixSourceThenRerunCells:
 
     def test_fix_upstream_data(self, nb_runner):
         """Downstream fails because of bad data, fix data."""
-        nb_runner.create_notebook([
-            "data = []  # empty causes error",
-            "avg = sum(data) / len(data)\nprint(f'avg = {avg}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = []  # empty causes error",
+                "avg = sum(data) / len(data)\nprint(f'avg = {avg}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_cell(1)
         with pytest.raises(CellExecutionError):

@@ -8,6 +8,7 @@ check.
 This half needs no frontend: the comm handler is ordinary Python, and a test can
 deliver exactly the payload the extension would.
 """
+
 from __future__ import annotations
 
 import json
@@ -90,13 +91,20 @@ def test_a_malformed_payload_is_ignored_not_raised():
     ValueError)` the upstream checker catches, so it would reach the user out
     of a cell they never touched.
     """
-    for bad in (None, 42, "cells", {}, {"seq": "x", "cells": []},
-                {"seq": 1, "cells": "nope"}, {"seq": 1, "cells": [1, 2, 3]},
-                {"seq": True, "cells": []},
-                {"seq": 1, "cells": [{"cell_type": "code", "source": 123}]},
-                {"seq": 1, "cells": [{"cell_type": "code", "source": None}]},
-                {"seq": 1, "cells": [{"cell_type": "code", "source": True}]},
-                {"seq": 1, "cells": [{"cell_type": "code", "source": {}}]}):
+    for bad in (
+        None,
+        42,
+        "cells",
+        {},
+        {"seq": "x", "cells": []},
+        {"seq": 1, "cells": "nope"},
+        {"seq": 1, "cells": [1, 2, 3]},
+        {"seq": True, "cells": []},
+        {"seq": 1, "cells": [{"cell_type": "code", "source": 123}]},
+        {"seq": 1, "cells": [{"cell_type": "code", "source": None}]},
+        {"seq": 1, "cells": [{"cell_type": "code", "source": True}]},
+        {"seq": 1, "cells": [{"cell_type": "code", "source": {}}]},
+    ):
         handle_message(bad)
     assert latest_cells() is None
 
@@ -116,10 +124,14 @@ def test_reset_clears_the_store():
 
 def _write_notebook(path, source: str) -> None:
     path.write_text(
-        json.dumps({
-            "cells": [{"cell_type": "code", "source": source}],
-            "metadata": {}, "nbformat": 4, "nbformat_minor": 5,
-        }),
+        json.dumps(
+            {
+                "cells": [{"cell_type": "code", "source": source}],
+                "metadata": {},
+                "nbformat": 4,
+                "nbformat_minor": 5,
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -132,7 +144,8 @@ def test_wiring_a_pushed_snapshot_is_served_instead_of_the_file(tmp_path):
     handle_message({"seq": 1, "cells": CELLS})
 
     assert sd.get_notebook_cells(str(nb_path)) == [
-        "THRESHOLD = 0.9", "y = THRESHOLD * 2",
+        "THRESHOLD = 0.9",
+        "y = THRESHOLD * 2",
     ]
 
 
@@ -203,9 +216,7 @@ class _FakeShell:
 def _open_comm(shell, data=None):
     """Drive one comm_open through the registered target, as ipykernel would."""
     comm = _FakeComm()
-    shell.kernel.comm_manager.targets[TARGET](
-        comm, {"content": {"data": {} if data is None else data}}
-    )
+    shell.kernel.comm_manager.targets[TARGET](comm, {"content": {"data": {} if data is None else data}})
     return comm
 
 
@@ -340,8 +351,8 @@ def test_a_retransmitted_snapshot_cannot_re_arm_itself_after_expiry():
     """
     handle_message({"seq": 4, "cells": CELLS})
     expire()
-    handle_message({"seq": 4, "cells": CELLS})       # duplicate
-    handle_message({"seq": 3, "cells": CELLS})       # late retry of an older one
+    handle_message({"seq": 4, "cells": CELLS})  # duplicate
+    handle_message({"seq": 3, "cells": CELLS})  # late retry of an older one
     assert latest_cells() is None
 
 
@@ -418,10 +429,10 @@ class _FakeEvents:
         self.registered = {name: [] for name in available_events}
 
     def register(self, event, fn):
-        self.registered[event].append(fn)   # KeyError on an unknown event, as IPython's does
+        self.registered[event].append(fn)  # KeyError on an unknown event, as IPython's does
 
     def unregister(self, event, fn):
-        self.registered[event].remove(fn)   # raises when absent, as IPython's does
+        self.registered[event].remove(fn)  # raises when absent, as IPython's does
 
     def trigger(self, event, *a):
         for fn in list(self.registered[event]):
@@ -437,7 +448,7 @@ def test_the_expiry_hook_is_registered_on_post_run_cell_and_retires_a_snapshot()
     assert shell.events.registered["post_run_cell"]
 
     handle_message({"seq": 1, "cells": CELLS})
-    shell.events.trigger("post_run_cell", None)      # IPython passes the result
+    shell.events.trigger("post_run_cell", None)  # IPython passes the result
     assert latest_cells() is None
 
 

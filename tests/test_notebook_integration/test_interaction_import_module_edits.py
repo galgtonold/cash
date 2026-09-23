@@ -14,10 +14,12 @@ class TestImportStatementEdits:
 
     def test_change_imported_function(self, nb_runner):
         """Change from one math function to another."""
-        nb_runner.create_notebook([
-            "from math import sqrt",
-            "result = sqrt(144)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from math import sqrt",
+                "result = sqrt(144)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 12.0" in nb_runner.get_output(2)
@@ -30,10 +32,12 @@ class TestImportStatementEdits:
 
     def test_add_import_use_it(self, nb_runner):
         """Add a new import and use it in existing cell."""
-        nb_runner.create_notebook([
-            "x = 100",
-            "result = x + 1\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 100",
+                "result = x + 1\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 101" in nb_runner.get_output(2)
@@ -46,19 +50,19 @@ class TestImportStatementEdits:
 
     def test_import_alias_change(self, nb_runner):
         """Change import alias."""
-        nb_runner.create_notebook([
-            "import json as j",
-            "data = j.dumps({'a': 1})\nprint(f'data = {data}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import json as j",
+                "data = j.dumps({'a': 1})\nprint(f'data = {data}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         output = nb_runner.get_output(2)
         assert "data = " in output
 
         # Change data being serialized
-        nb_runner.set_cell_source(
-            2, "data = j.dumps({'a': 1, 'b': 2})\nprint(f'data = {data}')"
-        )
+        nb_runner.set_cell_source(2, "data = j.dumps({'a': 1, 'b': 2})\nprint(f'data = {data}')")
         nb_runner.run_all()
         output = nb_runner.get_output(2)
         assert '"b": 2' in output or '"b":2' in output
@@ -69,11 +73,13 @@ class TestModuleReusePatterns:
 
     def test_use_module_in_two_cells_edit_one(self, nb_runner):
         """Import module, use in 2 cells, edit one."""
-        nb_runner.create_notebook([
-            "import math",
-            "a = math.floor(3.7)\nprint(f'a = {a}')",
-            "b = math.ceil(3.2)\nprint(f'b = {b}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import math",
+                "a = math.floor(3.7)\nprint(f'a = {a}')",
+                "b = math.ceil(3.2)\nprint(f'b = {b}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "a = 3" in nb_runner.get_output(2)
@@ -87,10 +93,12 @@ class TestModuleReusePatterns:
 
     def test_stdlib_to_custom_function(self, nb_runner):
         """Replace stdlib call with custom function."""
-        nb_runner.create_notebook([
-            "import math\ndef my_sqrt(x):\n    return math.sqrt(x)",
-            "result = my_sqrt(25)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import math\ndef my_sqrt(x):\n    return math.sqrt(x)",
+                "result = my_sqrt(25)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 5.0" in nb_runner.get_output(2)
@@ -109,11 +117,13 @@ class TestConditionalImportSwitching:
 
     def test_switch_between_json_modes(self, nb_runner):
         """Switch between json and string formatting."""
-        nb_runner.create_notebook([
-            "import json\nuse_json = True",
-            "data = {'key': 'value', 'num': 42}",
-            "if use_json:\n    output = json.dumps(data)\nelse:\n    output = str(data)\nprint(f'output = {output}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import json\nuse_json = True",
+                "data = {'key': 'value', 'num': 42}",
+                "if use_json:\n    output = json.dumps(data)\nelse:\n    output = str(data)\nprint(f'output = {output}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         output = nb_runner.get_output(3)

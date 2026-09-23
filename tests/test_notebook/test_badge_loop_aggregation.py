@@ -12,6 +12,7 @@ Before the ``view.iter_iterations`` seam, ``_item_total_time``,
 only and silently dropped nested savings, while ``_collect_iterations``
 and the body renderer descended into ``.nested`` — a drift bug.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -33,9 +34,7 @@ from cash.notebook.badge_renderer.view import (
 def _loop(code: str, *, time_s: float, saved_s: float, status: BadgeStatus) -> LoopStatement:
     return LoopStatement(
         base_code=code,
-        iterations=(
-            IterationRow(status=status, code=code, time_s=time_s, saved_time_s=saved_s),
-        ),
+        iterations=(IterationRow(status=status, code=code, time_s=time_s, saved_time_s=saved_s),),
     )
 
 
@@ -89,13 +88,15 @@ def test_the_loop_tip_counts_trips_not_statement_runs() -> None:
     from cash.notebook.badge_renderer.renderers.html import _for_loop_group_html
 
     def stmt(code, statuses):
-        return LoopStatement(base_code=code, iterations=tuple(
-            IterationRow(status=s, code=code, time_s=0.01, saved_time_s=0.1) for s in statuses))
+        return LoopStatement(
+            base_code=code,
+            iterations=tuple(IterationRow(status=s, code=code, time_s=0.01, saved_time_s=0.1) for s in statuses),
+        )
+
     R, C = BadgeStatus.RESTORED, BadgeStatus.COMPUTED
     loop = ForLoopGroup(
         loop_var_names=("mg",),
-        stmts=(stmt("sel = pick(mg)", (R, R, C)), stmt("n = count(sel)", (R, C, C)),
-               stmt("rows.append(n)", (R, R, C))),
+        stmts=(stmt("sel = pick(mg)", (R, R, C)), stmt("n = count(sel)", (R, C, C)), stmt("rows.append(n)", (R, R, C))),
         loop_header="for mg in [200, 400, 600]:",
     )
     html = _for_loop_group_html(loop, 1.0)

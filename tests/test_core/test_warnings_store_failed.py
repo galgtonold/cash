@@ -1,9 +1,8 @@
 """When backend.set() raises, emit CashCacheStoreFailedWarning."""
+
 from __future__ import annotations
 
 import warnings
-
-import pytest
 
 from cash import Cash, CashCacheStoreFailedWarning
 
@@ -28,6 +27,7 @@ class _BrokenBackend:
 
     def lock(self, key):
         from contextlib import nullcontext
+
         return nullcontext()
 
     def cleanup_expired(self, predicate):
@@ -48,7 +48,7 @@ def test_store_failure_emits_store_failed_warning():
         warnings.simplefilter("always")
         result = f(5)
         f(6)  # second call with different arg — store fails again,
-              # but this is keyed (func, '') so dedup → no second warn
+        # but this is keyed (func, '') so dedup → no second warn
 
     assert result == 15  # compute still succeeds
     store_failed = [w for w in captured if issubclass(w.category, CashCacheStoreFailedWarning)]

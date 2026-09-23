@@ -1,18 +1,16 @@
 """Tests for the CashWarning hierarchy and _warn_once dedup."""
+
 from __future__ import annotations
 
 import threading
 import warnings
 
-import pytest
-
 from cash import (
     Cash,
-    CashWarning,
     CashCacheIneffectiveWarning,
     CashCacheStoreFailedWarning,
+    CashWarning,
 )
-
 
 # ``_warn_once`` takes a diagnostic code and a fix line as required keyword
 # arguments, and ``format_diagnostic`` rejects a code that is not registered --
@@ -74,11 +72,21 @@ def test_warn_once_default_stacklevel_attributes_to_caller(tmp_path):
         # Direct call from this test frame: stacklevel=1 → blames the
         # emit line in core.py (the line inside _warn_once).
         c._warn_once(
-            CashCacheIneffectiveWarning, "f", "X", "direct", stacklevel=1, **CODED,
+            CashCacheIneffectiveWarning,
+            "f",
+            "X",
+            "direct",
+            stacklevel=1,
+            **CODED,
         )
         # stacklevel=2 → blames this test's call line.
         c._warn_once(
-            CashCacheIneffectiveWarning, "g", "X", "from-test", stacklevel=2, **CODED,
+            CashCacheIneffectiveWarning,
+            "g",
+            "X",
+            "from-test",
+            stacklevel=2,
+            **CODED,
         )
 
     assert len(captured) == 2
@@ -90,6 +98,7 @@ def test_warn_once_default_stacklevel_attributes_to_caller(tmp_path):
 
 class _Unpicklable:
     """Holds a threading.Lock, which is not picklable."""
+
     def __init__(self):
         self._lock = threading.Lock()
 
@@ -157,8 +166,7 @@ def test_unpicklable_arg_warning_blames_user_call_site(tmp_path):
     assert len(ineffective) == 1
     # The warning should be attributed to this test file, NOT to cash/core.py.
     assert ineffective[0].filename.endswith("test_warnings_ineffective.py"), (
-        f"warning attributed to {ineffective[0].filename!r}; "
-        f"expected user call site in test_warnings_ineffective.py"
+        f"warning attributed to {ineffective[0].filename!r}; expected user call site in test_warnings_ineffective.py"
     )
 
 

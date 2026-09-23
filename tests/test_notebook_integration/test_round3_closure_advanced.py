@@ -1,6 +1,8 @@
 """Batch 90 – advanced closure, nonlocal, and scope edge cases."""
 
-import textwrap, pytest
+import textwrap
+
+import pytest
 
 pytestmark = [pytest.mark.stress, pytest.mark.integration]
 
@@ -10,8 +12,9 @@ class TestAdvancedClosures:
 
     def test_closure_memoize(self, nb_runner):
         """Closure-based memoization."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 def memoize(fn):
                     cache = {}
                     call_count = [0]
@@ -32,8 +35,9 @@ class TestAdvancedClosures:
                 result = fib(20)
                 cache_size = len(fib.cache)
             """),
-            "print(f'fib20={result} cache_size={cache_size}')",
-        ])
+                "print(f'fib20={result} cache_size={cache_size}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -42,8 +46,9 @@ class TestAdvancedClosures:
 
     def test_nonlocal_accumulator(self, nb_runner):
         """Accumulator using nonlocal with multiple operations."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 def make_accumulator():
                     history = []
                     total = 0
@@ -63,8 +68,9 @@ class TestAdvancedClosures:
                 final = add(15)
                 hist = get_hist()
             """),
-            "print(f'final={final}')\nprint(f'hist={hist}')",
-        ])
+                "print(f'final={final}')\nprint(f'hist={hist}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -74,8 +80,9 @@ class TestAdvancedClosures:
 
     def test_closure_chain(self, nb_runner):
         """Chain of closures composing functions."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 def compose(*funcs):
                     def composed(x):
                         result = x
@@ -91,8 +98,9 @@ class TestAdvancedClosures:
                 pipe = compose(square, double, add1)
                 results = [pipe(i) for i in range(5)]
             """),
-            "print(f'results={results}')",
-        ])
+                "print(f'results={results}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -103,9 +111,10 @@ class TestAdvancedClosures:
 
     def test_scope_global_local_interaction(self, nb_runner):
         """Global vs local scope interactions across cells."""
-        nb_runner.create_notebook([
-            "MULTIPLIER = 10",
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                "MULTIPLIER = 10",
+                textwrap.dedent("""\
                 def compute(x):
                     local_offset = 5
                     return x * MULTIPLIER + local_offset
@@ -113,8 +122,9 @@ class TestAdvancedClosures:
                 r1 = compute(3)
                 r2 = compute(7)
             """),
-            "print(f'r1={r1} r2={r2}')",
-        ])
+                "print(f'r1={r1} r2={r2}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(3)
@@ -123,9 +133,10 @@ class TestAdvancedClosures:
 
     def test_closure_propagation_memoize(self, nb_runner):
         """Memoized closure with upstream change propagation."""
-        nb_runner.create_notebook([
-            "scale = 2",
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                "scale = 2",
+                textwrap.dedent("""\
                 def make_scaler(s):
                     cache = {}
                     def scaled(x):
@@ -137,8 +148,9 @@ class TestAdvancedClosures:
                 scaler = make_scaler(scale)
                 vals = [scaler(i) for i in range(5)]
             """),
-            "print(f'vals={vals}')",
-        ])
+                "print(f'vals={vals}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "[0, 2, 4, 6, 8]" in nb_runner.get_output(3)

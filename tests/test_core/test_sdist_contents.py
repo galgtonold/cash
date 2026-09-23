@@ -12,6 +12,7 @@ archive. Every signal short of building the archive looked clean.
 
 So this test builds a real sdist and looks inside it.
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -56,7 +57,9 @@ def test_sdist_has_no_environment_or_build_junk(tmp_path):
 
     cp = subprocess.run(
         [sys.executable, "-m", "build", "--sdist", "--outdir", str(tmp_path)],
-        cwd=str(REPO_ROOT), capture_output=True, text=True,
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
     )
     assert cp.returncode == 0, f"sdist build failed:\n{cp.stdout[-3000:]}\n{cp.stderr[-3000:]}"
 
@@ -74,9 +77,7 @@ def test_sdist_has_no_environment_or_build_junk(tmp_path):
     )
 
     # Positive control: the exclusion must not have taken the package with it.
-    assert any("/src/cash/__init__.py" in n for n in names), (
-        "sdist does not contain the package itself"
-    )
+    assert any("/src/cash/__init__.py" in n for n in names), "sdist does not contain the package itself"
 
     # The sdist is MINIMAL: the package plus only the files needed to build it
     # (pyproject + the README/LICENSE the metadata references). Tests, docs,

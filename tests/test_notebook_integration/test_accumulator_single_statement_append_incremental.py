@@ -31,6 +31,7 @@ make the assertion vacuous, and compared against a cash-off oracle run with
 the IDENTICAL cell shape so a smaller count is provably cash's incremental
 reuse, not an artifact of the shape itself.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.loops]
@@ -44,12 +45,7 @@ def _n(path):
 
 
 def _compute_def(counter):
-    return (
-        "def compute(v):\n"
-        f"    open(r'{counter}', 'a').write('X')\n"
-        "    time.sleep(0.03)\n"
-        "    return v * 10"
-    )
+    return f"def compute(v):\n    open(r'{counter}', 'a').write('X')\n    time.sleep(0.03)\n    return v * 10"
 
 
 def _fast_path_cell(items):

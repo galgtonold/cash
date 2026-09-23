@@ -8,6 +8,7 @@ function (on a cold miss via the tracker parent-chain, and on a hit by replaying
 the dependency's recorded deps), so the outer entry invalidates too - regardless
 of the order the functions were first computed in.
 """
+
 from __future__ import annotations
 
 import time
@@ -38,7 +39,7 @@ def test_file_change_propagates_through_depends_on(tmp_path, compute_inner_first
     load, upper = _build(c, str(data))
 
     if compute_inner_first:
-        load()              # inner cached first -> inner is a HIT inside upper
+        load()  # inner cached first -> inner is a HIT inside upper
     assert upper() == "HELLO"
 
     time.sleep(0.02)
@@ -55,7 +56,7 @@ def test_outer_records_nested_file_dep(tmp_path):
     c = Cash(backend=FileBackend(cache_dir=str(tmp_path / "cache")))
     load, upper = _build(c, str(data))
 
-    upper()   # cold: nested load() reads the file
+    upper()  # cold: nested load() reads the file
     raw_meta, _ = c.backend.get(upper.explain().cache_key)
     recorded = (raw_meta or {}).get("auto_file_deps") or {}
     assert any(p.endswith("data.txt") for p in recorded), recorded

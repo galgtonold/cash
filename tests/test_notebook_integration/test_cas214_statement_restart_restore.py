@@ -14,6 +14,7 @@ Ground truth is an EXTERNAL counter appended from inside the loop body and read
 from outside the kernel. A print or a badge cannot witness this -- a cache hit
 restores prints, so the notebook looks identical either way.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.upstream, pytest.mark.timeout(300)]
@@ -30,19 +31,21 @@ def test_statement_cache_survives_a_kernel_restart(nb_runner, tmp_path):
     counter = tmp_path / "calls.log"
     cp = str(counter).replace("\\", "/")
 
-    nb_runner.create_notebook([
-        "import cash\n%cash_on",
-        (
-            "import time\n"
-            "def slow(i):\n"
-            "    time.sleep(0.01)\n"
-            f"    with open(r'{cp}', 'a') as fh:\n"
-            "        fh.write('X')\n"
-            "    return i * 2\n"
-            "result = [slow(i) for i in range(30)]\n"
-            "print('sum', sum(result))"
-        ),
-    ])
+    nb_runner.create_notebook(
+        [
+            "import cash\n%cash_on",
+            (
+                "import time\n"
+                "def slow(i):\n"
+                "    time.sleep(0.01)\n"
+                f"    with open(r'{cp}', 'a') as fh:\n"
+                "        fh.write('X')\n"
+                "    return i * 2\n"
+                "result = [slow(i) for i in range(30)]\n"
+                "print('sum', sum(result))"
+            ),
+        ]
+    )
     nb_runner.start_kernel()
 
     nb_runner.run_all()
@@ -53,8 +56,7 @@ def test_statement_cache_survives_a_kernel_restart(nb_runner, tmp_path):
     nb_runner.run_cell(2)
     warm = _calls(counter)
     assert warm == cold, (
-        f"warm re-run in the SAME session recomputed: {cold} -> {warm}. "
-        f"If this fails the bug is broader than CAS-214."
+        f"warm re-run in the SAME session recomputed: {cold} -> {warm}. If this fails the bug is broader than CAS-214."
     )
 
     # The real test: a kernel restart. cash is disabled by a restart, so the

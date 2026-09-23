@@ -10,6 +10,7 @@ producer -- resetting it. CAS-47's no-cache exclusion only covered the
 stale-value guard's self-write sets, not the pass-2 lineage mismatch. The fix
 drops no-cache-written vars from ``broken_vars`` before producer scheduling.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.upstream]
@@ -20,10 +21,12 @@ def _last(out: str) -> str:
 
 
 def test_nocache_inplace_mutation_advances(nb_runner):
-    nb_runner.create_notebook([
-        "log = []",
-        "# @cash: no-cache\nlog.append(len(log))\nprint(len(log))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "log = []",
+            "# @cash: no-cache\nlog.append(len(log))\nprint(len(log))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert _last(nb_runner.get_output(2)) == "1"
@@ -32,10 +35,12 @@ def test_nocache_inplace_mutation_advances(nb_runner):
 
 
 def test_nocache_reassignment_advances(nb_runner):
-    nb_runner.create_notebook([
-        "counter = 0",
-        "# @cash: no-cache\ncounter = counter + 1\nprint(counter)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "counter = 0",
+            "# @cash: no-cache\ncounter = counter + 1\nprint(counter)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert _last(nb_runner.get_output(2)) == "1"
@@ -46,10 +51,12 @@ def test_nocache_reassignment_advances(nb_runner):
 def test_cached_inplace_mutation_still_resets(nb_runner):
     """Control: WITHOUT no-cache, the run-from-start guarantee still resets the
     in-place mutation on an isolated re-run (the fix is scoped to no-cache)."""
-    nb_runner.create_notebook([
-        "log = []",
-        "log.append(len(log))\nprint(len(log))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "log = []",
+            "log.append(len(log))\nprint(len(log))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert _last(nb_runner.get_output(2)) == "1"

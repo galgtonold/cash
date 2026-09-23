@@ -21,6 +21,7 @@ independently: an edit that RESTORES the mtime afterwards satisfies it. See
 timestamp that closes it on POSIX, and the threshold knob that closes it
 anywhere.
 """
+
 from __future__ import annotations
 
 import os
@@ -40,15 +41,13 @@ pytestmark = pytest.mark.core
 # default (256 MiB): what is under test is the SAMPLED regime, which begins
 # wherever the threshold sits, and a 130 MiB fixture per test buys nothing.
 # ``test_sampled_file_freshness_backstops.py`` pins the default itself.
-_FULL_MAX = 1024 * 1024                    # 1 MiB
-_BIG = _FULL_MAX + 1024 * 1024             # 2 MiB -> sampled regime
+_FULL_MAX = 1024 * 1024  # 1 MiB
+_BIG = _FULL_MAX + 1024 * 1024  # 2 MiB -> sampled regime
 
 
 @pytest.fixture(autouse=True)
 def _sample_above_one_mib(monkeypatch):
-    monkeypatch.setattr(
-        file_dep_snapshot, "_full_hash_max_bytes", lambda: _FULL_MAX
-    )
+    monkeypatch.setattr(file_dep_snapshot, "_full_hash_max_bytes", lambda: _FULL_MAX)
 
 
 def _sampled_offsets(size: int) -> list[tuple[int, int]]:
@@ -126,6 +125,4 @@ def test_small_file_touch_still_hits(tmp_path):
     st = os.stat(f)
     os.utime(f, (st.st_atime + 100, st.st_mtime + 100))  # touch: mtime moves
     assert os.stat(f).st_size == st.st_size
-    assert file_dep_is_fresh(str(f), snap) == (True, None), (
-        "full-hashed touch must remain fresh (CAS-98)"
-    )
+    assert file_dep_is_fresh(str(f), snap) == (True, None), "full-hashed touch must remain fresh (CAS-98)"

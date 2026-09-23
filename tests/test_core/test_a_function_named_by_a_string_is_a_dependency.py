@@ -12,6 +12,7 @@ class was never analysed, and said nothing.
 Each case runs in fresh interpreters on one cache: the edit (``fun1`` returns 10
 -> 20) must recompute, and a run without an edit must hit.
 """
+
 from __future__ import annotations
 
 import os
@@ -25,7 +26,7 @@ pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
 
 HELPERS = "def fun1():\n    return {RET}\n"
 
-IN_FUNCTION = textwrap.dedent('''
+IN_FUNCTION = textwrap.dedent("""
     import sys, time
     import cash
     import helpers
@@ -37,9 +38,9 @@ IN_FUNCTION = textwrap.dedent('''
         return y + getattr(helpers, "fun1")()
 
     print(g(2))
-''')
+""")
 
-IN_ARGUMENT_METHOD = textwrap.dedent('''
+IN_ARGUMENT_METHOD = textwrap.dedent("""
     import sys, time
     import cash
     import helpers
@@ -58,9 +59,9 @@ IN_ARGUMENT_METHOD = textwrap.dedent('''
         return a.f(y)
 
     print(f(A(1), 2))
-''')
+""")
 
-SAME_MODULE_ARGUMENT_METHOD = textwrap.dedent('''
+SAME_MODULE_ARGUMENT_METHOD = textwrap.dedent("""
     import sys, time
     import cash
 
@@ -83,9 +84,9 @@ SAME_MODULE_ARGUMENT_METHOD = textwrap.dedent('''
         return a.f(y)
 
     print(f(A(1), 2))
-''')
+""")
 
-RUNTIME_NAME = textwrap.dedent('''
+RUNTIME_NAME = textwrap.dedent("""
     import sys, time
     import cash
 
@@ -108,7 +109,7 @@ RUNTIME_NAME = textwrap.dedent('''
         return a.f(y)
 
     print(f(A(1), 2))
-''')
+""")
 
 
 def _run(tmp_path, script, **fmt):
@@ -116,18 +117,22 @@ def _run(tmp_path, script, **fmt):
     # No .pyc: Python trusts one whose source has the same size and the same
     # whole-second mtime, and `return 10` -> `return 20` keeps the size, so an
     # edit landing in the previous run's second imported the old helpers.
-    env = dict(os.environ, CASH_CACHE_DIR=str(tmp_path / ".cash"), PYTHONWARNINGS="always",
-               PYTHONDONTWRITEBYTECODE="1")
-    proc = subprocess.run([sys.executable, "main.py"], cwd=tmp_path, env=env,
-                          capture_output=True, text=True, timeout=120)
+    env = dict(os.environ, CASH_CACHE_DIR=str(tmp_path / ".cash"), PYTHONWARNINGS="always", PYTHONDONTWRITEBYTECODE="1")
+    proc = subprocess.run(
+        [sys.executable, "main.py"], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120
+    )
     assert proc.returncode == 0, proc.stderr
     return proc.stdout.strip(), proc.stderr
 
 
-@pytest.mark.parametrize("script, base, edited", [
-    (IN_FUNCTION, "12", "22"),
-    (IN_ARGUMENT_METHOD, "13", "23"),
-], ids=["in_the_cached_function", "in_an_argument_method"])
+@pytest.mark.parametrize(
+    "script, base, edited",
+    [
+        (IN_FUNCTION, "12", "22"),
+        (IN_ARGUMENT_METHOD, "13", "23"),
+    ],
+    ids=["in_the_cached_function", "in_an_argument_method"],
+)
 def test_editing_a_function_named_by_a_constant_string_recomputes(tmp_path, script, base, edited):
     (tmp_path / "helpers.py").write_text(HELPERS.format(RET=10))
     out, err = _run(tmp_path, script)
@@ -163,7 +168,7 @@ def test_a_waiver_on_that_line_silences_it(tmp_path):
 # argument but held BY it (`A(1, B())`, `A.f` calling `self.b.f()`). The
 # argument's class was folded; what the instance held was not looked into, so
 # editing `B.f`, or `fun1`/`fun2` behind it, served the old result.
-NESTED = textwrap.dedent('''
+NESTED = textwrap.dedent("""
     import sys, time
     import cash
 
@@ -194,7 +199,7 @@ NESTED = textwrap.dedent('''
         return a.f(y)
 
     print(f(A(1, B()), 2))
-''')
+""")
 
 
 def _nested(**over):
@@ -203,11 +208,15 @@ def _nested(**over):
     return NESTED.replace("{F1}", fmt["F1"]).replace("{F2}", fmt["F2"]).replace("{B_EXTRA}", fmt["B_EXTRA"])
 
 
-@pytest.mark.parametrize("edit, want", [
-    ({"F2": "100"}, "104"),
-    ({"F1": "5"}, "98"),
-    ({"B_EXTRA": " + 1000"}, "1094"),
-], ids=["function_behind_the_held_object", "function_it_calls", "held_objects_method"])
+@pytest.mark.parametrize(
+    "edit, want",
+    [
+        ({"F2": "100"}, "104"),
+        ({"F1": "5"}, "98"),
+        ({"B_EXTRA": " + 1000"}, "1094"),
+    ],
+    ids=["function_behind_the_held_object", "function_it_calls", "held_objects_method"],
+)
 def test_code_of_an_object_the_argument_holds_is_a_dependency(tmp_path, edit, want):
     out, err = _run(tmp_path, _nested())
     assert out == "94" and "[RUN]" in err

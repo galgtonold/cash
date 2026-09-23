@@ -15,11 +15,13 @@ class TestSelectiveCellExecution:
     def test_run_only_first_and_last(self, nb_runner):
         """Run first cell, then jump to last cell (skip middle).
         Upstream should detect and re-execute middle cells."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "y = x * 2",
-            "z = y + 1\nprint(f'z = {z}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "y = x * 2",
+                "z = y + 1\nprint(f'z = {z}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_cell(1)
         # Skip cell 2, run cell 3 — upstream should ensure y exists
@@ -28,11 +30,13 @@ class TestSelectiveCellExecution:
 
     def test_run_cells_in_reverse(self, nb_runner):
         """Run cells in reverse order."""
-        nb_runner.create_notebook([
-            "a = 5",
-            "b = a + 1",
-            "c = b + 1\nprint(f'c = {c}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 5",
+                "b = a + 1",
+                "c = b + 1\nprint(f'c = {c}')",
+            ]
+        )
         nb_runner.start_kernel()
         # Run in reverse: cell 3 first (upstream should find and run 1, 2)
         nb_runner.run_cell(3)
@@ -40,11 +44,13 @@ class TestSelectiveCellExecution:
 
     def test_run_middle_only(self, nb_runner):
         """Run only a middle cell."""
-        nb_runner.create_notebook([
-            "x = 42",
-            "y = x * 2\nprint(f'y = {y}')",
-            "z = y + 1",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 42",
+                "y = x * 2\nprint(f'y = {y}')",
+                "z = y + 1",
+            ]
+        )
         nb_runner.start_kernel()
         # Run only cell 2 — upstream should ensure x exists
         nb_runner.run_cell(2)
@@ -56,10 +62,12 @@ class TestRerunAfterEdit:
 
     def test_edit_and_rerun_single(self, nb_runner):
         """Edit a cell, re-run only that cell."""
-        nb_runner.create_notebook([
-            "x = 1",
-            "y = x + 1\nprint(f'y = {y}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 1",
+                "y = x + 1\nprint(f'y = {y}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "y = 2" in nb_runner.get_output(2)
@@ -71,11 +79,13 @@ class TestRerunAfterEdit:
 
     def test_edit_middle_rerun_last(self, nb_runner):
         """Edit middle cell, re-run only last cell."""
-        nb_runner.create_notebook([
-            "a = 1",
-            "b = a + 1",
-            "c = b + 1\nprint(f'c = {c}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 1",
+                "b = a + 1",
+                "c = b + 1\nprint(f'c = {c}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "c = 3" in nb_runner.get_output(3)
@@ -90,11 +100,13 @@ class TestPartialExecution:
 
     def test_run_first_three_then_add_fourth(self, nb_runner):
         """Run first 3 cells, then add and run a 4th."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "y = x * 2",
-            "z = y + 5",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "y = x * 2",
+                "z = y + 5",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_cells([1, 2, 3])
 
@@ -105,12 +117,14 @@ class TestPartialExecution:
 
     def test_run_subset_edit_run_rest(self, nb_runner):
         """Run subset, edit, run remaining."""
-        nb_runner.create_notebook([
-            "a = 5",
-            "b = a + 1",
-            "c = b * 2",
-            "d = c + 3\nprint(f'd = {d}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 5",
+                "b = a + 1",
+                "c = b * 2",
+                "d = c + 3\nprint(f'd = {d}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_cells([1, 2])
 
@@ -126,10 +140,12 @@ class TestRepeatExecution:
 
     def test_run_same_cell_twice(self, nb_runner):
         """Run the same cell twice — idempotent result."""
-        nb_runner.create_notebook([
-            "x = 42",
-            "result = x * 2\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 42",
+                "result = x * 2\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 84" in nb_runner.get_output(2)
@@ -140,11 +156,13 @@ class TestRepeatExecution:
 
     def test_run_all_twice(self, nb_runner):
         """Run all cells twice — should be idempotent."""
-        nb_runner.create_notebook([
-            "a = 1",
-            "b = a + 1",
-            "c = b + 1\nprint(f'c = {c}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 1",
+                "b = a + 1",
+                "c = b + 1\nprint(f'c = {c}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "c = 3" in nb_runner.get_output(3)

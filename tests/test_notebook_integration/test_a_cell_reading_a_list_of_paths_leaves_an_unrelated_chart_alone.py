@@ -8,6 +8,7 @@ cell below it, ``TF = [Path('other.csv')]`` and
 neither the chart nor anything drawn from it; its read went through a list, so
 what it read was "unknown", and an unknown read cannot rule the chart out.
 """
+
 import pytest
 
 pytest.importorskip("pandas")
@@ -20,13 +21,15 @@ pytestmark = [pytest.mark.integration, pytest.mark.upstream, pytest.mark.timeout
 def test_the_chart_is_not_redrawn(nb_runner, tmp_path, spelling):
     folder = tmp_path.as_posix()
     import pandas as pd
+
     pd.DataFrame({"g": [i % 5 for i in range(200)], "v": range(200)}).to_csv(tmp_path / "data.csv", index=False)
     pd.DataFrame({"g": range(5), "t": range(5)}).to_csv(tmp_path / "other.csv", index=False)
     chart = tmp_path / "report" / "chart.png"
 
     read_cell = (f"TF = [Path(r'{folder}/other.csv')]\n" if spelling == "same_cell" else "") + (
         "t = pd.concat([pd.read_csv(f) for f in TF])\n"
-        "attain = total.to_frame('m').join(t.set_index('g'))\nprint('ROWS', len(attain))")
+        "attain = total.to_frame('m').join(t.set_index('g'))\nprint('ROWS', len(attain))"
+    )
     cells = [
         "import cash\n%cash_on\n%cash_badge print\nimport pandas as pd\nfrom pathlib import Path\n"
         "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt",
@@ -52,4 +55,5 @@ def test_the_chart_is_not_redrawn(nb_runner, tmp_path, spelling):
     nb_runner.run_cell(7)
     assert "ROWS 5" in nb_runner.get_output(7), nb_runner.get_raw_output(7)
     assert chart.stat().st_mtime_ns == drawn, (
-        "a cell that reads other.csv re-drew the chart:\n" + nb_runner.get_raw_output(7))
+        "a cell that reads other.csv re-drew the chart:\n" + nb_runner.get_raw_output(7)
+    )

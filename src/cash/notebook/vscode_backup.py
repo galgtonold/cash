@@ -23,6 +23,7 @@ This is an undocumented internal of another product and can change in any VS
 Code release. Everything here degrades to ``None`` rather than raising, and the
 caller falls through to reading the file as it always has.
 """
+
 from __future__ import annotations
 
 import json
@@ -73,12 +74,12 @@ def parse_backup(path: Path) -> tuple[str, dict, dict] | None:
     newline = text.find("\n")
     if newline == -1:
         return None
-    header_line, body = text[:newline], text[newline + 1:]
+    header_line, body = text[:newline], text[newline + 1 :]
 
     space = header_line.find(" ")
     if space == -1:
         return None
-    uri, header_json = header_line[:space], header_line[space + 1:]
+    uri, header_json = header_line[:space], header_line[space + 1 :]
 
     try:
         meta = json.loads(header_json)
@@ -204,9 +205,9 @@ _MTIME_TOLERANCE_MS = 2000
 # Mirrors server_discovery's save-settle constants, for the same reason: read a
 # file that is still being written and you get a partial parse. VS Code's
 # backup debounce measured ~1s trailing-edge, so the window is the same size.
-_FRESH_WINDOW_S: float = 1.5     # only wait when the backup changed this recently
-_POLL_INTERVAL_S: float = 0.05   # re-stat cadence while a write is in flight
-_MAX_WAIT_S: float = 1.5         # hard cap so we never block a run for long
+_FRESH_WINDOW_S: float = 1.5  # only wait when the backup changed this recently
+_POLL_INTERVAL_S: float = 0.05  # re-stat cadence while a write is in flight
+_MAX_WAIT_S: float = 1.5  # hard cap so we never block a run for long
 
 
 def _wait_for_backup_settle(path: Path) -> None:

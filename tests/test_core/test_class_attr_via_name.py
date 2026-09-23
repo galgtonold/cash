@@ -10,6 +10,7 @@ Cross-process (the stale serve only shows after a second process rebuilds the
 key); ``time.sleep(0.3)`` clears the persistence floor; ``.cash`` is never
 cleared, or the test is vacuous.
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -22,8 +23,10 @@ pytestmark = pytest.mark.slow
 
 def _run(tmp_path):
     cp = subprocess.run(
-        [sys.executable, "main.py"], cwd=str(tmp_path),
-        capture_output=True, text=True,
+        [sys.executable, "main.py"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
     )
     assert cp.returncode == 0, f"failed:\n{cp.stdout}\n{cp.stderr}"
     return cp.stdout.strip().splitlines()[-1].split("R ", 1)[1].strip()
@@ -60,10 +63,13 @@ print("R", Model(100).compute(0))
 """
 
 
-@pytest.mark.parametrize("template,k1,r1,k2,r2", [
-    (FREE_FN, "0", "100", "250", "350"),
-    (METHOD_TYPE_SELF, "0", "100", "777", "877"),
-])
+@pytest.mark.parametrize(
+    "template,k1,r1,k2,r2",
+    [
+        (FREE_FN, "0", "100", "250", "350"),
+        (METHOD_TYPE_SELF, "0", "100", "777", "877"),
+    ],
+)
 def test_class_attr_via_name_invalidates(tmp_path, template, k1, r1, k2, r2):
     main = tmp_path / "main.py"
     main.write_text(template.format(k=k1), encoding="utf-8")

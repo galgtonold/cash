@@ -18,6 +18,7 @@ discarded. ``test_a_failed_write_is_still_remembered`` is the arm that stops a
 future cleanup from restoring the older bug where a failed write vanished
 without a trace.
 """
+
 from __future__ import annotations
 
 import threading
@@ -68,6 +69,7 @@ def test_in_flight_writes_are_still_tracked(writes):
 @pytest.mark.expects_failed_writes
 def test_a_failed_write_is_still_remembered(writes):
     """Failures are the reason `_pending` cannot simply be cleared on completion."""
+
     def boom():
         raise OSError("disk full")
 
@@ -88,7 +90,7 @@ def test_waiting_on_a_finished_key_is_a_no_op(writes):
     """`wait(key)` must not care that the future has been forgotten."""
     writes.submit("done", lambda: None)
     writes.wait_all()
-    writes.wait("done")          # must not raise or block
+    writes.wait("done")  # must not raise or block
 
 
 def test_resubmitting_a_forgotten_key_still_orders_correctly(writes):
@@ -112,9 +114,7 @@ def test_the_registry_does_not_grow_across_many_keys(writes):
         for i in range(200):
             writes.submit(f"b{batch}_k{i}", lambda: None)
         writes.wait_all()
-        assert len(writes._pending) == 0, (
-            f"after batch {batch} the registry holds {len(writes._pending)}"
-        )
+        assert len(writes._pending) == 0, f"after batch {batch} the registry holds {len(writes._pending)}"
 
 
 def test_has_pending_sees_an_in_flight_write(writes):
@@ -147,6 +147,7 @@ def test_a_failed_write_does_not_read_as_pending(writes):
     Counting one as pending would make its key permanently unevictable, so the
     cache could never get back under its cap after a single failed write.
     """
+
     def boom():
         raise OSError("disk full")
 

@@ -27,6 +27,7 @@ without any judgement call, which is why it is worth automating.
 
 Exit code is 0 when EVERY selected test failed without the fix.
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -60,9 +61,10 @@ def main() -> int:
     restored = False
     try:
         proc = subprocess.run(
-            [sys.executable, "-m", "pytest", *targets,
-             "-n0", "-p", "no:randomly", "-q", "--tb=no"],
-            cwd=str(REPO), capture_output=True, text=True,
+            [sys.executable, "-m", "pytest", *targets, "-n0", "-p", "no:randomly", "-q", "--tb=no"],
+            cwd=str(REPO),
+            capture_output=True,
+            text=True,
         )
         out = proc.stdout
     finally:
@@ -70,8 +72,7 @@ def main() -> int:
         # including one where pytest itself raised. No `return` here -- that
         # would swallow the exception that brought us in.
         restored = _git("stash", "pop", "--quiet").returncode == 0
-        print("Restored src/." if restored
-              else "!! FAILED TO RESTORE src/ -- run `git stash pop` yourself !!")
+        print("Restored src/." if restored else "!! FAILED TO RESTORE src/ -- run `git stash pop` yourself !!")
 
     if not restored:
         return 2

@@ -8,6 +8,7 @@ cash "deliberately reports it rather than raising it into your code", and
 ``cache_info()['warnings']`` is documented as the way to discover silent
 misbehaviour after the fact.
 """
+
 from __future__ import annotations
 
 import threading
@@ -24,7 +25,7 @@ from cash.exceptions import CashCacheStoreFailedWarning
 def _unpicklable_maker(cash):
     @cash.cache
     def make_lock(n):
-        time.sleep(0.3)      # past the persistence floor: the disk tier is asked
+        time.sleep(0.3)  # past the persistence floor: the disk tier is asked
         return {"n": n, "lock": threading.Lock()}
 
     return make_lock
@@ -33,8 +34,11 @@ def _unpicklable_maker(cash):
 @pytest.mark.parametrize("kind", ["tiered", "file"])
 def test_an_unstorable_result_is_reported(tmp_path, kind):
     cache_dir = str(tmp_path / kind)
-    cash = (Cash(cache_dir=cache_dir, register_magic=False) if kind == "tiered"
-            else Cash(backend=FileBackend(cache_dir=cache_dir), register_magic=False))
+    cash = (
+        Cash(cache_dir=cache_dir, register_magic=False)
+        if kind == "tiered"
+        else Cash(backend=FileBackend(cache_dir=cache_dir), register_magic=False)
+    )
     make_lock = _unpicklable_maker(cash)
 
     with warnings.catch_warnings(record=True) as seen:

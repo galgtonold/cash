@@ -26,6 +26,7 @@ reported, explicitly as an unverified upper bound. These tests pin:
 * where the re-measured baseline is *cheaper* than the cache's, the cheaper —
   defensible — number is the one credited.
 """
+
 from __future__ import annotations
 
 import json
@@ -79,8 +80,14 @@ def _replay_retail_etl(magics) -> None:
     """
     for i in range(3):
         magics._update_session_stats(
-            [{"status": CacheStatus.RESTORED, "saved_time": 25.0,
-              "execution_time": 0.0, "code": f"df{i} = pd.read_csv(f{i})"}],
+            [
+                {
+                    "status": CacheStatus.RESTORED,
+                    "saved_time": 25.0,
+                    "execution_time": 0.0,
+                    "code": f"df{i} = pd.read_csv(f{i})",
+                }
+            ],
             cell_total_time=8.0,
         )
 
@@ -109,8 +116,7 @@ class TestStaleBaselineCannotPrintAWin:
         # A pathological stale baseline: an hour of "saving" credited from cache
         # metadata, on a cell that cost 5s of real wall time and verified nothing.
         magics._update_session_stats(
-            [{"status": CacheStatus.RESTORED, "saved_time": 3600.0,
-              "execution_time": 0.0, "code": "huge = load()"}],
+            [{"status": CacheStatus.RESTORED, "saved_time": 3600.0, "execution_time": 0.0, "code": "huge = load()"}],
             cell_total_time=5.0,
         )
         data = _stats_json(magics, capsys)
@@ -151,8 +157,7 @@ class TestVerifiedSavingsStillRead:
         )
         # ... and re-running the cell restores it in 0.2s.
         magics._update_session_stats(
-            [{"status": CacheStatus.RESTORED, "saved_time": 30.0,
-              "execution_time": 0.0, "code": "model = fit(X)"}],
+            [{"status": CacheStatus.RESTORED, "saved_time": 30.0, "execution_time": 0.0, "code": "model = fit(X)"}],
             cell_total_time=0.2,
         )
         data = _stats_json(magics, capsys)
@@ -168,8 +173,7 @@ class TestVerifiedSavingsStillRead:
             cell_total_time=30.2,
         )
         magics._update_session_stats(
-            [{"status": CacheStatus.RESTORED, "saved_time": 30.0,
-              "execution_time": 0.0, "code": "model = fit(X)"}],
+            [{"status": CacheStatus.RESTORED, "saved_time": 30.0, "execution_time": 0.0, "code": "model = fit(X)"}],
             cell_total_time=0.2,
         )
         capsys.readouterr()
@@ -190,8 +194,14 @@ class TestVerifiedSavingsStillRead:
             cell_total_time=6.1,
         )
         magics._update_session_stats(
-            [{"status": CacheStatus.RESTORED, "saved_time": 25.0,
-              "execution_time": 0.0, "code": "df = pd.read_csv(p)"}],
+            [
+                {
+                    "status": CacheStatus.RESTORED,
+                    "saved_time": 25.0,
+                    "execution_time": 0.0,
+                    "code": "df = pd.read_csv(p)",
+                }
+            ],
             cell_total_time=8.0,
         )
         data = _stats_json(magics, capsys)
@@ -216,7 +226,7 @@ class TestVerificationFiresOnTheRealPipeline:
 
     def test_compute_then_restore_credits_a_verified_saving(self, magics_fixture):
         magics, shell, _backend = magics_fixture
-        magics._badge_mode = 'off'
+        magics._badge_mode = "off"
         # A statement expensive enough to clear the 10ms cache floor, with no
         # import (imports are cheap and separately cached).
         cell = "slow = sum(i * i for i in range(2_000_000))"
@@ -225,9 +235,7 @@ class TestVerificationFiresOnTheRealPipeline:
         stats = magics._session.stats
         assert stats["statements_computed"] == 1
         # The baseline was measured HERE, keyed by the statement source.
-        assert magics._session.measured_compute, (
-            "no baseline recorded for a COMPUTED statement"
-        )
+        assert magics._session.measured_compute, "no baseline recorded for a COMPUTED statement"
 
         magics.cash("", cell)
         assert stats["statements_restored"] == 1, "second run did not hit the cache"
@@ -238,7 +246,7 @@ class TestVerificationFiresOnTheRealPipeline:
 
     def test_stats_reset_forgets_the_measured_baselines(self, magics_fixture, capsys):
         magics, _shell, _backend = magics_fixture
-        magics._badge_mode = 'off'
+        magics._badge_mode = "off"
         magics.cash("", "slow2 = sum(i * i for i in range(2_000_000))")
         assert magics._session.measured_compute
 
@@ -284,10 +292,13 @@ class TestUpstreamComputeIsNotOverhead:
         # not the 41s.
         magics._update_session_stats(
             [
-                {"status": CacheStatus.COMPUTED, "execution_time": 40.0,
-                 "is_upstream": True, "code": "df = etl()"},
-                {"status": CacheStatus.COMPUTED, "execution_time": 0.01,
-                 "is_upstream": False, "code": "print(df.shape)"},
+                {"status": CacheStatus.COMPUTED, "execution_time": 40.0, "is_upstream": True, "code": "df = etl()"},
+                {
+                    "status": CacheStatus.COMPUTED,
+                    "execution_time": 0.01,
+                    "is_upstream": False,
+                    "code": "print(df.shape)",
+                },
             ],
             cell_total_time=41.0,
         )

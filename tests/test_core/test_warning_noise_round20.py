@@ -13,6 +13,7 @@
 
 Each has a control that must still warn.
 """
+
 from __future__ import annotations
 
 import csv
@@ -45,6 +46,7 @@ def _ambient(fn):
 
 
 # -- local accumulators --------------------------------------------------------
+
 
 def sessionize(events):
     by_user = defaultdict(list)
@@ -108,13 +110,15 @@ def parse_users(path):
     return users
 
 
-@pytest.mark.parametrize("fn", [sessionize, station_stats, latency_percentiles, latency_by_path_sorted,
-                                parse_orders, parse_users])
+@pytest.mark.parametrize(
+    "fn", [sessionize, station_stats, latency_percentiles, latency_by_path_sorted, parse_orders, parse_users]
+)
 def test_a_local_accumulator_is_not_a_side_effect(fn):
     assert _effects(fn) == [], _effects(fn)
 
 
 # Controls: the same shapes reaching the CALLER's objects.
+
 
 def element_holds_an_argument(rows):
     d = {"a": rows}
@@ -141,13 +145,16 @@ def rows_of_a_list_argument(rows):
     return rows
 
 
-@pytest.mark.parametrize("fn", [element_holds_an_argument, sorts_elements_of_an_argument,
-                                accumulates_into_an_argument, rows_of_a_list_argument])
+@pytest.mark.parametrize(
+    "fn",
+    [element_holds_an_argument, sorts_elements_of_an_argument, accumulates_into_an_argument, rows_of_a_list_argument],
+)
 def test_the_same_shapes_on_the_callers_objects_still_warn(fn):
     assert _effects(fn), f"{fn.__name__} mutates the caller's data and was not reported"
 
 
 # -- log lines -------------------------------------------------------------------
+
 
 def _log(msg):
     print(msg, file=sys.stderr)
@@ -176,6 +183,7 @@ def test_a_print_to_stdout_is_still_reported():
 
 
 # -- a timing helper -------------------------------------------------------------
+
 
 def mark(name):
     print(f"@@RUN {name}", file=sys.stderr, flush=True)
@@ -215,6 +223,7 @@ def test_the_clock_helper_is_still_part_of_the_key():
 
 # -- a test's fake behind autospec ----------------------------------------------
 
+
 def _lookup(x):
     return x + 1
 
@@ -242,8 +251,9 @@ def test_an_autospec_fakes_side_effect_is_not_analysed_as_production_code(tmp_pa
 
 # -- where a pool's warning points ---------------------------------------------
 
+
 def announces(x):
-    print("computing", x)       # stdout: a static finding
+    print("computing", x)  # stdout: a static finding
     return x
 
 
@@ -268,6 +278,7 @@ def test_a_warning_from_a_pool_thread_names_the_users_file(tmp_path):
 
 # -- once per version, not once per process -----------------------------------
 
+
 def reports_to_stdout(x):
     print("row", x)
     return x
@@ -281,6 +292,7 @@ def also_reports_to_stdout(x):
 
 def _impure_shown(c, fn, arg):
     import warnings
+
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
         c.cache(fn)(arg)
@@ -290,10 +302,11 @@ def _impure_shown(c, fn, arg):
 def test_a_static_finding_is_shown_once_per_cache_not_every_run(tmp_path):
     """r20s1: 32 warning lines in a nightly job's log, every night."""
     from cash import Cash
+
     first = Cash(cache_dir=str(tmp_path / "c"))
     assert _impure_shown(first, reports_to_stdout, 1)
-    first.shutdown()                                   # the end of that run
-    later = Cash(cache_dir=str(tmp_path / "c"))        # the next run
+    first.shutdown()  # the end of that run
+    later = Cash(cache_dir=str(tmp_path / "c"))  # the next run
     assert not _impure_shown(later, reports_to_stdout, 2)
     logged = later._func_warnings.get(f"{__name__}.reports_to_stdout") or []
     assert any(e.get("code") == "IMPURE-SIDE-EFFECTS" for e in logged), logged
@@ -302,6 +315,7 @@ def test_a_static_finding_is_shown_once_per_cache_not_every_run(tmp_path):
 def test_a_different_finding_is_shown_again(tmp_path):
     """Control: new findings are new text, and new text is shown."""
     from cash import Cash
+
     first = Cash(cache_dir=str(tmp_path / "c"))
     assert _impure_shown(first, reports_to_stdout, 1)
     first.shutdown()
@@ -312,6 +326,7 @@ def test_a_different_finding_is_shown_again(tmp_path):
 # freezegun is not a dependency; these stand-ins do the two things it does that
 # reached cash: `time.perf_counter` replaced by a frozen function, and dates
 # made under the freeze being instances of `freezegun.api.FakeDate`.
+
 
 def slow_report(when):
     time.sleep(0.25)  # @cash:assume-safe
@@ -358,13 +373,17 @@ def test_a_fake_date_is_keyed_as_the_date(tmp_path, monkeypatch):
 
 # -- sqlite ----------------------------------------------------------------------
 
+
 def rate(con: sqlite3.Connection, key):
     return con.execute("SELECT v FROM rates WHERE k = ?", (key,)).fetchone()[0]
 
 
 def rate_with_cte(con, key):
-    return con.execute("""
-        WITH r AS (SELECT k, v FROM rates) SELECT v FROM r WHERE k = ?""", (key,)).fetchall()
+    return con.execute(
+        """
+        WITH r AS (SELECT k, v FROM rates) SELECT v FROM r WHERE k = ?""",
+        (key,),
+    ).fetchall()
 
 
 def record_rate(con, key, value):

@@ -29,15 +29,13 @@ FileNotFoundError, equally outside that list, and it needs no uninstalled
 package. The first run succeeds, so the notebook gets into the state that
 matters: a block cash believes it can re-run, which then cannot run.
 """
-PIN = ("cash.configure(call_cost_floor_seconds=0.0, "
-       "min_execution_time_to_cache_seconds=0.0)\n")
+
+PIN = "cash.configure(call_cost_floor_seconds=0.0, min_execution_time_to_cache_seconds=0.0)\n"
 SETUP = "import cash\n%load_ext cash\n%cash_badge print\n" + PIN + "%cash_on"
 
 CELLS = [
     SETUP,
-    "from pathlib import Path\n"
-    "Path('side.txt').write_text('hello there')\n"
-    "base = sum(i*i for i in range(1_500_000))",
+    "from pathlib import Path\nPath('side.txt').write_text('hello there')\nbase = sum(i*i for i in range(1_500_000))",
     "with open('side.txt') as fh:\n    contents = fh.read()\nloaded = len(contents)",
     "answer = base + loaded\nprint('ANSWER', answer)",
 ]
@@ -45,10 +43,7 @@ CELLS = [
 # The edit that forces the rebuild AND takes the file away, so replaying the
 # block above raises where it succeeded before.
 REMOVES_THE_FILE = (
-    "from pathlib import Path\n"
-    "import os\n"
-    "os.remove('side.txt')\n"
-    "base = sum(i*i for i in range(1_500_001))"
+    "from pathlib import Path\nimport os\nos.remove('side.txt')\nbase = sum(i*i for i in range(1_500_001))"
 )
 
 
@@ -66,15 +61,14 @@ def _rebuild(nb_runner) -> str:
     nb_runner.set_cell_source(2, REMOVES_THE_FILE)
     try:
         nb_runner.run_cells([4])
-    except Exception as exc:                       # noqa: BLE001 - the message is the point
+    except Exception as exc:  # noqa: BLE001 - the message is the point
         return f"{type(exc).__name__}: {exc}"
     return nb_runner.get_output(4)
 
 
 def test_a_block_that_cannot_be_replayed_is_not_called_a_cash_bug(nb_runner):
     told = _rebuild(nb_runner)
-    assert "NOTEBOOK-BAILOUT" not in told, (
-        f"cash blamed itself for a block it could not replay:{chr(10)}{told}")
+    assert "NOTEBOOK-BAILOUT" not in told, f"cash blamed itself for a block it could not replay:{chr(10)}{told}"
     assert "Nothing in your code caused this" not in told, told
 
 

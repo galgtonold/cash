@@ -24,6 +24,7 @@ them and must stay green.
 Measured as counted real executions, never wall clock -- a timing assertion
 would measure the machine under parallel load rather than the policy.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.loops]
@@ -47,11 +48,7 @@ UNRELATED = "unrelated = 1\n"
 # happening. Safe to leave set: prepare_for_test calls reset_session(), which
 # restores config defaults, so the pin cannot leak into the next warm-kernel
 # test.
-SETUP_PINNED_CEILING = (
-    "import cash\n"
-    "cash.configure(loop_split_max_iter_seconds=1.0)\n"
-    "%cash_on\n"
-)
+SETUP_PINNED_CEILING = "import cash\ncash.configure(loop_split_max_iter_seconds=1.0)\n%cash_on\n"
 
 # Under the single-unit threshold (n>=125 for a 1-statement body), so this
 # loop decomposes -- the band's shape.
@@ -134,10 +131,10 @@ def _why(work_dir):
     timing that decides the verdict in the first place.
     """
     import json
+
     store = work_dir / ".cash" / "_loop_split.json"
     if not store.exists():
-        entries = list((work_dir / ".cash").glob("*.entry")) if (
-            work_dir / ".cash").exists() else []
+        entries = list((work_dir / ".cash").glob("*.entry")) if (work_dir / ".cash").exists() else []
         return f"no split verdict recorded; {len(entries)} cache entries on disk"
     try:
         return f"split store = {json.dumps(json.loads(store.read_text()))}"
@@ -170,7 +167,8 @@ def _seed_split_verdict(work_dir, loop_src, k=_K):
     cache_dir = work_dir / ".cash"
     cache_dir.mkdir(parents=True, exist_ok=True)
     (cache_dir / "_loop_split.json").write_text(
-        json.dumps({"version": 1, "splits": {source_hash: k}}), encoding="utf-8")
+        json.dumps({"version": 1, "splits": {source_hash: k}}), encoding="utf-8"
+    )
     return source_hash
 
 
@@ -202,10 +200,10 @@ def test_a_recorded_split_costs_only_its_head(nb_runner, tmp_path):
     cold = _n(counter)
     assert cold == _N, f"baseline did not run all {_N} items: {cold}"
 
-    nb_runner.run_cell(LOOP_CELL)          # splits; the tail is a cold miss
+    nb_runner.run_cell(LOOP_CELL)  # splits; the tail is a cold miss
     after_first_split = _n(counter)
 
-    nb_runner.run_cell(LOOP_CELL)          # the tail now hits
+    nb_runner.run_cell(LOOP_CELL)  # the tail now hits
     steady = _n(counter) - after_first_split
     assert steady <= _K, (
         f"a settled rerun re-ran {steady}/{_N} calls with a verdict already "
@@ -275,20 +273,16 @@ def test_the_split_preserves_the_value(nb_runner, tmp_path):
     """Head + tail must produce exactly what the undivided loop produced,
     including the leaked loop variable."""
     counter = tmp_path / "calls.log"
-    nb_runner.create_notebook(_cells(counter) + [
-        "print('SUM', sum(out), 'LAST', out[-1], 'T', t, 'LEN', len(out))"
-    ])
+    nb_runner.create_notebook(_cells(counter) + ["print('SUM', sum(out), 'LAST', out[-1], 'T', t, 'LEN', len(out))"])
     nb_runner.start_kernel()
     nb_runner.run_all()
     expected = nb_runner.get_output(6)
-    assert expected == (f"SUM {sum(range(1, _N + 1)) * 10} LAST {_N * 10} "
-                        f"T {_N} LEN {_N}"), expected
+    assert expected == (f"SUM {sum(range(1, _N + 1)) * 10} LAST {_N * 10} T {_N} LEN {_N}"), expected
 
     nb_runner.run_cell(LOOP_CELL)
     nb_runner.run_cell(6)
     assert nb_runner.get_output(6) == expected, (
-        f"the split changed the loop's result:\n  cold: {expected}\n"
-        f"  warm: {nb_runner.get_output(6)}"
+        f"the split changed the loop's result:\n  cold: {expected}\n  warm: {nb_runner.get_output(6)}"
     )
 
 
@@ -324,7 +318,7 @@ def test_an_expensive_body_is_never_split(nb_runner, tmp_path):
     """
     counter = tmp_path / "calls.log"
     n = 60
-    nb_runner.create_notebook(_cells(counter, n=n, ms=20.0))   # 20ms >> 3ms floor
+    nb_runner.create_notebook(_cells(counter, n=n, ms=20.0))  # 20ms >> 3ms floor
     nb_runner.start_kernel()
     nb_runner.run_all()
     cold = _n(counter)

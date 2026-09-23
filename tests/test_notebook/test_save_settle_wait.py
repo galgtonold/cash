@@ -15,6 +15,7 @@ Found while measuring the harness: that always-stable poll is ~51ms of dead
 time on the first cash read after every notebook write, which is most of the
 per-test fixed cost of a serial run.
 """
+
 from __future__ import annotations
 
 import os
@@ -57,8 +58,7 @@ def test_fresh_but_stable_file_returns_after_one_poll(nb, monkeypatch):
 
     sd._wait_for_notebook_save(str(nb))
 
-    assert slept == [sd._SAVE_POLL_INTERVAL_S], (
-        f"expected exactly one poll of a stable fresh file, got {slept}")
+    assert slept == [sd._SAVE_POLL_INTERVAL_S], f"expected exactly one poll of a stable fresh file, got {slept}"
 
 
 def test_waits_until_an_in_flight_write_stops_growing(nb, monkeypatch):
@@ -75,7 +75,7 @@ def test_waits_until_an_in_flight_write_stops_growing(nb, monkeypatch):
         calls["n"] += 1
         if calls["n"] <= stop_growing_after:
             with open(nb, "a", encoding="utf-8") as f:
-                f.write(" ")   # size changes -> writer still in flight
+                f.write(" ")  # size changes -> writer still in flight
             real_sleep(0.001)  # let the mtime actually move
 
     monkeypatch.setattr(sd._time, "sleep", fake_sleep)
@@ -84,8 +84,8 @@ def test_waits_until_an_in_flight_write_stops_growing(nb, monkeypatch):
 
     # One poll per growth step, plus the final poll that observed no change.
     assert calls["n"] == stop_growing_after + 1, (
-        f"returned after {calls['n']} polls while the file was still being "
-        f"written (expected {stop_growing_after + 1})")
+        f"returned after {calls['n']} polls while the file was still being written (expected {stop_growing_after + 1})"
+    )
 
 
 def test_wait_is_bounded_when_the_writer_never_stops(nb, monkeypatch):

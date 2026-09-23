@@ -16,6 +16,7 @@ whichever library did it -- pandas, matplotlib and pathlib all open through
 ``io.open``. Writes a C extension makes without Python's ``open`` are not
 seen; their writer keeps no provenance and is re-fired as before.
 """
+
 from __future__ import annotations
 
 import contextvars
@@ -30,8 +31,7 @@ _WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_TRUNC
 
 #: The collectors of the blocks being observed, innermost last. A statement
 #: inside a loop is recorded for both.
-_active: contextvars.ContextVar[tuple[set[str], ...]] = contextvars.ContextVar(
-    "cash_write_observers", default=())
+_active: contextvars.ContextVar[tuple[set[str], ...]] = contextvars.ContextVar("cash_write_observers", default=())
 _installed = False
 
 

@@ -11,9 +11,11 @@ from disk while the kernel is still alive — rather than asserting a downstream
 symptom. A restart test can pass for the wrong reason (writes happening to win
 the race against process death), which is precisely how this went unnoticed.
 """
+
 import os
 
 import pytest
+
 from cash.backends.entry_format import ENTRY_SUFFIX
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
@@ -22,8 +24,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
 def _chain_cells(cache_dir: str):
     cdir = cache_dir.replace("\\", "/")
     return [
-        "import cash\nfrom cash import Cash, FileBackend\n"
-        f"c = Cash(backend=FileBackend(cache_dir='{cdir}'))",
+        f"import cash\nfrom cash import Cash, FileBackend\nc = Cash(backend=FileBackend(cache_dir='{cdir}'))",
         "import time\n"
         "def base(x):\n    return x + 1\n"
         "@c.cache\n"
@@ -34,8 +35,7 @@ def _chain_cells(cache_dir: str):
         "def mid(x):\n    return load(x) + 10\n"
         "@c.cache(depends_on=[mid])\n"
         "def top(x):\n    return mid(x) + 100",
-        "vals = [top(s) for s in (1, 2, 3)]\n"
-        "print(f'RESULT vals={vals}')",
+        "vals = [top(s) for s in (1, 2, 3)]\nprint(f'RESULT vals={vals}')",
     ]
 
 

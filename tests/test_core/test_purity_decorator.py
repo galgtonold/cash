@@ -4,6 +4,7 @@ The suite-wide conftest filter silences CashImpurityWarning by
 default (the counter pattern is everywhere). These tests opt back
 in explicitly to assert on warning behavior.
 """
+
 from __future__ import annotations
 
 import warnings
@@ -15,7 +16,6 @@ from cash import (
     CashImpureFunctionError,
     CashImpurityWarning,
 )
-
 
 # Tests in this file want to see CashImpurityWarning — override the
 # suite-wide filter that hides it.
@@ -42,6 +42,7 @@ def test_impure_function_warns_default(tmp_path):
     @c.cache
     def f(url):
         import requests
+
         return requests.post(url, json={"x": 1})
 
     with warnings.catch_warnings(record=True) as captured:
@@ -66,6 +67,7 @@ def test_impure_function_silenced_by_assume_safe(tmp_path):
     @c.cache(assume_safe=True)
     def f(url):
         import requests
+
         return requests.post(url, json={"x": 1})
 
     with warnings.catch_warnings(record=True) as captured:
@@ -85,6 +87,7 @@ def test_strict_mode_raises_on_first_call(tmp_path):
     @c.cache(strict=True)
     def f(url):
         import requests
+
         return requests.post(url)
 
     with pytest.raises(CashImpureFunctionError) as exc_info:
@@ -108,6 +111,7 @@ def test_strict_and_assume_safe_are_mutually_exclusive(tmp_path):
     c = Cash(cache_dir=str(tmp_path), register_magic=False)
 
     with pytest.raises(ValueError, match="mutually exclusive"):
+
         @c.cache(strict=True, assume_safe=True)
         def f(x):
             return x
@@ -119,6 +123,7 @@ def test_warnings_appear_in_cache_info(tmp_path):
     @c.cache
     def f():
         import os
+
         os.system("echo hi")
         return 1
 
@@ -147,16 +152,20 @@ def test_helper_source_hash_invalidates_cache_across_instances(tmp_path):
     helper_module = pkg_root / "helpers.py"
     main_module = pkg_root / "main.py"
 
-    helper_module.write_text(textwrap.dedent("""
+    helper_module.write_text(
+        textwrap.dedent("""
         def double(x):
             return x * 2
-    """))
-    main_module.write_text(textwrap.dedent("""
+    """)
+    )
+    main_module.write_text(
+        textwrap.dedent("""
         from .helpers import double
 
         def compute(x):
             return double(x)
-    """))
+    """)
+    )
 
     sys.path.insert(0, str(tmp_path))
     try:
@@ -168,10 +177,12 @@ def test_helper_source_hash_invalidates_cache_across_instances(tmp_path):
         assert result_v1 == 10
 
         # Edit the helper.
-        helper_module.write_text(textwrap.dedent("""
+        helper_module.write_text(
+            textwrap.dedent("""
             def double(x):
                 return x * 3  # changed!
-        """))
+        """)
+        )
 
         # Fresh Cash instance + reload module so the changed helper is picked up.
         for mod_name in ("pkg.main", "pkg.helpers", "pkg"):
@@ -310,6 +321,7 @@ def test_warning_message_includes_line_numbers(tmp_path):
     @c.cache
     def f(url):
         import requests
+
         result = requests.post(url)
         return result
 

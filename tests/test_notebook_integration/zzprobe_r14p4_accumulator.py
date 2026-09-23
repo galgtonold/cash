@@ -29,6 +29,7 @@ for live kernel state (never a print -- a cache hit replays prints).
 
     python tests/test_notebook_integration/zzprobe_r14p4_accumulator.py
 """
+
 from __future__ import annotations
 
 import shutil
@@ -75,8 +76,7 @@ runner.create_notebook(cells(log))
 runner.start_kernel()
 try:
     runner.run_all()
-    print(f"cold          : log={n(log):3d} (expect {N_DAYS})  "
-          f"len(equity)={runner.peek('len(equity)')}")
+    print(f"cold          : log={n(log):3d} (expect {N_DAYS})  len(equity)={runner.peek('len(equity)')}")
 
     # --- P4 WRONG-2: edit an upstream cell, then jump to the loop cell -------
     runner.set_cell_source(3, f"days = list(range({N_DAYS + 5}))")
@@ -84,27 +84,26 @@ try:
     before = n(log)
     runner.run_cell(4)
     after = n(log)
-    print(f"after upstream edit + loop rerun: log {before} -> {after}  "
-          f"len(equity)={runner.peek('len(equity)')}")
+    print(f"after upstream edit + loop rerun: log {before} -> {after}  len(equity)={runner.peek('len(equity)')}")
     doubled = after > N_DAYS + 5 + 2
-    print(f"   WRONG-2 (log accumulated instead of reset): "
-          f"{'REPRODUCED' if doubled else 'not reproduced'}"
-          f"  [reset would give {N_DAYS + 5}]")
+    print(
+        f"   WRONG-2 (log accumulated instead of reset): "
+        f"{'REPRODUCED' if doubled else 'not reproduced'}"
+        f"  [reset would give {N_DAYS + 5}]"
+    )
 
     # --- P4 BLOCKING: real restart, then run a DOWNSTREAM cell only ---------
     runner.restart()
-    runner.run_cell(1)          # %cash_on, as the protocol requires
+    runner.run_cell(1)  # %cash_on, as the protocol requires
     pre = n(log)
-    runner.run_cell(5)          # downstream only -- never re-run the loop
+    runner.run_cell(5)  # downstream only -- never re-run the loop
     try:
         length = runner.peek("len(equity)")
-    except Exception as e:      # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
         length = f"<raised {type(e).__name__}>"
-    print(f"after restart + downstream-only: log {pre} -> {n(log)}  "
-          f"len(equity)={length}")
+    print(f"after restart + downstream-only: log {pre} -> {n(log)}  len(equity)={length}")
     empty = str(length).strip() in ("0", "<raised", "") or "raised" in str(length)
-    print(f"   BLOCKING (accumulator empty after restart): "
-          f"{'REPRODUCED' if empty else 'not reproduced'}")
+    print(f"   BLOCKING (accumulator empty after restart): {'REPRODUCED' if empty else 'not reproduced'}")
 finally:
     runner.shutdown()
     shutil.rmtree(work, ignore_errors=True)

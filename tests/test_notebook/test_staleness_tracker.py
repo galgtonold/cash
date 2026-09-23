@@ -4,6 +4,7 @@ When IPython hands cash the code it is running and the file claims that same
 cell says something else, the file is stale -- and so is every other cell cash
 read from it. This tracker holds that verdict for the session.
 """
+
 from __future__ import annotations
 
 import os
@@ -62,7 +63,7 @@ def test_saving_the_file_clears_the_verdict(tmp_path):
     assert t.is_stale() is True
 
     time.sleep(0.01)
-    _touch(nb, "y")                       # a save moves mtime
+    _touch(nb, "y")  # a save moves mtime
     t.observe(running_code="b = 1", file_code="b = 1", notebook_path=str(nb))
     assert t.is_stale() is False
 
@@ -70,8 +71,7 @@ def test_saving_the_file_clears_the_verdict(tmp_path):
 def test_a_missing_file_is_never_stale(tmp_path):
     """Degrade, never raise: no file means no proof, not a problem."""
     t = StalenessTracker()
-    assert t.observe(running_code="a = 2", file_code="a = 1",
-                     notebook_path=str(tmp_path / "gone.ipynb")) is False
+    assert t.observe(running_code="a = 2", file_code="a = 1", notebook_path=str(tmp_path / "gone.ipynb")) is False
     assert t.is_stale() is False
 
 
@@ -88,8 +88,7 @@ def test_absent_file_code_is_never_stale(tmp_path):
 def test_hint_names_the_running_cell(tmp_path):
     nb = _touch(tmp_path / "nb.ipynb")
     t = StalenessTracker()
-    t.observe(running_code="THRESHOLD = 0.9\nmore()", file_code="THRESHOLD = 0.5",
-              notebook_path=str(nb))
+    t.observe(running_code="THRESHOLD = 0.9\nmore()", file_code="THRESHOLD = 0.5", notebook_path=str(nb))
     assert "THRESHOLD = 0.9" in t.hint()
 
 
@@ -117,8 +116,7 @@ def test_hint_handles_non_ascii_by_replacement(tmp_path):
     nb = _touch(tmp_path / "nb.ipynb")
     t = StalenessTracker()
     # A cell with non-ASCII characters (café, café spelled with different encoding)
-    t.observe(running_code="café = 1\nmore()", file_code="cafe = 1",
-              notebook_path=str(nb))
+    t.observe(running_code="café = 1\nmore()", file_code="cafe = 1", notebook_path=str(nb))
     hint = t.hint()
     assert hint is not None
     # The real constraint: must be encodable as pure ASCII.
@@ -140,11 +138,14 @@ def test_percent_percent_cash_cell_untouched_is_not_stale(tmp_path):
     look edited. This is the false positive the fix must eliminate."""
     nb = _touch(tmp_path / "nb.ipynb", "%%cash\nTHRESHOLD = 0.5")
     t = StalenessTracker()
-    assert t.observe(
-        running_code="THRESHOLD = 0.5",             # the BODY IPython hands cash
-        file_code="%%cash\nTHRESHOLD = 0.5",         # the FULL text the file has
-        notebook_path=str(nb),
-    ) is False
+    assert (
+        t.observe(
+            running_code="THRESHOLD = 0.5",  # the BODY IPython hands cash
+            file_code="%%cash\nTHRESHOLD = 0.5",  # the FULL text the file has
+            notebook_path=str(nb),
+        )
+        is False
+    )
     assert t.is_stale() is False
 
 
@@ -153,11 +154,14 @@ def test_percent_percent_cash_cell_with_ttl_arg_untouched_is_not_stale(tmp_path)
     depend on the bare `%%cash` spelling with nothing after it."""
     nb = _touch(tmp_path / "nb.ipynb", "%%cash ttl=60\nTHRESHOLD = 0.5")
     t = StalenessTracker()
-    assert t.observe(
-        running_code="THRESHOLD = 0.5",
-        file_code="%%cash ttl=60\nTHRESHOLD = 0.5",
-        notebook_path=str(nb),
-    ) is False
+    assert (
+        t.observe(
+            running_code="THRESHOLD = 0.5",
+            file_code="%%cash ttl=60\nTHRESHOLD = 0.5",
+            notebook_path=str(nb),
+        )
+        is False
+    )
     assert t.is_stale() is False
 
 
@@ -168,11 +172,14 @@ def test_percent_percent_cash_cell_real_edit_is_still_caught(tmp_path):
     not just silence it."""
     nb = _touch(tmp_path / "nb.ipynb", "%%cash\nTHRESHOLD = 0.5")
     t = StalenessTracker()
-    assert t.observe(
-        running_code="THRESHOLD = 0.9",              # edited body, unsaved
-        file_code="%%cash\nTHRESHOLD = 0.5",          # file still has the old value
-        notebook_path=str(nb),
-    ) is True
+    assert (
+        t.observe(
+            running_code="THRESHOLD = 0.9",  # edited body, unsaved
+            file_code="%%cash\nTHRESHOLD = 0.5",  # file still has the old value
+            notebook_path=str(nb),
+        )
+        is True
+    )
     assert t.is_stale() is True
 
 
@@ -185,18 +192,24 @@ def test_percent_cash_on_hook_path_unaffected_by_the_magic_line_strip(tmp_path):
     nb = _touch(tmp_path / "nb.ipynb", "%%time\nTHRESHOLD = 0.5")
     t = StalenessTracker()
     # Identical on both sides -- must not be reported stale.
-    assert t.observe(
-        running_code="%%time\nTHRESHOLD = 0.5",
-        file_code="%%time\nTHRESHOLD = 0.5",
-        notebook_path=str(nb),
-    ) is False
+    assert (
+        t.observe(
+            running_code="%%time\nTHRESHOLD = 0.5",
+            file_code="%%time\nTHRESHOLD = 0.5",
+            notebook_path=str(nb),
+        )
+        is False
+    )
     # A real edit on both sides -- must still be caught.
     t2 = StalenessTracker()
-    assert t2.observe(
-        running_code="%%time\nTHRESHOLD = 0.9",
-        file_code="%%time\nTHRESHOLD = 0.5",
-        notebook_path=str(nb),
-    ) is True
+    assert (
+        t2.observe(
+            running_code="%%time\nTHRESHOLD = 0.9",
+            file_code="%%time\nTHRESHOLD = 0.5",
+            notebook_path=str(nb),
+        )
+        is True
+    )
 
 
 def test_checker_no_false_positive_on_saved_percent_percent_cash_cell(tmp_path):
@@ -212,24 +225,31 @@ def test_checker_no_false_positive_on_saved_percent_percent_cash_cell(tmp_path):
     from cash.notebook.upstream.checker import UpstreamChecker
 
     nb = tmp_path / "nb.ipynb"
-    nb.write_text(json.dumps({
-        "cells": [{
-            "cell_type": "code",
-            "id": "c1",
-            "metadata": {},
-            "execution_count": None,
-            "outputs": [],
-            "source": ["%%cash\n", "THRESHOLD = 0.5"],
-        }],
-        "metadata": {},
-        "nbformat": 4,
-        "nbformat_minor": 5,
-    }), encoding="utf-8")
+    nb.write_text(
+        json.dumps(
+            {
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "id": "c1",
+                        "metadata": {},
+                        "execution_count": None,
+                        "outputs": [],
+                        "source": ["%%cash\n", "THRESHOLD = 0.5"],
+                    }
+                ],
+                "metadata": {},
+                "nbformat": 4,
+                "nbformat_minor": 5,
+            }
+        ),
+        encoding="utf-8",
+    )
 
     cells_with_ids = get_notebook_cells_with_ids(str(nb))
     assert cells_with_ids == [("c1", "%%cash\nTHRESHOLD = 0.5")]  # sanity on the fixture
 
-    checker = UpstreamChecker.__new__(UpstreamChecker)   # no full init needed
+    checker = UpstreamChecker.__new__(UpstreamChecker)  # no full init needed
     checker.debug = False
     checker.staleness = StalenessTracker()
     checker._notebook_path_for_staleness = str(nb)
@@ -243,9 +263,7 @@ def test_checker_no_false_positive_on_saved_percent_percent_cash_cell(tmp_path):
         cells_with_ids=cells_with_ids,
     )
     assert idx == 0
-    assert checker.staleness.is_stale() is False, (
-        "an untouched, saved %%cash cell must never be reported stale"
-    )
+    assert checker.staleness.is_stale() is False, "an untouched, saved %%cash cell must never be reported stale"
 
 
 def test_checker_still_catches_a_real_edit_in_a_percent_percent_cash_cell(tmp_path):
@@ -257,19 +275,26 @@ def test_checker_still_catches_a_real_edit_in_a_percent_percent_cash_cell(tmp_pa
     from cash.notebook.upstream.checker import UpstreamChecker
 
     nb = tmp_path / "nb.ipynb"
-    nb.write_text(json.dumps({
-        "cells": [{
-            "cell_type": "code",
-            "id": "c1",
-            "metadata": {},
-            "execution_count": None,
-            "outputs": [],
-            "source": ["%%cash\n", "THRESHOLD = 0.5"],
-        }],
-        "metadata": {},
-        "nbformat": 4,
-        "nbformat_minor": 5,
-    }), encoding="utf-8")
+    nb.write_text(
+        json.dumps(
+            {
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "id": "c1",
+                        "metadata": {},
+                        "execution_count": None,
+                        "outputs": [],
+                        "source": ["%%cash\n", "THRESHOLD = 0.5"],
+                    }
+                ],
+                "metadata": {},
+                "nbformat": 4,
+                "nbformat_minor": 5,
+            }
+        ),
+        encoding="utf-8",
+    )
 
     cells_with_ids = get_notebook_cells_with_ids(str(nb))
 
@@ -318,7 +343,7 @@ def test_checker_detects_a_stale_file_on_an_id_match(tmp_path, monkeypatch):
     nb = tmp_path / "nb.ipynb"
     nb.write_text("{}", encoding="utf-8")
 
-    checker = UpstreamChecker.__new__(UpstreamChecker)   # no full init needed
+    checker = UpstreamChecker.__new__(UpstreamChecker)  # no full init needed
     checker.debug = False
     checker.staleness = StalenessTracker()
     checker._notebook_path_for_staleness = str(nb)

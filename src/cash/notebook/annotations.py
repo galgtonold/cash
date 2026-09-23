@@ -9,17 +9,27 @@ from dataclasses import dataclass
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning
 
-__all__ = ["CacheAnnotation", "ANNOTATION_PATTERN", "leading_cell_annotation", "parse_annotation_line", "parse_annotations_in_range", "get_statement_annotations", "extract_annotations_for_statements"]
+__all__ = [
+    "CacheAnnotation",
+    "ANNOTATION_PATTERN",
+    "leading_cell_annotation",
+    "parse_annotation_line",
+    "parse_annotations_in_range",
+    "get_statement_annotations",
+    "extract_annotations_for_statements",
+]
+
 
 @dataclass
 class CacheAnnotation:
     """Represents cache control annotations for a statement."""
-    persist: bool = False       # Force disk persistence
-    no_cache: bool = False      # Disable caching entirely
-    ttl: int | None = None   # Override TTL in seconds
+
+    persist: bool = False  # Force disk persistence
+    no_cache: bool = False  # Disable caching entirely
+    ttl: int | None = None  # Override TTL in seconds
     allow_random: bool = False  # Suppress randomness warnings
-    cache_fit: bool = False     # Opt in to caching a bare ``estimator.fit(X, y)``
-    cache_calls: bool = False   # No-op: call-interception is the default (CAS-243)
+    cache_fit: bool = False  # Opt in to caching a bare ``estimator.fit(X, y)``
+    cache_calls: bool = False  # No-op: call-interception is the default (CAS-243)
     no_cache_calls: bool = False  # Opt OUT of caching CALLS inside the statement
 
     def merge(self, other: CacheAnnotation) -> CacheAnnotation:
@@ -31,14 +41,21 @@ class CacheAnnotation:
             allow_random=self.allow_random or other.allow_random,
             cache_fit=self.cache_fit or other.cache_fit,
             cache_calls=self.cache_calls or other.cache_calls,
-            no_cache_calls=self.no_cache_calls or other.no_cache_calls
+            no_cache_calls=self.no_cache_calls or other.no_cache_calls,
         )
 
     def has_directives(self) -> bool:
         """Check if any directives are set."""
-        return (self.persist or self.no_cache or self.ttl is not None
-                or self.allow_random or self.cache_fit or self.cache_calls
-                or self.no_cache_calls)
+        return (
+            self.persist
+            or self.no_cache
+            or self.ttl is not None
+            or self.allow_random
+            or self.cache_fit
+            or self.cache_calls
+            or self.no_cache_calls
+        )
+
 
 # Regex patterns for annotation parsing ([\w-]+ allows hyphens in directive names)
 # Whitespace is tolerated after the colon and around ``=`` so both the
@@ -53,7 +70,8 @@ class CacheAnnotation:
 # reads as "cash isn't working" rather than "my annotation was truncated"
 # (CAS-249). Capturing the whole token lets the directive handler see ``5m``
 # and reject it out loud.
-ANNOTATION_PATTERN = re.compile(r'#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\S*))?')
+ANNOTATION_PATTERN = re.compile(r"#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\S*))?")
+
 
 def parse_annotation_line(line: str) -> CacheAnnotation | None:
     """
@@ -68,22 +86,22 @@ def parse_annotation_line(line: str) -> CacheAnnotation | None:
     directive = match.group(1).lower()
     value = match.group(2)
 
-    if directive == 'persist':
+    if directive == "persist":
         return CacheAnnotation(persist=True)
-    if directive == 'no-cache' or directive == 'nocache':
+    if directive == "no-cache" or directive == "nocache":
         return CacheAnnotation(no_cache=True)
-    if directive == 'allow-random' or directive == 'allowrandom':
+    if directive == "allow-random" or directive == "allowrandom":
         return CacheAnnotation(allow_random=True)
-    if directive == 'cache-fit' or directive == 'cachefit':
+    if directive == "cache-fit" or directive == "cachefit":
         return CacheAnnotation(cache_fit=True)
-    if directive == 'cache-calls' or directive == 'cachecalls':
+    if directive == "cache-calls" or directive == "cachecalls":
         # Call-interception is the default now (CAS-243); this directive is
         # kept parseable so notebooks written under the opt-in era don't
         # error, but it has no effect.
         return CacheAnnotation(cache_calls=True)
-    if directive == 'no-cache-calls' or directive == 'nocachecalls':
+    if directive == "no-cache-calls" or directive == "nocachecalls":
         return CacheAnnotation(no_cache_calls=True)
-    if directive == 'ttl' and value is not None:
+    if directive == "ttl" and value is not None:
         # ``isascii`` as well as ``isdigit``: the latter is True for characters
         # like the superscript two, which ``int()`` then refuses.
         if value.isascii() and value.isdigit():
@@ -101,11 +119,8 @@ def parse_annotation_line(line: str) -> CacheAnnotation | None:
 
     return None
 
-def parse_annotations_in_range(
-    source_lines: list[str],
-    start_line: int,
-    end_line: int
-) -> CacheAnnotation:
+
+def parse_annotations_in_range(source_lines: list[str], start_line: int, end_line: int) -> CacheAnnotation:
     """
     Parse all annotations within a line range (1-indexed, inclusive).
 
@@ -124,7 +139,7 @@ def parse_annotations_in_range(
         stripped = line.strip()
 
         # Stop if we hit a non-comment, non-empty line
-        if stripped and not stripped.startswith('#'):
+        if stripped and not stripped.startswith("#"):
             break
 
         # Try to parse annotation from this line
@@ -145,6 +160,7 @@ def parse_annotations_in_range(
             result = result.merge(ann)
 
     return result
+
 
 def leading_cell_annotation(source_lines: list[str]) -> CacheAnnotation:
     """The cell-scoped directives from the cell's LEADING comment block.
@@ -180,9 +196,9 @@ def leading_cell_annotation(source_lines: list[str]) -> CacheAnnotation:
     for line in source_lines:
         stripped = line.strip()
         if not stripped:
-            continue                      # blank lines don't close the header
-        if not stripped.startswith('#'):
-            break                         # first real code closes the header
+            continue  # blank lines don't close the header
+        if not stripped.startswith("#"):
+            break  # first real code closes the header
         ann = parse_annotation_line(line)
         if ann:
             header = header.merge(ann)
@@ -190,10 +206,7 @@ def leading_cell_annotation(source_lines: list[str]) -> CacheAnnotation:
     return CacheAnnotation(no_cache=header.no_cache, no_cache_calls=header.no_cache_calls)
 
 
-def get_statement_annotations(
-    full_source: str,
-    node: ast.AST
-) -> CacheAnnotation:
+def get_statement_annotations(full_source: str, node: ast.AST) -> CacheAnnotation:
     """
     Get cache annotations that apply to an AST node.
 
@@ -211,7 +224,7 @@ def get_statement_annotations(
     """
     source_lines = full_source.splitlines()
 
-    if not hasattr(node, 'lineno') or not hasattr(node, 'end_lineno'):
+    if not hasattr(node, "lineno") or not hasattr(node, "end_lineno"):
         return CacheAnnotation()
 
     start_line = node.lineno
@@ -225,7 +238,7 @@ def get_statement_annotations(
     # merges it explicitly (resolve_header_annotation -> resolve_statement_
     # annotation). Letting the header leak in here would re-create the bug where
     # a whole-range annotation disabled caching for every sibling in the body.
-    if getattr(node, 'col_offset', 0) != 0:
+    if getattr(node, "col_offset", 0) != 0:
         return statement_level
 
     # Cell-level first, statement-level layered on top, so a statement-specific
@@ -233,9 +246,8 @@ def get_statement_annotations(
     # via CacheAnnotation.merge).
     return leading_cell_annotation(source_lines).merge(statement_level)
 
-def extract_annotations_for_statements(
-    full_source: str
-) -> dict[int, CacheAnnotation]:
+
+def extract_annotations_for_statements(full_source: str) -> dict[int, CacheAnnotation]:
     """
     Extract all annotations and map them to statement line numbers.
 
@@ -255,15 +267,12 @@ def extract_annotations_for_statements(
     cell_level = leading_cell_annotation(source_lines)
 
     for node in tree.body:
-        if hasattr(node, 'lineno'):
+        if hasattr(node, "lineno"):
             start_line = node.lineno
-            end_line = getattr(node, 'end_lineno', start_line) or start_line
-            ann = cell_level.merge(
-                parse_annotations_in_range(source_lines, start_line, end_line)
-            )
+            end_line = getattr(node, "end_lineno", start_line) or start_line
+            ann = cell_level.merge(parse_annotations_in_range(source_lines, start_line, end_line))
 
             if ann.has_directives():
                 annotations[start_line] = ann
 
     return annotations
-

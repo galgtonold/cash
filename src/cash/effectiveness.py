@@ -42,6 +42,7 @@ and still miserable", e.g. 8s of validation to save 60s. That case is
 deliberately out of scope here: caching that pays is not misuse, and the ask
 was to be conservative about interrupting anyone.
 """
+
 from __future__ import annotations
 
 from collections import deque
@@ -202,23 +203,26 @@ class EffectivenessLedger:
                 small.append((waste, func_name))
                 continue
             led.warned = True
-            out.append(_message(func_name, led, waste, per_call_overhead,
-                                best_case_saving, self._culprits.get(func_name)))
+            out.append(
+                _message(func_name, led, waste, per_call_overhead, best_case_saving, self._culprits.get(func_name))
+            )
         total = sum(w for w, _ in small)
         if len(small) >= 2 and total >= self._threshold:
             small.sort(reverse=True)
             named = ", ".join(f"{name!r} ({waste:.1f}s)" for waste, name in small[:5])
             more = f" and {len(small) - 5} more" if len(small) > 5 else ""
-            out.append((
-                f"@cash.cache cost more than it saved across {len(small)} functions "
-                f"in this run -- a net loss of about {total:.1f}s together, each "
-                f"under the {self._threshold:g}s a single warning waits for: "
-                f"{named}{more}. Each one's overhead per call is larger than the "
-                f"most its body ever took.",
-                "these are cheap functions over large arguments: leave them "
-                "uncached, or cache what they are computed from instead -- the "
-                "aggregate rather than the rows.",
-            ))
+            out.append(
+                (
+                    f"@cash.cache cost more than it saved across {len(small)} functions "
+                    f"in this run -- a net loss of about {total:.1f}s together, each "
+                    f"under the {self._threshold:g}s a single warning waits for: "
+                    f"{named}{more}. Each one's overhead per call is larger than the "
+                    f"most its body ever took.",
+                    "these are cheap functions over large arguments: leave them "
+                    "uncached, or cache what they are computed from instead -- the "
+                    "aggregate rather than the rows.",
+                )
+            )
         return out
 
     def reset(self) -> None:
@@ -276,10 +280,12 @@ def _message(
         # (str), about 0ms to hash" for a parser whose hit was a 2M-row restore.
         # And on misses there is nothing to load: the cost is keeping the
         # result -- copying it into memory, writing it (round 20).
-        where = ("loading the stored result, which takes longer than running "
-                 "the function" if led.hit_overhead > led.miss_overhead else
-                 "keeping the result -- copying it into memory and writing it -- "
-                 "which takes longer than running the function")
+        where = (
+            "loading the stored result, which takes longer than running the function"
+            if led.hit_overhead > led.miss_overhead
+            else "keeping the result -- copying it into memory and writing it -- "
+            "which takes longer than running the function"
+        )
         what = (
             f"@cash.cache on {func_name!r} is costing more than it saves. "
             f"Across {led.calls} calls cash spent {led.overhead_seconds:.2f}s on "
@@ -297,16 +303,15 @@ def _message(
     if culprit is None:
         return what, hasher
     param, type_name, seconds, producer, old_pandas = culprit
-    what += (f" The costliest argument is '{param}' ({type_name}), "
-             f"about {seconds * 1000:.0f}ms to hash.")
+    what += f" The costliest argument is '{param}' ({type_name}), about {seconds * 1000:.0f}ms to hash."
     parts = []
     if producer:
         parts.append(
             f"'{param}' comes from {producer}(): if that result is not modified "
             f"afterwards, declare @cash.cache(frozen=True) on {producer} and it "
-            f"is keyed without being hashed")
+            f"is keyed without being hashed"
+        )
     if old_pandas:
-        parts.append("pandas 3 (copy-on-write) lets cash check a frame for "
-                     "changes instead of hashing it on every call")
+        parts.append("pandas 3 (copy-on-write) lets cash check a frame for changes instead of hashing it on every call")
     parts.append(("otherwise " if parts else "") + hasher)
     return what, "; ".join(parts)

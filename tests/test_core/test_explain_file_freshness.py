@@ -10,6 +10,7 @@ migrated and still compared raw mtime/size, so after a touch it reported
 diagnostic that contradicts the behavior it describes is worse than none.
 These tests pin explain() to the actual outcome in both directions.
 """
+
 import os
 
 import pytest
@@ -37,7 +38,7 @@ def reader(data_file):
         with open(data_file, encoding="utf-8") as fh:
             return fh.read()
 
-    read_it()                       # prime: records the file dep
+    read_it()  # prime: records the file dep
     assert calls["n"] == 1
     return read_it, calls
 
@@ -55,9 +56,7 @@ class TestExplainFileFreshness:
 
         e = read_it.explain()
         assert e.would_hit is True
-        assert e.reason == "hit", (
-            f"explain() reported {e.reason!r} ({e.details}) after a touch"
-        )
+        assert e.reason == "hit", f"explain() reported {e.reason!r} ({e.details}) after a touch"
 
         # ...and the call agrees: no recompute.
         read_it()
@@ -87,9 +86,7 @@ class TestExplainFileFreshness:
         e = read_it.explain()
         assert e.would_hit is False
         assert e.reason == "file_changed"
-        assert any(
-            v == "size changed" for v in e.details["changed_files"].values()
-        ), e.details
+        assert any(v == "size changed" for v in e.details["changed_files"].values()), e.details
 
         read_it()
         assert calls["n"] == 2
@@ -101,9 +98,7 @@ class TestExplainFileFreshness:
         e = read_it.explain()
         assert e.would_hit is False
         assert e.reason == "file_changed"
-        assert any(
-            v == "file missing" for v in e.details["changed_files"].values()
-        ), e.details
+        assert any(v == "file missing" for v in e.details["changed_files"].values()), e.details
 
     def test_unchanged_file_explains_as_hit(self, reader):
         read_it, calls = reader
@@ -120,8 +115,8 @@ class TestExplainAgreesWithCall:
     @pytest.mark.parametrize(
         "mutate,expect_hit",
         [
-            (lambda p: None, True),                                  # untouched
-            (lambda p: _touch(p), True),                             # touch only
+            (lambda p: None, True),  # untouched
+            (lambda p: _touch(p), True),  # touch only
             (lambda p: p.write_text("HELLO WORLD", encoding="utf-8"), False),
             (lambda p: p.write_text("longer content here", encoding="utf-8"), False),
         ],

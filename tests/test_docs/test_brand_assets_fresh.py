@@ -23,6 +23,7 @@ HTML), so a png -> html mapping guessed from filenames is wrong by
 construction -- and a second copy of the table is one more thing that can
 disagree with the first.
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -64,9 +65,7 @@ def test_there_are_brand_assets():
     assert sorted(BRAND_DIR.glob("*.png")), "no docs/_brand/*.png found"
 
 
-@pytest.mark.parametrize(
-    "src, out_stem", [(a[0], a[1]) for a in _assets()], ids=lambda v: str(v)
-)
+@pytest.mark.parametrize("src, out_stem", [(a[0], a[1]) for a in _assets()], ids=lambda v: str(v))
 def test_png_matches_the_html_it_was_rendered_from(src: str, out_stem: str):
     html = BRAND_DIR / f"{src}.html"
     png = BRAND_DIR / f"{out_stem}.png"
@@ -75,8 +74,7 @@ def test_png_matches_the_html_it_was_rendered_from(src: str, out_stem: str):
     assert html.exists(), f"{out_stem} names a source {html.name} that does not exist"
     assert png.exists(), f"{png.name} has not been built"
     assert stamp.exists(), (
-        f"{png.name} has no .stamp recording which HTML it came from. "
-        "Re-run `python scripts/build_brand_assets.py`."
+        f"{png.name} has no .stamp recording which HTML it came from. Re-run `python scripts/build_brand_assets.py`."
     )
     assert stamp.read_text(encoding="utf-8").strip() == _stamper()(html), (
         f"{png.name} was rendered from an older {html.name}. Re-run "
@@ -133,10 +131,7 @@ def test_the_social_card_stays_inside_githubs_upload_limits():
 def test_the_social_card_keeps_githubs_two_to_one_ratio():
     width, height = _png_size(BRAND_DIR / "social-card.png")
     ratio = width / height
-    assert abs(ratio - 2.0) < 0.01, (
-        f"social-card.png ratio is {ratio:.3f}; GitHub expects 2:1 and crops "
-        f"anything else."
-    )
+    assert abs(ratio - 2.0) < 0.01, f"social-card.png ratio is {ratio:.3f}; GitHub expects 2:1 and crops anything else."
     assert width >= 1280, f"{width}px wide is below GitHub's 1280 minimum"
 
 

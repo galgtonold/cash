@@ -18,6 +18,7 @@ target, and calling the command function directly with a hand-built Namespace
 would skip the environment and the argument parser, which is where both halves
 of it live.
 """
+
 from __future__ import annotations
 
 import os
@@ -36,7 +37,10 @@ def _run(*argv, env=None, cwd=None):
     environ.update(env or {})
     return subprocess.run(
         [sys.executable, "-m", "cash", *argv],
-        capture_output=True, text=True, env=environ, cwd=cwd,
+        capture_output=True,
+        text=True,
+        env=environ,
+        cwd=cwd,
     )
 
 
@@ -57,11 +61,11 @@ def a_cache_somewhere_else(tmp_path):
         encoding="utf-8",
     )
     env = {"CASH_CACHE_DIR": str(elsewhere)}
-    out = subprocess.run([sys.executable, str(script)], capture_output=True,
-                         text=True, cwd=str(workdir),
-                         env={**os.environ, **env})
+    out = subprocess.run(
+        [sys.executable, str(script)], capture_output=True, text=True, cwd=str(workdir), env={**os.environ, **env}
+    )
     assert out.returncode == 0, out.stderr
-    for _ in range(20):                       # the writer is a background thread
+    for _ in range(20):  # the writer is a background thread
         if elsewhere.is_dir() and any(elsewhere.iterdir()):
             break
         time.sleep(0.25)
@@ -76,12 +80,8 @@ def test_inspect_reads_the_configured_cache(a_cache_somewhere_else):
     result = _run("inspect", env=env, cwd=str(workdir))
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "slow" in result.stdout, (
-        f"inspect did not report the entries the library wrote:\n{result.stdout}"
-    )
-    assert str(elsewhere) in result.stdout, (
-        "inspect should name the directory it read, now that it is not the cwd"
-    )
+    assert "slow" in result.stdout, f"inspect did not report the entries the library wrote:\n{result.stdout}"
+    assert str(elsewhere) in result.stdout, "inspect should name the directory it read, now that it is not the cwd"
 
 
 def test_clear_all_clears_the_configured_cache(a_cache_somewhere_else):
@@ -138,8 +138,7 @@ def test_clear_all_refuses_a_directory_that_is_not_a_cache(tmp_path):
     precious.mkdir()
     (precious / "thesis.txt").write_text("years of work", encoding="utf-8")
 
-    result = _run("clear", "--all", env={"CASH_CACHE_DIR": str(precious)},
-                  cwd=str(tmp_path))
+    result = _run("clear", "--all", env={"CASH_CACHE_DIR": str(precious)}, cwd=str(tmp_path))
 
     assert result.returncode == 1
     assert "does not look like a cash cache" in result.stdout
@@ -162,5 +161,4 @@ def test_python_m_cash_targets_the_project_you_stand_in(tmp_path):
     assert out.returncode == 0, out.stderr
     line = next(ln for ln in out.stdout.splitlines() if "Cache dir" in ln)
     shown = line.split(":", 1)[1].strip()
-    assert os.path.normcase(os.path.realpath(shown)) == \
-        os.path.normcase(os.path.realpath(project / ".cash")), line
+    assert os.path.normcase(os.path.realpath(shown)) == os.path.normcase(os.path.realpath(project / ".cash")), line

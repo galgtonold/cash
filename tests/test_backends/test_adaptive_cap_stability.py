@@ -14,6 +14,7 @@ is what a ~48 GiB volume converges to.
 Adding the cache's own size back in removes the loop: as the cache grows by N
 bytes, free drops by N, and the sum is unchanged.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -22,7 +23,7 @@ import cash.backends.adaptive_caps as caps
 from cash.backends import FileBackend
 from cash.backends.adaptive_caps import adaptive_disk_cap, adaptive_disk_cap_for
 
-GIB = 1024 ** 3
+GIB = 1024**3
 
 
 @pytest.fixture
@@ -59,8 +60,7 @@ def volume(tmp_path, monkeypatch):
     # The directory walk is what turns bytes on disk into `_current_size_bytes`;
     # it is exercised in its own tests. Here it is only the courier for the
     # footprint, and paying 12 GiB of I/O to move one integer is what broke CI.
-    monkeypatch.setattr(FileBackend, "_scan_size_bytes",
-                        lambda self: used["bytes"])
+    monkeypatch.setattr(FileBackend, "_scan_size_bytes", lambda self: used["bytes"])
 
     def occupy(nbytes):
         used["bytes"] = nbytes
@@ -72,16 +72,21 @@ def test_the_cap_does_not_shrink_as_the_cache_fills(volume):
     """The defect, stated as the invariant it violates."""
     cache, free_when_empty, occupy = volume
 
-    empty = FileBackend(str(cache), max_size_bytes=adaptive_disk_cap(free_when_empty),
-                        adaptive_cap=True, flush_interval=0)
+    empty = FileBackend(
+        str(cache), max_size_bytes=adaptive_disk_cap(free_when_empty), adaptive_cap=True, flush_interval=0
+    )
     empty._ensure_size_scanned()
     cap_when_empty = empty._max_size_bytes
     empty.shutdown()
 
-    occupy(cap_when_empty)                   # the cache fills to that cap
+    occupy(cap_when_empty)  # the cache fills to that cap
 
-    full = FileBackend(str(cache), max_size_bytes=adaptive_disk_cap(caps._free_bytes_on_volume(str(cache))),
-                       adaptive_cap=True, flush_interval=0)
+    full = FileBackend(
+        str(cache),
+        max_size_bytes=adaptive_disk_cap(caps._free_bytes_on_volume(str(cache))),
+        adaptive_cap=True,
+        flush_interval=0,
+    )
     full._ensure_size_scanned()
     cap_when_full = full._max_size_bytes
     full.shutdown()
@@ -101,8 +106,7 @@ def test_an_explicit_cap_is_never_re_derived(volume):
     cache, _, _ = volume
     chosen = 3 * GIB
 
-    b = FileBackend(str(cache), max_size_bytes=chosen, adaptive_cap=False,
-                    flush_interval=0)
+    b = FileBackend(str(cache), max_size_bytes=chosen, adaptive_cap=False, flush_interval=0)
     b._ensure_size_scanned()
     assert b._max_size_bytes == chosen
     b.shutdown()
@@ -112,8 +116,7 @@ def test_an_empty_cache_gets_the_same_cap_as_before(volume):
     """The correction must be invisible until there is something to correct for."""
     cache, free_when_empty, _ = volume
 
-    b = FileBackend(str(cache), max_size_bytes=None, adaptive_cap=True,
-                    flush_interval=0)
+    b = FileBackend(str(cache), max_size_bytes=None, adaptive_cap=True, flush_interval=0)
     b._ensure_size_scanned()
     assert b._max_size_bytes == adaptive_disk_cap(free_when_empty)
     b.shutdown()
@@ -136,9 +139,7 @@ def test_the_cap_still_follows_the_volume(volume):
     finally:
         caps._free_bytes_on_volume = orig
 
-    assert cramped < roomy, (
-        f"cap did not fall when the volume filled: {roomy} -> {cramped}"
-    )
+    assert cramped < roomy, f"cap did not fall when the volume filled: {roomy} -> {cramped}"
 
 
 def test_own_usage_is_added_to_free(tmp_path, monkeypatch):

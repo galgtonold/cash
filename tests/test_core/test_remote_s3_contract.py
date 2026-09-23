@@ -13,6 +13,7 @@ an in-process S3 emulator and assert the contract cash depends on.
 The failure mode they exist to catch is silent degradation, not a crash — so
 they assert on the token's *shape*, not merely that one was produced.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -187,8 +188,8 @@ class TestMultipartEtags:
     def _upload(self, client, chunk_mb: int) -> str:
         import io
 
-        from boto3.s3.transfer import TransferConfig
         import s3fs
+        from boto3.s3.transfer import TransferConfig
 
         client.upload_fileobj(
             io.BytesIO(self.BODY),
@@ -207,9 +208,7 @@ class TestMultipartEtags:
         not throw away everyone's cache."""
         first = self._upload(s3, 5)
         # The ETag is quoted, so the part count is the tail INSIDE the quotes.
-        assert first.rstrip('"').endswith("-3"), (
-            f"expected a 3-part multipart ETag, got {first}"
-        )
+        assert first.rstrip('"').endswith("-3"), f"expected a 3-part multipart ETag, got {first}"
         assert self._upload(s3, 5) == first
 
     def test_a_different_part_size_moves_the_token_for_identical_bytes(self, s3):
@@ -235,9 +234,7 @@ class TestVersionPinnedUrls:
     """``?versionId=`` is only ever tested against a string parse elsewhere."""
 
     def test_a_pinned_url_is_stable_across_later_overwrites(self, s3):
-        s3.put_bucket_versioning(
-            Bucket=BUCKET, VersioningConfiguration={"Status": "Enabled"}
-        )
+        s3.put_bucket_versioning(Bucket=BUCKET, VersioningConfiguration={"Status": "Enabled"})
         v1 = s3.put_object(Bucket=BUCKET, Key=KEY, Body=b"one")["VersionId"]
         v2 = s3.put_object(Bucket=BUCKET, Key=KEY, Body=b"two")["VersionId"]
 
@@ -260,9 +257,7 @@ class TestVersionPinnedUrls:
         import fsspec
         import s3fs
 
-        s3.put_bucket_versioning(
-            Bucket=BUCKET, VersioningConfiguration={"Status": "Enabled"}
-        )
+        s3.put_bucket_versioning(Bucket=BUCKET, VersioningConfiguration={"Status": "Enabled"})
         v1 = s3.put_object(Bucket=BUCKET, Key=KEY, Body=b"one")["VersionId"]
         s3.put_object(Bucket=BUCKET, Key=KEY, Body=b"two")
         s3fs.S3FileSystem.clear_instance_cache()

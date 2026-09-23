@@ -9,6 +9,7 @@ out of the overhead.
 Here the hashing is made slow on purpose (pickling the argument sleeps), so
 the tax is a known number rather than a machine-dependent one.
 """
+
 import json
 
 import pytest
@@ -33,10 +34,10 @@ def test_the_hashing_tax_is_reported_as_overhead(nb_runner):
     assert "OUT 42" in nb_runner.get_output(2), nb_runner.get_raw_output(2)
 
     raw = nb_runner.get_output(3)
-    data = json.loads(raw[raw.index("{"):raw.rindex("}") + 1])
+    data = json.loads(raw[raw.index("{") : raw.rindex("}") + 1])
     assert data["total_overhead"] >= 0.5, (
-        "cash spent at least 0.6s hashing and reported "
-        f"{data['total_overhead']:.2f}s of overhead:\n{raw}")
+        f"cash spent at least 0.6s hashing and reported {data['total_overhead']:.2f}s of overhead:\n{raw}"
+    )
     assert data["total_compute_time"] < 0.5, (
-        "the hashing was counted as the user's compute: "
-        f"{data['total_compute_time']:.2f}s\n{raw}")
+        f"the hashing was counted as the user's compute: {data['total_compute_time']:.2f}s\n{raw}"
+    )

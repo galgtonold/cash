@@ -22,54 +22,162 @@ four of five testers), without going quiet on the code they are for:
 Both are conservative: whatever they do not understand counts as not fresh and
 not log-only, which keeps the warning.
 """
+
 from __future__ import annotations
 
 import ast
 
-__all__ = ["fresh_name_nodes", "receiver_is_fresh", "LogOnlyFlow", "is_log_helper",
-           "is_log_line", "is_read_only_sql"]
+__all__ = ["fresh_name_nodes", "receiver_is_fresh", "LogOnlyFlow", "is_log_helper", "is_log_line", "is_read_only_sql"]
 
-_FRESH_CONSTRUCTOR_NAMES = frozenset({
-    "list", "dict", "set", "bytearray", "defaultdict", "OrderedDict", "Counter", "deque",
-    "sorted", "frozenset", "bytes", "tuple",
-})
-_FRESH_CONSTRUCTOR_ATTRS = frozenset({
-    "zeros", "empty", "ones", "full", "array", "asarray",
-    "zeros_like", "empty_like", "ones_like", "full_like", "arange", "linspace",
-    "DataFrame", "Series", "copy", "deepcopy", "fromkeys",
-    # Aggregations and reshapes that return a NEW frame/array/scalar. Missing
-    # these made ordinary pandas -- `g = df.groupby(...).sum()` then
-    # `g["col"] = ...` -- read as a mutation of caller state (found attacking
-    # the decorator before round 26).
-    "sum", "mean", "median", "min", "max", "std", "var", "count", "size",
-    "nunique", "quantile", "agg", "aggregate", "transform", "apply",
-    "first", "last", "unique", "value_counts", "to_dict", "to_list", "tolist",
-    # numpy builders, spelled as module attributes
-    "concatenate", "stack", "hstack", "vstack", "dstack", "column_stack",
-    "tile", "repeat", "where", "clip", "round", "argsort",
-})
+_FRESH_CONSTRUCTOR_NAMES = frozenset(
+    {
+        "list",
+        "dict",
+        "set",
+        "bytearray",
+        "defaultdict",
+        "OrderedDict",
+        "Counter",
+        "deque",
+        "sorted",
+        "frozenset",
+        "bytes",
+        "tuple",
+    }
+)
+_FRESH_CONSTRUCTOR_ATTRS = frozenset(
+    {
+        "zeros",
+        "empty",
+        "ones",
+        "full",
+        "array",
+        "asarray",
+        "zeros_like",
+        "empty_like",
+        "ones_like",
+        "full_like",
+        "arange",
+        "linspace",
+        "DataFrame",
+        "Series",
+        "copy",
+        "deepcopy",
+        "fromkeys",
+        # Aggregations and reshapes that return a NEW frame/array/scalar. Missing
+        # these made ordinary pandas -- `g = df.groupby(...).sum()` then
+        # `g["col"] = ...` -- read as a mutation of caller state (found attacking
+        # the decorator before round 26).
+        "sum",
+        "mean",
+        "median",
+        "min",
+        "max",
+        "std",
+        "var",
+        "count",
+        "size",
+        "nunique",
+        "quantile",
+        "agg",
+        "aggregate",
+        "transform",
+        "apply",
+        "first",
+        "last",
+        "unique",
+        "value_counts",
+        "to_dict",
+        "to_list",
+        "tolist",
+        # numpy builders, spelled as module attributes
+        "concatenate",
+        "stack",
+        "hstack",
+        "vstack",
+        "dstack",
+        "column_stack",
+        "tile",
+        "repeat",
+        "where",
+        "clip",
+        "round",
+        "argsort",
+    }
+)
 _FRESH_LITERAL_NODES = (ast.List, ast.Dict, ast.Set, ast.ListComp, ast.DictComp, ast.SetComp)
 
 #: Readers that hand back an object nobody else holds.
-_FRESH_READER_ATTRS = frozenset({
-    "read_csv", "read_parquet", "read_excel", "read_json", "read_feather",
-    "read_table", "read_pickle", "read_sql", "read_sql_query", "read_fwf",
-    "read_hdf", "read_orc", "loadtxt", "genfromtxt", "fromfile", "concat",
-})
+_FRESH_READER_ATTRS = frozenset(
+    {
+        "read_csv",
+        "read_parquet",
+        "read_excel",
+        "read_json",
+        "read_feather",
+        "read_table",
+        "read_pickle",
+        "read_sql",
+        "read_sql_query",
+        "read_fwf",
+        "read_hdf",
+        "read_orc",
+        "loadtxt",
+        "genfromtxt",
+        "fromfile",
+        "concat",
+    }
+)
 
 #: pandas / numpy methods that return a NEW object whatever they are called on
 #: (without ``inplace=True``). Views -- ``reshape``, ``ravel``, ``view``,
 #: ``.T`` -- are deliberately absent: mutating a view of the caller's data
 #: mutates the caller's data. So is ``fit``: sklearn returns ``self``.
-_NEW_OBJECT_METHODS = frozenset({
-    "merge", "join", "dropna", "fillna", "assign", "rename", "drop",
-    "reset_index", "set_index", "sort_values", "sort_index", "agg",
-    "aggregate", "pivot", "pivot_table", "melt", "astype", "query",
-    "head", "tail", "sample", "reindex", "round", "cumsum", "diff",
-    "shift", "to_frame", "explode", "where", "mask", "clip", "replace",
-    "drop_duplicates", "nlargest", "nsmallest", "value_counts", "describe",
-    "copy", "deepcopy", "tolist", "to_numpy",
-})
+_NEW_OBJECT_METHODS = frozenset(
+    {
+        "merge",
+        "join",
+        "dropna",
+        "fillna",
+        "assign",
+        "rename",
+        "drop",
+        "reset_index",
+        "set_index",
+        "sort_values",
+        "sort_index",
+        "agg",
+        "aggregate",
+        "pivot",
+        "pivot_table",
+        "melt",
+        "astype",
+        "query",
+        "head",
+        "tail",
+        "sample",
+        "reindex",
+        "round",
+        "cumsum",
+        "diff",
+        "shift",
+        "to_frame",
+        "explode",
+        "where",
+        "mask",
+        "clip",
+        "replace",
+        "drop_duplicates",
+        "nlargest",
+        "nsmallest",
+        "value_counts",
+        "describe",
+        "copy",
+        "deepcopy",
+        "tolist",
+        "to_numpy",
+    }
+)
 
 #: Methods on a fresh container that hand back one of its ELEMENTS, which may
 #: be anyone's object -- unless the container is DEEP-fresh (below).
@@ -91,27 +199,84 @@ _INSERTING_METHODS = {"append": -1, "add": -1, "appendleft": -1, "insert": 1, "s
 #: ...or every element of their argument.
 _MERGING_METHODS = frozenset({"extend", "update", "extendleft"})
 #: Methods that neither insert nor let anything else do so.
-_NON_INSERTING_METHODS = frozenset({
-    "get", "items", "keys", "values", "pop", "popitem", "copy", "sort", "clear",
-    "remove", "index", "count", "most_common", "reverse", "discard", "elements",
-    "total", "popleft",
-})
+_NON_INSERTING_METHODS = frozenset(
+    {
+        "get",
+        "items",
+        "keys",
+        "values",
+        "pop",
+        "popitem",
+        "copy",
+        "sort",
+        "clear",
+        "remove",
+        "index",
+        "count",
+        "most_common",
+        "reverse",
+        "discard",
+        "elements",
+        "total",
+        "popleft",
+    }
+)
 
 #: Calls a container can be handed without anything being put into it.
-_READ_ONLY_CALLS = frozenset({
-    "len", "sorted", "sum", "min", "max", "any", "all", "print", "repr", "str",
-    "enumerate", "zip", "reversed", "iter", "isinstance", "bool", "list", "tuple",
-    "set", "frozenset", "dict", "next", "map", "filter", "hash", "id", "type",
-    "format", "round", "abs",
-})
+_READ_ONLY_CALLS = frozenset(
+    {
+        "len",
+        "sorted",
+        "sum",
+        "min",
+        "max",
+        "any",
+        "all",
+        "print",
+        "repr",
+        "str",
+        "enumerate",
+        "zip",
+        "reversed",
+        "iter",
+        "isinstance",
+        "bool",
+        "list",
+        "tuple",
+        "set",
+        "frozenset",
+        "dict",
+        "next",
+        "map",
+        "filter",
+        "hash",
+        "id",
+        "type",
+        "format",
+        "round",
+        "abs",
+    }
+)
 
 #: Constructors of an EMPTY container, and the defaultdict factories whose
 #: values are fresh or immutable.
 _EMPTY_CONTAINERS = frozenset({"dict", "list", "set", "OrderedDict", "Counter", "deque"})
-_FRESH_FACTORIES = frozenset({
-    "list", "dict", "set", "int", "float", "str", "bool", "tuple", "frozenset",
-    "Counter", "OrderedDict", "deque",
-})
+_FRESH_FACTORIES = frozenset(
+    {
+        "list",
+        "dict",
+        "set",
+        "int",
+        "float",
+        "str",
+        "bool",
+        "tuple",
+        "frozenset",
+        "Counter",
+        "OrderedDict",
+        "deque",
+    }
+)
 
 
 def root_name(node: ast.AST) -> ast.Name | None:
@@ -142,9 +307,9 @@ def _fresh(node: ast.AST | None, name_is_fresh, name_is_deep=None) -> bool:
     decided by the shape of the expression. *name_is_deep*, when given, says
     whether a name holds a deep-fresh container, whose elements are fresh.
     """
+
     def element_of_deep(container: ast.AST) -> bool:
-        return (name_is_deep is not None and isinstance(container, ast.Name)
-                and name_is_deep(container))
+        return name_is_deep is not None and isinstance(container, ast.Name) and name_is_deep(container)
 
     if node is None:
         return False
@@ -153,7 +318,7 @@ def _fresh(node: ast.AST | None, name_is_fresh, name_is_deep=None) -> bool:
     if isinstance(node, ast.Name):
         return name_is_fresh(node)
     if isinstance(node, ast.BinOp):
-        return True                     # a + b builds a new object
+        return True  # a + b builds a new object
     if isinstance(node, ast.IfExp):
         return _fresh(node.body, name_is_fresh) and _fresh(node.orelse, name_is_fresh)
     if isinstance(node, ast.BoolOp):
@@ -165,9 +330,9 @@ def _fresh(node: ast.AST | None, name_is_fresh, name_is_deep=None) -> bool:
 
     if isinstance(node, ast.Subscript):
         if _is_mask(node.slice):
-            return True                 # a boolean filter copies
+            return True  # a boolean filter copies
         if _has_slice(node.slice):
-            return rooted(node.value)   # a view: only of our own data
+            return rooted(node.value)  # a view: only of our own data
         return element_of_deep(node.value)  # an element: anyone's, unless deep
     if isinstance(node, ast.Attribute):
         return rooted(node)
@@ -178,8 +343,7 @@ def _fresh(node: ast.AST | None, name_is_fresh, name_is_deep=None) -> bool:
         if isinstance(f, ast.Attribute):
             if any(kw.arg == "inplace" for kw in node.keywords):
                 return False
-            if (f.attr in _FRESH_CONSTRUCTOR_ATTRS or f.attr in _FRESH_READER_ATTRS
-                    or f.attr in _NEW_OBJECT_METHODS):
+            if f.attr in _FRESH_CONSTRUCTOR_ATTRS or f.attr in _FRESH_READER_ATTRS or f.attr in _NEW_OBJECT_METHODS:
                 return True
             if f.attr in _ELEMENT_METHODS:
                 return element_of_deep(f.value)
@@ -214,8 +378,7 @@ def _callee_name(func: ast.AST) -> str | None:
     """``dict`` for ``dict(...)``, ``defaultdict`` for ``collections.defaultdict(...)``."""
     if isinstance(func, ast.Name):
         return func.id
-    if (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name)
-            and func.value.id == "collections"):
+    if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id == "collections":
         return func.attr
     return None
 
@@ -238,26 +401,24 @@ def _deep_value(value: ast.AST | None, fresh: set[str]) -> bool:
         func = value.func
         if isinstance(func, ast.Attribute) and func.attr in _DEEP_BUILDER_ATTRS:
             return True
-        if (isinstance(func, ast.Name) and func.id in _DEEP_REBUILDERS
-                and len(value.args) == 1):
+        if isinstance(func, ast.Name) and func.id in _DEEP_REBUILDERS and len(value.args) == 1:
             inner = value.args[0]
             if isinstance(inner, ast.Name):
                 return _DEEP + inner.id in fresh
             return _deep_value(inner, fresh)
     if isinstance(value, (ast.List, ast.Set, ast.Tuple)):
         return not any(isinstance(e, ast.Starred) for e in value.elts) and all(
-            _fresh_or_immutable(e, fresh) for e in value.elts)
+            _fresh_or_immutable(e, fresh) for e in value.elts
+        )
     if isinstance(value, ast.Dict):
-        return None not in value.keys and all(
-            _fresh_or_immutable(v, fresh) for v in value.values)
+        return None not in value.keys and all(_fresh_or_immutable(v, fresh) for v in value.values)
     if isinstance(value, (ast.ListComp, ast.SetComp, ast.DictComp)):
         inner = set(fresh)
         for gen in value.generators:
             names: set[str] = set()
             _bound_names(gen.target, names)
             inner = _without(inner, names)
-        return _fresh_or_immutable(
-            value.value if isinstance(value, ast.DictComp) else value.elt, inner)
+        return _fresh_or_immutable(value.value if isinstance(value, ast.DictComp) else value.elt, inner)
     if isinstance(value, ast.Call) and not value.keywords:
         name = _callee_name(value.func)
         if name in _EMPTY_CONTAINERS and not value.args:
@@ -288,8 +449,7 @@ def _is_csv_rows(node: ast.AST) -> bool:
         return False
     f = node.func
     if isinstance(f, ast.Attribute):
-        return (f.attr in ("reader", "DictReader") and isinstance(f.value, ast.Name)
-                and f.value.id == "csv")
+        return f.attr in ("reader", "DictReader") and isinstance(f.value, ast.Name) and f.value.id == "csv"
     return isinstance(f, ast.Name) and f.id == "DictReader"
 
 
@@ -300,13 +460,24 @@ def _read_only_use(node: ast.Name, up: ast.AST | None) -> bool:
     if isinstance(up, (ast.For, ast.AsyncFor, ast.comprehension)):
         return up.iter is node
     if isinstance(up, ast.Call):
-        return (node in up.args and isinstance(up.func, ast.Name)
-                and up.func.id in _READ_ONLY_CALLS)
+        return node in up.args and isinstance(up.func, ast.Name) and up.func.id in _READ_ONLY_CALLS
     if isinstance(up, ast.IfExp):
         return up.test is node
-    return isinstance(up, (ast.Compare, ast.BoolOp, ast.UnaryOp, ast.BinOp,
-                           ast.FormattedValue, ast.Return, ast.Expr, ast.If,
-                           ast.While, ast.Assert))
+    return isinstance(
+        up,
+        (
+            ast.Compare,
+            ast.BoolOp,
+            ast.UnaryOp,
+            ast.BinOp,
+            ast.FormattedValue,
+            ast.Return,
+            ast.Expr,
+            ast.If,
+            ast.While,
+            ast.Assert,
+        ),
+    )
 
 
 def _escaped_names(func_def: ast.AST) -> frozenset[str]:
@@ -378,11 +549,12 @@ class _FreshFlow:
         key = _DEEP + f.value.id
         if f.attr in _INSERTING_METHODS:
             which = _INSERTING_METHODS[f.attr]
-            args = call.args if which < 0 else call.args[which:which + 1]
+            args = call.args if which < 0 else call.args[which : which + 1]
             ok = all(_fresh_or_immutable(a, fresh) for a in args)
         elif f.attr in _MERGING_METHODS:
             ok = all(_deep_value(a, fresh) or self._deep(a, fresh) for a in call.args) and all(
-                _fresh_or_immutable(kw.value, fresh) for kw in call.keywords)
+                _fresh_or_immutable(kw.value, fresh) for kw in call.keywords
+            )
         else:
             ok = f.attr in _NON_INSERTING_METHODS
         if not ok:
@@ -411,11 +583,10 @@ class _FreshFlow:
             self.marks[id(node)] = node.id in fresh
         elif isinstance(node, ast.Subscript):
             if self._deep(node.value, fresh):
-                self.marks[id(node)] = True     # an element of a deep container
+                self.marks[id(node)] = True  # an element of a deep container
         elif isinstance(node, ast.Call):
             f = node.func
-            if (isinstance(f, ast.Attribute) and f.attr in _ELEMENT_METHODS
-                    and self._deep(f.value, fresh)):
+            if isinstance(f, ast.Attribute) and f.attr in _ELEMENT_METHODS and self._deep(f.value, fresh):
                 self.marks[id(node)] = True
         for child in ast.iter_child_nodes(node):
             if not isinstance(child, ast.stmt):
@@ -439,23 +610,28 @@ class _FreshFlow:
                     out.add(tgt.id)
                 else:
                     out.discard(tgt.id)
-                if tgt.id not in self.excluded and tgt.id not in self.escaped \
-                        and _deep_value(value, fresh):
+                if tgt.id not in self.excluded and tgt.id not in self.escaped and _deep_value(value, fresh):
                     out.add(_DEEP + tgt.id)
                 else:
                     out.discard(_DEEP + tgt.id)
             elif isinstance(tgt, (ast.Tuple, ast.List)):
                 # `a, b = [], []` pairs up; anything else unpacks elements,
                 # which may be anyone's objects.
-                pairs = (isinstance(value, (ast.Tuple, ast.List))
-                         and len(value.elts) == len(tgt.elts)
-                         and not any(isinstance(e, ast.Starred) for e in tgt.elts))
+                pairs = (
+                    isinstance(value, (ast.Tuple, ast.List))
+                    and len(value.elts) == len(tgt.elts)
+                    and not any(isinstance(e, ast.Starred) for e in tgt.elts)
+                )
                 for i, elt in enumerate(tgt.elts):
                     names: set[str] = set()
                     _bound_names(elt, names)
                     out = _without(out, names)
-                    if (pairs and isinstance(elt, ast.Name) and elt.id not in self.excluded
-                            and expr_is_fresh(value.elts[i], fresh)):
+                    if (
+                        pairs
+                        and isinstance(elt, ast.Name)
+                        and elt.id not in self.excluded
+                        and expr_is_fresh(value.elts[i], fresh)
+                    ):
                         out.add(elt.id)
             elif isinstance(tgt, ast.Subscript) and self._deep(tgt.value, fresh):
                 # `d[k] = v` puts v into d.
@@ -468,29 +644,48 @@ class _FreshFlow:
         """Loop variables that hold a fresh object each time round: the
         elements of a deep container, and the rows a csv reader makes."""
         # `sorted(d.items())`, `list(d)`: the same elements, reordered or copied.
-        while (isinstance(it, ast.Call) and isinstance(it.func, ast.Name)
-               and it.func.id in ("sorted", "list", "tuple", "reversed")
-               and len(it.args) == 1):
+        while (
+            isinstance(it, ast.Call)
+            and isinstance(it.func, ast.Name)
+            and it.func.id in ("sorted", "list", "tuple", "reversed")
+            and len(it.args) == 1
+        ):
             it = it.args[0]
-        if (isinstance(it, ast.Call) and isinstance(it.func, ast.Name)
-                and it.func.id == "enumerate" and it.args
-                and isinstance(target, ast.Tuple) and len(target.elts) == 2):
+        if (
+            isinstance(it, ast.Call)
+            and isinstance(it.func, ast.Name)
+            and it.func.id == "enumerate"
+            and it.args
+            and isinstance(target, ast.Tuple)
+            and len(target.elts) == 2
+        ):
             it, target = it.args[0], target.elts[1]
         if isinstance(it, ast.Call) and isinstance(it.func, ast.Attribute) and not it.args:
             if it.func.attr == "values" and self._deep(it.func.value, fresh):
                 return {target.id} if isinstance(target, ast.Name) else set()
-            if (it.func.attr == "items" and self._deep(it.func.value, fresh)
-                    and isinstance(target, ast.Tuple) and len(target.elts) == 2
-                    and isinstance(target.elts[1], ast.Name)):
+            if (
+                it.func.attr == "items"
+                and self._deep(it.func.value, fresh)
+                and isinstance(target, ast.Tuple)
+                and len(target.elts) == 2
+                and isinstance(target.elts[1], ast.Name)
+            ):
                 return {target.elts[1].id}
         if (self._deep(it, fresh) or _is_csv_rows(it)) and isinstance(target, ast.Name):
             return {target.id}
         return set()
 
-    def _loop(self, header: list[ast.AST], names: set[str], body: list[ast.stmt],
-              orelse: list[ast.stmt], fresh: set[str], bound=None) -> set[str]:
+    def _loop(
+        self,
+        header: list[ast.AST],
+        names: set[str],
+        body: list[ast.stmt],
+        orelse: list[ast.stmt],
+        fresh: set[str],
+        bound=None,
+    ) -> set[str]:
         head = _without(fresh, names)
-        while True:                     # to the fixpoint: an iteration may undo freshness
+        while True:  # to the fixpoint: an iteration may undo freshness
             state = head | (bound(head) if bound is not None else set())
             for h in header:
                 self._mark(h, state)
@@ -514,13 +709,19 @@ class _FreshFlow:
         if isinstance(s, ast.AugAssign):
             self._mark(s.value, fresh)
             self._mark(s.target, fresh)
-            return set(fresh)           # in place: the identity is unchanged
+            return set(fresh)  # in place: the identity is unchanged
         if isinstance(s, (ast.For, ast.AsyncFor)):
             self._mark(s.iter, fresh)
             names: set[str] = set()
             _bound_names(s.target, names)
-            return self._loop([s.target], names, s.body, s.orelse, fresh,
-                              bound=lambda state: self._loop_targets(s.target, s.iter, state))
+            return self._loop(
+                [s.target],
+                names,
+                s.body,
+                s.orelse,
+                fresh,
+                bound=lambda state: self._loop_targets(s.target, s.iter, state),
+            )
         if isinstance(s, ast.While):
             return self._loop([s.test], set(), s.body, s.orelse, fresh)
         if isinstance(s, ast.If):
@@ -537,7 +738,7 @@ class _FreshFlow:
             return self.block(s.body, out)
         if isinstance(s, ast.Try) or type(s).__name__ == "TryStar":
             body_end = self.block(s.body, fresh)
-            start = set(fresh) & body_end   # a handler may run from any point
+            start = set(fresh) & body_end  # a handler may run from any point
             ends = [self.block(s.orelse, body_end)]
             for h in s.handlers:
                 self._mark(h.type, start)
@@ -559,14 +760,12 @@ class _FreshFlow:
         for child in ast.iter_child_nodes(s):
             if not isinstance(child, ast.stmt):
                 self._mark(child, fresh)
-        bodies = [v for _, v in ast.iter_fields(s)
-                  if isinstance(v, list) and v and isinstance(v[0], ast.stmt)]
+        bodies = [v for _, v in ast.iter_fields(s) if isinstance(v, list) and v and isinstance(v[0], ast.stmt)]
         bodies += [case.body for case in getattr(s, "cases", [])]
         out = set(fresh)
         if bodies:
             out = set.intersection(*(self.block(b, fresh) for b in bodies))
-            out = _without(out, {n.id for n in ast.walk(s)
-                                 if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)})
+            out = _without(out, {n.id for n in ast.walk(s) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)})
         return _without(out, _walrus_names(s))
 
 
@@ -587,16 +786,29 @@ def fresh_name_nodes(func_def: ast.AST) -> frozenset[int]:
 
 # -- ambient reads that only reach a log line --------------------------------
 
-_LOG_METHODS = frozenset({"debug", "info", "warning", "warn", "error", "exception",
-                          "critical", "log"})
+_LOG_METHODS = frozenset({"debug", "info", "warning", "warn", "error", "exception", "critical", "log"})
 
 #: Expression nodes a value passes through on its way to wherever it ends up.
 #: A dict / list / set literal too: ``logger.info(json.dumps({"ts": now}))``
 #: is a structured log line, and the literal only carries the value to it.
-_TRANSPARENT = (ast.BinOp, ast.UnaryOp, ast.JoinedStr, ast.FormattedValue,
-                ast.Call, ast.Attribute, ast.Subscript, ast.Compare, ast.IfExp,
-                ast.BoolOp, ast.Tuple, ast.keyword, ast.Starred,
-                ast.Dict, ast.List, ast.Set)
+_TRANSPARENT = (
+    ast.BinOp,
+    ast.UnaryOp,
+    ast.JoinedStr,
+    ast.FormattedValue,
+    ast.Call,
+    ast.Attribute,
+    ast.Subscript,
+    ast.Compare,
+    ast.IfExp,
+    ast.BoolOp,
+    ast.Tuple,
+    ast.keyword,
+    ast.Starred,
+    ast.Dict,
+    ast.List,
+    ast.Set,
+)
 
 
 def _is_log_sink(call: ast.Call, log_helpers: frozenset[str] = frozenset()) -> bool:
@@ -614,12 +826,12 @@ def _is_log_sink(call: ast.Call, log_helpers: frozenset[str] = frozenset()) -> b
     # way was reported (found attacking the decorator before round 26).
     if isinstance(recv, ast.Call) and f.attr in _LOG_METHODS:
         callee = recv.func
-        made_by = (callee.attr if isinstance(callee, ast.Attribute)
-                   else callee.id if isinstance(callee, ast.Name) else "")
+        made_by = (
+            callee.attr if isinstance(callee, ast.Attribute) else callee.id if isinstance(callee, ast.Name) else ""
+        )
         if made_by == "getLogger":
             return True
-    recv_name = (recv.attr if isinstance(recv, ast.Attribute)
-                 else recv.id if isinstance(recv, ast.Name) else "")
+    recv_name = recv.attr if isinstance(recv, ast.Attribute) else recv.id if isinstance(recv, ast.Name) else ""
     if f.attr in _LOG_METHODS and "log" in recv_name.lower():
         return True
     if f.attr == "write" and recv_name in ("stderr", "stdout"):
@@ -630,8 +842,7 @@ def _is_log_sink(call: ast.Call, log_helpers: frozenset[str] = frozenset()) -> b
 def _is_stderr(node: ast.AST) -> bool:
     """``sys.stderr`` / ``sys.__stderr__``, or ``stderr`` imported from sys."""
     if isinstance(node, ast.Attribute):
-        return (node.attr in ("stderr", "__stderr__") and isinstance(node.value, ast.Name)
-                and node.value.id == "sys")
+        return node.attr in ("stderr", "__stderr__") and isinstance(node.value, ast.Name) and node.value.id == "sys"
     return isinstance(node, ast.Name) and node.id == "stderr"
 
 
@@ -648,8 +859,7 @@ def is_log_line(call: ast.Call) -> bool:
     """
     f = call.func
     if isinstance(f, ast.Name):
-        return f.id == "print" and any(
-            kw.arg == "file" and _is_stderr(kw.value) for kw in call.keywords)
+        return f.id == "print" and any(kw.arg == "file" and _is_stderr(kw.value) for kw in call.keywords)
     if not isinstance(f, ast.Attribute):
         return False
     recv = f.value
@@ -658,19 +868,33 @@ def is_log_line(call: ast.Call) -> bool:
     # way was reported (found attacking the decorator before round 26).
     if isinstance(recv, ast.Call) and f.attr in _LOG_METHODS:
         callee = recv.func
-        made_by = (callee.attr if isinstance(callee, ast.Attribute)
-                   else callee.id if isinstance(callee, ast.Name) else "")
+        made_by = (
+            callee.attr if isinstance(callee, ast.Attribute) else callee.id if isinstance(callee, ast.Name) else ""
+        )
         if made_by == "getLogger":
             return True
-    recv_name = (recv.attr if isinstance(recv, ast.Attribute)
-                 else recv.id if isinstance(recv, ast.Name) else "")
+    recv_name = recv.attr if isinstance(recv, ast.Attribute) else recv.id if isinstance(recv, ast.Name) else ""
     if f.attr in _LOG_METHODS and "log" in recv_name.lower():
         return True
     return f.attr in ("write", "flush") and _is_stderr(recv)
 
 
-_SQL_WRITES = ("INSERT", "UPDATE", "DELETE", "REPLACE", "MERGE", "UPSERT", "CREATE",
-               "DROP", "ALTER", "TRUNCATE", "ATTACH", "DETACH", "VACUUM", "PRAGMA")
+_SQL_WRITES = (
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "REPLACE",
+    "MERGE",
+    "UPSERT",
+    "CREATE",
+    "DROP",
+    "ALTER",
+    "TRUNCATE",
+    "ATTACH",
+    "DETACH",
+    "VACUUM",
+    "PRAGMA",
+)
 
 
 def is_read_only_sql(call: ast.Call) -> bool:
@@ -703,16 +927,19 @@ def is_log_helper(func_def: ast.AST) -> bool:
     makes it an ordinary function.
     """
     body = list(getattr(func_def, "body", []))
-    if (body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant)
-            and isinstance(body[0].value.value, str)):
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
         body = body[1:]
     if not body:
         return False
     for stmt in body:
         if isinstance(stmt, ast.Return) and stmt.value is None:
             continue
-        if not (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)
-                and _is_log_sink(stmt.value)):
+        if not (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call) and _is_log_sink(stmt.value)):
             return False
     return True
 
@@ -736,8 +963,7 @@ class LogOnlyFlow:
             up = self._parent.get(id(child))
             if up is None:
                 return False
-            if (isinstance(up, ast.Call) and child is not up.func
-                    and _is_log_sink(up, self._log_helpers)):
+            if isinstance(up, ast.Call) and child is not up.func and _is_log_sink(up, self._log_helpers):
                 return True
             if isinstance(up, _TRANSPARENT):
                 child = up
@@ -746,12 +972,12 @@ class LogOnlyFlow:
                 return all(self._name_only_logged(t, _names) for t in up.targets)
             if isinstance(up, (ast.AugAssign, ast.AnnAssign)) and child is up.value:
                 return self._name_only_logged(up.target, _names)
-            return False            # returned, stored, tested, passed on, ...
+            return False  # returned, stored, tested, passed on, ...
 
     def _name_only_logged(self, target: ast.AST, names: frozenset[str]) -> bool:
         if not isinstance(target, ast.Name):
-            return False            # stored into something: it escapes
+            return False  # stored into something: it escapes
         if target.id in names:
-            return True             # already being followed up the chain
+            return True  # already being followed up the chain
         uses = self._loads.get(target.id, [])
         return all(self.only_logged(u, names | {target.id}) for u in uses)

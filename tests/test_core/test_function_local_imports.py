@@ -10,6 +10,7 @@ The helper module is imported by the analysis when the first call has not run
 the body yet (that is the import the body is about to make); a LIBRARY module
 is never imported early on a function's behalf.
 """
+
 from __future__ import annotations
 
 import os
@@ -29,7 +30,7 @@ BODIES = {
     "aliased": "    from helpmod import scale as sc\n    return sum(sc(v) for v in values)\n",
 }
 
-JOB = '''\
+JOB = """\
 import sys, time
 import cash
 
@@ -39,14 +40,13 @@ def total(values):
     time.sleep(0.2)  # @cash:assume-safe
 {BODY}
 print(total([1, 2, 3]))
-'''
+"""
 
 
 def _run(proj, script="job.py"):
     env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
     env.update(PYTHONDONTWRITEBYTECODE="1", CASH_CACHE_DIR=str(proj / ".cash"))
-    p = subprocess.run([sys.executable, script], cwd=str(proj), env=env,
-                       capture_output=True, text=True, timeout=120)
+    p = subprocess.run([sys.executable, script], cwd=str(proj), env=env, capture_output=True, text=True, timeout=120)
     assert p.returncode == 0, p.stderr[-2000:]
     return p.stdout.strip(), "[RUN]" in p.stderr
 
@@ -67,7 +67,8 @@ def test_a_relative_import_inside_a_package_function(tmp_path):
     pkg.mkdir()
     (pkg / "__init__.py").write_text("", encoding="utf-8")
     (pkg / "helpmod.py").write_text(HELPER.format(K=2), encoding="utf-8")
-    (pkg / "steps.py").write_text(textwrap.dedent('''
+    (pkg / "steps.py").write_text(
+        textwrap.dedent("""
         import sys, time
         import cash
 
@@ -77,9 +78,10 @@ def test_a_relative_import_inside_a_package_function(tmp_path):
             time.sleep(0.2)  # @cash:assume-safe
             from .helpmod import scale
             return sum(scale(v) for v in values)
-    '''), encoding="utf-8")
-    (tmp_path / "job.py").write_text("from pkg.steps import total\nprint(total([1, 2, 3]))\n",
-                                     encoding="utf-8")
+    """),
+        encoding="utf-8",
+    )
+    (tmp_path / "job.py").write_text("from pkg.steps import total\nprint(total([1, 2, 3]))\n", encoding="utf-8")
     assert _run(tmp_path) == ("12", True)
     assert _run(tmp_path) == ("12", False)
     (pkg / "helpmod.py").write_text(HELPER.format(K=3), encoding="utf-8")
@@ -89,7 +91,8 @@ def test_a_relative_import_inside_a_package_function(tmp_path):
 def test_a_library_imported_in_a_branch_that_does_not_run_is_not_imported(tmp_path):
     """Control: deferring a heavy import into a function is deliberate, and the
     analysis must not undo it. `tabnanny` stands in for the heavy library."""
-    (tmp_path / "job.py").write_text(textwrap.dedent('''
+    (tmp_path / "job.py").write_text(
+        textwrap.dedent("""
         import sys, time
         import cash
 
@@ -103,7 +106,9 @@ def test_a_library_imported_in_a_branch_that_does_not_run_is_not_imported(tmp_pa
 
         assert "tabnanny" not in sys.modules
         print(total([1, 2, 3]), "tabnanny" in sys.modules)
-    '''), encoding="utf-8")
+    """),
+        encoding="utf-8",
+    )
     assert _run(tmp_path)[0] == "6 False"
 
 
@@ -112,7 +117,7 @@ def test_a_library_imported_in_a_branch_that_does_not_run_is_not_imported(tmp_pa
 SETTINGS = "ROUNDING = {K}\n"
 
 CONSTANT_JOBS = {
-    "constant-from-import": '''\
+    "constant-from-import": """\
 import sys, time
 import cash
 
@@ -124,8 +129,8 @@ def total(values):
     return round(sum(values) / 7, ROUNDING)
 
 print(total([1, 2, 3]))
-''',
-    "module-attribute": '''\
+""",
+    "module-attribute": """\
 import sys, time
 import cash
 
@@ -137,8 +142,8 @@ def total(values):
     return round(sum(values) / 7, settingsmod.ROUNDING)
 
 print(total([1, 2, 3]))
-''',
-    "decorator-factory-captures-the-module": '''\
+""",
+    "decorator-factory-captures-the-module": """\
 import functools, sys, time
 import cash
 
@@ -162,7 +167,7 @@ def total(values):
     return ratio(values)
 
 print(total([1, 2, 3]))
-''',
+""",
 }
 
 

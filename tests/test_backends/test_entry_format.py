@@ -12,6 +12,7 @@ rewrite the value. Every ``get`` bumps ``last_access`` and the flusher writes
 it back every few seconds; if that rewrote the whole entry, reading a 100MB
 frame would rewrite 100MB on a timer.
 """
+
 from __future__ import annotations
 
 import os
@@ -89,8 +90,7 @@ BIG = 4 * 1024 * 1024
 
 def _write_big(tmp_path, payload=b"z" * BIG):
     path = str(tmp_path / "big.entry")
-    meta = {"key": "k", "size": len(payload), "created_at": 0.0,
-            "last_access": 1.0, "access_count": 1}
+    meta = {"key": "k", "size": len(payload), "created_at": 0.0, "last_access": 1.0, "access_count": 1}
     with open(path, "wb") as fh:
         fh.write(pack_entry(meta, payload))
     return path, meta, payload
@@ -99,6 +99,7 @@ def _write_big(tmp_path, payload=b"z" * BIG):
 # ---------------------------------------------------------------------------
 # The property the two-file split existed to guarantee
 # ---------------------------------------------------------------------------
+
 
 def test_reading_metadata_does_not_read_the_payload(tmp_path, counted):
     """A 4MB entry must cost a few hundred bytes to inspect."""
@@ -152,14 +153,14 @@ def test_metadata_read_cost_is_flat_in_payload_size(tmp_path, counted):
     read_entry(big, with_payload=False)
 
     assert sum(reads) == small_bytes, (
-        f"a {BIG:,}-byte entry cost {sum(reads)} bytes to inspect against "
-        f"{small_bytes} for a 100-byte one"
+        f"a {BIG:,}-byte entry cost {sum(reads)} bytes to inspect against {small_bytes} for a 100-byte one"
     )
 
 
 # ---------------------------------------------------------------------------
 # Recording an access must not rewrite the value
 # ---------------------------------------------------------------------------
+
 
 def test_updating_metadata_does_not_rewrite_the_payload(tmp_path, counted):
     _reads, writes = counted
@@ -197,9 +198,15 @@ def test_the_reserved_slack_absorbs_what_a_read_adds(tmp_path):
     ``access_count``, a new ``last_access``, and the ``source`` key.
     """
     path = str(tmp_path / "e.entry")
-    meta = {"key": "m.f:state:0:args", "size": 512, "created_at": 1.0,
-            "last_access": 1.0, "access_count": 0, "compressed": False,
-            "storage": ["DISK"]}
+    meta = {
+        "key": "m.f:state:0:args",
+        "size": 512,
+        "created_at": 1.0,
+        "last_access": 1.0,
+        "access_count": 0,
+        "compressed": False,
+        "storage": ["DISK"],
+    }
     with open(path, "wb") as fh:
         fh.write(pack_entry(meta, b"x" * 512))
 
@@ -213,6 +220,7 @@ def test_the_reserved_slack_absorbs_what_a_read_adds(tmp_path):
 # ---------------------------------------------------------------------------
 # Shape
 # ---------------------------------------------------------------------------
+
 
 def test_round_trip(tmp_path):
     path = str(tmp_path / "e.entry")
@@ -244,6 +252,7 @@ def test_unreadable_bytes_raise_rather_than_return_junk(tmp_path, bad):
 # End to end, through the backend
 # ---------------------------------------------------------------------------
 
+
 def test_a_flush_after_a_read_leaves_a_big_value_intact(tmp_path):
     """The whole point, reached the way a session reaches it."""
     backend = FileBackend(str(tmp_path / "c"), flush_interval=0)
@@ -251,7 +260,7 @@ def test_a_flush_after_a_read_leaves_a_big_value_intact(tmp_path):
     backend.set("k", payload)
     backend._writes.wait_all()
 
-    assert backend.get("k")[1] == payload      # dirties last_access
+    assert backend.get("k")[1] == payload  # dirties last_access
     backend._flush_metadata()
 
     metadata, value = backend.get("k")

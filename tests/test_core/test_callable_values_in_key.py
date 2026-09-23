@@ -15,6 +15,7 @@ Each shape is edited twice, in fresh processes on one cache: A changes the
 value baked in (2 -> 3), B the body (`x * k` -> `x * k + 1`). Values [1, 2, 3]
 give 12 before, 18 after A, 21 after B. The second (unedited) run must hit.
 """
+
 from __future__ import annotations
 
 import os
@@ -39,7 +40,7 @@ SHAPES = {
     "factory_closure": "def make(k):\n    def f(x):\n        return {BODY}\n    return f\nF = make({K})\n",
 }
 
-AS_GLOBAL = textwrap.dedent('''
+AS_GLOBAL = textwrap.dedent("""
     import sys, time
     import cash
     import cbmod
@@ -51,9 +52,9 @@ AS_GLOBAL = textwrap.dedent('''
         return sum(cbmod.F(v) for v in values)
 
     print(run([1, 2, 3]))
-''')
+""")
 
-AS_DEFAULT = textwrap.dedent('''
+AS_DEFAULT = textwrap.dedent("""
     import sys, time
     import cash
     from cbmod import F
@@ -65,7 +66,7 @@ AS_DEFAULT = textwrap.dedent('''
         return sum(fn(v) for v in values)
 
     print(run([1, 2, 3]))
-''')
+""")
 
 
 def _module(template, k, body):
@@ -77,8 +78,7 @@ def _module(template, k, body):
 def _run(proj):
     env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
     env.update(PYTHONDONTWRITEBYTECODE="1", CASH_CACHE_DIR=str(proj / ".cash"))
-    p = subprocess.run([sys.executable, "job.py"], cwd=str(proj), env=env,
-                       capture_output=True, text=True, timeout=120)
+    p = subprocess.run([sys.executable, "job.py"], cwd=str(proj), env=env, capture_output=True, text=True, timeout=120)
     assert p.returncode == 0, p.stderr[-2000:]
     return p.stdout.strip(), "[RUN]" in p.stderr, p.stderr
 

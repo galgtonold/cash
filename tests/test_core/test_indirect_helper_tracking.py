@@ -10,11 +10,11 @@ Cross-process, because the stale-serve only shows up when a second process
 rebuilds the key and matches the persisted entry. `time.sleep(0.3)` clears the
 persistence floor; without it nothing persists and the test is vacuous.
 """
+
 from __future__ import annotations
 
 import subprocess
 import sys
-import textwrap
 
 import pytest
 
@@ -23,14 +23,16 @@ pytestmark = pytest.mark.slow
 
 def _run(tmp_path):
     cp = subprocess.run(
-        [sys.executable, "main.py"], cwd=str(tmp_path),
-        capture_output=True, text=True,
+        [sys.executable, "main.py"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
     )
     assert cp.returncode == 0, f"script failed:\n{cp.stdout}\n{cp.stderr}"
     return cp.stdout.strip()
 
 
-MAIN = '''\
+MAIN = """\
 import warnings; warnings.simplefilter("ignore")
 import time
 import cash
@@ -57,7 +59,7 @@ def via_argument(x):
     return _apply(helper, x)   # helper passed as an argument
 
 print("V", via_variable(5), "A", via_argument(5), "RAN", RAN[0])
-'''
+"""
 
 
 def _write(tmp_path, delta):

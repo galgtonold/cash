@@ -17,6 +17,7 @@ this duplicate.
 Counted, not timed: the defect is "the same value is hashed twice", which is
 exact. A wall-clock threshold would be the flakiest possible way to assert it.
 """
+
 from __future__ import annotations
 
 import tempfile
@@ -33,11 +34,7 @@ from tests.conftest import MockShell
 
 ITERATIONS = 4
 
-CELL = (
-    "seen = []\n"
-    "for arr in arrays:\n"
-    "    seen.append(float(arr.sum()))\n"
-)
+CELL = "seen = []\nfor arr in arrays:\n    seen.append(float(arr.sum()))\n"
 
 
 @pytest.fixture
@@ -52,18 +49,14 @@ def counting_magics(monkeypatch):
 
     # Both call sites import this function-locally, at call time, so patching
     # the module attribute reaches them.
-    monkeypatch.setattr(
-        object_hashing, "compute_hash_full", counting_compute_hash_full
-    )
+    monkeypatch.setattr(object_hashing, "compute_hash_full", counting_compute_hash_full)
 
     shell = MockShell()
     cash = Cash(cache_dir=tempfile.mkdtemp(), register_magic=False)
     magics = CashMagics(shell, cash)
     magics.cash_on("")
     magics._badge_mode = "off"
-    shell.user_ns["arrays"] = [
-        np.arange(1000, dtype=float) + i for i in range(ITERATIONS)
-    ]
+    shell.user_ns["arrays"] = [np.arange(1000, dtype=float) + i for i in range(ITERATIONS)]
     return magics, counts
 
 

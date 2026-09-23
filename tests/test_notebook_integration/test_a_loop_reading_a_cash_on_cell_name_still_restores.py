@@ -32,6 +32,7 @@ slowly. The gap is filled from the SIMULATION's lineage, not from a value
 invented for the occasion, so editing that cell moves it and the record
 correctly stops matching.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
@@ -51,8 +52,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 # deliberately NOT marked: a stale answer is never a load artifact.
 LOAD_SENSITIVE = pytest.mark.flaky(reruns=2, reruns_delay=5, only_rerun=["re-ran"])
 
-HEAD = ("import cash\n%cash_on\n%cash_persist on\n%cash_badge print\n"
-        "from pathlib import Path")
+HEAD = "import cash\n%cash_on\n%cash_persist on\n%cash_badge print\nfrom pathlib import Path"
 
 #: The body has to be worth caching or the point is unreachable: a trivial
 #: one is under the min-execution-time floor, so its iterations re-run on
@@ -62,9 +62,7 @@ WORK = "sum(i * i for i in range(2_000_000))"
 
 # Built by concatenation, not %-formatting: these cell sources are full of
 # literal `%` and a template gets away from you fast.
-LOOP = ("OUT = {}\n"
-        "for line in DATA.read_text().splitlines():\n"
-        "    OUT[line] = len(line) + " + WORK + " % 7\n")
+LOOP = "OUT = {}\nfor line in DATA.read_text().splitlines():\n    OUT[line] = len(line) + " + WORK + " % 7\n"
 
 TOTAL = "TOTAL = sum(OUT.values()) + " + WORK + " % 11"
 SUMM = "SUMMARY = 'R total=' + str(TOTAL + " + WORK + " % 13)"
@@ -89,14 +87,12 @@ def _bind(path):
 
 def _data(tmp_path, name, rows):
     path = tmp_path / name
-    path.write_text("\n".join("row%02d" % i for i in range(rows)) + "\n",
-                    encoding="utf-8")
+    path.write_text("\n".join("row%02d" % i for i in range(rows)) + "\n", encoding="utf-8")
     return path
 
 
 @LOAD_SENSITIVE
-def test_a_loop_reading_a_cash_on_cell_name_is_not_re_run_after_a_restart(
-        nb_runner, tmp_path):
+def test_a_loop_reading_a_cash_on_cell_name_is_not_re_run_after_a_restart(nb_runner, tmp_path):
     """The case that was costing a full chain re-run on every restart."""
     data = _data(tmp_path, "rows.txt", 8)
     cells = [HEAD + "\n" + _bind(data), LOOP, TOTAL, SUMM, SHOW]
@@ -116,8 +112,7 @@ def test_a_loop_reading_a_cash_on_cell_name_is_not_re_run_after_a_restart(
     raw = nb_runner.get_raw_output(5)
     assert "R total=" in nb_runner.get_output(5), raw
     assert "8 ran" not in raw, (
-        "the loop re-ran all eight iterations after the restart; its "
-        "recorded outcome was not adopted:\n" + raw
+        "the loop re-ran all eight iterations after the restart; its recorded outcome was not adopted:\n" + raw
     )
 
 
@@ -141,13 +136,11 @@ def test_the_same_loop_with_its_input_one_cell_lower(nb_runner, tmp_path):
     assert "R total=" in nb_runner.get_output(6), raw
     assert "8 ran" not in raw, (
         # The word "re-ran" is what makes LOAD_SENSITIVE retry this; keep it.
-        "the loop re-ran all eight iterations after the restart, in the "
-        "shape that has always worked:\n" + raw
+        "the loop re-ran all eight iterations after the restart, in the shape that has always worked:\n" + raw
     )
 
 
-def test_editing_the_cash_on_cell_still_invalidates_the_loop(
-        nb_runner, tmp_path):
+def test_editing_the_cash_on_cell_still_invalidates_the_loop(nb_runner, tmp_path):
     """The safety control, and the reason the obvious fix was rejected.
 
     Trusting the record whenever its own keys agree would have kept serving

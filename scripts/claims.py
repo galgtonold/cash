@@ -23,6 +23,7 @@ about that same code and pins nothing (see `_print_unanchored`). That prose is
 invisible to every check in `tests/docs/` no matter how false it goes, and the
 moment a target drifts is the one moment somebody is already re-reading it.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -113,9 +114,7 @@ def _print_unanchored(drifted: list[Problem]) -> None:
     """
     targets: list[Target] = []
     for p in drifted:
-        if p.target is not None and not any(
-            t.path == p.target.path and t.symbol == p.target.symbol for t in targets
-        ):
+        if p.target is not None and not any(t.path == p.target.path and t.symbol == p.target.symbol for t in targets):
             targets.append(p.target)
 
     pages = published_pages()
@@ -352,8 +351,7 @@ def _cmd_report(src_path: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--queue", action="store_true", help="list drifted claims")
     g.add_argument("--pin", action="store_true", help="fill in every @? placeholder")

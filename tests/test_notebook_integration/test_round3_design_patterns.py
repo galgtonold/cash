@@ -1,5 +1,7 @@
 """Batch 58: Design patterns — Observer, Strategy, Builder, State with cash caching."""
+
 import textwrap
+
 import pytest
 
 
@@ -9,8 +11,9 @@ class TestObserverPattern:
 
     def test_observer_basic(self, nb_runner):
         """Observer pattern with publish/subscribe."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class EventEmitter:
                     def __init__(self):
                         self._listeners = {}
@@ -29,13 +32,14 @@ class TestObserverPattern:
                 emitter.on('data', lambda x: results.append(f"got:{x}"))
                 emitter.on('data', lambda x: results.append(f"also:{x}"))
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 emitter.emit('data', 42)
                 emitter.emit('data', 99)
                 print(f"results={results}")
                 print(f"history_count={len(emitter._history)}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -50,8 +54,9 @@ class TestStrategyPattern:
 
     def test_strategy_swap(self, nb_runner):
         """Strategy pattern with swappable algorithms."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class Sorter:
                     def __init__(self, strategy=None):
                         self.strategy = strategy or sorted
@@ -69,7 +74,7 @@ class TestStrategyPattern:
                 reverse_sorter = Sorter(reverse_sort)
                 abs_sorter = Sorter(abs_sort)
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 data = [3, -1, 4, -1, 5, -9, 2, 6]
                 r1 = default_sorter.sort(data)
                 r2 = reverse_sorter.sort(data)
@@ -78,7 +83,8 @@ class TestStrategyPattern:
                 print(f"reverse={r2}")
                 print(f"abs={r3}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -87,25 +93,30 @@ class TestStrategyPattern:
 
     def test_strategy_change_propagates(self, nb_runner):
         """Changing strategy function propagates."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 def formatter(x):
                     return f"${x:.2f}"
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 prices = [10, 20.5, 3.99]
                 formatted = [formatter(p) for p in prices]
                 print(f"formatted={formatted}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "$10.00" in nb_runner.get_output(2)
 
-        nb_runner.set_cell_source(1, textwrap.dedent("""\
+        nb_runner.set_cell_source(
+            1,
+            textwrap.dedent("""\
             def formatter(x):
                 return f"EUR {x:.2f}"
-        """))
+        """),
+        )
         nb_runner.run_all()
         assert "EUR 10.00" in nb_runner.get_output(2)
 
@@ -116,8 +127,9 @@ class TestBuilderPattern:
 
     def test_query_builder(self, nb_runner):
         """Builder pattern for SQL-like query construction."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class QueryBuilder:
                     def __init__(self, table):
                         self._table = table
@@ -147,7 +159,7 @@ class TestBuilderPattern:
                             sql += f" LIMIT {self._limit}"
                         return sql
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 query = (QueryBuilder("users")
                     .where("age > 18")
                     .where("active = true")
@@ -156,7 +168,8 @@ class TestBuilderPattern:
                     .build())
                 print(f"query={query}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -171,8 +184,9 @@ class TestStateMachinePattern:
 
     def test_simple_state_machine(self, nb_runner):
         """State machine with transitions."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class StateMachine:
                     def __init__(self, initial):
                         self.state = initial
@@ -196,7 +210,7 @@ class TestStateMachinePattern:
                 sm.add_transition('paused', 'resume', 'running')
                 sm.add_transition('running', 'stop', 'idle')
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 sm.trigger('start')
                 sm.trigger('pause')
                 sm.trigger('resume')
@@ -204,7 +218,8 @@ class TestStateMachinePattern:
                 print(f"state={sm.state}")
                 print(f"history={sm.history}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -213,8 +228,9 @@ class TestStateMachinePattern:
 
     def test_state_machine_change(self, nb_runner):
         """Changing state machine transitions propagates."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class FSM:
                     def __init__(self):
                         self.state = 'A'
@@ -225,16 +241,19 @@ class TestStateMachinePattern:
 
                 fsm = FSM()
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 states = [fsm.step() for _ in range(6)]
                 print(f"states={states}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "states=['B', 'C', 'A', 'B', 'C', 'A']" in nb_runner.get_output(2)
 
-        nb_runner.set_cell_source(1, textwrap.dedent("""\
+        nb_runner.set_cell_source(
+            1,
+            textwrap.dedent("""\
             class FSM:
                 def __init__(self):
                     self.state = 'X'
@@ -244,6 +263,7 @@ class TestStateMachinePattern:
                     return self.state
 
             fsm = FSM()
-        """))
+        """),
+        )
         nb_runner.run_all()
         assert "states=['Y', 'X', 'Y', 'X', 'Y', 'X']" in nb_runner.get_output(2)

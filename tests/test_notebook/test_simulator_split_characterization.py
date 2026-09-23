@@ -5,21 +5,23 @@ split (docs/superpowers/plans/2026-05-16-notebook-simulator-split.md).
 They MUST stay green through every extraction task. Do not weaken them
 to make a refactor easier — fix the refactor instead.
 """
+
 from __future__ import annotations
 
 import copy
-import pytest
 from unittest.mock import MagicMock
 
-from cash.notebook.ipython.magics import CashMagics
-from cash.core import Cash
-from cash.backends import InMemoryBackend
+import pytest
 from traitlets.config.configurable import Configurable
 
+from cash.backends import InMemoryBackend
+from cash.core import Cash
+from cash.notebook.ipython.magics import CashMagics
 
 # ---------------------------------------------------------------------------
 # Shared fixture (defined locally — magics_fixture has no shared conftest)
 # ---------------------------------------------------------------------------
+
 
 class MockShell(Configurable):
     """Minimal mock IPython shell."""
@@ -51,6 +53,7 @@ def magics_fixture():
 # Helper
 # ---------------------------------------------------------------------------
 
+
 def _snapshot_tracking_state(simulator):
     """Deep-copy the TrackingState fields the simulator can write.
 
@@ -70,6 +73,7 @@ def _snapshot_tracking_state(simulator):
 # ---------------------------------------------------------------------------
 # Characterization tests
 # ---------------------------------------------------------------------------
+
 
 def test_clean_notebook_no_changes_returns_empty_plan(magics_fixture):
     """A notebook with no modifications produces no re-execution work."""
@@ -112,13 +116,9 @@ def test_modified_upstream_cell_schedules_reexecution(magics_fixture):
     )
 
     # At least one of the upstream statements must be scheduled.
-    assert len(stmts) > 0, (
-        f"expected upstream stmt to be re-scheduled, got {stmts!r}"
-    )
+    assert len(stmts) > 0, f"expected upstream stmt to be re-scheduled, got {stmts!r}"
     # The modified statement itself (or its dependent) must appear.
-    assert any("x" in s for s in stmts), (
-        f"expected a statement involving 'x' in re-execution plan, got {stmts!r}"
-    )
+    assert any("x" in s for s in stmts), f"expected a statement involving 'x' in re-execution plan, got {stmts!r}"
 
 
 def test_simulate_and_find_changes_return_types(magics_fixture):

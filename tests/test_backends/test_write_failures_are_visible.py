@@ -11,6 +11,7 @@ entry is permanently absent, and the user sees only unexplained cache misses.
 Whatever else is decided about durability (CAS-209), a failure must leave a
 trace.
 """
+
 from __future__ import annotations
 
 import logging
@@ -64,11 +65,9 @@ class TestFailureIsRecorded:
         pw = _failing_writes()
         with caplog.at_level(logging.WARNING, logger="cash.backends._base"):
             pw.shutdown(wait=True)
-        assert any("cache write(s) failed" in r.message or
-                   "cache write(s) failed" in r.getMessage()
-                   for r in caplog.records), (
-            f"no WARNING recorded; saw {[r.getMessage() for r in caplog.records]}"
-        )
+        assert any(
+            "cache write(s) failed" in r.message or "cache write(s) failed" in r.getMessage() for r in caplog.records
+        ), f"no WARNING recorded; saw {[r.getMessage() for r in caplog.records]}"
 
     def test_shutdown_never_raises(self):
         """shutdown() usually runs from atexit — raising there helps nobody."""
@@ -100,7 +99,6 @@ class TestFailureIsRecorded:
         try:
             with caplog.at_level(logging.DEBUG, logger="cash.backends._base"):
                 pw.wait_all()  # must not raise
-            assert any("Pending write failed" in r.getMessage()
-                       for r in caplog.records)
+            assert any("Pending write failed" in r.getMessage() for r in caplog.records)
         finally:
             pw.shutdown(wait=True)

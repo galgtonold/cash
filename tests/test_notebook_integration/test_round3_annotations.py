@@ -5,9 +5,10 @@ and debug mode behavior.
 Tests the special comment-based directives that control caching behavior
 at the statement level.
 """
-import pytest
+
 import textwrap
 
+import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.stress]
 
@@ -17,16 +18,18 @@ class TestNoCacheAnnotation:
 
     def test_no_cache_always_recomputes(self, nb_runner):
         """@cash: no-cache prevents caching of a statement."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 counter = 0
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 # @cash: no-cache
                 counter = counter + 1
                 print(counter)
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         output1 = nb_runner.get_output(2)
@@ -39,28 +42,32 @@ class TestNoCacheAnnotation:
 
     def test_no_cache_on_print(self, nb_runner):
         """@cash: no-cache on a print statement."""
-        nb_runner.create_notebook([
-            "x = 42",
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                "x = 42",
+                textwrap.dedent("""\
                 # @cash: no-cache
                 print(f"x = {x}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "x = 42" in nb_runner.get_output(2)
 
     def test_no_cache_mixed_with_cached(self, nb_runner):
         """Mix of cached and no-cache statements in same cell."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 a = 10
                 # @cash: no-cache
                 b = a + 1
                 c = a * 2
                 print(b, c)
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         output = nb_runner.get_output(1)
@@ -73,15 +80,17 @@ class TestAllowRandomAnnotation:
 
     def test_allow_random_permits_caching(self, nb_runner):
         """@cash: allow-random allows caching of random-containing code."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 import random
                 random.seed(42)
                 # @cash: allow-random
                 val = random.randint(1, 100)
                 print(val)
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         output = nb_runner.get_output(1)
@@ -94,11 +103,13 @@ class TestDebugMode:
 
     def test_debug_on_off(self, nb_runner):
         """Enable and disable debug mode."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "y = x + 1",
-            "print(y)",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "y = x + 1",
+                "print(y)",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.enable_debug()
         nb_runner.run_all()
@@ -110,35 +121,40 @@ class TestCashAnnotationEdgeCases:
 
     def test_annotation_with_spaces(self, nb_runner):
         """Annotation with extra spaces should still work."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 #  @cash:  no-cache
                 x = 42
                 print(x)
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "42" in nb_runner.get_output(1)
 
     def test_annotation_case_sensitivity(self, nb_runner):
         """Annotation must be lowercase @cash:."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 # This is just a comment, not an annotation
                 # @Cash: no-cache  
                 x = 100
                 print(x)
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "100" in nb_runner.get_output(1)
 
     def test_multiple_annotations(self, nb_runner):
         """Multiple cash annotations on a statement."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 import random
                 random.seed(42)
                 # @cash: allow-random
@@ -146,7 +162,8 @@ class TestCashAnnotationEdgeCases:
                 val = random.randint(1, 100)
                 print(val)
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         output = nb_runner.get_output(1)

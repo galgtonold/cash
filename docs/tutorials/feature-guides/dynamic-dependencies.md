@@ -40,7 +40,7 @@ The resolver receives **the same positional and keyword arguments as the decorat
 
 ## How it works
 
-<!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies @8ba1651b, cash/data_source.py:DataSource.state_token @fb386b76 -->
+<!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies @c065234b, cash/data_source.py:DataSource.state_token @fb386b76 -->
 The resolver lives in `Cash._resolve_dynamic_dependencies`. The path is:
 
 1. The resolver is called as `resolver(*args, **kwargs)` — same signature as the decorated function.
@@ -177,7 +177,7 @@ The warning text reads:
 
 Catching the exception and continuing means a transiently failing resolver (e.g. a temporary `OSError`) does not break your pipeline — it just degrades to a broader cache hit while you fix it.
 
-<!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies_silent @8c5eda76 -->
+<!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies_silent @dff56944 -->
 `f.explain()` uses a different variant — `Cash._resolve_dynamic_dependencies_silent` — which re-raises instead of warning, so introspection never emits warnings as a side effect. The resulting `CacheExplanation` carries `reason='key_uncomputable'` with the error type in `details`.
 
 ## Performance

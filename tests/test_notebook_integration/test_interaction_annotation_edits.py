@@ -14,10 +14,12 @@ class TestNoCacheAnnotationEdits:
 
     def test_add_no_cache_annotation(self, nb_runner):
         """Add @cash:no-cache annotation to a cell."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "y = x * 2\nprint(f'y = {y}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "y = x * 2\nprint(f'y = {y}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "y = 20" in nb_runner.get_output(2)
@@ -29,10 +31,12 @@ class TestNoCacheAnnotationEdits:
 
     def test_remove_no_cache_annotation(self, nb_runner):
         """Remove @cash:no-cache annotation."""
-        nb_runner.create_notebook([
-            "x = 5",
-            "# @cash:no-cache\ny = x + 1\nprint(f'y = {y}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 5",
+                "# @cash:no-cache\ny = x + 1\nprint(f'y = {y}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "y = 6" in nb_runner.get_output(2)
@@ -48,25 +52,27 @@ class TestPersistAnnotationEdits:
 
     def test_add_persist_annotation(self, nb_runner):
         """Add @cash:persist annotation."""
-        nb_runner.create_notebook([
-            "data = [1, 2, 3, 4, 5]",
-            "total = sum(data)\nprint(f'total = {total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = [1, 2, 3, 4, 5]",
+                "total = sum(data)\nprint(f'total = {total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total = 15" in nb_runner.get_output(2)
 
-        nb_runner.set_cell_source(
-            2, "# @cash:persist\ntotal = sum(data)\nprint(f'total = {total}')"
-        )
+        nb_runner.set_cell_source(2, "# @cash:persist\ntotal = sum(data)\nprint(f'total = {total}')")
         nb_runner.run_all()
         assert "total = 15" in nb_runner.get_output(2)
 
     def test_persist_survives_restart(self, nb_runner):
         """Persisted value should survive kernel restart."""
-        nb_runner.create_notebook([
-            "# @cash:persist\nimport time\nexpensive = sum(range(1000))\nprint(f'expensive = {expensive}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "# @cash:persist\nimport time\nexpensive = sum(range(1000))\nprint(f'expensive = {expensive}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "expensive = 499500" in nb_runner.get_output(1)
@@ -82,27 +88,29 @@ class TestAnnotationAndCodeEdits:
 
     def test_edit_code_with_annotation_present(self, nb_runner):
         """Edit code while annotation is present."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "# @cash:no-cache\nresult = x + 1\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "# @cash:no-cache\nresult = x + 1\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 11" in nb_runner.get_output(2)
 
         # Edit code but keep annotation
-        nb_runner.set_cell_source(
-            2, "# @cash:no-cache\nresult = x * 100\nprint(f'result = {result}')"
-        )
+        nb_runner.set_cell_source(2, "# @cash:no-cache\nresult = x * 100\nprint(f'result = {result}')")
         nb_runner.run_all()
         assert "result = 1000" in nb_runner.get_output(2)
 
     def test_edit_upstream_with_annotated_downstream(self, nb_runner):
         """Edit upstream cell, downstream has annotation."""
-        nb_runner.create_notebook([
-            "base = 5",
-            "# @cash:no-cache\ncomputed = base * 2\nprint(f'computed = {computed}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "base = 5",
+                "# @cash:no-cache\ncomputed = base * 2\nprint(f'computed = {computed}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "computed = 10" in nb_runner.get_output(2)

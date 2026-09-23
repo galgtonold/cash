@@ -6,25 +6,29 @@ freshly constructed ``vec`` unfitted -- silent in the same kernel,
 ``NotFittedError`` after a restart. The same in a loop:
 ``labels_k = km.fit_predict(Z); models[k] = km`` kept unfitted models.
 """
+
 import pytest
 
 pytest.importorskip("sklearn")
 
 pytestmark = [pytest.mark.integration]
 
-TEXTS = ("from sklearn.feature_extraction.text import TfidfVectorizer\n"
-         "texts = [f'doc {i} topic {i % 7} alpha{i % 13} beta{i % 5} delta{i}' for i in range(20000)]")
+TEXTS = (
+    "from sklearn.feature_extraction.text import TfidfVectorizer\n"
+    "texts = [f'doc {i} topic {i % 7} alpha{i % 13} beta{i % 5} delta{i}' for i in range(20000)]"
+)
 FIT = "vectorizer = TfidfVectorizer(ngram_range=(1, 2))\nX = vectorizer.fit_transform(texts)"
 CHECK = "print('FITTED', hasattr(vectorizer, 'vocabulary_'), X.shape[0])"
 
-DATA = ("import numpy as np\nfrom sklearn.cluster import KMeans\n"
-        "Z = np.random.RandomState(0).rand(3000, 20)")
-SWEEP = ("models = {}\n"
-         "for k in [3, 5]:\n"
-         "    km = KMeans(n_clusters=k, n_init=3, random_state=0)\n"
-         "    labels_k = km.fit_predict(Z)\n"
-         "    models[k] = km\n"
-         "print('FITTED', all(hasattr(m, 'labels_') for m in models.values()))")
+DATA = "import numpy as np\nfrom sklearn.cluster import KMeans\nZ = np.random.RandomState(0).rand(3000, 20)"
+SWEEP = (
+    "models = {}\n"
+    "for k in [3, 5]:\n"
+    "    km = KMeans(n_clusters=k, n_init=3, random_state=0)\n"
+    "    labels_k = km.fit_predict(Z)\n"
+    "    models[k] = km\n"
+    "print('FITTED', all(hasattr(m, 'labels_') for m in models.values()))"
+)
 
 
 def test_fit_transform_on_a_rerun_and_after_a_restart(nb_runner):

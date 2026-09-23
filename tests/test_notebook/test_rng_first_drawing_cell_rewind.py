@@ -16,6 +16,7 @@ usable rewind anchor. A plain ``import random`` cell would qualify. These tests
 pin the real behaviour so it cannot regress if that incidental signal goes away
 (as it must when the cell- and statement-level RNG observers are merged).
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -71,9 +72,7 @@ def test_rewinds_to_own_pre_state_when_no_upstream_anchor():
     assert not state.rng_post_states
 
     checker._restore_position_rng_state(DRAW, CELLS, 1)
-    assert random.random() == expected, (
-        "a first-drawing cell must rewind to the position it started from"
-    )
+    assert random.random() == expected, "a first-drawing cell must rewind to the position it started from"
 
 
 def test_own_pre_state_wins_over_upstream_anchor():
@@ -92,9 +91,7 @@ def test_own_pre_state_wins_over_upstream_anchor():
 
     random.random()  # move the live stream off both
     checker._restore_position_rng_state(DRAW, CELLS, 1)
-    assert random.random() == from_own, (
-        "the cell's own recorded start must take priority over the upstream anchor"
-    )
+    assert random.random() == from_own, "the cell's own recorded start must take priority over the upstream anchor"
 
 
 def test_stale_pre_state_is_rejected_when_the_seed_changed():
@@ -118,9 +115,7 @@ def test_stale_pre_state_is_rejected_when_the_seed_changed():
 
     random.random()
     checker._restore_position_rng_state(DRAW, CELLS, 1)
-    assert random.random() == from_anchor, (
-        "a pre-state recorded under a superseded seed must not be restored"
-    )
+    assert random.random() == from_anchor, "a pre-state recorded under a superseded seed must not be restored"
 
 
 def test_unseeded_pre_state_stays_valid():
@@ -138,9 +133,7 @@ def test_unseeded_pre_state_stays_valid():
     checker._restore_position_rng_state(DRAW, CELLS, 1)
     second = random.random()
 
-    assert first == expected == second, (
-        "an unseeded stream's frozen position must survive repeated rewinds"
-    )
+    assert first == expected == second, "an unseeded stream's frozen position must survive repeated rewinds"
 
 
 def test_no_recorded_state_anywhere_is_a_noop():

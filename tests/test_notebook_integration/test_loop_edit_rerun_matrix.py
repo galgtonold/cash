@@ -130,6 +130,7 @@ landed.
 
 ``get_output`` / ``run_cell`` on ``nb_runner`` are 1-based cell indices.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.loops]
@@ -217,9 +218,8 @@ def _why(work_dir):
     if not cache_dir.exists():
         return "no .cash directory: nothing was ever stored"
     entries = list(cache_dir.glob("*.entry"))
-    split = (cache_dir / "_loop_split.json")
-    return (f"{len(entries)} cache entries on disk; "
-            f"split store {'present' if split.exists() else 'absent'}")
+    split = cache_dir / "_loop_split.json"
+    return f"{len(entries)} cache entries on disk; split store {'present' if split.exists() else 'absent'}"
 
 
 def _compute_def(counter, sleep, mult=10):
@@ -242,12 +242,7 @@ def _compute_def(counter, sleep, mult=10):
     # storing 6 calls and failing at 54/60. Emit no sleep at all when there is
     # none to take; callers passing a real duration are unaffected.
     body_sleep = f"    time.sleep({sleep})\n" if sleep else ""
-    return (
-        "def compute(v):\n"
-        f"    open(r'{counter}', 'a').write('X')\n"
-        f"{body_sleep}"
-        f"    return v * {mult}"
-    )
+    return f"def compute(v):\n    open(r'{counter}', 'a').write('X')\n{body_sleep}    return v * {mult}"
 
 
 # ---------------------------------------------------------------------------
@@ -256,6 +251,7 @@ def _compute_def(counter, sleep, mult=10):
 # whole-cell-caching-confounder trap: seed + loop in one cell makes the trap,
 # the fix, and an undirected control all measure identically).
 # ---------------------------------------------------------------------------
+
 
 def _a_body(items_expr):
     return f"for t in {items_expr}:\n    out.append(compute(t))\nprint('OUT', out)"
@@ -294,8 +290,7 @@ def _adjacent_cell(counter, items_expr, setup=SETUP):
     immediately preceding the `for`) -- that adjacency is part of what CAS-259
     and CAS-261 are about, not a confounder to avoid here.
     """
-    return [setup, UNRELATED, _compute_def(counter, _SLEEP_LARGE),
-            f"out = []\n{_a_body(items_expr)}"]
+    return [setup, UNRELATED, _compute_def(counter, _SLEEP_LARGE), f"out = []\n{_a_body(items_expr)}"]
 
 
 LOOP_CELL_ADJACENT = 4
@@ -304,6 +299,7 @@ LOOP_CELL_ADJACENT = 4
 # ===========================================================================
 # Shape A, small (n=3, 0.3s/call, HOISTED seed)
 # ===========================================================================
+
 
 def test_shape_a_small_unchanged_rerun(nb_runner, tmp_path):
     """Mutation that would break this: deleting call_unit's cache-hit
@@ -424,6 +420,7 @@ def test_shape_a_small_oracle_no_caching(nb_runner, tmp_path):
 # Shape A, LARGE (n=100, 5ms/call, ADJACENT seed) -- CAS-261's uncached band
 # ===========================================================================
 
+
 @LOAD_SENSITIVE
 def test_shape_a_large_unchanged_rerun(nb_runner, tmp_path):
     """Mutation: raising call_unit._COST_FLOOR_S above 5ms would make this
@@ -440,7 +437,9 @@ def test_shape_a_large_unchanged_rerun(nb_runner, tmp_path):
 
     nb_runner.run_cell(LOOP_CELL_ADJACENT)
     warm = _n(counter) - cold
-    assert warm == 0, f"unchanged rerun re-ran {warm} calls, expected 0 (measured: {warm}/{_N_LARGE}) [{_why(tmp_path)}]"
+    assert warm == 0, (
+        f"unchanged rerun re-ran {warm} calls, expected 0 (measured: {warm}/{_N_LARGE}) [{_why(tmp_path)}]"
+    )
 
 
 @LOAD_SENSITIVE
@@ -492,7 +491,9 @@ def test_shape_a_large_unrelated_edit(nb_runner, tmp_path):
     nb_runner.set_cell_source(UNRELATED_CELL, UNRELATED_EDITED)
     nb_runner.run_cell(LOOP_CELL_ADJACENT)
     warm = _n(counter) - cold
-    assert warm == 0, f"unrelated upstream edit re-ran {warm} calls, expected 0 (measured: {warm}/{_N_LARGE}) [{_why(tmp_path)}]"
+    assert warm == 0, (
+        f"unrelated upstream edit re-ran {warm} calls, expected 0 (measured: {warm}/{_N_LARGE}) [{_why(tmp_path)}]"
+    )
 
 
 def test_shape_a_large_dependency_edit(nb_runner, tmp_path):
@@ -528,6 +529,7 @@ def test_shape_a_large_oracle_no_caching(nb_runner, tmp_path):
 # ===========================================================================
 # Shape B: two-statement body (v = compute(t); out.append(v)), HOISTED seed
 # ===========================================================================
+
 
 def test_shape_b_unchanged_rerun(nb_runner, tmp_path):
     counter = tmp_path / "calls.log"
@@ -619,6 +621,7 @@ def test_shape_b_oracle_no_caching(nb_runner, tmp_path):
 # Shape C: accumulator fold (s += compute(t)), HOISTED seed
 # ===========================================================================
 
+
 def test_shape_c_unchanged_rerun(nb_runner, tmp_path):
     counter = tmp_path / "calls.log"
     nb_runner.create_notebook(_hoisted_cells(counter, "s = 0", _c_body(SMALL_BASE)))
@@ -706,6 +709,7 @@ def test_shape_c_oracle_no_caching(nb_runner, tmp_path):
 # ===========================================================================
 # Shape D: subscript store (d[t] = compute(t)), HOISTED seed
 # ===========================================================================
+
 
 def test_shape_d_unchanged_rerun(nb_runner, tmp_path):
     counter = tmp_path / "calls.log"
@@ -828,9 +832,12 @@ def test_sub_break_even_calls_are_not_stored_individually(nb_runner, tmp_path):
     """
     counter = tmp_path / "calls.log"
     # sleep=0 -> the body is just a file append, far below the 3ms floor.
-    cells = [SETUP_HIGH_COST_FLOOR, UNRELATED, _compute_def(counter, 0),
-             f"out = []\nfor t in list(range(1, {_N_TINY + 1})):\n"
-             f"    out.append(compute(t))\nprint('OUT', len(out))"]
+    cells = [
+        SETUP_HIGH_COST_FLOOR,
+        UNRELATED,
+        _compute_def(counter, 0),
+        f"out = []\nfor t in list(range(1, {_N_TINY + 1})):\n    out.append(compute(t))\nprint('OUT', len(out))",
+    ]
     nb_runner.create_notebook(cells)
     nb_runner.start_kernel()
     nb_runner.run_all()

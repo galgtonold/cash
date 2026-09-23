@@ -25,6 +25,7 @@ the span holds anything whose effect a lineage does not show: a control
 structure (one unit to the simulation, statement by statement to the runtime),
 or a read of a file (``plt.imread(p)``).
 """
+
 from __future__ import annotations
 
 import ast
@@ -54,9 +55,13 @@ def _parse(code: str) -> ast.Module | None:
 def _assigned_names(tree: ast.Module) -> set[str]:
     names: set[str] = set()
     for node in tree.body:
-        targets = (node.targets if isinstance(node, ast.Assign)
-                   else [node.target] if isinstance(node, (ast.AnnAssign, ast.AugAssign))
-                   else [])
+        targets = (
+            node.targets
+            if isinstance(node, ast.Assign)
+            else [node.target]
+            if isinstance(node, (ast.AnnAssign, ast.AugAssign))
+            else []
+        )
         for target in targets:
             for sub in ast.walk(target):
                 if isinstance(sub, ast.Name):
@@ -66,18 +71,32 @@ def _assigned_names(tree: ast.Module) -> set[str]:
 
 def _reads_any(tree: ast.Module, names: set[str]) -> bool:
     """Does this statement READ one of *names*?"""
-    return any(isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
-               and node.id in names for node in ast.walk(tree))
+    return any(
+        isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in names for node in ast.walk(tree)
+    )
 
 
 def _counted(tree: ast.Module) -> bool:
     """Does the simulation give this statement a trace entry the way the runtime
     runs it? Bindings and calls do; ``del``, ``pass`` and a bare name shown at
     the end of a cell do not, on either side -- so they are left out of both."""
-    return all(isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.Import,
-                                 ast.ImportFrom, ast.FunctionDef, ast.ClassDef, *_CONTROL))
-               or (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call))
-               for node in tree.body)
+    return all(
+        isinstance(
+            node,
+            (
+                ast.Assign,
+                ast.AnnAssign,
+                ast.AugAssign,
+                ast.Import,
+                ast.ImportFrom,
+                ast.FunctionDef,
+                ast.ClassDef,
+                *_CONTROL,
+            ),
+        )
+        or (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call))
+        for node in tree.body
+    )
 
 
 def carrier_history_fingerprint(

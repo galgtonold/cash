@@ -14,10 +14,12 @@ class TestRapidSameCellEdits:
 
     def test_three_consecutive_edits(self, nb_runner):
         """Edit a cell three times consecutively."""
-        nb_runner.create_notebook([
-            "x = 1  # version 1",
-            "print(f'x = {x}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 1  # version 1",
+                "print(f'x = {x}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "x = 1" in nb_runner.get_output(2)
@@ -39,10 +41,12 @@ class TestRapidSameCellEdits:
 
     def test_oscillating_values(self, nb_runner):
         """Alternate between two values rapidly."""
-        nb_runner.create_notebook([
-            "val = 'A'  # oscillate val A",
-            "print(f'val = {val}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "val = 'A'  # oscillate val A",
+                "print(f'val = {val}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "val = A" in nb_runner.get_output(2)
@@ -59,10 +63,12 @@ class TestRapidSameCellEdits:
 
     def test_edit_type_change(self, nb_runner):
         """Edit a cell to change variable type each time."""
-        nb_runner.create_notebook([
-            "data = 42  # type change start",
-            "print(f'type = {type(data).__name__}, data = {data}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = 42  # type change start",
+                "print(f'type = {type(data).__name__}, data = {data}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "type = int" in nb_runner.get_output(2)
@@ -88,10 +94,12 @@ class TestRapidDependentEdits:
 
     def test_edit_producer_then_consumer_rapidly(self, nb_runner):
         """Edit both producer and consumer cells rapidly."""
-        nb_runner.create_notebook([
-            "x = 5  # producer",
-            "y = x * 2\nprint(f'y = {y}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 5  # producer",
+                "y = x * 2\nprint(f'y = {y}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "y = 10" in nb_runner.get_output(2)
@@ -114,10 +122,12 @@ class TestRapidDependentEdits:
 
     def test_rapid_formula_changes(self, nb_runner):
         """Rapidly change the formula applied to same input."""
-        nb_runner.create_notebook([
-            "n = 10  # input number",
-            "result = n + 1\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "n = 10  # input number",
+                "result = n + 1\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 11" in nb_runner.get_output(2)

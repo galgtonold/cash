@@ -16,6 +16,7 @@ Instrumenting the failure showed the blocking handle is released almost at
 once: the destination became writable on the very first 10 ms retry in every
 observed case. So a short bounded retry is the whole fix.
 """
+
 from __future__ import annotations
 
 import os
@@ -25,8 +26,8 @@ import time
 
 import pytest
 
+from cash.backends.entry_format import ENTRY_SUFFIX
 from cash.backends.file_backend import FileBackend
-from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry, read_entry
 
 
 def _backend(tmp_path):
@@ -49,7 +50,7 @@ def test_a_transient_permission_error_does_not_lose_the_write(tmp_path, monkeypa
 
     def flaky_replace(src, dst, *a, **kw):
         calls["n"] += 1
-        if calls["n"] <= 3:                      # denied three times, then clear
+        if calls["n"] <= 3:  # denied three times, then clear
             raise PermissionError(5, "Access is denied")
         return real_replace(src, dst, *a, **kw)
 
@@ -92,7 +93,7 @@ def test_a_real_windows_reader_holding_the_destination_does_not_lose_the_write(t
     def hold():
         with open(target, "rb"):
             holder_open.set()
-            time.sleep(0.15)          # release well inside the retry budget
+            time.sleep(0.15)  # release well inside the retry budget
 
     t = threading.Thread(target=hold)
     t.start()

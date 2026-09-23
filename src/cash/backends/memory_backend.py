@@ -14,10 +14,10 @@ from typing import Any
 
 from cash.exceptions import CacheBackendError
 
-from ._base import CacheBackend, MetadataDict, gdsf_value
-from .serialization import Serializer
 from .. import _plain_data
 from .._sizing import pandas_nbytes
+from ._base import CacheBackend, MetadataDict, gdsf_value
+from .serialization import Serializer
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +39,16 @@ class InMemoryBackend(CacheBackend):
     In-memory cache backend using a dictionary.
     Supports smart eviction based on memory pressure.
     """
+
     source_label: str = "RAM"
 
-    def __init__(self, max_memory_percent: float = 0.9, check_interval: int = 10, max_entries: int | None = None,
-                 max_size_bytes: int | None = None) -> None:
+    def __init__(
+        self,
+        max_memory_percent: float = 0.9,
+        check_interval: int = 10,
+        max_entries: int | None = None,
+        max_size_bytes: int | None = None,
+    ) -> None:
         """
         Args:
             max_memory_percent: Memory usage percentage (0.0 to 1.0) at which to trigger eviction.
@@ -126,7 +132,7 @@ class InMemoryBackend(CacheBackend):
         """
         try:
             type_name = type(value).__name__
-            if type_name in ('DataFrame', 'Series'):
+            if type_name in ("DataFrame", "Series"):
                 return InMemoryBackend._copy_frame(value)
             value_type = type(value)
             if value_type is list or value_type is tuple:
@@ -169,7 +175,8 @@ class InMemoryBackend(CacheBackend):
                 # could hold it either.
                 raise CacheBackendError(
                     f"the result could not be copied ({type(exc).__name__}: {exc}), "
-                    f"so caching it would hand every caller the same object") from exc
+                    f"so caching it would hand every caller the same object"
+                ) from exc
             logger.debug("Could not deep-copy value for key %r, returning reference", key)
             return value
 
@@ -191,7 +198,7 @@ class InMemoryBackend(CacheBackend):
         """Put a copy of each plain container in *value*'s dicts into *memo*."""
         for item in value.values():
             item_type = type(item)
-            if item_type.__name__ in ('DataFrame', 'Series') and id(item) not in memo:
+            if item_type.__name__ in ("DataFrame", "Series") and id(item) not in memo:
                 memo[id(item)] = InMemoryBackend._copy_frame(item)
             elif item_type is dict:
                 if depth < 4:
@@ -227,18 +234,18 @@ class InMemoryBackend(CacheBackend):
         if entry is None:
             return None
         metadata = entry[0]
-        metadata['last_access'] = time.time()
-        metadata['access_count'] = metadata.get('access_count', 0) + 1
-        metadata.setdefault('source', self.source_label)
+        metadata["last_access"] = time.time()
+        metadata["access_count"] = metadata.get("access_count", 0) + 1
+        metadata.setdefault("source", self.source_label)
         return metadata
 
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
         if key in self._store:
             metadata, value = self._store[key]
 
-            metadata['last_access'] = time.time()
-            metadata['access_count'] = metadata.get('access_count', 0) + 1
-            metadata.setdefault('source', self.source_label)
+            metadata["last_access"] = time.time()
+            metadata["access_count"] = metadata.get("access_count", 0) + 1
+            metadata.setdefault("source", self.source_label)
             self._touch(key)
 
             if key in self._immutable_below:
@@ -249,8 +256,9 @@ class InMemoryBackend(CacheBackend):
             return metadata, self._safe_deep_copy(value, key)
         return None, None
 
-    def set(self, key: str, value: Any, metadata: MetadataDict | None = None,
-            serializer: Serializer | None = None) -> bool | None:
+    def set(
+        self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None
+    ) -> bool | None:
         """Store *value*; returns False if it was refused (see below)."""
         metadata = self._init_metadata(metadata, key)
 
@@ -278,8 +286,8 @@ class InMemoryBackend(CacheBackend):
                 self._drop(key)
             return False
 
-        if 'storage' not in metadata:
-            metadata['storage'] = ['RAM']
+        if "storage" not in metadata:
+            metadata["storage"] = ["RAM"]
 
         if dict_rows_size is not None:
             # csv.DictReader / JSON records with immutable values: a new dict
@@ -294,17 +302,16 @@ class InMemoryBackend(CacheBackend):
             # variables a cell left behind, and one unisolatable variable among
             # them (an open handle in scope) must not stop the statement being
             # cached -- the notebook re-executes what it cannot restore.
-            stored = self._safe_deep_copy(
-                value, key, required=bool((metadata or {}).get('copy_required')))
+            stored = self._safe_deep_copy(value, key, required=bool((metadata or {}).get("copy_required")))
         else:
             _size, immutable, levels = plain
             stored = _plain_data.copy_plain(value, immutable, levels)[1]
-        metadata['size'] = size
+        metadata["size"] = size
 
         # Byte-cap bookkeeping: on replacement, discount the old entry's size
         # before recording the new one so the running total stays accurate.
         if key in self._store:
-            self._current_size_bytes -= self._store[key][0].get('size', 0)
+            self._current_size_bytes -= self._store[key][0].get("size", 0)
         self._store[key] = (metadata, stored)
         self._touch(key)
         if immutable:
@@ -338,7 +345,7 @@ class InMemoryBackend(CacheBackend):
         self._seq_by_key.pop(key, None)
         entry = self._store.pop(key, None)
         if entry is not None:
-            self._current_size_bytes -= entry[0].get('size', 0)
+            self._current_size_bytes -= entry[0].get("size", 0)
 
     def delete(self, key: str) -> None:
         self._drop(key)
@@ -408,14 +415,14 @@ class InMemoryBackend(CacheBackend):
             if frame_size is not None:
                 return frame_size
             # Prefer nbytes for numpy/pandas
-            if hasattr(obj, 'nbytes'):
+            if hasattr(obj, "nbytes"):
                 return int(obj.nbytes)
-            if hasattr(obj, 'memory_usage'):
+            if hasattr(obj, "memory_usage"):
                 # pandas DataFrame/Series
                 # OPTIMIZATION: Use deep=False for speed (deep=True scans all object columns)
                 try:
                     mem = obj.memory_usage(deep=False)
-                    if hasattr(mem, 'sum'):
+                    if hasattr(mem, "sum"):
                         return int(mem.sum())
                     return int(mem)
                 except (TypeError, AttributeError):
@@ -527,13 +534,14 @@ class InMemoryBackend(CacheBackend):
         overshoot. Every later one: whatever it has grown past the level the
         first one left.
         """
-        total = getattr(mem, 'total', None)
-        percent = getattr(mem, 'percent', None)
+        total = getattr(mem, "total", None)
+        percent = getattr(mem, "percent", None)
         if not isinstance(total, (int, float)) or not isinstance(percent, (int, float)) or total <= 0:
             return None
         own = self._current_size_bytes
-        worsening = (self._pressure_percent is not None
-                     and percent > self._pressure_percent + self._PRESSURE_WORSENED_POINTS)
+        worsening = (
+            self._pressure_percent is not None and percent > self._pressure_percent + self._PRESSURE_WORSENED_POINTS
+        )
         if self._pressure_floor is not None and not worsening:
             return max(0.0, own - self._pressure_floor)
         # A fresh share: the episode's first check, or pressure that has got
@@ -563,7 +571,7 @@ class InMemoryBackend(CacheBackend):
                 entry = self._store.get(key)
                 if entry is None:
                     continue
-                freed += entry[0].get('size', 0) or 0
+                freed += entry[0].get("size", 0) or 0
                 self._drop(key)
                 self._gdsf_clock = max(self._gdsf_clock, priority)
             if freed:
@@ -578,7 +586,7 @@ class InMemoryBackend(CacheBackend):
 
     def _gdsf_priority(self, key: str, meta: MetadataDict) -> float:
         """``H = L + hits * execution_time / size``, L as of the last access."""
-        return self._gdsf_base.get(key, 0.0) + gdsf_value(meta, meta.get('size', 1))
+        return self._gdsf_base.get(key, 0.0) + gdsf_value(meta, meta.get("size", 1))
 
     def _evict_to_byte_cap(self) -> None:
         """Evict by value per byte until under ~90% of the byte cap.
@@ -622,7 +630,7 @@ class InMemoryBackend(CacheBackend):
             return
         items = []
         for key, (meta, _) in self._store.items():
-            last_access = meta.get('last_access', 0)
+            last_access = meta.get("last_access", 0)
             items.append((last_access, key))
         items.sort()  # oldest first
         for _, key in items[:count]:
@@ -630,9 +638,9 @@ class InMemoryBackend(CacheBackend):
 
     def _try_malloc_trim(self) -> None:
         """Try to clean up memory on Linux."""
-        if sys.platform.startswith('linux'):
+        if sys.platform.startswith("linux"):
             try:
-                libc = ctypes.CDLL('libc.so.6')
+                libc = ctypes.CDLL("libc.so.6")
                 libc.malloc_trim(0)
             except (OSError, AttributeError):
                 # Best-effort memory cleanup; safe to ignore on non-glibc systems
@@ -647,9 +655,10 @@ def _pandas_copy_on_write() -> bool:
     if _COW:
         return _COW[0]
     import sys
+
     pd = sys.modules.get("pandas")
     if pd is None:
-        return False            # not decided yet: nothing to copy without pandas
+        return False  # not decided yet: nothing to copy without pandas
     try:
         on = int(str(pd.__version__).split(".")[0]) >= 3
         if not on:

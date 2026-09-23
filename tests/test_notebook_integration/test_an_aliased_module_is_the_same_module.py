@@ -13,6 +13,7 @@ value. Only a kernel restart fixed it. Their notebook says
 
 and that alias is the whole finding.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
@@ -21,9 +22,7 @@ SLOW = "    _ = sum(i * i for i in range(3_000_000))\n"
 
 
 def _module(marker):
-    return ("def parse_headers(rows):\n"
-            + SLOW +
-            "    return [r + '" + marker + "' for r in rows]\n")
+    return "def parse_headers(rows):\n" + SLOW + "    return [r + '" + marker + "' for r in rows]\n"
 
 
 def _cells(import_line, callee):
@@ -50,8 +49,7 @@ def _play(nb_runner, tmp_path, name, import_line, callee):
 
 def test_an_aliased_module_edit_reaches_the_call(nb_runner, tmp_path):
     """r27s2's shape: `import lib as x`, then `x.f(...)`."""
-    out, raw = _play(nb_runner, tmp_path, "aliaslib",
-                     "import aliaslib as al", "al.parse_headers")
+    out, raw = _play(nb_runner, tmp_path, "aliaslib", "import aliaslib as al", "al.parse_headers")
     assert "R a_NEW" in out, (
         "the module was edited and the call returned the pre-edit value; "
         "only the alias differs from the passing case below:\n" + raw
@@ -64,13 +62,11 @@ def test_the_same_module_without_an_alias(nb_runner, tmp_path):
     All three of the tester's minimisations wrote `import mylib`, and so does
     every module-reload test in this suite.
     """
-    out, raw = _play(nb_runner, tmp_path, "plainlib",
-                     "import plainlib", "plainlib.parse_headers")
+    out, raw = _play(nb_runner, tmp_path, "plainlib", "import plainlib", "plainlib.parse_headers")
     assert "R a_NEW" in out, raw
 
 
 def test_a_from_import_of_the_function(nb_runner, tmp_path):
     """The third spelling, for completeness."""
-    out, raw = _play(nb_runner, tmp_path, "fromlib",
-                     "from fromlib import parse_headers", "parse_headers")
+    out, raw = _play(nb_runner, tmp_path, "fromlib", "from fromlib import parse_headers", "parse_headers")
     assert "R a_NEW" in out, raw

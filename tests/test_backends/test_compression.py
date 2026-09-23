@@ -1,21 +1,22 @@
 """Tests for compression functionality in FileBackend."""
+
 import os
+
 from cash import Cash
-
-
 from cash.backends import FileBackend
-from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry, read_entry
+from cash.backends.entry_format import ENTRY_SUFFIX
+
 
 def test_compression_enabled(temp_cache_dir):
     """Test that compression reduces file size for compressible data."""
     # Use FileBackend directly to bypass smart persistence policy
     backend = FileBackend(temp_cache_dir, compress=True)
     app = Cash(backend=backend)
-    
+
     @app.cache
     def large_data():
         return b"0" * 10000
-    
+
     large_data()
     entries = app.backend.list_entries()  # list_entries drains pending writes
     assert len(entries) == 1

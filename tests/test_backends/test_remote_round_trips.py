@@ -19,6 +19,7 @@ Two things this found:
 The doubles live in ``remote_doubles``; they store real bytes, so a count
 assertion here is also asserting the operation worked.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -34,6 +35,7 @@ def s3():
     from unittest.mock import patch
 
     from cash.backends.s3_backend import S3Backend
+
     with patch("boto3.client"):
         backend = S3Backend(bucket="b", prefix="p/")
     backend.s3 = FakeS3Client()
@@ -47,6 +49,7 @@ def redis():
     from unittest.mock import patch
 
     from cash.backends.redis_backend import RedisBackend
+
     with patch("redis.Redis"):
         backend = RedisBackend(prefix="p:")
     backend.client = FakeRedisClient()
@@ -68,6 +71,7 @@ def _wire(backend):
 # S3
 # ---------------------------------------------------------------------------
 
+
 def test_s3_reading_metadata_does_not_download_the_value(s3):
     """The hole: inspecting an entry pulled the whole object across the wire.
 
@@ -84,15 +88,11 @@ def test_s3_reading_metadata_does_not_download_the_value(s3):
 
     assert meta is not None and meta["execution_time"] == 1.0
     wire = _wire(s3)
-    assert wire.round_trips == 1, (
-        f"{wire.round_trips} requests to read metadata: {dict(wire.calls)}"
-    )
+    assert wire.round_trips == 1, f"{wire.round_trips} requests to read metadata: {dict(wire.calls)}"
     assert wire.bytes_out <= S3Backend.METADATA_PREFETCH_BYTES, (
         f"downloaded {wire.bytes_out:,} bytes, more than the prefetch"
     )
-    assert wire.bytes_out < len(payload) / 100, (
-        f"downloaded {wire.bytes_out:,} bytes of a {len(payload):,}-byte value"
-    )
+    assert wire.bytes_out < len(payload) / 100, f"downloaded {wire.bytes_out:,} bytes of a {len(payload):,}-byte value"
 
 
 def test_s3_reading_the_value_still_downloads_it(s3):
@@ -122,9 +122,7 @@ def test_s3_metadata_larger_than_the_prefetch_costs_a_second_request(s3):
     meta = s3.get_metadata("fat")
 
     assert meta is not None and len(meta["code"]) == S3Backend.METADATA_PREFETCH_BYTES * 2
-    assert _wire(s3).calls["get_object"] == 2, (
-        "the widened re-read did not happen"
-    )
+    assert _wire(s3).calls["get_object"] == 2, "the widened re-read did not happen"
 
 
 def test_s3_delete_is_one_request(s3):
@@ -133,9 +131,7 @@ def test_s3_delete_is_one_request(s3):
     s3.delete("k")
 
     wire = _wire(s3)
-    assert wire.round_trips == 1, (
-        f"{wire.round_trips} requests to delete one entry: {dict(wire.calls)}"
-    )
+    assert wire.round_trips == 1, f"{wire.round_trips} requests to delete one entry: {dict(wire.calls)}"
     assert s3.get("k") == (None, None)
 
 
@@ -155,8 +151,8 @@ def test_s3_delete_raises_on_a_real_failure(s3):
 
 def _client_error_code(code: str):
     import botocore.exceptions
-    return botocore.exceptions.ClientError(
-        {"Error": {"Code": code, "Message": code}}, "DeleteObject")
+
+    return botocore.exceptions.ClientError({"Error": {"Code": code, "Message": code}}, "DeleteObject")
 
 
 def test_s3_a_write_and_a_read_are_each_one_request(s3):
@@ -188,14 +184,13 @@ def test_s3_listing_does_not_download_the_values(s3):
     entries = s3.list_entries()
 
     assert len(entries) == 5, entries
-    assert _wire(s3).bytes_out < 5 * 512 * 1024 / 10, (
-        f"listing 5 entries transferred {_wire(s3).bytes_out:,} bytes"
-    )
+    assert _wire(s3).bytes_out < 5 * 512 * 1024 / 10, f"listing 5 entries transferred {_wire(s3).bytes_out:,} bytes"
 
 
 # ---------------------------------------------------------------------------
 # Redis
 # ---------------------------------------------------------------------------
+
 
 def test_redis_reading_metadata_does_not_transfer_the_value(redis):
     payload = _seed(redis)
@@ -205,8 +200,7 @@ def test_redis_reading_metadata_does_not_transfer_the_value(redis):
     assert meta is not None and meta["execution_time"] == 1.0
     wire = _wire(redis)
     assert wire.bytes_out < 4096, (
-        f"transferred {wire.bytes_out:,} bytes of a {len(payload):,}-byte "
-        f"value to read its metadata"
+        f"transferred {wire.bytes_out:,} bytes of a {len(payload):,}-byte value to read its metadata"
     )
 
 
@@ -236,6 +230,7 @@ def test_redis_delete_is_one_round_trip(redis):
 # SQLite -- not remote, same hole
 # ---------------------------------------------------------------------------
 
+
 def test_sqlite_reading_metadata_does_not_deserialize_the_value(tmp_path):
     """Local, but it inherited the same ``get_metadata`` and paid the same way.
 
@@ -256,9 +251,7 @@ def test_sqlite_reading_metadata_does_not_deserialize_the_value(tmp_path):
         meta = backend.get_metadata("k")
 
         assert meta is not None and meta["execution_time"] == 1.0
-        assert _UnpicklingCanary.loads == 0, (
-            "the value was deserialized to answer a metadata question"
-        )
+        assert _UnpicklingCanary.loads == 0, "the value was deserialized to answer a metadata question"
     finally:
         backend.shutdown()
 
@@ -277,11 +270,8 @@ def test_sqlite_keeps_the_payload_column_last(tmp_path):
 
     backend = SQLiteBackend(str(tmp_path / "c.db"))
     try:
-        cols = [row[1] for row in
-                backend._conn.execute("PRAGMA table_info(cache_entries)")]
-        assert cols.index("metadata") < cols.index("data"), (
-            f"the payload column is not last: {cols}"
-        )
+        cols = [row[1] for row in backend._conn.execute("PRAGMA table_info(cache_entries)")]
+        assert cols.index("metadata") < cols.index("data"), f"the payload column is not last: {cols}"
     finally:
         backend.shutdown()
 
@@ -303,20 +293,17 @@ def test_sqlite_rebuilds_a_table_written_with_the_old_column_order(tmp_path):
     )
     conn.execute(
         "INSERT INTO cache_entries VALUES (?,?,?,?,?,?,0,NULL,?)",
-        ("old", pickle.dumps("v"), pickle.dumps({"key": "old"}), 1, 0.0, 0.0,
-         "PickleSerializer"),
+        ("old", pickle.dumps("v"), pickle.dumps({"key": "old"}), 1, 0.0, 0.0, "PickleSerializer"),
     )
     conn.commit()
     conn.close()
 
     backend = SQLiteBackend(db)
     try:
-        cols = [row[1] for row in
-                backend._conn.execute("PRAGMA table_info(cache_entries)")]
+        cols = [row[1] for row in backend._conn.execute("PRAGMA table_info(cache_entries)")]
         assert cols.index("metadata") < cols.index("data"), cols
         assert backend.get("old") == (None, None), (
-            "the pre-migration entry survived; it cannot be read from the new "
-            "schema and must not be reported as a hit"
+            "the pre-migration entry survived; it cannot be read from the new schema and must not be reported as a hit"
         )
         backend.set("k", {"a": 1}, {"execution_time": 1.0})
         backend._writes.wait_all()

@@ -7,6 +7,7 @@ function, and then the export, whose back-test loop reads ``models``. The
 loop re-ran; ``models = {...}`` did not, and the loop used the dict the OLD
 statement had built. Old and new code happened to agree there.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.upstream]

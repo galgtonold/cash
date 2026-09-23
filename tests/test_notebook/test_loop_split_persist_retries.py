@@ -23,6 +23,7 @@ thread-and-sleep test would be a wall-clock threshold, which is this repo's
 entire integration-flake class. The real-handle behaviour is pinned once,
 Windows-only, at the bottom.
 """
+
 from __future__ import annotations
 
 import json
@@ -78,7 +79,7 @@ def test_a_persistent_denial_still_raises(tmp_path, monkeypatch):
 def test_a_verdict_survives_a_destination_that_frees_up(tmp_path, monkeypatch):
     """The #74 regression: the verdict must reach disk, not just memory."""
     store = LoopSplitStore(str(tmp_path))
-    store.record("hash-a", 4)                     # establishes the file
+    store.record("hash-a", 4)  # establishes the file
 
     monkeypatch.setattr(os, "replace", _DeniesThenSucceeds(failures=2))
     LoopSplitStore(str(tmp_path)).record("hash-b", 7)
@@ -102,7 +103,7 @@ def test_a_verdict_lost_to_a_permanent_denial_does_not_raise(tmp_path, monkeypat
     store.record("hash-a", 4)
 
     monkeypatch.setattr(os, "replace", _DeniesThenSucceeds(failures=10_000))
-    LoopSplitStore(str(tmp_path)).record("hash-b", 7)      # must not raise
+    LoopSplitStore(str(tmp_path)).record("hash-b", 7)  # must not raise
 
     on_disk = json.loads(Path(store._path).read_text(encoding="utf-8"))["splits"]
     assert "hash-b" not in on_disk, "a permanent denial should not have landed"
@@ -121,7 +122,7 @@ def test_windows_really_does_deny_a_held_destination(tmp_path):
     store.record("hash-a", 4)
 
     with open(store._path, encoding="utf-8"):
-        LoopSplitStore(str(tmp_path)).record("hash-b", 7)   # must not raise
+        LoopSplitStore(str(tmp_path)).record("hash-b", 7)  # must not raise
 
     on_disk = json.loads(Path(store._path).read_text(encoding="utf-8"))["splits"]
     assert "hash-a" in on_disk

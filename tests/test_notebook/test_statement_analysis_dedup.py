@@ -6,11 +6,13 @@ the pre-execution cacheability decision and again in ``_post_execute``. Both
 passed identical ``(code, tree)`` args, so three AST visitors ran twice per
 statement on the hot path.
 """
+
 from __future__ import annotations
+
+from unittest.mock import MagicMock, patch
 
 import pytest
 from traitlets.config import Configurable
-from unittest.mock import MagicMock, patch
 
 from cash.backends import InMemoryBackend
 from cash.core import Cash
@@ -50,9 +52,7 @@ def test_analyze_statement_called_once_per_processed_statement(magics_fixture):
     """
     magics, shell, _ = magics_fixture
 
-    real_analyze = __import__(
-        "cash.notebook.statement.processor", fromlist=["analyze_statement"]
-    ).analyze_statement
+    real_analyze = __import__("cash.notebook.statement.processor", fromlist=["analyze_statement"]).analyze_statement
 
     with patch(
         "cash.notebook.statement.processor.analyze_statement",
@@ -63,6 +63,5 @@ def test_analyze_statement_called_once_per_processed_statement(magics_fixture):
     # The cell runs one statement (`y = 1 + 2`). Pre-fix this was 2 calls; the
     # de-dup contract is exactly 1 per processed statement.
     assert spy.call_count == 1, (
-        f"Expected exactly 1 analyze_statement call, got {spy.call_count}. "
-        f"calls: {spy.call_args_list}"
+        f"Expected exactly 1 analyze_statement call, got {spy.call_count}. calls: {spy.call_args_list}"
     )

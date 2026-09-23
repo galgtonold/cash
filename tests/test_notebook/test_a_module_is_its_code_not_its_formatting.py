@@ -18,6 +18,7 @@ What must still count is the part nobody should have to think about twice:
 ``# @cash:assume-safe`` waives a purity check, and cash's own diagnostic says
 directives are part of a function's source identity.
 """
+
 import os
 
 import pytest
@@ -25,11 +26,7 @@ import pytest
 from cash.notebook.statement import file_deps
 from cash.notebook.statement.file_deps import _module_identity, read_module_source_hash
 
-BASE = ("def load(n):\n"
-        "    return list(range(n))\n"
-        "\n"
-        "def report(rows):\n"
-        "    return len(rows)\n")
+BASE = "def load(n):\n    return list(range(n))\n\ndef report(rows):\n    return len(rows)\n"
 
 
 def _id(text):
@@ -49,8 +46,7 @@ class TestWhatStopsMattering:
         assert _id(BASE) == _id(BASE.replace("\n\n", "\n\n\n\n"))
 
     def test_a_docstring_does_not(self):
-        assert _id(BASE) == _id(BASE.replace("def load(n):\n",
-                                             'def load(n):\n    """rows"""\n'))
+        assert _id(BASE) == _id(BASE.replace("def load(n):\n", 'def load(n):\n    """rows"""\n'))
 
     def test_nor_does_rewording_one(self):
         a = BASE.replace("def load(n):\n", 'def load(n):\n    """rows"""\n')
@@ -61,8 +57,7 @@ class TestWhatStopsMattering:
         assert _id(BASE) == _id('"""Loading and reporting."""\n' + BASE)
 
     def test_nor_does_reflowing_a_call(self):
-        wrapped = BASE.replace("    return list(range(n))",
-                               "    return list(\n        range(n)\n    )")
+        wrapped = BASE.replace("    return list(range(n))", "    return list(\n        range(n)\n    )")
         assert _id(BASE) == _id(wrapped)
 
 
@@ -76,12 +71,10 @@ class TestWhatStillMatters:
         assert _id(BASE) != _id(BASE + "def extra():\n    return 1\n")
 
     def test_a_string_the_function_returns(self):
-        assert _id(BASE) != _id(BASE.replace("return len(rows)",
-                                             "return 'rows: ' + str(len(rows))"))
+        assert _id(BASE) != _id(BASE.replace("return len(rows)", "return 'rows: ' + str(len(rows))"))
 
     def test_a_cash_directive_appearing(self):
-        assert _id(BASE) != _id(BASE.replace("def load(n):",
-                                             "def load(n):  # @cash:assume-safe"))
+        assert _id(BASE) != _id(BASE.replace("def load(n):", "def load(n):  # @cash:assume-safe"))
 
     def test_a_cash_directive_moving_to_another_function(self):
         """Kept as whole lines precisely so this is visible.
@@ -90,8 +83,7 @@ class TestWhatStillMatters:
         waived purity check would silently apply to the wrong function.
         """
         on_load = BASE.replace("def load(n):", "def load(n):  # @cash:assume-safe")
-        on_report = BASE.replace("def report(rows):",
-                                 "def report(rows):  # @cash:assume-safe")
+        on_report = BASE.replace("def report(rows):", "def report(rows):  # @cash:assume-safe")
         assert _id(on_load) != _id(on_report)
 
     def test_a_cash_directive_changing_its_value(self):
@@ -130,7 +122,8 @@ class TestTheMemo:
         path.write_text(BASE.replace("range(n)", "range(n + 1)"), encoding="utf-8")
         assert read_module_source_hash(str(path)) != before, (
             "the memo is keyed on the same stat cash uses to notice a module "
-            "changed at all; if this fails it is holding a stale digest")
+            "changed at all; if this fails it is holding a stale digest"
+        )
 
     def test_dependency_files_are_folded_in(self, tmp_path):
         mod = tmp_path / "with_dep.py"
@@ -176,7 +169,8 @@ class TestTheMemo:
 
         assert read_module_source_hash(str(path)) != before, (
             "same size, same mtime, new code: a digest memoised while the file "
-            "was still being written must not be trusted")
+            "was still being written must not be trusted"
+        )
 
     def test_a_file_that_has_settled_is_memoised(self, tmp_path):
         """The other half: the rule above must not turn the memo off."""
@@ -189,11 +183,16 @@ class TestTheMemo:
         assert str(path) in file_deps._IDENTITY_CACHE
 
 
-@pytest.mark.parametrize("directive", [
-    "# @cash:persist", "# @cash:no-cache", "# @cash:assume-safe",
-    "# @cash: allow-random", "# @cash:nocache",
-])
+@pytest.mark.parametrize(
+    "directive",
+    [
+        "# @cash:persist",
+        "# @cash:no-cache",
+        "# @cash:assume-safe",
+        "# @cash: allow-random",
+        "# @cash:nocache",
+    ],
+)
 def test_every_spelling_of_a_directive_counts(directive):
     """Matched with the parser's own pattern, so the two cannot drift."""
-    assert _id(BASE) != _id(BASE.replace("def load(n):",
-                                         "def load(n):  " + directive))
+    assert _id(BASE) != _id(BASE.replace("def load(n):", "def load(n):  " + directive))

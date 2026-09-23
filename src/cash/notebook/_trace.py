@@ -18,6 +18,7 @@ Zero-cost when off: a single ``os.environ.get`` per call, and the decision
 points instrumented are not hot loops. Never raises — tracing must never change
 program behaviour.
 """
+
 from __future__ import annotations
 
 import json
@@ -45,8 +46,7 @@ def trace_event(event: str, **fields: Any) -> None:
     if not path:
         return
     try:
-        norm = {k: (sorted(v) if isinstance(v, (set, frozenset)) else v)
-                for k, v in fields.items()}
+        norm = {k: (sorted(v) if isinstance(v, (set, frozenset)) else v) for k, v in fields.items()}
         line = json.dumps({"event": event, **norm}, default=str)
     except Exception:  # noqa: BLE001 — tracing must never break the run
         try:

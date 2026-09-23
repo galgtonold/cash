@@ -11,6 +11,7 @@ path was missing it — the validation report at
 ``docs/superpowers/scratch/decorator_validation/report.html`` surfaced
 it across every backend.
 """
+
 from __future__ import annotations
 
 import os
@@ -18,7 +19,6 @@ import time
 from pathlib import Path
 
 import pandas as pd
-import pytest
 
 from cash import Cash
 from cash.backends.memory_backend import InMemoryBackend
@@ -116,7 +116,8 @@ class TestAutoFileTracking:
             calls[0] += 1
             return path.read_text()
 
-        f(); f()
+        f()
+        f()
         assert calls[0] == 1
         path.write_text("v2", encoding="utf-8")
         _touch_future(path)
@@ -153,9 +154,7 @@ def test_pseudo_fs_reads_are_not_tracked_as_dependencies():
     tracker = FileAccessTracker({})
     tracker._track_path("/proc/meminfo")
     tracker._track_path("/sys/kernel/mm/transparent_hugepage/enabled")
-    assert tracker.accessed_files == set(), (
-        f"pseudo-fs paths leaked into deps: {tracker.accessed_files}"
-    )
+    assert tracker.accessed_files == set(), f"pseudo-fs paths leaked into deps: {tracker.accessed_files}"
 
 
 def test_a_chunked_iterator_still_hits_after_an_eviction_check(tmp_path):

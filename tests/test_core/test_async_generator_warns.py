@@ -1,9 +1,8 @@
 """@cash.cache on async generators: warn once, return unwrapped."""
+
 from __future__ import annotations
 
 import warnings
-
-import pytest
 
 from cash import Cash, CashCacheIneffectiveWarning
 

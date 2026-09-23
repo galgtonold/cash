@@ -36,6 +36,7 @@ is by definition in-session.
 Backends are shut down per cell either way, so a long matrix run measures the
 same thing at the end as at the start.
 """
+
 from __future__ import annotations
 
 import statistics
@@ -51,7 +52,7 @@ from benchmarks._object_generators import estimate_in_memory_size, make_object
 class MeasureResult:
     family: str
     target_bytes: int
-    backend_kind: str            # "ram" or "disk"
+    backend_kind: str  # "ram" or "disk"
     repeats: int
     actual_size_bytes: int
     serialize_seconds: float
@@ -63,9 +64,11 @@ def _build_backend(backend_kind: str, cache_root: Path):
     """Construct a fresh backend instance. cache_root is used only for disk."""
     if backend_kind == "ram":
         from cash.backends.memory_backend import InMemoryBackend
+
         return InMemoryBackend()
     if backend_kind == "disk":
         from cash.backends.file_backend import FileBackend
+
         cache_root.mkdir(parents=True, exist_ok=True)
         return FileBackend(str(cache_root))
     raise ValueError(f"unknown backend_kind: {backend_kind!r}")
@@ -112,7 +115,7 @@ def measure_one(
             t0 = time.perf_counter()
             backend.set(key, {"variables": {"v": obj}}, {"timestamp": 0.0})
             if writes is not None:
-                writes.wait_all()     # the write is part of storing, not of reading
+                writes.wait_all()  # the write is part of storing, not of reading
             ser_samples.append(time.perf_counter() - t0)
 
             if backend_kind != "disk":
@@ -142,11 +145,11 @@ def measure_one(
             error=str(e),
         )
 
-    for b in ({id(backend): backend, id(reader): reader}.values()):
+    for b in {id(backend): backend, id(reader): reader}.values():
         if b is None:
-            continue                  # disk cells never build a second backend
+            continue  # disk cells never build a second backend
         try:
-            b.shutdown()              # ~8 threads per backend; see the docstring
+            b.shutdown()  # ~8 threads per backend; see the docstring
         except Exception:  # noqa: BLE001 - teardown must not lose a measurement
             pass
 

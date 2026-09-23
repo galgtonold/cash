@@ -19,16 +19,8 @@ pytestmark = [pytest.mark.timeout(90)]
 
 def test_writer_edit_then_isolated_reader_rerun_serves_stale_file(nb_runner, tmp_path):
     p = str(tmp_path / "data.txt").replace("\\", "/")
-    writer_v1 = (
-        f"with open('{p}', 'w') as f:\n"
-        "    f.write('1,2,3')\n"
-        "print('wrote v1')"
-    )
-    reader = (
-        f"with open('{p}') as f:\n"
-        "    body = f.read()\n"
-        "print('body =', body)"
-    )
+    writer_v1 = f"with open('{p}', 'w') as f:\n    f.write('1,2,3')\nprint('wrote v1')"
+    reader = f"with open('{p}') as f:\n    body = f.read()\nprint('body =', body)"
     nb_runner.create_notebook([writer_v1, reader])
     nb_runner.start_kernel()
     nb_runner.enable_debug()
@@ -37,11 +29,7 @@ def test_writer_edit_then_isolated_reader_rerun_serves_stale_file(nb_runner, tmp
 
     # Edit the writer: different content AND byte size (rules out CAS-10
     # mtime-granularity timing entirely -- the file is simply never rewritten).
-    writer_v2 = (
-        f"with open('{p}', 'w') as f:\n"
-        "    f.write('10,20,30,40')\n"
-        "print('wrote v2')"
-    )
+    writer_v2 = f"with open('{p}', 'w') as f:\n    f.write('10,20,30,40')\nprint('wrote v2')"
     nb_runner.set_cell_source(1, writer_v2)
 
     # Isolated re-run of ONLY the reader cell (what a user does after editing

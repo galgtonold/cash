@@ -14,10 +14,12 @@ class TestRapidEditsOneCell:
 
     def test_five_rapid_edits(self, nb_runner):
         """Edit the same cell five times, verify each time."""
-        nb_runner.create_notebook([
-            "x = 0",
-            "y = x + 1\nprint(f'y = {y}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 0",
+                "y = x + 1\nprint(f'y = {y}')",
+            ]
+        )
         nb_runner.start_kernel()
 
         for i in range(5):
@@ -27,23 +29,27 @@ class TestRapidEditsOneCell:
 
     def test_ten_rapid_edits(self, nb_runner):
         """Ten rapid edits to the upstream cell."""
-        nb_runner.create_notebook([
-            "n = 0",
-            "result = n ** 2\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "n = 0",
+                "result = n ** 2\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
 
         for i in range(10):
             nb_runner.set_cell_source(1, f"n = {i}")
             nb_runner.run_all()
-            assert f"result = {i ** 2}" in nb_runner.get_output(2)
+            assert f"result = {i**2}" in nb_runner.get_output(2)
 
     def test_rapid_edits_with_function(self, nb_runner):
         """Rapidly edit function definition."""
-        nb_runner.create_notebook([
-            "def f(x):\n    return x + 0",
-            "result = f(10)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def f(x):\n    return x + 0",
+                "result = f(10)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
 
         for offset in [1, 5, 10, 100, -1]:
@@ -57,11 +63,13 @@ class TestRapidEditsMultipleCells:
 
     def test_alternating_rapid_edits(self, nb_runner):
         """Alternate between editing two cells rapidly."""
-        nb_runner.create_notebook([
-            "a = 1",
-            "b = 1",
-            "c = a + b\nprint(f'c = {c}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 1",
+                "b = 1",
+                "c = a + b\nprint(f'c = {c}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "c = 2" in nb_runner.get_output(3)
@@ -85,10 +93,12 @@ class TestRapidEditsMultipleCells:
         Uses kernel restart between cycles to avoid "already executed"
         skip optimization masking the revert detection.
         """
-        nb_runner.create_notebook([
-            "x = 1",
-            "y = x + 1\nprint(f'y = {y}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 1",
+                "y = x + 1\nprint(f'y = {y}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "y = 2" in nb_runner.get_output(2)
@@ -113,10 +123,12 @@ class TestRapidEditWithRestart:
 
     def test_edit_restart_cycle(self, nb_runner):
         """Edit → restart → verify cycle."""
-        nb_runner.create_notebook([
-            "x = 0",
-            "y = x + 1\nprint(f'y = {y}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 0",
+                "y = x + 1\nprint(f'y = {y}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "y = 1" in nb_runner.get_output(2)

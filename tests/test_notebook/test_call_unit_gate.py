@@ -1,7 +1,6 @@
 """The sub-unit is judged by decide_cacheability, same as a statement."""
-import ast
 
-import pytest
+import ast
 
 from cash.notebook.call_unit import call_site_is_cacheable
 
@@ -126,9 +125,12 @@ def test_a_comprehension_variable_needs_no_lineage():
     they refused the call -- cached then only when a notebook variable of
     the same name happened to exist."""
     call = ast.parse("{k: slow(v + 0) for k, v in d.items()}").body[0].value.value
-    common = dict(user_ns={"slow": _compute, "d": {}}, annotation=None,
-                  is_stateful_call=lambda name: False,
-                  scan_forbidden=lambda code, ns, tree: [],
-                  variable_lineage={"slow": "s", "d": "d"})
+    common = dict(
+        user_ns={"slow": _compute, "d": {}},
+        annotation=None,
+        is_stateful_call=lambda name: False,
+        scan_forbidden=lambda code, ns, tree: [],
+        variable_lineage={"slow": "s", "d": "d"},
+    )
     assert not call_site_is_cacheable(call, **common)[0]
     assert call_site_is_cacheable(call, local_names=frozenset({"k", "v"}), **common)[0]

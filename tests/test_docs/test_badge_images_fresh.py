@@ -19,6 +19,7 @@ Chain of custody: test_badge_examples_fresh holds the HTML to the renderer,
 this holds the PNG to the HTML. Together they mean a change to badge output
 cannot land while a stale picture is still committed.
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -62,8 +63,7 @@ def test_png_matches_the_html_it_was_rendered_from(png: Path):
 
     assert html.exists(), f"{png.name} has no source {html.name}"
     assert stamp.exists(), (
-        f"{png.name} has no .stamp recording which HTML it came from. "
-        "Re-run `python scripts/build_badge_images.py`."
+        f"{png.name} has no .stamp recording which HTML it came from. Re-run `python scripts/build_badge_images.py`."
     )
 
     expected = _stamper()(html)
@@ -93,6 +93,5 @@ def test_stamp_does_not_depend_on_the_checkout_line_endings(tmp_path):
     crlf.write_bytes(body.replace(b"\n", b"\r\n"))
 
     assert stamp(lf) == stamp(crlf), (
-        "the stamp is line-ending dependent, so a stamp written on one platform "
-        "cannot be verified on another"
+        "the stamp is line-ending dependent, so a stamp written on one platform cannot be verified on another"
     )

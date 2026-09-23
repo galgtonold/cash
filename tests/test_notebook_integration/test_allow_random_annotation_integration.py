@@ -10,6 +10,7 @@ kernel process, so it can only reach the user if it survives IPython's warning
 plumbing and lands in the cell's stderr stream — something no in-process test can
 demonstrate. ``nb_runner`` is the only trustworthy oracle for it.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
@@ -19,11 +20,13 @@ WARNING_TEXT = "Unseeded randomness detected"
 
 def test_unseeded_random_warning_reaches_cell_output(nb_runner):
     """The warning must actually surface to the user, not just be raised."""
-    nb_runner.create_notebook([
-        "import numpy as np",
-        "x = np.random.rand(1000)",
-        "print('len', len(x))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np",
+            "x = np.random.rand(1000)",
+            "print('len', len(x))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -38,11 +41,13 @@ def test_unseeded_random_warning_reaches_cell_output(nb_runner):
 
 
 def test_allow_random_suppresses_warning_in_cell_output(nb_runner):
-    nb_runner.create_notebook([
-        "import numpy as np",
-        "# @cash:allow-random\nx = np.random.rand(1000)",
-        "print('len', len(x))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np",
+            "# @cash:allow-random\nx = np.random.rand(1000)",
+            "print('len', len(x))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -53,11 +58,13 @@ def test_allow_random_suppresses_warning_in_cell_output(nb_runner):
 def test_seeded_random_does_not_warn(nb_runner):
     """Seeding in an earlier cell must quiet a later draw — the detector's
     session state has to survive across cells to get this right."""
-    nb_runner.create_notebook([
-        "import numpy as np\nnp.random.seed(42)",
-        "x = np.random.rand(1000)",
-        "print('len', len(x))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np\nnp.random.seed(42)",
+            "x = np.random.rand(1000)",
+            "print('len', len(x))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -72,11 +79,13 @@ def test_loop_body_warns_once_not_per_iteration(nb_runner):
     without stripping it the dedupe key would be unique per iteration and the
     notebook would be flooded.
     """
-    nb_runner.create_notebook([
-        "import numpy as np",
-        "acc = []\nfor i in range(50):\n    acc.append(np.random.rand())",
-        "print('n', len(acc))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np",
+            "acc = []\nfor i in range(50):\n    acc.append(np.random.rand())",
+            "print('n', len(acc))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -89,10 +98,12 @@ def test_allow_random_still_caches(nb_runner):
     would without it. ``@cash:persist`` clears the cost-model floor so this
     measures the directive rather than the statement's runtime.
     """
-    nb_runner.create_notebook([
-        "import numpy as np\nnp.random.seed(0)",
-        "# @cash:persist\n# @cash:allow-random\nx = np.random.rand(1000)\nprint('sum=', round(float(x.sum()), 6))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np\nnp.random.seed(0)",
+            "# @cash:persist\n# @cash:allow-random\nx = np.random.rand(1000)\nprint('sum=', round(float(x.sum()), 6))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     first = nb_runner.get_output(2)

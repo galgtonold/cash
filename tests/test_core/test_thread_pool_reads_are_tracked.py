@@ -5,6 +5,7 @@ cached function -- editing a shard HIT the pre-edit value (3 of 3), while the
 serial loop beside it invalidated. The tracker is found through a ContextVar,
 and a pool's worker threads start with an empty context.
 """
+
 from __future__ import annotations
 
 import contextvars

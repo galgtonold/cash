@@ -11,6 +11,7 @@ cached steps, keyed by the producer's identity, serve pre-rewrite results.
 Plain lists and tuples are now compared by the identities of what they hold,
 level by level, whatever their size.
 """
+
 from __future__ import annotations
 
 import time
@@ -36,17 +37,17 @@ def test_sorting_the_argument_in_place_is_not_stored(c, n, frozen):
     @c.cache(frozen=frozen)
     def load(n):
         time.sleep(0.12)
-        return [((i * 7919) % n, i) for i in range(n)]       # "file order" is i order
+        return [((i * 7919) % n, i) for i in range(n)]  # "file order" is i order
 
     @c.cache
     def top(rows):
         time.sleep(0.12)
-        rows.sort(reverse=True)                              # the accident
+        rows.sort(reverse=True)  # the accident
         return rows[:3]
 
     rows = load(n)
     top(rows)
-    without_cash = _tail(rows)                                # what the program sees
+    without_cash = _tail(rows)  # what the program sees
     rows = load(n)
     top(rows)
     assert _tail(rows) == without_cash, "the warm run skipped the in-place sort"
@@ -72,15 +73,14 @@ def test_rewriting_a_field_of_a_frozen_result_invalidates_its_later_consumers(c)
     def normalise(rows):
         time.sleep(0.12)
         for r in rows:
-            r[1] = r[1].removeprefix("/api")                 # a field of every row
+            r[1] = r[1].removeprefix("/api")  # a field of every row
         return len(rows)
 
     rows = load(100)
     assert per_path(rows) == {"/login": 50, "/api/items": 50}
     rows = load(100)
-    normalise(rows)                                           # the step the user adds
-    assert per_path(rows) == {"/login": 50, "/items": 50}, \
-        "served the counts of the rows before the rewrite"
+    normalise(rows)  # the step the user adds
+    assert per_path(rows) == {"/login": 50, "/items": 50}, "served the counts of the rows before the rewrite"
 
 
 def _sorts(rows):
@@ -94,15 +94,19 @@ def _rewrites(rows):
     return len(rows)
 
 
-@pytest.mark.parametrize("fn, says", [
-    (_sorts, "changes the argument 'rows' in place"),
-    (_rewrites, "changes an element of the argument 'rows' in place"),
-])
+@pytest.mark.parametrize(
+    "fn, says",
+    [
+        (_sorts, "changes the argument 'rows' in place"),
+        (_rewrites, "changes an element of the argument 'rows' in place"),
+    ],
+)
 def test_the_static_finding_says_the_argument_is_changed(c, fn, says):
     """Round 20 (r20s2 F14): both read as the label a local list's `.sort()`
     gets ("write method", "subscript mutation"), the same as the false alarms
     beside them, so the one that mattered was not read."""
     import warnings
+
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
         c.cache(fn)([[2], [1]])

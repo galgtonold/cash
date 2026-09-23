@@ -25,6 +25,7 @@ Everything else is provisional: folded, then demoted by
 the value. The accumulator protection this rule exists for is unchanged, and
 the last two tests here pin it.
 """
+
 from __future__ import annotations
 
 import warnings
@@ -66,12 +67,14 @@ def test_a_method_call_on_a_global_dict_reaches_the_key(cash_instance):
         globals()["ALIASES"] = {"emea": "eu"}
 
 
-@pytest.mark.parametrize("reader,expected_first,expected_second", [
-    ("get", "eu", "EUROPE"),
-    ("keys", "['emea']", "['emea', 'apac']"),
-])
-def test_other_read_only_methods_track_too(cash_instance, reader, expected_first,
-                                           expected_second):
+@pytest.mark.parametrize(
+    "reader,expected_first,expected_second",
+    [
+        ("get", "eu", "EUROPE"),
+        ("keys", "['emea']", "['emea', 'apac']"),
+    ],
+)
+def test_other_read_only_methods_track_too(cash_instance, reader, expected_first, expected_second):
     """``.get`` is not special: any non-writing method is a read."""
     runs: list[str] = []
 
@@ -83,8 +86,7 @@ def test_other_read_only_methods_track_too(cash_instance, reader, expected_first
         return str(list(ALIASES.keys()))
 
     assert read("emea") == expected_first
-    globals()["ALIASES"] = ({"emea": "EUROPE"} if reader == "get"
-                            else {"emea": "eu", "apac": "ap"})
+    globals()["ALIASES"] = {"emea": "EUROPE"} if reader == "get" else {"emea": "eu", "apac": "ap"}
     try:
         assert read("emea") == expected_second
         assert len(runs) == 2
@@ -125,6 +127,7 @@ def test_an_unchanged_table_still_hits(cash_instance):
 
 
 # --- the accumulator protection this rule exists for ------------------------
+
 
 def test_a_written_global_is_still_refused(cash_instance):
     """``append`` writes, so the name stays out of the key.
@@ -170,9 +173,7 @@ def test_a_mutating_method_the_table_does_not_know_is_learned_at_runtime(cash_in
         touch(1)
         touch(1)
 
-    assert len(runs) <= 2, (
-        f"a self-mutating global was folded for ever: {len(runs)} executions"
-    )
+    assert len(runs) <= 2, f"a self-mutating global was folded for ever: {len(runs)} executions"
 
 
 def test_a_module_attribute_read_by_method_call(cash_instance):
@@ -193,9 +194,7 @@ def test_a_module_attribute_read_by_method_call(cash_instance):
     assert summarise("p") == "fast,smart|p"
     helper_registry.MODELS["extra"] = helper_registry._fast
     try:
-        assert summarise("p") == "extra,fast,smart|p", (
-            "the edited registry in another module was ignored"
-        )
+        assert summarise("p") == "extra,fast,smart|p", "the edited registry in another module was ignored"
         assert len(runs) == 2
     finally:
         helper_registry.MODELS.clear()
@@ -257,6 +256,7 @@ def test_the_machinery_dunders_are_still_skipped(cash_instance):
 
 def test_a_user_dunder_is_a_candidate(cash_instance):
     """The other half of the same rule, asserted where it is decided."""
+
     def reads_version(x):
         return f"{__version__}|{x}"
 

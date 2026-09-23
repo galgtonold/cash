@@ -20,13 +20,15 @@ def test_new_file_in_globbed_dir_invalidates(nb_runner, tmp_path):
     (gdir / "d1.num").write_text("1")
     (gdir / "d2.num").write_text("2")
     gp = str(gdir).replace("\\", "/")
-    nb_runner.create_notebook([
-        (
-            "import glob\n"
-            f"vals = [int(open(fp).read()) for fp in sorted(glob.glob('{gp}/*.num'))]\n"
-            "print('vals =', vals)"
-        ),
-    ])
+    nb_runner.create_notebook(
+        [
+            (
+                "import glob\n"
+                f"vals = [int(open(fp).read()) for fp in sorted(glob.glob('{gp}/*.num'))]\n"
+                "print('vals =', vals)"
+            ),
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_debug()
     nb_runner.run_all()

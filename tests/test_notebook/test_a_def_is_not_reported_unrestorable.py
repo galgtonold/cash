@@ -8,6 +8,7 @@ always re-runs at no cost and its lineage persists either way; the reason is for
 floor -- but a def whose body reads a frame loaded from a file inherits the
 file dependency, which skips the floor.
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -38,8 +39,9 @@ def magics(monkeypatch):
     m._auto_cache_enabled = True
     seen: list = []
     original = m._update_last_cell_metrics
-    monkeypatch.setattr(m, "_update_last_cell_metrics",
-                        lambda metrics, total: (seen.append(list(metrics)), original(metrics, total)))
+    monkeypatch.setattr(
+        m, "_update_last_cell_metrics", lambda metrics, total: (seen.append(list(metrics)), original(metrics, total))
+    )
     return m, seen
 
 

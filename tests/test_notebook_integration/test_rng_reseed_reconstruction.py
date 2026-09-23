@@ -6,6 +6,7 @@ persists an edit without running the cell), so it is testable without the real
 Jupyter driver. Oracle = the same cell sources run in order with no cash — the
 correct clean-run value.
 """
+
 import re
 
 import pytest
@@ -29,7 +30,7 @@ def _draw(runner, cell_num):
 def _oracle(cells):
     """Run cell sources in order in a fresh namespace, no cash = the truth."""
     buf: list[str] = []
-    ns = {'print': lambda *a, **k: buf.append(" ".join(str(x) for x in a))}
+    ns = {"print": lambda *a, **k: buf.append(" ".join(str(x) for x in a))}
     for src in cells:
         exec(compile(src, "<oracle>", "exec"), ns)
     m = re.search(r"X0\s+([0-9.eE+-]+)", "\n".join(buf))
@@ -38,16 +39,15 @@ def _oracle(cells):
 
 @pytest.mark.timeout(180)
 def test_numpy_cross_cell_reseed_edit_without_rerun(nb_runner):
-    correct = _oracle([C_SEED1, C_DRAW])          # seed(1) top to bottom
+    correct = _oracle([C_SEED1, C_DRAW])  # seed(1) top to bottom
     nb_runner.create_notebook([C_ON, C_SEED0, C_DRAW])
     nb_runner.start_kernel()
-    nb_runner.run_all()                            # cold: draw cached under seed(0)
-    nb_runner.set_cell_source(2, C_SEED1)          # edit seed cell, persist, do NOT run it
-    nb_runner.run_cell(3)                          # run only the draw
+    nb_runner.run_all()  # cold: draw cached under seed(0)
+    nb_runner.set_cell_source(2, C_SEED1)  # edit seed cell, persist, do NOT run it
+    nb_runner.run_cell(3)  # run only the draw
     got = _draw(nb_runner, 3)
     assert got == pytest.approx(correct, abs=1e-9), (
-        f"draw did not reflect the edited seed: got {got}, "
-        f"clean-run value is {correct}"
+        f"draw did not reflect the edited seed: got {got}, clean-run value is {correct}"
     )
 
 
@@ -78,10 +78,10 @@ def test_reseed_rerun_still_correct_and_warm_draw_unaffected(nb_runner):
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert _draw(nb_runner, 3) == pytest.approx(seed0, abs=1e-9)
-    nb_runner.run_all()                            # warm: must still equal seed0 (cached)
+    nb_runner.run_all()  # warm: must still equal seed0 (cached)
     assert _draw(nb_runner, 3) == pytest.approx(seed0, abs=1e-9), "warm re-run changed the draw"
     nb_runner.set_cell_source(2, C_SEED1)
-    nb_runner.run_cell(2)                          # re-run the seed cell too
+    nb_runner.run_cell(2)  # re-run the seed cell too
     nb_runner.run_cell(3)
     assert _draw(nb_runner, 3) == pytest.approx(seed1, abs=1e-9), "reseed+rerun did not update"
 
@@ -101,7 +101,7 @@ def test_editing_a_downstream_seed_cell_does_not_reach_an_upstream_draw(nb_runne
     nb_runner.start_kernel()
     nb_runner.run_all()
     nb_runner.set_cell_source(4, "import numpy as np\nnp.random.seed(999)")  # edit DOWNSTREAM seed
-    nb_runner.run_cell(3)                           # re-run only the upstream draw
+    nb_runner.run_cell(3)  # re-run only the upstream draw
     after = _draw(nb_runner, 3)
     # The one thing the fix must guarantee: it re-runs only UPSTREAM seed cells.
     # If it wrongly pulled in the edited downstream seed(999), the draw would be

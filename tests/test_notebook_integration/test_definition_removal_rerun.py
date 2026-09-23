@@ -8,6 +8,7 @@ consumers from the namespace and tracking. A from-start re-run of a consumer
 then raises ``NameError`` exactly as a fresh kernel would, instead of replaying
 the stale cached value.
 """
+
 import pytest
 from nbclient.exceptions import CellExecutionError
 
@@ -51,5 +52,4 @@ def test_remove_def_rerun_consumer_directly(nb_runner):
 
 def test_transitive_consumer_invalidated(nb_runner):
     # a -> b -> c ; remove a's definition, re-run only c.
-    _edit_expect_nameerror(
-        nb_runner, ["a = 1", "b = a * 10", "c = b + 5\nprint(c)"], 1, "pass", 3)
+    _edit_expect_nameerror(nb_runner, ["a = 1", "b = a * 10", "c = b + 5\nprint(c)"], 1, "pass", 3)

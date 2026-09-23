@@ -15,10 +15,10 @@ contract is:
   next ``get()``/``delete()`` for the same key.
 - ``shutdown()`` blocks until every in-flight write is done.
 """
+
 from __future__ import annotations
 
 import time
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -28,10 +28,10 @@ from cash.backends.memory_backend import InMemoryBackend
 from cash.backends.sqlite_backend import SQLiteBackend
 from cash.backends.tiered_backend import TieredBackend
 
-
 # ---------------------------------------------------------------------------
 # Backend factory: parametrise across every slow backend that should be async
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(params=["file", "sqlite", "redis"])
 def slow_backend(request, tmp_path):
@@ -46,6 +46,7 @@ def slow_backend(request, tmp_path):
         _redis = pytest.importorskip("redis")
         with patch.object(_redis, "Redis", fakeredis.FakeStrictRedis):
             from cash.backends.redis_backend import RedisBackend
+
             b = RedisBackend(prefix=f"cash:async:{kind}:")
     try:
         yield b
@@ -56,6 +57,7 @@ def slow_backend(request, tmp_path):
 # ---------------------------------------------------------------------------
 # Core contract
 # ---------------------------------------------------------------------------
+
 
 class TestSerializeOnCallingThread:
     """The value's state at the moment of set() must be captured before
@@ -80,11 +82,13 @@ class TestSetReturnsBeforeWriteCompletes:
         # Patch the slow backend's internal sync writer to sleep, so we can
         # tell whether set() actually waited for it.
         original_write = slow_backend._do_set_sync
+
         def slow_write(*args, **kwargs):
             # Generous: the window only has to outlast however long a loaded
             # runner takes to get back to the calling thread after set().
             time.sleep(2.0)
             return original_write(*args, **kwargs)
+
         monkeypatch.setattr(slow_backend, "_do_set_sync", slow_write)
 
         slow_backend.set("k", "value")
@@ -100,8 +104,7 @@ class TestSetReturnsBeforeWriteCompletes:
         # until the write completes, which is the regression worth catching,
         # and it stays valid however slow the machine is.
         assert slow_backend._writes.pending_count() > 0, (
-            "set() returned only after its write finished — it should schedule "
-            "the write and return"
+            "set() returned only after its write finished — it should schedule the write and return"
         )
 
 
@@ -110,9 +113,11 @@ class TestReadAfterWriteConsistency:
 
     def test_immediate_get_returns_just_set_value(self, slow_backend, monkeypatch):
         original_write = slow_backend._do_set_sync
+
         def slow_write(*args, **kwargs):
             time.sleep(0.3)
             return original_write(*args, **kwargs)
+
         monkeypatch.setattr(slow_backend, "_do_set_sync", slow_write)
 
         slow_backend.set("k", "the-value")
@@ -121,9 +126,11 @@ class TestReadAfterWriteConsistency:
 
     def test_two_rapid_sets_same_key_serialize(self, slow_backend, monkeypatch):
         original_write = slow_backend._do_set_sync
+
         def slow_write(*args, **kwargs):
             time.sleep(0.15)
             return original_write(*args, **kwargs)
+
         monkeypatch.setattr(slow_backend, "_do_set_sync", slow_write)
 
         slow_backend.set("k", "first")
@@ -138,9 +145,11 @@ class TestDeleteDrainsPending:
 
     def test_delete_after_set_actually_deletes(self, slow_backend, monkeypatch):
         original_write = slow_backend._do_set_sync
+
         def slow_write(*args, **kwargs):
             time.sleep(0.3)
             return original_write(*args, **kwargs)
+
         monkeypatch.setattr(slow_backend, "_do_set_sync", slow_write)
 
         slow_backend.set("k", "value")
@@ -155,11 +164,13 @@ class TestShutdownWaitsForPending:
     def test_shutdown_blocks_until_writes_finish(self, slow_backend, monkeypatch):
         write_finished = []
         original_write = slow_backend._do_set_sync
+
         def slow_write(*args, **kwargs):
             time.sleep(0.3)
             r = original_write(*args, **kwargs)
             write_finished.append(time.perf_counter())
             return r
+
         monkeypatch.setattr(slow_backend, "_do_set_sync", slow_write)
 
         slow_backend.set("k", "value")
@@ -187,6 +198,7 @@ class TestFailureSurface:
 
         def boom(*args, **kwargs):
             raise RuntimeError("simulated backend write failure")
+
         monkeypatch.setattr(slow_backend, "_do_set_sync", boom)
 
         slow_backend.set("bad-key", "value")  # returns; failure is in flight
@@ -199,8 +211,10 @@ class TestFailureSurface:
         Raising here killed a notebook cell before its variable was bound, so
         a cache write failure destroyed a computation that had succeeded.
         """
+
         def boom(*args, **kwargs):
             raise RuntimeError("simulated backend write failure")
+
         monkeypatch.setattr(slow_backend, "_do_set_sync", boom)
 
         slow_backend.set("bad-key", "value")
@@ -212,6 +226,7 @@ class TestFailureSurface:
 # ---------------------------------------------------------------------------
 # RAM stays synchronous
 # ---------------------------------------------------------------------------
+
 
 class TestRAMStaysSync:
     """InMemoryBackend should NOT use an executor — RAM is too fast for the
@@ -227,6 +242,7 @@ class TestRAMStaysSync:
 # Tiered backend cell-finish time
 # ---------------------------------------------------------------------------
 
+
 class TestTieredShutdownPropagates:
     """A script that exits via atexit calls Cash.shutdown → backend.shutdown.
     For TieredBackend (the default), that MUST cascade into every tier so
@@ -235,6 +251,7 @@ class TestTieredShutdownPropagates:
 
     def test_tiered_shutdown_drains_each_tier(self, tmp_path, monkeypatch):
         import time as _time
+
         ram = InMemoryBackend()
         disk = FileBackend(str(tmp_path / "fb"), flush_interval=0)
         tiered = TieredBackend([ram, disk], promotion_policy=lambda e, s: True)
@@ -242,11 +259,13 @@ class TestTieredShutdownPropagates:
         # Make the disk write slow so the test can prove shutdown waited.
         original = disk._do_set_sync
         write_done = []
+
         def slow(*args, **kwargs):
             _time.sleep(0.3)
             r = original(*args, **kwargs)
             write_done.append(_time.perf_counter())
             return r
+
         monkeypatch.setattr(disk, "_do_set_sync", slow)
 
         meta = {"execution_time": 5.0, "size": 100}
@@ -271,9 +290,11 @@ class TestTieredCellFinishTime:
 
         # Make the disk write take half a second.
         original = disk._do_set_sync
+
         def slow(*args, **kwargs):
             time.sleep(0.5)
             return original(*args, **kwargs)
+
         monkeypatch.setattr(disk, "_do_set_sync", slow)
 
         t0 = time.perf_counter()

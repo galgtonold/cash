@@ -6,6 +6,7 @@ times - the sync `use_locking` path never applied to async functions. With
 one coroutine (the leader) computes and stores, the rest wait and read the
 stored result. Without `use_locking` the old fan-out behavior is preserved.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -75,7 +76,7 @@ def test_async_single_flight_followers_get_result_when_leader_rejects_cache():
     c = Cash(backend=InMemoryBackend(), use_locking=True)
     runs = {"n": 0}
 
-    @c.cache(cache_if=lambda v: False)   # never store
+    @c.cache(cache_if=lambda v: False)  # never store
     async def fetch(x):
         runs["n"] += 1
         await asyncio.sleep(0.02)
@@ -86,7 +87,7 @@ def test_async_single_flight_followers_get_result_when_leader_rejects_cache():
 
     results = asyncio.run(main())
     assert all(r == 36 for r in results)
-    assert runs["n"] >= 1            # correctness preserved; coalescing may not apply
+    assert runs["n"] >= 1  # correctness preserved; coalescing may not apply
 
 
 def test_async_single_flight_propagates_exception():
@@ -98,9 +99,7 @@ def test_async_single_flight_propagates_exception():
         raise ValueError("nope")
 
     async def main():
-        results = await asyncio.gather(
-            *[boom(1) for _ in range(3)], return_exceptions=True
-        )
+        results = await asyncio.gather(*[boom(1) for _ in range(3)], return_exceptions=True)
         return results
 
     results = asyncio.run(main())
@@ -119,7 +118,7 @@ def test_async_single_flight_sequential_calls_hit_cache():
 
     async def main():
         a = await fetch(10)
-        b = await fetch(10)     # sequential - normal cache hit
+        b = await fetch(10)  # sequential - normal cache hit
         return a, b
 
     a, b = asyncio.run(main())

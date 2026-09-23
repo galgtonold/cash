@@ -17,6 +17,7 @@ backend that fetched the wrong object, or fetched one twice, would still pass.
 These store and return real bytes, so a test that asserts a count is also
 asserting the operation worked.
 """
+
 from __future__ import annotations
 
 import fnmatch
@@ -29,7 +30,7 @@ class _Recorder:
 
     def __init__(self, latency: float = 0.0):
         self.calls: Counter[str] = Counter()
-        self.bytes_out = 0          # bytes the double handed back to the caller
+        self.bytes_out = 0  # bytes the double handed back to the caller
         self.latency = latency
 
     def record(self, op: str, payload: bytes = b"") -> None:
@@ -88,8 +89,7 @@ class FakeS3Client(_Recorder):
 
     def list_objects_v2(self, Bucket, Prefix="", **_kw):  # noqa: N803
         self.record("list_objects_v2")
-        return {"Contents": self._contents(Bucket, Prefix),
-                "KeyCount": len(self._contents(Bucket, Prefix))}
+        return {"Contents": self._contents(Bucket, Prefix), "KeyCount": len(self._contents(Bucket, Prefix))}
 
     def get_paginator(self, operation_name):
         if operation_name != "list_objects_v2":
@@ -97,9 +97,7 @@ class FakeS3Client(_Recorder):
         return _FakePaginator(self)
 
     def _contents(self, bucket, prefix):
-        return [{"Key": k, "Size": len(v)}
-                for (b, k), v in self.store.items()
-                if b == bucket and k.startswith(prefix)]
+        return [{"Key": k, "Size": len(v)} for (b, k), v in self.store.items() if b == bucket and k.startswith(prefix)]
 
 
 class _FakePaginator:
@@ -133,8 +131,8 @@ def _parse_range(header: str, size: int) -> slice:
 
 def _client_error(code: str):
     import botocore.exceptions
-    return botocore.exceptions.ClientError(
-        {"Error": {"Code": code, "Message": code}}, "GetObject")
+
+    return botocore.exceptions.ClientError({"Error": {"Code": code, "Message": code}}, "GetObject")
 
 
 class FakeRedisClient(_Recorder):

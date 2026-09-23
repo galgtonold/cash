@@ -24,9 +24,9 @@ import logging
 import time as _time
 from typing import TYPE_CHECKING, Any
 
-from . import helpers as _helpers
 from ..cache_status import CacheStatus
 from ..file_tracker import FileAccessTracker
+from . import helpers as _helpers
 
 if TYPE_CHECKING:
     from ..statement import ProcessResult
@@ -67,7 +67,6 @@ def _stamp_call_events_body_index(m: dict, body_idx: int) -> None:
             echain.insert(0, body_idx)
 
 
-
 def _is_pure_access(node: ast.AST) -> bool:
     """A name followed only by attribute reads and constant subscripts
     (``a.var["symbol"]``, ``df.x``): no calls, nothing that could run code but
@@ -77,6 +76,7 @@ def _is_pure_access(node: ast.AST) -> bool:
     if isinstance(node, ast.Subscript):
         return isinstance(node.slice, ast.Constant) and _is_pure_access(node.value)
     return isinstance(node, ast.Name)
+
 
 class ForLoopHandler:
     """Per-iteration caching for ``for`` loops.
@@ -167,12 +167,33 @@ class ForLoopHandler:
     # one-shot iterator unseen any more, because every name the header reads
     # is checked for being one; that check, not this list, is what stops
     # `sorted(g)` re-draining `g`.
-    _PURE_ITER_PRODUCERS = frozenset({
-        'range', 'sorted', 'reversed', 'list', 'tuple', 'set', 'frozenset',
-        'dict', 'enumerate', 'zip', 'map', 'filter', 'iter', 'bytes',
-        'bytearray', 'str',
-        'len', 'min', 'max', 'abs', 'round', 'int', 'float',
-    })
+    _PURE_ITER_PRODUCERS = frozenset(
+        {
+            "range",
+            "sorted",
+            "reversed",
+            "list",
+            "tuple",
+            "set",
+            "frozenset",
+            "dict",
+            "enumerate",
+            "zip",
+            "map",
+            "filter",
+            "iter",
+            "bytes",
+            "bytearray",
+            "str",
+            "len",
+            "min",
+            "max",
+            "abs",
+            "round",
+            "int",
+            "float",
+        }
+    )
 
     def __init__(self, shell, statement_processor, debug: bool, dispatcher):
         self.shell = shell
@@ -239,7 +260,9 @@ class ForLoopHandler:
         # into every body statement. Resolved once here rather than per
         # iteration — it is a property of the source, not of the iteration.
         loop_annotation = _helpers.resolve_header_annotation(
-            raw_cell, node, inherited_annotation,
+            raw_cell,
+            node,
+            inherited_annotation,
         )
 
         if self.debug:
@@ -270,8 +293,7 @@ class ForLoopHandler:
             # the read with both, which is what the decorator does for a
             # cached call nested inside another.
             iter_code = ast.unparse(node.iter)
-            with FileAccessTracker(self.shell.user_ns,
-                                   propagate_to_parent=True) as _iter_tracker:
+            with FileAccessTracker(self.shell.user_ns, propagate_to_parent=True) as _iter_tracker:
                 iterable = eval(iter_code, self.shell.user_ns, self.shell.user_ns)
             _header_files = set(_iter_tracker.get_accessed_files())
 
@@ -297,9 +319,7 @@ class ForLoopHandler:
             # simulator-only left a plain re-run paying full decomposition.
             _verdict_k = self._recorded_split_k(node, iterable)
             if _verdict_k is not None:
-                return self._run_split(node, _verdict_k, ttl, silent,
-                                       parent_context, raw_cell,
-                                       inherited_annotation)
+                return self._run_split(node, _verdict_k, ttl, silent, parent_context, raw_cell, inherited_annotation)
 
             # Fast-loop heuristic: if per-iteration decomposition would be too
             # expensive relative to the computation, execute as a single unit.
@@ -315,8 +335,9 @@ class ForLoopHandler:
             # header is provably safe; otherwise fall through to the
             # per-iteration path below, which consumes the single, already
             # evaluated ``iterable``.
-            if (self._should_execute_loop_as_single_unit(node, iterable, parent_context)
-                    and self._iter_header_safe_to_reevaluate(node.iter, iterable)):
+            if self._should_execute_loop_as_single_unit(
+                node, iterable, parent_context
+            ) and self._iter_header_safe_to_reevaluate(node.iter, iterable):
                 if self.debug:
                     logger.debug("[CONTROL] Fast-loop: executing as single unit (overhead > benefit)")
                 # Single-unit mode makes the loop ONE cache entry, so the unit
@@ -335,6 +356,7 @@ class ForLoopHandler:
                 # actually cacheable. ``None`` for every other single-unit
                 # loop, which keeps their behaviour unchanged.
                 from ..cacheability import cacheable_accumulator_loop
+
                 force_outputs = None
                 acc_loop = cacheable_accumulator_loop(node, prev_node)
                 if acc_loop is not None:
@@ -342,21 +364,22 @@ class ForLoopHandler:
                     force_outputs = {acc, *loop_vars}
                     if self.debug:
                         logger.debug(
-                            "[CONTROL] Single-unit accumulator loop -> "
-                            "force_outputs=%s", force_outputs,
+                            "[CONTROL] Single-unit accumulator loop -> force_outputs=%s",
+                            force_outputs,
                         )
                 return self.dispatcher._execute_as_single_unit(
-                    node, ttl, silent, raw_cell, inherited_annotation,
+                    node,
+                    ttl,
+                    silent,
+                    raw_cell,
+                    inherited_annotation,
                     force_outputs=force_outputs,
                 )
 
             # all iterations.
-            iterable_lineage = _helpers.get_iterable_lineage(
-                self.shell, self.statement_processor, node.iter
-            )
+            iterable_lineage = _helpers.get_iterable_lineage(self.shell, self.statement_processor, node.iter)
             if self.debug:
-                logger.debug("[CONTROL] Iterable lineage: %s...",
-                             iterable_lineage[:20] if iterable_lineage else 'None')
+                logger.debug("[CONTROL] Iterable lineage: %s...", iterable_lineage[:20] if iterable_lineage else "None")
 
             # Measure the first few iterations so this loop can be judged for
             # splitting on a LATER run. Nothing is split here.
@@ -369,10 +392,17 @@ class ForLoopHandler:
             # rebound names: one changed in place (`parts.append(d)`) keeps
             # every file and is read once at the end -- read per iteration, its
             # growing set made the gathering quadratic again.
-            _file_deps = getattr(self.statement_processor, 'executed_file_deps', None)
-            _body_names = {n.id for stmt in node.body for n in ast.walk(stmt)
-                           if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)
-                           } if _file_deps is not None else set()
+            _file_deps = getattr(self.statement_processor, "executed_file_deps", None)
+            _body_names = (
+                {
+                    n.id
+                    for stmt in node.body
+                    for n in ast.walk(stmt)
+                    if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)
+                }
+                if _file_deps is not None
+                else set()
+            )
             # Seeded with the header's reads: `inherit_body_file_deps` gives
             # every variable the loop mutated the files the loop read, and the
             # iterable is as much a read as the body is.
@@ -382,9 +412,16 @@ class ForLoopHandler:
                 total_iterations += 1
                 _iter_started = _time.perf_counter()
                 if self._process_one_iteration(
-                    node, iteration_value, iterable_lineage, target_names,
-                    ttl, silent, all_metrics, parent_context,
-                    raw_cell, loop_annotation,
+                    node,
+                    iteration_value,
+                    iterable_lineage,
+                    target_names,
+                    ttl,
+                    silent,
+                    all_metrics,
+                    parent_context,
+                    raw_cell,
+                    loop_annotation,
                 ):
                     cached_iterations += 1
                 else:
@@ -399,7 +436,11 @@ class ForLoopHandler:
 
             # After all iterations, update lineage for mutated variables
             _helpers.update_lineage_after_execution(
-                self.shell, self.statement_processor, node, ast.unparse(node), debug=self.debug,
+                self.shell,
+                self.statement_processor,
+                node,
+                ast.unparse(node),
+                debug=self.debug,
                 body_files=_body_files,
             )
 
@@ -433,18 +474,14 @@ class ForLoopHandler:
                 metrics=all_metrics,
                 total_iterations=total_iterations,
                 cached_iterations=cached_iterations,
-                computed_iterations=computed_iterations
+                computed_iterations=computed_iterations,
             )
 
         except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user for-loop body code
             # Handed back to the cell, which raises it: logged at ERROR it printed
             # the traceback a second time, through cash (round 25, r25s2/r25s3).
             logger.debug("[CONTROL] Error in for loop: %s", e, exc_info=True)
-            return ControlStructureResult(
-                success=False,
-                metrics=all_metrics,
-                error=e
-            )
+            return ControlStructureResult(success=False, metrics=all_metrics, error=e)
 
     # ------------------------------------------------------------------
     # Per-iteration processing
@@ -495,6 +532,7 @@ class ForLoopHandler:
                 # arrays that agreed in the sample onto ONE entry - wrong
                 # result on the first run. Hash full content here.
                 from cash.notebook.object_hashing import compute_hash_full
+
                 full = compute_hash_full(val)
                 # `variable_lineage[name]` and `loop_var_digests[name]`
                 # WANT DIFFERENT THINGS and must not be conflated -- a lesson
@@ -532,6 +570,7 @@ class ForLoopHandler:
                 # var), just no longer skippable via the attribute shortcut
                 # for THIS consumer specifically.
                 from ...lineage_tag import own_tag
+
                 tag = own_tag(val)
                 h = tag if tag is not None else full
                 self.statement_processor.variable_lineage[name] = h
@@ -545,14 +584,12 @@ class ForLoopHandler:
         # recomputing an identical `compute_hash_full` on an identical object --
         # a full duplicate of the most expensive thing an iteration does when
         # the loop target is large.
-        iteration_context = build_iteration_context(
-            target_names, self.shell.user_ns, parent_context, loop_var_digests
-        )
+        iteration_context = build_iteration_context(target_names, self.shell.user_ns, parent_context, loop_var_digests)
         if iterable_lineage:
-            iteration_context['__iterable_lineage__'] = iterable_lineage
+            iteration_context["__iterable_lineage__"] = iterable_lineage
 
         context_hash = compute_context_hash(iteration_context)
-        loop_vars = {k: v for k, v in iteration_context.items() if not k.startswith('__')}
+        loop_vars = {k: v for k, v in iteration_context.items() if not k.startswith("__")}
         iteration_cached = True
         # Track the AST body index of each emitted metric so the view-
         # builder can render the for-loop's body in source order even
@@ -586,23 +623,34 @@ class ForLoopHandler:
         # construction site, `magics.py`), but requirement 5 (never let a
         # caching optimisation be why user code fails) should hold at both
         # ends of this wire, not just inside `CallUnit`.
-        loop_vars_scope = getattr(self.statement_processor, 'loop_vars_scope', None)
+        loop_vars_scope = getattr(self.statement_processor, "loop_vars_scope", None)
         scope = (
-            loop_vars_scope(loop_vars, loop_var_digests)
-            if loop_vars_scope is not None else contextlib.nullcontext()
+            loop_vars_scope(loop_vars, loop_var_digests) if loop_vars_scope is not None else contextlib.nullcontext()
         )
         with scope:
             for body_idx, body_node in enumerate(node.body):
                 before_count = len(all_metrics)
                 if is_control_structure(body_node):
                     was_computed = self._execute_loop_body_nested_control(
-                        body_node, ttl, silent, iteration_context, context_hash, loop_vars, all_metrics,
-                        raw_cell, loop_annotation,
+                        body_node,
+                        ttl,
+                        silent,
+                        iteration_context,
+                        context_hash,
+                        loop_vars,
+                        all_metrics,
+                        raw_cell,
+                        loop_annotation,
                     )
                 else:
                     was_computed = self._execute_loop_body_statement(
-                        body_node, iteration_context, ttl, silent, all_metrics,
-                        raw_cell, loop_annotation,
+                        body_node,
+                        iteration_context,
+                        ttl,
+                        silent,
+                        all_metrics,
+                        raw_cell,
+                        loop_annotation,
                     )
                 for m in all_metrics[before_count:]:
                     if not isinstance(m, dict):
@@ -654,16 +702,17 @@ class ForLoopHandler:
         # A body statement is never the cell's last expression: Jupyter shows
         # nothing for ``ax.text(...)`` inside a loop (round 22: 151 Text reprs).
         result = self.statement_processor.process_statement(
-            modified_code, ttl, silent, annotation=annotation, is_last=False,
+            modified_code,
+            ttl,
+            silent,
+            annotation=annotation,
+            is_last=False,
         )
 
         # Attach human-readable loop variable values to the metrics
-        loop_vars = {
-            k: v for k, v in iteration_context.items()
-            if not k.startswith('__')
-        }
+        loop_vars = {k: v for k, v in iteration_context.items() if not k.startswith("__")}
         if loop_vars:
-            result['loop_vars'] = loop_vars
+            result["loop_vars"] = loop_vars
 
         return result
 
@@ -692,26 +741,31 @@ class ForLoopHandler:
         Raises on error, annotating the exception with the body node's line number.
         """
         result = self.dispatcher.process(
-            body_node, ttl, silent, iteration_context, raw_cell, loop_annotation,
+            body_node,
+            ttl,
+            silent,
+            iteration_context,
+            raw_cell,
+            loop_annotation,
         )
         # Inject __iteration_context__ into nested metrics so the badge
         # renderer keeps them inside the loop group.
         for m in result.metrics:
-            code = m.get('code', '')
-            if '# __iteration_context__:' not in code:
-                m['code'] = f"# __iteration_context__: {context_hash}\n{code}"
-            if loop_vars and 'loop_vars' not in m:
-                m['loop_vars'] = loop_vars
-            if not m.get('_output_flushed'):
+            code = m.get("code", "")
+            if "# __iteration_context__:" not in code:
+                m["code"] = f"# __iteration_context__: {context_hash}\n{code}"
+            if loop_vars and "loop_vars" not in m:
+                m["loop_vars"] = loop_vars
+            if not m.get("_output_flushed"):
                 _helpers.flush_metrics_output(m)
         all_metrics.extend(result.metrics)
         if not result.success:
             err = result.error or RuntimeError("Error in nested control structure")
             # Preserve _cash_error_lineno from nested error, or fall back to
             # this node's line number.
-            if not hasattr(err, '_cash_error_lineno'):
+            if not hasattr(err, "_cash_error_lineno"):
                 with contextlib.suppress(AttributeError, TypeError):
-                    err._cash_error_lineno = getattr(body_node, 'lineno', None)
+                    err._cash_error_lineno = getattr(body_node, "lineno", None)
             raise err
         return result.computed_iterations > 0
 
@@ -740,22 +794,28 @@ class ForLoopHandler:
         """
         stmt_code = ast.unparse(body_node)
         annotation = _helpers.resolve_statement_annotation(
-            raw_cell, body_node, loop_annotation,
+            raw_cell,
+            body_node,
+            loop_annotation,
         )
         metrics = self._process_body_statement(
-            stmt_code, iteration_context, ttl, silent, annotation,
+            stmt_code,
+            iteration_context,
+            ttl,
+            silent,
+            annotation,
         )
         _helpers.flush_metrics_output(metrics)
         all_metrics.append(metrics)
-        if metrics.get('status') == CacheStatus.ERROR:
-            err = metrics.get('error', RuntimeError(f"Error executing: {stmt_code}"))
+        if metrics.get("status") == CacheStatus.ERROR:
+            err = metrics.get("error", RuntimeError(f"Error executing: {stmt_code}"))
             # Annotate with the body statement's original line number from the
             # cell AST so _show_clean_error can point to the exact line, not
             # the for-loop header.
             with contextlib.suppress(AttributeError, TypeError):
-                err._cash_error_lineno = getattr(body_node, 'lineno', None)
+                err._cash_error_lineno = getattr(body_node, "lineno", None)
             raise err
-        return metrics.get('status') == CacheStatus.COMPUTED
+        return metrics.get("status") == CacheStatus.COMPUTED
 
     # ------------------------------------------------------------------
     # Fast-loop heuristic
@@ -766,9 +826,9 @@ class ForLoopHandler:
         if getattr(self, "_split_store_cache", "unset") != "unset":
             return self._split_store_cache
         from ..loop_split import store_for_backend
+
         cash_instance = getattr(self.statement_processor, "cash_instance", None)
-        self._split_store_cache = store_for_backend(
-            getattr(cash_instance, "backend", None))
+        self._split_store_cache = store_for_backend(getattr(cash_instance, "backend", None))
         return self._split_store_cache
 
     def _split_eligible(self, node: ast.For, iterable) -> int | None:
@@ -792,6 +852,7 @@ class ForLoopHandler:
         * **File I/O in the body** -- needs per-iteration dep tracking.
         """
         from ..loop_split import is_split_half
+
         if node.orelse or is_split_half(node):
             return None
         try:
@@ -848,17 +909,20 @@ class ForLoopHandler:
         """
         if done <= 0:
             return False
-        max_iter = self._split_conf(
-            "loop_split_max_iter_seconds", self._SPLIT_MAX_ITER_SEC)
-        min_remaining = self._split_conf(
-            "loop_split_min_remaining_seconds", self._SPLIT_MIN_REMAINING_SEC)
+        max_iter = self._split_conf("loop_split_max_iter_seconds", self._SPLIT_MAX_ITER_SEC)
+        min_remaining = self._split_conf("loop_split_min_remaining_seconds", self._SPLIT_MIN_REMAINING_SEC)
         per_iter = elapsed / done
         if per_iter >= max_iter:
             return False
         split = (n - done) * per_iter >= min_remaining
         if self.debug:
-            logger.debug("[LOOP_SPLIT] per_iter=%.2fms remaining=%.0fms n=%d -> %s",
-                         per_iter * 1000, (n - done) * per_iter * 1000, n, split)
+            logger.debug(
+                "[LOOP_SPLIT] per_iter=%.2fms remaining=%.0fms n=%d -> %s",
+                per_iter * 1000,
+                (n - done) * per_iter * 1000,
+                n,
+                split,
+            )
         return split
 
     def _record_split_verdict(self, node: ast.For, elapsed: float, n: int) -> None:
@@ -874,10 +938,10 @@ class ForLoopHandler:
             return
         try:
             from ..loop_split import loop_source_hash
+
             store.record(loop_source_hash(node), self._SPLIT_PROBE_ITERS)
             if self.debug:
-                logger.debug("[LOOP_SPLIT] recorded k=%d; splits from next run",
-                             self._SPLIT_PROBE_ITERS)
+                logger.debug("[LOOP_SPLIT] recorded k=%d; splits from next run", self._SPLIT_PROBE_ITERS)
         except Exception:  # noqa: BLE001 - learning must never break execution
             logger.debug("[LOOP_SPLIT] could not record a verdict", exc_info=True)
 
@@ -897,13 +961,13 @@ class ForLoopHandler:
             return None
         try:
             from ..loop_split import loop_source_hash
+
             return store.get(loop_source_hash(node))
         except Exception:  # noqa: BLE001 - a lookup must never break the loop
             logger.debug("[LOOP_SPLIT] verdict lookup failed", exc_info=True)
             return None
 
-    def _run_split(self, node, k, ttl, silent, parent_context, raw_cell,
-                   inherited_annotation):
+    def _run_split(self, node, k, ttl, silent, parent_context, raw_cell, inherited_annotation):
         """Execute a split loop as head + tail.
 
         Halves come from ``loop_split.split_nodes`` -- the same derivation the
@@ -928,13 +992,15 @@ class ForLoopHandler:
             acc, loop_vars = shape
             force_outputs = {acc, *loop_vars}
         if self.debug:
-            logger.debug("[LOOP_SPLIT] executing split at k=%d (force_outputs=%s)",
-                         k, force_outputs)
+            logger.debug("[LOOP_SPLIT] executing split at k=%d (force_outputs=%s)", k, force_outputs)
 
-        head_res = self.process(head, ttl, silent, parent_context, raw_cell,
-                                inherited_annotation)
+        head_res = self.process(head, ttl, silent, parent_context, raw_cell, inherited_annotation)
         tail_res = self.dispatcher._execute_as_single_unit(
-            tail, ttl, silent, raw_cell, inherited_annotation,
+            tail,
+            ttl,
+            silent,
+            raw_cell,
+            inherited_annotation,
             force_outputs=force_outputs,
         )
         return ControlStructureResult(
@@ -978,18 +1044,18 @@ class ForLoopHandler:
         # a header that merely names a stored iterator is exhausted by the
         # first -- the walk below still refuses those, and any unknown call.
         fresh = isinstance(iter_node, ast.Call) and (
-            (isinstance(iter_node.func, ast.Name)
-             and iter_node.func.id in self._PURE_ITER_PRODUCERS)
-            or (isinstance(iter_node.func, ast.Attribute)
-                and iter_node.func.attr in self._FRESH_ITERATOR_METHODS))
+            (isinstance(iter_node.func, ast.Name) and iter_node.func.id in self._PURE_ITER_PRODUCERS)
+            or (isinstance(iter_node.func, ast.Attribute) and iter_node.func.attr in self._FRESH_ITERATOR_METHODS)
+        )
         try:
             if not fresh and iter(iterable) is iterable:
                 return False
         except Exception:  # noqa: BLE001 - defensive; non-iterables fail later anyway
             pass
 
-        user_ns = getattr(self.shell, 'user_ns', None) or {}
+        user_ns = getattr(self.shell, "user_ns", None) or {}
         import builtins as _builtins
+
         for sub in ast.walk(iter_node):
             # A one-shot iterator ANYWHERE in the header, not only as the
             # header. The check above only sees the RESULT, and
@@ -1023,10 +1089,7 @@ class ForLoopHandler:
         return True
 
     def _should_execute_loop_as_single_unit(
-        self,
-        node: ast.For,
-        iterable,
-        parent_context: dict[str, Any] | None
+        self, node: ast.For, iterable, parent_context: dict[str, Any] | None
     ) -> bool:
         """
         Decide whether a for loop should be executed as a single cacheable
@@ -1101,7 +1164,10 @@ class ForLoopHandler:
         if self.debug:
             logger.debug(
                 "[FAST_LOOP] Estimated overhead: %.1fs (%s iters × %s stmts × %.0fms/stmt)",
-                estimated_overhead, n_iterations, n_body_stmts, self._PER_STMT_OVERHEAD_SEC*1000
+                estimated_overhead,
+                n_iterations,
+                n_body_stmts,
+                self._PER_STMT_OVERHEAD_SEC * 1000,
             )
 
         return True
@@ -1109,9 +1175,16 @@ class ForLoopHandler:
     #: Methods that build a FRESH iterator over their object on every call.
     #: A header calling one may be evaluated twice: the second call iterates
     #: the same data again, where a stored iterator would be exhausted.
-    _FRESH_ITERATOR_METHODS = frozenset({
-        'itertuples', 'iterrows', 'items', 'iteritems', 'keys', 'values',
-    })
+    _FRESH_ITERATOR_METHODS = frozenset(
+        {
+            "itertuples",
+            "iterrows",
+            "items",
+            "iteritems",
+            "keys",
+            "values",
+        }
+    )
 
     def _estimated_iterations(self, iter_node: ast.AST, iterable) -> int | None:
         """How many times the loop will run, or ``None`` if it cannot be told.
@@ -1128,7 +1201,7 @@ class ForLoopHandler:
             return len(iterable)
         except TypeError:
             pass
-        user_ns = getattr(self.shell, 'user_ns', None) or {}
+        user_ns = getattr(self.shell, "user_ns", None) or {}
 
         def length_of(node: ast.AST) -> int | None:
             if isinstance(node, ast.Name):
@@ -1144,8 +1217,9 @@ class ForLoopHandler:
                 # 200,000-iteration inner loop counted as unknown and went
                 # through the per-statement machinery: 243 s against 3.8 s.
                 try:
-                    value = eval(compile(ast.Expression(node), '<loop-size>', 'eval'),
-                                 {'__builtins__': {}}, dict(user_ns))
+                    value = eval(
+                        compile(ast.Expression(node), "<loop-size>", "eval"), {"__builtins__": {}}, dict(user_ns)
+                    )
                     return len(value)
                 except Exception:  # noqa: BLE001 - sizing is advisory; unknown is safe
                     return None
@@ -1157,13 +1231,13 @@ class ForLoopHandler:
                 if base is None:
                     return None
                 owner = user_ns.get(func.value.id) if isinstance(func.value, ast.Name) else None
-                if func.attr in ('items', 'iteritems') and hasattr(owner, 'columns'):
+                if func.attr in ("items", "iteritems") and hasattr(owner, "columns"):
                     return len(owner.columns)
                 return base
             if isinstance(func, ast.Name) and node.args:
-                if func.id in ('enumerate', 'reversed', 'sorted', 'list', 'tuple'):
+                if func.id in ("enumerate", "reversed", "sorted", "list", "tuple"):
                     return length_of(node.args[0])
-                if func.id == 'zip':
+                if func.id == "zip":
                     lengths = [length_of(a) for a in node.args]
                     return None if any(n is None for n in lengths) else min(lengths)
             return None
@@ -1208,10 +1282,22 @@ class ForLoopHandler:
                     continue
 
                 # Check for file I/O patterns
-                if func_name in ('open', 'read', 'write', 'read_csv',
-                                 'to_csv', 'read_excel', 'to_excel',
-                                 'save', 'load', 'savez', 'savetxt',
-                                 'loadtxt', 'read_parquet', 'to_parquet'):
+                if func_name in (
+                    "open",
+                    "read",
+                    "write",
+                    "read_csv",
+                    "to_csv",
+                    "read_excel",
+                    "to_excel",
+                    "save",
+                    "load",
+                    "savez",
+                    "savetxt",
+                    "loadtxt",
+                    "read_parquet",
+                    "to_parquet",
+                ):
                     return True
 
         return False

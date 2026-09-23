@@ -6,6 +6,7 @@ lands. Session 3: an existing file is rewritten in place. ``raw`` had the new
 rows, but ``sales`` was restored with session 2's entry -- the old content.
 Without the new file in between, the rewrite was caught.
 """
+
 from pathlib import Path
 
 import pytest
@@ -18,23 +19,26 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(900)]
 FILES = 200
 ROWS = 6000
 
-READ = ("import glob, os\nimport pandas as pd\n"
-        "files = sorted(glob.glob(os.path.join('exports', 'pos_*.csv')))\n"
-        "parts = []\n"
-        "for f in files:\n"
-        "    d = pd.read_csv(f)\n"
-        "    d['source_file'] = os.path.basename(f)\n"
-        "    parts.append(d)\n"
-        "raw = pd.concat(parts, ignore_index=True)\n"
-        "print(len(files), 'files', len(raw), 'rows')")
-DERIVE = ("key_cols = [c for c in raw.columns if c != 'source_file']\n"
-          "sales = raw.drop_duplicates(subset=key_cols).copy()\n"
-          "print('S030 total:', int(sales.loc[sales['store'] == 'S030', 'v'].sum()))")
+READ = (
+    "import glob, os\nimport pandas as pd\n"
+    "files = sorted(glob.glob(os.path.join('exports', 'pos_*.csv')))\n"
+    "parts = []\n"
+    "for f in files:\n"
+    "    d = pd.read_csv(f)\n"
+    "    d['source_file'] = os.path.basename(f)\n"
+    "    parts.append(d)\n"
+    "raw = pd.concat(parts, ignore_index=True)\n"
+    "print(len(files), 'files', len(raw), 'rows')"
+)
+DERIVE = (
+    "key_cols = [c for c in raw.columns if c != 'source_file']\n"
+    "sales = raw.drop_duplicates(subset=key_cols).copy()\n"
+    "print('S030 total:', int(sales.loc[sales['store'] == 'S030', 'v'].sum()))"
+)
 
 
 def _frame(store, n, rng):
-    return pd.DataFrame({"store": store, "receipt": [f"R{store}-{k}" for k in range(n)],
-                         "v": rng.integers(1, 100, n)})
+    return pd.DataFrame({"store": store, "receipt": [f"R{store}-{k}" for k in range(n)], "v": rng.integers(1, 100, n)})
 
 
 def _session(nb_runner):
@@ -58,8 +62,8 @@ def test_the_rewritten_file_reaches_the_derived_frame(nb_runner, new_file_first)
         _session(nb_runner)
     target = folder / "pos_S030.csv"
     df = pd.read_csv(target)
-    df.loc[df.index % 25 == 0, "v"] *= 2          # 4% of the values doubled
-    df = df[df.index % 100 != 7]                  # 1% of the rows dropped
+    df.loc[df.index % 25 == 0, "v"] *= 2  # 4% of the values doubled
+    df = df[df.index % 100 != 7]  # 1% of the rows dropped
     df.to_csv(target, index=False)
     truth = int(pd.read_csv(target)["v"].sum())
     out = _session(nb_runner)

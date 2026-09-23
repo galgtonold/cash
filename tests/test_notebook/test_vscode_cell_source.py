@@ -12,6 +12,7 @@ unit test passed. This file plants a real backup on disk and asserts through
 the real ``server_discovery`` entry points instead, mirroring
 ``test_colab_cell_source.py``'s shape for the analogous Colab wiring.
 """
+
 from __future__ import annotations
 
 import json
@@ -31,38 +32,54 @@ def _write_notebook(path: Path, sources: list[str]) -> None:
     )
 
 
-def _write_backup(dirpath: Path, nb_path: Path, *, mtime_ms: int, size: int,
-                  cells: list[str], name: str = "abc123") -> Path:
+def _write_backup(
+    dirpath: Path, nb_path: Path, *, mtime_ms: int, size: int, cells: list[str], name: str = "abc123"
+) -> Path:
     """Write a file in VS Code's backup format (same shape as
     test_vscode_backup.py's helper of the same name)."""
     uri = nb_path.as_uri()
-    header = json.dumps({
-        "mtime": mtime_ms, "ctime": mtime_ms, "size": size,
-        "etag": "x", "orphaned": False,
-        "typeId": "notebook/jupyter-notebook/jupyter-notebook",
-    })
-    body = json.dumps({
-        "cells": [
-            {"cell_type": "code", "id": f"c{i}", "metadata": {},
-             "outputs": [], "execution_count": None, "source": src}
-            for i, src in enumerate(cells)
-        ],
-        "nbformat": 4, "nbformat_minor": 5, "metadata": {},
-    })
+    header = json.dumps(
+        {
+            "mtime": mtime_ms,
+            "ctime": mtime_ms,
+            "size": size,
+            "etag": "x",
+            "orphaned": False,
+            "typeId": "notebook/jupyter-notebook/jupyter-notebook",
+        }
+    )
+    body = json.dumps(
+        {
+            "cells": [
+                {
+                    "cell_type": "code",
+                    "id": f"c{i}",
+                    "metadata": {},
+                    "outputs": [],
+                    "execution_count": None,
+                    "source": src,
+                }
+                for i, src in enumerate(cells)
+            ],
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+        }
+    )
     target = dirpath / name
     target.write_text(f"{uri} {header}\n{body}", encoding="utf-8")
     return target
 
 
-def _plant_backup(tmp_path, monkeypatch, nb: Path, *, cells: list[str],
-                  settled: bool = True, name: str = "abc123") -> Path:
+def _plant_backup(
+    tmp_path, monkeypatch, nb: Path, *, cells: list[str], settled: bool = True, name: str = "abc123"
+) -> Path:
     """Point vscode_backup at a fake Backups root holding one matching backup
     for *nb*, settled (aged past the debounce window) by default."""
     st = os.stat(nb)
     root = tmp_path / "Backups" / "ws" / "file"
     root.mkdir(parents=True, exist_ok=True)
-    backup = _write_backup(root, nb, mtime_ms=int(st.st_mtime * 1000), size=st.st_size,
-                           cells=cells, name=name)
+    backup = _write_backup(root, nb, mtime_ms=int(st.st_mtime * 1000), size=st.st_size, cells=cells, name=name)
     if settled:
         old = time.time() - 60
         os.utime(backup, (old, old))
@@ -125,9 +142,7 @@ def test_no_backup_served_without_vscode_signal(tmp_path, monkeypatch):
     monkeypatch.setattr(sd, "_try_vscode_path", lambda: None)  # explicitly not VS Code
     _plant_backup(tmp_path, monkeypatch, nb, cells=["NEW_UNSAVED = 2"])
 
-    assert sd.get_notebook_cells(str(nb)) == ["OLD_SAVED = 1"], (
-        "served a VS Code backup with no VS Code signal present"
-    )
+    assert sd.get_notebook_cells(str(nb)) == ["OLD_SAVED = 1"], "served a VS Code backup with no VS Code signal present"
 
 
 def test_backup_still_served_with_vscode_signal_present(tmp_path, monkeypatch):
@@ -156,10 +171,14 @@ def test_a_malformed_cell_entry_returns_none_not_a_raise(tmp_path, monkeypatch):
     root.mkdir(parents=True)
     uri = nb.as_uri()
     header = json.dumps({"mtime": int(st.st_mtime * 1000), "size": st.st_size})
-    body = json.dumps({
-        "cells": ["not a dict", {"cell_type": "code", "id": "c1", "source": "x = 1"}],
-        "nbformat": 4, "nbformat_minor": 5, "metadata": {},
-    })
+    body = json.dumps(
+        {
+            "cells": ["not a dict", {"cell_type": "code", "id": "c1", "source": "x = 1"}],
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+        }
+    )
     backup = root / "abc123"
     backup.write_text(f"{uri} {header}\n{body}", encoding="utf-8")
     old = time.time() - 60
@@ -249,8 +268,9 @@ def test_a_changed_backup_between_calls_is_picked_up(tmp_path, monkeypatch):
     st = os.stat(nb)
     root = tmp_path / "Backups" / "ws" / "file"
     time.sleep(0.01)
-    backup = _write_backup(root, nb, mtime_ms=int(st.st_mtime * 1000), size=st.st_size,
-                           cells=["SECOND_EDIT = 2"], name="abc123")
+    backup = _write_backup(
+        root, nb, mtime_ms=int(st.st_mtime * 1000), size=st.st_size, cells=["SECOND_EDIT = 2"], name="abc123"
+    )
     old = time.time() - 60
     os.utime(backup, (old, old))  # keep it settled so the wait doesn't interfere
 

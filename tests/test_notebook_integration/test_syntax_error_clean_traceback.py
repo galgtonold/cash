@@ -41,25 +41,24 @@ _CASH_INTERNAL_MARKERS = [
 def _assert_clean(text: str) -> None:
     for marker in _CASH_INTERNAL_MARKERS:
         assert marker not in text, (
-            f"traceback leaked cash internals ({marker!r}); "
-            f"expected a clean user-facing error. Got:\n{text[:1200]}"
+            f"traceback leaked cash internals ({marker!r}); expected a clean user-facing error. Got:\n{text[:1200]}"
         )
 
 
 def test_single_cell_syntax_error_is_clean(nb_runner):
     """A plain typo in a single cell shows SyntaxError with no cash frames."""
-    nb_runner.create_notebook([
-        "x = 1 2",  # complete-but-invalid -> plain SyntaxError
-    ])
+    nb_runner.create_notebook(
+        [
+            "x = 1 2",  # complete-but-invalid -> plain SyntaxError
+        ]
+    )
     nb_runner.start_kernel()
 
     with pytest.raises(CellExecutionError) as excinfo:
         nb_runner.run_cell(1)
     text = str(excinfo.value)
 
-    assert "SyntaxError" in text, (
-        f"expected a SyntaxError to reach the user, got:\n{text[:1200]}"
-    )
+    assert "SyntaxError" in text, f"expected a SyntaxError to reach the user, got:\n{text[:1200]}"
     _assert_clean(text)
 
 
@@ -70,10 +69,12 @@ def test_syntax_error_after_upstream_resolution_is_clean(nb_runner):
     parse failure, exercising the lineage/simulation path — exactly where the old
     code leaked ``virtual_lineage.py`` / ``checker.py`` frames into the chain.
     """
-    nb_runner.create_notebook([
-        "a = 1",
-        "b = a + 2 2",  # references upstream `a`, then a plain SyntaxError
-    ])
+    nb_runner.create_notebook(
+        [
+            "a = 1",
+            "b = a + 2 2",  # references upstream `a`, then a plain SyntaxError
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_cell(1)
 
@@ -81,9 +82,7 @@ def test_syntax_error_after_upstream_resolution_is_clean(nb_runner):
         nb_runner.run_cell(2)
     text = str(excinfo.value)
 
-    assert "SyntaxError" in text, (
-        f"expected a SyntaxError to reach the user, got:\n{text[:1200]}"
-    )
+    assert "SyntaxError" in text, f"expected a SyntaxError to reach the user, got:\n{text[:1200]}"
     _assert_clean(text)
 
 
@@ -96,11 +95,13 @@ def test_upstream_failure_keeps_intentional_cause_but_not_accidental_chain(nb_ru
     But the *accidental* context-chain ("During handling of the above
     exception") that used to expose cash's frames must be gone.
     """
-    nb_runner.create_notebook([
-        "x = 10",
-        "y = x * 2",
-        "print('y=' + str(y))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "x = 10",
+            "y = x * 2",
+            "print('y=' + str(y))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "y=20" in nb_runner.get_output(3)
@@ -113,12 +114,8 @@ def test_upstream_failure_keeps_intentional_cause_but_not_accidental_chain(nb_ru
     text = str(excinfo.value)
 
     # The intentional failure IS surfaced...
-    assert "UpstreamStateError" in text, (
-        f"expected the upstream failure to surface in the cell, got:\n{text[:1200]}"
-    )
-    assert "undefined_name_xyz" in text, (
-        f"error should name the real underlying cause, got:\n{text[:1200]}"
-    )
+    assert "UpstreamStateError" in text, f"expected the upstream failure to surface in the cell, got:\n{text[:1200]}"
+    assert "undefined_name_xyz" in text, f"error should name the real underlying cause, got:\n{text[:1200]}"
     # ...but the accidental context-chain that leaked cash's frames is gone.
     assert "During handling of the above exception" not in text, (
         f"the accidental __context__ chain must be suppressed, got:\n{text[:1200]}"

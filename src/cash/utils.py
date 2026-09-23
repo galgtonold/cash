@@ -53,7 +53,7 @@ def normalize_path(path: str) -> str:
         normalize_path("C:\\\\Users\\\\foo\\\\bar.csv")  # → "C:/Users/foo/bar.csv"
         normalize_path("/home/foo/bar.csv")              # → "/home/foo/bar.csv"
     """
-    return path.replace(os.path.sep, '/')
+    return path.replace(os.path.sep, "/")
 
 
 # ---------------------------------------------------------------------------
@@ -183,7 +183,7 @@ def _basename_candidates(stored_path: str) -> list[str]:
     reading is only consulted when that finds nothing.
     """
     candidates = [os.path.basename(stored_path)]
-    agnostic = stored_path.replace('\\', '/').rsplit('/', 1)[-1]
+    agnostic = stored_path.replace("\\", "/").rsplit("/", 1)[-1]
     if agnostic and agnostic not in candidates:
         candidates.append(agnostic)
     return [c for c in candidates if c]
@@ -235,10 +235,10 @@ def resolve_file_dep_path(stored_path: str) -> str | None:
     # Fallback 2: try progressively longer path suffixes relative to CWD.
     # E.g. stored = "C:/old/root/project/examples/data.csv"
     #   → try "examples/data.csv" relative to CWD
-    parts = stored_path.replace('\\', '/').split('/')
+    parts = stored_path.replace("\\", "/").split("/")
     # Start from the second-to-last component (parent dir + filename)
     for i in range(max(len(parts) - 2, 1), 0, -1):
-        suffix = '/'.join(parts[i:])
+        suffix = "/".join(parts[i:])
         candidate = os.path.join(os.getcwd(), suffix)
         if os.path.exists(candidate):
             return normalize_path(os.path.realpath(candidate))
@@ -253,8 +253,7 @@ def resolve_file_dep_path(stored_path: str) -> str | None:
 REPLACE_RETRY_DELAYS = (0.005, 0.01, 0.02, 0.04, 0.08, 0.16)
 
 
-def replace_with_retry(tmp_path: str, path: str,
-                       delays: tuple[float, ...] = REPLACE_RETRY_DELAYS) -> None:
+def replace_with_retry(tmp_path: str, path: str, delays: tuple[float, ...] = REPLACE_RETRY_DELAYS) -> None:
     """``os.replace``, but tolerant of a destination that is briefly locked.
 
     The replace is atomic on both platforms, but on Windows it is not always
@@ -280,7 +279,7 @@ def replace_with_retry(tmp_path: str, path: str,
             return
         except PermissionError:
             time.sleep(delay)
-    os.replace(tmp_path, path)      # out of patience; let it raise
+    os.replace(tmp_path, path)  # out of patience; let it raise
 
 
 @functools.lru_cache(maxsize=8)
@@ -332,15 +331,15 @@ def resolve_main_module(func: Any) -> str:
     ``python -c``, a frozen app, and a Jupyter kernel, where ``__main__`` is
     the user namespace rather than a file and there is no import to agree with.
     """
-    g = getattr(func, '__globals__', None) or {}
+    g = getattr(func, "__globals__", None) or {}
     # `python -m pkg.mod` runs pkg/mod.py as `__main__`, and the file stem
     # alone called it `mod` while `import pkg.mod` called it `pkg.mod`: two
     # caches for one function, and `cash clear --function f` ambiguous between
     # them (round 18). The module spec carries the dotted name the import uses.
-    spec_name = getattr(g.get('__spec__'), 'name', None)
+    spec_name = getattr(g.get("__spec__"), "name", None)
     if isinstance(spec_name, str) and spec_name and spec_name not in MAIN_MODULE_NAMES:
         return spec_name
-    path = g.get('__file__')
+    path = g.get("__file__")
     if not isinstance(path, str) or not path:
-        return '__main__'
-    return _module_stem(path) or '__main__'
+        return "__main__"
+    return _module_stem(path) or "__main__"

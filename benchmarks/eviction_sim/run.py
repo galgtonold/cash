@@ -17,6 +17,7 @@ notebook's current source would request).
     python benchmarks/eviction_sim/run.py --set p_undo=0.4 --set days=120
     python benchmarks/eviction_sim/run.py --list
 """
+
 from __future__ import annotations
 
 import argparse
@@ -62,8 +63,11 @@ def simulate(params: Params, disk, ram, live_hints=False, touch_hints=False, liv
                 # cash's upstream simulator computes the current key of every
                 # statement above the cell before it runs; loop iterations it
                 # cannot enumerate without executing, so they are not touched.
-                keys = [proj.key(sid) for sid in proj.nb_stmts[op[1]]
-                        if proj.stmts[sid].cell <= op[2] and not proj.stmts[sid].loop_iters]
+                keys = [
+                    proj.key(sid)
+                    for sid in proj.nb_stmts[op[1]]
+                    if proj.stmts[sid].cell <= op[2] and not proj.stmts[sid].loop_iters
+                ]
                 for pol in (disk, ram):
                     if pol is not None:
                         pol.hint("touch", keys=keys)
@@ -71,8 +75,11 @@ def simulate(params: Params, disk, ram, live_hints=False, touch_hints=False, liv
                 # the notebook's FULL live set: every top-level statement of
                 # its current source (loop iterations are not enumerable)
                 nb = op[1]
-                keys = {proj.key(sid) for sid in proj.nb_stmts[nb]
-                        if proj.stmts[sid].cell < frontier[nb] and not proj.stmts[sid].loop_iters}
+                keys = {
+                    proj.key(sid)
+                    for sid in proj.nb_stmts[nb]
+                    if proj.stmts[sid].cell < frontier[nb] and not proj.stmts[sid].loop_iters
+                }
                 disk.hint("liveset", nb=nb, keys=keys)
             eng.run_cell(op[1], op[2])
         elif kind in ("frontier", "edited"):
@@ -148,8 +155,9 @@ POLICIES = {
     "GDSF-s8": lambda cap: P.SampledGDSF(cap, k=8),
     "GDSF-s32": lambda cap: P.SampledGDSF(cap, k=32),
     "GDSF-s128": lambda cap: P.SampledGDSF(cap, k=128),
-    "Supersede+GDSF-s32": lambda cap: P.SupersedeAware(cap, keep=1, inner=P.SampledGDSF, inner_kw={"k": 32},
-                                                        age_on_dead=False),
+    "Supersede+GDSF-s32": lambda cap: P.SupersedeAware(
+        cap, keep=1, inner=P.SampledGDSF, inner_kw={"k": 32}, age_on_dead=False
+    ),
 }
 NEEDS_LIVE = {n for n in POLICIES if n.startswith(("LiveGC", "Hybrid"))}
 NEEDS_TOUCH = {"GDSF+touch"}
@@ -159,14 +167,14 @@ NEEDS_LIVESET = {n for n in POLICIES if n.startswith("OwnerGC")}
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tier", choices=["disk", "ram"], default="disk")
-    ap.add_argument("--ram-cap", type=float, default=0.25,
-                    help="disk experiment: RAM cap as multiple of live bytes")
+    ap.add_argument("--ram-cap", type=float, default=0.25, help="disk experiment: RAM cap as multiple of live bytes")
     ap.add_argument("--seeds", type=int, default=5)
     ap.add_argument("--fracs", default="0.25,0.5,1,2,4")
     ap.add_argument("--policies", default=None, help="comma-separated names (see --list)")
     ap.add_argument("--set", action="append", default=[], help="Params override, e.g. p_undo=0.4")
-    ap.add_argument("--out", default=None,
-                    help="write raw per-seed results as JSON (benchmarks/results_* is gitignored)")
+    ap.add_argument(
+        "--out", default=None, help="write raw per-seed results as JSON (benchmarks/results_* is gitignored)"
+    )
     ap.add_argument("--list", action="store_true", help="print the policy names and exit")
     ap.add_argument("-q", action="store_true", help="only print the summary table")
     a = ap.parse_args()
@@ -193,8 +201,18 @@ def main():
     elif a.tier == "disk":
         names = [n for n in POLICIES if n != "cash-RAM-now"]
     else:
-        names = ["cash-RAM-now", "LRU", "S3-FIFO", "ARC", "SLRU", "GDSF", "CostLRU",
-                 "Supersede+LRU", "Supersede+CostLRU", "LiveGC+CostLRU"]
+        names = [
+            "cash-RAM-now",
+            "LRU",
+            "S3-FIFO",
+            "ARC",
+            "SLRU",
+            "GDSF",
+            "CostLRU",
+            "Supersede+LRU",
+            "Supersede+CostLRU",
+            "LiveGC+CostLRU",
+        ]
     results = {n: {f: [] for f in fracs} for n in names}
     hits = {n: {f: [] for f in fracs} for n in names}
     meta = []
@@ -211,17 +229,26 @@ def main():
             t_inf = simulate(prm, Unlimited(), Unlimited()).time
             t_abs = simulate(prm, Unlimited(), None).time
         meta.append(dict(seed=seed, footprint=total, live=lb, t_inf=t_inf, t_abs=t_abs))
-        print(f"seed {seed}: disk footprint {total/1e9:.2f} GB, live {lb/1e9:.3f} GB "
-              f"({total/max(1,lb):.0f}x), T_unlimited {t_inf/3600:.2f} h, "
-              f"T_absent {t_abs/3600:.2f} h", file=sys.stderr)
+        print(
+            f"seed {seed}: disk footprint {total / 1e9:.2f} GB, live {lb / 1e9:.3f} GB "
+            f"({total / max(1, lb):.0f}x), T_unlimited {t_inf / 3600:.2f} h, "
+            f"T_absent {t_abs / 3600:.2f} h",
+            file=sys.stderr,
+        )
         for f in fracs:
             cap = int(lb * f)
             for n in names:
                 t0 = time.time()
                 pol = POLICIES[n](cap)
                 if a.tier == "disk":
-                    eng = simulate(prm, pol, P.CashRAM(ram_cap), live_hints=n in NEEDS_LIVE,
-                                   touch_hints=n in NEEDS_TOUCH, liveset_hints=n in NEEDS_LIVESET)
+                    eng = simulate(
+                        prm,
+                        pol,
+                        P.CashRAM(ram_cap),
+                        live_hints=n in NEEDS_LIVE,
+                        touch_hints=n in NEEDS_TOUCH,
+                        liveset_hints=n in NEEDS_LIVESET,
+                    )
                     h = eng.disk_hits
                 else:
                     eng = simulate(prm, Unlimited(), pol, live_hints=n in NEEDS_LIVE)
@@ -230,18 +257,21 @@ def main():
                 results[n][f].append(lost)
                 hits[n][f].append(h / max(1, eng.requests))
                 if not a.q:
-                    print(f"  cap={f:>5}x  {n:<16} lost={lost*100:6.1f}%  "
-                          f"tier-hits={h/max(1,eng.requests)*100:5.1f}%  ({time.time()-t0:.1f}s)",
-                          file=sys.stderr)
+                    print(
+                        f"  cap={f:>5}x  {n:<16} lost={lost * 100:6.1f}%  "
+                        f"tier-hits={h / max(1, eng.requests) * 100:5.1f}%  ({time.time() - t0:.1f}s)",
+                        file=sys.stderr,
+                    )
     print()
-    print(f"[{a.tier} tier] lost savings, mean over {a.seeds} seeds (lower is better); "
-          f"cap = multiple of live-set bytes")
-    print(f"{'policy':<18}" + "".join(f"{str(f)+'x':>9}" for f in fracs))
+    print(
+        f"[{a.tier} tier] lost savings, mean over {a.seeds} seeds (lower is better); cap = multiple of live-set bytes"
+    )
+    print(f"{'policy':<18}" + "".join(f"{str(f) + 'x':>9}" for f in fracs))
     for n in names:
         row = f"{n:<18}"
         for f in fracs:
             v = results[n][f]
-            row += f"{statistics.mean(v)*100:8.1f}%"
+            row += f"{statistics.mean(v) * 100:8.1f}%"
         print(row)
     if a.tier == "disk":
         fp = statistics.mean(m["footprint"] / max(1, m["live"]) for m in meta)
@@ -249,10 +279,17 @@ def main():
     if a.out:
         os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
         with open(a.out, "w") as fh:
-            json.dump(dict(tier=a.tier, fracs=fracs, meta=meta,
-                           results={n: {str(f): v for f, v in r.items()} for n, r in results.items()},
-                           hits={n: {str(f): v for f, v in r.items()} for n, r in hits.items()}),
-                      fh, indent=1)
+            json.dump(
+                dict(
+                    tier=a.tier,
+                    fracs=fracs,
+                    meta=meta,
+                    results={n: {str(f): v for f, v in r.items()} for n, r in results.items()},
+                    hits={n: {str(f): v for f, v in r.items()} for n, r in hits.items()},
+                ),
+                fh,
+                indent=1,
+            )
 
 
 if __name__ == "__main__":

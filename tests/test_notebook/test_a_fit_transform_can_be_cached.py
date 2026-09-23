@@ -7,14 +7,17 @@ assignment form of ``fit_transform`` was refused even when asked. It stays
 opt-in (see the directive's identity caveat), and the refusal now says how
 to opt in.
 """
+
 import pytest
 
 pytest.importorskip("sklearn")
 
 from cash.notebook.cache_status import CacheStatus  # noqa: E402
 
-SETUP = ("from sklearn.feature_extraction.text import TfidfVectorizer\n"
-         "texts = [f'the cat {i % 97} sat by dog {i % 89}' for i in range(40_000)]\n")
+SETUP = (
+    "from sklearn.feature_extraction.text import TfidfVectorizer\n"
+    "texts = [f'the cat {i % 97} sat by dog {i % 89}' for i in range(40_000)]\n"
+)
 
 
 def _run(cash_magics, code):
@@ -23,9 +26,11 @@ def _run(cash_magics, code):
     import ast
 
     from cash.notebook.annotations import get_statement_annotations
+
     node = ast.parse(code).body[0]
     return cash_magics._statement_processor.process_statement(
-        ast.unparse(node), annotation=get_statement_annotations(code, node))
+        ast.unparse(node), annotation=get_statement_annotations(code, node)
+    )
 
 
 def test_asked_for_it_is_cached_with_the_fitted_vectorizer(cash_magics):

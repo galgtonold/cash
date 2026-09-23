@@ -20,6 +20,7 @@ new object from there on.
 
 Counted with ``os.write`` from inside the cached function.
 """
+
 from pathlib import Path
 
 import pytest
@@ -28,15 +29,17 @@ pytest.importorskip("pandas")
 
 pytestmark = [pytest.mark.integration, pytest.mark.mutations]
 
-SETUP = ("import os, time\n"
-         "import pandas as pd\n"
-         "def slow_total(frame):\n"
-         "    fd = os.open('runs.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND)\n"
-         "    os.write(fd, b'x')\n"
-         "    os.close(fd)\n"
-         "    time.sleep(0.2)\n"
-         "    return int(frame['a'].sum())\n"
-         "df = pd.DataFrame({'a': range(1000), 'b': [0.123] * 1000})")
+SETUP = (
+    "import os, time\n"
+    "import pandas as pd\n"
+    "def slow_total(frame):\n"
+    "    fd = os.open('runs.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND)\n"
+    "    os.write(fd, b'x')\n"
+    "    os.close(fd)\n"
+    "    time.sleep(0.2)\n"
+    "    return int(frame['a'].sum())\n"
+    "df = pd.DataFrame({'a': range(1000), 'b': [0.123] * 1000})"
+)
 TOTAL = "total = slow_total(df)\nprint('TOTAL', total)"
 ON = "import cash\n%cash_on"
 
@@ -46,14 +49,17 @@ def _runs(runner) -> int:
     return log.read_text().count("x") if log.exists() else 0
 
 
-@pytest.mark.parametrize("shown, edited", [
-    ("df.round(2)", "df.round(3)"),
-    ("df.describe().round(3)", "df.describe().round(2)"),
-    ("df.mean()", "df.median()"),
-    ("df['a'].abs().sum()", "df['b'].abs().sum()"),
-    ("df.groupby('b').agg('sum')", "df.groupby('b').agg('mean')"),
-    ("df.sort_values('a').head()", "df.sort_values('a').head(3)"),
-])
+@pytest.mark.parametrize(
+    "shown, edited",
+    [
+        ("df.round(2)", "df.round(3)"),
+        ("df.describe().round(3)", "df.describe().round(2)"),
+        ("df.mean()", "df.median()"),
+        ("df['a'].abs().sum()", "df['b'].abs().sum()"),
+        ("df.groupby('b').agg('sum')", "df.groupby('b').agg('mean')"),
+        ("df.sort_values('a').head()", "df.sort_values('a').head(3)"),
+    ],
+)
 def test_editing_how_a_frame_is_shown_keeps_what_is_built_from_it(nb_runner, shown, edited):
     """The bump was keyed on the display statement's source: editing the
     expression moved ``df``'s lineage and every later result built from it
@@ -73,10 +79,13 @@ def test_editing_how_a_frame_is_shown_keeps_what_is_built_from_it(nb_runner, sho
 BIG = SETUP.replace("range(1000), 'b': [0.123] * 1000", "range(300_000), 'b': [0.123] * 300_000")
 
 
-@pytest.mark.parametrize("shown, edited", [
-    ("df[df.b > 0].groupby('b').size()", "df[df.b > 0].groupby('a').size()"),
-    ("df.groupby('b')['a'].cumcount()", "df.groupby('a')['a'].cumcount()"),
-])
+@pytest.mark.parametrize(
+    "shown, edited",
+    [
+        ("df[df.b > 0].groupby('b').size()", "df[df.b > 0].groupby('a').size()"),
+        ("df.groupby('b')['a'].cumcount()", "df.groupby('a')['a'].cumcount()"),
+    ],
+)
 def test_a_method_on_a_grouping_leaves_the_frame_alone(nb_runner, shown, edited):
     """Round 30 (r30s1): the last method is called on the GroupBy.
 
@@ -100,8 +109,7 @@ def test_a_chain_that_changes_the_frame_still_counts(nb_runner):
     The frame is over the 1 MiB up to which a call keys on the value of an
     argument passed by name: a small ``df`` holds the same values after the
     edit, and ``slow_total(df)`` is then rightly served."""
-    nb_runner.create_notebook([ON, BIG, "df.pop('b').round(2)", TOTAL,
-                               "print(list(df.columns))"])
+    nb_runner.create_notebook([ON, BIG, "df.pop('b').round(2)", TOTAL, "print(list(df.columns))"])
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "['a']" in nb_runner.get_output(5)

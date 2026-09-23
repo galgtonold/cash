@@ -20,11 +20,13 @@ class TestUpstreamSimulation:
 
     def test_31_fresh_kernel_restore_all(self, nb_runner):
         """Scenario 31: Run all, reset state, run last cell — upstream restores all."""
-        nb_runner.create_notebook([
-            "a = 10",
-            "b = a + 5",
-            "c = b * 2\nprint(f'c={c}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 10",
+                "b = a + 5",
+                "c = b * 2\nprint(f'c={c}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "c=30" in nb_runner.get_output(3)
@@ -38,12 +40,14 @@ class TestUpstreamSimulation:
         """Scenario 32: Fresh kernel restore with file dependency."""
         csv_path = tmp_path / "test_data.csv"
         csv_path.write_text("x,y\n1,2\n3,4\n")
-        csv_str = str(csv_path).replace('\\', '/')
+        csv_str = str(csv_path).replace("\\", "/")
 
-        nb_runner.create_notebook([
-            f"import pandas as pd\ndf = pd.read_csv('{csv_str}')",
-            "total = df['x'].sum()\nprint(f'total={total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                f"import pandas as pd\ndf = pd.read_csv('{csv_str}')",
+                "total = df['x'].sum()\nprint(f'total={total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total=4" in nb_runner.get_output(2)
@@ -55,12 +59,14 @@ class TestUpstreamSimulation:
 
     def test_33_partial_upstream_restore(self, nb_runner):
         """Scenario 33: Only needed upstream cells restored."""
-        nb_runner.create_notebook([
-            "a = 1",
-            "b = 2",
-            "c = 3",
-            "d = a + c\nprint(f'd={d}')",  # Only needs a and c, not b
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 1",
+                "b = 2",
+                "c = 3",
+                "d = a + c\nprint(f'd={d}')",  # Only needs a and c, not b
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "d=4" in nb_runner.get_output(4)
@@ -70,10 +76,12 @@ class TestUpstreamSimulation:
 
     def test_34_upstream_with_inserted_cell(self, nb_runner):
         """Scenario 35: Run cells 1-2, insert cell between them, run cell 3."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "y = x + 5\nprint(f'y={y}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "y = x + 5\nprint(f'y={y}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "y=15" in nb_runner.get_output(2)
@@ -87,11 +95,13 @@ class TestUpstreamSimulation:
 
     def test_35_upstream_simulation_cache_correctness(self, nb_runner):
         """Run all, modify middle cell, run last — simulation must find change."""
-        nb_runner.create_notebook([
-            "a = 1",
-            "b = a + 10",
-            "c = b + 100\nprint(f'c={c}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 1",
+                "b = a + 10",
+                "c = b + 100\nprint(f'c={c}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "c=111" in nb_runner.get_output(3)
@@ -103,11 +113,13 @@ class TestUpstreamSimulation:
 
     def test_36_upstream_with_control_structure(self, nb_runner):
         """Scenario 40: Upstream cell has a for loop — simulation must decompose."""
-        nb_runner.create_notebook([
-            "data = [1, 2, 3]",
-            "result = {}\nfor x in data:\n    result[x] = x * 2",
-            "total = sum(result.values())\nprint(f'total={total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = [1, 2, 3]",
+                "result = {}\nfor x in data:\n    result[x] = x * 2",
+                "total = sum(result.values())\nprint(f'total={total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total=12" in nb_runner.get_output(3)
@@ -118,11 +130,13 @@ class TestUpstreamSimulation:
 
     def test_37_upstream_with_if_else(self, nb_runner):
         """Scenario 41: Upstream has if/else — simulation must eval condition."""
-        nb_runner.create_notebook([
-            "n = 10",
-            "if n > 5:\n    label = 'big'\nelse:\n    label = 'small'",
-            "print(f'label={label}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "n = 10",
+                "if n > 5:\n    label = 'big'\nelse:\n    label = 'small'",
+                "print(f'label={label}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "label=big" in nb_runner.get_output(3)
@@ -133,12 +147,14 @@ class TestUpstreamSimulation:
 
     def test_38_concurrent_variable_names(self, nb_runner):
         """Scenario 47: Same var in multiple cells — latest wins."""
-        nb_runner.create_notebook([
-            "x = 'first'",
-            "x = 'second'",
-            "x = 'third'",
-            "print(f'x={x}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 'first'",
+                "x = 'second'",
+                "x = 'third'",
+                "print(f'x={x}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "x=third" in nb_runner.get_output(4)
@@ -148,7 +164,7 @@ class TestUpstreamSimulation:
         cells = []
         cells.append("v0 = 1")
         for i in range(1, 10):
-            cells.append(f"v{i} = v{i-1} + 1")
+            cells.append(f"v{i} = v{i - 1} + 1")
         cells.append("print(f'v9={v9}')")
         nb_runner.create_notebook(cells)
         nb_runner.start_kernel()
@@ -161,11 +177,13 @@ class TestUpstreamSimulation:
 
     def test_40_upstream_metric_accuracy(self, nb_runner):
         """Scenario 44: Verify upstream only restores what's needed."""
-        nb_runner.create_notebook([
-            "x = 100",
-            "y = 200",  # Not needed by cell 3
-            "z = x + 1\nprint(f'z={z}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 100",
+                "y = 200",  # Not needed by cell 3
+                "z = x + 1\nprint(f'z={z}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "z=101" in nb_runner.get_output(3)
@@ -184,9 +202,11 @@ class TestCellOrdering:
 
     def test_41_run_cell_twice_skips(self, nb_runner):
         """Scenario 52: Run cell 1, run cell 1 again — should skip."""
-        nb_runner.create_notebook([
-            "x = 42\nprint(f'x={x}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 42\nprint(f'x={x}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_cell(1)
         assert "x=42" in nb_runner.get_output(1)
@@ -195,9 +215,11 @@ class TestCellOrdering:
 
     def test_42_run_modify_run(self, nb_runner):
         """Scenario 53: Run, modify, run again — should recompute."""
-        nb_runner.create_notebook([
-            "x = 1\nprint(f'x={x}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 1\nprint(f'x={x}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_cell(1)
         assert "x=1" in nb_runner.get_output(1)
@@ -207,11 +229,13 @@ class TestCellOrdering:
 
     def test_43_rerun_unchanged_middle(self, nb_runner):
         """Scenario 54: Run 1,2,3 then re-run 2 (unchanged) — should skip."""
-        nb_runner.create_notebook([
-            "a = 1",
-            "b = a + 1\nprint(f'b={b}')",
-            "c = b + 1\nprint(f'c={c}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 1",
+                "b = a + 1\nprint(f'b={b}')",
+                "c = b + 1\nprint(f'c={c}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "b=2" in nb_runner.get_output(2)
@@ -222,11 +246,13 @@ class TestCellOrdering:
 
     def test_44_modify_early_rerun_late(self, nb_runner):
         """Scenario 55: Run 1,2,3 — modify 1, re-run 3 only. Upstream restores."""
-        nb_runner.create_notebook([
-            "x = 5",
-            "y = x * 2",
-            "z = y + 1\nprint(f'z={z}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 5",
+                "y = x * 2",
+                "z = y + 1\nprint(f'z={z}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "z=11" in nb_runner.get_output(3)
@@ -238,11 +264,13 @@ class TestCellOrdering:
 
     def test_45_modify_middle_rerun_downstream(self, nb_runner):
         """Scenario 56: Modify cell 2, re-run 2 and 3."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "y = x + 1\nprint(f'y={y}')",
-            "z = y + 1\nprint(f'z={z}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "y = x + 1\nprint(f'y={y}')",
+                "z = y + 1\nprint(f'z={z}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "y=11" in nb_runner.get_output(2)
@@ -256,11 +284,13 @@ class TestCellOrdering:
 
     def test_46_skip_middle_cell(self, nb_runner):
         """Scenario 59: Run 1, skip 2, run 3 — 3 needs 2's output."""
-        nb_runner.create_notebook([
-            "a = 5",
-            "b = a + 10",
-            "c = b + 20\nprint(f'c={c}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 5",
+                "b = a + 10",
+                "c = b + 20\nprint(f'c={c}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_cell(1)
         # Skip cell 2, run cell 3 — upstream should restore b
@@ -269,9 +299,11 @@ class TestCellOrdering:
 
     def test_47_rapid_reexecution(self, nb_runner):
         """Scenario 62: Run same cell multiple times — should skip after first."""
-        nb_runner.create_notebook([
-            "counter = 1\nprint(f'counter={counter}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "counter = 1\nprint(f'counter={counter}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_cell(1)
         assert "counter=1" in nb_runner.get_output(1)
@@ -282,12 +314,14 @@ class TestCellOrdering:
 
     def test_48_run_all_modify_middle_run_all(self, nb_runner):
         """Scenario 65: Full re-run with one change — only affected recompute."""
-        nb_runner.create_notebook([
-            "a = 1",
-            "b = a + 1",
-            "c = 100",  # Independent of a,b
-            "d = b + c\nprint(f'd={d}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 1",
+                "b = a + 1",
+                "c = 100",  # Independent of a,b
+                "d = b + c\nprint(f'd={d}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "d=102" in nb_runner.get_output(4)
@@ -299,11 +333,13 @@ class TestCellOrdering:
 
     def test_49_interleaved_execution(self, nb_runner):
         """Scenario 57: Run 1, 3, 2, 3 — second run of 3 correct."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "y = 20",
-            "z = x + y\nprint(f'z={z}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "y = 20",
+                "z = x + y\nprint(f'z={z}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_cell(1)
         nb_runner.run_cell(3)  # y not yet run but should be restored from upstream
@@ -312,38 +348,42 @@ class TestCellOrdering:
         nb_runner.run_cell(3)
         assert "z=30" in nb_runner.get_output(3)
 
-
     def test_51_run_after_variable_deleted(self, nb_runner):
         """Scenario 60: Delete variable, then run downstream."""
-        nb_runner.create_notebook([
-            "x = 42",
-            "y = x + 1\nprint(f'y={y}')",
-            "del x",
-            "print(f'y still={y}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 42",
+                "y = x + 1\nprint(f'y={y}')",
+                "del x",
+                "print(f'y still={y}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "y=43" in nb_runner.get_output(2)
         assert "y still=43" in nb_runner.get_output(4)
 
-
     def test_53_cell_with_star_import(self, nb_runner):
         """Scenario 64: Star import — should not crash."""
-        nb_runner.create_notebook([
-            "from os.path import *",
-            "result = exists('.')\nprint(f'exists={result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from os.path import *",
+                "result = exists('.')\nprint(f'exists={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "exists=True" in nb_runner.get_output(2)
 
     def test_54_upstream_accumulator_init_skip(self, nb_runner):
         """Scenario 39: Accumulator init `result = {}` should not reset on upstream."""
-        nb_runner.create_notebook([
-            "data = [1, 2, 3]",
-            "result = {}\nfor x in data:\n    result[x] = x * 10",
-            "total = sum(result.values())\nprint(f'total={total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = [1, 2, 3]",
+                "result = {}\nfor x in data:\n    result[x] = x * 10",
+                "total = sum(result.values())\nprint(f'total={total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total=60" in nb_runner.get_output(3)
@@ -355,14 +395,16 @@ class TestCellOrdering:
         """Complex pipeline: data → filter → transform → aggregate, fresh kernel."""
         csv_path = tmp_path / "pipeline_data.csv"
         csv_path.write_text("name,value\nalpha,10\nbeta,20\ngamma,30\nalpha,40\n")
-        csv_str = str(csv_path).replace('\\', '/')
+        csv_str = str(csv_path).replace("\\", "/")
 
-        nb_runner.create_notebook([
-            f"import pandas as pd\ndf = pd.read_csv('{csv_str}')",
-            "filtered = df[df['value'] > 15]",
-            "transformed = filtered.copy()\ntransformed['doubled'] = filtered['value'] * 2",
-            "result = transformed['doubled'].sum()\nprint(f'result={result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                f"import pandas as pd\ndf = pd.read_csv('{csv_str}')",
+                "filtered = df[df['value'] > 15]",
+                "transformed = filtered.copy()\ntransformed['doubled'] = filtered['value'] * 2",
+                "result = transformed['doubled'].sum()\nprint(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         # filtered: beta(20), gamma(30), alpha(40) → doubled: 40, 60, 80 → sum = 180
@@ -373,13 +415,15 @@ class TestCellOrdering:
 
     def test_56_modify_upstream_only_affected_recompute(self, nb_runner):
         """Two independent branches, modify one — other should not recompute."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "y = 20",
-            "a = x + 1",  # depends on x only
-            "b = y + 1",  # depends on y only
-            "print(f'a={a}, b={b}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "y = 20",
+                "a = x + 1",  # depends on x only
+                "b = y + 1",  # depends on y only
+                "print(f'a={a}, b={b}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "a=11, b=21" in nb_runner.get_output(5)
@@ -391,10 +435,12 @@ class TestCellOrdering:
 
     def test_57_upstream_with_import(self, nb_runner):
         """Scenario 46: Upstream has import needed by downstream."""
-        nb_runner.create_notebook([
-            "import math",
-            "result = math.sqrt(144)\nprint(f'result={result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import math",
+                "result = math.sqrt(144)\nprint(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result=12.0" in nb_runner.get_output(2)
@@ -404,10 +450,12 @@ class TestCellOrdering:
 
     def test_58_upstream_syntax_error_graceful(self, nb_runner):
         """Scenario 38: Upstream cell has syntax error — should handle gracefully."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "y = x + 1\nprint(f'y={y}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "y = x + 1\nprint(f'y={y}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "y=11" in nb_runner.get_output(2)
@@ -419,22 +467,26 @@ class TestCellOrdering:
 
     def test_59_duplicate_code_cells_with_ids(self, nb_runner):
         """Scenario 42: Two cells that produce same variable — latest definition wins."""
-        nb_runner.create_notebook([
-            "x = 1  # first definition",
-            "x = 1  # second definition",
-            "print(f'x={x}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 1  # first definition",
+                "x = 1  # second definition",
+                "print(f'x={x}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "x=1" in nb_runner.get_output(3)
 
     def test_60_upstream_produces_and_consumes_same_var(self, nb_runner):
         """Scenario 43: Cell both consumes and produces df (df = df.merge(...))."""
-        nb_runner.create_notebook([
-            "import pandas as pd\ndf = pd.DataFrame({'a': [1,2], 'b': [3,4]})",
-            "other = pd.DataFrame({'a': [1,2], 'c': [5,6]})",
-            "df = df.merge(other, on='a')\nprint(len(df))",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import pandas as pd\ndf = pd.DataFrame({'a': [1,2], 'b': [3,4]})",
+                "other = pd.DataFrame({'a': [1,2], 'c': [5,6]})",
+                "df = df.merge(other, on='a')\nprint(len(df))",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "2" in nb_runner.get_output(3)
@@ -445,11 +497,13 @@ class TestComplexReexecution:
 
     def test_61_modify_and_rerun_only_downstream(self, nb_runner):
         """Change cell 2, only re-run cell 3 — upstream detects change."""
-        nb_runner.create_notebook([
-            "x = 5",
-            "y = x + 1",
-            "z = y * 10\nprint(f'z={z}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 5",
+                "y = x + 1",
+                "z = y * 10\nprint(f'z={z}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "z=60" in nb_runner.get_output(3)
@@ -459,13 +513,14 @@ class TestComplexReexecution:
         nb_runner.run_cell(3)
         assert "z=1050" in nb_runner.get_output(3)
 
-
     def test_63_alternating_values(self, nb_runner):
         """Toggle value back and forth — cache should handle correctly."""
-        nb_runner.create_notebook([
-            "x = 'A'",
-            "print(f'x={x}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 'A'",
+                "print(f'x={x}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "x=A" in nb_runner.get_output(2)
@@ -480,10 +535,12 @@ class TestComplexReexecution:
 
     def test_64_deep_nesting_upstream(self, nb_runner):
         """Deeply nested function calls in upstream."""
-        nb_runner.create_notebook([
-            "def f(x): return x + 1\ndef g(x): return f(x) * 2\ndef h(x): return g(x) + 10",
-            "result = h(5)\nprint(f'result={result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def f(x): return x + 1\ndef g(x): return f(x) * 2\ndef h(x): return g(x) + 10",
+                "result = h(5)\nprint(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         # h(5) = g(5) + 10 = f(5)*2 + 10 = 6*2 + 10 = 22
@@ -494,4 +551,3 @@ class TestComplexReexecution:
         nb_runner.run_cell(2)
         # h(5) = g(5) + 10 = f(5)*2 + 10 = 105*2 + 10 = 220
         assert "result=220" in nb_runner.get_output(2)
-

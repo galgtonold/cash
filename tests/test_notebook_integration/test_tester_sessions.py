@@ -6,6 +6,7 @@ defaults, and with every result persisted -- several round-22 bugs appeared
 only once a value was big or slow enough to reach the disk, which a small
 dataset alone never makes happen.
 """
+
 from __future__ import annotations
 
 import pytest

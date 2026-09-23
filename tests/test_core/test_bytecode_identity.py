@@ -25,6 +25,7 @@ def _fn(body, name="f"):
 
 # --- must SEE changes --------------------------------------------------
 
+
 def test_string_constant_change_is_seen():
     """`co_code` is identical here -- this is the case it cannot see."""
     a = _fn('def f():\n    return "alpha"')
@@ -75,6 +76,7 @@ def test_change_inside_a_lambda_const_is_seen():
 
 # --- must be STABLE ----------------------------------------------------
 
+
 def test_identical_source_gives_identical_digest():
     src = "def f(x):\n    return x + 1"
     assert bytecode_identity(_fn(src)) == bytecode_identity(_fn(src))
@@ -111,16 +113,17 @@ def test_deeply_nested_code_is_stable():
 
 # --- shapes without a plain __code__ -----------------------------------
 
+
 def test_callable_instance_uses_its_call():
     ns = {}
     exec(
         compile(
             textwrap.dedent(
-                '''
+                """
                 class C:
                     def __call__(self):
                         return "alpha"
-                '''
+                """
             ),
             "<probe>",
             "exec",

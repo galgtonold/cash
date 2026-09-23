@@ -12,6 +12,7 @@ reader lost the granularity a plain ``import tickets_lib`` kept.
 Recorded under the alias, because that is the name the invalidator looks it
 up by (``_decide_symbol_action``'s ``input_var``).
 """
+
 import types
 from types import SimpleNamespace
 

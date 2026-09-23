@@ -11,6 +11,7 @@ what the code means -- and the warning names the argument. Only an object can
 change this way: an int or str rebound inside the body is invisible to the
 caller and must not trigger it.
 """
+
 from __future__ import annotations
 
 import warnings
@@ -66,7 +67,7 @@ def test_a_call_that_changes_an_array_argument_runs_every_time(tmp_path, body):
         for _ in range(3):
             a = np.array([3.0, -2.0, 0.5, 4.0])
             expected = a.copy()
-            body(expected)                        # what the uncached call does to it
+            body(expected)  # what the uncached call does to it
             cached(a)
             assert np.array_equal(a, expected), "the caller's array was left unchanged"
     assert len(runs) == 3, "a result was stored and served without changing the argument"
@@ -74,10 +75,14 @@ def test_a_call_that_changes_an_array_argument_runs_every_time(tmp_path, body):
     assert named, "no warning named the argument"
 
 
-@pytest.mark.parametrize("mutate", [
-    lambda rows: rows.append(99),
-    lambda rows: rows.sort(),
-], ids=["list-append", "list-sort"])
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda rows: rows.append(99),
+        lambda rows: rows.sort(),
+    ],
+    ids=["list-append", "list-sort"],
+)
 def test_a_list_argument_changed_by_a_library_call_is_not_stored(tmp_path, mutate):
     c = Cash(cache_dir=str(tmp_path / "cache"))
     runs = []
@@ -85,7 +90,7 @@ def test_a_list_argument_changed_by_a_library_call_is_not_stored(tmp_path, mutat
     @c.cache
     def f(rows):
         runs.append(1)
-        mutate(rows)            # through a callable: the source scan cannot see it
+        mutate(rows)  # through a callable: the source scan cannot see it
         return len(rows)
 
     for _ in range(2):

@@ -55,6 +55,7 @@ work and all of which are avoided below:
   reaches disk. At 30ms the PURE control re-ran after every restart -- a
   durability floor reading as a correctness finding. Hence 150ms bodies.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration]
@@ -154,8 +155,7 @@ def test_a_callee_written_global_survives_a_kernel_restart(nb_runner, tmp_path):
         "floor before reading anything into it."
     )
     assert _globals(nb_runner) == {"inline": "[1]", "in_callee": "[1]"}, (
-        "the callee's write to CALLS_F did not survive a restart, while the "
-        "identical write spelled inline did"
+        "the callee's write to CALLS_F did not survive a restart, while the identical write spelled inline did"
     )
 
 
@@ -192,12 +192,15 @@ def test_a_same_session_rerun_neither_freezes_nor_accumulates(nb_runner, tmp_pat
         )
 
 
-@pytest.mark.parametrize("spelling,source", [
-    ("assignment", "af = compute_f(1)\n"),
-    ("append", "sink = []\nsink.append(compute_f(1))\n"),
-    ("nested_call", "print('F', compute_f(1))\n"),
-    ("comprehension", "vals = [compute_f(1)]\n"),
-])
+@pytest.mark.parametrize(
+    "spelling,source",
+    [
+        ("assignment", "af = compute_f(1)\n"),
+        ("append", "sink = []\nsink.append(compute_f(1))\n"),
+        ("nested_call", "print('F', compute_f(1))\n"),
+        ("comprehension", "vals = [compute_f(1)]\n"),
+    ],
+)
 def test_every_spelling_of_the_call_behaves_the_same(nb_runner, tmp_path, spelling, source):
     """CAS-145: a rule that fires for one spelling and not another is a defect
     this project has already paid for. ``function_global_mutations`` only ever
@@ -214,9 +217,7 @@ def test_every_spelling_of_the_call_behaves_the_same(nb_runner, tmp_path, spelli
     nb_runner.restart()
     nb_runner.run_all()
     assert _n(cf) - cold == 0, f"{spelling}: nothing was cached, so this proves nothing"
-    assert nb_runner.peek("CALLS_F") == "[1]", (
-        f"{spelling}: the callee's global write was dropped on a hit"
-    )
+    assert nb_runner.peek("CALLS_F") == "[1]", f"{spelling}: the callee's global write was dropped on a hit"
 
 
 def test_the_statement_stops_caching_but_the_work_does_not(nb_runner, tmp_path):
@@ -272,9 +273,7 @@ def test_the_statement_stops_caching_but_the_work_does_not(nb_runner, tmp_path):
         "statement is only affordable because the calls inside it still cache"
     )
     assert nb_runner.peek("total") == "210"
-    assert nb_runner.peek("SEEN") == "[1]", (
-        "the callee's global write was lost even though the statement re-ran"
-    )
+    assert nb_runner.peek("SEEN") == "[1]", "the callee's global write was lost even though the statement re-ran"
 
 
 def test_editing_the_callee_still_recomputes(nb_runner, tmp_path):
@@ -292,8 +291,7 @@ def test_editing_the_callee_still_recomputes(nb_runner, tmp_path):
     assert nb_runner.peek("af") == "20", "served a stale value after an edit"
 
 
-def test_two_statements_writing_the_same_global_do_not_invalidate_each_other(
-        nb_runner, tmp_path):
+def test_two_statements_writing_the_same_global_do_not_invalidate_each_other(nb_runner, tmp_path):
     """The callee-mutated global is an OUTPUT of the calling statement, never
     also an input.
 
@@ -311,24 +309,24 @@ def test_two_statements_writing_the_same_global_do_not_invalidate_each_other(
     the tick file counts here.
     """
     ci = tmp_path / "i.log"
-    nb_runner.create_notebook([
-        SETUP,
-        ("import os\n"
-         "def _tick_i():\n"
-         f"    fd = os.open(r'{ci}', os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
-         "    os.write(fd, b'X')\n"
-         "    os.close(fd)\n"
-         "counter = 0\n"),
-        "def increment():\n"
-        "    global counter\n"
-        "    counter += 1\n"
-        "    _tick_i()\n"
-        "    return counter\n",
-        "r1 = increment()\nr2 = increment()\n",
-        # A downstream reader is required, not decoration: it is what makes the
-        # checker walk upstream and discover the (wrongly) stale sibling.
-        "summary = (counter, r1, r2)\n",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            (
+                "import os\n"
+                "def _tick_i():\n"
+                f"    fd = os.open(r'{ci}', os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+                "    os.write(fd, b'X')\n"
+                "    os.close(fd)\n"
+                "counter = 0\n"
+            ),
+            "def increment():\n    global counter\n    counter += 1\n    _tick_i()\n    return counter\n",
+            "r1 = increment()\nr2 = increment()\n",
+            # A downstream reader is required, not decoration: it is what makes the
+            # checker walk upstream and discover the (wrongly) stale sibling.
+            "summary = (counter, r1, r2)\n",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -349,9 +347,7 @@ _HIDDEN_STATE_DEFS = (
     "results = {}\n"
 )
 
-_HIDDEN_STATE_LOOP = ("# @cash:cache-calls\n"
-                      "for t in [1, 2, 3]:\n"
-                      "    results[t] = fetch_next(conn)\n")
+_HIDDEN_STATE_LOOP = "# @cash:cache-calls\nfor t in [1, 2, 3]:\n    results[t] = fetch_next(conn)\n"
 
 
 def test_a_loop_over_a_hidden_state_callee_replays_on_a_rerun(nb_runner):
@@ -387,9 +383,7 @@ def test_a_loop_over_a_hidden_state_callee_replays_on_a_rerun(nb_runner):
         assert nb_runner.peek("results") == "{1: 1, 2: 2, 3: 3}", (
             "a rerun produced different values -- the loop did not replay"
         )
-        assert nb_runner.peek("counter") == "{'n': 3}", (
-            "fetch_next() ran again on the rerun instead of replaying"
-        )
+        assert nb_runner.peek("counter") == "{'n': 3}", "fetch_next() ran again on the rerun instead of replaying"
 
 
 def test_a_loop_body_captures_the_callee_global_too(nb_runner, tmp_path):
@@ -401,14 +395,17 @@ def test_a_loop_body_captures_the_callee_global_too(nb_runner, tmp_path):
     dependencies -- without the latter this converged one iteration per run.
     """
     cp, cf, ci = (tmp_path / f"{n}.log" for n in ("p", "f", "i"))
-    loop_inline = ("for t in [1, 2, 3]:\n"
-                   "    CALLS_I.append(t)\n"
-                   "    oi.append(compute_i(t))\n")
-    loop_callee = ("for t in [1, 2, 3]:\n"
-                   "    of.append(compute_f(t))\n")
-    nb_runner.create_notebook([
-        SETUP, _defs(cp, cf, ci), "oi = []\nof = []\n", loop_inline, loop_callee,
-    ])
+    loop_inline = "for t in [1, 2, 3]:\n    CALLS_I.append(t)\n    oi.append(compute_i(t))\n"
+    loop_callee = "for t in [1, 2, 3]:\n    of.append(compute_f(t))\n"
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            _defs(cp, cf, ci),
+            "oi = []\nof = []\n",
+            loop_inline,
+            loop_callee,
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert _globals(nb_runner) == {"inline": "[1, 2, 3]", "in_callee": "[1, 2, 3]"}
@@ -432,37 +429,32 @@ def test_rerunning_an_earlier_loop_discards_a_later_loops_writes(nb_runner, tmp_
     clean top-to-bottom run up to A would produce.
     """
     cf, cp, ci = (tmp_path / f"{n}.log" for n in ("f", "p", "i"))
-    defs = _defs(cp, cf, ci) + (
-        "LOG_I = []\n"
-        "def inline_pure(v):\n"
-        f"    _busy({_BODY_MS})\n"
-        "    return v * 10\n"
-    )
-    a_inline = ("for x in [1, 2, 3]:\n"
-                "    LOG_I.append(x)\n"
-                "    oi.append(inline_pure(x))\n")
+    defs = _defs(cp, cf, ci) + (f"LOG_I = []\ndef inline_pure(v):\n    _busy({_BODY_MS})\n    return v * 10\n")
+    a_inline = "for x in [1, 2, 3]:\n    LOG_I.append(x)\n    oi.append(inline_pure(x))\n"
     a_callee = "for x in [1, 2, 3]:\n    of.append(compute_f(x))\n"
-    b_inline = ("for x in [111, 10]:\n"
-                "    LOG_I.append(x)\n"
-                "    oi.append(inline_pure(x))\n")
+    b_inline = "for x in [111, 10]:\n    LOG_I.append(x)\n    oi.append(inline_pure(x))\n"
     b_callee = "for x in [111, 10]:\n    of.append(compute_f(x))\n"
-    nb_runner.create_notebook([
-        SETUP, defs, "oi = []\nof = []\n", a_inline, a_callee, b_inline, b_callee,
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            defs,
+            "oi = []\nof = []\n",
+            a_inline,
+            a_callee,
+            b_inline,
+            b_callee,
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     both = {"inline": "[1, 2, 3, 111, 10]", "in_callee": "[1, 2, 3, 111, 10]"}
-    live = {"inline": nb_runner.peek("LOG_I"),
-            "in_callee": nb_runner.peek("CALLS_F")}
+    live = {"inline": nb_runner.peek("LOG_I"), "in_callee": nb_runner.peek("CALLS_F")}
     assert live == both, f"cold run is not the expected starting point: {live}"
 
-    nb_runner.run_cells([4, 5])          # the EARLIER pair only
+    nb_runner.run_cells([4, 5])  # the EARLIER pair only
 
-    after = {"inline": nb_runner.peek("LOG_I"),
-             "in_callee": nb_runner.peek("CALLS_F")}
-    assert after["inline"] == "[1, 2, 3]", (
-        f"the inline yardstick itself moved: {after['inline']}"
-    )
+    after = {"inline": nb_runner.peek("LOG_I"), "in_callee": nb_runner.peek("CALLS_F")}
+    assert after["inline"] == "[1, 2, 3]", f"the inline yardstick itself moved: {after['inline']}"
     assert after["in_callee"] == after["inline"], (
         "re-running the earlier loop left the later loop's callee-writes behind"
     )

@@ -10,7 +10,9 @@ set_metadata_only() methods. Metadata for cheap statements (rejected by the
 TieredBackend promotion policy) was never persisted to disk, so after kernel
 restart the metadata lookup fell back to backend.get() which also returned None.
 """
+
 import re
+
 import pytest
 
 
@@ -27,7 +29,7 @@ def _strip_style(html: str) -> str:
     first means a future stylesheet change (minified or not) can never again
     make -- or break -- an assertion here.
     """
-    return re.sub(r'<style>.*?</style>', '', html, flags=re.DOTALL)
+    return re.sub(r"<style>.*?</style>", "", html, flags=re.DOTALL)
 
 
 def _get_badge_html(cell) -> str:
@@ -42,18 +44,18 @@ def _get_badge_html(cell) -> str:
     prose. So the old predicate always returned '' here -- there was no
     badge output to fail on, only a selector that could never find one.
     """
-    for output in cell.get('outputs', []):
-        if output.output_type in ('execute_result', 'display_data'):
-            data = output.get('data', {})
-            html = data.get('text/html', '')
-            if html and 'c3-wrap' in _strip_style(html):
+    for output in cell.get("outputs", []):
+        if output.output_type in ("execute_result", "display_data"):
+            data = output.get("data", {})
+            html = data.get("text/html", "")
+            if html and "c3-wrap" in _strip_style(html):
                 return html
-    return ''
+    return ""
 
 
 def _full_restart_code(vars_to_clear):
     """Generate code that simulates a full kernel restart."""
-    var_list = ', '.join(f"'{v}'" for v in vars_to_clear)
+    var_list = ", ".join(f"'{v}'" for v in vars_to_clear)
     return f"""
 try:
     _cash_magics = get_ipython().magics_manager.registry.get('CashMagics')
@@ -84,35 +86,39 @@ class TestSkippedTimingAfterRestart:
         """
         Core test: after kernel restart, run ONLY the last cell.
         The badge's "Skipped" section should show actual timing, not '-'.
-        
+
         Checks the badge HTML directly for the absence of '-' in timing.
         """
-        import pandas as pd
         import numpy as np
-        
+        import pandas as pd
+
         csv_path = tmp_path / "test_data.csv"
-        csv_path_str = str(csv_path).replace('\\', '/')
-        
+        csv_path_str = str(csv_path).replace("\\", "/")
+
         np.random.seed(42)
         n = 50000
-        df = pd.DataFrame({
-            'Date': pd.date_range('2020-01-01', periods=n, freq='h').astype(str),
-            'Ticker': np.random.choice(['AAPL', 'GOOGL', 'MSFT'], n),
-            'Close': np.random.randn(n).cumsum() + 100,
-            'Volume': np.random.randint(1000, 10000, n),
-        })
+        df = pd.DataFrame(
+            {
+                "Date": pd.date_range("2020-01-01", periods=n, freq="h").astype(str),
+                "Ticker": np.random.choice(["AAPL", "GOOGL", "MSFT"], n),
+                "Close": np.random.randn(n).cumsum() + 100,
+                "Volume": np.random.randint(1000, 10000, n),
+            }
+        )
         df.to_csv(csv_path, index=False)
 
-        nb_runner.create_notebook([
-            "import pandas as pd\nimport numpy as np",
-            f"df = pd.read_csv('{csv_path_str}')",
-            "df = df.sort_values(by=['Ticker', 'Date'])",
-            "df['Date'] = pd.to_datetime(df['Date'])",
-            "import time; time.sleep(1.5)\ndf['SMA'] = df.groupby('Ticker')['Close'].transform(lambda x: x.rolling(20).mean())",
-            "print(len(df))",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import pandas as pd\nimport numpy as np",
+                f"df = pd.read_csv('{csv_path_str}')",
+                "df = df.sort_values(by=['Ticker', 'Date'])",
+                "df['Date'] = pd.to_datetime(df['Date'])",
+                "import time; time.sleep(1.5)\ndf['SMA'] = df.groupby('Ticker')['Close'].transform(lambda x: x.rolling(20).mean())",
+                "print(len(df))",
+            ]
+        )
         nb_runner.start_kernel()
-        
+
         # First run - execute all cells normally
         nb_runner.run_all()
         output1 = nb_runner.get_output(6)
@@ -120,14 +126,12 @@ class TestSkippedTimingAfterRestart:
 
         # Simulate FULL kernel restart
         nb_runner.reset_cash_state()
-        import asyncio
         nb_runner._run_async(
             nb_runner.client.kc._async_execute_interactive(
-                _full_restart_code(['pd', 'np', 'df', 'time']),
-                store_history=False
+                _full_restart_code(["pd", "np", "df", "time"]), store_history=False
             )
         )
-        
+
         # Run ONLY last cell — triggers upstream simulation
         nb_runner.run_cell(6)
 
@@ -145,8 +149,7 @@ class TestSkippedTimingAfterRestart:
         # ``data-status="skipped"`` attribute -- not the word 'Skipped' as
         # visible prose (the visible pill is uppercase, 'SKIPPED', and only
         # inside a per-row hover tooltip).
-        assert 'data-status="skipped"' in body, \
-            "Expected a Skipped section (data-status=\"skipped\") in badge"
+        assert 'data-status="skipped"' in body, 'Expected a Skipped section (data-status="skipped") in badge'
 
         # Find all skipped item rows and pair each one's own code with its
         # own displayed timing. The v3 renderer has no <tr>, no `skip_*`
@@ -171,11 +174,11 @@ class TestSkippedTimingAfterRestart:
         items_with_dash = []
         for code, timing_td in skipped_rows:
             # Print each item (ASCII safe)
-            code_ascii = code.encode('ascii', 'replace').decode()
-            timing_ascii = timing_td.encode('ascii', 'replace').decode()
+            code_ascii = code.encode("ascii", "replace").decode()
+            timing_ascii = timing_td.encode("ascii", "replace").decode()
             print(f"  Row: code='{code_ascii}' timing='{timing_ascii}'")
 
-            if timing_td == '-':
+            if timing_td == "-":
                 items_with_dash.append(code)
 
         # sort_values and to_datetime are the two non-trivial upstream
@@ -186,55 +189,58 @@ class TestSkippedTimingAfterRestart:
         # this is the actual regression this file guards: TieredBackend used
         # to have no metadata for them after a restart, so they'd show a
         # bare '-' rather than a number.
-        found_targets = {code for code, _ in skipped_rows
-                         if 'sort_values' in code or 'to_datetime' in code}
+        found_targets = {code for code, _ in skipped_rows if "sort_values" in code or "to_datetime" in code}
         assert len(found_targets) == 2, (
             "Expected both 'sort_values' and 'to_datetime' as Skipped rows "
             f"with timing; found {len(found_targets)} of them. "
             f"All skipped rows parsed: {skipped_rows}"
         )
         for code in items_with_dash:
-            assert 'sort_values' not in code and 'to_datetime' not in code, \
+            assert "sort_values" not in code and "to_datetime" not in code, (
                 f"Item '{code}' shows '-' but should show timing"
+            )
         for code, timing_td in skipped_rows:
-            if 'sort_values' in code or 'to_datetime' in code:
-                assert re.fullmatch(r'\d+\.\d{2}s', timing_td), (
-                    f"Skipped row's timing isn't a well-formed number: "
-                    f"{timing_td!r} (code={code!r})"
+            if "sort_values" in code or "to_datetime" in code:
+                assert re.fullmatch(r"\d+\.\d{2}s", timing_td), (
+                    f"Skipped row's timing isn't a well-formed number: {timing_td!r} (code={code!r})"
                 )
 
     def test_skipped_items_metadata_hits(self, nb_runner, tmp_path):
         """
         Verify all skipped items find their metadata from disk cache.
-        
+
         This test specifically exercises the TieredBackend path (default backend)
         where cheap statements (below promotion threshold) would previously
         have no metadata on disk. Now set_metadata_only ensures metadata
         is always persisted regardless of the promotion policy.
         """
-        import pandas as pd
         import numpy as np
-        
+        import pandas as pd
+
         csv_path = tmp_path / "test_data.csv"
-        csv_path_str = str(csv_path).replace('\\', '/')
-        
+        csv_path_str = str(csv_path).replace("\\", "/")
+
         np.random.seed(42)
         n = 10000
-        df = pd.DataFrame({
-            'A': np.random.randn(n),
-            'B': np.random.randn(n),
-        })
+        df = pd.DataFrame(
+            {
+                "A": np.random.randn(n),
+                "B": np.random.randn(n),
+            }
+        )
         df.to_csv(csv_path, index=False)
 
-        nb_runner.create_notebook([
-            "import pandas as pd\nimport numpy as np",
-            f"df = pd.read_csv('{csv_path_str}')",
-            "df = df.sort_values('A')",
-            "import time; time.sleep(1.5)\nresult = df['A'].sum()",
-            "print(result)",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import pandas as pd\nimport numpy as np",
+                f"df = pd.read_csv('{csv_path_str}')",
+                "df = df.sort_values('A')",
+                "import time; time.sleep(1.5)\nresult = df['A'].sum()",
+                "print(result)",
+            ]
+        )
         nb_runner.start_kernel()
-        
+
         # First run
         nb_runner.run_all()
         output1 = nb_runner.get_output(5)
@@ -246,32 +252,27 @@ class TestSkippedTimingAfterRestart:
 
         # Simulate FULL kernel restart
         nb_runner.reset_cash_state()
-        import asyncio
         nb_runner._run_async(
             nb_runner.client.kc._async_execute_interactive(
-                _full_restart_code(['pd', 'np', 'df', 'result', 'time']),
-                store_history=False
+                _full_restart_code(["pd", "np", "df", "result", "time"]), store_history=False
             )
         )
-        
+
         # Run ONLY cell 5 (downstream)
         nb_runner.run_cell(5)
-        
+
         raw5 = str(nb_runner.get_raw_output(5))
-        
+
         # Result should still be correct
-        assert result_val in raw5, \
-            f"Expected '{result_val}' in output, got: {raw5[:500]}"
-        
+        assert result_val in raw5, f"Expected '{result_val}' in output, got: {raw5[:500]}"
+
         # Check for metadata hits (no misses for data-bearing statements)
         # Note: import statements and simple assignments may legitimately miss
         # because they execute so fast (<1ms) that no timing data is stored.
         # The key check is that sort_values and read_csv DON'T miss.
         if "miss cache" in raw5:
-            missed_lines = [l for l in raw5.split('\n') if 'miss cache' in l]
+            missed_lines = [l for l in raw5.split("\n") if "miss cache" in l]
             # Filter out import/trivial misses
-            data_misses = [l for l in missed_lines 
-                          if 'import ' not in l and "data_path" not in l
-                          and "= '" not in l]
+            data_misses = [l for l in missed_lines if "import " not in l and "data_path" not in l and "= '" not in l]
             if data_misses:
                 pytest.fail(f"Data-bearing skipped statements missed cache metadata: {data_misses}")

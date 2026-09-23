@@ -9,6 +9,7 @@ mutated alias back through the (transitive) alias map and marks the source x
 mutated, so x's producer restores its cell-entry base. Copies (`y = x.copy()`,
 `y = x[:]`) are not aliases and keep their cache.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.upstream]
@@ -52,13 +53,11 @@ def test_tuple_unpack_alias(nb_runner):
 def test_alias_bound_in_for_body(nb_runner):
     # Alias formed AND mutated inside a loop body (CAS-61) — scanned via the
     # cell-wide alias map that descends into control bodies.
-    _rerun(nb_runner, "x = [1, 2, 3]",
-           "for _ in range(1):\n    y = x\n    y.append(99)\nprint(x)", "[1, 2, 3, 99]")
+    _rerun(nb_runner, "x = [1, 2, 3]", "for _ in range(1):\n    y = x\n    y.append(99)\nprint(x)", "[1, 2, 3, 99]")
 
 
 def test_alias_bound_in_if_body(nb_runner):
-    _rerun(nb_runner, "x = [1, 2]",
-           "if True:\n    y = x\n    y.append(9)\nprint(x)", "[1, 2, 9]")
+    _rerun(nb_runner, "x = [1, 2]", "if True:\n    y = x\n    y.append(9)\nprint(x)", "[1, 2, 9]")
 
 
 def test_alias_set_mutation(nb_runner):
@@ -73,8 +72,7 @@ def test_direct_mutation_control(nb_runner):
 def test_copy_is_not_alias_preserved(nb_runner):
     # A real copy is independent; mutating it must NOT reset the source, and the
     # copy itself is idempotent across re-runs.
-    _rerun(nb_runner, "x = [1, 2, 3]", "y = x.copy()\ny.append(99)\nprint(y, x)",
-           "[1, 2, 3, 99] [1, 2, 3]")
+    _rerun(nb_runner, "x = [1, 2, 3]", "y = x.copy()\ny.append(99)\nprint(y, x)", "[1, 2, 3, 99] [1, 2, 3]")
 
 
 # --- lineage-carrying (DataFrame) aliases: the source must join the selfref /
@@ -92,8 +90,12 @@ def test_df_alias_aug_assign(nb_runner):
 
 
 def test_df_alias_inplace_method_nonidempotent(nb_runner):
-    _rerun(nb_runner, "import pandas as pd\ndf = pd.DataFrame({'a': [1, 2]})",
-           "df2 = df\ndf2.insert(0, 'z', [9, 9])\nprint(list(df.columns))", "['z', 'a']")
+    _rerun(
+        nb_runner,
+        "import pandas as pd\ndf = pd.DataFrame({'a': [1, 2]})",
+        "df2 = df\ndf2.insert(0, 'z', [9, 9])\nprint(list(df.columns))",
+        "['z', 'a']",
+    )
 
 
 def test_df_alias_newcol_preserved(nb_runner):

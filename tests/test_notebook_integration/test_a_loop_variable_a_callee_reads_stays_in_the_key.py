@@ -5,6 +5,7 @@ from its key when its arguments already carry them, so the chosen setting could
 be served from the sweep. A loop variable the callee -- or a method of a class
 it uses -- reads as a global is not in the arguments, and must stay.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.loops, pytest.mark.timeout(120)]

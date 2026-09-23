@@ -5,6 +5,7 @@ number from ``list_entries``, which opens every entry file to read its
 metadata. Re-running r23s2's first cell (``%cash_on``) took 22.7 s for that on
 a cache of a few thousand entries (round 23, 2026-09-14).
 """
+
 from __future__ import annotations
 
 import pytest
@@ -23,13 +24,14 @@ def _fill(backend, n):
 def _no_entry_reads(monkeypatch):
     def refuse(*_a, **_k):
         raise AssertionError("entry_count read an entry")
+
     monkeypatch.setattr(file_backend, "read_entry", refuse)
 
 
 def test_a_file_cache_is_counted_without_opening_an_entry(tmp_path, monkeypatch):
     b = FileBackend(cache_dir=str(tmp_path))
     _fill(b, 5)
-    assert len(b.list_entries()) == 5          # control: the listing agrees
+    assert len(b.list_entries()) == 5  # control: the listing agrees
     _no_entry_reads(monkeypatch)
 
     assert b.entry_count() == 5
@@ -63,6 +65,7 @@ def test_cash_on_counts_without_listing(cash_magics, capsys, monkeypatch, n):
 
     def refuse(*_a, **_k):
         raise AssertionError("%cash_on listed the cache")
+
     monkeypatch.setattr(type(backend), "list_entries", refuse)
     cash_magics.cash_on("")
     out = capsys.readouterr().out

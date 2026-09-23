@@ -1,5 +1,6 @@
 import sys
 import types
+
 from cash.core import Cash
 
 
@@ -7,7 +8,7 @@ def test_a_fileless_module_counts_as_user_code():
     """A notebook cell's __main__ has no __file__. The existing
     _is_user_module rejects it, which would make this whole feature a no-op
     in the environment it exists for."""
-    nb = types.ModuleType("nbmod")          # no __file__, like a notebook __main__
+    nb = types.ModuleType("nbmod")  # no __file__, like a notebook __main__
     assert Cash._is_user_code_module(nb) is True
 
 
@@ -18,9 +19,9 @@ def test_builtins_are_not_user_code_despite_being_fileless():
 
 
 def test_stdlib_and_site_packages_are_still_excluded():
-    import json
     assert Cash._is_user_code_module(sys.modules["json"]) is False
-import hashlib
+
+
 import itertools
 import subprocess
 
@@ -80,7 +81,10 @@ def _code_surface_hash_in_subprocess(class_body: str) -> str:
     """
     script = "from cash import Cash\n" + class_body + "\nc = Cash()\nprint(c._code_surface_hash(S))\n"
     result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True, timeout=30,
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     assert result.returncode == 0, f"subprocess failed:\n{result.stdout}\n{result.stderr}"
     return result.stdout.strip()
@@ -133,6 +137,7 @@ def test_a_third_party_class_returns_none():
     """Library code stays by-reference: folding thousands of methods into every
     key would churn on every upgrade for no correctness gain."""
     import json.encoder
+
     c = CashCls()
     assert c._code_surface_hash(json.encoder.JSONEncoder) is None
 
@@ -140,7 +145,7 @@ def test_a_third_party_class_returns_none():
 def test_it_never_raises_on_an_exotic_object():
     c = CashCls()
     assert c._code_surface_hash(object()) is None
-    assert c._code_surface_hash(len) is None          # builtin, no __code__
+    assert c._code_surface_hash(len) is None  # builtin, no __code__
     # object() and len are both HASHABLE, so neither exercises the memo-read
     # path below -- they do not discriminate the Blocker-4 bug. A list, a
     # dict, and a set are unhashable, which is the common case for a cache
@@ -171,11 +176,7 @@ def test_a_comprehension_in_a_method_hashes_identically_across_processes():
     in a method -- invisible to an in-process test, since nothing forces two
     objects built moments apart on ONE interpreter's heap to collide the way
     two SEPARATE processes reliably do."""
-    body = (
-        "class S:\n"
-        "    def transform(self, xs):\n"
-        "        return sum(x * 2 for x in xs)\n"
-    )
+    body = "class S:\n    def transform(self, xs):\n        return sum(x * 2 for x in xs)\n"
     h1 = _code_surface_hash_in_subprocess(body)
     h2 = _code_surface_hash_in_subprocess(body)
     assert h1 != "None"  # positive control: it must actually have hashed something
@@ -187,11 +188,7 @@ def test_a_sentinel_data_attribute_hashes_identically_across_processes():
     digest via repr(), which embeds a live memory address for anything like a
     ``MISSING = object()`` sentinel -- the same disease as Blocker 1, one
     layer up (a class-level constant instead of a nested code object)."""
-    body = (
-        "class S:\n"
-        "    MISSING = object()\n"
-        "    def r(self): return 1\n"
-    )
+    body = "class S:\n    MISSING = object()\n    def r(self): return 1\n"
     h1 = _code_surface_hash_in_subprocess(body)
     h2 = _code_surface_hash_in_subprocess(body)
     assert h1 != "None"
@@ -235,6 +232,7 @@ def test_a_partialmethod_bound_argument_change_invalidates():
     different digests whether or not the bug exists, which would make this
     assertion pass for the wrong reason. The equal-argument control below is
     what proves the bound value is carrying it."""
+
     def _two_in_one_module(arg_a, arg_b):
         """Both classes in ONE registered fileless module, same qualname, sharing
         ONE ``base`` function object.
@@ -276,11 +274,7 @@ def test_a_frozenset_literal_in_a_method_hashes_identically_across_processes():
     the time (measured) even with the bug present, which would make the
     mutation check below unreliable. Six elements diverged in 10 of 10
     sampled fresh processes during development of this test."""
-    body = (
-        "class S:\n"
-        "    def m(self, x):\n"
-        "        return x in {'alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta'}\n"
-    )
+    body = "class S:\n    def m(self, x):\n        return x in {'alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta'}\n"
     h1 = _code_surface_hash_in_subprocess(body)
     h2 = _code_surface_hash_in_subprocess(body)
     assert h1 != "None"
@@ -314,12 +308,7 @@ def test_an_unpicklable_default_hashes_identically_across_processes(label, defau
     because nothing forces two objects on one heap to collide the way two
     separate interpreter invocations reliably differ.
     """
-    body = (
-        "import threading\n"
-        "class S:\n"
-        f"    def m(self, {default}):\n"
-        "        return 1\n"
-    )
+    body = f"import threading\nclass S:\n    def m(self, {default}):\n        return 1\n"
     digests = {_code_surface_hash_in_subprocess(body) for _ in range(3)}
     assert "None" not in digests
     assert len(digests) == 1, f"{label}: {len(digests)} distinct digests across 3 processes"

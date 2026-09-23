@@ -1,5 +1,7 @@
 """Batch 81: Property & descriptor patterns — cash caching with properties and descriptors."""
+
 import textwrap
+
 import pytest
 
 
@@ -9,8 +11,9 @@ class TestPropertyPatterns:
 
     def test_computed_property(self, nb_runner):
         """Computed property across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class Circle:
                     def __init__(self, radius):
                         self._radius = radius
@@ -38,11 +41,12 @@ class TestPropertyPatterns:
                 c = Circle(5)
                 print(f"r={c.radius} area={c.area:.2f} circ={c.circumference:.2f}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 c.radius = 10
                 print(f"new_area={c.area:.2f}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "r=5 area=78.54" in nb_runner.get_output(1)
@@ -50,8 +54,9 @@ class TestPropertyPatterns:
 
     def test_cached_property(self, nb_runner):
         """functools.cached_property pattern across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class ExpensiveCompute:
                     def __init__(self, data):
                         self.data = data
@@ -67,10 +72,11 @@ class TestPropertyPatterns:
                 r2 = obj.result
                 print(f"r1={r1} r2={r2} computes={obj._compute_count}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 print(f"result={obj.result} total_computes={obj._compute_count}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "r1=55 r2=55" in nb_runner.get_output(1)
@@ -84,8 +90,9 @@ class TestDescriptorPatterns:
 
     def test_validated_descriptor(self, nb_runner):
         """Descriptor with validation across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class Positive:
                     def __init__(self, name):
                         self.name = name
@@ -109,11 +116,12 @@ class TestDescriptorPatterns:
                 p = Product('Widget', 9.99, 100)
                 print(f"product={p.name} price={p.price} qty={p.quantity}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 total = p.price * p.quantity
                 print(f"total=${total:.2f}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "product=Widget price=9.99 qty=100" in nb_runner.get_output(1)
@@ -121,8 +129,9 @@ class TestDescriptorPatterns:
 
     def test_type_checked_descriptor(self, nb_runner):
         """Type-checking descriptor across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class TypeChecked:
                     def __init__(self, expected_type):
                         self.expected_type = expected_type
@@ -150,11 +159,12 @@ class TestDescriptorPatterns:
                 cfg = Config('localhost', 8080, True)
                 print(f"host={cfg.host} port={cfg.port} debug={cfg.debug}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 url = f"http://{cfg.host}:{cfg.port}"
                 print(f"url={url}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "host=localhost port=8080 debug=True" in nb_runner.get_output(1)
@@ -162,8 +172,9 @@ class TestDescriptorPatterns:
 
     def test_property_propagation(self, nb_runner):
         """Property class propagation on change."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class Box:
                     def __init__(self, w, h):
                         self.w = w
@@ -174,15 +185,18 @@ class TestDescriptorPatterns:
 
                 box = Box(5, 10)
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 print(f"area={box.area}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "area=50" in nb_runner.get_output(2)
 
-        nb_runner.set_cell_source(1, textwrap.dedent("""\
+        nb_runner.set_cell_source(
+            1,
+            textwrap.dedent("""\
             class Box:
                 def __init__(self, w, h):
                     self.w = w
@@ -192,6 +206,7 @@ class TestDescriptorPatterns:
                     return self.w * self.h
 
             box = Box(8, 12)
-        """))
+        """),
+        )
         nb_runner.run_cells([1, 2])
         assert "area=96" in nb_runner.get_output(2)

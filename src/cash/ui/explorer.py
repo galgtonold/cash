@@ -12,6 +12,7 @@ from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 
 try:
     import pandas as pd
+
     HAS_PANDAS = True
 except ImportError:
     HAS_PANDAS = False
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
     from ..core import Cash
 
 logger = logging.getLogger(__name__)
+
 
 class CacheExplorer:
     """Inspect, search, and manage entries stored in a `Cash` backend.
@@ -62,19 +64,20 @@ class CacheExplorer:
 
         # Enrich with human readable info
         for entry in entries:
-            if 'timestamp' in entry:
-                entry['timestamp_human'] = datetime.fromtimestamp(entry['timestamp']).strftime('%Y-%m-%d %H:%M:%S')
+            if "timestamp" in entry:
+                entry["timestamp_human"] = datetime.fromtimestamp(entry["timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
 
             # Add source code if available in memory
-            func_name = entry.get('func_name')
+            func_name = entry.get("func_name")
             if func_name and func_name in self.app.functions:
                 import inspect
+
                 try:
-                    entry['source_code'] = inspect.getsource(self.app.functions[func_name])
+                    entry["source_code"] = inspect.getsource(self.app.functions[func_name])
                 except SOURCE_RETRIEVAL_ERRORS:
-                    entry['source_code'] = "Source not available"
+                    entry["source_code"] = "Source not available"
             else:
-                entry['source_code'] = "Function not loaded"
+                entry["source_code"] = "Function not loaded"
 
         return entries
 
@@ -86,11 +89,10 @@ class CacheExplorer:
         count = 0
         entries = self.list_entries()
         for entry in entries:
-            if entry.get('func_name') == func_name:
-                self.app.backend.delete(entry['key'])
+            if entry.get("func_name") == func_name:
+                self.app.backend.delete(entry["key"])
                 count += 1
         return count
-
 
     def get_preview(self, key: str) -> str:
         """
@@ -102,12 +104,13 @@ class CacheExplorer:
 
         try:
             from ..backends.serialization import PickleSerializer
+
             # Preview always assumes the default Pickle serializer; the stored
             # serializer_cls is not yet honored here.
             serializer = PickleSerializer()
             value = serializer.deserialize(value_bytes)
 
-            if hasattr(value, 'head'): # DataFrame/Series
+            if hasattr(value, "head"):  # DataFrame/Series
                 return str(value.head())
             return str(value)[:1000]
         except Exception as e:
@@ -126,10 +129,10 @@ class CacheExplorer:
         df = pd.DataFrame(entries)
 
         # Reorder columns for better readability
-        cols = ['func_name', 'timestamp_human', 'ttl', 'key', 'args_hash', 'state_hash']
+        cols = ["func_name", "timestamp_human", "ttl", "key", "args_hash", "state_hash"]
         # Add other columns that might exist
         existing_cols = [c for c in cols if c in df.columns]
-        remaining_cols = [c for c in df.columns if c not in cols and c != 'source_code']
+        remaining_cols = [c for c in df.columns if c not in cols and c != "source_code"]
 
         return df[existing_cols + remaining_cols]
 
@@ -151,9 +154,9 @@ class CacheExplorer:
         # Process entries into hierarchy: Module -> Function -> Entries
         hierarchy = {}
         for entry in entries:
-            func_name = entry.get('func_name', 'Unknown')
+            func_name = entry.get("func_name", "Unknown")
             # Heuristic to extract module: assume func_name is "module.submodule.function"
-            parts = func_name.rsplit('.', 1)
+            parts = func_name.rsplit(".", 1)
             if len(parts) == 2:
                 module, func = parts
             else:
@@ -163,30 +166,23 @@ class CacheExplorer:
             if module not in hierarchy:
                 hierarchy[module] = {}
             if func not in hierarchy[module]:
-                hierarchy[module][func] = {'entries': [], 'total_size': 0}
+                hierarchy[module][func] = {"entries": [], "total_size": 0}
 
-            hierarchy[module][func]['entries'].append(entry)
-            hierarchy[module][func]['total_size'] += entry.get('size', 0)
+            hierarchy[module][func]["entries"].append(entry)
+            hierarchy[module][func]["total_size"] += entry.get("size", 0)
 
         # Convert to list for JSON
         tree_data = []
         for module, funcs in hierarchy.items():
-            module_node = {
-                'name': module,
-                'type': 'module',
-                'children': []
-            }
+            module_node = {"name": module, "type": "module", "children": []}
             for func, data in funcs.items():
                 func_node = {
-                    'name': func,
-                    'type': 'function',
-                    'stats': {
-                        'count': len(data['entries']),
-                        'total_size': data['total_size']
-                    },
-                    'entries': data['entries']
+                    "name": func,
+                    "type": "function",
+                    "stats": {"count": len(data["entries"]), "total_size": data["total_size"]},
+                    "entries": data["entries"],
                 }
-                module_node['children'].append(func_node)
+                module_node["children"].append(func_node)
             tree_data.append(module_node)
 
         # Prepare data for JS
@@ -404,7 +400,7 @@ class CacheExplorer:
         </html>
         """
 
-        html_base64 = base64.b64encode(html_content.encode('utf-8')).decode('utf-8')
+        html_base64 = base64.b64encode(html_content.encode("utf-8")).decode("utf-8")
         data_uri = f"data:text/html;base64,{html_base64}"
 
         return IFrame(src=data_uri, width="100%", height=height)
@@ -420,30 +416,18 @@ class CacheExplorer:
         from IPython.display import clear_output  # noqa: F401
 
         func_selector = widgets.Select(
-            options=sorted(func_options),
-            description='Functions:',
-            layout=widgets.Layout(width='100%', height='100%')
+            options=sorted(func_options), description="Functions:", layout=widgets.Layout(width="100%", height="100%")
         )
 
         # Tab 1: Overview
         overview_output = widgets.Output()
-        clear_func_btn = widgets.Button(
-            description='Clear Function Cache',
-            button_style='danger',
-            icon='trash'
-        )
+        clear_func_btn = widgets.Button(description="Clear Function Cache", button_style="danger", icon="trash")
 
         # Tab 2: Entries
         entries_selector = widgets.Select(
-            options=[],
-            description='Entries:',
-            layout=widgets.Layout(width='100%', height='150px')
+            options=[], description="Entries:", layout=widgets.Layout(width="100%", height="150px")
         )
-        delete_entry_btn = widgets.Button(
-            description='Delete Entry',
-            button_style='warning',
-            icon='times'
-        )
+        delete_entry_btn = widgets.Button(description="Delete Entry", button_style="warning", icon="times")
         entry_details = widgets.HTML()
 
         # Tab 3: Preview (Placeholder)
@@ -451,33 +435,42 @@ class CacheExplorer:
         with preview_output:
             print("Select an entry to preview data (Coming Soon)")
 
-        tabs = widgets.Tab(children=[
-            widgets.VBox([overview_output, clear_func_btn]),
-            widgets.VBox([entries_selector, delete_entry_btn, entry_details]),
-            preview_output
-        ])
-        tabs.set_title(0, 'Overview')
-        tabs.set_title(1, 'Entries')
-        tabs.set_title(2, 'Preview')
+        tabs = widgets.Tab(
+            children=[
+                widgets.VBox([overview_output, clear_func_btn]),
+                widgets.VBox([entries_selector, delete_entry_btn, entry_details]),
+                preview_output,
+            ]
+        )
+        tabs.set_title(0, "Overview")
+        tabs.set_title(1, "Entries")
+        tabs.set_title(2, "Preview")
 
-        main_view = widgets.VBox([tabs], layout=widgets.Layout(width='70%', padding='10px'))
-        sidebar = widgets.VBox([func_selector], layout=widgets.Layout(width='30%'))
-        app_layout = widgets.HBox([sidebar, main_view], layout=widgets.Layout(height='500px', border='1px solid #ccc'))
+        main_view = widgets.VBox([tabs], layout=widgets.Layout(width="70%", padding="10px"))
+        sidebar = widgets.VBox([func_selector], layout=widgets.Layout(width="30%"))
+        app_layout = widgets.HBox([sidebar, main_view], layout=widgets.Layout(height="500px", border="1px solid #ccc"))
 
-        return (func_selector, overview_output, clear_func_btn,
-                entries_selector, delete_entry_btn, entry_details,
-                preview_output, app_layout)
+        return (
+            func_selector,
+            overview_output,
+            clear_func_btn,
+            entries_selector,
+            delete_entry_btn,
+            entry_details,
+            preview_output,
+            app_layout,
+        )
 
     def _make_func_select_handler(self, overview_output: Any, entries_selector: Any, entry_details: Any) -> Any:
         """Return the on_func_select closure for the widget."""
         from IPython.display import clear_output
 
         def on_func_select(change):
-            if not change['new']:
+            if not change["new"]:
                 return
-            full_name = change['new']
-            if '.' in full_name:
-                module, func = full_name.rsplit('.', 1)
+            full_name = change["new"]
+            if "." in full_name:
+                module, func = full_name.rsplit(".", 1)
             else:
                 module, func = "Global", full_name
 
@@ -491,10 +484,10 @@ class CacheExplorer:
                     print(f"Total Size: {self._format_bytes(data['total_size'])}")
 
                 entry_options = []
-                for e in data['entries']:
-                    time_str = e.get('timestamp_human', 'N/A')
-                    key_short = e['key'][:8] + '...'
-                    entry_options.append((f"{time_str} ({key_short})", e['key']))
+                for e in data["entries"]:
+                    time_str = e.get("timestamp_human", "N/A")
+                    key_short = e["key"][:8] + "..."
+                    entry_options.append((f"{time_str} ({key_short})", e["key"]))
                 entries_selector.options = entry_options
                 entries_selector.value = None
                 entry_details.value = ""
@@ -506,19 +499,19 @@ class CacheExplorer:
         from IPython.display import clear_output
 
         def on_entry_select(change):
-            key = change['new']
+            key = change["new"]
             if not key:
                 return
-            entry = next((e for e in self._entries if e['key'] == key), None)
+            entry = next((e for e in self._entries if e["key"] == key), None)
             if entry:
                 details_html = f"""
-                <b>Key:</b> {entry['key']}<br>
-                <b>Timestamp:</b> {entry.get('timestamp_human')}<br>
-                <b>Size:</b> {self._format_bytes(entry.get('size', 0))}<br>
-                <b>TTL:</b> {entry.get('ttl')}<br>
+                <b>Key:</b> {entry["key"]}<br>
+                <b>Timestamp:</b> {entry.get("timestamp_human")}<br>
+                <b>Size:</b> {self._format_bytes(entry.get("size", 0))}<br>
+                <b>TTL:</b> {entry.get("ttl")}<br>
                 <hr>
                 <b>Source Code:</b><br>
-                <pre style="background-color: #f4f4f4; padding: 5px;">{entry.get('source_code', 'N/A')}</pre>
+                <pre style="background-color: #f4f4f4; padding: 5px;">{entry.get("source_code", "N/A")}</pre>
                 """
                 entry_details.value = details_html
                 with preview_output:
@@ -553,6 +546,7 @@ class CacheExplorer:
 
     def _make_delete_entry_handler(self, entries_selector: Any) -> Any:
         """Return the on_delete_entry closure for the widget."""
+
         def on_delete_entry(b):
             key = entries_selector.value
             if not key:
@@ -566,17 +560,24 @@ class CacheExplorer:
 
         return on_delete_entry
 
-    def _wire_widget_events(self, func_selector: Any, overview_output: Any, clear_func_btn: Any,
-                            entries_selector: Any, delete_entry_btn: Any, entry_details: Any,
-                            preview_output: Any) -> None:
+    def _wire_widget_events(
+        self,
+        func_selector: Any,
+        overview_output: Any,
+        clear_func_btn: Any,
+        entries_selector: Any,
+        delete_entry_btn: Any,
+        entry_details: Any,
+        preview_output: Any,
+    ) -> None:
         """Wire up event handlers for the explorer widget."""
         on_func_select = self._make_func_select_handler(overview_output, entries_selector, entry_details)
         on_entry_select = self._make_entry_select_handler(entry_details, preview_output)
         on_clear_func = self._make_clear_func_handler(func_selector, overview_output)
         on_delete_entry = self._make_delete_entry_handler(entries_selector)
 
-        func_selector.observe(on_func_select, names='value')
-        entries_selector.observe(on_entry_select, names='value')
+        func_selector.observe(on_func_select, names="value")
+        entries_selector.observe(on_entry_select, names="value")
         clear_func_btn.on_click(on_clear_func)
         delete_entry_btn.on_click(on_delete_entry)
 
@@ -599,13 +600,26 @@ class CacheExplorer:
             for func in funcs:
                 func_options.append(f"{module}.{func}")
 
-        (func_selector, overview_output, clear_func_btn,
-         entries_selector, delete_entry_btn, entry_details,
-         preview_output, app_layout) = self._build_widget_layout(widgets, func_options)
+        (
+            func_selector,
+            overview_output,
+            clear_func_btn,
+            entries_selector,
+            delete_entry_btn,
+            entry_details,
+            preview_output,
+            app_layout,
+        ) = self._build_widget_layout(widgets, func_options)
 
-        self._wire_widget_events(func_selector, overview_output, clear_func_btn,
-                                 entries_selector, delete_entry_btn, entry_details,
-                                 preview_output)
+        self._wire_widget_events(
+            func_selector,
+            overview_output,
+            clear_func_btn,
+            entries_selector,
+            delete_entry_btn,
+            entry_details,
+            preview_output,
+        )
 
         return app_layout
 
@@ -623,8 +637,8 @@ class CacheExplorer:
     def _build_hierarchy(self, entries: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         hierarchy = {}
         for entry in entries:
-            func_name = entry.get('func_name', 'Unknown')
-            parts = func_name.rsplit('.', 1)
+            func_name = entry.get("func_name", "Unknown")
+            parts = func_name.rsplit(".", 1)
             if len(parts) == 2:
                 module, func = parts
             else:
@@ -634,22 +648,22 @@ class CacheExplorer:
             if module not in hierarchy:
                 hierarchy[module] = {}
             if func not in hierarchy[module]:
-                hierarchy[module][func] = {'entries': [], 'total_size': 0}
+                hierarchy[module][func] = {"entries": [], "total_size": 0}
 
-            hierarchy[module][func]['entries'].append(entry)
-            hierarchy[module][func]['total_size'] += entry.get('size', 0)
+            hierarchy[module][func]["entries"].append(entry)
+            hierarchy[module][func]["total_size"] += entry.get("size", 0)
         return hierarchy
 
     def _format_bytes(self, bytes_val: int, decimals: int = 2) -> str:
         if bytes_val == 0:
-            return '0 Bytes'
+            return "0 Bytes"
         k = 1024
         dm = max(decimals, 0)
-        sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB']
+        sizes = ["Bytes", "KB", "MB", "GB", "TB"]
         import math
+
         i = math.floor(math.log(bytes_val) / math.log(k))
         return f"{bytes_val / (k**i):.{dm}f} {sizes[i]}"
-
 
     def show(self) -> None:
         """
@@ -657,6 +671,7 @@ class CacheExplorer:
         """
         try:
             from IPython.display import display
+
             # Try to display widget if in notebook
             # How to detect?
             # Usually if IPython is available we can try.

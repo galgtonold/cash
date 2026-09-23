@@ -14,10 +14,10 @@ from cash.notebook.file_tracker import (
     FileDependencyRegistry,
 )
 
-
 # ---------------------------------------------------------------------------
 # FileDependencyRegistry
 # ---------------------------------------------------------------------------
+
 
 class TestFileDependencyRegistry:
     """Test the singleton registry and handler registration."""
@@ -48,6 +48,7 @@ class TestFileDependencyRegistry:
 # ---------------------------------------------------------------------------
 # FileAccessTracker — builtin open() interception
 # ---------------------------------------------------------------------------
+
 
 class TestFileAccessTrackerOpen:
     """Test that open() calls are intercepted and file paths tracked."""
@@ -102,6 +103,7 @@ class TestFileAccessTrackerOpen:
 # FileAccessTracker — path normalisation
 # ---------------------------------------------------------------------------
 
+
 class TestPathNormalisation:
     """Paths are stored as canonical, forward-slash paths."""
 
@@ -123,6 +125,7 @@ class TestPathNormalisation:
 # ---------------------------------------------------------------------------
 # FileAccessTracker — user namespace patching
 # ---------------------------------------------------------------------------
+
 
 class TestUserNamespacePatching:
     """open() in user_ns is also intercepted."""
@@ -166,14 +169,13 @@ class TestUserNamespacePatching:
         with user_ns["open"](other_path) as f:
             f.read()
         after = set(tracker.get_accessed_files())
-        assert before == after, (
-            f"reads outside `with` block leaked into tracker: {after - before}"
-        )
+        assert before == after, f"reads outside `with` block leaked into tracker: {after - before}"
 
 
 # ---------------------------------------------------------------------------
 # FileAccessTracker — self-healing of leaked wrappers
 # ---------------------------------------------------------------------------
+
 
 class TestPermanentInstallSemantics:
     """After the ContextVar refactor the per-tracker
@@ -209,8 +211,10 @@ class TestPermanentInstallSemantics:
     def test_sequential_trackers_are_isolated(self, tmp_path: Path):
         """Two trackers used back-to-back must each see only their own
         block's reads — no cross-contamination."""
-        p_a = tmp_path / "a.txt"; p_a.write_text("a")
-        p_b = tmp_path / "b.txt"; p_b.write_text("b")
+        p_a = tmp_path / "a.txt"
+        p_a.write_text("a")
+        p_b = tmp_path / "b.txt"
+        p_b.write_text("b")
 
         t1 = FileAccessTracker()
         with t1, open(str(p_a)) as f:
@@ -243,8 +247,7 @@ class TestRemoteUrlChannel:
 
         assert tracker.get_accessed_remote_urls() == {"s3://bucket/events.parquet"}
         assert tracker.get_accessed_files() == set(), (
-            "a URL must never enter the file set - every consumer of it stats "
-            "and hashes its members"
+            "a URL must never enter the file set - every consumer of it stats and hashes its members"
         )
 
     @pytest.mark.parametrize(

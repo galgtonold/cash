@@ -10,6 +10,7 @@ Handing the handle back is the only thing cash can do with it; it cannot be
 stored (STORE-FAILED says so), so the call recomputes, which for opening a file
 is what the user wants anyway.
 """
+
 from __future__ import annotations
 
 import io
@@ -76,6 +77,7 @@ def test_a_coroutine_returning_an_async_generator_is_not_exhausted(cash):
         async def gen():
             for i in range(n):
                 yield i
+
         return gen()
 
     async def drain():

@@ -3,6 +3,7 @@
 Loads code cells from .ipynb files and generates the synthetic micro
 notebook used to isolate per-statement overhead from compute noise.
 """
+
 from __future__ import annotations
 
 import json
@@ -19,6 +20,7 @@ class CodeCell:
         notebook_cell_index: Zero-based index among all cells (code + markdown).
         source: Cell source as a single string (joined with no extra separator).
     """
+
     index: int
     notebook_cell_index: int
     source: str

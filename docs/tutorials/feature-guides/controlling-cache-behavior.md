@@ -32,7 +32,7 @@ model = train_xgb(X, y)         # 12 min to fit — force to disk
 noise = np.random.rand(1000)    # we know it's unseeded; don't warn us
 ```
 
-<!-- claim: cash/notebook/annotations.py:parse_annotation_line @f843a7c6, cash/notebook/annotations.py:ANNOTATION_PATTERN @95980cce -->
+<!-- claim: cash/notebook/annotations.py:parse_annotation_line @4e940712, cash/notebook/annotations.py:ANNOTATION_PATTERN @412c3ce1 -->
 That's the everyday language — six directives in total, counting the two specialised ones above. Stack annotations on consecutive lines above a statement (Cash walks backwards through comment lines until it hits a blank or a non-comment).
 
 ## The four annotations
@@ -53,7 +53,7 @@ api_response = requests.get("https://api.example.com/data")
 print(f"Debug: {some_value}")
 ```
 
-<!-- claim: cash/notebook/cacheability_decision.py:decide_cacheability @be2e3981 -->
+<!-- claim: cash/notebook/cacheability_decision.py:decide_cacheability @e9c27ac0 -->
 The decision-merge layer short-circuits as soon as it sees this annotation — `decide_cacheability` returns `(False, ['@cash:no-cache annotation'])` before consulting anything else. The badge shows the statement as NOT CACHED with that exact reason string.
 
 <iframe class="cash-badge" src="/_badges/not_cached_explicit.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
@@ -96,7 +96,7 @@ The annotation sets `force_persist = True`, which the post-execute path threads 
 
 ### `@cash:allow-random` — accept non-reproducibility
 
-<!-- claim: cash/notebook/randomness.py:check_and_warn_randomness @acebcb9b, cash/notebook/randomness.py:MODULE_ALIASES @1d79cda4, cash/notebook/randomness.py:RANDOM_FUNCTIONS @928168d0 -->
+<!-- claim: cash/notebook/randomness.py:check_and_warn_randomness @8f6c8229, cash/notebook/randomness.py:MODULE_ALIASES @993c2ed1, cash/notebook/randomness.py:RANDOM_FUNCTIONS @5801a3eb -->
 Cash scans every statement for unseeded calls to known RNG functions (`numpy.random.randn`, `torch.rand`, `random.choice`, dozens more — full list in `RANDOM_FUNCTIONS`) and raises a `CashRandomnessWarning` when it finds one. The reasoning: a cached `np.random.rand(1000)` won't match what a fresh re-execution would produce, so cache hits are silently non-reproducible.
 
 Two fixes. Seed it:
@@ -130,7 +130,7 @@ The warning fires once per statement per session, so a re-run of an unchanged ce
 
 ## RNG state is replayed across cache hits
 
-<!-- claim: cash/notebook/randomness.py:capture_object_rng_states @b4e01b79, cash/notebook/randomness.py:restore_object_rng_states @fa5d1e25 -->
+<!-- claim: cash/notebook/randomness.py:capture_object_rng_states @51b16e5b, cash/notebook/randomness.py:restore_object_rng_states @9b0cccf3 -->
 A cache hit restores more than the value. If you hold your own RNG object — an
 `np.random.Generator`, an `np.random.RandomState`, or a `random.Random` —
 its internal state is captured alongside the cached statement and **replayed**
@@ -236,7 +236,7 @@ The first source that triggers wins; later sources are not consulted.
 
 For the annotations that *don't* skip caching:
 
-<!-- claim: cash/notebook/annotations.py:CacheAnnotation.merge @b2421117 -->
+<!-- claim: cash/notebook/annotations.py:CacheAnnotation.merge @dd1153cd -->
 - `@cash:persist` + `@cash:ttl=N` compose freely — a statement can be both forced-to-disk and time-limited. `CacheAnnotation.merge` ORs the persist flags and overrides the TTL, so stacking on consecutive lines works:
 
   ```python { .nb-cell }

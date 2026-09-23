@@ -98,11 +98,12 @@ AMPLIFICATION_SKIP_REASON = (
 )
 
 _COST_MODEL_KEYS = (
-    'cost_model_size_bytes',
-    'cost_model_restore_seconds',
-    'cost_model_type_name',
-    'cost_model_family',
+    "cost_model_size_bytes",
+    "cost_model_restore_seconds",
+    "cost_model_type_name",
+    "cost_model_family",
 )
+
 
 class _ProcessResultRequired(TypedDict):
     """Keys that are always present in a :class:`ProcessResult`."""
@@ -116,12 +117,14 @@ class _ProcessResultRequired(TypedDict):
     code: str
     uncacheable_reasons: list[str]
 
+
 class DecoratorCallMetric(TypedDict, total=False):
     """Metrics for a single ``@cash.cache`` decorated function call."""
 
     func_name: str
     cache_hit: bool
     execution_time: float
+
 
 class ProcessResult(_ProcessResultRequired, total=False):
     """Typed dictionary for the return value of ``StatementProcessor.process_statement()``.
@@ -162,15 +165,35 @@ class ProcessResult(_ProcessResultRequired, total=False):
     cost_model_type_name: str
     cost_model_family: str
 
+
 logger = logging.getLogger(__name__)
 
-_KNOWN_PICKLABLE_TYPE_NAMES = frozenset({
-    'DataFrame', 'Series', 'ndarray',
-    'int', 'float', 'str', 'bool', 'bytes', 'NoneType',
-    'list', 'dict', 'tuple', 'set', 'frozenset',
-    'int64', 'float64', 'int32', 'float32',
-    'Timestamp', 'Timedelta', 'DatetimeIndex',
-})
+_KNOWN_PICKLABLE_TYPE_NAMES = frozenset(
+    {
+        "DataFrame",
+        "Series",
+        "ndarray",
+        "int",
+        "float",
+        "str",
+        "bool",
+        "bytes",
+        "NoneType",
+        "list",
+        "dict",
+        "tuple",
+        "set",
+        "frozenset",
+        "int64",
+        "float64",
+        "int32",
+        "float32",
+        "Timestamp",
+        "Timedelta",
+        "DatetimeIndex",
+    }
+)
+
 
 def _config_float(config: Any, attr: str, default: float) -> float:
     """Read a float-valued config attribute defensively.
@@ -188,7 +211,8 @@ def _config_float(config: Any, attr: str, default: float) -> float:
 
 
 def _snapshot_with_inherited(
-    file_dependencies: set[str], accessed_remote: set[str],
+    file_dependencies: set[str],
+    accessed_remote: set[str],
     inherited_snapshots: dict[str, dict] | None,
 ) -> dict[str, dict]:
     """Snapshot the files a statement read itself; take the ones it only
@@ -217,7 +241,7 @@ def _is_control_body(code: str) -> bool:
     decisions, and three copies of a marker string is three chances for one of
     them to silently stop matching.
     """
-    return '# __iteration_context__:' in code or '# control_context:' in code
+    return "# __iteration_context__:" in code or "# control_context:" in code
 
 
 class _TeeWriter:
@@ -268,6 +292,7 @@ class _TeeWriter:
     def __getattr__(self, name: str) -> Any:
         return getattr(self._real, name)
 
+
 @contextmanager
 def _tee_output() -> Generator[Any, None, None]:
     """Context manager that tees stdout/stderr to both the real stream and a buffer.
@@ -279,6 +304,7 @@ def _tee_output() -> Generator[Any, None, None]:
     Performance: uses batched flushes (~100 ms) so that 50 000+ print calls
     complete in roughly the same time as native Python/Jupyter output.
     """
+
     class TeedOutput:
         def __init__(self):
             self.stdout = ""
@@ -301,6 +327,7 @@ def _tee_output() -> Generator[Any, None, None]:
         teed.stderr = "".join(stderr_chunks)
         sys.stdout, sys.stderr = old_stdout, old_stderr
 
+
 # ``capture_output`` is the ONLY IPython name imported at module scope, and it
 # keeps its try/except because the fallback below is a genuine working
 # equivalent (it really does capture stdout/stderr), not a silent drop.  The
@@ -317,18 +344,22 @@ def _tee_output() -> Generator[Any, None, None]:
 # fails loudly with a clear ImportError.  Same rule as
 # ``StatementRestorer._replay_cached_outputs``.
 @contextmanager
-def _fallback_capture_output(stdout: bool = True, stderr: bool = True, display: bool = True) -> Generator[Any, None, None]:
+def _fallback_capture_output(
+    stdout: bool = True, stderr: bool = True, display: bool = True
+) -> Generator[Any, None, None]:
     """Fallback capture_output for when IPython is not available."""
+
     class CapturedOutput:
         def __init__(self):
             self.stdout = ""
             self.stderr = ""
             self.outputs = []
+
         def show(self):
             if self.stdout:
-                print(self.stdout, end='')
+                print(self.stdout, end="")
             if self.stderr:
-                print(self.stderr, end='', file=sys.stderr)
+                print(self.stderr, end="", file=sys.stderr)
 
     captured = CapturedOutput()
     old_stdout, old_stderr = sys.stdout, sys.stderr
@@ -346,6 +377,7 @@ def _fallback_capture_output(stdout: bool = True, stderr: bool = True, display: 
             captured.stderr = sys.stderr.getvalue()
     finally:
         sys.stdout, sys.stderr = old_stdout, old_stderr
+
 
 _CAPTURE_OUTPUT = None
 
@@ -393,6 +425,7 @@ def _attach_kernel_publisher_api(pub: Any, real: Any) -> None:
             # be survivable, not meaningful.
             def _noop(*_args: Any, __name: str = name, **_kwargs: Any) -> None:
                 logger.debug("[CAPTURE] %s() ignored: no real publisher", __name)
+
             setattr(pub, name, _noop)
         else:
             setattr(pub, name, target)
@@ -405,6 +438,7 @@ def _kernel_safe_capture(cls: Any) -> Any:
     publisher and the display hook -- is inherited untouched, exception
     propagation included.
     """
+
     class _KernelSafeCaptureOutput(cls):  # type: ignore[misc, valid-type]
         def __enter__(self):
             captured = super().__enter__()
@@ -439,6 +473,7 @@ def capture_output(stdout: bool = True, stderr: bool = True, display: bool = Tru
     if _CAPTURE_OUTPUT is None:
         try:
             from IPython.utils.io import capture_output as _ipy_capture
+
             # See `_kernel_safe_capture`: IPython's publisher is missing methods
             # ipykernel calls on `shell.display_pub` while the swap is live.
             _CAPTURE_OUTPUT = _kernel_safe_capture(_ipy_capture)
@@ -508,15 +543,14 @@ def _version_slot(source_hash: str, outputs: set[str]) -> str:
     version one of them reads in this process is never pruned for the other."""
     return hashlib.sha256(f"{source_hash}|{','.join(sorted(outputs))}".encode()).hexdigest()[:32]
 
+
 def _is_only_definitions(code: str) -> bool:
     """Whether *code* is nothing but ``def``/``class`` statements."""
     try:
         body = ast.parse(code).body
     except (SyntaxError, ValueError):
         return False
-    return bool(body) and all(
-        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) for node in body)
-
+    return bool(body) and all(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) for node in body)
 
 
 def _plain_call_assignment(code: str) -> tuple[str, dict[str, int] | None] | None:
@@ -543,13 +577,14 @@ def _plain_call_assignment(code: str) -> tuple[str, dict[str, int] | None] | Non
     if isinstance(target, ast.Tuple | ast.List) and all(isinstance(e, ast.Name) for e in target.elts):
         positions: dict[str, int] = {}
         for position, element in enumerate(target.elts):
-            positions[element.id] = position           # a name bound twice keeps the last
+            positions[element.id] = position  # a name bound twice keeps the last
         return ast.unparse(node.value), positions
     return None
 
 
 #: Methods that fit an estimator in place, for `# @cash:cache-fit`.
-_FIT_METHODS = frozenset({'fit', 'partial_fit', 'fit_transform', 'fit_predict'})
+_FIT_METHODS = frozenset({"fit", "partial_fit", "fit_transform", "fit_predict"})
+
 
 class StatementProcessor:
     """
@@ -586,7 +621,7 @@ class StatementProcessor:
         # from config; flippable at runtime (``%cash_persist`` magic). Read
         # defensively because tests pass a MagicMock cash_instance.
         try:
-            self.persist_all = bool(getattr(cash_instance.config, 'persist_all', False))
+            self.persist_all = bool(getattr(cash_instance.config, "persist_all", False))
         except (AttributeError, TypeError):
             self.persist_all = False
         self.compute_hash: Callable[[Any], str] | None = compute_hash_fn
@@ -704,9 +739,7 @@ class StatementProcessor:
         # defensively: the backend is a MagicMock in a good number of tests, and
         # an unresolvable dir just means session-scoped verdicts.
         try:
-            _guard_dir = resolve_cache_dir(
-                cash_instance.backend if cash_instance is not None else None
-            )
+            _guard_dir = resolve_cache_dir(cash_instance.backend if cash_instance is not None else None)
         except (AttributeError, TypeError):
             _guard_dir = None
         self._miss_guard = MissGuard(_guard_dir)
@@ -989,7 +1022,8 @@ class StatementProcessor:
             return self.cash_instance
         try:
             import cash as _cash_mod
-            return getattr(_cash_mod, '_global_cash', None)
+
+            return getattr(_cash_mod, "_global_cash", None)
         except ImportError:
             logger.debug("[PROCESSOR] Failed to import cash module for global instance")
             return None
@@ -1044,22 +1078,20 @@ class StatementProcessor:
             # Dropping only the self-referential names keeps the reason for
             # the half of the statement that is still sound:
             # ``df = df.join(other)`` may honestly blame ``other``.
-            wanted = {
-                v for v in (inputs or [])
-                if isinstance(v, str) and v not in set(outputs or [])
-            }
-            for out in (outputs or []):
+            wanted = {v for v in (inputs or []) if isinstance(v, str) and v not in set(outputs or [])}
+            for out in outputs or []:
                 previous = state.executed_input_lineages.get(out)
                 if not previous:
                     continue
                 stale = sorted(
-                    name for name, was in previous.items()
+                    name
+                    for name, was in previous.items()
                     if name in wanted and name in current and current[name] != was
                 )
                 if stale:
                     names = ", ".join(stale[:3])
                     more = f" +{len(stale) - 3} more" if len(stale) > 3 else ""
-                    metrics['miss_reason'] = f"input changed: {names}{more}"
+                    metrics["miss_reason"] = f"input changed: {names}{more}"
                     return
         except (AttributeError, TypeError):  # pragma: no cover - defensive
             return
@@ -1096,13 +1128,19 @@ class StatementProcessor:
         # routing through the call cache -- see _code_and_tree_for_execution.
         self._calls_not_worth_wrapping: set[str] = set()
 
-    def process_statement(self, code: str, ttl: int | None = None, silent: bool = False,
-                          annotation: CacheAnnotation | None = None,
-                          display_code: str | None = None,
-                          exec_source: str | None = None,
-                          occurrence_index: int = 0, stream_output: bool = False,
-                          force_outputs: set[str] | None = None,
-                          is_last: bool = True) -> ProcessResult:
+    def process_statement(
+        self,
+        code: str,
+        ttl: int | None = None,
+        silent: bool = False,
+        annotation: CacheAnnotation | None = None,
+        display_code: str | None = None,
+        exec_source: str | None = None,
+        occurrence_index: int = 0,
+        stream_output: bool = False,
+        force_outputs: set[str] | None = None,
+        is_last: bool = True,
+    ) -> ProcessResult:
         """
         Process a single statement: Analyze -> Check Cache -> Execute/Restore.
 
@@ -1157,13 +1195,13 @@ class StatementProcessor:
         unseeded_calls = self._warn_unseeded_randomness(code, allow_random)
         self._warn_entropy_reseed(code)
         metrics: ProcessResult = {
-            'status': CacheStatus.UNKNOWN,
-            'execution_time': 0.0,
-            'total_time': 0.0,
-            'saved_time': 0.0,
-            'error': None,
-            'restored_vars': [],
-            'code': code.strip(),
+            "status": CacheStatus.UNKNOWN,
+            "execution_time": 0.0,
+            "total_time": 0.0,
+            "saved_time": 0.0,
+            "error": None,
+            "restored_vars": [],
+            "code": code.strip(),
             # The badge shows the user's own layout. NEVER part of the cache
             # key: `code` above is what is hashed, always. This text MAY reach
             # `ast.parse` / `compile()` / `register_cell_source` now (as
@@ -1171,8 +1209,8 @@ class StatementProcessor:
             # "display-only, never compile()" rule so a function defined in a
             # cell keeps its comments (and thus a per-line
             # `# @cash:assume-safe` waiver) for `inspect.getsource`.
-            'display_code': display_code,
-            'uncacheable_reasons': []
+            "display_code": display_code,
+            "uncacheable_reasons": [],
         }
         self._stamp_random_effect(metrics, code, unseeded_calls)
         if self.debug:
@@ -1193,10 +1231,10 @@ class StatementProcessor:
         # the upstream simulation, and bumping/skip-caching per iteration makes
         # the planner replay only the last writer (measured: LOOP_F == [2]
         # instead of [1, 2, 3]). The loop owns its body's writes -- CAS-265.
-        callee_globals = (
-            set() if _is_control_body(code) else self._callee_mutated_globals(_parsed_tree)
+        callee_globals = set() if _is_control_body(code) else self._callee_mutated_globals(_parsed_tree)
+        inputs, outputs, source_hash, cache_key, analysis_time, hash_time = self._analyze_and_hash(
+            code, occurrence_index=occurrence_index, tree=_parsed_tree
         )
-        inputs, outputs, source_hash, cache_key, analysis_time, hash_time = self._analyze_and_hash(code, occurrence_index=occurrence_index, tree=_parsed_tree)
         # Caller-forced outputs (accumulator-loop fast path): capture
         # and restore these on top of the AST-discovered outputs, and mark them
         # as expected writes so an in-place accumulator mutation (``out.append``)
@@ -1232,10 +1270,18 @@ class StatementProcessor:
         # prefix in the row-detail "Key" field. Lets users see at a glance
         # when two runs of the same statement land in the same vs. a
         # different cache slot.
-        metrics['cache_key'] = cache_key
+        metrics["cache_key"] = cache_key
 
         early_result, skip_cache = self._check_redundant_import(
-            code, _parsed_tree, skip_cache, inputs, outputs, metrics, source_hash, cache_key, process_start,
+            code,
+            _parsed_tree,
+            skip_cache,
+            inputs,
+            outputs,
+            metrics,
+            source_hash,
+            cache_key,
+            process_start,
         )
         if early_result is not None:
             return early_result
@@ -1270,7 +1316,9 @@ class StatementProcessor:
             fit_only = self._fitted_receivers(_parsed_tree)
         else:
             mut_pre_route, mut_observe, mut_assumed, mut_record = self._classify_method_mutations(
-                _parsed_tree, source_hash, outputs,
+                _parsed_tree,
+                source_hash,
+                outputs,
             )
             est_fit = self._estimator_fit_receivers(_parsed_tree, outputs) if cache_fit else set()
             draw_only = set()
@@ -1315,10 +1363,9 @@ class StatementProcessor:
             outputs = outputs | mut_pre_route | est_fit | fam
         if skip_pre_route:
             skip_cache = True
-            metrics['uncacheable_reasons'].append(
+            metrics["uncacheable_reasons"].append(
                 f"In-place mutation on: {', '.join(sorted(skip_pre_route))} "
-                "(receiver lineage bumped; statement re-executes)"
-                + self._cache_fit_hint(skip_pre_route)
+                "(receiver lineage bumped; statement re-executes)" + self._cache_fit_hint(skip_pre_route)
             )
         # CAS-260, and deliberately the SAME treatment the inline spelling of
         # the identical mutation gets immediately above: the statement
@@ -1332,7 +1379,7 @@ class StatementProcessor:
         # re-executing affordable here.
         if callee_globals:
             skip_cache = True
-            metrics['uncacheable_reasons'].append(
+            metrics["uncacheable_reasons"].append(
                 f"Callee mutates: {', '.join(sorted(callee_globals))} "
                 "(global lineage bumped; statement re-executes, call still cached)"
             )
@@ -1342,15 +1389,13 @@ class StatementProcessor:
         # source is precisely what the control-body skip above exists to avoid.
         if draw_only:
             skip_cache = True
-            metrics['uncacheable_reasons'].append(
-                f"Draws on: {', '.join(sorted(draw_only))} "
-                "(live Figure/Axes; statement re-executes)"
+            metrics["uncacheable_reasons"].append(
+                f"Draws on: {', '.join(sorted(draw_only))} (live Figure/Axes; statement re-executes)"
             )
         if fit_only:
             skip_cache = True
-            metrics['uncacheable_reasons'].append(
-                f"Fits: {', '.join(sorted(fit_only))} "
-                "(estimator fitted in place; statement re-executes)"
+            metrics["uncacheable_reasons"].append(
+                f"Fits: {', '.join(sorted(fit_only))} (estimator fitted in place; statement re-executes)"
             )
         # An UNSEEDED estimator fit routed to caching above is frozen on re-run
         # with no warning -- cash's AST detector cannot see the randomness inside
@@ -1373,7 +1418,7 @@ class StatementProcessor:
                 scan_forbidden=CodeAnalyzer.scan_for_forbidden_functions,
             )
             if not cacheable:
-                metrics['uncacheable_reasons'].extend(reasons)
+                metrics["uncacheable_reasons"].extend(reasons)
                 skip_cache = True
         effective_ttl = self._ttl_floor_from_called_functions(inputs, effective_ttl)
         metadata, cached_data, cache_check_time = self._do_cache_lookup(skip_cache, cache_key, effective_ttl, inputs)
@@ -1383,18 +1428,27 @@ class StatementProcessor:
             self._print_cache_debug(code, cache_key, inputs, cached_data, analysis_time, hash_time, cache_check_time)
 
         if cached_data and not self._import_needs_reexecution(_parsed_tree):
-            hit_result = self._handle_cache_hit(cached_data, metadata, silent, cache_key, inputs, metrics, process_start, est_fit)
+            hit_result = self._handle_cache_hit(
+                cached_data, metadata, silent, cache_key, inputs, metrics, process_start, est_fit
+            )
             if hit_result is not None:
                 # The restore SUCCEEDED, so the value handed back is a replay.
                 self._warn_stale_randomness(code, unseeded_calls, allow_random)
                 self._warn_stale_estimator_fit(code, unseeded_fits, allow_random)
                 self._flag_inline_unseeded_fit(
-                    hit_result, code, _parsed_tree, outputs, allow_random, is_hit=True,
+                    hit_result,
+                    code,
+                    _parsed_tree,
+                    outputs,
+                    allow_random,
+                    is_hit=True,
                 )
                 return hit_result
 
         _exec_code, _exec_tree = self._code_and_tree_for_execution(
-            code, _parsed_tree, annotation,
+            code,
+            _parsed_tree,
+            annotation,
         )
         # CAS-243: `_code_and_tree_for_execution` may have rewritten an
         # eligible call into `__cash_call__(fn, i)(...)` -- returning a NEW
@@ -1410,23 +1464,34 @@ class StatementProcessor:
         # executes `_exec_code` (the rewritten text) exactly as today.
         _exec_source = exec_source if _exec_code is code else None
         error_metrics, result, captured, execution_time, accessed_files, accessed_remote = self._execute_and_drain(
-            _exec_code, stream_output, skip_cache, _exec_tree,
-            metrics, process_start, silent, is_last,
+            _exec_code,
+            stream_output,
+            skip_cache,
+            _exec_tree,
+            metrics,
+            process_start,
+            silent,
+            is_last,
             exec_source=_exec_source,
         )
         if error_metrics is not None:
             return error_metrics
 
         self._flag_inline_unseeded_fit(
-            metrics, code, _parsed_tree, outputs, allow_random, is_hit=False,
+            metrics,
+            code,
+            _parsed_tree,
+            outputs,
+            allow_random,
+            is_hit=False,
         )
         self._flag_observed_hidden_draw(metrics, code, outputs, skip_cache=skip_cache)
-        metrics['status'] = CacheStatus.COMPUTED
-        metrics['evaluated_vars'] = list(outputs) if outputs else []
+        metrics["status"] = CacheStatus.COMPUTED
+        metrics["evaluated_vars"] = list(outputs) if outputs else []
         # Surface input variable names so downstream consumers (provenance,
         # audit, badge tooltips) can reconstruct the dependency graph.
         # Filter out the no-name inputs the AST sometimes emits.
-        metrics['inputs'] = [v for v in (inputs or []) if isinstance(v, str)]
+        metrics["inputs"] = [v for v in (inputs or []) if isinstance(v, str)]
         # Attribute the miss for the badge's row-detail drawer when we can do
         # it cheaply. ``CacheFreshnessChecker`` sets ``last_miss_reason`` as a
         # side effect for TTL / file invalidations (already-computed
@@ -1434,27 +1499,48 @@ class StatementProcessor:
         # empty-key path — that diagnostic was O(N²) in cache size and
         # dominated cold-run cost.
         if not skip_cache and self._freshness.last_miss_reason:
-            metrics['miss_reason'] = self._freshness.last_miss_reason
+            metrics["miss_reason"] = self._freshness.last_miss_reason
         elif not skip_cache:
             self._attribute_input_change(metrics, inputs, outputs)
 
         self._post_execute(
-            code, result, inputs, outputs, accessed_files,
-            execution_time, effective_ttl, cache_key, source_hash,
-            captured, skip_cache, force_persist, metrics, process_start,
-            _parsed_tree, statement_analysis,
-            mut_observe, mut_assumed, mut_record, est_fit,
+            code,
+            result,
+            inputs,
+            outputs,
+            accessed_files,
+            execution_time,
+            effective_ttl,
+            cache_key,
+            source_hash,
+            captured,
+            skip_cache,
+            force_persist,
+            metrics,
+            process_start,
+            _parsed_tree,
+            statement_analysis,
+            mut_observe,
+            mut_assumed,
+            mut_record,
+            est_fit,
             accessed_remote,
         )
 
         return metrics
 
-    async def process_statement_async(self, code: str, ttl: int | None = None, silent: bool = False,
-                                      annotation: CacheAnnotation | None = None,
-                                      display_code: str | None = None,
-                                      exec_source: str | None = None,
-                                      occurrence_index: int = 0, stream_output: bool = False,
-                                      is_last: bool = True) -> ProcessResult:
+    async def process_statement_async(
+        self,
+        code: str,
+        ttl: int | None = None,
+        silent: bool = False,
+        annotation: CacheAnnotation | None = None,
+        display_code: str | None = None,
+        exec_source: str | None = None,
+        occurrence_index: int = 0,
+        stream_output: bool = False,
+        is_last: bool = True,
+    ) -> ProcessResult:
         """Async twin of :meth:`process_statement` for top-level-await cells.
 
         Line-for-line the same pipeline — analysis, cache lookup, cache-hit
@@ -1480,13 +1566,13 @@ class StatementProcessor:
         unseeded_calls = self._warn_unseeded_randomness(code, allow_random)
         self._warn_entropy_reseed(code)
         metrics: ProcessResult = {
-            'status': CacheStatus.UNKNOWN,
-            'execution_time': 0.0,
-            'total_time': 0.0,
-            'saved_time': 0.0,
-            'error': None,
-            'restored_vars': [],
-            'code': code.strip(),
+            "status": CacheStatus.UNKNOWN,
+            "execution_time": 0.0,
+            "total_time": 0.0,
+            "saved_time": 0.0,
+            "error": None,
+            "restored_vars": [],
+            "code": code.strip(),
             # The badge shows the user's own layout. NEVER part of the cache
             # key: `code` above is what is hashed, always. This text MAY reach
             # `ast.parse` / `compile()` / `register_cell_source` now (as
@@ -1494,8 +1580,8 @@ class StatementProcessor:
             # "display-only, never compile()" rule so a function defined in a
             # cell keeps its comments (and thus a per-line
             # `# @cash:assume-safe` waiver) for `inspect.getsource`.
-            'display_code': display_code,
-            'uncacheable_reasons': []
+            "display_code": display_code,
+            "uncacheable_reasons": [],
         }
         self._stamp_random_effect(metrics, code, unseeded_calls)
         if self.debug:
@@ -1516,16 +1602,24 @@ class StatementProcessor:
         # the upstream simulation, and bumping/skip-caching per iteration makes
         # the planner replay only the last writer (measured: LOOP_F == [2]
         # instead of [1, 2, 3]). The loop owns its body's writes -- CAS-265.
-        callee_globals = (
-            set() if _is_control_body(code) else self._callee_mutated_globals(_parsed_tree)
+        callee_globals = set() if _is_control_body(code) else self._callee_mutated_globals(_parsed_tree)
+        inputs, outputs, source_hash, cache_key, analysis_time, hash_time = self._analyze_and_hash(
+            code, occurrence_index=occurrence_index, tree=_parsed_tree
         )
-        inputs, outputs, source_hash, cache_key, analysis_time, hash_time = self._analyze_and_hash(code, occurrence_index=occurrence_index, tree=_parsed_tree)
         if callee_globals:
             outputs = outputs | callee_globals
-        metrics['cache_key'] = cache_key
+        metrics["cache_key"] = cache_key
 
         early_result, skip_cache = self._check_redundant_import(
-            code, _parsed_tree, skip_cache, inputs, outputs, metrics, source_hash, cache_key, process_start,
+            code,
+            _parsed_tree,
+            skip_cache,
+            inputs,
+            outputs,
+            metrics,
+            source_hash,
+            cache_key,
+            process_start,
         )
         if early_result is not None:
             return early_result
@@ -1540,7 +1634,9 @@ class StatementProcessor:
             fit_only = self._fitted_receivers(_parsed_tree)
         else:
             mut_pre_route, mut_observe, mut_assumed, mut_record = self._classify_method_mutations(
-                _parsed_tree, source_hash, outputs,
+                _parsed_tree,
+                source_hash,
+                outputs,
             )
             est_fit = self._estimator_fit_receivers(_parsed_tree, outputs) if cache_fit else set()
             draw_only = set()
@@ -1585,10 +1681,9 @@ class StatementProcessor:
             outputs = outputs | mut_pre_route | est_fit | fam
         if skip_pre_route:
             skip_cache = True
-            metrics['uncacheable_reasons'].append(
+            metrics["uncacheable_reasons"].append(
                 f"In-place mutation on: {', '.join(sorted(skip_pre_route))} "
-                "(receiver lineage bumped; statement re-executes)"
-                + self._cache_fit_hint(skip_pre_route)
+                "(receiver lineage bumped; statement re-executes)" + self._cache_fit_hint(skip_pre_route)
             )
         # CAS-260, and deliberately the SAME treatment the inline spelling of
         # the identical mutation gets immediately above: the statement
@@ -1602,7 +1697,7 @@ class StatementProcessor:
         # re-executing affordable here.
         if callee_globals:
             skip_cache = True
-            metrics['uncacheable_reasons'].append(
+            metrics["uncacheable_reasons"].append(
                 f"Callee mutates: {', '.join(sorted(callee_globals))} "
                 "(global lineage bumped; statement re-executes, call still cached)"
             )
@@ -1612,15 +1707,13 @@ class StatementProcessor:
         # source is precisely what the control-body skip above exists to avoid.
         if draw_only:
             skip_cache = True
-            metrics['uncacheable_reasons'].append(
-                f"Draws on: {', '.join(sorted(draw_only))} "
-                "(live Figure/Axes; statement re-executes)"
+            metrics["uncacheable_reasons"].append(
+                f"Draws on: {', '.join(sorted(draw_only))} (live Figure/Axes; statement re-executes)"
             )
         if fit_only:
             skip_cache = True
-            metrics['uncacheable_reasons'].append(
-                f"Fits: {', '.join(sorted(fit_only))} "
-                "(estimator fitted in place; statement re-executes)"
+            metrics["uncacheable_reasons"].append(
+                f"Fits: {', '.join(sorted(fit_only))} (estimator fitted in place; statement re-executes)"
             )
         # An UNSEEDED estimator fit routed to caching above is frozen on re-run
         # with no warning -- cash's AST detector cannot see the randomness inside
@@ -1643,7 +1736,7 @@ class StatementProcessor:
                 scan_forbidden=CodeAnalyzer.scan_for_forbidden_functions,
             )
             if not cacheable:
-                metrics['uncacheable_reasons'].extend(reasons)
+                metrics["uncacheable_reasons"].extend(reasons)
                 skip_cache = True
         effective_ttl = self._ttl_floor_from_called_functions(inputs, effective_ttl)
         metadata, cached_data, cache_check_time = self._do_cache_lookup(skip_cache, cache_key, effective_ttl, inputs)
@@ -1655,47 +1748,89 @@ class StatementProcessor:
         # CACHE HIT — returns before any coroutine is built, so an identical
         # second run of a top-level-await cell skips the await entirely.
         if cached_data and not self._import_needs_reexecution(_parsed_tree):
-            hit_result = self._handle_cache_hit(cached_data, metadata, silent, cache_key, inputs, metrics, process_start, est_fit)
+            hit_result = self._handle_cache_hit(
+                cached_data, metadata, silent, cache_key, inputs, metrics, process_start, est_fit
+            )
             if hit_result is not None:
                 # The restore SUCCEEDED, so the value handed back is a replay.
                 self._warn_stale_randomness(code, unseeded_calls, allow_random)
                 self._warn_stale_estimator_fit(code, unseeded_fits, allow_random)
                 self._flag_inline_unseeded_fit(
-                    hit_result, code, _parsed_tree, outputs, allow_random, is_hit=True,
+                    hit_result,
+                    code,
+                    _parsed_tree,
+                    outputs,
+                    allow_random,
+                    is_hit=True,
                 )
                 return hit_result
 
         _exec_code, _exec_tree = self._code_and_tree_for_execution(
-            code, _parsed_tree, annotation,
+            code,
+            _parsed_tree,
+            annotation,
         )
         # CAS-243 guard -- see the identical comment in :meth:`process_statement`.
         _exec_source = exec_source if _exec_code is code else None
-        error_metrics, result, captured, execution_time, accessed_files, accessed_remote = await self._execute_and_drain_async(
-            _exec_code, stream_output, skip_cache, _exec_tree,
-            metrics, process_start, silent, is_last,
+        (
+            error_metrics,
+            result,
+            captured,
+            execution_time,
+            accessed_files,
+            accessed_remote,
+        ) = await self._execute_and_drain_async(
+            _exec_code,
+            stream_output,
+            skip_cache,
+            _exec_tree,
+            metrics,
+            process_start,
+            silent,
+            is_last,
             exec_source=_exec_source,
         )
         if error_metrics is not None:
             return error_metrics
 
         self._flag_inline_unseeded_fit(
-            metrics, code, _parsed_tree, outputs, allow_random, is_hit=False,
+            metrics,
+            code,
+            _parsed_tree,
+            outputs,
+            allow_random,
+            is_hit=False,
         )
         self._flag_observed_hidden_draw(metrics, code, outputs, skip_cache=skip_cache)
-        metrics['status'] = CacheStatus.COMPUTED
-        metrics['evaluated_vars'] = list(outputs) if outputs else []
-        metrics['inputs'] = [v for v in (inputs or []) if isinstance(v, str)]
+        metrics["status"] = CacheStatus.COMPUTED
+        metrics["evaluated_vars"] = list(outputs) if outputs else []
+        metrics["inputs"] = [v for v in (inputs or []) if isinstance(v, str)]
         if not skip_cache and self._freshness.last_miss_reason:
-            metrics['miss_reason'] = self._freshness.last_miss_reason
+            metrics["miss_reason"] = self._freshness.last_miss_reason
         elif not skip_cache:
             self._attribute_input_change(metrics, inputs, outputs)
 
         self._post_execute(
-            code, result, inputs, outputs, accessed_files,
-            execution_time, effective_ttl, cache_key, source_hash,
-            captured, skip_cache, force_persist, metrics, process_start,
-            _parsed_tree, statement_analysis,
-            mut_observe, mut_assumed, mut_record, est_fit,
+            code,
+            result,
+            inputs,
+            outputs,
+            accessed_files,
+            execution_time,
+            effective_ttl,
+            cache_key,
+            source_hash,
+            captured,
+            skip_cache,
+            force_persist,
+            metrics,
+            process_start,
+            _parsed_tree,
+            statement_analysis,
+            mut_observe,
+            mut_assumed,
+            mut_record,
+            est_fit,
             accessed_remote,
         )
 
@@ -1758,9 +1893,9 @@ class StatementProcessor:
         floor = effective_ttl
         for name in inputs:
             fn = user_ns.get(name)
-            if fn is None or not getattr(fn, '_cash_cached', False):
+            if fn is None or not getattr(fn, "_cash_cached", False):
                 continue
-            declared = getattr(fn, '_cash_declared_ttl', None)
+            declared = getattr(fn, "_cash_declared_ttl", None)
             if declared is None:
                 continue
             floor = declared if floor is None else min(floor, declared)
@@ -1776,12 +1911,12 @@ class StatementProcessor:
         the body's real source, so a random draw inside a 1000-iteration loop
         warns once, not 1000 times.
         """
-        if '# __iteration_context__:' not in code and '# control_context:' not in code:
+        if "# __iteration_context__:" not in code and "# control_context:" not in code:
             return code
-        return '\n'.join(
-            line for line in code.split('\n')
-            if not line.startswith('# __iteration_context__:')
-            and not line.startswith('# control_context:')
+        return "\n".join(
+            line
+            for line in code.split("\n")
+            if not line.startswith("# __iteration_context__:") and not line.startswith("# control_context:")
         )
 
     def _warn_unseeded_randomness(self, code: str, allow_random: bool) -> list:
@@ -1806,7 +1941,9 @@ class StatementProcessor:
         code = self._strip_control_markers(code)
         try:
             unseeded_calls, _has_seed = check_and_warn_randomness(
-                code, self.randomness_detector, suppress_warning=allow_random,
+                code,
+                self.randomness_detector,
+                suppress_warning=allow_random,
             )
             return list(unseeded_calls)
         except (SyntaxError, ValueError, AttributeError, RecursionError):
@@ -1832,12 +1969,13 @@ class StatementProcessor:
             stripped = self._strip_control_markers(code)
             if not get_entropy_reseed_modules(stripped):
                 return
-            digest = hashlib.sha256(stripped.encode('utf-8')).hexdigest()
+            digest = hashlib.sha256(stripped.encode("utf-8")).hexdigest()
             if digest in self._warned_entropy_reseed:
                 return
             self._warned_entropy_reseed.add(digest)
             from cash.diagnostics import warn_diagnostic
             from cash.notebook.randomness import CashRandomnessWarning
+
             warn_diagnostic(
                 CashRandomnessWarning,
                 "RANDOM-SEED-NONE",
@@ -1853,8 +1991,11 @@ class StatementProcessor:
             logger.debug("%s Entropy-reseed warning failed for statement", _LOG_PROCESSOR)
 
     def _stamp_random_effect(
-        self, metrics: 'ProcessResult', code: str,
-        unseeded_calls: list, unseeded_fits: 'list | tuple' = (),
+        self,
+        metrics: "ProcessResult",
+        code: str,
+        unseeded_calls: list,
+        unseeded_fits: "list | tuple" = (),
     ) -> None:
         """Record a statement's RNG role on its metric so the badge can show it.
 
@@ -1866,25 +2007,24 @@ class StatementProcessor:
         """
         try:
             stripped = self._strip_control_markers(code)
-            draws = (
-                bool(get_drawing_rng_modules(stripped))
-                or bool(unseeded_calls)
-                or bool(unseeded_fits)
-            )
+            draws = bool(get_drawing_rng_modules(stripped)) or bool(unseeded_calls) or bool(unseeded_fits)
             seeds = bool(get_seeding_rng_modules(stripped))
         except (SyntaxError, ValueError, AttributeError, RecursionError):
             return
         if draws:
-            metrics['random_effect'] = 'draw'
+            metrics["random_effect"] = "draw"
         elif seeds:
-            metrics['random_effect'] = 'seed'
+            metrics["random_effect"] = "seed"
         else:
             return
         if unseeded_calls or unseeded_fits:
-            metrics['random_unseeded'] = True
+            metrics["random_unseeded"] = True
 
     def _warn_stale_randomness(
-        self, code: str, unseeded_calls: list, allow_random: bool,
+        self,
+        code: str,
+        unseeded_calls: list,
+        allow_random: bool,
     ) -> None:
         """Announce that a cached unseeded random value was just replayed.
 
@@ -1915,8 +2055,10 @@ class StatementProcessor:
             return
         try:
             warn_stale_randomness(
-                self._strip_control_markers(code), unseeded_calls,
-                self.randomness_detector, suppress_warning=allow_random,
+                self._strip_control_markers(code),
+                unseeded_calls,
+                self.randomness_detector,
+                suppress_warning=allow_random,
             )
         except (SyntaxError, ValueError, AttributeError, RecursionError):
             logger.debug("%s Stale-randomness warning failed for statement", _LOG_PROCESSOR)
@@ -1944,14 +2086,17 @@ class StatementProcessor:
                 if est is None:
                     continue
                 params = est.get_params()
-                if 'random_state' in params and params['random_state'] is None:
+                if "random_state" in params and params["random_state"] is None:
                     unseeded.append(rf)
             except (AttributeError, TypeError, ValueError, KeyError):
                 continue
         return sorted(unseeded)
 
     def _warn_unseeded_estimator_fit(
-        self, code: str, est_fit: set[str], allow_random: bool,
+        self,
+        code: str,
+        est_fit: set[str],
+        allow_random: bool,
     ) -> list[str]:
         """Warn that an UNSEEDED estimator ``.fit()`` is cached as a frozen replay.
 
@@ -1973,8 +2118,10 @@ class StatementProcessor:
             return []
         try:
             warn_unseeded_estimator_fit(
-                self._strip_control_markers(code), unseeded,
-                self.randomness_detector, suppress_warning=allow_random,
+                self._strip_control_markers(code),
+                unseeded,
+                self.randomness_detector,
+                suppress_warning=allow_random,
             )
         except (ValueError, AttributeError, RecursionError):
             logger.debug("%s Estimator-fit randomness warning failed", _LOG_PROCESSOR)
@@ -1986,13 +2133,18 @@ class StatementProcessor:
         if tree is None:
             return False
         for node in ast.walk(tree):
-            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                    and node.func.attr in ('fit', 'partial_fit')):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in ("fit", "partial_fit")
+            ):
                 return True
         return False
 
     def _inline_unseeded_fit_outputs(
-        self, tree: ast.Module | None, outputs: set[str],
+        self,
+        tree: ast.Module | None,
+        outputs: set[str],
     ) -> list[str]:
         """Output vars that are UNSEEDED fitted estimators (gap).
 
@@ -2014,19 +2166,24 @@ class StatementProcessor:
                 est = self.shell.user_ns.get(var)
                 if est is None:
                     continue
-                if not (callable(getattr(est, 'fit', None))
-                        and callable(getattr(est, 'get_params', None))):
+                if not (callable(getattr(est, "fit", None)) and callable(getattr(est, "get_params", None))):
                     continue
                 params = est.get_params()
-                if 'random_state' in params and params['random_state'] is None:
+                if "random_state" in params and params["random_state"] is None:
                     found.append(var)
             except (AttributeError, TypeError, ValueError, KeyError):
                 continue
         return sorted(found)
 
     def _flag_inline_unseeded_fit(
-        self, metrics: 'ProcessResult', code: str, tree: ast.Module | None,
-        outputs: set[str], allow_random: bool, *, is_hit: bool,
+        self,
+        metrics: "ProcessResult",
+        code: str,
+        tree: ast.Module | None,
+        outputs: set[str],
+        allow_random: bool,
+        *,
+        is_hit: bool,
     ) -> None:
         """Badge + warn for an inline/assignment-form unseeded fit (gap).
 
@@ -2036,7 +2193,7 @@ class StatementProcessor:
         """
         # Cheap guard on the hot path: no ``fit`` token, no AST walk. A ``.fit`` /
         # ``.partial_fit`` call always spells "fit", so this cannot false-negate.
-        if not outputs or 'fit' not in code:
+        if not outputs or "fit" not in code:
             return
         fits = self._inline_unseeded_fit_outputs(tree, outputs)
         if not fits:
@@ -2104,7 +2261,7 @@ class StatementProcessor:
         hidden = set(drew) - set(visible)
         if not hidden:
             return
-        digest = hashlib.sha256(code.encode('utf-8')).hexdigest()
+        digest = hashlib.sha256(code.encode("utf-8")).hexdigest()
         ledger = self._tracking_state.observed_rng_statement_draws
         known = ledger.get(digest, set())
         if hidden - known:
@@ -2170,7 +2327,7 @@ class StatementProcessor:
         if len(ancestry) <= self._MAX_UNSAVED_ANCESTRY:
             return ancestry
         self._collapsed += 1
-        return {f'collapsed:{self._collapsed}': sum(ancestry.values())}
+        return {f"collapsed:{self._collapsed}": sum(ancestry.values())}
 
     def begin_structure_cost(self) -> None:
         """A control structure starts: collect what its body leaves unsaved."""
@@ -2221,7 +2378,7 @@ class StatementProcessor:
                 # in all -- and a re-run copied every one back: 0.05 s plain,
                 # 11-23 s cached. What the loop leaves is judged when it ends.
                 return False
-            later = getattr(self, 'written_later_in_cell', frozenset())
+            later = getattr(self, "written_later_in_cell", frozenset())
             if not outputs or set(outputs) & set(later):
                 return False
             cost = sum(sum(self._unsaved_ancestry.get(name, {}).values()) for name in inputs)
@@ -2247,8 +2404,8 @@ class StatementProcessor:
         final ``sales`` is one of them (round 25, r25s2). Still only in a
         notebook, where a restart re-runs cells by their source.
         """
-        backend = getattr(self.cash_instance, 'backend', None) if self.cash_instance else None
-        persist = getattr(backend, 'persist_from_memory', None)
+        backend = getattr(self.cash_instance, "backend", None) if self.cash_instance else None
+        persist = getattr(backend, "persist_from_memory", None)
         last, self._cell_last_key = self._cell_last_key, {}
         later = self._tracking_state.read_by_later_cells
         self._tracking_state.read_by_later_cells = None
@@ -2284,11 +2441,11 @@ class StatementProcessor:
 
     def _lineages_read(self, inputs: set[str]) -> dict[str, str]:
         from ..cache_key import called_function_dependencies
+
         read = {}
-        for dep in called_function_dependencies(
-                sorted(inputs), self.shell.user_ns, self.variable_lineage, None):
-            name, _, lineage = dep.partition(':')
-            if lineage != 'ABSENT':
+        for dep in called_function_dependencies(sorted(inputs), self.shell.user_ns, self.variable_lineage, None):
+            name, _, lineage = dep.partition(":")
+            if lineage != "ABSENT":
                 read[name] = lineage
         read.update({n: self.variable_lineage[n] for n in inputs if n in self.variable_lineage})
         return read
@@ -2302,7 +2459,8 @@ class StatementProcessor:
         known to be stale (round 29, r29s4). Pass the result to `end_control_log`."""
         try:
             inputs, _outputs = CodeAnalyzer.analyze_code_block(
-                code, resolve_source=self._resolve_live_function_source, user_ns=self.shell.user_ns)
+                code, resolve_source=self._resolve_live_function_source, user_ns=self.shell.user_ns
+            )
             return len(self._cell_stmt_log), (code, self._lineages_read(inputs))
         except Exception:  # noqa: BLE001 - a history is optional; none means "cannot vouch"
             return len(self._cell_stmt_log), (code, {})
@@ -2324,8 +2482,12 @@ class StatementProcessor:
         return set(self._cell_rng_changed), self._cell_rng_pre, self._cell_rng_post
 
     def _flag_observed_hidden_draw(
-        self, metrics: 'ProcessResult', code: str, outputs: set[str],
-        *, skip_cache: bool,
+        self,
+        metrics: "ProcessResult",
+        code: str,
+        outputs: set[str],
+        *,
+        skip_cache: bool,
     ) -> None:
         """Stamp the unseeded pill for a draw only the runtime observer saw.
 
@@ -2355,7 +2517,7 @@ class StatementProcessor:
         """
         if skip_cache or not outputs:
             return
-        changed = getattr(self, '_observed_rng_draw', None)
+        changed = getattr(self, "_observed_rng_draw", None)
         if not changed:
             return
         try:
@@ -2366,11 +2528,14 @@ class StatementProcessor:
         hidden_unseeded = changed - ast_draws - seeded
         if not hidden_unseeded:
             return
-        metrics['random_effect'] = 'draw'
-        metrics['random_unseeded'] = True
+        metrics["random_effect"] = "draw"
+        metrics["random_unseeded"] = True
 
     def _warn_stale_estimator_fit(
-        self, code: str, unseeded_fits: list[str], allow_random: bool,
+        self,
+        code: str,
+        unseeded_fits: list[str],
+        allow_random: bool,
     ) -> None:
         """Announce that a cached UNSEEDED estimator fit was just replayed.
 
@@ -2384,8 +2549,10 @@ class StatementProcessor:
             return
         try:
             warn_stale_estimator_fit(
-                self._strip_control_markers(code), unseeded_fits,
-                self.randomness_detector, suppress_warning=allow_random,
+                self._strip_control_markers(code),
+                unseeded_fits,
+                self.randomness_detector,
+                suppress_warning=allow_random,
             )
         except (ValueError, AttributeError, RecursionError):
             logger.debug("%s Stale estimator-fit warning failed", _LOG_PROCESSOR)
@@ -2399,8 +2566,9 @@ class StatementProcessor:
     ) -> tuple[StatementCacheMetadata | None, Any | None, float]:
         """Run cache lookup unless *skip_cache* is set."""
         if not skip_cache:
-            return self._freshness.check_cache(self._tracking_state, cache_key, ttl, inputs,
-                                               epoch=getattr(self.shell, 'execution_count', None))
+            return self._freshness.check_cache(
+                self._tracking_state, cache_key, ttl, inputs, epoch=getattr(self.shell, "execution_count", None)
+            )
         if self.debug:
             logger.debug("%s Skipping cache lookup due to missing input lineage or @cash:no-cache", _LOG_ANNOTATION)
         return None, None, 0.0
@@ -2436,18 +2604,21 @@ class StatementProcessor:
         """
         if skip_cache:
             return
-        if '# __iteration_context__:' in code or '# control_context:' in code:
+        if "# __iteration_context__:" in code or "# control_context:" in code:
             return
-        self._miss_guard.observe(source_hash, cache_key, hit=cached_data is not None,
-                                 components=self._lineages_read(inputs) if inputs else {})
+        self._miss_guard.observe(
+            source_hash,
+            cache_key,
+            hit=cached_data is not None,
+            components=self._lineages_read(inputs) if inputs else {},
+        )
 
     #: The perpetual-miss guard spares a statement whose value is written in at
     #: most this share of what computing it cost: each write it wastes is then
     #: nearly free, and one later hit repays all of them.
     _CHEAP_WRITE_SHARE = 0.1
 
-    def _write_is_cheap(self, outputs: set[str], captured_vars: dict[str, Any],
-                        execution_time: float) -> bool:
+    def _write_is_cheap(self, outputs: set[str], captured_vars: dict[str, Any], execution_time: float) -> bool:
         """Whether writing *outputs* costs little next to *execution_time*.
 
         The guard exists for values whose every write is wasted money -- a
@@ -2458,6 +2629,7 @@ class StatementProcessor:
         CV again. Estimated with the cost model the size-aware skip uses.
         """
         from cash.notebook import cost_model
+
         if execution_time <= 0:
             return False
         try:
@@ -2466,8 +2638,7 @@ class StatementProcessor:
                 if name not in captured_vars:
                     continue
                 value = captured_vars[name]
-                write += cost_model.estimated_serialize_time(
-                    type(value).__name__, estimate_object_size(value), "disk")
+                write += cost_model.estimated_serialize_time(type(value).__name__, estimate_object_size(value), "disk")
         except Exception:  # noqa: BLE001 - an estimate it cannot make guards as before
             return False
         return write <= self._CHEAP_WRITE_SHARE * execution_time
@@ -2492,19 +2663,20 @@ class StatementProcessor:
     @staticmethod
     def _wrap_key(code: str) -> str:
         """*code* without the per-iteration / branch context marker lines."""
-        if '# __iteration_context__:' not in code and '# control_context:' not in code:
+        if "# __iteration_context__:" not in code and "# control_context:" not in code:
             return code
-        return "\n".join(line for line in code.split("\n")
-                         if not line.startswith(('# __iteration_context__:', '# control_context:')))
+        return "\n".join(
+            line for line in code.split("\n") if not line.startswith(("# __iteration_context__:", "# control_context:"))
+        )
 
     def _learn_call_wrapping(self, code: str, wall_time: float, calls: list) -> None:
         """Record whether *code*'s calls are worth the call cache next time."""
         try:
-            floor_of = getattr(self._call_cache, '_cost_floor_s', None)
+            floor_of = getattr(self._call_cache, "_cost_floor_s", None)
             floor = floor_of() if callable(floor_of) else 0.003
             if not isinstance(floor, (int, float)):
                 floor = 0.003
-            hit = any(isinstance(ev, dict) and ev.get('cache_hit') for ev in calls or ())
+            hit = any(isinstance(ev, dict) and ev.get("cache_hit") for ev in calls or ())
             key = self._wrap_key(code)
             if wall_time < floor and not hit:
                 self._calls_not_worth_wrapping.add(key)
@@ -2546,8 +2718,7 @@ class StatementProcessor:
         # wins, exactly as it already wins over ``persist``). Absent an
         # annotation at all, neither opt-out is set, so interception proceeds.
         if annotation is not None and (
-            getattr(annotation, 'no_cache_calls', False)
-            or getattr(annotation, 'no_cache', False)
+            getattr(annotation, "no_cache_calls", False) or getattr(annotation, "no_cache", False)
         ):
             return code, tree
         # Which statement's calls the call cache's "returned last" is about
@@ -2613,8 +2784,10 @@ class StatementProcessor:
                         _LOG_PROCESSOR,
                     )
                     return False
+
             rewritten, sites = wrap_eligible_calls(
-                tree if tree is not None else ast.parse(code), gate=gate,
+                tree if tree is not None else ast.parse(code),
+                gate=gate,
                 namespace=self.shell.user_ns,
             )
             if not sites:
@@ -2626,8 +2799,8 @@ class StatementProcessor:
             # ``ast.unparse`` drops a trailing ';', which _execute_statement
             # reads as "suppress the repr". Losing it would make a rewritten
             # statement echo a value the user silenced.
-            if code.rstrip().endswith(';'):
-                new_code += ';'
+            if code.rstrip().endswith(";"):
+                new_code += ";"
             if self._call_cache is None or self._call_cache_owner is not cash_instance:
                 self._call_cache = CallCache(
                     cash_instance,
@@ -2664,9 +2837,7 @@ class StatementProcessor:
             self.shell.user_ns[HELPER_NAME] = self._call_cache.resolve
             return new_code, rewritten
         except (SyntaxError, ValueError, TypeError, AttributeError):
-            logger.debug(
-                "%s cache-calls rewrite failed; executing unmodified", _LOG_PROCESSOR
-            )
+            logger.debug("%s cache-calls rewrite failed; executing unmodified", _LOG_PROCESSOR)
             return code, tree
 
     def _execute_and_drain(
@@ -2692,8 +2863,11 @@ class StatementProcessor:
 
         marks = self._cash_time_marks()
         result, captured, execution_time, accessed_files, accessed_remote = self._execute_statement(
-            code, stream_output=stream_output, tree=tree,
-            skip_capture=(skip_cache and stream_output), is_last=is_last,
+            code,
+            stream_output=stream_output,
+            tree=tree,
+            skip_capture=(skip_cache and stream_output),
+            is_last=is_last,
             exec_source=exec_source,
         )
         wall_time = execution_time
@@ -2709,26 +2883,26 @@ class StatementProcessor:
         decorator_calls.extend(self._drain_call_unit_events())
         self._learn_call_wrapping(code, wall_time, decorator_calls)
 
-        metrics['stdout'] = captured.stdout
-        metrics['stderr'] = captured.stderr
+        metrics["stdout"] = captured.stdout
+        metrics["stderr"] = captured.stderr
         # IPython rich-display capture (RichOutput objects). Distinct from
         # ``metadata['outputs']`` and ``evaluated_vars`` (which hold variable
         # NAMES from AST analysis). Keeping them under different keys avoids
         # the F-01-style fallback chain that printed ``<RichOutput at 0x..>``
         # into badge fields.
-        metrics['rich_outputs'] = captured.outputs
+        metrics["rich_outputs"] = captured.outputs
         if decorator_calls:
-            metrics['decorator_calls'] = decorator_calls
+            metrics["decorator_calls"] = decorator_calls
 
         self._display_execution_output(captured, wall_time, silent, stream_output, metrics)
-        metrics['execution_time'] = wall_time
-        metrics['compute_cost'] = execution_time
-        metrics['cash_tax'] = self._cash_tax_seconds(marks)
+        metrics["execution_time"] = wall_time
+        metrics["compute_cost"] = execution_time
+        metrics["cash_tax"] = self._cash_tax_seconds(marks)
 
         if not result.success:
-            metrics['status'] = CacheStatus.ERROR
-            metrics['error'] = result.error
-            metrics['total_time'] = time.time() - process_start
+            metrics["status"] = CacheStatus.ERROR
+            metrics["error"] = result.error
+            metrics["total_time"] = time.time() - process_start
             self._handle_execution_error(result, silent)
             return metrics, result, captured, execution_time, accessed_files, accessed_remote
 
@@ -2759,8 +2933,11 @@ class StatementProcessor:
 
         marks = self._cash_time_marks()
         result, captured, execution_time, accessed_files, accessed_remote = await self._execute_statement_async(
-            code, stream_output=stream_output, tree=tree,
-            skip_capture=(skip_cache and stream_output), is_last=is_last,
+            code,
+            stream_output=stream_output,
+            tree=tree,
+            skip_capture=(skip_cache and stream_output),
+            is_last=is_last,
             exec_source=exec_source,
         )
         wall_time = execution_time
@@ -2776,21 +2953,21 @@ class StatementProcessor:
         decorator_calls.extend(self._drain_call_unit_events())
         self._learn_call_wrapping(code, wall_time, decorator_calls)
 
-        metrics['stdout'] = captured.stdout
-        metrics['stderr'] = captured.stderr
-        metrics['rich_outputs'] = captured.outputs
+        metrics["stdout"] = captured.stdout
+        metrics["stderr"] = captured.stderr
+        metrics["rich_outputs"] = captured.outputs
         if decorator_calls:
-            metrics['decorator_calls'] = decorator_calls
+            metrics["decorator_calls"] = decorator_calls
 
         self._display_execution_output(captured, wall_time, silent, stream_output, metrics)
-        metrics['execution_time'] = wall_time
-        metrics['compute_cost'] = execution_time
-        metrics['cash_tax'] = self._cash_tax_seconds(marks)
+        metrics["execution_time"] = wall_time
+        metrics["compute_cost"] = execution_time
+        metrics["cash_tax"] = self._cash_tax_seconds(marks)
 
         if not result.success:
-            metrics['status'] = CacheStatus.ERROR
-            metrics['error'] = result.error
-            metrics['total_time'] = time.time() - process_start
+            metrics["status"] = CacheStatus.ERROR
+            metrics["error"] = result.error
+            metrics["total_time"] = time.time() - process_start
             self._handle_execution_error(result, silent)
             return metrics, result, captured, execution_time, accessed_files, accessed_remote
 
@@ -2799,9 +2976,9 @@ class StatementProcessor:
     def _cash_time_marks(self) -> tuple[float, Any, float, float]:
         """Cash's own clocks, read around a statement (see :meth:`_statement_cost`)."""
         from cash.notebook.file_tracker import tracking_seconds
-        unit = getattr(getattr(self, '_call_cache', None), '_call_unit', None)
-        return (tracking_seconds(), unit, getattr(unit, 'overhead_s', 0.0),
-                getattr(unit, 'hits_saved_s', 0.0))
+
+        unit = getattr(getattr(self, "_call_cache", None), "_call_unit", None)
+        return (tracking_seconds(), unit, getattr(unit, "overhead_s", 0.0), getattr(unit, "hits_saved_s", 0.0))
 
     def _statement_tax(self, marks: tuple[float, Any, float, float]) -> tuple[float, float]:
         """``(cash's own seconds inside this statement, what its cached calls saved)``.
@@ -2818,14 +2995,15 @@ class StatementProcessor:
         measured 370 s slower (round 30, r30s4).
         """
         from cash.notebook.file_tracker import tracking_seconds
+
         tracking0, unit0, overhead0, saved0 = marks
         tracking = max(0.0, tracking_seconds() - tracking0)
-        unit = getattr(getattr(self, '_call_cache', None), '_call_unit', None)
+        unit = getattr(getattr(self, "_call_cache", None), "_call_unit", None)
         overhead = saved = 0.0
         if unit is not None:
             base_overhead, base_saved = (overhead0, saved0) if unit is unit0 else (0.0, 0.0)
-            overhead = max(0.0, getattr(unit, 'overhead_s', 0.0) - base_overhead)
-            saved = max(0.0, getattr(unit, 'hits_saved_s', 0.0) - base_saved)
+            overhead = max(0.0, getattr(unit, "overhead_s", 0.0) - base_overhead)
+            saved = max(0.0, getattr(unit, "hits_saved_s", 0.0) - base_saved)
         return tracking + overhead, saved
 
     def _statement_cost(self, wall_time: float, marks: tuple[float, Any, float, float]) -> float:
@@ -2889,7 +3067,7 @@ class StatementProcessor:
                     newly_mutated.add(name)
             if newly_mutated:
                 # ``est_fit`` is non-empty only under ``# @cash:cache-fit``
-                #. Those receivers still enter ``outputs`` (source-based
+                # . Those receivers still enter ``outputs`` (source-based
                 # lineage bump + fitted value capture) and are still recorded in
                 # ``mutation_verdicts`` below (so the upstream simulation bumps
                 # downstream lineage on a data edit), but they are NOT
@@ -2900,12 +3078,12 @@ class StatementProcessor:
                 # The caller's ``outputs`` is its own set: without this the
                 # badge row said "Produced -" for ``sc.pp.normalize_total(adata)``
                 # on its first run (round 28, r28s4).
-                produced = metrics.setdefault('evaluated_vars', [])
+                produced = metrics.setdefault("evaluated_vars", [])
                 produced.extend(n for n in sorted(newly_mutated) if n not in produced)
                 skip_observed = newly_mutated - est_fit
                 if skip_observed:
                     skip_cache = True
-                    metrics.setdefault('uncacheable_reasons', []).append(
+                    metrics.setdefault("uncacheable_reasons", []).append(
                         f"In-place mutation on: {', '.join(sorted(skip_observed))} "
                         "(observed; receiver lineage bumped; statement re-executes)"
                         + self._cache_fit_hint(skip_observed)
@@ -2922,8 +3100,14 @@ class StatementProcessor:
         self._persist_import_bindings(code, tree)
 
         captured_vars = self._lineage.capture_and_track_variables(
-            self._tracking_state, outputs, inputs, code, source_hash,
-            cache_key=cache_key, accessed_files=accessed_files, tree=tree,
+            self._tracking_state,
+            outputs,
+            inputs,
+            code,
+            source_hash,
+            cache_key=cache_key,
+            accessed_files=accessed_files,
+            tree=tree,
             accessed_remote=accessed_remote,
         )
 
@@ -2935,13 +3119,13 @@ class StatementProcessor:
         # cacheable (over-invalidation guard).
         if not skip_cache:
             from .derivation_edges import is_uncacheable_alias
+
             for out in outputs:
                 val = captured_vars.get(out)
                 if val is not None and is_uncacheable_alias(val, self.shell.user_ns):
                     skip_cache = True
-                    metrics.setdefault('uncacheable_reasons', []).append(
-                        f"Live-alias object '{out}' (view/ref-holder); re-derived "
-                        "from live base, not cached."
+                    metrics.setdefault("uncacheable_reasons", []).append(
+                        f"Live-alias object '{out}' (view/ref-holder); re-derived from live base, not cached."
                     )
                     break
 
@@ -2954,7 +3138,7 @@ class StatementProcessor:
         # This must run here (post-execution) rather than in decide_cacheability:
         # the object does not exist yet when that runs. Refusing BEFORE
         # _save_to_cache is what prevents the deep-copy from ever happening
-        #.
+        # .
         if not skip_cache:
             for out in outputs:
                 val = captured_vars.get(out)
@@ -2963,7 +3147,7 @@ class StatementProcessor:
                 reason = identity_coupled_reason(out, val)
                 if reason is not None:
                     skip_cache = True
-                    metrics.setdefault('uncacheable_reasons', []).append(reason)
+                    metrics.setdefault("uncacheable_reasons", []).append(reason)
                     break
 
         # Nor one producing a CONSUMABLE the cache cannot copy -- an open file
@@ -2975,14 +3159,16 @@ class StatementProcessor:
         # (test_a_consumed_iterator_is_rebuilt_for_its_reader).
         if not skip_cache:
             from ..consumables import is_consumable_unrestorable
+
             for out in outputs:
                 val = captured_vars.get(out)
                 if val is not None and is_consumable_unrestorable(val):
                     skip_cache = True
-                    metrics.setdefault('uncacheable_reasons', []).append(
+                    metrics.setdefault("uncacheable_reasons", []).append(
                         f"'{out}' is consumed as it is read (an open file or a "
                         f"generator) and cannot be restored: it is re-created "
-                        f"every run")
+                        f"every run"
+                    )
                     break
 
         # Record executed file-WRITING statements by code text:
@@ -2990,13 +3176,14 @@ class StatementProcessor:
         # to tell an edited/new writer from one that already ran.
         # A write the code does not spell (``save_chart(kind)``, whose savefig
         # is in the helper) counts too: it was observed (``write_observer``).
-        written = self.user_written_paths(getattr(self, '_last_written_paths', frozenset()))
+        written = self.user_written_paths(getattr(self, "_last_written_paths", frozenset()))
         try:
-            if written or any(e.kind == 'file_write' for e in statement_analysis.side_effects):
+            if written or any(e.kind == "file_write" for e in statement_analysis.side_effects):
                 self._tracking_state.executed_write_stmt_codes.add(code)
                 # The upstream check's per-file answers for this cell run were
                 # taken before this write; nothing checked after it may use them.
                 from ..upstream.virtual_lineage import forget_file_state_this_run
+
                 forget_file_state_this_run()
                 # Persist write provenance so a post-restart isolated reader can
                 # tell an already-on-disk writer effect (skip it) from a stale
@@ -3052,44 +3239,54 @@ class StatementProcessor:
             skip_cache = True
             if self.debug:
                 logger.debug(
-                    "%s Not storing %s: hidden RNG draw discovered after its key "
-                    "was built; next run keys it correctly",
-                    _LOG_ANNOTATION, source_hash[:12],
+                    "%s Not storing %s: hidden RNG draw discovered after its key was built; next run keys it correctly",
+                    _LOG_ANNOTATION,
+                    source_hash[:12],
                 )
 
         saved_metadata = None
         if not skip_cache:
             saved_metadata = self._save_to_cache(
-                cache_key, code, result, inputs, outputs, accessed_files,
-                execution_time, effective_ttl, captured, process_start,
-                source_hash, captured_vars, force_persist=force_persist,
-                miss_guarded=miss_guarded, accessed_remote=accessed_remote,
+                cache_key,
+                code,
+                result,
+                inputs,
+                outputs,
+                accessed_files,
+                execution_time,
+                effective_ttl,
+                captured,
+                process_start,
+                source_hash,
+                captured_vars,
+                force_persist=force_persist,
+                miss_guarded=miss_guarded,
+                accessed_remote=accessed_remote,
             )
         elif self.debug:
             logger.debug("%s Skipping cache save due to @cash:no-cache", _LOG_ANNOTATION)
 
         if saved_metadata and saved_metadata.storage is not None:
-            metrics['storage'] = saved_metadata.storage
+            metrics["storage"] = saved_metadata.storage
         if saved_metadata and saved_metadata.skipped_reason is not None:
-            metrics['skipped_reason'] = saved_metadata.skipped_reason
+            metrics["skipped_reason"] = saved_metadata.skipped_reason
             if saved_metadata.skipped_reason == GUARD_SKIP_REASON:
                 # What kept changing the key (round 29, r29s1).
                 cause = self._miss_guard.cause(source_hash)
                 if cause:
-                    metrics['guard_cause'] = cause
+                    metrics["guard_cause"] = cause
         if saved_metadata:
             for k in _COST_MODEL_KEYS:
                 value = getattr(saved_metadata, k)
                 if value is not None:
                     metrics[k] = value
         storage = (saved_metadata.storage if saved_metadata else None) or ()
-        self._note_rebuild_cost(cache_key, inputs, outputs, execution_time,
-                                on_disk=any(s != 'RAM' for s in storage))
+        self._note_rebuild_cost(cache_key, inputs, outputs, execution_time, on_disk=any(s != "RAM" for s in storage))
 
-        metrics['total_time'] = time.time() - process_start
+        metrics["total_time"] = time.time() - process_start
         self.analytics_manager.record_event(
-            status='MISS',
-            execution_time=metrics['total_time'],
+            status="MISS",
+            execution_time=metrics["total_time"],
             saved_time=0.0,
             code_hash=cache_key,
         )
@@ -3103,7 +3300,7 @@ class StatementProcessor:
         tagged with the bytecode magic) for the callee walk. Written only when
         it changed this session; best-effort.
         """
-        if 'import' not in code:
+        if "import" not in code:
             return
         try:
             nodes = [n for n in (tree or ast.parse(code)).body if isinstance(n, ast.ImportFrom)]
@@ -3114,42 +3311,50 @@ class StatementProcessor:
         import base64
         import importlib.util
         import marshal
+
         user_ns = self.shell.user_ns
         bindings: dict[str, dict[str, Any]] = {}
         for node in nodes:
             for alias in node.names:
                 name = alias.asname or alias.name
-                if name == '*' or name not in user_ns:
+                if name == "*" or name not in user_ns:
                     continue
                 value = user_ns[name]
-                entry: dict[str, Any] = {'module': isinstance(value, types.ModuleType)}
-                if callable(value) and not entry['module'] and self.function_tracker is not None:
+                entry: dict[str, Any] = {"module": isinstance(value, types.ModuleType)}
+                if callable(value) and not entry["module"] and self.function_tracker is not None:
                     try:
-                        entry['digest'] = self.function_tracker.get_function_source_hash(value)
+                        entry["digest"] = self.function_tracker.get_function_source_hash(value)
                     except Exception:  # noqa: BLE001 - no digest is a smaller record, not an error
-                        entry['digest'] = None
-                    entry['is_class'] = isinstance(value, type)
-                    func_code = getattr(value, '__code__', None)
-                    if isinstance(func_code, types.CodeType) and not entry['is_class']:
+                        entry["digest"] = None
+                    entry["is_class"] = isinstance(value, type)
+                    func_code = getattr(value, "__code__", None)
+                    if isinstance(func_code, types.CodeType) and not entry["is_class"]:
                         try:
-                            entry['code'] = base64.b64encode(marshal.dumps(func_code)).decode('ascii')
+                            entry["code"] = base64.b64encode(marshal.dumps(func_code)).decode("ascii")
                         except ValueError:
                             pass
                 bindings[name] = entry
         if not bindings:
             return
-        written = self.__dict__.setdefault('_import_bindings_written', {})
+        written = self.__dict__.setdefault("_import_bindings_written", {})
         if written.get(code) == bindings:
             return
         backend = self.cash_instance.backend if self.cash_instance else None
         if backend is None:
             return
         from ..cache_key import import_bindings_key
+
         try:
             self._stmt_restorer.persist_metadata_only(
-                backend, import_bindings_key(code),
-                {'import_bindings': True, 'bindings': bindings, 'code': code, 'ttl': None,
-                 'magic': importlib.util.MAGIC_NUMBER.hex()},
+                backend,
+                import_bindings_key(code),
+                {
+                    "import_bindings": True,
+                    "bindings": bindings,
+                    "code": code,
+                    "ttl": None,
+                    "magic": importlib.util.MAGIC_NUMBER.hex(),
+                },
             )
             written[code] = bindings
         except (OSError, TypeError, ValueError, AttributeError):
@@ -3163,17 +3368,19 @@ class StatementProcessor:
         simulation after a restart assumes the call mutates, as it always did.
         """
         verdict = sorted(receivers)
-        written = self.__dict__.setdefault('_mutation_verdicts_written', {})
+        written = self.__dict__.setdefault("_mutation_verdicts_written", {})
         if written.get(source_hash) == verdict:
             return
         backend = self.cash_instance.backend if self.cash_instance else None
         if backend is None:
             return
         from ..cache_key import mutation_verdict_key
+
         try:
             self._stmt_restorer.persist_metadata_only(
-                backend, mutation_verdict_key(source_hash),
-                {'mutation_verdict': True, 'receivers': verdict, 'ttl': None},
+                backend,
+                mutation_verdict_key(source_hash),
+                {"mutation_verdict": True, "receivers": verdict, "ttl": None},
             )
             written[source_hash] = verdict
         except (OSError, TypeError, ValueError, AttributeError):
@@ -3188,7 +3395,7 @@ class StatementProcessor:
         unknown after a restart, which is the conservative old behaviour.
         """
         paths = sorted(accessed_files)
-        written = self.__dict__.setdefault('_read_provenance_written', {})
+        written = self.__dict__.setdefault("_read_provenance_written", {})
         if written.get(code) == paths:
             return
         backend = self.cash_instance.backend if self.cash_instance else None
@@ -3196,8 +3403,9 @@ class StatementProcessor:
             return
         try:
             self._stmt_restorer.persist_metadata_only(
-                backend, read_provenance_key(code),
-                {'read_provenance': True, 'paths': paths, 'code': code, 'ttl': None},
+                backend,
+                read_provenance_key(code),
+                {"read_provenance": True, "paths": paths, "code": code, "ttl": None},
             )
             written[code] = paths
         except (OSError, TypeError, ValueError, AttributeError):
@@ -3212,12 +3420,11 @@ class StatementProcessor:
             return frozenset()
         roots = set()
         backend = self.cash_instance.backend if self.cash_instance else None
-        for b in [backend, *getattr(backend, 'backends', ())]:
-            root = getattr(b, 'cache_dir', None)
+        for b in [backend, *getattr(backend, "backends", ())]:
+            root = getattr(b, "cache_dir", None)
             if isinstance(root, (str, os.PathLike)):
                 roots.add(os.path.normcase(os.path.abspath(os.fspath(root))) + os.sep)
-        return frozenset(p for p in paths
-                         if not any(os.path.normcase(p).startswith(r) for r in roots))
+        return frozenset(p for p in paths if not any(os.path.normcase(p).startswith(r) for r in roots))
 
     def _persist_write_provenance(
         self,
@@ -3262,26 +3469,24 @@ class StatementProcessor:
             if any(p not in file_deps for p in paths):
                 return
             names = set(inputs) | called_function_globals(inputs, self.shell.user_ns)
-            input_lineages = {
-                v: self.variable_lineage[v]
-                for v in names
-                if v in self.variable_lineage
-            }
+            input_lineages = {v: self.variable_lineage[v] for v in names if v in self.variable_lineage}
             record = {
-                'write_provenance': True,
-                'paths': paths,
-                'file_deps': file_deps,
-                'input_lineages': input_lineages,
-                'code': code,
-                'ttl': None,  # provenance must not expire out from under a reader
+                "write_provenance": True,
+                "paths": paths,
+                "file_deps": file_deps,
+                "input_lineages": input_lineages,
+                "code": code,
+                "ttl": None,  # provenance must not expire out from under a reader
             }
             histories = self._carrier_histories(code, inputs)
             if histories:
-                record['carrier_histories'] = histories
+                record["carrier_histories"] = histories
             backend = self.cash_instance.backend if self.cash_instance else None
             if backend is not None:
                 self._stmt_restorer.persist_metadata_only(
-                    backend, write_provenance_key(code), record,
+                    backend,
+                    write_provenance_key(code),
+                    record,
                 )
         except (OSError, TypeError, ValueError, AttributeError):
             logger.debug("%s write-provenance persistence failed", _LOG_PROCESSOR)
@@ -3336,9 +3541,7 @@ class StatementProcessor:
         if tree is None:
             return set()
         receivers: set[str] = set()
-        for base, _method in (
-            standalone_method_call_receivers(tree) | assigned_method_call_receivers(tree)
-        ):
+        for base, _method in standalone_method_call_receivers(tree) | assigned_method_call_receivers(tree):
             value = self.shell.user_ns.get(base)
             if isinstance(value, types.ModuleType):
                 continue  # ``plt.savefig()`` is a module call, not a receiver draw
@@ -3348,8 +3551,11 @@ class StatementProcessor:
         # too -- the same ``drawn_args`` rule `_classify_method_mutations`
         # applies outside a loop. In a loop body it was missed, and a re-run
         # saved every chart blank (round 23, a plotting helper per model).
-        receivers |= {name for name in top_level_call_argument_bases(tree)
-                      if receiver_is_identity_coupled(self.shell.user_ns.get(name))}
+        receivers |= {
+            name
+            for name in top_level_call_argument_bases(tree)
+            if receiver_is_identity_coupled(self.shell.user_ns.get(name))
+        }
         return receivers
 
     def _fitted_receivers(self, tree: ast.Module | None) -> set[str]:
@@ -3363,9 +3569,11 @@ class StatementProcessor:
         """
         if tree is None:
             return set()
-        return {base for base, method in (
-                    standalone_method_call_receivers(tree) | assigned_method_call_receivers(tree))
-                if fits_its_receiver(method, self.shell.user_ns.get(base))}
+        return {
+            base
+            for base, method in (standalone_method_call_receivers(tree) | assigned_method_call_receivers(tree))
+            if fits_its_receiver(method, self.shell.user_ns.get(base))
+        }
 
     def _classify_method_mutations(
         self,
@@ -3398,8 +3606,11 @@ class StatementProcessor:
         # method-call receiver at all. Behind the early return below, that
         # call was served from the cache and the saved chart had an empty
         # panel (round 22, tester-session tests).
-        drawn_args = {name for name in top_level_call_argument_bases(tree)
-                      if receiver_is_identity_coupled(self.shell.user_ns.get(name))}
+        drawn_args = {
+            name
+            for name in top_level_call_argument_bases(tree)
+            if receiver_is_identity_coupled(self.shell.user_ns.get(name))
+        }
         arg_watch = self._bare_call_arguments(tree, outputs) - drawn_args
         if not candidates and not assigned and not drawn_args and not arg_watch:
             return set(), set(), set(), False
@@ -3440,8 +3651,7 @@ class StatementProcessor:
                 # Figure is idempotent + load-bearing for chart coherence.
                 pre_route.add(base)
                 continue
-            if (chain_is_pure(method, inner.get((base, method), frozenset()))
-                    or is_pandas_plot_call(method, receiver)):
+            if chain_is_pure(method, inner.get((base, method), frozenset())) or is_pandas_plot_call(method, receiver):
                 continue
             if verdict is not None:
                 if base in verdict:
@@ -3568,13 +3778,12 @@ class StatementProcessor:
         except (SyntaxError, ValueError, RecursionError):
             return set()
         ns = self.shell.user_ns
-        return {
-            n for n in names
-            if n in ns and not isinstance(ns[n], types.ModuleType)
-        }
+        return {n for n in names if n in ns and not isinstance(ns[n], types.ModuleType)}
 
     def _function_arg_mutation_receivers(
-        self, tree: ast.Module | None, outputs: set[str],
+        self,
+        tree: ast.Module | None,
+        outputs: set[str],
     ) -> set[str]:
         """Variables mutated in place by a bare FUNCTION call (``proc(d)``)."""
         if tree is None:
@@ -3585,10 +3794,7 @@ class StatementProcessor:
             muts = function_arg_mutations(tree, self._resolve_live_function_source)
         except (SyntaxError, ValueError, RecursionError):
             return set()
-        return {
-            var for var in muts
-            if not isinstance(self.shell.user_ns.get(var), types.ModuleType)
-        } - outputs
+        return {var for var in muts if not isinstance(self.shell.user_ns.get(var), types.ModuleType)} - outputs
 
     def _estimator_fit_receivers(
         self,
@@ -3634,7 +3840,7 @@ class StatementProcessor:
             v = self.shell.user_ns.get(base)
             if isinstance(v, types.ModuleType):
                 continue
-            if callable(getattr(v, 'fit', None)) and callable(getattr(v, 'get_params', None)):
+            if callable(getattr(v, "fit", None)) and callable(getattr(v, "get_params", None)):
                 receivers.add(base)
         return receivers - outputs
 
@@ -3643,10 +3849,15 @@ class StatementProcessor:
         one -- the refusal otherwise gave no way out (round 29, r29s2)."""
         for base in receivers:
             v = self.shell.user_ns.get(base)
-            if (not isinstance(v, types.ModuleType) and callable(getattr(v, 'fit', None))
-                    and callable(getattr(v, 'get_params', None))):
-                return (f" -- `{base}` is an estimator being fitted; add `# @cash:cache-fit` "
-                        "to cache the fit with it (see that directive's identity caveat)")
+            if (
+                not isinstance(v, types.ModuleType)
+                and callable(getattr(v, "fit", None))
+                and callable(getattr(v, "get_params", None))
+            ):
+                return (
+                    f" -- `{base}` is an estimator being fitted; add `# @cash:cache-fit` "
+                    "to cache the fit with it (see that directive's identity caveat)"
+                )
         return ""
 
     def _receiver_observable(self, base: str) -> bool:
@@ -3660,7 +3871,7 @@ class StatementProcessor:
         val = self.shell.user_ns.get(base)
         if val is None:
             return False
-        if type(val).__name__ in ('DataFrame', 'Series', 'ndarray'):
+        if type(val).__name__ in ("DataFrame", "Series", "ndarray"):
             return False
         if isinstance(val, (list, tuple, dict, set, frozenset)) and len(val) > 200:
             return False
@@ -3682,7 +3893,7 @@ class StatementProcessor:
             after = self.compute_hash(val)
         except (TypeError, ValueError, AttributeError, pickle.PicklingError):
             return True
-        identity_hash = hashlib.sha256(str(id(val)).encode('utf-8')).hexdigest()
+        identity_hash = hashlib.sha256(str(id(val)).encode("utf-8")).hexdigest()
         if after == identity_hash:
             return True  # unpicklable -> identity hash -> mutation undetectable
         before = self.current_session_hashes.get(base)
@@ -3730,54 +3941,81 @@ class StatementProcessor:
         try:
             if self.debug:
                 logger.debug("%s Cache hit for key: %s...", _LOG_CACHE_HIT, cache_key[:20])
-                logger.debug("%s Input lineages used: %s", _LOG_CACHE_HIT, [(v, self.variable_lineage.get(v, 'NONE')[:16] + '...') for v in inputs if v not in ['get_ipython', '__builtins__', 'print']])
+                logger.debug(
+                    "%s Input lineages used: %s",
+                    _LOG_CACHE_HIT,
+                    [
+                        (v, self.variable_lineage.get(v, "NONE")[:16] + "...")
+                        for v in inputs
+                        if v not in ["get_ipython", "__builtins__", "print"]
+                    ],
+                )
                 if metadata:
-                    logger.debug("%s Stored lineages in cache: %s", _LOG_CACHE_HIT, [(k, v[:16]+'...') for k,v in (metadata.output_lineages or {}).items()])
-            self._stmt_restorer.restore_from_cache(self._tracking_state, cached_data, metadata, silent, process_start, inplace_restore)
+                    logger.debug(
+                        "%s Stored lineages in cache: %s",
+                        _LOG_CACHE_HIT,
+                        [(k, v[:16] + "...") for k, v in (metadata.output_lineages or {}).items()],
+                    )
+            self._stmt_restorer.restore_from_cache(
+                self._tracking_state, cached_data, metadata, silent, process_start, inplace_restore
+            )
 
-            metrics['status'] = CacheStatus.RESTORED
-            metrics['saved_time'] = (metadata.execution_time or 0.0) if metadata else 0.0
-            metrics['restored_vars'] = (metadata.outputs or []) if metadata else []
+            metrics["status"] = CacheStatus.RESTORED
+            metrics["saved_time"] = (metadata.execution_time or 0.0) if metadata else 0.0
+            metrics["restored_vars"] = (metadata.outputs or []) if metadata else []
             # Carry the stored input list through so provenance/audit can
             # reconstruct the dependency graph on a cache hit, not just on
             # a fresh compute.
-            metrics['inputs'] = list((metadata.inputs or []) if metadata else [])
-            metrics['total_time'] = time.time() - process_start
+            metrics["inputs"] = list((metadata.inputs or []) if metadata else [])
+            metrics["total_time"] = time.time() - process_start
 
             if metadata:
                 if metadata.source is not None:
-                    metrics['source'] = metadata.source
-                    metrics['storage'] = [metadata.source]
+                    metrics["source"] = metadata.source
+                    metrics["storage"] = [metadata.source]
                 elif metadata.storage is not None:
-                    metrics['storage'] = metadata.storage
+                    metrics["storage"] = metadata.storage
                 for k in _COST_MODEL_KEYS:
                     value = getattr(metadata, k)
                     if value is not None:
                         metrics[k] = value
                 where = [metadata.source, *(metadata.storage or ())]
-                self._note_rebuild_cost(cache_key, inputs, metadata.outputs or (),
-                                        metadata.execution_time or 0.0,
-                                        on_disk=any(s not in (None, 'RAM') for s in where))
+                self._note_rebuild_cost(
+                    cache_key,
+                    inputs,
+                    metadata.outputs or (),
+                    metadata.execution_time or 0.0,
+                    on_disk=any(s not in (None, "RAM") for s in where),
+                )
 
             self.analytics_manager.record_event(
-                status='HIT',
-                execution_time=metrics['total_time'],
-                saved_time=metrics['saved_time'],
+                status="HIT",
+                execution_time=metrics["total_time"],
+                saved_time=metrics["saved_time"],
                 code_hash=cache_key,
             )
 
             payload = cached_data
-            if isinstance(payload, dict) and 'variables' in payload:
-                metrics['stdout'] = payload.get('stdout', '')
-                metrics['stderr'] = payload.get('stderr', '')
-                metrics['rich_outputs'] = payload.get('rich_outputs', [])
+            if isinstance(payload, dict) and "variables" in payload:
+                metrics["stdout"] = payload.get("stdout", "")
+                metrics["stderr"] = payload.get("stderr", "")
+                metrics["rich_outputs"] = payload.get("rich_outputs", [])
             else:
-                metrics['stdout'] = ''
-                metrics['stderr'] = ''
-                metrics['rich_outputs'] = []
+                metrics["stdout"] = ""
+                metrics["stderr"] = ""
+                metrics["rich_outputs"] = []
 
             return metrics
-        except (CacheBackendError, CacheSerializationError, KeyError, TypeError, ValueError, AttributeError, OSError, pickle.UnpicklingError) as e:
+        except (
+            CacheBackendError,
+            CacheSerializationError,
+            KeyError,
+            TypeError,
+            ValueError,
+            AttributeError,
+            OSError,
+            pickle.UnpicklingError,
+        ) as e:
             logger.warning("%s Restoration failed (%s), falling back to execution.", _LOG_CACHE, e, exc_info=True)
             return None
 
@@ -3789,10 +4027,10 @@ class StatementProcessor:
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     names.add(alias.name)
-                    names.add(alias.name.split('.')[0])
+                    names.add(alias.name.split(".")[0])
             elif isinstance(node, ast.ImportFrom) and node.module:
                 names.add(node.module)
-                names.add(node.module.split('.')[0])
+                names.add(node.module.split(".")[0])
         return names
 
     def _check_redundant_import(
@@ -3826,15 +4064,17 @@ class StatementProcessor:
             # Present is not enough: the name must hold what the import would
             # bind. `import array` then `from array import array` found `array`
             # present and skipped, leaving the module where the class belongs.
-            all_present = (all(name in self.shell.user_ns for name in import_names)
-                           and self._import_bindings_hold(tree_check))
+            all_present = all(name in self.shell.user_ns for name in import_names) and self._import_bindings_hold(
+                tree_check
+            )
 
             if has_reloaded:
                 self.recently_reloaded_modules -= source_module_names
                 if self.debug:
                     logger.debug(
                         "%s Import involves recently-reloaded module, disabling cache for: %s",
-                        _LOG_OPTIMIZATION, code.strip()
+                        _LOG_OPTIMIZATION,
+                        code.strip(),
                     )
                 return None, True  # updated skip_cache
 
@@ -3850,11 +4090,17 @@ class StatementProcessor:
             if all_present:
                 if self.debug:
                     logger.debug("%s SKIPPING redundant import: %s", _LOG_OPTIMIZATION, code.strip())
-                metrics['status'] = CacheStatus.SKIPPED
-                metrics['total_time'] = time.time() - process_start
+                metrics["status"] = CacheStatus.SKIPPED
+                metrics["total_time"] = time.time() - process_start
                 self._update_state_tracking(
-                    code, ExecutionResult(success=True, skipped=True),
-                    inputs, outputs, set(), source_hash, cache_key, tree=tree,
+                    code,
+                    ExecutionResult(success=True, skipped=True),
+                    inputs,
+                    outputs,
+                    set(),
+                    source_hash,
+                    cache_key,
+                    tree=tree,
                 )
                 return metrics, skip_cache
 
@@ -3878,23 +4124,25 @@ class StatementProcessor:
         from IPython.display import display, publish_display_data
 
         for output in outputs:
-            if isinstance(output, dict) and 'data' in output:
-                publish_display_data(data=output['data'], metadata=output.get('metadata', {}))
+            if isinstance(output, dict) and "data" in output:
+                publish_display_data(data=output["data"], metadata=output.get("metadata", {}))
             else:
                 display(output)
 
-    def _display_execution_output(self, captured: Any, execution_time: float, silent: bool, stream_output: bool, metrics: ProcessResult) -> None:
+    def _display_execution_output(
+        self, captured: Any, execution_time: float, silent: bool, stream_output: bool, metrics: ProcessResult
+    ) -> None:
         """Display captured stdout/stderr/rich outputs after execution."""
         if stream_output:
             # User already saw output in real-time via _TeeWriter.
-            metrics['_output_flushed'] = True
+            metrics["_output_flushed"] = True
             if not silent:
                 self._publish_rich_outputs(captured.outputs)
         elif not silent:
             if captured.stdout:
-                print(captured.stdout, end='')
+                print(captured.stdout, end="")
             if captured.stderr:
-                print(captured.stderr, end='', file=sys.stderr)
+                print(captured.stderr, end="", file=sys.stderr)
             self._publish_rich_outputs(captured.outputs)
 
     @staticmethod
@@ -3906,10 +4154,12 @@ class StatementProcessor:
         inside differs).
         """
         if stream_output and skip_capture:
+
             class _EmptyCaptured:
-                stdout = ''
-                stderr = ''
+                stdout = ""
+                stderr = ""
                 outputs = []
+
             return contextlib.nullcontext(_EmptyCaptured())
         if stream_output:
             return _tee_output()
@@ -3926,18 +4176,28 @@ class StatementProcessor:
         (``ax.annotate`` per topic, reading a frame built from 10,000
         documents) re-checked all of them 52 times in one cell.
         """
-        wrote = bool(getattr(self, '_last_written_paths', None)) or not getattr(result, 'success', False)
+        wrote = bool(getattr(self, "_last_written_paths", None)) or not getattr(result, "success", False)
         if not wrote:
             try:
                 from ..cacheability import statement_calls_user_writer, statement_writes_files
-                wrote = (statement_writes_files(code)
-                         or statement_calls_user_writer(code, self.shell.user_ns) is not None)
+
+                wrote = (
+                    statement_writes_files(code) or statement_calls_user_writer(code, self.shell.user_ns) is not None
+                )
             except Exception:  # noqa: BLE001 - when unsure, check files again
                 wrote = True
         if wrote:
-            self._freshness.forget_file_answers(getattr(self.shell, 'execution_count', None))
+            self._freshness.forget_file_answers(getattr(self.shell, "execution_count", None))
 
-    def _execute_statement(self, code: str, stream_output: bool = False, tree: ast.Module | None = None, skip_capture: bool = False, is_last: bool = True, exec_source: str | None = None) -> tuple[Any, Any, float, set[str]]:
+    def _execute_statement(
+        self,
+        code: str,
+        stream_output: bool = False,
+        tree: ast.Module | None = None,
+        skip_capture: bool = False,
+        is_last: bool = True,
+        exec_source: str | None = None,
+    ) -> tuple[Any, Any, float, set[str]]:
         """Execute statement with output capture and file tracking.
 
         A statement that may have written a file drops the freshness answers
@@ -4001,8 +4261,8 @@ class StatementProcessor:
                         try:
                             tree = ast.parse(source)
                         except SyntaxError:
-                             # Fallback to standard exec if parse fails (though it shouldn't if compiled worked, but good for safety)
-                             tree = None
+                            # Fallback to standard exec if parse fails (though it shouldn't if compiled worked, but good for safety)
+                            tree = None
 
                     # One linecache-registered filename per statement, so a
                     # traceback inside a function DEFINED here shows its source
@@ -4010,42 +4270,42 @@ class StatementProcessor:
                     cash_file = register_cell_source(source)
 
                     if tree and tree.body and isinstance(tree.body[-1], ast.Expr):
-                         body_nodes = tree.body[:-1]
-                         last_node = tree.body[-1]
+                        body_nodes = tree.body[:-1]
+                        last_node = tree.body[-1]
 
-                         if body_nodes:
-                             mod = ast.Module(body=body_nodes, type_ignores=[])
-                             # Locations must be fixed for some python versions/ast nodes
-                             # but usually parse provides them.
-                             c_body = compile(mod, cash_file, 'exec')
-                             exec(c_body, self.shell.user_ns, self.shell.user_ns)
+                        if body_nodes:
+                            mod = ast.Module(body=body_nodes, type_ignores=[])
+                            # Locations must be fixed for some python versions/ast nodes
+                            # but usually parse provides them.
+                            c_body = compile(mod, cash_file, "exec")
+                            exec(c_body, self.shell.user_ns, self.shell.user_ns)
 
-                         expr_val = last_node.value
-                         mod_expr = ast.Expression(body=expr_val)
-                         ast.fix_missing_locations(mod_expr)
-                         c_expr = compile(mod_expr, cash_file, 'eval')
-                         result_val = eval(c_expr, self.shell.user_ns, self.shell.user_ns)
+                        expr_val = last_node.value
+                        mod_expr = ast.Expression(body=expr_val)
+                        ast.fix_missing_locations(mod_expr)
+                        c_expr = compile(mod_expr, cash_file, "eval")
+                        result_val = eval(c_expr, self.shell.user_ns, self.shell.user_ns)
 
-                         # IPython echoes only the LAST expression of a CELL. Cash
-                         # splits the cell into statements and executes each as its
-                         # own unit, so without ``is_last`` every bare expression
-                         # got displayed and cash silently changed notebook
-                         # semantics -- `a+1 / a+2 / a+3` printed 2,3,4 where a
-                         # plain kernel prints 4. Gating the DISPLAY (not
-                         # the cache-keyed source) is deliberate: the reverted
-                         # attempt appended ';' to the keyed source in the runtime
-                         # only, desyncing it from the simulator's unparse and
-                         # blanking a chart.
-                         # A trailing ``;`` suppresses the repr in IPython. The
-                         # cell splitter re-attaches it after ``ast.unparse``
-                         #; honour it so no repr is displayed OR captured
-                         # (an empty capture then also restores cleanly).
-                         if (is_last and result_val is not None
-                                 and not code.rstrip().endswith(';')):
-                             from IPython.display import display
-                             display(result_val)
+                        # IPython echoes only the LAST expression of a CELL. Cash
+                        # splits the cell into statements and executes each as its
+                        # own unit, so without ``is_last`` every bare expression
+                        # got displayed and cash silently changed notebook
+                        # semantics -- `a+1 / a+2 / a+3` printed 2,3,4 where a
+                        # plain kernel prints 4. Gating the DISPLAY (not
+                        # the cache-keyed source) is deliberate: the reverted
+                        # attempt appended ';' to the keyed source in the runtime
+                        # only, desyncing it from the simulator's unparse and
+                        # blanking a chart.
+                        # A trailing ``;`` suppresses the repr in IPython. The
+                        # cell splitter re-attaches it after ``ast.unparse``
+                        # ; honour it so no repr is displayed OR captured
+                        # (an empty capture then also restores cleanly).
+                        if is_last and result_val is not None and not code.rstrip().endswith(";"):
+                            from IPython.display import display
+
+                            display(result_val)
                     else:
-                        compiled_code = compile(source, cash_file, 'exec')
+                        compiled_code = compile(source, cash_file, "exec")
                         exec(compiled_code, self.shell.user_ns, self.shell.user_ns)
                         result_val = None
 
@@ -4063,18 +4323,28 @@ class StatementProcessor:
 
         except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user code
             result = self._create_error_result(e)
-            if 'captured' not in dir():
+            if "captured" not in dir():
+
                 class _EmptyCaptured:
-                    stdout = ''
-                    stderr = ''
+                    stdout = ""
+                    stderr = ""
                     outputs = []
+
                 captured = _EmptyCaptured()
 
         self._forget_file_answers_if_it_wrote(code, result)
         execution_time = time.time() - start_time
         return result, captured, execution_time, accessed_files, accessed_remote
 
-    async def _execute_statement_async(self, code: str, stream_output: bool = False, tree: ast.Module | None = None, skip_capture: bool = False, is_last: bool = True, exec_source: str | None = None) -> tuple[Any, Any, float, set[str]]:
+    async def _execute_statement_async(
+        self,
+        code: str,
+        stream_output: bool = False,
+        tree: ast.Module | None = None,
+        skip_capture: bool = False,
+        is_last: bool = True,
+        exec_source: str | None = None,
+    ) -> tuple[Any, Any, float, set[str]]:
         """Async twin of :meth:`_execute_statement` for top-level-await cells.
 
         Byte-for-byte the same output-capture / file-tracking / last-expr
@@ -4133,7 +4403,7 @@ class StatementProcessor:
 
                         if body_nodes:
                             mod = ast.Module(body=body_nodes, type_ignores=[])
-                            c_body = compile(mod, cash_file, 'exec', flags=_FLAG)
+                            c_body = compile(mod, cash_file, "exec", flags=_FLAG)
                             coro = eval(c_body, self.shell.user_ns, self.shell.user_ns)
                             if c_body.co_flags & inspect.CO_COROUTINE:
                                 await coro
@@ -4141,18 +4411,18 @@ class StatementProcessor:
                         expr_val = last_node.value
                         mod_expr = ast.Expression(body=expr_val)
                         ast.fix_missing_locations(mod_expr)
-                        c_expr = compile(mod_expr, cash_file, 'eval', flags=_FLAG)
+                        c_expr = compile(mod_expr, cash_file, "eval", flags=_FLAG)
                         result_val = eval(c_expr, self.shell.user_ns, self.shell.user_ns)
                         if c_expr.co_flags & inspect.CO_COROUTINE:
                             result_val = await result_val
 
                         # Same last-expression-only rule as the sync path.
-                        if (is_last and result_val is not None
-                                and not code.rstrip().endswith(';')):
+                        if is_last and result_val is not None and not code.rstrip().endswith(";"):
                             from IPython.display import display
+
                             display(result_val)
                     else:
-                        compiled_code = compile(source, cash_file, 'exec', flags=_FLAG)
+                        compiled_code = compile(source, cash_file, "exec", flags=_FLAG)
                         coro = eval(compiled_code, self.shell.user_ns, self.shell.user_ns)
                         if compiled_code.co_flags & inspect.CO_COROUTINE:
                             await coro
@@ -4169,24 +4439,62 @@ class StatementProcessor:
 
         except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user code
             result = self._create_error_result(e)
-            if 'captured' not in dir():
+            if "captured" not in dir():
+
                 class _EmptyCaptured:
-                    stdout = ''
-                    stderr = ''
+                    stdout = ""
+                    stderr = ""
                     outputs = []
+
                 captured = _EmptyCaptured()
 
         self._forget_file_answers_if_it_wrote(code, result)
         execution_time = time.time() - start_time
         return result, captured, execution_time, accessed_files, accessed_remote
 
-    def _update_state_tracking(self, code: str, result: Any, inputs: set[str], outputs: set[str], accessed_files: set[str], source_hash: str, cache_key: str, tree: ast.Module | None = None) -> None:
+    def _update_state_tracking(
+        self,
+        code: str,
+        result: Any,
+        inputs: set[str],
+        outputs: set[str],
+        accessed_files: set[str],
+        source_hash: str,
+        cache_key: str,
+        tree: ast.Module | None = None,
+    ) -> None:
         """Update lineage and variable tracking."""
-        self._lineage.capture_and_track_variables(self._tracking_state, outputs, inputs, code, source_hash, cache_key=cache_key, accessed_files=accessed_files, tree=tree)
+        self._lineage.capture_and_track_variables(
+            self._tracking_state,
+            outputs,
+            inputs,
+            code,
+            source_hash,
+            cache_key=cache_key,
+            accessed_files=accessed_files,
+            tree=tree,
+        )
 
-    def _save_to_cache(self, cache_key: str, code: str, result: Any, inputs: set[str], outputs: set[str], accessed_files: set[str], execution_time: float, ttl: int | None, captured: Any, process_start: float, source_hash: str, captured_vars: dict[str, Any], force_persist: bool = False, miss_guarded: bool = False, accessed_remote: set[str] | None = None) -> StatementCacheMetadata | None:
-        if getattr(result, 'skipped', False):
-             return None
+    def _save_to_cache(
+        self,
+        cache_key: str,
+        code: str,
+        result: Any,
+        inputs: set[str],
+        outputs: set[str],
+        accessed_files: set[str],
+        execution_time: float,
+        ttl: int | None,
+        captured: Any,
+        process_start: float,
+        source_hash: str,
+        captured_vars: dict[str, Any],
+        force_persist: bool = False,
+        miss_guarded: bool = False,
+        accessed_remote: set[str] | None = None,
+    ) -> StatementCacheMetadata | None:
+        if getattr(result, "skipped", False):
+            return None
 
         all_file_deps = set(accessed_files) if accessed_files else set()
         inherited_snapshots: dict[str, dict] = {}
@@ -4200,7 +4508,7 @@ class StatementProcessor:
         # again here. Re-snapshotted per statement, every statement derived from
         # a frame read out of 5,222 files re-read all 5,222 (round 23, r23s4).
         # A later lookup still checks the real file against it.
-        if hasattr(self, 'executed_file_deps'):
+        if hasattr(self, "executed_file_deps"):
             direct = all_file_deps.copy()
             for input_var in inputs:
                 inherited = self.executed_file_deps.get(input_var)
@@ -4234,34 +4542,34 @@ class StatementProcessor:
     def _producer_file_snapshots(self, var_name: str) -> dict[str, dict]:
         """The file snapshots *var_name*'s producing statement stored, or {}."""
         key = self._tracking_state.variable_sources.get(var_name)
-        backend = getattr(self.cash_instance, 'backend', None) if self.cash_instance else None
+        backend = getattr(self.cash_instance, "backend", None) if self.cash_instance else None
         if not key or backend is None:
             return {}
         from .. import file_dep_snapshot
+
         epoch = file_dep_snapshot._HASH_EPOCH
-        memo = self.__dict__.get('_producer_snapshot_memo')
-        if memo is None or memo.get('__epoch__') != epoch:
-            memo = self.__dict__['_producer_snapshot_memo'] = {'__epoch__': epoch}
+        memo = self.__dict__.get("_producer_snapshot_memo")
+        if memo is None or memo.get("__epoch__") != epoch:
+            memo = self.__dict__["_producer_snapshot_memo"] = {"__epoch__": epoch}
         if key in memo:
             return memo[key]
         try:
-            peek = getattr(backend, 'peek_metadata', None)
+            peek = getattr(backend, "peek_metadata", None)
             meta = peek(key) if peek is not None else backend.get(key)[0]
         except Exception:  # noqa: BLE001 - a snapshot it cannot read is taken afresh
             meta = None
-        snaps = (meta or {}).get('file_dependencies') or {} if isinstance(meta, dict) else {}
+        snaps = (meta or {}).get("file_dependencies") or {} if isinstance(meta, dict) else {}
         if len(memo) > 64:
             memo.clear()
         memo[key] = snaps
         return snaps
-
 
     def _should_skip_large_object_caching(
         self,
         captured_vars: dict[str, Any],
         execution_time: float,
         force_persist: bool = False,
-        has_file_dependencies: bool = False
+        has_file_dependencies: bool = False,
     ) -> tuple[bool, str | None, dict[str, Any] | None]:
         """Decide whether caching a set of output variables is worthwhile.
 
@@ -4315,21 +4623,21 @@ class StatementProcessor:
         # metadata-only hits.
 
         # --- Determine cost model based on backend type -----------------------
-        backend = getattr(self.cash_instance, 'backend', None)
-        backend_type = type(backend).__name__ if backend else ''
+        backend = getattr(self.cash_instance, "backend", None)
+        backend_type = type(backend).__name__ if backend else ""
 
         # For TieredBackend the first (fastest) tier determines the restore cost
         # because that's where the data will be read from on cache hit.
-        if backend_type == 'TieredBackend' and hasattr(backend, 'backends') and backend.backends:
+        if backend_type == "TieredBackend" and hasattr(backend, "backends") and backend.backends:
             primary_backend_type = type(backend.backends[0]).__name__
         else:
             primary_backend_type = backend_type
 
-        is_ram_backend = primary_backend_type == 'InMemoryBackend'
+        is_ram_backend = primary_backend_type == "InMemoryBackend"
 
-        config = getattr(self.cash_instance, 'config', None)
-        min_savings_pct = _config_float(config, 'min_cache_savings_pct', 0.20)
-        fixed_budget = _config_float(config, 'min_cache_fixed_budget_seconds', 0.05)
+        config = getattr(self.cash_instance, "config", None)
+        min_savings_pct = _config_float(config, "min_cache_savings_pct", 0.20)
+        fixed_budget = _config_float(config, "min_cache_fixed_budget_seconds", 0.05)
 
         # Track the prediction for the largest variable (by size_bytes) seen so
         # far. Computed even on the early-return paths so observability is
@@ -4341,13 +4649,16 @@ class StatementProcessor:
         skip_decision: tuple[str | None, dict[str, Any] | None] | None = None
         for var_name, var_value in captured_vars.items():
             skip, reason, prediction = self._check_var_restore_budget(
-                var_name, var_value, execution_time,
-                is_ram_backend, min_savings_pct, fixed_budget,
+                var_name,
+                var_value,
+                execution_time,
+                is_ram_backend,
+                min_savings_pct,
+                fixed_budget,
             )
             # Keep track of the largest variable's prediction for exposure.
             if prediction is not None:
-                if (largest_prediction is None
-                        or prediction['size_bytes'] > largest_prediction['size_bytes']):
+                if largest_prediction is None or prediction["size_bytes"] > largest_prediction["size_bytes"]:
                     largest_prediction = prediction
             # Only the FIRST skip-causing var matters for the decision; remember it.
             if skip and skip_decision is None:
@@ -4389,19 +4700,18 @@ class StatementProcessor:
         ``type_name``, ``family``; or ``None`` if size estimation raises.
         """
         from cash.notebook import cost_model
+
         try:
             obj_size = estimate_object_size(var_value)
             type_name = type(var_value).__name__
             backend_kind = "ram" if is_ram_backend else "disk"
             family = cost_model.resolve_family(type_name)
-            est_restore_time = cost_model.estimated_restore_time(
-                type_name, obj_size, backend_kind
-            )
+            est_restore_time = cost_model.estimated_restore_time(type_name, obj_size, backend_kind)
             prediction: dict[str, Any] = {
-                'size_bytes': obj_size,
-                'restore_seconds': est_restore_time,
-                'type_name': type_name,
-                'family': family,
+                "size_bytes": obj_size,
+                "restore_seconds": est_restore_time,
+                "type_name": type_name,
+                "family": family,
             }
             max_acceptable_restore = max(
                 fixed_budget,
@@ -4426,7 +4736,12 @@ class StatementProcessor:
                 backend_label = "copy" if is_ram_backend else "serialize"
                 logger.debug(
                     "[SIZE_AWARE] Caching '%s' (%.1fMB %s) — est. %s %.2fs vs %.2fs compute",
-                    var_name, size_mb, type_name, backend_label, est_restore_time, execution_time
+                    var_name,
+                    size_mb,
+                    type_name,
+                    backend_label,
+                    est_restore_time,
+                    execution_time,
                 )
             return False, None, prediction
         except (TypeError, ValueError, AttributeError, OSError, RecursionError):
@@ -4460,7 +4775,7 @@ class StatementProcessor:
         if prediction is None:
             return 0
         try:
-            size = int(prediction.get('size_bytes') or 0)
+            size = int(prediction.get("size_bytes") or 0)
         except (TypeError, ValueError):
             return 0
         return max(size, 0)
@@ -4474,8 +4789,7 @@ class StatementProcessor:
         counter; an ordinary ``# @cash:persist`` on a single statement has no
         marker, gets ``None`` here, and is untouched by the whole mechanism.
         """
-        if ('# __iteration_context__:' not in code
-                and '# control_context:' not in code):
+        if "# __iteration_context__:" not in code and "# control_context:" not in code:
             return None
         return self._strip_control_markers(code).strip()
 
@@ -4516,8 +4830,7 @@ class StatementProcessor:
             return True, AMPLIFICATION_SKIP_REASON
 
         cumulative = self._persist_bytes_by_stmt.get(stmt_id, 0)
-        if (cumulative > _PERSIST_AMPLIFICATION_FLOOR_BYTES
-                and cumulative > _PERSIST_AMPLIFICATION_LIMIT * size):
+        if cumulative > _PERSIST_AMPLIFICATION_FLOOR_BYTES and cumulative > _PERSIST_AMPLIFICATION_LIMIT * size:
             self._warned_persist_amplification.add(stmt_id)
             self._warn_persist_amplification(stmt_id, cumulative, size, annotated=annotated)
             return True, AMPLIFICATION_SKIP_REASON
@@ -4547,10 +4860,10 @@ class StatementProcessor:
         size = self._amplification_size(prediction)
         if size <= 0:
             return
-        destinations = wire.get('storage') or ()
+        destinations = wire.get("storage") or ()
         if not isinstance(destinations, (list, tuple)):
             return
-        if not any(d != 'RAM' for d in destinations):
+        if not any(d != "RAM" for d in destinations):
             return
         # Growth only: a loop that REBINDS a same-sized value each pass stores a
         # different result every time, and nothing in it grows. Summing those
@@ -4559,12 +4872,14 @@ class StatementProcessor:
         self._persist_last_size_by_stmt[stmt_id] = size
         if last is not None and size <= last:
             return
-        self._persist_bytes_by_stmt[stmt_id] = (
-            self._persist_bytes_by_stmt.get(stmt_id, 0) + size
-        )
+        self._persist_bytes_by_stmt[stmt_id] = self._persist_bytes_by_stmt.get(stmt_id, 0) + size
 
     def _warn_persist_amplification(
-        self, stmt_id: str, cumulative: int, size: int, annotated: bool = False,
+        self,
+        stmt_id: str,
+        cumulative: int,
+        size: int,
+        annotated: bool = False,
     ) -> None:
         """Warn once that a looped persist is snapshotting a growing object.
 
@@ -4576,9 +4891,9 @@ class StatementProcessor:
         from cash.backends.adaptive_caps import human_bytes
         from cash.diagnostics import warn_diagnostic
 
-        first_line = (stmt_id.splitlines() or [''])[0].strip()
+        first_line = (stmt_id.splitlines() or [""])[0].strip()
         if len(first_line) > 60:
-            first_line = first_line[:57] + '...'
+            first_line = first_line[:57] + "..."
         warn_diagnostic(
             CashCacheIneffectiveWarning,
             "CACHE-LOOP-GROWTH",
@@ -4589,11 +4904,14 @@ class StatementProcessor:
             f"not the final one. Further iterations are not being stored.",
             # The annotation advice only for a statement that carries it: r25s3
             # was told to move a `# @cash:persist` they never wrote.
-            ("move `# @cash:persist` off the loop and onto a statement that "
-             "produces the finished object, so it is stored once." if annotated else
-             "build the finished object in one statement -- a comprehension, "
-             "or a function the loop's work moves into -- so it is stored once; "
-             "calls inside the loop are still cached."),
+            (
+                "move `# @cash:persist` off the loop and onto a statement that "
+                "produces the finished object, so it is stored once."
+                if annotated
+                else "build the finished object in one statement -- a comprehension, "
+                "or a function the loop's work moves into -- so it is stored once; "
+                "calls inside the loop are still cached."
+            ),
         )
 
     def _store_in_cache(
@@ -4622,7 +4940,7 @@ class StatementProcessor:
         pay a per-file read just to decide 'recompute')."""
         t_store = time.time()
         # What this key recorded is about to change (``_producer_file_snapshots``).
-        producer_memo = self.__dict__.get('_producer_snapshot_memo')
+        producer_memo = self.__dict__.get("_producer_snapshot_memo")
         if producer_memo:
             producer_memo.pop(cache_key, None)
 
@@ -4647,13 +4965,10 @@ class StatementProcessor:
         # (`lines = [l for l in fh]`) stopped being stored, re-ran on the second
         # Run All against the handle its skipped producer had left at EOF, and
         # printed [] (test_file_handle_iteration_second_run_all).
-        reads_files = (bool(file_dependencies or accessed_remote)
-                       if direct_reads is None else direct_reads)
+        reads_files = bool(file_dependencies or accessed_remote) if direct_reads is None else direct_reads
         if not force_persist and not file_dependencies and not accessed_remote:
-            config_obj = getattr(self.cash_instance, 'config', None)
-            min_exec_time = _config_float(
-                config_obj, 'min_execution_time_to_cache_seconds', 0.01
-            )
+            config_obj = getattr(self.cash_instance, "config", None)
+            min_exec_time = _config_float(config_obj, "min_execution_time_to_cache_seconds", 0.01)
             # ``execution_time`` is wall clock (``time.time()``), not CPU time,
             # so it charges the statement for any scheduling stall too. On
             # Windows the clock can report exactly 0.0 for a genuinely
@@ -4667,15 +4982,17 @@ class StatementProcessor:
             if execution_time < min_exec_time and not self._final_over_costly_inputs(inputs, outputs):
                 if self.debug:
                     logger.debug(
-                        "[SIZE_AWARE] Compute took only %.1fms, below "
-                        "%.0fms floor — not writing cache entry",
-                        execution_time * 1000, min_exec_time * 1000,
+                        "[SIZE_AWARE] Compute took only %.1fms, below %.0fms floor — not writing cache entry",
+                        execution_time * 1000,
+                        min_exec_time * 1000,
                     )
                 return None
 
         # Size-aware caching: skip storing large objects when serialization overhead dominates
         should_skip, skip_reason, prediction = self._should_skip_large_object_caching(
-            captured_vars, execution_time, force_persist,
+            captured_vars,
+            execution_time,
+            force_persist,
             has_file_dependencies=reads_files,
         )
 
@@ -4690,9 +5007,9 @@ class StatementProcessor:
         # statement (lambda assign, `g = f` alias) re-executes.
         if not should_skip:
             _unrestorable = sorted(
-                _name for _name, _v in captured_vars.items()
-                if (inspect.isfunction(_v) or inspect.isclass(_v))
-                and getattr(_v, '__module__', None) == '__main__'
+                _name
+                for _name, _v in captured_vars.items()
+                if (inspect.isfunction(_v) or inspect.isclass(_v)) and getattr(_v, "__module__", None) == "__main__"
             )
             if _unrestorable:
                 should_skip = True
@@ -4727,7 +5044,9 @@ class StatementProcessor:
         # because it is a disk-safety guard, not a cost heuristic.
         if not should_skip:
             amplified, amplified_reason = self._check_persist_amplification(
-                code, prediction, annotated=force_persist,
+                code,
+                prediction,
+                annotated=force_persist,
             )
             if amplified:
                 should_skip = True
@@ -4738,10 +5057,10 @@ class StatementProcessor:
         cost_fields: dict[str, Any] = {}
         if prediction is not None:
             cost_fields = {
-                'cost_model_size_bytes': prediction['size_bytes'],
-                'cost_model_restore_seconds': prediction['restore_seconds'],
-                'cost_model_type_name': prediction['type_name'],
-                'cost_model_family': prediction['family'],
+                "cost_model_size_bytes": prediction["size_bytes"],
+                "cost_model_restore_seconds": prediction["restore_seconds"],
+                "cost_model_type_name": prediction["type_name"],
+                "cost_model_family": prediction["family"],
             }
 
         if should_skip:
@@ -4756,7 +5075,7 @@ class StatementProcessor:
                 skipped_reason=skip_reason,
                 metadata_only=True,
                 output_lineages=self._lineage.build_output_lineages(self._tracking_state, outputs),
-            input_lineages=self._lineage.build_input_lineages(self._tracking_state, inputs),
+                input_lineages=self._lineage.build_input_lineages(self._tracking_state, inputs),
                 **cost_fields,
             )
             try:
@@ -4775,8 +5094,7 @@ class StatementProcessor:
             source_hash=source_hash,
             code=code,
             key=cache_key,
-            file_dependencies=_snapshot_with_inherited(
-                file_dependencies, accessed_remote, inherited_snapshots),
+            file_dependencies=_snapshot_with_inherited(file_dependencies, accessed_remote, inherited_snapshots),
             force_persist=force_persist,
             output_lineages=self._lineage.build_output_lineages(self._tracking_state, outputs),
             input_lineages=self._lineage.build_input_lineages(self._tracking_state, inputs),
@@ -4789,22 +5107,24 @@ class StatementProcessor:
         referenced: dict[str, int] = {}
         if self._call_cache is not None:
             from cash.notebook.call_refs import with_call_refs
+
             trusted, unpacked = self._plain_call_result(code)
-            variables = with_call_refs(variables, self._call_cache.held_results(), referenced,
-                                       trusted=trusted, unpacked=unpacked)
+            variables = with_call_refs(
+                variables, self._call_cache.held_results(), referenced, trusted=trusted, unpacked=unpacked
+            )
         payload = {
-            'variables': variables,
-            'stdout': captured_output.stdout,
-            'stderr': captured_output.stderr,
+            "variables": variables,
+            "stdout": captured_output.stdout,
+            "stderr": captured_output.stderr,
             # Rich-display output (RichOutput objects). The 'outputs' key in
             # the sibling ``metadata`` dict holds variable NAMES — two distinct
             # concepts; keep them on different keys here too.
-            'rich_outputs': captured_output.outputs,
-            'rng_state': capture_rng_state(),
+            "rich_outputs": captured_output.outputs,
+            "rng_state": capture_rng_state(),
             # The seeding regime this state was captured under, so a later
             # restore can tell whether replaying it would clobber a re-seed
             # rather than continue the stream.
-            'rng_epochs': dict(self._rng_seed_epochs),
+            "rng_epochs": dict(self._rng_seed_epochs),
         }
 
         # the module-global RNG post-state above misses generators the
@@ -4816,7 +5136,7 @@ class StatementProcessor:
         try:
             object_rng_states = capture_object_rng_states(inputs, self.shell.user_ns)
             if object_rng_states:
-                payload['rng_object_states'] = object_rng_states
+                payload["rng_object_states"] = object_rng_states
         except (TypeError, AttributeError) as e:
             logger.debug("[RANDOMNESS] Object RNG capture skipped: %s", e)
 
@@ -4827,13 +5147,14 @@ class StatementProcessor:
         wire = metadata.to_dict()
         if referenced:
             from cash.notebook.call_refs import REF_BYTES_FIELD, REFS_FIELD
+
             wire[REFS_FIELD] = sorted(referenced)
             wire[REF_BYTES_FIELD] = sum(referenced.values())
         # An intermediate of this cell (``cell_executor._written_later_in_cell``)
         # stays in RAM; the cell's final version is persisted at its end.
-        later = getattr(self, 'written_later_in_cell', frozenset())
+        later = getattr(self, "written_later_in_cell", frozenset())
         if not force_persist and outputs and later and set(outputs) <= later:
-            wire['defer_persist'] = True
+            wire["defer_persist"] = True
 
         try:
             self.cash_instance.backend.set(cache_key, payload, wire)
@@ -4842,7 +5163,7 @@ class StatementProcessor:
         else:
             # Charge this write to its statement's amplification budget, now
             # that the backend has reported which tiers actually took it
-            #. Only durable destinations count.
+            # . Only durable destinations count.
             self._account_persisted_bytes(code, prediction, wire)
 
         # The metadata-only record keeps a RAM-only value's lineage across a
@@ -4851,7 +5172,7 @@ class StatementProcessor:
         # write (``FileBackend.set_metadata_only``) only to skip it: r24s2's
         # cleaning cell spent 5.8 s of its cold run there, on ~500 MB frames
         # whose write was meant to happen in the background.
-        persisted = any(d != "RAM" for d in (wire.get('storage') or ()))
+        persisted = any(d != "RAM" for d in (wire.get("storage") or ()))
         try:
             backend = self.cash_instance.backend
             if backend is not None and not persisted:
@@ -4863,12 +5184,14 @@ class StatementProcessor:
         total_time = time.time() - process_start
 
         if self.debug:
-            logger.debug("[TIMING] Store: %.1fms | OVERALL: %.1fms", store_time*1000, total_time*1000)
+            logger.debug("[TIMING] Store: %.1fms | OVERALL: %.1fms", store_time * 1000, total_time * 1000)
             logger.debug("[CACHE DEBUG] Stored in cache: %s", cache_key)
 
         return StatementCacheMetadata.from_dict(wire)
 
-    def _analyze_and_hash(self, code: str, occurrence_index: int = 0, tree: ast.Module | None = None) -> tuple[set[str], set[str], str, str, float, float]:
+    def _analyze_and_hash(
+        self, code: str, occurrence_index: int = 0, tree: ast.Module | None = None
+    ) -> tuple[set[str], set[str], str, str, float, float]:
         """Analyze code and compute hashes.
 
         Delegates cache key computation to the unified ``compute_cache_key``
@@ -4889,8 +5212,8 @@ class StatementProcessor:
         # mirrored site, or the two engines disagree about what a statement
         # reads and writes -- which is an ADR-007 key divergence.
         inputs, outputs = CodeAnalyzer.analyze_code_block(
-            code, tree=tree, resolve_source=self._resolve_live_function_source,
-            user_ns=self.shell.user_ns)
+            code, tree=tree, resolve_source=self._resolve_live_function_source, user_ns=self.shell.user_ns
+        )
         self._log_statement_reads(code, inputs)
         analysis_time = time.time() - t1
 
@@ -4924,9 +5247,7 @@ class StatementProcessor:
                 occurrence_index=occurrence_index,
             )
         except Exception as exc:
-            raise CacheKeyComputationError(
-                f"Failed to compute cache key for: {code[:80]!r}"
-            ) from exc
+            raise CacheKeyComputationError(f"Failed to compute cache key for: {code[:80]!r}") from exc
 
         # A seed PRODUCES its module's hidden RNG variable: record its lineage
         # (the seed statement's own key) into variable_lineage so downstream draws
@@ -4946,13 +5267,10 @@ class StatementProcessor:
         entropy_vars = {rng_virtual_var(m) for m in entropy_modules}
         for var in hidden_lineage_writes(code):
             self.variable_lineage[var] = (
-                entropy_write_lineage() if var in entropy_vars
-                else hidden_write_lineage(cache_key)
+                entropy_write_lineage() if var in entropy_vars else hidden_write_lineage(cache_key)
             )
         for module in get_seeding_rng_modules(code):
-            self._rng_seed_epochs[module] = (
-                entropy_write_lineage() if module in entropy_modules else cache_key
-            )
+            self._rng_seed_epochs[module] = entropy_write_lineage() if module in entropy_modules else cache_key
 
         hash_time = time.time() - t2
         return inputs, outputs, source_hash, cache_key, analysis_time, hash_time
@@ -4965,13 +5283,18 @@ class StatementProcessor:
         cached_data: Any,
         analysis_time: float,
         hash_time: float,
-        cache_check_time: float
+        cache_check_time: float,
     ) -> None:
         logger.debug("[CACHE DEBUG] Statement: %s...", code[:50])
         logger.debug("[CACHE DEBUG] Key: %s...", cache_key[:40])
         logger.debug("[CACHE DEBUG] Inputs: %s", inputs)
         logger.debug("[CACHE DEBUG] Cache hit: %s", cached_data is not None)
-        logger.debug("[TIMING] Analysis: %.1fms | Hash: %.1fms | Lookup: %.1fms", analysis_time*1000, hash_time*1000, cache_check_time*1000)
+        logger.debug(
+            "[TIMING] Analysis: %.1fms | Hash: %.1fms | Lookup: %.1fms",
+            analysis_time * 1000,
+            hash_time * 1000,
+            cache_check_time * 1000,
+        )
 
     def _import_needs_reexecution(self, tree: ast.Module | None) -> bool:
         """True for a pure-import statement whose bound name(s) are absent from
@@ -5015,6 +5338,7 @@ class StatementProcessor:
         that import would bind? Answered from ``sys.modules`` without importing
         anything; anything not already loaded, or relative, is "no"."""
         import sys
+
         missing = object()
         ns = self.shell.user_ns
         for node in tree.body:
@@ -5022,7 +5346,7 @@ class StatementProcessor:
                 for alias in node.names:
                     if alias.name not in sys.modules:
                         return False
-                    name = alias.asname or alias.name.split('.')[0]
+                    name = alias.asname or alias.name.split(".")[0]
                     expected = sys.modules.get(alias.name if alias.asname else name)
                     if expected is None or ns.get(name, missing) is not expected:
                         return False
@@ -5054,13 +5378,13 @@ class StatementProcessor:
                         if alias.asname:
                             defined_names.add(alias.asname)
                         else:
-                            defined_names.add(alias.name.split('.')[0])
-                else: # ImportFrom
+                            defined_names.add(alias.name.split(".")[0])
+                else:  # ImportFrom
                     for alias in node.names:
                         if alias.asname:
                             defined_names.add(alias.asname)
                         else:
-                            if alias.name == '*':
+                            if alias.name == "*":
                                 return None
                             defined_names.add(alias.name)
 
@@ -5099,7 +5423,7 @@ class StatementProcessor:
             clean_tb = exc_tb
 
         e_with_clean_tb = exc_value.with_traceback(clean_tb)
-        formatted_tb = ''.join(traceback.format_exception(exc_type, exc_value, clean_tb))
+        formatted_tb = "".join(traceback.format_exception(exc_type, exc_value, clean_tb))
 
         return ExecutionResult(
             success=False,
@@ -5116,4 +5440,3 @@ class StatementProcessor:
 
 
 from ..file_tracker import FileAccessTracker
-

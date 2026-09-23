@@ -32,6 +32,7 @@ class ShellProtocol(Protocol):
         """Execute a code cell in the shell."""
         ...
 
+
 @runtime_checkable
 class CacheBackendProtocol(Protocol):
     """Minimal interface for a cache backend used by the notebook subsystem.
@@ -44,15 +45,14 @@ class CacheBackendProtocol(Protocol):
         """Retrieve a cached value and its metadata by key."""
         ...
 
-    def set(
-        self, key: str, value: Any, metadata: dict[str, Any] | None = None, serializer: Any = None
-    ) -> None:
+    def set(self, key: str, value: Any, metadata: dict[str, Any] | None = None, serializer: Any = None) -> None:
         """Store a value with optional metadata and serializer."""
         ...
 
     def delete(self, key: str) -> None:
         """Remove a cached entry by key."""
         ...
+
 
 @runtime_checkable
 class CashInstanceProtocol(Protocol):
@@ -63,6 +63,7 @@ class CashInstanceProtocol(Protocol):
     """
 
     backend: CacheBackendProtocol
+
 
 @dataclass
 class TrackingState:
@@ -158,7 +159,7 @@ class TrackingState:
     # sha256(cell source) -> the global RNG state captured AFTER that cell ran.
     # Lets the checker restore the position-correct RNG state before a downstream
     # draw re-executes, instead of drawing from the last-left (wrong) live state
-    #. This is the concrete first step of ADR-018's
+    # . This is the concrete first step of ADR-018's
     # position-aware-RNG model; the full model folds it into a virtual variable
     # in the lineage graph. Keyed by CURRENT source, so an edited predecessor's
     # stale post-state is never matched.
@@ -300,7 +301,8 @@ class TrackingState:
     # file state, the simulation takes what the runtime recorded; otherwise
     # it re-plans.
     control_outcomes: dict[str, tuple[dict[str, str], dict[str, str], frozenset[str], str]] = field(
-        default_factory=dict)
+        default_factory=dict
+    )
 
     # Written by StatementLineageBuilder when a tracked module is re-imported.
     # Read by module_invalidator. Maps module_name -> {var_names} whose stored
@@ -362,4 +364,5 @@ class TrackingState:
 
     def __post_init__(self) -> None:
         from cash.notebook.lineage_store import LineageStore
+
         self.lineage = LineageStore(backing=self.variable_lineage)

@@ -15,10 +15,12 @@ class TestDataExplorationWorkflow:
 
     def test_explore_then_refine(self, nb_runner):
         """User explores, then refines analysis."""
-        nb_runner.create_notebook([
-            "data = list(range(1, 21))",
-            "mean_val = sum(data) / len(data)\nprint(f'mean = {mean_val}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = list(range(1, 21))",
+                "mean_val = sum(data) / len(data)\nprint(f'mean = {mean_val}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "mean = 10.5" in nb_runner.get_output(2)
@@ -38,12 +40,14 @@ class TestDataExplorationWorkflow:
 
     def test_iterative_parameter_tuning(self, nb_runner):
         """User tunes parameters across multiple iterations."""
-        nb_runner.create_notebook([
-            "threshold = 50\nscale = 2",
-            "data = list(range(100))",
-            "filtered = [x for x in data if x > threshold]",
-            "result = sum(x * scale for x in filtered)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "threshold = 50\nscale = 2",
+                "data = list(range(100))",
+                "filtered = [x for x in data if x > threshold]",
+                "result = sum(x * scale for x in filtered)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         output1 = nb_runner.get_output(4)
@@ -70,11 +74,13 @@ class TestModelRetraining:
 
     def test_change_hyperparameters(self, nb_runner):
         """Change hyperparameters and retrain."""
-        nb_runner.create_notebook([
-            "# Hyperparams\nlr = 0.01\nepochs = 10",
-            "# Training sim\nimport random\nrandom.seed(42)\nloss = 1.0\nfor e in range(epochs):\n    loss *= (1 - lr)\nfinal_loss = round(loss, 4)",
-            "print(f'loss = {final_loss}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "# Hyperparams\nlr = 0.01\nepochs = 10",
+                "# Training sim\nimport random\nrandom.seed(42)\nloss = 1.0\nfor e in range(epochs):\n    loss *= (1 - lr)\nfinal_loss = round(loss, 4)",
+                "print(f'loss = {final_loss}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         output1 = nb_runner.get_output(3)
@@ -97,11 +103,13 @@ class TestReportGeneration:
 
     def test_change_format_then_data(self, nb_runner):
         """Change formatting, then change data."""
-        nb_runner.create_notebook([
-            "sales = [100, 200, 300, 400, 500]",
-            "total = sum(sales)\navg = total / len(sales)",
-            "report = f'Total: {total}, Avg: {avg}'\nprint(report)",
-        ])
+        nb_runner.create_notebook(
+            [
+                "sales = [100, 200, 300, 400, 500]",
+                "total = sum(sales)\navg = total / len(sales)",
+                "report = f'Total: {total}, Avg: {avg}'\nprint(report)",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "Total: 1500, Avg: 300.0" in nb_runner.get_output(3)
@@ -125,10 +133,12 @@ class TestDebuggingWorkflow:
 
     def test_add_debug_fix_remove(self, nb_runner):
         """Add debug output, fix bug, remove debug."""
-        nb_runner.create_notebook([
-            "numbers = [1, 2, 3, 4, 5]",
-            "# Bug: using wrong formula\nresult = sum(numbers) / (len(numbers) + 1)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "numbers = [1, 2, 3, 4, 5]",
+                "# Bug: using wrong formula\nresult = sum(numbers) / (len(numbers) + 1)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         # Bug: divides by 6 instead of 5
@@ -149,11 +159,13 @@ class TestBackAndForthEditing:
 
     def test_edit_cell1_then_cell3_then_cell1_again(self, nb_runner):
         """Edit cell 1, then cell 3, then cell 1 again."""
-        nb_runner.create_notebook([
-            "base = 10",
-            "mid = base * 2",
-            "final = mid + 5\nprint(f'final = {final}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "base = 10",
+                "mid = base * 2",
+                "final = mid + 5\nprint(f'final = {final}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "final = 25" in nb_runner.get_output(3)
@@ -175,10 +187,12 @@ class TestBackAndForthEditing:
 
     def test_oscillate_between_two_values(self, nb_runner):
         """Toggle a value back and forth — each cell gets unique code."""
-        nb_runner.create_notebook([
-            "mode = 'A'",
-            "result = 100 if mode == 'A' else 200\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "mode = 'A'",
+                "result = 100 if mode == 'A' else 200\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 100" in nb_runner.get_output(2)
@@ -195,10 +209,12 @@ class TestBackAndForthEditing:
 
     def test_sequential_distinct_changes(self, nb_runner):
         """Make many distinct changes to same cell — each unique."""
-        nb_runner.create_notebook([
-            "val = 1",
-            "out = val * 10\nprint(f'out = {out}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "val = 1",
+                "out = val * 10\nprint(f'out = {out}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "out = 10" in nb_runner.get_output(2)

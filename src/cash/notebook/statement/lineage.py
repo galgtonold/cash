@@ -64,9 +64,9 @@ class StatementLineageBuilder:
 
     def __init__(
         self,
-        shell: 'ShellProtocol',
-        function_tracker: 'FunctionTracker',
-        file_deps: 'StatementFileDeps',
+        shell: "ShellProtocol",
+        function_tracker: "FunctionTracker",
+        file_deps: "StatementFileDeps",
         compute_hash: Callable[[Any], str] | None = None,
         debug: bool = False,
     ) -> None:
@@ -82,7 +82,7 @@ class StatementLineageBuilder:
 
     def capture_and_track_variables(
         self,
-        tracking_state: 'TrackingState',
+        tracking_state: "TrackingState",
         outputs: set[str],
         inputs: set[str],
         code: str,
@@ -108,11 +108,15 @@ class StatementLineageBuilder:
         file_stats: dict[str, Any] = {}
         if accessed_files or accessed_remote:
             file_hash_component = compute_file_hash_component(
-                accessed_files or set(), accessed_remote, stats_out=file_stats,
+                accessed_files or set(),
+                accessed_remote,
+                stats_out=file_stats,
             )
         if cache_key:
             tracking_state.statement_file_reads[cache_key] = (
-                frozenset(accessed_files or ()), frozenset(accessed_remote or ()))
+                frozenset(accessed_files or ()),
+                frozenset(accessed_remote or ()),
+            )
 
         # A draw READS its module's hidden RNG variable (ADR-018): fold that
         # variable's lineage into every output's lineage so a re-seed upstream
@@ -144,7 +148,8 @@ class StatementLineageBuilder:
             captured_vars[var_name] = value
 
             input_lineage_hashes, input_lineage_map = self._build_input_lineages(
-                tracking_state, lineage_inputs, user_ns, code)
+                tracking_state, lineage_inputs, user_ns, code
+            )
             tracking_state.executed_input_lineages[var_name] = input_lineage_map
 
             # The formula and its ingredients are shared with the simulator
@@ -161,9 +166,7 @@ class StatementLineageBuilder:
             # are written together and cannot drift.
             tracking_state.lineage.record(var_name, output_lineage_hash, value=value)
 
-            detect_derivation_edges(
-                tracking_state.derivation_edges, var_name, value, user_ns
-            )
+            detect_derivation_edges(tracking_state.derivation_edges, var_name, value, user_ns)
 
             self._apply_granular_module_update(tracking_state, var_name, value, output_lineage_hash)
 
@@ -178,12 +181,13 @@ class StatementLineageBuilder:
 
             tracking_state.variable_sources[var_name] = cache_key
 
-            self._file_deps.update_for_var(tracking_state, var_name, accessed_files, inputs, value,
-                                           rebind=var_name not in inputs, stats=file_stats)
+            self._file_deps.update_for_var(
+                tracking_state, var_name, accessed_files, inputs, value, rebind=var_name not in inputs, stats=file_stats
+            )
 
         # After all outputs' lineages are recorded, replay derivation bumps:
         # a mutation of a base/frame bumps its live-alias derivatives
-        #. Skip-inputs rule keeps view *creation* from
+        # . Skip-inputs rule keeps view *creation* from
         # invalidating its base. Runtime attaches the live value so the bumped
         # var's ``_cash_lineage_hash`` stays paired with its dict entry.
         bump_derived_lineages(
@@ -191,19 +195,17 @@ class StatementLineageBuilder:
             tracking_state.variable_lineage,
             outputs,
             inputs,
-            record=lambda t, h: tracking_state.lineage.record(
-                t, h, value=user_ns.get(t)
-            ),
+            record=lambda t, h: tracking_state.lineage.record(t, h, value=user_ns.get(t)),
             present=lambda t: t in user_ns,
         )
 
         return captured_vars
 
-    def build_output_lineages(self, tracking_state: 'TrackingState', outputs: set[str]) -> dict[str, str]:
+    def build_output_lineages(self, tracking_state: "TrackingState", outputs: set[str]) -> dict[str, str]:
         """Collect ``{var: lineage_hash}`` for all outputs that have a lineage."""
         return {v: tracking_state.variable_lineage[v] for v in outputs if v in tracking_state.variable_lineage}
 
-    def build_input_lineages(self, tracking_state: 'TrackingState', inputs: set[str]) -> dict[str, str]:
+    def build_input_lineages(self, tracking_state: "TrackingState", inputs: set[str]) -> dict[str, str]:
         """Collect ``{var: lineage_hash}`` for the inputs this statement read.
 
         Stored on the entry so a RESTORED value can answer "has one of my
@@ -224,7 +226,10 @@ class StatementLineageBuilder:
     # ------------------------------------------------------------------
 
     def _build_input_lineages(
-        self, tracking_state: 'TrackingState', inputs: set[str], user_ns: dict,
+        self,
+        tracking_state: "TrackingState",
+        inputs: set[str],
+        user_ns: dict,
         code: str | None = None,
     ) -> tuple[list[str], dict[str, str]]:
         """Build input lineage hashes list and map for a set of input variables.
@@ -245,8 +250,7 @@ class StatementLineageBuilder:
             # attributes reach, as the cache key values it -- see
             # `lineage_formula.module_read_lineage`. Recorded in the input map
             # too, which is what the upstream check compares against.
-            narrowed = module_read_lineage(
-                self.function_tracker, input_var, user_ns.get(input_var), code)
+            narrowed = module_read_lineage(self.function_tracker, input_var, user_ns.get(input_var), code)
             if narrowed is not None:
                 input_lineage_hashes.append(narrowed)
                 input_lineage_map[input_var] = narrowed
@@ -277,7 +281,11 @@ class StatementLineageBuilder:
         return input_lineage_hashes, input_lineage_map
 
     def _apply_granular_module_update(
-        self, tracking_state: 'TrackingState', var_name: str, value: Any, output_lineage_hash: str,
+        self,
+        tracking_state: "TrackingState",
+        var_name: str,
+        value: Any,
+        output_lineage_hash: str,
     ) -> None:
         """Apply deferred granular lineage update when a tracked module is re-imported."""
         if isinstance(value, types.ModuleType) and var_name in tracking_state.granular_preserved_vars:
@@ -287,10 +295,16 @@ class StatementLineageBuilder:
                 if pv_inputs is not None and var_name in pv_inputs:
                     pv_inputs[var_name] = output_lineage_hash
                     if self.debug:
-                        logger.debug("[GRANULAR] Deferred update: '%s'.'%s' -> %s...", pv, var_name, output_lineage_hash[:12])
+                        logger.debug(
+                            "[GRANULAR] Deferred update: '%s'.'%s' -> %s...", pv, var_name, output_lineage_hash[:12]
+                        )
 
     def _update_module_attribute_deps(
-        self, tracking_state: 'TrackingState', var_name: str, code: str, user_ns: dict,
+        self,
+        tracking_state: "TrackingState",
+        var_name: str,
+        code: str,
+        user_ns: dict,
     ) -> None:
         """Update granular module attribute dependency tracking for *var_name*."""
         try:
@@ -301,24 +315,31 @@ class StatementLineageBuilder:
                 # Tracked under its REAL name; recorded under the name read,
                 # which is what the invalidator looks it up by. Checking the
                 # name read missed `import tickets_lib as tl` (see 9785293).
-                if (isinstance(input_val, types.ModuleType)
-                        and getattr(input_val, '__name__', input_name)
-                        in self.function_tracker._tracked_modules):
+                if (
+                    isinstance(input_val, types.ModuleType)
+                    and getattr(input_val, "__name__", input_name) in self.function_tracker._tracked_modules
+                ):
                     mod_deps[input_name] = attrs
             if mod_deps:
                 tracking_state.module_attribute_deps[var_name] = mod_deps
             elif var_name in tracking_state.module_attribute_deps:
                 del tracking_state.module_attribute_deps[var_name]
         except (AttributeError, TypeError, ValueError, SyntaxError):
-            logger.debug("[PROCESSOR] Module attribute tracking failed for '%s', falling back to full invalidation", var_name)
+            logger.debug(
+                "[PROCESSOR] Module attribute tracking failed for '%s', falling back to full invalidation", var_name
+            )
             tracking_state.module_attribute_deps.pop(var_name, None)
 
     def _update_variable_content_hashes(
-        self, tracking_state: 'TrackingState', var_name: str, value: Any, output_lineage_hash: str,
+        self,
+        tracking_state: "TrackingState",
+        var_name: str,
+        value: Any,
+        output_lineage_hash: str,
     ) -> None:
         """Update variable_hashes and current_session_hashes for *var_name*."""
         type_name = type(value).__name__
-        if type_name in ('DataFrame', 'Series', 'ndarray'):
+        if type_name in ("DataFrame", "Series", "ndarray"):
             # For large objects, use lineage hash as proxy for content hash
             if var_name not in tracking_state.variable_hashes:
                 tracking_state.variable_hashes[var_name] = set()
@@ -335,8 +356,7 @@ class StatementLineageBuilder:
                 if self.debug:
                     logger.debug("[CACHE DEBUG] Could not hash captured variable '%s': %s", var_name, e)
 
-    def lineage_if_rerun(self, tracking_state: 'TrackingState', var_name: str, value: Any,
-                         code: str) -> str:
+    def lineage_if_rerun(self, tracking_state: "TrackingState", var_name: str, value: Any, code: str) -> str:
         """The lineage *var_name* would get if *code* ran again now: the same
         formula and ingredients as :meth:`capture_and_track_variables`, without
         running anything. For an import after its module was reloaded, so the
@@ -344,10 +364,12 @@ class StatementLineageBuilder:
         keyed with the reload's own hash, what the session computed after an
         edit was never restored the next morning)."""
         from ..analysis import CodeAnalyzer
+
         user_ns = self.shell.user_ns
         inputs, _outputs = CodeAnalyzer.analyze_code_block(code, user_ns=user_ns)
         input_lineage_hashes, _map = self._build_input_lineages(
-            tracking_state, inputs | hidden_lineage_reads(code), user_ns, code)
+            tracking_state, inputs | hidden_lineage_reads(code), user_ns, code
+        )
         return output_lineage(
             statement_source_hash(code),
             input_lineage_hashes,
@@ -358,7 +380,7 @@ class StatementLineageBuilder:
 
     def _compute_module_lineage_component(
         self,
-        tracking_state: 'TrackingState',
+        tracking_state: "TrackingState",
         value: Any,
         var_name: str,
         code: str,
@@ -371,7 +393,11 @@ class StatementLineageBuilder:
         module invalidation.
         """
         component = module_source_component(
-            self.function_tracker, value, var_name, code, tree,
+            self.function_tracker,
+            value,
+            var_name,
+            code,
+            tree,
             note_from_import=tracking_state.from_import_sources.__setitem__,
         )
         # Kept only when narrowed: it is the evidence the invalidator needs to

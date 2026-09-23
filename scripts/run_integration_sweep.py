@@ -31,6 +31,7 @@ Usage:
     python scripts/run_integration_sweep.py [--chunk 60] [-n 16]
         [--results-dir DIR] [--only SUBSTRING] [--stress N]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -66,21 +67,15 @@ def _clear_project_cache() -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--chunk", type=int, default=60,
-                    help="files per pytest invocation (default: 60)")
-    ap.add_argument("-n", "--workers", default="16",
-                    help="xdist workers; 'auto' is deliberately NOT the default")
-    ap.add_argument("--results-dir", type=pathlib.Path,
-                    default=REPO / "integration_sweep")
-    ap.add_argument("--only", default="",
-                    help="only files whose name contains this substring")
+    ap.add_argument("--chunk", type=int, default=60, help="files per pytest invocation (default: 60)")
+    ap.add_argument("-n", "--workers", default="16", help="xdist workers; 'auto' is deliberately NOT the default")
+    ap.add_argument("--results-dir", type=pathlib.Path, default=REPO / "integration_sweep")
+    ap.add_argument("--only", default="", help="only files whose name contains this substring")
     ap.add_argument("--timeout", type=int, default=3600)
-    ap.add_argument("--stress", type=int, default=0,
-                    help="repeat the alias/mutation scenarios N times each")
+    ap.add_argument("--stress", type=int, default=0, help="repeat the alias/mutation scenarios N times each")
     args = ap.parse_args()
 
-    files = sorted(p.as_posix() for p in SUITE.glob("test_*.py")
-                   if args.only in p.name)
+    files = sorted(p.as_posix() for p in SUITE.glob("test_*.py") if args.only in p.name)
     if not files:
         print(f"no test files matched {args.only!r} in {SUITE}")
         return 1
@@ -90,9 +85,8 @@ def main() -> int:
     if args.stress > 0:
         env["CASH_STRESS_REPEAT"] = str(args.stress)
         env["CASH_STRESS_KEEP"] = str((args.results_dir / "stress").resolve())
-    chunks = [files[i:i + args.chunk] for i in range(0, len(files), args.chunk)]
-    print(f"{len(files)} files in {len(chunks)} chunk(s) of <= {args.chunk}, "
-          f"-n {args.workers}", flush=True)
+    chunks = [files[i : i + args.chunk] for i in range(0, len(files), args.chunk)]
+    print(f"{len(files)} files in {len(chunks)} chunk(s) of <= {args.chunk}, -n {args.workers}", flush=True)
 
     failures: list[tuple[int, str]] = []
     started = time.perf_counter()
@@ -100,37 +94,52 @@ def main() -> int:
         t0 = time.perf_counter()
         _clear_project_cache()
         proc = subprocess.run(
-            [sys.executable, "-m", "pytest", *chunk, "-q",
-             "-n", args.workers, "--dist", "worksteal",
-             "-p", "no:randomly", "-rf", "--tb=long"],
-            cwd=REPO, env=env, capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=args.timeout,
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                *chunk,
+                "-q",
+                "-n",
+                args.workers,
+                "--dist",
+                "worksteal",
+                "-p",
+                "no:randomly",
+                "-rf",
+                "--tb=long",
+            ],
+            cwd=REPO,
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=args.timeout,
         )
         elapsed = time.perf_counter() - t0
         out = proc.stdout or ""
-        tail = [ln for ln in out.strip().splitlines()
-                if " in " in ln and any(w in ln for w in
-                                        ("passed", "failed", "error"))]
+        tail = [
+            ln
+            for ln in out.strip().splitlines()
+            if " in " in ln and any(w in ln for w in ("passed", "failed", "error"))
+        ]
         summary = tail[-1] if tail else "(no summary line)"
 
         if proc.returncode == 0:
-            print(f"ok   chunk {i:2d}/{len(chunks)} {elapsed:6.1f}s  {summary}",
-                  flush=True)
+            print(f"ok   chunk {i:2d}/{len(chunks)} {elapsed:6.1f}s  {summary}", flush=True)
             continue
 
         log = args.results_dir / f"chunk{i}_failure.log"
-        log.write_text(out + "\n===STDERR===\n" + (proc.stderr or ""),
-                       encoding="utf-8")
+        log.write_text(out + "\n===STDERR===\n" + (proc.stderr or ""), encoding="utf-8")
         failures.append((i, summary))
-        print(f"FAIL chunk {i:2d}/{len(chunks)} {elapsed:6.1f}s  {summary}",
-              flush=True)
+        print(f"FAIL chunk {i:2d}/{len(chunks)} {elapsed:6.1f}s  {summary}", flush=True)
         for line in out.splitlines():
             if line.startswith(("FAILED", "ERROR")):
                 print(f"     {line[:160]}", flush=True)
         print(f"     full output: {log}", flush=True)
 
-    print(f"\n=== SWEEP DONE in {(time.perf_counter() - started) / 60:.1f} min ===",
-          flush=True)
+    print(f"\n=== SWEEP DONE in {(time.perf_counter() - started) / 60:.1f} min ===", flush=True)
     if not failures:
         # Deliberately not "all green": this suite has no known-red baseline,
         # so "0 failed" is the only acceptable result and saying so plainly
@@ -141,8 +150,10 @@ def main() -> int:
     print(f"{len(failures)} chunk(s) with failures:")
     for i, summary in failures:
         print(f"   chunk {i}: {summary}")
-    print("\nAttribute before blaming your change: re-run the chunk alone, and "
-          "if it reproduces, `git stash push -- src/` and run it again.")
+    print(
+        "\nAttribute before blaming your change: re-run the chunk alone, and "
+        "if it reproduces, `git stash push -- src/` and run it again."
+    )
     return 1
 
 

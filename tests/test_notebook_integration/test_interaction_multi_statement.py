@@ -12,14 +12,14 @@ pytestmark = [pytest.mark.core, pytest.mark.stress, pytest.mark.timeout(30)]
 class TestMultiStatementCellEdits:
     """Edit individual statements within multi-statement cells."""
 
-
-
     def test_add_statement_to_cell(self, nb_runner):
         """Add a new statement to an existing cell."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "result = x * 2\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "result = x * 2\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 20" in nb_runner.get_output(2)
@@ -32,10 +32,12 @@ class TestMultiStatementCellEdits:
 
     def test_remove_statement_from_cell(self, nb_runner):
         """Remove a statement from a multi-statement cell."""
-        nb_runner.create_notebook([
-            "x = 10\ny = 20\nz = 30",
-            "total = x + y + z\nprint(f'total = {total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10\ny = 20\nz = 30",
+                "total = x + y + z\nprint(f'total = {total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total = 60" in nb_runner.get_output(2)
@@ -48,10 +50,12 @@ class TestMultiStatementCellEdits:
 
     def test_reorder_statements_in_cell(self, nb_runner):
         """Reorder statements within a cell."""
-        nb_runner.create_notebook([
-            "a = 1\nb = a + 1",
-            "print(f'b = {b}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 1\nb = a + 1",
+                "print(f'b = {b}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "b = 2" in nb_runner.get_output(2)
@@ -68,9 +72,11 @@ class TestMultiStatementWithFunction:
 
     def test_function_and_call_in_same_cell(self, nb_runner):
         """Function definition and call in same cell."""
-        nb_runner.create_notebook([
-            "def double(x):\n    return x * 2\nresult = double(5)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def double(x):\n    return x * 2\nresult = double(5)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 10" in nb_runner.get_output(1)
@@ -85,10 +91,12 @@ class TestMultiStatementWithFunction:
 
     def test_two_functions_in_one_cell(self, nb_runner):
         """Two functions defined in one cell, used in next cell."""
-        nb_runner.create_notebook([
-            "def add(a, b):\n    return a + b\ndef mul(a, b):\n    return a * b",
-            "r1 = add(3, 4)\nr2 = mul(3, 4)\nprint(f'r1 = {r1}, r2 = {r2}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def add(a, b):\n    return a + b\ndef mul(a, b):\n    return a * b",
+                "r1 = add(3, 4)\nr2 = mul(3, 4)\nprint(f'r1 = {r1}, r2 = {r2}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "r1 = 7, r2 = 12" in nb_runner.get_output(2)
@@ -107,9 +115,11 @@ class TestMultiStatementWithPrint:
 
     def test_print_between_assignments(self, nb_runner):
         """Print statement between two assignments."""
-        nb_runner.create_notebook([
-            "x = 10\nprint(f'x = {x}')\ny = x * 2\nprint(f'y = {y}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10\nprint(f'x = {x}')\ny = x * 2\nprint(f'y = {y}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         output = nb_runner.get_output(1)
@@ -118,9 +128,11 @@ class TestMultiStatementWithPrint:
 
     def test_edit_multi_statement_with_prints(self, nb_runner):
         """Edit a multi-statement cell that includes prints."""
-        nb_runner.create_notebook([
-            "a = 1\nb = 2\nprint(f'sum = {a + b}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 1\nb = 2\nprint(f'sum = {a + b}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "sum = 3" in nb_runner.get_output(1)
@@ -135,9 +147,11 @@ class TestMultiStatementDependencies:
 
     def test_internal_dependency_chain(self, nb_runner):
         """Statements within a cell depend on each other."""
-        nb_runner.create_notebook([
-            "a = 1\nb = a + 1\nc = b + 1\nprint(f'c = {c}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 1\nb = a + 1\nc = b + 1\nprint(f'c = {c}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "c = 3" in nb_runner.get_output(1)
@@ -148,11 +162,13 @@ class TestMultiStatementDependencies:
 
     def test_cross_cell_multi_statement(self, nb_runner):
         """Multi-statement cells with cross-cell dependencies."""
-        nb_runner.create_notebook([
-            "x = 1\ny = 2",
-            "a = x + y\nb = x * y",
-            "result = a + b\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 1\ny = 2",
+                "a = x + y\nb = x * y",
+                "result = a + b\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 5" in nb_runner.get_output(3)

@@ -8,6 +8,7 @@ re-running the write makes ``plt.gcf()`` invent a blank figure and flush it over
 the user's chart. These tests drive the guard directly on a synthetic
 simulation trace so the refusal is deterministic and kernel-free.
 """
+
 from __future__ import annotations
 
 import types
@@ -33,6 +34,7 @@ def _entry(stmt, outputs=(), inputs=()):
 def fig_ax():
     plt = pytest.importorskip("matplotlib.pyplot")
     import matplotlib
+
     matplotlib.use("Agg")
     fig, ax = plt.subplots()
     yield fig, ax
@@ -42,9 +44,9 @@ def fig_ax():
 # The canonical draw-on-ax / save-via-plt cell, split into three trace entries.
 def _bar_trace(chart="out.png"):
     return [
-        _entry("fig, ax = plt.subplots()", outputs=("fig", "ax")),         # 0 producer
+        _entry("fig, ax = plt.subplots()", outputs=("fig", "ax")),  # 0 producer
         _entry("ax.bar(names, totals)", inputs=("ax", "names", "totals")),  # 1 fill
-        _entry(f"plt.savefig('{chart}')", inputs=("plt",)),                 # 2 the write
+        _entry(f"plt.savefig('{chart}')", inputs=("plt",)),  # 2 the write
     ]
 
 
@@ -52,6 +54,7 @@ class TestVulnerableShapeRefused:
     def test_orphaned_savefig_is_dropped_and_warns(self, fig_ax):
         fig, ax = fig_ax
         import matplotlib.pyplot as plt
+
         ns = {"plt": plt, "fig": fig, "ax": ax}
         trace = _bar_trace()
         planner = _planner(ns)
@@ -59,19 +62,24 @@ class TestVulnerableShapeRefused:
         # The vulnerable plan: the write [2] is scheduled, its producer [0] is not.
         with pytest.warns(CashWarning, match="refused to re-run a plt.savefig"):
             remaining, restored = planner._guard_global_figure_writes(
-                [2], trace, [],
+                [2],
+                trace,
+                [],
             )
         assert remaining == [], "the orphaned plt.savefig() must be dropped from the plan"
 
     def test_refused_write_is_also_stripped_from_restored_info(self, fig_ax):
         fig, ax = fig_ax
         import matplotlib.pyplot as plt
+
         ns = {"plt": plt, "fig": fig, "ax": ax}
         trace = _bar_trace("chart.png")
         planner = _planner(ns)
 
-        restored = [{"code": "plt.savefig('chart.png')", "status": "RESTORED"},
-                    {"code": "something else", "status": "RESTORED"}]
+        restored = [
+            {"code": "plt.savefig('chart.png')", "status": "RESTORED"},
+            {"code": "something else", "status": "RESTORED"},
+        ]
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             remaining, restored_out = planner._guard_global_figure_writes([2], trace, restored)
@@ -84,6 +92,7 @@ class TestVulnerableShapeRefused:
         before it cannot be verified to save a figure the user drew -> refuse."""
         fig, ax = fig_ax
         import matplotlib.pyplot as plt
+
         ns = {"plt": plt}
         trace = [_entry("plt.savefig('x.png')", inputs=("plt",))]
         planner = _planner(ns)
@@ -98,6 +107,7 @@ class TestHealthyShapeUntouched:
         (re)built coherently, so the write must be left in the plan and NOT warn."""
         fig, ax = fig_ax
         import matplotlib.pyplot as plt
+
         ns = {"plt": plt, "fig": fig, "ax": ax}
         trace = _bar_trace()
         planner = _planner(ns)
@@ -105,7 +115,9 @@ class TestHealthyShapeUntouched:
         with warnings.catch_warnings():
             warnings.simplefilter("error", CashWarning)  # any CashWarning fails the test
             remaining, restored = planner._guard_global_figure_writes(
-                [0, 1, 2], trace, [],
+                [0, 1, 2],
+                trace,
+                [],
             )
         assert remaining == [0, 1, 2], "a coherently-rebuilt figure write must be kept"
 
@@ -114,6 +126,7 @@ class TestHealthyShapeUntouched:
         this guard must not touch it even when its producer is unscheduled."""
         fig, ax = fig_ax
         import matplotlib.pyplot as plt
+
         ns = {"plt": plt, "fig": fig, "ax": ax}
         trace = [
             _entry("fig, ax = plt.subplots()", outputs=("fig", "ax")),
@@ -152,8 +165,10 @@ class TestHealthyShapeUntouched:
 class TestDetectionHelper:
     def test_distinguishes_module_from_receiver_via_namespace(self, fig_ax):
         from cash.notebook.cacheability import statement_saves_current_pyplot_figure as f
+
         fig, ax = fig_ax
         import matplotlib.pyplot as plt
+
         ns = {"plt": plt, "fig": fig}
         assert f("plt.savefig('x.png')", ns) is True
         assert f("fig.savefig('x.png')", ns) is False

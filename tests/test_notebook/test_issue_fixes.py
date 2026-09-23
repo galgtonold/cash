@@ -11,13 +11,14 @@ import ast
 import json
 import time
 from unittest.mock import patch
+
 from cash.notebook.analysis import CodeAnalyzer
 from cash.notebook.upstream import _SimulationCacheEntry
-
 
 # ===========================================================================
 # Issue 24: Comprehension variable scoping
 # ===========================================================================
+
 
 class TestComprehensionScoping:
     """Test that comprehension iteration variables don't leak as cell-level inputs/outputs."""
@@ -26,103 +27,103 @@ class TestComprehensionScoping:
         """List comprehension iteration variable should NOT be a cell-level input."""
         code = "result = [x * 2 for x in data]"
         inputs, outputs = CodeAnalyzer.analyze_code_block(code)
-        assert 'x' not in inputs, "Comprehension var 'x' should not be an input"
-        assert 'data' in inputs, "'data' should be an input"
-        assert 'result' in outputs
+        assert "x" not in inputs, "Comprehension var 'x' should not be an input"
+        assert "data" in inputs, "'data' should be an input"
+        assert "result" in outputs
 
     def test_listcomp_var_not_output(self):
         """List comprehension iteration variable should NOT leak as cell-level output."""
         code = "result = [x * 2 for x in data]"
         inputs, outputs = CodeAnalyzer.analyze_code_block(code)
-        assert 'x' not in outputs, "Comprehension var 'x' should not be a cell output"
+        assert "x" not in outputs, "Comprehension var 'x' should not be a cell output"
 
     def test_setcomp_var_not_input(self):
         """Set comprehension iteration variable should not leak."""
         code = "unique = {v.lower() for v in names}"
         inputs, outputs = CodeAnalyzer.analyze_code_block(code)
-        assert 'v' not in inputs
-        assert 'names' in inputs
-        assert 'unique' in outputs
+        assert "v" not in inputs
+        assert "names" in inputs
+        assert "unique" in outputs
 
     def test_dictcomp_var_not_input(self):
         """Dict comprehension iteration variable should not leak."""
         code = "mapping = {k: v for k, v in items}"
         inputs, outputs = CodeAnalyzer.analyze_code_block(code)
-        assert 'k' not in inputs
-        assert 'v' not in inputs
-        assert 'items' in inputs
-        assert 'mapping' in outputs
+        assert "k" not in inputs
+        assert "v" not in inputs
+        assert "items" in inputs
+        assert "mapping" in outputs
 
     def test_generatorexp_var_not_input(self):
         """Generator expression iteration variable should not leak."""
         code = "total = sum(x ** 2 for x in numbers)"
         inputs, outputs = CodeAnalyzer.analyze_code_block(code)
-        assert 'x' not in inputs
-        assert 'numbers' in inputs
-        assert 'sum' in inputs
-        assert 'total' in outputs
+        assert "x" not in inputs
+        assert "numbers" in inputs
+        assert "sum" in inputs
+        assert "total" in outputs
 
     def test_any_with_generatorexp(self):
         """any() with generator expression - the iteration var should not leak.
-        
+
         This is the exact pattern from Issue 24 (Project 4: Census ACS):
         any(_fn.endswith('.csv') for _fn in os.listdir(...))
         """
         code = "has_csv = any(_fn.endswith('.csv') for _fn in file_list)"
         inputs, outputs = CodeAnalyzer.analyze_code_block(code)
-        assert '_fn' not in inputs, "_fn should not leak from generator expression"
-        assert 'file_list' in inputs
-        assert 'any' in inputs
-        assert 'has_csv' in outputs
+        assert "_fn" not in inputs, "_fn should not leak from generator expression"
+        assert "file_list" in inputs
+        assert "any" in inputs
+        assert "has_csv" in outputs
 
     def test_nested_comprehension(self):
         """Nested comprehension variables should all be local."""
         code = "flat = [item for sublist in matrix for item in sublist]"
         inputs, outputs = CodeAnalyzer.analyze_code_block(code)
-        assert 'item' not in inputs
-        assert 'sublist' not in inputs
-        assert 'matrix' in inputs
-        assert 'flat' in outputs
+        assert "item" not in inputs
+        assert "sublist" not in inputs
+        assert "matrix" in inputs
+        assert "flat" in outputs
 
     def test_comprehension_with_conditional(self):
         """Comprehension with if clause - iteration var in condition should be local."""
         code = "evens = [x for x in numbers if x % 2 == 0]"
         inputs, outputs = CodeAnalyzer.analyze_code_block(code)
-        assert 'x' not in inputs
-        assert 'numbers' in inputs
-        assert 'evens' in outputs
+        assert "x" not in inputs
+        assert "numbers" in inputs
+        assert "evens" in outputs
 
     def test_comprehension_uses_outer_variable(self):
         """Comprehension body that uses an outer variable should detect it as input."""
         code = "scaled = [x * factor for x in data]"
         inputs, outputs = CodeAnalyzer.analyze_code_block(code)
-        assert 'x' not in inputs
-        assert 'factor' in inputs, "'factor' is from outer scope, should be input"
-        assert 'data' in inputs
-        assert 'scaled' in outputs
+        assert "x" not in inputs
+        assert "factor" in inputs, "'factor' is from outer scope, should be input"
+        assert "data" in inputs
+        assert "scaled" in outputs
 
     def test_comprehension_tuple_unpacking_target(self):
         """Comprehension with tuple unpacking target should not leak vars."""
         code = "keys = [k for k, v in items.items()]"
         inputs, outputs = CodeAnalyzer.analyze_code_block(code)
-        assert 'k' not in inputs
-        assert 'v' not in inputs
-        assert 'items' in inputs
-        assert 'keys' in outputs
+        assert "k" not in inputs
+        assert "v" not in inputs
+        assert "items" in inputs
+        assert "keys" in outputs
 
     def test_for_loop_var_still_leaks(self):
         """Regular for-loop variable SHOULD still be a cell-level output (Python semantics)."""
         code = "for i in range(10):\n    pass"
         inputs, outputs = CodeAnalyzer.analyze_code_block(code)
         # In Python, for-loop variables DO leak to enclosing scope
-        assert 'i' in outputs, "For-loop var should be a cell output (Python semantics)"
+        assert "i" in outputs, "For-loop var should be a cell output (Python semantics)"
 
     def test_walrus_in_comprehension(self):
         """Walrus operator (:=) in comprehension DOES leak to enclosing scope."""
         code = "results = [y := f(x) for x in data]"
         inputs, outputs = CodeAnalyzer.analyze_code_block(code)
-        assert 'x' not in inputs
-        assert 'data' in inputs
+        assert "x" not in inputs
+        assert "data" in inputs
         # y is assigned via walrus - Python 3.8+ says it leaks to enclosing scope
         # Our analyzer may or may not handle this - just ensure no crash
 
@@ -130,26 +131,27 @@ class TestComprehensionScoping:
         """Both key and value expressions in dictcomp should use comprehension scope."""
         code = "d = {k.upper(): len(v) for k, v in pairs}"
         inputs, outputs = CodeAnalyzer.analyze_code_block(code)
-        assert 'k' not in inputs
-        assert 'v' not in inputs
-        assert 'pairs' in inputs
-        assert 'len' in inputs
-        assert 'd' in outputs
+        assert "k" not in inputs
+        assert "v" not in inputs
+        assert "pairs" in inputs
+        assert "len" in inputs
+        assert "d" in outputs
 
 
 # ===========================================================================
 # Issue 23: Notebook path cache invalidation
 # ===========================================================================
 
+
 class TestNotebookPathCacheInvalidation:
     """Test that invalidate_notebook_path_cache() properly clears the cache."""
 
     def test_invalidate_clears_cache(self):
         """invalidate_notebook_path_cache should reset cached path and time."""
+        import cash.notebook.server_discovery as discovery_mod
         from cash.notebook.server_discovery import (
             invalidate_notebook_path_cache,
         )
-        import cash.notebook.server_discovery as discovery_mod
 
         # Set a fake cached path (state lives in server_discovery)
         discovery_mod._cached_notebook_path = "/fake/path/notebook.ipynb"
@@ -164,7 +166,7 @@ class TestNotebookPathCacheInvalidation:
     def test_get_notebook_path_after_invalidation(self):
         """After invalidation, get_notebook_path should re-discover (not use stale cache)."""
         import cash.notebook.server_discovery as discovery_mod
-        from cash.notebook.server_discovery import invalidate_notebook_path_cache, get_notebook_path
+        from cash.notebook.server_discovery import get_notebook_path, invalidate_notebook_path_cache
 
         # Set a fake cached path (state lives in server_discovery)
         discovery_mod._cached_notebook_path = "/old/notebook.ipynb"
@@ -202,14 +204,17 @@ class TestNotebookPathCacheInvalidation:
 
     def test_upstream_checker_reset_caches(self):
         """UpstreamChecker.reset_caches() should clear simulation and AST caches."""
-        from cash.notebook.upstream import UpstreamChecker
         from unittest.mock import MagicMock
+
+        from cash.notebook.upstream import UpstreamChecker
 
         shell = MagicMock()
         checker = UpstreamChecker(shell, debug=False)
 
         # Add some data to caches
-        checker.simulator._virtual_lineage._simulation_cache.append(_SimulationCacheEntry("hash1", {"var": "lin"}, set(), [], set(), set(), {}))
+        checker.simulator._virtual_lineage._simulation_cache.append(
+            _SimulationCacheEntry("hash1", {"var": "lin"}, set(), [], set(), set(), {})
+        )
         checker.simulator._virtual_lineage._ast_cache["code1"] = None
 
         checker.reset_caches()
@@ -219,14 +224,15 @@ class TestNotebookPathCacheInvalidation:
 
     def test_no_glob_fallback_for_notebook_discovery(self, tmp_path):
         """_read_notebook_code_cells should NOT use glob fallback (Issue 23).
-        
+
         The glob fallback can pick the wrong notebook when multiple .ipynb
         files exist in the working directory, leading to wrong upstream cells.
         """
-        from unittest.mock import patch
-        from cash.notebook.server_discovery import _read_notebook_code_cells
-        import os
         import json
+        import os
+        from unittest.mock import patch
+
+        from cash.notebook.server_discovery import _read_notebook_code_cells
 
         # Create a notebook in tmp_path
         nb = {"cells": [{"cell_type": "code", "source": ["wrong = True"]}]}
@@ -237,7 +243,7 @@ class TestNotebookPathCacheInvalidation:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            with patch('cash.notebook.server_discovery.get_notebook_path', return_value=None):
+            with patch("cash.notebook.server_discovery.get_notebook_path", return_value=None):
                 cells = _read_notebook_code_cells(None)
                 # Should return empty, NOT the cells from wrong_notebook.ipynb
                 assert cells == [], f"Should not pick up notebook via glob, got: {cells}"
@@ -248,6 +254,7 @@ class TestNotebookPathCacheInvalidation:
 # ===========================================================================
 # Issue 16/21: Nested tuple unpacking in for loops
 # ===========================================================================
+
 
 class TestNestedTupleUnpacking:
     """Test that nested tuple unpacking in for loops works correctly."""
@@ -262,8 +269,8 @@ class TestNestedTupleUnpacking:
 
         ns = {}
         bindings = bind_target_values(target, 42, ns)
-        assert bindings == {'i': 42}
-        assert ns['i'] == 42
+        assert bindings == {"i": 42}
+        assert ns["i"] == 42
 
     def test_bind_target_values_flat_tuple(self):
         """Flat tuple unpacking: for a, b in data."""
@@ -275,13 +282,13 @@ class TestNestedTupleUnpacking:
 
         ns = {}
         bindings = bind_target_values(target, (10, 20), ns)
-        assert bindings == {'a': 10, 'b': 20}
-        assert ns['a'] == 10
-        assert ns['b'] == 20
+        assert bindings == {"a": 10, "b": 20}
+        assert ns["a"] == 10
+        assert ns["b"] == 20
 
     def test_bind_target_values_nested_tuple(self):
         """Nested tuple unpacking: for a, (b, c) in data.
-        
+
         This is the exact pattern from Issue 16/21.
         """
         from cash.notebook.control_structures import bind_target_values
@@ -292,10 +299,10 @@ class TestNestedTupleUnpacking:
 
         ns = {}
         bindings = bind_target_values(target, (1, (2, 3)), ns)
-        assert bindings == {'a': 1, 'b': 2, 'c': 3}
-        assert ns['a'] == 1
-        assert ns['b'] == 2
-        assert ns['c'] == 3
+        assert bindings == {"a": 1, "b": 2, "c": 3}
+        assert ns["a"] == 1
+        assert ns["b"] == 2
+        assert ns["c"] == 3
 
     def test_bind_target_values_deep_nested(self):
         """Deeply nested tuple unpacking: for a, (b, (c, d)) in data."""
@@ -306,12 +313,12 @@ class TestNestedTupleUnpacking:
         target = tree.body[0].target
 
         ns = {}
-        bindings = bind_target_values(target, ('x', ('y', ('z', 'w'))), ns)
-        assert bindings == {'a': 'x', 'b': 'y', 'c': 'z', 'd': 'w'}
-        assert ns['a'] == 'x'
-        assert ns['b'] == 'y'
-        assert ns['c'] == 'z'
-        assert ns['d'] == 'w'
+        bindings = bind_target_values(target, ("x", ("y", ("z", "w"))), ns)
+        assert bindings == {"a": "x", "b": "y", "c": "z", "d": "w"}
+        assert ns["a"] == "x"
+        assert ns["b"] == "y"
+        assert ns["c"] == "z"
+        assert ns["d"] == "w"
 
     def test_bind_target_values_enumerate_pattern(self):
         """Common enumerate pattern: for i, (k, v) in enumerate(items)."""
@@ -322,11 +329,11 @@ class TestNestedTupleUnpacking:
         target = tree.body[0].target
 
         ns = {}
-        bindings = bind_target_values(target, (0, ('key', 'value')), ns)
-        assert bindings == {'i': 0, 'k': 'key', 'v': 'value'}
-        assert ns['i'] == 0
-        assert ns['k'] == 'key'
-        assert ns['v'] == 'value'
+        bindings = bind_target_values(target, (0, ("key", "value")), ns)
+        assert bindings == {"i": 0, "k": "key", "v": "value"}
+        assert ns["i"] == 0
+        assert ns["k"] == "key"
+        assert ns["v"] == "value"
 
     def test_bind_target_values_with_list_target(self):
         """List unpacking target: for [a, b] in data."""
@@ -338,9 +345,9 @@ class TestNestedTupleUnpacking:
 
         ns = {}
         bindings = bind_target_values(target, [10, 20], ns)
-        assert bindings == {'a': 10, 'b': 20}
-        assert ns['a'] == 10
-        assert ns['b'] == 20
+        assert bindings == {"a": 10, "b": 20}
+        assert ns["a"] == 10
+        assert ns["b"] == 20
 
     def test_extract_target_names_still_works(self):
         """Ensure extract_target_names is unchanged (backward compatibility)."""
@@ -351,90 +358,98 @@ class TestNestedTupleUnpacking:
         target = tree.body[0].target
 
         names = extract_target_names(target)
-        assert set(names) == {'a', 'b', 'c'}
+        assert set(names) == {"a", "b", "c"}
 
 
 # ===========================================================================
 # Issues 13, 15, 20: Transitive loop-mutation propagation & safety guards
 # ===========================================================================
 
+
 class TestTransitiveLoopMutation:
     """Test that variables derived from loop-mutated inputs are trusted in memory."""
 
     def test_transitive_propagation_simple(self, cash_magics, mock_shell):
         """Variable derived from loop-mutated var should be trusted, not restored from cache.
-        
+
         Scenario (Issue 20):
         - Cell 1: events = []; for item in data: events.append(item)
         - Cell 2: df = pd.DataFrame(events)  -> depends on loop-mutated 'events'
         - Cell 3: top = df.head()  -> depends on 'df' which depends on 'events'
-        
+
         When running cell 3, upstream should NOT restore 'events' as [] from cache.
         """
         # Simulate loop-mutated variable
-        mock_shell.user_ns['events'] = [1, 2, 3, 4, 5]
+        mock_shell.user_ns["events"] = [1, 2, 3, 4, 5]
         cash_magics.cash("", "events = []")
-        
+
         # Simulate the loop populating events
-        mock_shell.user_ns['events'] = [1, 2, 3, 4, 5]  # As if loop populated it
-        
+        mock_shell.user_ns["events"] = [1, 2, 3, 4, 5]  # As if loop populated it
+
         # Now create derived variable
         cash_magics.cash("", "total = len(events)")
-        assert mock_shell.user_ns['total'] == 5
+        assert mock_shell.user_ns["total"] == 5
 
     def test_safety_guard_blocks_empty_restore(self):
         """_try_virtual_restore should refuse to overwrite non-empty with empty cached value."""
-        from cash.notebook.upstream import UpstreamChecker
         from unittest.mock import MagicMock
-        
+
+        from cash.notebook.upstream import UpstreamChecker
+
         shell = MagicMock()
         # In-memory: non-empty list with 1000 items
-        shell.user_ns = {'my_list': list(range(1000))}
-        
+        shell.user_ns = {"my_list": list(range(1000))}
+
         cash_instance = MagicMock()
         # Cache returns empty list
         cash_instance.backend.get.return_value = (
-            {'output_lineages': {'my_list': 'hash123'}, 'execution_time': 1.0},
-            {'variables': {'my_list': []}}  # EMPTY cached value
+            {"output_lineages": {"my_list": "hash123"}, "execution_time": 1.0},
+            {"variables": {"my_list": []}},  # EMPTY cached value
         )
-        
+
         checker = UpstreamChecker(shell, cash_instance, debug=True)
         checker.variable_lineage = {}
-        
+
         restored, _, _ = checker.simulator._virtual_lineage._try_virtual_restore(
             "my_list = compute_data()",
-            {'my_list'}, {'compute_data'}, {},
+            {"my_list"},
+            {"compute_data"},
+            {},
         )
-        
+
         # The empty cached value should NOT overwrite the non-empty in-memory value
-        assert 'my_list' not in restored or len(shell.user_ns['my_list']) == 1000, \
+        assert "my_list" not in restored or len(shell.user_ns["my_list"]) == 1000, (
             "Safety guard should block restoring empty value over non-empty in-memory value"
+        )
 
     def test_safety_guard_allows_valid_restore(self):
         """_try_virtual_restore should allow restoring a non-empty cached value."""
-        from cash.notebook.upstream import UpstreamChecker
         from unittest.mock import MagicMock
-        
+
+        from cash.notebook.upstream import UpstreamChecker
+
         shell = MagicMock()
-        shell.user_ns = {'x': 42}  # scalar — no len()
-        
+        shell.user_ns = {"x": 42}  # scalar — no len()
+
         cash_instance = MagicMock()
         cash_instance.backend.get.return_value = (
-            {'output_lineages': {'x': 'hash456'}, 'execution_time': 0.5},
-            {'variables': {'x': 99}}
+            {"output_lineages": {"x": "hash456"}, "execution_time": 0.5},
+            {"variables": {"x": 99}},
         )
-        
+
         checker = UpstreamChecker(shell, cash_instance, debug=False)
         checker.variable_lineage = {}
-        
+
         restored, _, _ = checker.simulator._virtual_lineage._try_virtual_restore(
             "x = compute()",
-            {'x'}, {'compute'}, {},
+            {"x"},
+            {"compute"},
+            {},
         )
-        
+
         # Scalar values (no len) should be restored normally
-        assert 'x' in restored
-        assert shell.user_ns['x'] == 99
+        assert "x" in restored
+        assert shell.user_ns["x"] == 99
 
     def test_transitive_loop_vars_computed_from_simulation_trace(self):
         """The simulation trace should propagate loop-mutation flag transitively."""
@@ -443,23 +458,23 @@ class TestTransitiveLoopMutation:
         # Statement 2: events.append(x)  → events is loop-mutated
         # Statement 3: df = DataFrame(events)  (inputs: {events}, outputs: {df})
         # Statement 4: top = df.head()  (inputs: {df}, outputs: {top})
-        
-        vars_mutated_by_loops = {'events'}
+
+        vars_mutated_by_loops = {"events"}
         simulation_trace = [
-            ("events = []", {'events'}, set(), {}, {}, False),
-            ("df = pd.DataFrame(events, columns=['a'])", {'df'}, {'events', 'pd'}, {}, {}, False),
-            ("top = df.head()", {'top'}, {'df'}, {}, {}, False),
+            ("events = []", {"events"}, set(), {}, {}, False),
+            ("df = pd.DataFrame(events, columns=['a'])", {"df"}, {"events", "pd"}, {}, {}, False),
+            ("top = df.head()", {"top"}, {"df"}, {}, {}, False),
         ]
-        
+
         # Compute transitive derived vars (same algorithm as in upstream.py)
         vars_derived = set(vars_mutated_by_loops)
         for _stmt_code, outputs, inputs, _, _, _ in simulation_trace:
             if inputs & vars_derived:
                 vars_derived.update(outputs)
-        
-        assert 'events' in vars_derived, "Directly mutated var should be in derived set"
-        assert 'df' in vars_derived, "df depends on events → should be derived"
-        assert 'top' in vars_derived, "top depends on df → should be transitively derived"
+
+        assert "events" in vars_derived, "Directly mutated var should be in derived set"
+        assert "df" in vars_derived, "df depends on events → should be derived"
+        assert "top" in vars_derived, "top depends on df → should be transitively derived"
 
 
 class TestSkipWithoutRestore:
@@ -470,57 +485,57 @@ class TestSkipWithoutRestore:
         # Create a test file
         test_file = tmp_path / "data.csv"
         test_file.write_text("a,b\n1,2\n3,4\n")
-        
-        file_path = str(test_file).replace('\\', '/')
-        
+
+        file_path = str(test_file).replace("\\", "/")
+
         # Execute a statement that reads a file
         cash_magics.cash("", "import csv")
-        
+
         # First execution
         code = f"data = open('{file_path}').read()"
         cash_magics.cash("", code)
-        assert 'data' in mock_shell.user_ns
-        first_value = mock_shell.user_ns['data']
-        
+        assert "data" in mock_shell.user_ns
+        first_value = mock_shell.user_ns["data"]
+
         # Second execution — should be SKIPPED (file unchanged)
         cash_magics.cash("", code)
-        assert mock_shell.user_ns['data'] == first_value
+        assert mock_shell.user_ns["data"] == first_value
 
     def test_file_deps_reexecuted_when_changed(self, cash_magics, mock_shell, tmp_path):
         """Statement with file deps should be REEXECUTED if files have changed."""
         test_file = tmp_path / "data.csv"
         test_file.write_text("a,b\n1,2\n3,4\n")
-        file_path = str(test_file).replace('\\', '/')
-        
+        file_path = str(test_file).replace("\\", "/")
+
         # First execution
         code = f"data = open('{file_path}').read()"
         cash_magics.cash("", code)
-        first_value = mock_shell.user_ns['data']
-        
+        first_value = mock_shell.user_ns["data"]
+
         # Modify the file
         time.sleep(0.1)  # Ensure different mtime
         test_file.write_text("a,b\n5,6\n7,8\n")
-        
+
         # Second execution — should detect file change and re-execute
         cash_magics.cash("", code)
         # The value should reflect the new file content
-        new_value = mock_shell.user_ns['data']
+        new_value = mock_shell.user_ns["data"]
         assert new_value != first_value, "File changed, statement should have re-executed"
-        assert '5,6' in new_value
+        assert "5,6" in new_value
 
     def test_file_mtimes_tracked(self, cash_magics, mock_shell, tmp_path):
         """File modification times should be tracked per variable."""
         test_file = tmp_path / "test.txt"
         test_file.write_text("hello")
-        file_path = str(test_file).replace('\\', '/')
-        
+        file_path = str(test_file).replace("\\", "/")
+
         code = f"content = open('{file_path}').read()"
         cash_magics.cash("", code)
-        
+
         # Check that file mtimes are tracked
         sp = cash_magics._statement_processor
-        if 'content' in sp._tracking_state.executed_file_mtimes:
-            mtimes = sp._tracking_state.executed_file_mtimes['content']
+        if "content" in sp._tracking_state.executed_file_mtimes:
+            mtimes = sp._tracking_state.executed_file_mtimes["content"]
             assert len(mtimes) > 0, "File mtimes should be tracked"
 
 
@@ -558,44 +573,55 @@ for item in data:
         notebook = {
             "cells": [
                 {"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [], "source": loop_code},
-                {"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [], "source": downstream_code},
+                {
+                    "cell_type": "code",
+                    "execution_count": None,
+                    "metadata": {},
+                    "outputs": [],
+                    "source": downstream_code,
+                },
             ],
-            "metadata": {}, "nbformat": 4, "nbformat_minor": 4
+            "metadata": {},
+            "nbformat": 4,
+            "nbformat_minor": 4,
         }
-        notebook_path.write_text(json.dumps(notebook), encoding='utf-8')
+        notebook_path.write_text(json.dumps(notebook), encoding="utf-8")
 
         def get_cells(_path=None):
-            data = json.loads(notebook_path.read_text(encoding='utf-8'))
-            return [c['source'] for c in data['cells'] if c['cell_type'] == 'code']
+            data = json.loads(notebook_path.read_text(encoding="utf-8"))
+            return [c["source"] for c in data["cells"] if c["cell_type"] == "code"]
 
-        with patch('cash.notebook.upstream.checker.get_notebook_cells') as mock_get_cells, \
-             patch('cash.notebook.upstream.checker.get_notebook_cells_with_ids') as mock_get_ids:
-                mock_get_cells.side_effect = get_cells
-                mock_get_ids.return_value = []
+        with (
+            patch("cash.notebook.upstream.checker.get_notebook_cells") as mock_get_cells,
+            patch("cash.notebook.upstream.checker.get_notebook_cells_with_ids") as mock_get_ids,
+        ):
+            mock_get_cells.side_effect = get_cells
+            mock_get_ids.return_value = []
 
-                magics.cash_on("")
-                magics.cash("", loop_code)
-                assert shell.user_ns['total'] == 150
+            magics.cash_on("")
+            magics.cash("", loop_code)
+            assert shell.user_ns["total"] == 150
 
-                # Run downstream cell
+            # Run downstream cell
+            magics.cash("", downstream_code)
+            assert shell.user_ns["average"] == 30.0
+
+            # Key: re-running downstream should NOT trigger upstream re-execution
+            # (the loop code hasn't changed, so total should be trusted)
+            magics._upstream_checker.debug = True
+
+            import contextlib
+            import io
+
+            f = io.StringIO()
+            with contextlib.redirect_stdout(f):
                 magics.cash("", downstream_code)
-                assert shell.user_ns['average'] == 30.0
 
-                # Key: re-running downstream should NOT trigger upstream re-execution
-                # (the loop code hasn't changed, so total should be trusted)
-                magics._upstream_checker.debug = True
-
-                import io, contextlib
-                f = io.StringIO()
-                with contextlib.redirect_stdout(f):
-                    magics.cash("", downstream_code)
-
-                debug_output = f.getvalue()
-                # Should NOT see "Marking as broken" for total
-                assert "Marking as broken" not in debug_output, \
-                    f"total was incorrectly marked as broken:\n{debug_output}"
-                # Result should still be correct
-                assert shell.user_ns['average'] == 30.0
+            debug_output = f.getvalue()
+            # Should NOT see "Marking as broken" for total
+            assert "Marking as broken" not in debug_output, f"total was incorrectly marked as broken:\n{debug_output}"
+            # Result should still be correct
+            assert shell.user_ns["average"] == 30.0
 
     def test_loop_target_vars_collected_during_simulation(self, cash_magics, mock_shell, tmp_path):
         """
@@ -612,32 +638,42 @@ for item in data:
         notebook = {
             "cells": [
                 {"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [], "source": loop_code},
-                {"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [], "source": downstream_code},
+                {
+                    "cell_type": "code",
+                    "execution_count": None,
+                    "metadata": {},
+                    "outputs": [],
+                    "source": downstream_code,
+                },
             ],
-            "metadata": {}, "nbformat": 4, "nbformat_minor": 4
+            "metadata": {},
+            "nbformat": 4,
+            "nbformat_minor": 4,
         }
-        notebook_path.write_text(json.dumps(notebook), encoding='utf-8')
+        notebook_path.write_text(json.dumps(notebook), encoding="utf-8")
 
         def get_cells(_path=None):
-            data = json.loads(notebook_path.read_text(encoding='utf-8'))
-            return [c['source'] for c in data['cells'] if c['cell_type'] == 'code']
+            data = json.loads(notebook_path.read_text(encoding="utf-8"))
+            return [c["source"] for c in data["cells"] if c["cell_type"] == "code"]
 
-        with patch('cash.notebook.upstream.checker.get_notebook_cells') as mock_get_cells, \
-             patch('cash.notebook.upstream.checker.get_notebook_cells_with_ids') as mock_get_ids:
-                mock_get_cells.side_effect = get_cells
-                mock_get_ids.return_value = []
+        with (
+            patch("cash.notebook.upstream.checker.get_notebook_cells") as mock_get_cells,
+            patch("cash.notebook.upstream.checker.get_notebook_cells_with_ids") as mock_get_ids,
+        ):
+            mock_get_cells.side_effect = get_cells
+            mock_get_ids.return_value = []
 
-                magics.cash_on("")
-                magics.cash("", loop_code)
+            magics.cash_on("")
+            magics.cash("", loop_code)
 
-                # Now trigger upstream check on downstream cell to exercise simulation
+            # Now trigger upstream check on downstream cell to exercise simulation
 
-                # Direct test: call _simulate_and_find_changes
-                get_cells()
+            # Direct test: call _simulate_and_find_changes
+            get_cells()
 
-                # We need to check that loop_target_vars gets populated
-                # The simplest way: just check that simulation doesn't break downstream
-                magics.cash("", downstream_code)
+            # We need to check that loop_target_vars gets populated
+            # The simplest way: just check that simulation doesn't break downstream
+            magics.cash("", downstream_code)
 
     def test_tuple_unpacking_loop_target(self, cash_magics, mock_shell, tmp_path):
         """
@@ -657,36 +693,49 @@ for k, v in pairs:
         notebook = {
             "cells": [
                 {"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [], "source": loop_code},
-                {"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [], "source": downstream_code},
+                {
+                    "cell_type": "code",
+                    "execution_count": None,
+                    "metadata": {},
+                    "outputs": [],
+                    "source": downstream_code,
+                },
             ],
-            "metadata": {}, "nbformat": 4, "nbformat_minor": 4
+            "metadata": {},
+            "nbformat": 4,
+            "nbformat_minor": 4,
         }
-        notebook_path.write_text(json.dumps(notebook), encoding='utf-8')
+        notebook_path.write_text(json.dumps(notebook), encoding="utf-8")
 
         def get_cells(_path=None):
-            data = json.loads(notebook_path.read_text(encoding='utf-8'))
-            return [c['source'] for c in data['cells'] if c['cell_type'] == 'code']
+            data = json.loads(notebook_path.read_text(encoding="utf-8"))
+            return [c["source"] for c in data["cells"] if c["cell_type"] == "code"]
 
-        with patch('cash.notebook.upstream.checker.get_notebook_cells') as mock_get_cells, \
-             patch('cash.notebook.upstream.checker.get_notebook_cells_with_ids') as mock_get_ids:
-                mock_get_cells.side_effect = get_cells
-                mock_get_ids.return_value = []
+        with (
+            patch("cash.notebook.upstream.checker.get_notebook_cells") as mock_get_cells,
+            patch("cash.notebook.upstream.checker.get_notebook_cells_with_ids") as mock_get_ids,
+        ):
+            mock_get_cells.side_effect = get_cells
+            mock_get_ids.return_value = []
 
-                magics.cash_on("")
-                magics.cash("", loop_code)
-                assert shell.user_ns['result'] == ['1=a', '2=b', '3=c']
+            magics.cash_on("")
+            magics.cash("", loop_code)
+            assert shell.user_ns["result"] == ["1=a", "2=b", "3=c"]
 
+            magics.cash("", downstream_code)
+            assert shell.user_ns["summary"] == "1=a, 2=b, 3=c"
+
+            # Re-run downstream - should not trigger false broken detection
+            import contextlib
+            import io
+
+            magics._upstream_checker.debug = True
+
+            f = io.StringIO()
+            with contextlib.redirect_stdout(f):
                 magics.cash("", downstream_code)
-                assert shell.user_ns['summary'] == '1=a, 2=b, 3=c'
 
-                # Re-run downstream - should not trigger false broken detection
-                import io, contextlib
-                magics._upstream_checker.debug = True
-
-                f = io.StringIO()
-                with contextlib.redirect_stdout(f):
-                    magics.cash("", downstream_code)
-
-                debug_output = f.getvalue()
-                assert "Marking as broken" not in debug_output, \
-                    f"Loop target tuple vars incorrectly marked broken:\n{debug_output}"
+            debug_output = f.getvalue()
+            assert "Marking as broken" not in debug_output, (
+                f"Loop target tuple vars incorrectly marked broken:\n{debug_output}"
+            )

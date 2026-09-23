@@ -9,6 +9,7 @@ speed and pickled without the memo: 0.37 s. Without the memo the key is the
 content alone, so what matters is that equal content keys equal and anything
 else does not.
 """
+
 from __future__ import annotations
 
 import time
@@ -30,7 +31,7 @@ SHAPES = {
     "a list and a scalar": ([1, 2, 3], "tag", 4.5),
     "shared tuple inside": ([SHARED, SHARED, (2,)],),
     "shared across arguments": ([SHARED], [SHARED]),
-    "the same list twice": ([1, 2], ) * 2,
+    "the same list twice": ([1, 2],) * 2,
     "a dict inside": ([{"b": 1, "a": 2}],),
     "a set inside": ([{3, 1, 2}],),
     "a list subclass": (type("L", (list,), {})([1, 2]),),
@@ -63,16 +64,19 @@ def test_equal_content_keys_equal(key):
     assert key(rows=[(1, "a")], n=2) == key(n=2, rows=[(1, "a")])
 
 
-@pytest.mark.parametrize("a, b", [
-    ([(1,)], [(1.0,)]),
-    ([(1,)], [(True,)]),
-    ([(1, 2)], [[1, 2]]),
-    (["a"], [b"a"]),
-    ([(1, (2,))], [(1, 2)]),
-    ([1, 2], [2, 1]),
-    ([bytearray(b"a")], [b"a"]),
-    ([None], [()]),
-])
+@pytest.mark.parametrize(
+    "a, b",
+    [
+        ([(1,)], [(1.0,)]),
+        ([(1,)], [(True,)]),
+        ([(1, 2)], [[1, 2]]),
+        (["a"], [b"a"]),
+        ([(1, (2,))], [(1, 2)]),
+        ([1, 2], [2, 1]),
+        ([bytearray(b"a")], [b"a"]),
+        ([None], [()]),
+    ],
+)
 def test_different_content_keys_apart(key, a, b):
     assert key(a) != key(b)
 
@@ -110,21 +114,34 @@ def test_a_warm_hit_on_many_rows_does_not_walk_them(tmp_path, monkeypatch):
     calls = {"_contains_set": 0, "_canonicalize_dict_order": 0, "carriers": 0}
     for name in ("_contains_set", "_canonicalize_dict_order"):
         real = getattr(core, name)
-        monkeypatch.setattr(core, name, lambda *a, _r=real, _n=name, **k:
-                            calls.__setitem__(_n, calls[_n] + 1) or _r(*a, **k))
+        monkeypatch.setattr(
+            core, name, lambda *a, _r=real, _n=name, **k: calls.__setitem__(_n, calls[_n] + 1) or _r(*a, **k)
+        )
     real_iter = c._iter_code_carriers
-    monkeypatch.setattr(c, "_iter_code_carriers", lambda *a, **k:
-                        calls.__setitem__("carriers", calls["carriers"] + 1) or real_iter(*a, **k))
+    monkeypatch.setattr(
+        c,
+        "_iter_code_carriers",
+        lambda *a, **k: calls.__setitem__("carriers", calls["carriers"] + 1) or real_iter(*a, **k),
+    )
     t0 = time.perf_counter()
     assert total(rows) == sum(range(50_000))
     # Walking the rows is a call per row and more; the key itself takes a few.
     assert max(calls.values()) < 50, f"walked the rows: {calls}"
-    assert time.perf_counter() - t0 < 30        # a hang guard, not a benchmark
+    assert time.perf_counter() - t0 < 30  # a hang guard, not a benchmark
 
 
-FAST = {"rows", "nested lists", "empty tuples inside", "kwargs", "a list and a scalar",
-        "shared tuple inside", "shared across arguments", "the same list twice",
-        "bytearray leaves", "a dict inside"}   # a list of one dict: dict rows
+FAST = {
+    "rows",
+    "nested lists",
+    "empty tuples inside",
+    "kwargs",
+    "a list and a scalar",
+    "shared tuple inside",
+    "shared across arguments",
+    "the same list twice",
+    "bytearray leaves",
+    "a dict inside",
+}  # a list of one dict: dict rows
 
 
 @pytest.mark.parametrize("shape", sorted(SHAPES))
@@ -134,8 +151,7 @@ def test_which_shapes_take_the_fast_path(tmp_path, monkeypatch, shape):
     c = Cash(cache_dir=str(tmp_path / "cache"))
     unshared = []
     real = _plain_data.pickle_unshared
-    monkeypatch.setattr(_plain_data, "pickle_unshared",
-                        lambda value: unshared.append(1) or real(value))
+    monkeypatch.setattr(_plain_data, "pickle_unshared", lambda value: unshared.append(1) or real(value))
     c._hash_arg_payload(*_args(shape))
     assert bool(unshared) == (shape in FAST), shape
 
@@ -182,10 +198,8 @@ def test_a_small_dict_beside_a_big_list_leaves_the_list_on_the_fast_path(tmp_pat
     rows = [(i, str(i)) for i in range(50_000)]
     unshared, walked = [], []
     real_pickle, real_canon = _plain_data.pickle_unshared, core._canonicalize_dict_order
-    monkeypatch.setattr(_plain_data, "pickle_unshared",
-                        lambda v: unshared.append(v) or real_pickle(v))
-    monkeypatch.setattr(core, "_canonicalize_dict_order",
-                        lambda *a, **k: walked.append(1) or real_canon(*a, **k))
+    monkeypatch.setattr(_plain_data, "pickle_unshared", lambda v: unshared.append(v) or real_pickle(v))
+    monkeypatch.setattr(core, "_canonicalize_dict_order", lambda *a, **k: walked.append(1) or real_canon(*a, **k))
     c._hash_arg_payload((rows,), {"opts": {"b": 1, "a": 2}})
     assert any(v is rows for v in unshared), "the list was not keyed on its own"
     assert len(walked) < 100, f"the general path walked the rows ({len(walked)} calls)"

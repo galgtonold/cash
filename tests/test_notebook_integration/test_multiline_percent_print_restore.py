@@ -17,40 +17,27 @@ These tests put genuinely-expensive work in the same cell as such a print and
 assert the cell RESTORES from cache on an isolated re-run.  The f-string
 variant is a control that does byte-identical work and must also restore.
 """
+
 import pytest
 from conftest import shows_cached
 
 pytestmark = [pytest.mark.upstream, pytest.mark.timeout(120)]
 
-SETUP = (
-    "import numpy as np\n"
-    "import cash\n"
-    "%cash_on\n"
-    "%cash_badge print"
-)
+SETUP = "import numpy as np\nimport cash\n%cash_on\n%cash_badge print"
 
 # Deterministic, comfortably above the ~10 ms cost floor so it is cached.
 BASE = "data = np.linspace(0.0, 1.0, 2_000_000)"
 EXPENSIVE = "result = float((data.reshape(2000, 1000) @ data.reshape(1000, 2000)).sum())"
 
 # The regression trigger: the ``%`` operator opens a continuation line.
-MULTILINE_PCT_PRINT = (
-    'print("Asian call = %.4f\\n"\n'
-    '      "European   = %.4f"\n'
-    '      % (a, b))'
-)
+MULTILINE_PCT_PRINT = 'print("Asian call = %.4f\\n"\n      "European   = %.4f"\n      % (a, b))'
 
 # Control: byte-identical work, f-string formatting (never touched the magic bug).
 FSTRING_PRINT = 'print(f"Asian call = {a:.4f}\\nEuropean   = {b:.4f}")'
 
 
 def _expensive_cell(printer: str) -> str:
-    return (
-        EXPENSIVE + "\n"
-        "a = result\n"
-        "b = result / 2.0\n"
-        + printer
-    )
+    return EXPENSIVE + "\na = result\nb = result / 2.0\n" + printer
 
 
 def test_multiline_percent_print_cell_restores(nb_runner):
@@ -69,8 +56,7 @@ def test_multiline_percent_print_cell_restores(nb_runner):
     nb_runner.run_cell(3)
     out = nb_runner.get_output(3)
     assert shows_cached(out), (
-        "cell with a multi-line %-format print did not restore from cache "
-        f"(CAS-163). Badge output:\n{out}"
+        f"cell with a multi-line %-format print did not restore from cache (CAS-163). Badge output:\n{out}"
     )
     # And the formatted output is still produced.
     assert "Asian call =" in out

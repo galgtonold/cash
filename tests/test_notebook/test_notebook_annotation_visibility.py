@@ -13,6 +13,7 @@ Measured before the fix:
 Both arms are required. Without the unannotated arm, a run where warnings are
 broken generally would look like a pass.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -36,7 +37,7 @@ def cell_runner():
     cash = Cash(cache_dir=tempfile.mkdtemp(), register_magic=False)
     magics = CashMagics(shell, cash)
     magics.cash_on("")
-    magics._badge_mode = "off"          # keep the badge out of the captured output
+    magics._badge_mode = "off"  # keep the badge out of the captured output
     shell.user_ns["c"] = cash
 
     def run(cell: str) -> int:
@@ -57,20 +58,11 @@ ANNOTATED = (
     "audited(1)\n"
 )
 
-PLAIN = (
-    "import os\n"
-    "@c.cache\n"
-    "def unaudited(n):\n"
-    "    os.getpid()\n"
-    "    return n * 2\n"
-    "unaudited(1)\n"
-)
+PLAIN = "import os\n@c.cache\ndef unaudited(n):\n    os.getpid()\n    return n * 2\nunaudited(1)\n"
 
 
 def test_an_annotated_line_is_waived_in_a_notebook_cell(cell_runner):
-    assert cell_runner(ANNOTATED) == 0, (
-        "the waiver was not honoured for a function defined in a cell"
-    )
+    assert cell_runner(ANNOTATED) == 0, "the waiver was not honoured for a function defined in a cell"
 
 
 def test_an_unannotated_line_still_warns_in_a_notebook_cell(cell_runner):
@@ -104,14 +96,7 @@ def test_a_pep614_parenthesised_decorator_does_not_kill_the_cell():
     magics._badge_mode = "off"
     shell.user_ns["c"] = cash
 
-    cell = (
-        "@(\n"
-        "    c.cache\n"
-        ")\n"
-        "def f(n):\n"
-        "    return n  # @cash:assume-safe\n"
-        "f(3)\n"
-    )
+    cell = "@(\n    c.cache\n)\ndef f(n):\n    return n  # @cash:assume-safe\nf(3)\n"
 
     magics.cash("", cell)  # must not raise -- this is the regression itself
 
@@ -142,7 +127,7 @@ def async_cell_runner():
     cash = Cash(cache_dir=tempfile.mkdtemp(), register_magic=False)
     magics = CashMagics(shell, cash)
     magics.cash_on("")
-    magics._badge_mode = "off"          # keep the badge out of the captured output
+    magics._badge_mode = "off"  # keep the badge out of the captured output
     shell.user_ns["c"] = cash
 
     async def _tick(n):
@@ -174,13 +159,7 @@ ANNOTATED_ASYNC = (
 )
 
 PLAIN_ASYNC = (
-    "import os\n"
-    "@c.cache\n"
-    "def unaudited(n):\n"
-    "    os.getpid()\n"
-    "    return n * 2\n"
-    "unaudited(1)\n"
-    "_ = await _tick(1)\n"
+    "import os\n@c.cache\ndef unaudited(n):\n    os.getpid()\n    return n * 2\nunaudited(1)\n_ = await _tick(1)\n"
 )
 
 
@@ -195,9 +174,7 @@ def test_an_annotated_line_is_waived_in_a_notebook_cell_with_top_level_await(asy
     must still waive the purity warning, going through ``execute_cell_async``
     / ``process_statement_async`` / ``_execute_statement_async`` instead of
     their sync twins."""
-    assert async_cell_runner(ANNOTATED_ASYNC) == 0, (
-        "the waiver was not honoured on the async execution path"
-    )
+    assert async_cell_runner(ANNOTATED_ASYNC) == 0, "the waiver was not honoured on the async execution path"
 
 
 def test_an_unannotated_line_still_warns_in_a_notebook_cell_with_top_level_await(async_cell_runner):

@@ -15,6 +15,7 @@ from .serialization import PickleSerializer, Serializer
 try:
     import redis  # noqa: F401
     from redis.exceptions import RedisError
+
     HAS_REDIS = True
 except ImportError:
     HAS_REDIS = False
@@ -24,11 +25,13 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["RedisBackend", "HAS_REDIS"]
 
+
 class RedisBackend(CacheBackend):
     """
     Redis-based cache backend.
     Requires 'redis' package: pip install redis
     """
+
     source_label: str = "REDIS"
     # Tier-promotion hint: Redis is in-memory on the server and the
     # protocol doesn't love multi-MB transfers, so the tiered pipeline
@@ -36,30 +39,41 @@ class RedisBackend(CacheBackend):
     # not gated — users can opt-in to bigger values explicitly.
     max_size_bytes: int | None = 10 * 1024 * 1024
 
-    def __init__(self, host: str = 'localhost', port: int = 6379, db: int = 0,
-                 password: str | None = None, prefix: str = 'cash:',
-                 socket_keepalive: bool = True,
-                 health_check_interval: int = 30,
-                 retry_on_timeout: bool = True,
-                 max_retries: int = 3,
-                 **kwargs):
+    def __init__(
+        self,
+        host: str = "localhost",
+        port: int = 6379,
+        db: int = 0,
+        password: str | None = None,
+        prefix: str = "cash:",
+        socket_keepalive: bool = True,
+        health_check_interval: int = 30,
+        retry_on_timeout: bool = True,
+        max_retries: int = 3,
+        **kwargs,
+    ):
         try:
             import redis
             from redis.backoff import ExponentialBackoff
             from redis.exceptions import ConnectionError, TimeoutError  # noqa: F401
             from redis.retry import Retry
         except ImportError as exc:
-            raise DependencyNotFoundError("RedisBackend requires 'redis' package. Install it with 'pip install redis'.") from exc
+            raise DependencyNotFoundError(
+                "RedisBackend requires 'redis' package. Install it with 'pip install redis'."
+            ) from exc
 
         retry_strategy = Retry(ExponentialBackoff(), max_retries)
 
         self.client = redis.Redis(
-            host=host, port=port, db=db, password=password,
+            host=host,
+            port=port,
+            db=db,
+            password=password,
             socket_keepalive=socket_keepalive,
             health_check_interval=health_check_interval,
             retry_on_timeout=retry_on_timeout,
             retry=retry_strategy,
-            **kwargs
+            **kwargs,
         )
         self.prefix = prefix
         # Per-backend async writes: serialization happens on the calling
@@ -88,11 +102,11 @@ class RedisBackend(CacheBackend):
                 metadata = pickle.loads(meta_bytes)
 
                 # Deserialize data
-                serializer_cls = metadata.get('serializer_cls', PickleSerializer)
+                serializer_cls = metadata.get("serializer_cls", PickleSerializer)
                 serializer = serializer_cls()
                 value = serializer.deserialize(data_bytes)
 
-                metadata.setdefault('source', self.source_label)
+                metadata.setdefault("source", self.source_label)
                 return metadata, value
             except (pickle.UnpicklingError, KeyError, TypeError, ValueError) as e:
                 logger.debug("Redis get() deserialization error: %s", e)
@@ -118,9 +132,7 @@ class RedisBackend(CacheBackend):
         try:
             meta_bytes = self.client.get(meta_key)
         except (RedisError, OSError) as exc:
-            raise CacheBackendError(
-                f"Redis get_metadata failed for key {key!r}: {exc}"
-            ) from exc
+            raise CacheBackendError(f"Redis get_metadata failed for key {key!r}: {exc}") from exc
 
         if not meta_bytes:
             return None
@@ -131,10 +143,12 @@ class RedisBackend(CacheBackend):
             logger.debug("Redis get_metadata() deserialization error: %s", e)
             return None
 
-        metadata.setdefault('source', self.source_label)
+        metadata.setdefault("source", self.source_label)
         return metadata
 
-    def set(self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None) -> None:
+    def set(
+        self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None
+    ) -> None:
         """Serialize on the calling thread, run the pipeline in background."""
         meta_key, data_key = self._get_keys(key)
 
@@ -147,22 +161,28 @@ class RedisBackend(CacheBackend):
         serialized_value = serializer.serialize(value)
 
         # Store size and storage identifier
-        metadata['size'] = len(serialized_value)
-        if 'storage' not in metadata:
-            metadata['storage'] = [self.source_label]
+        metadata["size"] = len(serialized_value)
+        if "storage" not in metadata:
+            metadata["storage"] = [self.source_label]
 
         # Serialize metadata (includes ttl inside the pickled blob)
         meta_bytes = pickle.dumps(metadata)
-        ttl = metadata.get('ttl')
+        ttl = metadata.get("ttl")
 
         self._writes.submit(
-            key, self._do_set_sync,
-            meta_key, data_key, meta_bytes, serialized_value, ttl, key,
+            key,
+            self._do_set_sync,
+            meta_key,
+            data_key,
+            meta_bytes,
+            serialized_value,
+            ttl,
+            key,
         )
 
-    def _do_set_sync(self, meta_key: str, data_key: str,
-                     meta_bytes: bytes, serialized_value: bytes,
-                     ttl: int | None, key: str) -> None:
+    def _do_set_sync(
+        self, meta_key: str, data_key: str, meta_bytes: bytes, serialized_value: bytes, ttl: int | None, key: str
+    ) -> None:
         """The actual Redis pipeline — runs in the PendingWrites worker."""
         try:
             pipe = self.client.pipeline()

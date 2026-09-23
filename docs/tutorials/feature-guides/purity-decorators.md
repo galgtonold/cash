@@ -216,14 +216,14 @@ Now any cell that calls `log_to_dashboard(...)` or `send_alert(...)` runs fresh 
 
 ### What it actually does
 
-<!-- claim: cash/notebook/purity.py:stateful @d2b97ef0, cash/notebook/cacheability_decision.py:decide_cacheability @be2e3981 -->
+<!-- claim: cash/notebook/purity.py:stateful @d2b97ef0, cash/notebook/cacheability_decision.py:decide_cacheability @e9c27ac0 -->
 `@stateful` sets `_cash_stateful = True` on the wrapped function. When the statement processor walks the bare-name calls in a cell and finds one whose resolved callable has that attribute, `_check_callable_stateful` returns `True`. The caller (in `decide_cacheability`) then refuses to cache the cell and records the reason "Calls @stateful function".
 
 `@stateful` is checked *before* `@pure` in `_check_callable_stateful`, so if you ever (accidentally) stack both decorators on the same function, stateful wins. Don't rely on that — see the [caveats](#mixing-markers).
 
 ## Auto-detection (`analyze_function_purity`)
 
-<!-- claim: cash/notebook/purity.py:analyze_function_purity @7323a225, cash/notebook/purity.py:_ImpurityVisitor @04e3cd91 broad="the flag list is a claim about every branch of the visitor", cash/notebook/purity.py:_IMPURE_FUNCTION_CALLS @bb3b34e8, cash/notebook/purity.py:_IMPURE_MODULE_CALLS @21b515f5, cash/notebook/purity.py:_WRITE_METHODS @9cc480ba -->
+<!-- claim: cash/notebook/purity.py:analyze_function_purity @7323a225, cash/notebook/purity.py:_ImpurityVisitor @9a9dd9e9 broad="the flag list is a claim about every branch of the visitor", cash/notebook/purity.py:_IMPURE_FUNCTION_CALLS @9f39b579, cash/notebook/purity.py:_IMPURE_MODULE_CALLS @9e90768d, cash/notebook/purity.py:_WRITE_METHODS @a1c8cf66 -->
 You won't decorate everything. For undecorated functions, Cash falls back to an AST-based heuristic — `analyze_function_purity`. It:
 
 1. Grabs the function's source via `inspect.getsource`.
@@ -273,7 +273,7 @@ The heuristic is intentionally conservative. False positives (declaring somethin
 
 ## Known-pure builtins
 
-<!-- claim: cash/notebook/purity.py:KNOWN_PURE_BUILTINS @13fb552c -->
+<!-- claim: cash/notebook/purity.py:KNOWN_PURE_BUILTINS @ed7ca2b0 -->
 Cash short-circuits the analysis for stdlib names it already knows are safe. The full list lives in `KNOWN_PURE_BUILTINS`:
 
 ```
@@ -453,7 +453,7 @@ what to cache based on purity). The same machinery now runs on
 cleanly to "I want a warning", "I want it silent", and "I want it to
 fail CI".
 
-<!-- claim: cash/core.py:Cash._surface_purity @f30def74, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/core.py:Cash._surface_purity @a4fc3aae, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 ### Default: warn at first call
 
 <!-- test:expect-warning reason="this section exists to demonstrate the first-call impurity warning" -->
@@ -500,7 +500,7 @@ fetch_user.cache_info()["warnings"]
 
 ### `# @cash:assume-safe` — waive one statement
 
-<!-- claim: cash/purity_analyzer.py:_audited_lines @51755b02, cash/purity_analyzer.py:_drop_audited @75a58657 -->
+<!-- claim: cash/purity_analyzer.py:_audited_lines @388e5a23, cash/purity_analyzer.py:_drop_audited @536869b6 -->
 Put the waiver next to the thing you audited:
 
 ```python
@@ -626,10 +626,10 @@ also count as issues — the paranoid setting.
 `strict=True` and `assume_safe=True` are mutually exclusive; passing
 both raises `ValueError` at decoration time.
 
-<!-- claim: cash/__init__.py:mark_pure @ba10636a, cash/__init__.py:mark_stateful @ca0b83f6 -->
+<!-- claim: cash/__init__.py:mark_pure @860cda7f, cash/__init__.py:mark_stateful @d1ea88e3 -->
 ### Observed effects — what the first call actually did { #observed-effects-what-the-first-call-actually-did }
 
-<!-- claim: cash/effect_observer.py:EffectObserver @c5e827d0 broad="the observed-effect contract is the class as a whole", cash/core.py:Cash._report_observed_effects @2d2693d1 -->
+<!-- claim: cash/effect_observer.py:EffectObserver @c5e827d0 broad="the observed-effect contract is the class as a whole", cash/core.py:Cash._report_observed_effects @60289c7d -->
 Static analysis stops at library boundaries, so an effect *inside* a library is
 reachable only by the method's name — and a name cannot reach everything.
 `session.get(url)` is a network call, but `get` cannot go in the write-method
@@ -731,7 +731,7 @@ won't flag on it, and any function whose body calls
 
 ### What the analyzer looks at
 
-<!-- claim: cash/purity_analyzer.py:_PurityVisitor._record_call @af950ef0 broad="the flag list is a claim about every branch of the call rule", cash/purity_analyzer.py:_PurityVisitor.finalize_taint @25beed4f, cash/purity_analyzer.py:_PurityVisitor._table_is_reachable_from_the_key @f40e5656 -->
+<!-- claim: cash/purity_analyzer.py:_PurityVisitor._record_call @a8cdd7d1 broad="the flag list is a claim about every branch of the call rule", cash/purity_analyzer.py:_PurityVisitor.finalize_taint @a557e11f, cash/purity_analyzer.py:_PurityVisitor._table_is_reachable_from_the_key @f40e5656 -->
 The decorator-side analyzer walks the function body AND
 **module-bounded helpers** (functions defined in the same top-level
 package, or any non-installed-library code) and any **closure-bound
@@ -789,7 +789,7 @@ it flags:
   it via `depends_on=`/`dynamic_depends_on=`. The detection is scope-aware: a
   local that merely shares a name with a global doesn't trip it.
 
-<!-- claim: cash/purity_flow.py:fresh_name_nodes @6d3f600d, cash/purity_flow.py:_fresh @9605b9f4 -->
+<!-- claim: cash/purity_flow.py:fresh_name_nodes @6d3f600d, cash/purity_flow.py:_fresh @63431af2 -->
 In-place mutation of a **fresh local** is *not* flagged. An object the
 function made itself — a list/dict/set literal or comprehension, a known
 constructor or reader like `[]`, `dict()`, `np.zeros(...)`,

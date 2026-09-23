@@ -14,6 +14,7 @@ call:
 Opaque callables are now keyed on a stable identity, source/dependency analysis
 is skipped for them, and they cache without crashing.
 """
+
 from __future__ import annotations
 
 import functools

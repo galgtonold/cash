@@ -11,6 +11,7 @@ The row appears ONLY when something failed, which is what makes it acceptable
 on a surface whose own design notes warn that noise teaches people to ignore
 it (see badge_renderer/_reasons.py). Zero cost in the healthy case.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -107,6 +108,7 @@ def test_a_broken_backend_registry_cannot_break_the_cell(monkeypatch):
     Same guarantee the staleness notifications carry, and for the same reason:
     the worst acceptable outcome is a missed warning.
     """
+
     def boom():
         raise RuntimeError("registry exploded")
 

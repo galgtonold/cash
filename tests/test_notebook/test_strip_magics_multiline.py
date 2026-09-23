@@ -16,10 +16,10 @@ upstream replay and silently disabled cache restore for the cell.
 These are fast, direct tests of the splitter: feed it the source and assert the
 result is ONE statement that parses, not a fragment that raises.
 """
+
 import ast
 
 from cash.notebook.analysis import CodeAnalyzer
-
 
 # A literal backslash-n INSIDE the string (built with chr to avoid any
 # ambiguity between an escape and a real newline in the test source itself).
@@ -27,18 +27,11 @@ _BS_N = chr(92) + "n"
 
 # Form that actually triggered the bug: the ``%`` operator begins a
 # continuation line of a parenthesised, implicitly-concatenated string.
-MULTILINE_PCT_OP_AT_LINE_START = (
-    'print("Asian call = %.4f' + _BS_N + '"\n'
-    '      "European   = %.4f"\n'
-    '      % (a, b))'
-)
+MULTILINE_PCT_OP_AT_LINE_START = 'print("Asian call = %.4f' + _BS_N + '"\n      "European   = %.4f"\n      % (a, b))'
 
 # The headline two-line form from the report (``%`` mid-line): valid Python
 # that must also survive untouched.
-MULTILINE_PCT_MID_LINE = (
-    'print("Asian call = %.4f' + _BS_N + '"\n'
-    '      "European   = %.4f" % (a, b))'
-)
+MULTILINE_PCT_MID_LINE = 'print("Asian call = %.4f' + _BS_N + '"\n      "European   = %.4f" % (a, b))'
 
 
 def _parse_single_call(cleaned: str) -> ast.AST:
@@ -71,15 +64,11 @@ def test_pct_mid_line_multiline_print_survives():
 def test_real_magic_still_stripped_alongside_multiline_pct():
     """A genuine cell magic is still removed even when the same cell also holds
     a multi-line ``%``-statement whose continuation starts with ``%``."""
-    code = (
-        "loop_result = sum(range(3))\n"
-        "%matplotlib inline\n"
-        + MULTILINE_PCT_OP_AT_LINE_START
-    )
+    code = "loop_result = sum(range(3))\n%matplotlib inline\n" + MULTILINE_PCT_OP_AT_LINE_START
     cleaned = CodeAnalyzer.strip_magics(code)
     ast.parse(cleaned)  # must not raise
-    assert "%matplotlib inline" not in cleaned      # magic dropped
-    assert "% (a, b)" in cleaned                     # operator preserved
+    assert "%matplotlib inline" not in cleaned  # magic dropped
+    assert "% (a, b)" in cleaned  # operator preserved
     assert "loop_result = sum(range(3))" in cleaned
 
 
@@ -126,16 +115,11 @@ def test_indented_magic_does_not_empty_its_block():
     dependency-tracking everything that reads from it. The magic is replaced by
     ``pass`` so the suite still has a body.
     """
-    code = (
-        "if IN_COLAB:\n"
-        "    %pip install -q cash-lib\n"
-        "\n"
-        "import cash"
-    )
+    code = "if IN_COLAB:\n    %pip install -q cash-lib\n\nimport cash"
     cleaned = CodeAnalyzer.strip_magics(code)
-    ast.parse(cleaned)                       # must NOT raise
-    assert "%pip" not in cleaned             # the magic itself is gone
-    assert "    pass" in cleaned             # ...replaced by pass at its indent
+    ast.parse(cleaned)  # must NOT raise
+    assert "%pip" not in cleaned  # the magic itself is gone
+    assert "    pass" in cleaned  # ...replaced by pass at its indent
     assert "import cash" in cleaned
 
 

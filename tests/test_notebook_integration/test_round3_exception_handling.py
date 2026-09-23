@@ -1,5 +1,7 @@
 """Batch 78: Exception handling & custom exceptions — cash caching with error patterns."""
+
 import textwrap
+
 import pytest
 
 
@@ -9,8 +11,9 @@ class TestCustomExceptions:
 
     def test_exception_hierarchy(self, nb_runner):
         """Custom exception hierarchy across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class AppError(Exception):
                     def __init__(self, message, code=None):
                         super().__init__(message)
@@ -31,11 +34,12 @@ class TestCustomExceptions:
                     errors.append(cls(msg, code))
                 print(f"count={len(errors)}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 for e in errors:
                     print(f"{type(e).__name__}: {e} (code={e.code})")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "count=3" in nb_runner.get_output(1)
@@ -45,8 +49,9 @@ class TestCustomExceptions:
 
     def test_try_except_results(self, nb_runner):
         """try/except results cached across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 results = []
                 for item in [10, 0, "abc", 5, None]:
                     try:
@@ -58,12 +63,13 @@ class TestCustomExceptions:
                         results.append(('type_err', None))
                 print(f"results={results}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 ok_count = sum(1 for status, _ in results if status == 'ok')
                 err_count = len(results) - ok_count
                 print(f"ok={ok_count} errors={err_count}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out1 = nb_runner.get_output(1)
@@ -74,8 +80,9 @@ class TestCustomExceptions:
 
     def test_exception_chaining(self, nb_runner):
         """Exception chaining across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class ProcessError(Exception):
                     pass
 
@@ -93,11 +100,12 @@ class TestCustomExceptions:
                         results.append(str(e))
                 print(f"results={results}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 nums = [r for r in results if isinstance(r, int)]
                 print(f"valid_nums={nums} total={sum(nums)}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out1 = nb_runner.get_output(1)
@@ -112,8 +120,9 @@ class TestExceptionContextPatterns:
 
     def test_finally_cleanup(self, nb_runner):
         """Finally block cleanup across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 log = []
 
                 def safe_divide(a, b):
@@ -132,12 +141,13 @@ class TestExceptionContextPatterns:
                 print(f"r1={r1:.2f}" if r1 else "r1=None")
                 print(f"r2={r2}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 print(f"log={log}")
                 cleanup_count = sum(1 for x in log if x == 'cleanup')
                 print(f"cleanups={cleanup_count}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "r2=None" in nb_runner.get_output(1)
@@ -146,11 +156,12 @@ class TestExceptionContextPatterns:
 
     def test_exception_propagation(self, nb_runner):
         """Exception handling propagates on change."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 divisor = 2
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 try:
                     result = 100 / divisor
                     status = "ok"
@@ -159,13 +170,17 @@ class TestExceptionContextPatterns:
                     status = "error"
                 print(f"result={result} status={status}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result=50.0 status=ok" in nb_runner.get_output(2)
 
-        nb_runner.set_cell_source(1, textwrap.dedent("""\
+        nb_runner.set_cell_source(
+            1,
+            textwrap.dedent("""\
             divisor = 0
-        """))
+        """),
+        )
         nb_runner.run_cells([1, 2])
         assert "result=0 status=error" in nb_runner.get_output(2)

@@ -6,6 +6,7 @@ the upstream holder is never reset and the value doubles on re-run. CAS-60 fixed
 the bare `Name = Name` alias channel (incl. DataFrame aliases). These four remain
 as tracked limitations; each xfail flips to XPASS when its channel is fixed.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.upstream]
@@ -22,15 +23,17 @@ def _rerun(nb_runner, setup, cell, expect):
 
 @pytest.mark.xfail(reason="CAS-61: attribute-store alias not tracked", strict=False)
 def test_alias_via_attribute(nb_runner):
-    _rerun(nb_runner,
-           "class Box:\n    pass\nb = Box()\nx = [1, 2, 3]",
-           "b.ref = x\nb.ref.append(99)\nprint(x)", "[1, 2, 3, 99]")
+    _rerun(
+        nb_runner,
+        "class Box:\n    pass\nb = Box()\nx = [1, 2, 3]",
+        "b.ref = x\nb.ref.append(99)\nprint(x)",
+        "[1, 2, 3, 99]",
+    )
 
 
 @pytest.mark.xfail(reason="CAS-61: container-element aliasing not tracked", strict=False)
 def test_tuple_holds_mutable(nb_runner):
-    _rerun(nb_runner, "lst = [1, 2]",
-           "t = (lst,)\nt[0].append(3)\nprint(lst)", "[1, 2, 3]")
+    _rerun(nb_runner, "lst = [1, 2]", "t = (lst,)\nt[0].append(3)\nprint(lst)", "[1, 2, 3]")
 
 
 @pytest.mark.xfail(reason="CAS-61: walrus-as-method-receiver not attributed", strict=False)
@@ -42,5 +45,4 @@ def test_walrus_alias_mutate(nb_runner):
 
 @pytest.mark.xfail(reason="CAS-61: ternary alias is flow-sensitive (two sources)", strict=False)
 def test_conditional_alias(nb_runner):
-    _rerun(nb_runner, "x = [1, 2]\nz = [9]",
-           "y = x if True else z\ny.append(3)\nprint(x)", "[1, 2, 3]")
+    _rerun(nb_runner, "x = [1, 2]\nz = [9]", "y = x if True else z\ny.append(3)\nprint(x)", "[1, 2, 3]")

@@ -8,6 +8,7 @@ consumer, which served a stale value. The skip is now guarded by
 `not in variable_lineage` — a shadowed builtin IS tracked, a genuine builtin is
 not, so genuine-builtin calls (`sum([1, 2, 3])`) are still not over-invalidated.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.upstream]
@@ -23,8 +24,10 @@ def _edit_prop(nb_runner, name):
     assert "105" in nb_runner.get_output(3), f"{name}: {nb_runner.get_output(3)!r}"
 
 
-@pytest.mark.parametrize("name", ["sum", "list", "max", "min", "id", "type", "input",
-                                   "filter", "map", "dict", "set", "str", "next", "format"])
+@pytest.mark.parametrize(
+    "name",
+    ["sum", "list", "max", "min", "id", "type", "input", "filter", "map", "dict", "set", "str", "next", "format"],
+)
 def test_builtin_shadow_edit_propagates(nb_runner, name):
     _edit_prop(nb_runner, name)
 

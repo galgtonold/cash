@@ -1,4 +1,5 @@
 """Tests for ``f.explain(*args, **kwargs)`` — explain why a call hits or misses."""
+
 from __future__ import annotations
 
 import asyncio
@@ -6,9 +7,7 @@ import os
 import threading
 import time
 
-import pytest
-
-from cash import Cash, CacheExplanation
+from cash import CacheExplanation, Cash
 
 
 def test_explain_returns_cacheexplanation_instance(tmp_path):
@@ -85,6 +84,7 @@ def test_explain_does_not_mutate_stats(tmp_path):
 
 def test_explain_unhashable_arg(tmp_path):
     """Unhashable args produce key_uncomputable with an arg_type hint."""
+
     class _Unpicklable:
         def __init__(self):
             self._lock = threading.Lock()

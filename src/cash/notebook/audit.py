@@ -14,29 +14,32 @@ __all__ = ["AuditEntry", "AuditLogger"]
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass
 class AuditEntry:
     """Single audit log entry."""
+
     timestamp: float
-    operation: str         # 'cache_hit', 'cache_miss', 'cache_store', 'cache_delete',
-                           # 'cache_restore', 'cache_skip', 'cache_invalidate'
-    variable: str          # Variable name or cache key
-    code: str = ""         # Code that triggered the operation
-    status: str = ""       # 'success', 'error'
+    operation: str  # 'cache_hit', 'cache_miss', 'cache_store', 'cache_delete',
+    # 'cache_restore', 'cache_skip', 'cache_invalidate'
+    variable: str  # Variable name or cache key
+    code: str = ""  # Code that triggered the operation
+    status: str = ""  # 'success', 'error'
     duration_ms: float = 0.0
     details: dict[str, Any] = field(default_factory=dict)
 
     @property
     def timestamp_str(self) -> str:
-        return datetime.fromtimestamp(self.timestamp).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        return datetime.fromtimestamp(self.timestamp).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
-        d['timestamp_str'] = self.timestamp_str
+        d["timestamp_str"] = self.timestamp_str
         return d
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), default=str)
+
 
 class AuditLogger:
     """Persistent audit logger for cache operations.
@@ -58,7 +61,7 @@ class AuditLogger:
             self._file_path = file_path
         if self._file_path:
             try:
-                self._file_handle = open(self._file_path, 'a', encoding='utf-8')  # noqa: SIM115 - persistent handle, not a one-shot operation
+                self._file_handle = open(self._file_path, "a", encoding="utf-8")  # noqa: SIM115 - persistent handle, not a one-shot operation
             except OSError as e:
                 logger.warning("Could not open audit log file: %s", e)
                 self._file_handle = None
@@ -75,9 +78,15 @@ class AuditLogger:
     def enabled(self) -> bool:
         return self._enabled
 
-    def log(self, operation: str, variable: str, code: str = "",
-            status: str = "success", duration_ms: float = 0.0,
-            **details: Any):
+    def log(
+        self,
+        operation: str,
+        variable: str,
+        code: str = "",
+        status: str = "success",
+        duration_ms: float = 0.0,
+        **details: Any,
+    ):
         """Record an audit entry."""
         if not self._enabled:
             return
@@ -96,19 +105,19 @@ class AuditLogger:
 
         # Evict old entries
         if len(self._entries) > self._max_entries:
-            self._entries = self._entries[-self._max_entries:]
+            self._entries = self._entries[-self._max_entries :]
 
         # Write to file
         if self._file_handle:
             try:
-                self._file_handle.write(entry.to_json() + '\n')
+                self._file_handle.write(entry.to_json() + "\n")
                 self._file_handle.flush()
             except OSError as e:
                 logger.warning("Audit log write failed: %s", e)
 
-    def get_entries(self, operation: str | None = None,
-                    variable: str | None = None,
-                    limit: int = 50) -> list[AuditEntry]:
+    def get_entries(
+        self, operation: str | None = None, variable: str | None = None, limit: int = 50
+    ) -> list[AuditEntry]:
         entries = self._entries
         if operation:
             entries = [e for e in entries if e.operation == operation]
@@ -138,8 +147,7 @@ class AuditLogger:
     def clear(self):
         self._entries.clear()
 
-    def format_entries(self, entries: list[AuditEntry] | None = None,
-                       as_json: bool = False) -> str:
+    def format_entries(self, entries: list[AuditEntry] | None = None, as_json: bool = False) -> str:
         if entries is None:
             entries = self._entries[-50:]
 
@@ -151,15 +159,14 @@ class AuditLogger:
 
         lines = []
         for e in entries:
-            ts = datetime.fromtimestamp(e.timestamp).strftime('%H:%M:%S')
+            ts = datetime.fromtimestamp(e.timestamp).strftime("%H:%M:%S")
             dur = f"{e.duration_ms:.1f}ms" if e.duration_ms > 0 else ""
-            code_preview = e.code.split('\n')[0][:40] if e.code else ""
+            code_preview = e.code.split("\n")[0][:40] if e.code else ""
             line = f"[{ts}] {e.operation:16s} {e.variable:20s} {dur:>8s}  {code_preview}"
             lines.append(line)
 
-        return '\n'.join(lines)
+        return "\n".join(lines)
 
     def shutdown(self):
         """Cleanup resources."""
         self.disable()
-

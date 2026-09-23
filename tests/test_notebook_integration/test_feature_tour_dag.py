@@ -47,28 +47,23 @@ when cash stops tracking the shape.
 
 Asserted on cache STATE per node, never on wall clock.
 """
+
 import pytest
 from conftest import CASH_TEST_PIN_THRESHOLDS, shows_cached, shows_executed
 
 pytestmark = pytest.mark.timeout(180)
 
-SETUP = (
-    "import cash\n"
-    "%cash_on\n"
-    "%cash_badge print\n"
-    + CASH_TEST_PIN_THRESHOLDS +
-    "import numpy as np"
-)
+SETUP = "import cash\n%cash_on\n%cash_badge print\n" + CASH_TEST_PIN_THRESHOLDS + "import numpy as np"
 
 # Its own cell, ABOVE the models that call it -- both because that is the cell
 # the tour's section 5 edits without running, and because cash does not see
 # functions defined below a call site.
-SCORER = '''
+SCORER = """
 def score_fit(pred, actual):
     return float(np.sqrt(np.mean((pred - actual) ** 2)))
-'''
+"""
 
-HELPERS = '''
+HELPERS = """
 def kmeans_features(X, k, iters=6, seed=7):
     r = np.random.default_rng(seed)
     C = X[r.choice(len(X), k, replace=False)].copy()
@@ -126,7 +121,7 @@ def mlp_fit(X, y, epochs, hidden=6, lr=0.05, seed=3):
         W1 -= lr * (X.T @ dH / n); b1 -= lr * dH.mean(0)
         W2 -= lr * (H.T @ err / n); b2 -= lr * err.mean()
     return score_fit(np.tanh(X @ W1 + b1) @ W2 + b2, y)
-'''
+"""
 
 PANEL = """
 rng = np.random.default_rng(0)
@@ -166,8 +161,21 @@ leaderboard = sorted([("lasso", lasso_rmse), ("boost", boost_rmse), ("mlp", mlp_
 print("winner", leaderboard[0][0])
 """
 
-CELLS = [SETUP, SCORER, HELPERS, PANEL, N_CLUSTERS, FEATS,
-         LASSO_ALPHA, LASSO, BOOST_ROUNDS, BOOST, MLP_EPOCHS, MLP, BOARD]
+CELLS = [
+    SETUP,
+    SCORER,
+    HELPERS,
+    PANEL,
+    N_CLUSTERS,
+    FEATS,
+    LASSO_ALPHA,
+    LASSO,
+    BOOST_ROUNDS,
+    BOOST,
+    MLP_EPOCHS,
+    MLP,
+    BOARD,
+]
 
 # 1-based cell numbers -- NotebookTestRunner is 1-based, not 0-based.
 C_SCORER = 2
@@ -181,11 +189,9 @@ C_BOARD = 13
 def _state(runner):
     """Cache state per node, read off the badge each cell printed."""
     out = {}
-    for name, n in [("feats", C_FEATS), ("lasso", C_LASSO), ("boost", C_BOOST),
-                    ("mlp", C_MLP), ("board", C_BOARD)]:
+    for name, n in [("feats", C_FEATS), ("lasso", C_LASSO), ("boost", C_BOOST), ("mlp", C_MLP), ("board", C_BOARD)]:
         raw = runner.get_raw_output(n)
-        out[name] = ("CACHED" if shows_cached(raw)
-                     else "EXECUTED" if shows_executed(raw) else "?")
+        out[name] = "CACHED" if shows_cached(raw) else "EXECUTED" if shows_executed(raw) else "?"
     return out
 
 
@@ -197,8 +203,8 @@ def _warmed(nb_runner):
     r.run_all()
     warm = _state(r)
     assert all(v == "CACHED" for v in warm.values()), (
-        f"the lattice did not warm up; every node should be CACHED on the "
-        f"second run: {warm}")
+        f"the lattice did not warm up; every node should be CACHED on the second run: {warm}"
+    )
     return r
 
 
@@ -229,16 +235,14 @@ def test_editing_the_shared_scoring_helper_invalidates_every_model(nb_runner):
 
     r.set_cell_source(
         C_SCORER,
-        "\ndef score_fit(pred, actual):\n"
-        "    return float(np.mean(np.abs(pred - actual)))\n",
+        "\ndef score_fit(pred, actual):\n    return float(np.mean(np.abs(pred - actual)))\n",
     )
     r.run_all()
     after = _state(r)
 
     for node in ("lasso", "boost", "mlp"):
         assert after[node] == "EXECUTED", f"{node} calls score_fit: {after}"
-    assert after["feats"] == "CACHED", (
-        f"k-means does not call score_fit and must stay cached: {after}")
+    assert after["feats"] == "CACHED", f"k-means does not call score_fit and must stay cached: {after}"
 
 
 def test_editing_the_shared_upstream_cascades(nb_runner):

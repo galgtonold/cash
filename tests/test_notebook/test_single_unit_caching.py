@@ -1,4 +1,5 @@
 from cash.notebook.cache_status import CacheStatus
+
 """Tests for control structure caching behaviour.
 
 For-loops are decomposed per-iteration.  Each body statement goes through
@@ -8,17 +9,19 @@ while pure computation statements are cached per-iteration.
 
 If/while/with/try are still processed as single cacheable units.
 """
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
 from traitlets.config import Configurable
 
+from cash.backends import InMemoryBackend
 from cash.core import Cash
 from cash.notebook.ipython.magics import CashMagics
-from cash.backends import InMemoryBackend
 
 
 class MockShell(Configurable):
     """Mock IPython shell for testing."""
+
     def __init__(self):
         super().__init__()
         self.user_ns = {}
@@ -27,7 +30,7 @@ class MockShell(Configurable):
         self.events = MagicMock()
         self.ast_transformers = []
         self.user_global_ns = self.user_ns
-        self.display_pub = type('MockDisplayPub', (), {'publish': MagicMock()})()
+        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
 
 
 @pytest.fixture
@@ -56,7 +59,7 @@ for i in [1, 2, 3, 4, 5]:
     total += i
 """
         magics.cash("", code.strip())
-        assert shell.user_ns['total'] == 15
+        assert shell.user_ns["total"] == 15
 
     def test_second_run_correct(self, magics_fixture):
         """Second run should produce correct results."""
@@ -68,10 +71,10 @@ for i in [1, 2, 3, 4, 5]:
     total += i
 """
         magics.cash("", code.strip())
-        assert shell.user_ns['total'] == 15
+        assert shell.user_ns["total"] == 15
 
         magics.cash("", code.strip())
-        assert shell.user_ns['total'] == 15
+        assert shell.user_ns["total"] == 15
 
     def test_loop_with_append_correct(self, magics_fixture):
         """Loop with .append() mutation should produce correct results on both runs."""
@@ -83,10 +86,10 @@ for x in ['a', 'b', 'c', 'd']:
     results.append(x.upper())
 """
         magics.cash("", code.strip())
-        assert shell.user_ns['results'] == ['A', 'B', 'C', 'D']
+        assert shell.user_ns["results"] == ["A", "B", "C", "D"]
 
         magics.cash("", code.strip())
-        assert shell.user_ns['results'] == ['A', 'B', 'C', 'D']
+        assert shell.user_ns["results"] == ["A", "B", "C", "D"]
 
     def test_pure_body_statements_cached(self, magics_fixture):
         """Pure computations inside loops should be cached per-iteration.
@@ -100,15 +103,15 @@ for i in [1, 2, 3]:
 """
         # First run: compute
         magics.cash("", code.strip())
-        assert shell.user_ns['x'] == 300  # Last iteration value
+        assert shell.user_ns["x"] == 300  # Last iteration value
 
         # Second run: should restore from cache
         magics.cash("", code.strip())
-        assert shell.user_ns['x'] == 300
+        assert shell.user_ns["x"] == 300
 
         # Check that iterations were cached (look at metrics)
-        statements = magics._last_cell_metrics.get('statements', [])
-        restored = [s for s in statements if s.get('status') == CacheStatus.RESTORED]
+        statements = magics._last_cell_metrics.get("statements", [])
+        restored = [s for s in statements if s.get("status") == CacheStatus.RESTORED]
         assert len(restored) > 0, "Expected some statements to be RESTORED from cache"
 
     def test_mutation_statements_not_cached(self, magics_fixture):
@@ -121,11 +124,11 @@ for v in [10, 20]:
     acc.append(v)
 """
         magics.cash("", code.strip())
-        assert shell.user_ns['acc'] == [10, 20]
+        assert shell.user_ns["acc"] == [10, 20]
 
         # On second run, mutation statements re-execute
         magics.cash("", code.strip())
-        assert shell.user_ns['acc'] == [10, 20]
+        assert shell.user_ns["acc"] == [10, 20]
 
     def test_mixed_cache_and_mutation(self, magics_fixture):
         """Expensive pure statements cached, mutation statements re-executed."""
@@ -138,12 +141,12 @@ for key in ['x', 'y']:
     results[key] = val
 """
         magics.cash("", code.strip())
-        assert shell.user_ns['results'] == {'x': 4950, 'y': 4950}
+        assert shell.user_ns["results"] == {"x": 4950, "y": 4950}
 
         # Second run: val = sum(range(100)) should restore from cache
         # results[key] = val is a subscript assignment on results, but results IS output
         magics.cash("", code.strip())
-        assert shell.user_ns['results'] == {'x': 4950, 'y': 4950}
+        assert shell.user_ns["results"] == {"x": 4950, "y": 4950}
 
 
 class TestIfSingleUnitCaching:
@@ -159,7 +162,7 @@ else:
     result = 'small'
 """
         magics.cash("", code.strip())
-        assert shell.user_ns['result'] == 'big'
+        assert shell.user_ns["result"] == "big"
 
     def test_if_false_branch(self, magics_fixture):
         magics, shell, backend = magics_fixture
@@ -171,7 +174,7 @@ else:
     result = 'small'
 """
         magics.cash("", code.strip())
-        assert shell.user_ns['result'] == 'small'
+        assert shell.user_ns["result"] == "small"
 
 
 class TestWhileSingleUnitCaching:
@@ -187,8 +190,8 @@ while i < 5:
     i += 1
 """
         magics.cash("", code.strip())
-        assert shell.user_ns['counter'] == 5
-        assert shell.user_ns['i'] == 5
+        assert shell.user_ns["counter"] == 5
+        assert shell.user_ns["i"] == 5
 
 
 class TestBadgeDisplayWithPerIteration:
@@ -204,8 +207,8 @@ for key in ['a', 'b']:
 """
         magics.cash("", code.strip())
 
-        statements = magics._last_cell_metrics.get('statements', [])
-        loop_stmts = [s for s in statements if '# __iteration_context__:' in s.get('code', '')]
+        statements = magics._last_cell_metrics.get("statements", [])
+        loop_stmts = [s for s in statements if "# __iteration_context__:" in s.get("code", "")]
         assert len(loop_stmts) > 0, "Expected per-iteration metrics with __iteration_context__"
 
     def test_if_no_iteration_context(self, magics_fixture):
@@ -221,9 +224,10 @@ else:
 """
         magics.cash("", code.strip())
 
-        statements = magics._last_cell_metrics.get('statements', [])
+        statements = magics._last_cell_metrics.get("statements", [])
         for s in statements:
-            assert '# __iteration_context__:' not in s.get('code', '')
+            assert "# __iteration_context__:" not in s.get("code", "")
+
 
 class TestErrorPropagationInLoops:
     """Tests that runtime errors inside loops propagate correctly and are NOT masked by cache."""
@@ -268,7 +272,7 @@ for x in ['a', 'b']:
     val = stats['mean'][0]
 """
         magics.cash("", code_v1.strip())
-        assert shell.user_ns['val'] == 1.0
+        assert shell.user_ns["val"] == 1.0
 
         # Run 2: modified code introduces a bug (overwrite list with int)
         code_v2 = """
@@ -303,10 +307,8 @@ class TestErrorLineNumberAnnotation:
         except TypeError as e:
             # The error should be annotated with line 4 (the body statement),
             # not line 1 (the for-loop header)
-            assert hasattr(e, '_cash_error_lineno'), \
-                "_cash_error_lineno not set on exception"
-            assert e._cash_error_lineno == 4, \
-                f"Expected error at line 4, got line {e._cash_error_lineno}"
+            assert hasattr(e, "_cash_error_lineno"), "_cash_error_lineno not set on exception"
+            assert e._cash_error_lineno == 4, f"Expected error at line 4, got line {e._cash_error_lineno}"
 
     def test_if_single_unit_error_points_to_body_line(self, magics_fixture):
         """For single-unit if statements, error lineno should point inside the body."""
@@ -325,10 +327,8 @@ if x > 0:
         except ZeroDivisionError as e:
             # The if-block starts at line 2 in the cell.  The error is on
             # the 2nd line of the unparsed block → cell line 2 + 2 - 1 = 3
-            assert hasattr(e, '_cash_error_lineno'), \
-                "_cash_error_lineno not set on exception"
-            assert e._cash_error_lineno == 3, \
-                f"Expected error at line 3, got line {e._cash_error_lineno}"
+            assert hasattr(e, "_cash_error_lineno"), "_cash_error_lineno not set on exception"
+            assert e._cash_error_lineno == 3, f"Expected error at line 3, got line {e._cash_error_lineno}"
 
     def test_nested_for_loop_error_preserves_inner_lineno(self, magics_fixture):
         """Nested control structure errors should preserve the innermost error line."""
@@ -345,10 +345,8 @@ if x > 0:
             magics.cash("", code.strip())
             pytest.fail("Expected ZeroDivisionError")
         except ZeroDivisionError as e:
-            assert hasattr(e, '_cash_error_lineno'), \
-                "_cash_error_lineno not set on exception"
-            assert e._cash_error_lineno == 3, \
-                f"Expected error at line 3, got line {e._cash_error_lineno}"
+            assert hasattr(e, "_cash_error_lineno"), "_cash_error_lineno not set on exception"
+            assert e._cash_error_lineno == 3, f"Expected error at line 3, got line {e._cash_error_lineno}"
 
 
 class TestShowCleanErrorIntegration:
@@ -366,8 +364,8 @@ class TestShowCleanErrorIntegration:
 
         def patched_show(exc, raw_cell, node):
             # Check _cash_error_lineno before _show_clean_error uses it
-            lineno = getattr(exc, '_cash_error_lineno', None) or getattr(node, 'lineno', None)
-            captured_calls.append({'lineno': lineno, 'exc_type': type(exc).__name__})
+            lineno = getattr(exc, "_cash_error_lineno", None) or getattr(node, "lineno", None)
+            captured_calls.append({"lineno": lineno, "exc_type": type(exc).__name__})
             # Don't actually call the real one (it would try to use showtraceback)
             return
 
@@ -381,9 +379,8 @@ class TestShowCleanErrorIntegration:
         magics._execute_cell(raw_cell, store_history=True)
 
         assert len(captured_calls) == 1, f"Expected 1 _show_clean_error call, got {len(captured_calls)}"
-        assert captured_calls[0]['lineno'] == 4, \
-            f"Expected error line 4, got {captured_calls[0]['lineno']}"
-        assert captured_calls[0]['exc_type'] == 'TypeError'
+        assert captured_calls[0]["lineno"] == 4, f"Expected error line 4, got {captured_calls[0]['lineno']}"
+        assert captured_calls[0]["exc_type"] == "TypeError"
 
 
 class TestUpstreamFunctionTrackerSharing:
@@ -402,12 +399,12 @@ class TestUpstreamFunctionTrackerSharing:
         sp_ft = magics._statement_processor.function_tracker
         uc_ft = magics._upstream_checker.function_tracker
 
-        assert sp_ft is uc_ft, \
-            "function_tracker must be the same object instance on both components"
+        assert sp_ft is uc_ft, "function_tracker must be the same object instance on both components"
 
     def test_function_tracker_not_none(self, magics_fixture):
         """UpstreamChecker's function_tracker should not be None."""
         magics, shell, backend = magics_fixture
 
-        assert magics._upstream_checker.function_tracker is not None, \
+        assert magics._upstream_checker.function_tracker is not None, (
             "UpstreamChecker.function_tracker should not be None"
+        )

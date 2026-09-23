@@ -15,6 +15,7 @@ unchanged it would have drawn silently.
 A later statement that binds a name WITHOUT reading it does not continue what
 the earlier producer built; it starts over, and owes it nothing.
 """
+
 import pytest
 
 pytest.importorskip("matplotlib")

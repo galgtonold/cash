@@ -1,6 +1,8 @@
 """Batch 82 – match/case (structural pattern matching, Python 3.10+)."""
 
-import textwrap, pytest
+import textwrap
+
+import pytest
 
 pytestmark = [pytest.mark.stress, pytest.mark.integration]
 
@@ -10,8 +12,9 @@ class TestMatchCase:
 
     def test_basic_match(self, nb_runner):
         """match/case with literal patterns."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 def classify(code):
                     match code:
                         case 200:
@@ -24,8 +27,9 @@ class TestMatchCase:
                             return 'unknown'
                 results = [classify(c) for c in [200, 404, 500, 301]]
             """),
-            "print(f'results={results}')",
-        ])
+                "print(f'results={results}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -36,8 +40,9 @@ class TestMatchCase:
 
     def test_match_sequence_pattern(self, nb_runner):
         """match/case with sequence unpacking patterns."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 def parse_command(cmd):
                     match cmd.split():
                         case ["quit"]:
@@ -55,8 +60,9 @@ class TestMatchCase:
                     parse_command("dance"),
                 ]
             """),
-            "print(f'outputs={outputs}')",
-        ])
+                "print(f'outputs={outputs}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -67,8 +73,9 @@ class TestMatchCase:
 
     def test_match_class_pattern(self, nb_runner):
         """match/case with class patterns."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from dataclasses import dataclass
 
                 @dataclass
@@ -99,8 +106,9 @@ class TestMatchCase:
                     describe(Point(1, 2)),
                 ]
             """),
-            "print(f'labels={labels}')",
-        ])
+                "print(f'labels={labels}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -111,9 +119,10 @@ class TestMatchCase:
 
     def test_match_guard_propagation(self, nb_runner):
         """match/case with guard conditions, upstream change propagation."""
-        nb_runner.create_notebook([
-            "threshold = 50",
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                "threshold = 50",
+                textwrap.dedent("""\
                 def categorize(val, thresh):
                     match val:
                         case x if x > thresh:
@@ -124,8 +133,9 @@ class TestMatchCase:
                             return 'low'
                 cats = [categorize(v, threshold) for v in [10, 30, 70]]
             """),
-            "print(f'cats={cats}')",
-        ])
+                "print(f'cats={cats}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "high" in nb_runner.get_output(3)
@@ -139,8 +149,9 @@ class TestMatchCase:
 
     def test_match_mapping_pattern(self, nb_runner):
         """match/case with mapping (dict) patterns."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 def process_event(event):
                     match event:
                         case {"type": "click", "x": x, "y": y}:
@@ -158,8 +169,9 @@ class TestMatchCase:
                     process_event({"type": "scroll"}),
                 ]
             """),
-            "print(f'results={results}')",
-        ])
+                "print(f'results={results}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)

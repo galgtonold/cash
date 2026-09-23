@@ -6,6 +6,7 @@ returned 1 where an uncached run returned 101 after an INSERT -- with no
 warning. ``pd.read_sql_query`` over a ``sqlite3`` connection has the same
 shape, and looks like the ``pd.read_*`` family that IS tracked.
 """
+
 from __future__ import annotations
 
 import json
@@ -16,7 +17,7 @@ import textwrap
 
 import pytest
 
-PROGRAM = textwrap.dedent('''
+PROGRAM = textwrap.dedent("""
     import os, sqlite3, time, json
     import pandas as pd
     import cash
@@ -36,7 +37,7 @@ PROGRAM = textwrap.dedent('''
             return int(pd.read_sql_query("select coalesce(sum(x), 0) as s from t", conn)["s"][0])
 
     print(json.dumps([total(), total_pandas()]))
-''')
+""")
 
 
 @pytest.mark.timeout(300)
@@ -50,12 +51,13 @@ def test_an_insert_invalidates_the_cached_query(tmp_path):
 
     script = tmp_path / "run.py"
     script.write_text(
-        PROGRAM.replace("CACHE_DIR", repr(str(tmp_path / ".cash"))).replace("PATH", repr(str(db))),
-        encoding="utf-8")
+        PROGRAM.replace("CACHE_DIR", repr(str(tmp_path / ".cash"))).replace("PATH", repr(str(db))), encoding="utf-8"
+    )
 
     def run():
-        done = subprocess.run([sys.executable, str(script)], capture_output=True,
-                              text=True, timeout=180, cwd=str(tmp_path))
+        done = subprocess.run(
+            [sys.executable, str(script)], capture_output=True, text=True, timeout=180, cwd=str(tmp_path)
+        )
         assert done.returncode == 0, done.stderr
         return json.loads(done.stdout.strip().splitlines()[-1])
 

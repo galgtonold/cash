@@ -10,14 +10,14 @@ Covers:
 - get_function_source_hash() cache bypass for tracked modules
 """
 
+import importlib
 import sys
 import time
 import types
-import importlib
+
 import pytest
 
 from cash.notebook.function_tracker import FunctionTracker, is_local_module
-
 
 # ============================================================================
 # Fixtures
@@ -41,10 +41,7 @@ def temp_module(tmp_path):
     module_name = f"_test_auto_track_{id(tmp_path)}"
     module_file = tmp_path / f"{module_name}.py"
     module_file.write_text(
-        "def helper(x):\n"
-        "    return x * 2\n\n"
-        "def transform(data):\n"
-        "    return [x + 1 for x in data]\n"
+        "def helper(x):\n    return x * 2\n\ndef transform(data):\n    return [x + 1 for x in data]\n"
     )
 
     sys.path.insert(0, str(tmp_path))
@@ -95,21 +92,25 @@ class TestIsLocalModule:
     def test_stdlib_module_returns_false(self):
         """Stdlib modules like 'os' should NOT be local."""
         import os as os_module
+
         assert is_local_module(os_module) is False
 
     def test_json_module_returns_false(self):
         """Stdlib 'json' module should NOT be local."""
         import json
+
         assert is_local_module(json) is False
 
     def test_site_packages_module_returns_false(self):
         """Third-party packages (pytest) should NOT be local."""
         import pytest as pytest_mod
+
         assert is_local_module(pytest_mod) is False
 
     def test_builtin_module_returns_false(self):
         """Modules with no __file__ (builtins) should NOT be local."""
         import builtins
+
         assert is_local_module(builtins) is False
 
     def test_local_temp_module_returns_true(self, temp_module):
@@ -276,7 +277,7 @@ class TestCheckAndReloadChangedModules:
 
         # Modify the file
         time.sleep(0.1)
-        with open(module_file, 'w') as f:
+        with open(module_file, "w") as f:
             f.write("def helper(x):\n    return x * 99\n")
 
         user_ns = {}
@@ -295,19 +296,19 @@ class TestCheckAndReloadChangedModules:
         tracker.track_module(module_name)
 
         # Put the function in user_ns (simulates 'from mod import helper')
-        user_ns = {'helper': mod.helper}
-        assert user_ns['helper'](5) == 10
+        user_ns = {"helper": mod.helper}
+        assert user_ns["helper"](5) == 10
 
         # Modify the module
         time.sleep(0.1)
-        with open(module_file, 'w') as f:
+        with open(module_file, "w") as f:
             f.write("def helper(x):\n    return x * 100\n")
 
         result, _ = tracker.check_and_reload_changed_modules(user_ns)
         assert module_name in result
 
         # user_ns should have the fresh function now
-        assert user_ns['helper'](5) == 500
+        assert user_ns["helper"](5) == 500
 
     def test_multiple_modules_some_changed(self, tracker, temp_module_pair):
         """Only changed modules should be reloaded."""
@@ -319,7 +320,7 @@ class TestCheckAndReloadChangedModules:
 
         # Only modify mod1
         time.sleep(0.1)
-        with open(mod1_file, 'w') as f:
+        with open(mod1_file, "w") as f:
             f.write("def func_a(x):\n    return x + 999\n")
 
         result, _ = tracker.check_and_reload_changed_modules({})
@@ -340,12 +341,12 @@ class TestUpdateUserNsFromModule:
         module_name, module_file = temp_module
         mod = importlib.import_module(module_name)
 
-        user_ns = {'helper': mod.helper}
+        user_ns = {"helper": mod.helper}
         old_helper = mod.helper
 
         # Modify and reload
         time.sleep(0.1)
-        with open(module_file, 'w') as f:
+        with open(module_file, "w") as f:
             f.write("def helper(x):\n    return x ** 2\n")
 
         tracker.reload_module(module_name)
@@ -353,22 +354,22 @@ class TestUpdateUserNsFromModule:
 
         updated = tracker._update_user_ns_from_module(module_name, new_mod, user_ns)
 
-        assert 'helper' in updated
-        assert user_ns['helper'] is not old_helper
-        assert user_ns['helper'](5) == 25
+        assert "helper" in updated
+        assert user_ns["helper"] is not old_helper
+        assert user_ns["helper"](5) == 25
 
     def test_skips_underscore_vars(self, tracker, temp_module):
         """Variables starting with _ should be skipped."""
         module_name, _ = temp_module
         mod = importlib.import_module(module_name)
 
-        user_ns = {'_private': mod.helper, 'helper': mod.helper}
+        user_ns = {"_private": mod.helper, "helper": mod.helper}
 
         updated = tracker._update_user_ns_from_module(module_name, mod, user_ns)
 
         # _private should NOT be updated, helper should
-        assert '_private' not in updated
-        assert 'helper' in updated
+        assert "_private" not in updated
+        assert "helper" in updated
 
     def test_non_module_vars_untouched(self, tracker, temp_module):
         """Variables not from the module should be untouched."""
@@ -376,24 +377,24 @@ class TestUpdateUserNsFromModule:
         mod = importlib.import_module(module_name)
 
         local_func = lambda x: x  # noqa: E731
-        user_ns = {'my_func': local_func, 'helper': mod.helper}
+        user_ns = {"my_func": local_func, "helper": mod.helper}
 
         updated = tracker._update_user_ns_from_module(module_name, mod, user_ns)
 
-        assert 'my_func' not in updated
-        assert user_ns['my_func'] is local_func
+        assert "my_func" not in updated
+        assert user_ns["my_func"] is local_func
 
     def test_updates_multiple_functions(self, tracker, temp_module):
         """Multiple functions from same module should all be updated."""
         module_name, _ = temp_module
         mod = importlib.import_module(module_name)
 
-        user_ns = {'helper': mod.helper, 'transform': mod.transform}
+        user_ns = {"helper": mod.helper, "transform": mod.transform}
 
         updated = tracker._update_user_ns_from_module(module_name, mod, user_ns)
 
-        assert 'helper' in updated
-        assert 'transform' in updated
+        assert "helper" in updated
+        assert "transform" in updated
 
 
 # ============================================================================
@@ -472,11 +473,7 @@ class TestDetectOpaqueCallPatterns:
 
     def test_multiple_patterns_multiple_warnings(self, tracker):
         """Multiple opaque patterns in same code should produce multiple warnings."""
-        code = (
-            "a = getattr(obj, 'method')(x)\n"
-            "b = registry['key'](y)\n"
-            "c = eval('func(z)')\n"
-        )
+        code = "a = getattr(obj, 'method')(x)\nb = registry['key'](y)\nc = eval('func(z)')\n"
         warnings = tracker.detect_opaque_call_patterns(code, {})
         assert len(warnings) >= 3
 
@@ -497,6 +494,7 @@ class TestSourceHashCacheBypass:
 
     def test_cached_hash_returned_for_untracked(self, tracker):
         """For untracked modules, cached hash should be returned."""
+
         def my_func(x):
             return x * 2
 
@@ -519,7 +517,7 @@ class TestSourceHashCacheBypass:
 
         # Modify the file (change the function body)
         time.sleep(0.1)
-        with open(module_file, 'w') as f:
+        with open(module_file, "w") as f:
             f.write("def helper(x):\n    return x ** 3\n")
 
         # Reload the module so inspect.getsource can read fresh code
@@ -562,18 +560,18 @@ class TestAutoTrackingIntegration:
         assert module_name in newly_tracked
 
         # Step 2: Simulate user_ns with imported function
-        user_ns = {'helper': mod.helper}
-        assert user_ns['helper'](5) == 10
+        user_ns = {"helper": mod.helper}
+        assert user_ns["helper"](5) == 10
 
         # Step 3: Modify the source file
         time.sleep(0.1)
-        with open(module_file, 'w') as f:
+        with open(module_file, "w") as f:
             f.write("def helper(x):\n    return x * 7\n")
 
         # Step 4: check_and_reload detects change and updates user_ns
         changed, _ = tracker.check_and_reload_changed_modules(user_ns)
         assert module_name in changed
-        assert user_ns['helper'](5) == 35
+        assert user_ns["helper"](5) == 35
 
     def test_auto_track_does_not_double_track(self, tracker, temp_module):
         """Running auto_track twice on same import doesn't duplicate tracking."""
@@ -598,15 +596,15 @@ class TestAutoTrackingIntegration:
 
         # Modify the source
         time.sleep(0.1)
-        with open(module_file, 'w') as f:
+        with open(module_file, "w") as f:
             f.write("def helper(x):\n    return x - 1\n")
 
         # Auto-reload
-        user_ns = {'helper': mod.helper}
+        user_ns = {"helper": mod.helper}
         tracker.check_and_reload_changed_modules(user_ns)
 
         # Get new hash from fresh function
-        hash_after = tracker.get_function_source_hash(user_ns['helper'])
+        hash_after = tracker.get_function_source_hash(user_ns["helper"])
         assert hash_before != hash_after
 
     def test_unchanged_module_no_reload(self, tracker, temp_module):
@@ -627,8 +625,8 @@ class TestAutoTrackingIntegration:
         newly_tracked = tracker.auto_track_local_imports(code)
 
         assert module_name in newly_tracked
-        assert 'os' not in tracker._tracked_modules
-        assert 'json' not in tracker._tracked_modules
+        assert "os" not in tracker._tracked_modules
+        assert "json" not in tracker._tracked_modules
 
 
 # ============================================================================
@@ -684,22 +682,22 @@ output = handler(df)
 
         # user_ns has both module functions and other data
         user_ns = {
-            'helper': mod.helper,
-            'my_data': [1, 2, 3],
-            'my_number': 42,
+            "helper": mod.helper,
+            "my_data": [1, 2, 3],
+            "my_number": 42,
         }
 
         time.sleep(0.1)
-        with open(module_file, 'w') as f:
+        with open(module_file, "w") as f:
             f.write("def helper(x):\n    return x + 100\n")
 
         tracker.check_and_reload_changed_modules(user_ns)
 
         # Non-module data should be untouched
-        assert user_ns['my_data'] == [1, 2, 3]
-        assert user_ns['my_number'] == 42
+        assert user_ns["my_data"] == [1, 2, 3]
+        assert user_ns["my_number"] == 42
         # But the function should be updated
-        assert user_ns['helper'](5) == 105
+        assert user_ns["helper"](5) == 105
 
     def test_detect_opaque_patterns_empty_code(self, tracker):
         """Empty code should return no warnings."""

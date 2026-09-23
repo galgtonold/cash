@@ -60,5 +60,6 @@ class TestDependencyGraph:
         # visualize with notebook=False and no pyvis should print a message
         # (pyvis may or may not be installed; just verify no crash)
         import contextlib
+
         with contextlib.suppress(Exception):
             g.visualize(notebook=False)

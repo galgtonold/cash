@@ -14,9 +14,9 @@ import warnings
 from types import SimpleNamespace
 
 from cash.notebook.randomness import (
+    CashRandomnessWarning,
     RandomnessDetector,
     RandomnessVisitor,
-    CashRandomnessWarning,
     check_and_warn_randomness,
 )
 
@@ -40,7 +40,7 @@ def _randomness_warnings(recorded):
 
 class TestRandomnessVisitor:
     """Tests for the AST visitor that detects randomness calls."""
-    
+
     def test_detect_random_random(self):
         """Test detection of random.random()."""
         code = """
@@ -48,13 +48,14 @@ import random
 x = random.random()
 """
         import ast
+
         tree = ast.parse(code)
         visitor = RandomnessVisitor()
         visitor.visit(tree)
-        
+
         assert len(visitor.random_calls) == 1
-        assert visitor.random_calls[0].function == 'random'
-        
+        assert visitor.random_calls[0].function == "random"
+
     def test_detect_random_choice(self):
         """Test detection of random.choice()."""
         code = """
@@ -62,13 +63,14 @@ import random
 x = random.choice([1, 2, 3])
 """
         import ast
+
         tree = ast.parse(code)
         visitor = RandomnessVisitor()
         visitor.visit(tree)
-        
+
         assert len(visitor.random_calls) == 1
-        assert visitor.random_calls[0].function == 'choice'
-    
+        assert visitor.random_calls[0].function == "choice"
+
     def test_detect_numpy_random(self):
         """Test detection of np.random.rand()."""
         code = """
@@ -76,14 +78,15 @@ import numpy as np
 x = np.random.rand(10)
 """
         import ast
+
         tree = ast.parse(code)
         visitor = RandomnessVisitor()
         visitor.visit(tree)
-        
+
         assert len(visitor.random_calls) == 1
-        assert visitor.random_calls[0].module == 'numpy.random'
-        assert visitor.random_calls[0].function == 'rand'
-    
+        assert visitor.random_calls[0].module == "numpy.random"
+        assert visitor.random_calls[0].function == "rand"
+
     def test_detect_numpy_randn(self):
         """Test detection of np.random.randn()."""
         code = """
@@ -91,13 +94,14 @@ import numpy as np
 y = np.random.randn(5, 5)
 """
         import ast
+
         tree = ast.parse(code)
         visitor = RandomnessVisitor()
         visitor.visit(tree)
-        
+
         assert len(visitor.random_calls) == 1
-        assert visitor.random_calls[0].function == 'randn'
-    
+        assert visitor.random_calls[0].function == "randn"
+
     def test_detect_seed_call(self):
         """Test detection of seed function calls."""
         code = """
@@ -106,13 +110,14 @@ random.seed(42)
 x = random.random()
 """
         import ast
+
         tree = ast.parse(code)
         visitor = RandomnessVisitor()
         visitor.visit(tree)
-        
+
         assert len(visitor.seed_calls) == 1
         assert len(visitor.random_calls) == 1
-    
+
     def test_detect_numpy_seed(self):
         """Test detection of np.random.seed()."""
         code = """
@@ -121,13 +126,14 @@ np.random.seed(42)
 x = np.random.rand(10)
 """
         import ast
+
         tree = ast.parse(code)
         visitor = RandomnessVisitor()
         visitor.visit(tree)
-        
+
         assert len(visitor.seed_calls) == 1
         assert len(visitor.random_calls) == 1
-    
+
     def test_no_random_calls(self):
         """Test code with no random calls."""
         code = """
@@ -135,17 +141,18 @@ x = 1 + 2
 y = [1, 2, 3]
 """
         import ast
+
         tree = ast.parse(code)
         visitor = RandomnessVisitor()
         visitor.visit(tree)
-        
+
         assert len(visitor.random_calls) == 0
         assert len(visitor.seed_calls) == 0
 
 
 class TestRandomnessDetector:
     """Tests for the RandomnessDetector class."""
-    
+
     def test_unseeded_random_detected(self):
         """Test that unseeded random calls are detected."""
         detector = RandomnessDetector()
@@ -154,11 +161,11 @@ import random
 x = random.random()
 """
         calls, warnings_list, has_seed = detector.analyze_code(code)
-        
+
         assert len(calls) == 1
         assert len(warnings_list) == 1
-        assert 'Unseeded randomness' in warnings_list[0]
-    
+        assert "Unseeded randomness" in warnings_list[0]
+
     def test_seeded_random_not_detected(self):
         """Test that seeded random calls don't trigger warnings."""
         detector = RandomnessDetector()
@@ -168,50 +175,50 @@ random.seed(42)
 x = random.random()
 """
         calls, warnings_list, has_seed = detector.analyze_code(code)
-        
+
         assert len(calls) == 0
         assert len(warnings_list) == 0
-        assert has_seed == True  # Seed was set
-    
+        assert has_seed is True  # Seed was set
+
     def test_session_state_persistence(self):
         """Test that seeding in one call persists to next call."""
         detector = RandomnessDetector()
-        
+
         # First code sets seed
         code1 = """
 import random
 random.seed(42)
 """
         detector.analyze_code(code1)
-        
+
         # Second code uses random
         code2 = """
 import random
 x = random.random()
 """
         calls, warnings_list, has_seed = detector.analyze_code(code2)
-        
+
         # Should not warn because seed was set previously
         assert len(calls) == 0
         assert len(warnings_list) == 0
-        assert has_seed == False  # No new seed in this code
-    
+        assert has_seed is False  # No new seed in this code
+
     def test_reset_clears_state(self):
         """Test that reset() clears seeding state."""
         detector = RandomnessDetector()
-        
+
         # Seed
         detector.analyze_code("import random; random.seed(42)")
-        
+
         # Reset
         detector.reset()
-        
+
         # Use random - should warn now
         calls, warnings_list, has_seed = detector.analyze_code("import random; x = random.random()")
-        
+
         assert len(calls) == 1
         assert len(warnings_list) == 1
-    
+
     def test_numpy_unseeded(self):
         """Test detection of unseeded numpy random."""
         detector = RandomnessDetector()
@@ -220,10 +227,10 @@ import numpy as np
 x = np.random.rand(100)
 """
         calls, warnings_list, has_seed = detector.analyze_code(code)
-        
+
         assert len(calls) == 1
-        assert 'numpy.random' in warnings_list[0]
-    
+        assert "numpy.random" in warnings_list[0]
+
     def test_numpy_seeded(self):
         """Test that seeded numpy random doesn't warn."""
         detector = RandomnessDetector()
@@ -233,10 +240,10 @@ np.random.seed(42)
 x = np.random.rand(100)
 """
         calls, warnings_list, has_seed = detector.analyze_code(code)
-        
+
         assert len(calls) == 0
         assert len(warnings_list) == 0
-    
+
     def test_multiple_random_calls(self):
         """Test detection of multiple random calls."""
         detector = RandomnessDetector()
@@ -247,14 +254,14 @@ x = random.random()
 y = np.random.rand(10)
 """
         calls, warnings_list, has_seed = detector.analyze_code(code)
-        
+
         assert len(calls) == 2
         assert len(warnings_list) == 2
 
 
 class TestCheckAndWarnRandomness:
     """Tests for the check_and_warn_randomness function."""
-    
+
     def test_warning_issued(self):
         """Test that warnings are issued for unseeded random."""
         detector = RandomnessDetector()
@@ -265,11 +272,11 @@ x = random.random()
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             check_and_warn_randomness(code, detector, suppress_warning=False)
-            
+
             randomness = _randomness_warnings(w)
             assert len(randomness) == 1
             assert issubclass(randomness[0].category, CashRandomnessWarning)
-    
+
     def test_warning_suppressed(self):
         """Test that warnings can be suppressed."""
         detector = RandomnessDetector()
@@ -280,21 +287,21 @@ x = random.random()
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             check_and_warn_randomness(code, detector, suppress_warning=True)
-            
+
             # Warning should be suppressed
             assert len(_randomness_warnings(w)) == 0
-    
+
     def test_state_updated_when_suppressed(self):
         """Test that session state is still updated when warnings are suppressed."""
         detector = RandomnessDetector()
-        
+
         # First call sets seed but suppresses warning
         code1 = """
 import random
 random.seed(42)
 """
         check_and_warn_randomness(code1, detector, suppress_warning=True)
-        
+
         # Second call should not warn because seed was tracked
         code2 = """
 import random
@@ -303,23 +310,23 @@ x = random.random()
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             check_and_warn_randomness(code2, detector, suppress_warning=False)
-            
+
             assert len(_randomness_warnings(w)) == 0
 
 
 class TestSyntaxErrorHandling:
     """Tests for handling of invalid code."""
-    
+
     def test_syntax_error_returns_empty(self):
         """Test that syntax errors don't crash the detector."""
         detector = RandomnessDetector()
         code = "this is not valid python code !@#$"
-        
+
         calls, warnings_list, has_seed = detector.analyze_code(code)
-        
+
         assert len(calls) == 0
         assert len(warnings_list) == 0
-        assert has_seed == False
+        assert has_seed is False
 
 
 class TestRandomnessVisitorAdvanced:
@@ -328,6 +335,7 @@ class TestRandomnessVisitorAdvanced:
     def test_detect_from_import_random(self):
         """Test detection of 'from random import random'."""
         import ast
+
         code = """
 from random import random
 x = random()
@@ -336,11 +344,12 @@ x = random()
         visitor = RandomnessVisitor()
         visitor.visit(tree)
         assert len(visitor.random_calls) == 1
-        assert visitor.random_calls[0].function == 'random'
+        assert visitor.random_calls[0].function == "random"
 
     def test_detect_from_import_choice(self):
         """Test detection of 'from random import choice'."""
         import ast
+
         code = """
 from random import choice
 x = choice([1, 2, 3])
@@ -349,11 +358,12 @@ x = choice([1, 2, 3])
         visitor = RandomnessVisitor()
         visitor.visit(tree)
         assert len(visitor.random_calls) == 1
-        assert visitor.random_calls[0].function == 'choice'
+        assert visitor.random_calls[0].function == "choice"
 
     def test_detect_torch_rand(self):
         """Test detection of torch.rand()."""
         import ast
+
         code = """
 import torch
 x = torch.rand(3, 3)
@@ -362,12 +372,13 @@ x = torch.rand(3, 3)
         visitor = RandomnessVisitor()
         visitor.visit(tree)
         assert len(visitor.random_calls) == 1
-        assert visitor.random_calls[0].module == 'torch'
-        assert visitor.random_calls[0].function == 'rand'
+        assert visitor.random_calls[0].module == "torch"
+        assert visitor.random_calls[0].function == "rand"
 
     def test_detect_torch_manual_seed(self):
         """Test detection of torch.manual_seed()."""
         import ast
+
         code = """
 import torch
 torch.manual_seed(42)
@@ -380,6 +391,7 @@ torch.manual_seed(42)
     def test_detect_tf_random(self):
         """Test detection of tf.random.uniform()."""
         import ast
+
         code = """
 import tensorflow as tf
 x = tf.random.uniform([3, 3])
@@ -388,11 +400,12 @@ x = tf.random.uniform([3, 3])
         visitor = RandomnessVisitor()
         visitor.visit(tree)
         assert len(visitor.random_calls) == 1
-        assert visitor.random_calls[0].function == 'uniform'
+        assert visitor.random_calls[0].function == "uniform"
 
     def test_detect_aliased_numpy_random(self):
         """Test detection with custom alias for numpy.random."""
         import ast
+
         code = """
 from numpy import random as nr
 x = nr.rand(10)
@@ -401,21 +414,23 @@ x = nr.rand(10)
         visitor = RandomnessVisitor()
         visitor.visit(tree)
         assert len(visitor.random_calls) == 1
-        assert visitor.random_calls[0].function == 'rand'
+        assert visitor.random_calls[0].function == "rand"
 
     def test_call_chain_extraction(self):
         """Test _get_call_chain helper."""
         import ast
+
         code = "np.random.seed(42)"
         tree = ast.parse(code)
         call = tree.body[0].value  # The Call node
         visitor = RandomnessVisitor()
         chain = visitor._get_call_chain(call.func)
-        assert chain == ['np', 'random', 'seed']
+        assert chain == ["np", "random", "seed"]
 
     def test_visit_call_empty_chain(self):
         """Test visit_Call with a non-attribute/name call (e.g., lambda)."""
         import ast
+
         code = "(lambda: None)()"
         tree = ast.parse(code)
         visitor = RandomnessVisitor()
@@ -430,10 +445,12 @@ class TestRNGStateCapture:
     def test_capture_random_state(self):
         """Test capturing stdlib random state."""
         import random
+
         from cash.notebook.randomness import capture_rng_state, restore_rng_state
+
         random.seed(42)
         state = capture_rng_state()
-        assert 'random' in state
+        assert "random" in state
         # Generate a number, restore, generate again - should match
         val1 = random.random()
         restore_rng_state(state)
@@ -443,10 +460,12 @@ class TestRNGStateCapture:
     def test_capture_numpy_state(self):
         """Test capturing numpy random state."""
         import numpy as np
+
         from cash.notebook.randomness import capture_rng_state, restore_rng_state
+
         np.random.seed(42)
         state = capture_rng_state()
-        assert 'numpy.random' in state
+        assert "numpy.random" in state
         val1 = np.random.rand()
         restore_rng_state(state)
         val2 = np.random.rand()
@@ -455,11 +474,13 @@ class TestRNGStateCapture:
     def test_restore_empty_state(self):
         """Test restore with empty state does nothing."""
         from cash.notebook.randomness import restore_rng_state
+
         restore_rng_state({})  # Should not crash
 
     def test_get_used_rng_modules(self):
         """Test identifying which RNG modules are used in code."""
         from cash.notebook.randomness import get_used_rng_modules
+
         code = """
 import random
 import numpy as np
@@ -467,30 +488,33 @@ x = random.random()
 y = np.random.rand(10)
 """
         modules = get_used_rng_modules(code)
-        assert 'random' in modules
-        assert 'numpy.random' in modules
+        assert "random" in modules
+        assert "numpy.random" in modules
 
     def test_get_used_rng_modules_syntax_error(self):
         """Test get_used_rng_modules with invalid code."""
         from cash.notebook.randomness import get_used_rng_modules
+
         modules = get_used_rng_modules("not valid python !@#$")
         assert modules == set()
 
     def test_get_used_rng_modules_no_random(self):
         """Test get_used_rng_modules with code that has no random calls."""
         from cash.notebook.randomness import get_used_rng_modules
+
         modules = get_used_rng_modules("x = 1 + 2")
         assert modules == set()
 
     def test_get_used_rng_modules_with_seed(self):
         """Test that seed calls also report the module."""
         from cash.notebook.randomness import get_used_rng_modules
+
         code = """
 import random
 random.seed(42)
 """
         modules = get_used_rng_modules(code)
-        assert 'random' in modules
+        assert "random" in modules
 
 
 class TestRandomnessDetectorAdvanced:
@@ -499,22 +523,22 @@ class TestRandomnessDetectorAdvanced:
     def test_mark_seeded_with_parent(self):
         """Test that marking a submodule seeded also marks the parent."""
         detector = RandomnessDetector()
-        detector.mark_seeded('numpy.random')
-        assert detector.is_seeded('numpy.random')
-        assert detector.is_seeded('numpy')
+        detector.mark_seeded("numpy.random")
+        assert detector.is_seeded("numpy.random")
+        assert detector.is_seeded("numpy")
 
     def test_is_seeded_via_parent(self):
         """Test that seeding parent module covers child."""
         detector = RandomnessDetector()
-        detector.mark_seeded('numpy')
-        assert detector.is_seeded('numpy.random')
+        detector.mark_seeded("numpy")
+        assert detector.is_seeded("numpy.random")
 
     def test_is_seeded_no_parent(self):
         """Test is_seeded for top-level module (no parent)."""
         detector = RandomnessDetector()
-        assert not detector.is_seeded('random')
-        detector.mark_seeded('random')
-        assert detector.is_seeded('random')
+        assert not detector.is_seeded("random")
+        detector.mark_seeded("random")
+        assert detector.is_seeded("random")
 
     def test_has_seed_calls_flag(self):
         """Test has_seed_calls return value."""
@@ -554,31 +578,42 @@ class TestRngCarrierDetection:
             "x = rng.standard_normal(10)",
         )
         assert len(calls) == 1
-        assert calls[0].carrier == 'rng'
-        assert calls[0].function == 'standard_normal'
-        assert calls[0].module == 'numpy.random'
+        assert calls[0].carrier == "rng"
+        assert calls[0].function == "standard_normal"
+        assert calls[0].module == "numpy.random"
 
     def test_seeded_default_rng_draw_not_detected(self):
-        assert self._carriers(
-            "import numpy as np",
-            "rng = np.random.default_rng(42)",
-            "x = rng.standard_normal(10)",
-        ) == []
+        assert (
+            self._carriers(
+                "import numpy as np",
+                "rng = np.random.default_rng(42)",
+                "x = rng.standard_normal(10)",
+            )
+            == []
+        )
 
     def test_seed_keyword_counts_as_seeded(self):
-        assert self._carriers(
-            "import numpy as np",
-            "rng = np.random.default_rng(seed=42)",
-            "x = rng.normal()",
-        ) == []
+        assert (
+            self._carriers(
+                "import numpy as np",
+                "rng = np.random.default_rng(seed=42)",
+                "x = rng.normal()",
+            )
+            == []
+        )
 
     def test_explicit_none_seed_is_unseeded(self):
         """``default_rng(None)`` is numpy's spelling of 'draw from OS entropy'."""
-        assert len(self._carriers(
-            "import numpy as np",
-            "rng = np.random.default_rng(None)",
-            "x = rng.normal()",
-        )) == 1
+        assert (
+            len(
+                self._carriers(
+                    "import numpy as np",
+                    "rng = np.random.default_rng(None)",
+                    "x = rng.normal()",
+                )
+            )
+            == 1
+        )
 
     def test_carrier_local_to_a_function_body_detected(self):
         """The CAS-135 report's actual shape: the generator is a function local.
@@ -593,7 +628,7 @@ class TestRngCarrierDetection:
             "    return float(g.standard_normal(10).mean())"
         )
         assert len(calls) == 1
-        assert calls[0].carrier == 'g'
+        assert calls[0].carrier == "g"
 
     def test_rng_param_not_resolved_against_stale_global(self):
         """CAS-154 Symptom B: a parameter draw must not resolve against a
@@ -605,24 +640,35 @@ class TestRngCarrierDetection:
         the outer name was ``del``-eted.
         """
         # Variant WITHOUT del: the stale global is still bound in the session.
-        assert self._carriers(
-            "import numpy as np",
-            "rng = np.random.default_rng()",
-            "def f(rng):\n    rng.standard_normal(10)",
-        ) == []
+        assert (
+            self._carriers(
+                "import numpy as np",
+                "rng = np.random.default_rng()",
+                "def f(rng):\n    rng.standard_normal(10)",
+            )
+            == []
+        )
         # Variant WITH del: the ``del rng`` that used to be the only silencer.
-        assert self._carriers(
-            "import numpy as np",
-            "rng = np.random.default_rng()",
-            "del rng",
-            "def f(rng):\n    rng.standard_normal(10)",
-        ) == []
+        assert (
+            self._carriers(
+                "import numpy as np",
+                "rng = np.random.default_rng()",
+                "del rng",
+                "def f(rng):\n    rng.standard_normal(10)",
+            )
+            == []
+        )
         # A parameter locally rebound to a concrete unseeded carrier still warns
         # (today's flat resolution is correct there — the binding is real).
-        assert len(self._carriers(
-            "import numpy as np",
-            "def f(rng):\n    rng = np.random.default_rng()\n    rng.standard_normal(10)",
-        )) == 1
+        assert (
+            len(
+                self._carriers(
+                    "import numpy as np",
+                    "def f(rng):\n    rng = np.random.default_rng()\n    rng.standard_normal(10)",
+                )
+            )
+            == 1
+        )
 
     def test_unseeded_rng_arg_flows_into_param_draw(self):
         """CAS-154 Symptom A: an unseeded generator passed as a keyword argument
@@ -640,18 +686,21 @@ class TestRngCarrierDetection:
             "price(rng=np.random.default_rng())",
         )
         assert len(calls) == 1
-        assert calls[0].carrier == 'rng'
-        assert calls[0].function == 'standard_normal'
-        assert calls[0].module == 'numpy.random'
+        assert calls[0].carrier == "rng"
+        assert calls[0].function == "standard_normal"
+        assert calls[0].module == "numpy.random"
         # The warning is attributed to the CALL statement (line 1 of that source).
         assert calls[0].lineno == 1
 
         # Seeded argument -> reproducible -> no warning.
-        assert self._carriers(
-            "import numpy as np",
-            "def price(rng):\n    return rng.standard_normal(5)",
-            "price(rng=np.random.default_rng(42))",
-        ) == []
+        assert (
+            self._carriers(
+                "import numpy as np",
+                "def price(rng):\n    return rng.standard_normal(5)",
+                "price(rng=np.random.default_rng(42))",
+            )
+            == []
+        )
 
     def test_call_arg_flow_silent_when_callee_never_scanned(self):
         """Conservative bias: an out-of-order / imported callee stays quiet.
@@ -660,10 +709,13 @@ class TestRngCarrierDetection:
         unseeded generator to it must not warn — matching the module's standing
         false-positive-avoidance philosophy.
         """
-        assert self._carriers(
-            "import numpy as np",
-            "price(rng=np.random.default_rng())",
-        ) == []
+        assert (
+            self._carriers(
+                "import numpy as np",
+                "price(rng=np.random.default_rng())",
+            )
+            == []
+        )
 
 
 class TestPositionalRngCarrierArguments:
@@ -721,9 +773,9 @@ class TestPositionalRngCarrierArguments:
             "price(np.random.default_rng(), 5)",
         )
         assert len(calls) == 1
-        assert calls[0].carrier == 'rng'
-        assert calls[0].function == 'standard_normal'
-        assert calls[0].module == 'numpy.random'
+        assert calls[0].carrier == "rng"
+        assert calls[0].function == "standard_normal"
+        assert calls[0].module == "numpy.random"
         # Attributed to the CALL statement, where the unseeded argument is written.
         assert calls[0].lineno == 1
 
@@ -735,8 +787,8 @@ class TestPositionalRngCarrierArguments:
             "price(5, np.random.default_rng())",
         )
         assert len(calls) == 1
-        assert calls[0].carrier == 'rng'
-        assert calls[0].function == 'standard_normal'
+        assert calls[0].carrier == "rng"
+        assert calls[0].function == "standard_normal"
 
     def test_seeded_rng_positional_arg_does_not_warn(self):
         """Control: a seeded generator is reproducible, so the call site is quiet.
@@ -744,12 +796,15 @@ class TestPositionalRngCarrierArguments:
         This is what makes the test above a detector rather than a rubber stamp
         on every positional argument.
         """
-        assert self._carriers(
-            self._ns(self.DEF_FIRST),
-            "import numpy as np",
-            self.DEF_FIRST,
-            "price(np.random.default_rng(42), 5)",
-        ) == []
+        assert (
+            self._carriers(
+                self._ns(self.DEF_FIRST),
+                "import numpy as np",
+                self.DEF_FIRST,
+                "price(np.random.default_rng(42), 5)",
+            )
+            == []
+        )
 
     def test_keyword_arg_still_warns_with_a_shell_present(self):
         """Regression: CAS-154's keyword path is untouched by the positional one."""
@@ -760,7 +815,7 @@ class TestPositionalRngCarrierArguments:
             "price(rng=np.random.default_rng(), n=5)",
         )
         assert len(calls) == 1
-        assert calls[0].carrier == 'rng'
+        assert calls[0].carrier == "rng"
 
     def test_session_carrier_passed_positionally_warns(self):
         """The other spelling of the same hazard: a session generator handed over
@@ -773,35 +828,44 @@ class TestPositionalRngCarrierArguments:
             "price(rng, 5)",
         )
         assert len(calls) == 1
-        assert calls[0].carrier == 'rng'
+        assert calls[0].carrier == "rng"
         # Seeded twin stays quiet.
-        assert self._carriers(
-            self._ns(self.DEF_FIRST),
-            "import numpy as np",
-            "rng = np.random.default_rng(1)",
-            self.DEF_FIRST,
-            "price(rng, 5)",
-        ) == []
+        assert (
+            self._carriers(
+                self._ns(self.DEF_FIRST),
+                "import numpy as np",
+                "rng = np.random.default_rng(1)",
+                self.DEF_FIRST,
+                "price(rng, 5)",
+            )
+            == []
+        )
 
     def test_positional_flow_silent_when_callee_never_scanned(self):
         """Conservative: nothing in the session says ``price`` draws off its
         first parameter, so a positional generator must not warn — even though
         the callee is right there in the namespace."""
-        assert self._carriers(
-            self._ns(self.DEF_FIRST),
-            "import numpy as np",
-            "price(np.random.default_rng(), 5)",
-        ) == []
+        assert (
+            self._carriers(
+                self._ns(self.DEF_FIRST),
+                "import numpy as np",
+                "price(np.random.default_rng(), 5)",
+            )
+            == []
+        )
 
     def test_positional_flow_silent_when_callee_absent_from_namespace(self):
         """Deliberate silence: without the live callee there is no signature, so
         the index cannot be named. A missing warning beats a guessed one."""
-        assert self._carriers(
-            {},  # empty user_ns: the def was scanned, but nothing is bound
-            "import numpy as np",
-            self.DEF_FIRST,
-            "price(np.random.default_rng(), 5)",
-        ) == []
+        assert (
+            self._carriers(
+                {},  # empty user_ns: the def was scanned, but nothing is bound
+                "import numpy as np",
+                self.DEF_FIRST,
+                "price(np.random.default_rng(), 5)",
+            )
+            == []
+        )
 
     def test_positional_arg_landing_in_star_args_stays_silent(self):
         """``*args`` swallows the slot, so nothing can be said about it.
@@ -811,22 +875,28 @@ class TestPositionalRngCarrierArguments:
         well as conservative.
         """
         source = "def price(rng, *rest):\n    return rng.standard_normal(5)"
-        assert self._carriers(
-            self._ns(source),
-            "import numpy as np",
-            source,
-            "price(100, np.random.default_rng())",
-        ) == []
+        assert (
+            self._carriers(
+                self._ns(source),
+                "import numpy as np",
+                source,
+                "price(100, np.random.default_rng())",
+            )
+            == []
+        )
 
     def test_positional_args_after_an_unpacking_stay_silent(self):
         """``price(*cfg, rng)``: every index after ``*cfg`` depends on its runtime
         length, so no later slot can be named."""
-        assert self._carriers(
-            self._ns(self.DEF_FIRST),
-            "import numpy as np",
-            self.DEF_FIRST,
-            "price(*cfg, np.random.default_rng())",
-        ) == []
+        assert (
+            self._carriers(
+                self._ns(self.DEF_FIRST),
+                "import numpy as np",
+                self.DEF_FIRST,
+                "price(*cfg, np.random.default_rng())",
+            )
+            == []
+        )
 
     def test_non_rng_positional_arg_stays_silent(self):
         """A positional argument that is not a generator must never warn."""
@@ -836,12 +906,15 @@ class TestPositionalRngCarrierArguments:
         # A bare name that is not a known carrier.
         assert self._carriers(ns, "import numpy as np", self.DEF_FIRST, "price(config)") == []
         # A generator in a slot the callee does not draw from.
-        assert self._carriers(
-            self._ns(self.DEF_SECOND),
-            "import numpy as np",
-            self.DEF_SECOND,
-            "price(np.random.default_rng(), 5)",  # slot 0 is ``n``, not ``rng``
-        ) == []
+        assert (
+            self._carriers(
+                self._ns(self.DEF_SECOND),
+                "import numpy as np",
+                self.DEF_SECOND,
+                "price(np.random.default_rng(), 5)",  # slot 0 is ``n``, not ``rng``
+            )
+            == []
+        )
 
     def test_non_function_callee_stays_silent(self):
         """Only a plain function's signature is mapped: a class or a partial
@@ -849,12 +922,15 @@ class TestPositionalRngCarrierArguments:
         ns = self._ns(
             "class price:\n    def __init__(self, rng, n):\n        pass",
         )
-        assert self._carriers(
-            ns,
-            "import numpy as np",
-            self.DEF_FIRST,  # teaches the session that ``price`` draws off ``rng``
-            "price(np.random.default_rng(), 5)",
-        ) == []
+        assert (
+            self._carriers(
+                ns,
+                "import numpy as np",
+                self.DEF_FIRST,  # teaches the session that ``price`` draws off ``rng``
+                "price(np.random.default_rng(), 5)",
+            )
+            == []
+        )
 
     def test_positional_warning_names_the_parameter_and_the_escape_hatch(self):
         """The user-facing half: the warning has to reach a filter and a fix."""
@@ -873,9 +949,8 @@ class TestPositionalRngCarrierArguments:
         randomness = [x for x in w if issubclass(x.category, CashRandomnessWarning)]
         # Report what was actually captured if this ever trips again: a bare
         # count tells you nothing about which warning is the unexpected one.
-        assert len(randomness) == 1, (
-            "expected exactly one CashRandomnessWarning, captured: "
-            + repr([(x.category.__name__, str(x.message)[:120]) for x in w])
+        assert len(randomness) == 1, "expected exactly one CashRandomnessWarning, captured: " + repr(
+            [(x.category.__name__, str(x.message)[:120]) for x in w]
         )
         assert "rng.standard_normal()" in str(randomness[0].message)
         assert "@cash:allow-random" in str(randomness[0].message)
@@ -889,7 +964,9 @@ class TestPositionalRngCarrierArguments:
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             check_and_warn_randomness(
-                "price(np.random.default_rng(), 5)", detector, suppress_warning=True,
+                "price(np.random.default_rng(), 5)",
+                detector,
+                suppress_warning=True,
             )
         # Same reason as above: an unrelated library warning inside the block
         # must not read as "the opt-out failed".
@@ -912,66 +989,122 @@ class TestPositionalRngCarrierArguments:
         Generator is independent of it. Letting the ledger suppress this would
         reintroduce the exact silence CAS-135 is about.
         """
-        assert len(self._carriers(
-            "import numpy as np\nnp.random.seed(42)",
-            "rng = np.random.default_rng()",
-            "x = rng.normal()",
-        )) == 1
+        assert (
+            len(
+                self._carriers(
+                    "import numpy as np\nnp.random.seed(42)",
+                    "rng = np.random.default_rng()",
+                    "x = rng.normal()",
+                )
+            )
+            == 1
+        )
 
     def test_bit_generator_seed_is_read_through(self):
-        assert self._carriers(
-            "import numpy as np",
-            "rng = np.random.Generator(np.random.PCG64(42))",
-            "x = rng.normal()",
-        ) == []
-        assert len(self._carriers(
-            "import numpy as np",
-            "rng = np.random.Generator(np.random.PCG64())",
-            "x = rng.normal()",
-        )) == 1
+        assert (
+            self._carriers(
+                "import numpy as np",
+                "rng = np.random.Generator(np.random.PCG64(42))",
+                "x = rng.normal()",
+            )
+            == []
+        )
+        assert (
+            len(
+                self._carriers(
+                    "import numpy as np",
+                    "rng = np.random.Generator(np.random.PCG64())",
+                    "x = rng.normal()",
+                )
+            )
+            == 1
+        )
 
     def test_randomstate_and_stdlib_random_carriers(self):
-        assert len(self._carriers(
-            "import numpy as np", "rs = np.random.RandomState()", "x = rs.rand(5)",
-        )) == 1
-        assert self._carriers(
-            "import numpy as np", "rs = np.random.RandomState(0)", "x = rs.rand(5)",
-        ) == []
-        assert len(self._carriers(
-            "import random", "r = random.Random()", "x = r.random()",
-        )) == 1
-        assert self._carriers(
-            "import random", "r = random.Random(7)", "x = r.random()",
-        ) == []
+        assert (
+            len(
+                self._carriers(
+                    "import numpy as np",
+                    "rs = np.random.RandomState()",
+                    "x = rs.rand(5)",
+                )
+            )
+            == 1
+        )
+        assert (
+            self._carriers(
+                "import numpy as np",
+                "rs = np.random.RandomState(0)",
+                "x = rs.rand(5)",
+            )
+            == []
+        )
+        assert (
+            len(
+                self._carriers(
+                    "import random",
+                    "r = random.Random()",
+                    "x = r.random()",
+                )
+            )
+            == 1
+        )
+        assert (
+            self._carriers(
+                "import random",
+                "r = random.Random(7)",
+                "x = r.random()",
+            )
+            == []
+        )
 
     def test_from_import_default_rng(self):
-        assert len(self._carriers(
-            "from numpy.random import default_rng",
-            "rng = default_rng()",
-            "x = rng.normal()",
-        )) == 1
+        assert (
+            len(
+                self._carriers(
+                    "from numpy.random import default_rng",
+                    "rng = default_rng()",
+                    "x = rng.normal()",
+                )
+            )
+            == 1
+        )
 
     def test_alias_carries_the_binding(self):
-        assert len(self._carriers(
-            "import numpy as np", "rng = np.random.default_rng()", "g = rng", "x = g.normal()",
-        )) == 1
+        assert (
+            len(
+                self._carriers(
+                    "import numpy as np",
+                    "rng = np.random.default_rng()",
+                    "g = rng",
+                    "x = g.normal()",
+                )
+            )
+            == 1
+        )
 
     def test_rebinding_to_a_non_carrier_forgets_it(self):
         """A name reused for an ordinary value must stop being an RNG."""
-        assert self._carriers(
-            "import numpy as np",
-            "rng = np.random.default_rng()",
-            "rng = load_config()",
-            "x = rng.normal()",
-        ) == []
+        assert (
+            self._carriers(
+                "import numpy as np",
+                "rng = np.random.default_rng()",
+                "rng = load_config()",
+                "x = rng.normal()",
+            )
+            == []
+        )
 
     def test_reseeding_quiets_the_carrier(self):
-        assert self._carriers(
-            "import numpy as np",
-            "rng = np.random.default_rng()",
-            "rng = np.random.default_rng(1)",
-            "x = rng.normal()",
-        ) == []
+        assert (
+            self._carriers(
+                "import numpy as np",
+                "rng = np.random.default_rng()",
+                "rng = np.random.default_rng(1)",
+                "x = rng.normal()",
+            )
+            == []
+        )
 
     def test_unknown_receiver_stays_silent(self):
         """``df.sample()`` is a documented gap, and must not become a false positive.
@@ -986,7 +1119,7 @@ class TestPositionalRngCarrierArguments:
     def test_reset_clears_carrier_bindings(self):
         detector = RandomnessDetector()
         detector.analyze_code("import numpy as np\nrng = np.random.default_rng()")
-        assert 'rng' in detector.rng_carriers
+        assert "rng" in detector.rng_carriers
         detector.reset()
         assert detector.rng_carriers == {}
 
@@ -1009,6 +1142,8 @@ class TestPositionalRngCarrierArguments:
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             check_and_warn_randomness(
-                "x = rng.standard_normal(10)", detector, suppress_warning=True,
+                "x = rng.standard_normal(10)",
+                detector,
+                suppress_warning=True,
             )
         assert len(_randomness_warnings(w)) == 0

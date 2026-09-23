@@ -6,13 +6,14 @@ others would be copies of a 500 MB frame nothing restores -- and after a
 restart Run All re-ran all of them: 6.6-8 s, "saved 0.33s". The cell now jumps
 to the last version on disk, and runs only what that version does not cover.
 """
+
 import ast
 
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(600)]
 
-_TEE = '''
+_TEE = """
 import cash.notebook.statement.processor as _p
 C = _p.StatementProcessor
 if not hasattr(C, "_test_orig"):
@@ -28,7 +29,7 @@ if not hasattr(C, "_test_orig"):
         return r
     C.process_statement = _tee
 C._test_ran = []
-'''
+"""
 _RAN = "__import__('cash.notebook.statement.processor', fromlist=['_']).StatementProcessor._test_ran"
 
 CLEAN = (

@@ -15,17 +15,14 @@ the stderr warning, and that text legitimately differs between runs
 measures the warning rather than the draw — which is how the first version of
 this probe reported "it redrew" while the value was frozen.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(240)]
 
 SETUP = "import cash\nimport random\nimport numpy as np\nimport time"
 
-EXPENSIVE = (
-    "time.sleep(0.2)\n"
-    "v = float(np.random.rand(200_000).sum())\n"
-    "print('EXPENSIVE', v)"
-)
+EXPENSIVE = "time.sleep(0.2)\nv = float(np.random.rand(200_000).sum())\nprint('EXPENSIVE', v)"
 TRIVIAL = "v = random.random()\nprint('TRIVIAL', v)"
 
 

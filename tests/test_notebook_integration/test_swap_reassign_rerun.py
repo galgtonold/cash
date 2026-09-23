@@ -3,6 +3,7 @@ must be idempotent on isolated re-run — the read-and-written names reset to
 their cell-entry base first, instead of composing on the already-swapped state
 (CAS-65).
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.upstream]

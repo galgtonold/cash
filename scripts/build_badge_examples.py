@@ -21,6 +21,7 @@ lifetime of this script. IDs become ``id-0000000001``,
 The counter restarts for every fixture so a snapshot depends only on its
 own fixture, never on how many UUIDs were minted earlier in the process.
 """
+
 from __future__ import annotations
 
 import argparse

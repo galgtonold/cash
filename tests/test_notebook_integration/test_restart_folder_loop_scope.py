@@ -11,24 +11,29 @@ folder read again). A loop keeps what it read now, as a statement does.
 
 Observed on disk: the report folder and its chart keep their ``st_mtime_ns``.
 """
+
 from pathlib import Path
 
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(600)]
 
-READ = ("import glob\nimport time\nimport shutil\nfrom pathlib import Path\nimport pandas as pd\n"
-        "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt\n"
-        "files = sorted(glob.glob('exports/*.csv'))\n"
-        "parts = []\n"
-        "for f in files:\n    time.sleep(0.2)\n    parts.append(pd.read_csv(f))\n"
-        "raw = pd.concat(parts, ignore_index=True)")
-REPORT = ("OUT = Path('report')\n"
-          "if OUT.exists():\n    shutil.rmtree(OUT)\n"
-          "OUT.mkdir()\n"
-          "fig, ax = plt.subplots(figsize=(4, 3))\n"
-          "ax.bar(raw['k'], raw['v'])\n"
-          "fig.savefig(OUT / 'chart.png'); plt.close(fig)")
+READ = (
+    "import glob\nimport time\nimport shutil\nfrom pathlib import Path\nimport pandas as pd\n"
+    "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt\n"
+    "files = sorted(glob.glob('exports/*.csv'))\n"
+    "parts = []\n"
+    "for f in files:\n    time.sleep(0.2)\n    parts.append(pd.read_csv(f))\n"
+    "raw = pd.concat(parts, ignore_index=True)"
+)
+REPORT = (
+    "OUT = Path('report')\n"
+    "if OUT.exists():\n    shutil.rmtree(OUT)\n"
+    "OUT.mkdir()\n"
+    "fig, ax = plt.subplots(figsize=(4, 3))\n"
+    "ax.bar(raw['k'], raw['v'])\n"
+    "fig.savefig(OUT / 'chart.png'); plt.close(fig)"
+)
 TABLE = "total = int(raw['v'].sum())\nprint('TOTAL', total)"
 CELLS = ["import cash\n%cash_on", READ, REPORT, TABLE]
 # Reads the chart: its writer, and the ``mkdir`` of the folder it is in, matter here.
@@ -68,6 +73,7 @@ def test_a_cell_that_reads_a_deleted_chart_gets_its_folder_back(nb_runner):
     """The control: a folder made by the chart cell is read by whatever reads
     a file inside it, so it is made again before the chart is drawn into it."""
     import shutil
+
     _exports(Path(nb_runner.work_dir))
     nb_runner.create_notebook([*CELLS, VIEW])
     nb_runner.start_kernel()

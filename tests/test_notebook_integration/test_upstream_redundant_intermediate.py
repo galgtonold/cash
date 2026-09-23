@@ -30,23 +30,24 @@ class TestNoRedundantUpstreamRestores:
         downstream cell should NOT trigger any upstream re-execution.
         """
         csv_path = tmp_path / "test_data.csv"
-        csv_path_str = str(csv_path).replace('\\', '/')
+        csv_path_str = str(csv_path).replace("\\", "/")
 
-        import pandas as pd
         import numpy as np
-        pd.DataFrame({
-            'A': range(100),
-            'B': np.random.randn(100),
-            'C': np.random.randn(100)
-        }).to_csv(csv_path, index=False)
+        import pandas as pd
 
-        nb_runner.create_notebook([
-            f"import pandas as pd\nimport numpy as np\ndf = pd.read_csv('{csv_path_str}')",
-            "df = df.sort_values('A')",
-            "df['D'] = df['B'] * df['C']",
-            "df['E'] = df['D'].rolling(5).mean()",
-            "print(f'Columns: {list(df.columns)}')\nprint(f'Shape: {df.shape}')",
-        ])
+        pd.DataFrame({"A": range(100), "B": np.random.randn(100), "C": np.random.randn(100)}).to_csv(
+            csv_path, index=False
+        )
+
+        nb_runner.create_notebook(
+            [
+                f"import pandas as pd\nimport numpy as np\ndf = pd.read_csv('{csv_path_str}')",
+                "df = df.sort_values('A')",
+                "df['D'] = df['B'] * df['C']",
+                "df['E'] = df['D'].rolling(5).mean()",
+                "print(f'Columns: {list(df.columns)}')\nprint(f'Shape: {df.shape}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.enable_debug()  # needed for the "Auto-executing upstream" assertion below
         nb_runner.run_all()
@@ -71,29 +72,34 @@ class TestNoRedundantUpstreamRestores:
         when everything is current in memory.
         """
         csv_path = tmp_path / "financial_data.csv"
-        csv_path_str = str(csv_path).replace('\\', '/')
+        csv_path_str = str(csv_path).replace("\\", "/")
 
-        import pandas as pd
         import numpy as np
-        pd.DataFrame({
-            'Ticker': ['AAPL'] * 50 + ['GOOGL'] * 50,
-            'Close': np.random.randn(100).cumsum() + 100,
-            'Volume': np.random.randint(1000, 10000, 100)
-        }).to_csv(csv_path, index=False)
+        import pandas as pd
 
-        nb_runner.create_notebook([
-            "import pandas as pd\nimport numpy as np",
-            f"df = pd.read_csv('{csv_path_str}')\ndf = df.sort_values(by=['Ticker'])",
-            "df['VolAdj'] = df.groupby('Ticker')['Close'].transform(lambda x: x.rolling(5).mean())",
-            (
-                "def weighted_mean(x):\n"
-                "    w = np.arange(1, len(x) + 1)\n"
-                "    return np.sum(x * w) / np.sum(w)\n"
-                "df['SMA'] = df.groupby('Ticker')['Close'].transform("
-                "lambda x: x.rolling(10).apply(weighted_mean, raw=True))"
-            ),
-            "print(f'Columns: {list(df.columns)}')",
-        ])
+        pd.DataFrame(
+            {
+                "Ticker": ["AAPL"] * 50 + ["GOOGL"] * 50,
+                "Close": np.random.randn(100).cumsum() + 100,
+                "Volume": np.random.randint(1000, 10000, 100),
+            }
+        ).to_csv(csv_path, index=False)
+
+        nb_runner.create_notebook(
+            [
+                "import pandas as pd\nimport numpy as np",
+                f"df = pd.read_csv('{csv_path_str}')\ndf = df.sort_values(by=['Ticker'])",
+                "df['VolAdj'] = df.groupby('Ticker')['Close'].transform(lambda x: x.rolling(5).mean())",
+                (
+                    "def weighted_mean(x):\n"
+                    "    w = np.arange(1, len(x) + 1)\n"
+                    "    return np.sum(x * w) / np.sum(w)\n"
+                    "df['SMA'] = df.groupby('Ticker')['Close'].transform("
+                    "lambda x: x.rolling(10).apply(weighted_mean, raw=True))"
+                ),
+                "print(f'Columns: {list(df.columns)}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.enable_debug()  # needed for the "Auto-executing upstream" assertion below
         nb_runner.run_all()
@@ -104,9 +110,7 @@ class TestNoRedundantUpstreamRestores:
         assert "'SMA'" in nb_runner.get_output(5)
 
         raw = nb_runner.get_raw_output(5)
-        assert raw.count("Auto-executing upstream") == 0, (
-            f"Unexpected upstream re-execution. Output: {raw[:500]}"
-        )
+        assert raw.count("Auto-executing upstream") == 0, f"Unexpected upstream re-execution. Output: {raw[:500]}"
 
     def test_cell_modification_uses_valid_extension(self, nb_runner, tmp_path):
         """
@@ -114,12 +118,14 @@ class TestNoRedundantUpstreamRestores:
         the "valid extension" check should handle df's lineage mismatch
         without triggering upstream re-execution.
         """
-        nb_runner.create_notebook([
-            "x = 10",
-            "y = x * 2",
-            "z = y + 100",
-            "df_out = z * 3\nprint(f'result = {df_out}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "y = x * 2",
+                "z = y + 100",
+                "df_out = z * 3\nprint(f'result = {df_out}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.enable_debug()  # needed for the "Auto-executing upstream" assertion below
         nb_runner.run_all()
@@ -144,12 +150,14 @@ class TestForwardSimulationConsistency:
         On re-run with no code changes, the incremental simulation cache
         should be used (no forward propagation needed).
         """
-        nb_runner.create_notebook([
-            "a = 42",
-            "b = a * 2",
-            "c = b + 10",
-            "print(f'c = {c}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 42",
+                "b = a * 2",
+                "c = b + 10",
+                "print(f'c = {c}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "c = 94" in nb_runner.get_output(4)
@@ -177,16 +185,19 @@ class TestForwardSimulationConsistency:
         statements, matching runtime lineages.
         """
         csv_path = tmp_path / "prop_data.csv"
-        csv_path_str = str(csv_path).replace('\\', '/')
+        csv_path_str = str(csv_path).replace("\\", "/")
         import pandas as pd
-        pd.DataFrame({'x': [1, 2, 3]}).to_csv(csv_path, index=False)
 
-        nb_runner.create_notebook([
-            "import pandas as pd",
-            f"df = pd.read_csv('{csv_path_str}')",
-            "df['y'] = df['x'] * 2",
-            "print(f'result = {df[\"y\"].sum()}')",
-        ])
+        pd.DataFrame({"x": [1, 2, 3]}).to_csv(csv_path, index=False)
+
+        nb_runner.create_notebook(
+            [
+                "import pandas as pd",
+                f"df = pd.read_csv('{csv_path_str}')",
+                "df['y'] = df['x'] * 2",
+                "print(f'result = {df[\"y\"].sum()}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.enable_debug()  # needed for the "Auto-executing upstream" assertion below
         nb_runner.run_all()
@@ -203,12 +214,14 @@ class TestForwardSimulationConsistency:
         When an upstream cell changes, only the affected variable chain
         should be re-executed, not unrelated statements.
         """
-        nb_runner.create_notebook([
-            "x = 10\ny = 20",
-            "a = x * 2",
-            "b = y * 3",
-            "print(f'a={a}, b={b}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10\ny = 20",
+                "a = x * 2",
+                "b = y * 3",
+                "print(f'a={a}, b={b}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "a=20, b=60" in nb_runner.get_output(4)
@@ -227,17 +240,19 @@ class TestBackwardsScanOptimization:
         """
         When the backwards scan finds a cache hit for the LATEST df producer,
         intermediate df producers should be skipped (not visited).
-        
+
         This is the core of the user's question: after restoring SMA_50's df,
         VolAdj_20's df restore should be unnecessary.
         """
-        nb_runner.create_notebook([
-            "x = 10",
-            "x = x + 1",       # x=11
-            "x = x * 2",       # x=22
-            "x = x + 100",     # x=122
-            "print(f'x = {x}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "x = x + 1",  # x=11
+                "x = x * 2",  # x=22
+                "x = x + 100",  # x=122
+                "print(f'x = {x}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.enable_debug()  # needed for the "Auto-executing upstream" assertion below
         nb_runner.run_all()

@@ -23,6 +23,7 @@ The clock line records GreedyDual's inflation value L, so a new process
 resumes it instead of restarting at zero (which would rank everything it
 writes below everything already on disk).
 """
+
 from __future__ import annotations
 
 import logging

@@ -28,6 +28,7 @@ is inlined as ``_is_lineage_exempt`` — it's purely a property of the
 value (module type, private callable, etc.) and has no production
 override, so no hook indirection is justified.
 """
+
 from __future__ import annotations
 
 import ast
@@ -76,8 +77,8 @@ __all__ = [
 # the bases also keeps this precise — ``Line2D`` is an ``Artist`` but is not
 # identity-coupled, so it stays cacheable.
 _IDENTITY_COUPLED_BASES: Mapping[str, str] = {
-    'matplotlib.figure.FigureBase': 'matplotlib Figure',       # Figure, SubFigure
-    'matplotlib.axes._base._AxesBase': 'matplotlib Axes',      # Axes + every projection
+    "matplotlib.figure.FigureBase": "matplotlib Figure",  # Figure, SubFigure
+    "matplotlib.axes._base._AxesBase": "matplotlib Axes",  # Axes + every projection
 }
 
 # ``fig, axes = plt.subplots(2, 2)`` binds ``axes`` to a numpy object-array of
@@ -97,9 +98,7 @@ _CONTAINER_SCAN_MAX_DEPTH = 4  # dict-of-list-of-Axes is 2 deep; leave headroom.
 # Builtin-ish names that never need lineage tracking.  Kept in module scope
 # so the per-input loop does not rebuild ``set(dir(builtins))`` on every call.
 _BUILTIN_NAMES: frozenset[str] = frozenset(dir(builtins))
-_SKIP_INPUT_NAMES: frozenset[str] = frozenset(
-    {'get_ipython', '__builtins__', 'print', '__name__', '__doc__'}
-)
+_SKIP_INPUT_NAMES: frozenset[str] = frozenset({"get_ipython", "__builtins__", "print", "__name__", "__doc__"})
 
 
 def _is_lineage_exempt(var_name: str, val: Any) -> bool:
@@ -109,9 +108,9 @@ def _is_lineage_exempt(var_name: str, val: Any) -> bool:
     is captured by other means) are exempt.  Used by ``_has_missing_lineage``
     to decide whether absence of a lineage entry is a cacheability blocker.
     """
-    if isinstance(val, types.ModuleType) or var_name == 'get_ipython':
+    if isinstance(val, types.ModuleType) or var_name == "get_ipython":
         return True
-    return bool(callable(val) and (var_name.startswith('_') or hasattr(val, '__self__')))
+    return bool(callable(val) and (var_name.startswith("_") or hasattr(val, "__self__")))
 
 
 def _coupled_kind(value: Any) -> str | None:
@@ -126,8 +125,8 @@ def _coupled_kind(value: Any) -> str | None:
     except AttributeError:  # pragma: no cover - exotic metaclass
         return None
     for base in mro:
-        module = getattr(base, '__module__', '') or ''
-        if not module.startswith('matplotlib'):
+        module = getattr(base, "__module__", "") or ""
+        if not module.startswith("matplotlib"):
             continue
         kind = _IDENTITY_COUPLED_BASES.get(f"{module}.{getattr(base, '__qualname__', '')}")
         if kind is not None:
@@ -153,7 +152,7 @@ def _coupled_kind_in_container(value: Any, _depth: int = 0) -> str | None:
         items: Any = value.values()
     elif isinstance(value, (list, tuple, set, frozenset)):
         items = value
-    elif type(value).__module__ == 'numpy' and getattr(getattr(value, 'dtype', None), 'kind', '') == 'O':
+    elif type(value).__module__ == "numpy" and getattr(getattr(value, "dtype", None), "kind", "") == "O":
         items = value.flat
     else:
         return None
@@ -223,7 +222,7 @@ def decide_cacheability(
     ``metrics['uncacheable_reasons']``.  An empty list means "cacheable."
     """
     if annotation is not None and annotation.no_cache:
-        return False, ['@cash:no-cache annotation']
+        return False, ["@cash:no-cache annotation"]
 
     try:
         forbidden = scan_forbidden(code, user_ns, tree)
@@ -238,8 +237,7 @@ def decide_cacheability(
                 return False, ["Calls @stateful function"]
             writer = user_callee_writing_files(user_ns.get(name))
             if writer:
-                return False, [f"Calls {name}(), which writes files ({writer}): "
-                               "a cache hit would skip the write"]
+                return False, [f"Calls {name}(), which writes files ({writer}): a cache hit would skip the write"]
     except (TypeError, AttributeError) as exc:
         logger.debug("Error checking function purity: %s", exc)
 
@@ -248,7 +246,7 @@ def decide_cacheability(
         return False, ast_reasons
 
     if _has_missing_lineage(inputs, user_ns, variable_lineage):
-        return False, ['Input variable missing lineage']
+        return False, ["Input variable missing lineage"]
 
     return True, []
 

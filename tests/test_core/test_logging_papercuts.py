@@ -7,6 +7,7 @@ log), a crashed run ("5 of 5 calls restored"), a worker pool (summaries
 interleaved mid-line), and `cash inspect` (two headers; nothing said an entry
 had expired).
 """
+
 from __future__ import annotations
 
 import logging
@@ -14,7 +15,6 @@ import os
 import subprocess
 import sys
 import textwrap
-import time
 
 import pytest
 
@@ -33,7 +33,8 @@ def _env(tmp_path, **extra):
 def test_cash_debug_prints_under_pytest(tmp_path):
     """pytest's logging plugin puts capture handlers on the root logger, and
     cash read that as "the application configured logging"."""
-    (tmp_path / "test_job.py").write_text(textwrap.dedent('''
+    (tmp_path / "test_job.py").write_text(
+        textwrap.dedent("""
         import cash
 
         @cash.cache
@@ -42,10 +43,17 @@ def test_cash_debug_prints_under_pytest(tmp_path):
 
         def test_it():
             assert f(1) == 2
-    '''), encoding="utf-8")
-    p = subprocess.run([sys.executable, "-m", "pytest", "-s", "-q", "-p", "no:cacheprovider",
-                        "test_job.py"], cwd=str(tmp_path), capture_output=True, text=True,
-                       env=_env(tmp_path, CASH_DEBUG="1"), timeout=120)
+    """),
+        encoding="utf-8",
+    )
+    p = subprocess.run(
+        [sys.executable, "-m", "pytest", "-s", "-q", "-p", "no:cacheprovider", "test_job.py"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+        env=_env(tmp_path, CASH_DEBUG="1"),
+        timeout=120,
+    )
     assert "1 passed" in p.stdout, p.stdout + p.stderr
     assert "cash.calls: MISS" in p.stdout + p.stderr
 
@@ -54,7 +62,8 @@ def test_an_application_level_on_the_cash_logger_is_kept(tmp_path):
     """dictConfig set `cash` to INFO; CASH_DEBUG lowered it to DEBUG under the
     application on every Cash()."""
     script = tmp_path / "job.py"
-    script.write_text(textwrap.dedent('''
+    script.write_text(
+        textwrap.dedent("""
         import logging, logging.config
         logging.config.dictConfig({"version": 1, "handlers": {"h": {"class": "logging.StreamHandler"}},
                                    "loggers": {"cash": {"level": "INFO", "handlers": ["h"]}}})
@@ -62,9 +71,10 @@ def test_an_application_level_on_the_cash_logger_is_kept(tmp_path):
         cash.Cash(debug=True)
         cash.Cash(debug=True)
         print(logging.getLevelName(logging.getLogger("cash").level))
-    '''), encoding="utf-8")
-    p = subprocess.run([sys.executable, str(script)], capture_output=True, text=True,
-                       env=_env(tmp_path), timeout=120)
+    """),
+        encoding="utf-8",
+    )
+    p = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, env=_env(tmp_path), timeout=120)
     assert p.stdout.strip().splitlines()[-1] == "INFO", p.stdout + p.stderr
 
 
@@ -86,8 +96,7 @@ def test_verbose_can_be_configured_and_lines_carry_the_entry_id(tmp_path, caplog
 
 
 def test_a_call_that_raises_is_logged_and_counted(tmp_path, caplog):
-    c = Cash(backend=FileBackend(cache_dir=str(tmp_path / ".cash")), register_magic=False,
-             verbose=True)
+    c = Cash(backend=FileBackend(cache_dir=str(tmp_path / ".cash")), register_magic=False, verbose=True)
 
     @c.cache
     def boom(x):
@@ -142,18 +151,27 @@ def test_a_file_read_by_two_spellings_is_listed_once(tmp_path, monkeypatch):
 
 def test_inspect_prints_one_header_and_when_an_entry_expires(tmp_path):
     script = tmp_path / "job.py"
-    script.write_text(textwrap.dedent('''
+    script.write_text(
+        textwrap.dedent("""
         import time, cash
         @cash.cache(ttl=3600)
         def f(x):
             time.sleep(0.15)  # @cash:assume-safe
             return x
         f(1)
-    '''), encoding="utf-8")
+    """),
+        encoding="utf-8",
+    )
     env = _env(tmp_path)
     subprocess.run([sys.executable, str(script)], env=env, check=True, timeout=120)
-    p = subprocess.run([sys.executable, "-m", "cash", "inspect", "--function", "f"],
-                       cwd=str(tmp_path), env=env, capture_output=True, text=True, timeout=120)
+    p = subprocess.run(
+        [sys.executable, "-m", "cash", "inspect", "--function", "f"],
+        cwd=str(tmp_path),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
     out = p.stdout
     assert out.count("Cache dir") == 1, out
     assert "EXPIRES" in out and ("in 59m" in out or "in 1h" in out), out

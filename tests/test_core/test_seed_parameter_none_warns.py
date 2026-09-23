@@ -14,6 +14,7 @@ saying so. The detector read `default_rng(seed)` as seeded because it has an
 argument; whether it is depends on what the caller passed, which only the
 call knows.
 """
+
 from __future__ import annotations
 
 import warnings
@@ -88,6 +89,7 @@ def test_allow_random_silences_it(tmp_path):
 # while the bare `seed=None` parameter above did warn.
 # ---------------------------------------------------------------------------
 
+
 class _Settings:
     def __init__(self, seed=None, n=100):
         self.seed = seed
@@ -96,7 +98,7 @@ class _Settings:
 
 class _PropertySeed:
     @property
-    def seed(self):                         # must never be CALLED by the check
+    def seed(self):  # must never be CALLED by the check
         raise AssertionError("the seed check evaluated a property")
 
 
@@ -157,5 +159,5 @@ def test_a_seed_behind_a_property_is_not_evaluated(tmp_path):
     cached = c.cache(via_property)
     with warnings.catch_warnings(record=True) as rec, pytest.raises(AssertionError):
         warnings.simplefilter("always")
-        cached(_PropertySeed(), 10)             # the BODY reads the property and raises
+        cached(_PropertySeed(), 10)  # the BODY reads the property and raises
     assert not _unseeded(rec)

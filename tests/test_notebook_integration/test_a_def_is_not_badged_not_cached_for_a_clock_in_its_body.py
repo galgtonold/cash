@@ -9,6 +9,7 @@ The clock runs when the function is called, and the call is judged on its
 own. What runs at definition time -- decorators, default arguments,
 annotations -- still counts, as does a class body.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
@@ -17,10 +18,12 @@ SETUP = "import cash\n%cash_on\n%cash_badge print\nimport time"
 
 
 def test_a_clock_in_the_body_does_not_refuse_the_def(nb_runner):
-    nb_runner.create_notebook([
-        SETUP,
-        "def f(x):\n    t = time.time()\n    return x + t * 0\nprint('F', f(1))",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            "def f(x):\n    t = time.time()\n    return x + t * 0\nprint('F', f(1))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     raw = nb_runner.get_raw_output(2)
@@ -30,11 +33,13 @@ def test_a_clock_in_the_body_does_not_refuse_the_def(nb_runner):
 
 def test_the_call_is_still_refused(nb_runner):
     """Control: reading the clock is still not cacheable where it happens."""
-    nb_runner.create_notebook([
-        SETUP,
-        "def f(x):\n    return x + time.time()\nv = f(1)",
-        "print('V', v)",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            "def f(x):\n    return x + time.time()\nv = f(1)",
+            "print('V', v)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     first = nb_runner.get_output(3).split("V ")[1].splitlines()[0]
@@ -42,14 +47,17 @@ def test_the_call_is_still_refused(nb_runner):
     nb_runner.restart()
     nb_runner.run_all()
     assert nb_runner.get_output(3).split("V ")[1].splitlines()[0] != first, (
-        "a call reading the clock was served from the cache:\n"
-        + nb_runner.get_raw_output(2))
+        "a call reading the clock was served from the cache:\n" + nb_runner.get_raw_output(2)
+    )
 
 
-@pytest.mark.parametrize("code, label", [
-    ("def h(x, when=time.time()):\n    return x\nprint('H', h(1))", "def h"),
-    ("class C:\n    made = time.time()\nprint('C', C.made > 0)", "class C"),
-])
+@pytest.mark.parametrize(
+    "code, label",
+    [
+        ("def h(x, when=time.time()):\n    return x\nprint('H', h(1))", "def h"),
+        ("class C:\n    made = time.time()\nprint('C', C.made > 0)", "class C"),
+    ],
+)
 def test_what_runs_at_definition_time_still_counts(nb_runner, code, label):
     nb_runner.create_notebook([SETUP, code])
     nb_runner.start_kernel()

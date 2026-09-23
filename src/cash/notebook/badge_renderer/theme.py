@@ -17,13 +17,9 @@ from __future__ import annotations
 # host (Jupyter / browser) provides the typography.
 # ---------------------------------------------------------------------------
 FONT_SANS = (
-    '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, '
-    'sans-serif, "Apple Color Emoji", "Segoe UI Emoji"'
+    '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji"'
 )
-FONT_MONO = (
-    'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, '
-    '"Liberation Mono", monospace'
-)
+FONT_MONO = 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace'
 
 # ---------------------------------------------------------------------------
 # Display limits
@@ -56,47 +52,47 @@ MIN_TIME_DISPLAY_MS = 0.001
 # ---------------------------------------------------------------------------
 
 # CACHED — single green hue family. Rail/FG = saturated; BAR = mid; BG = pale.
-RAIL_CACHED    = "#2a8a5e"
-BAR_CACHED     = "#86bfa3"
+RAIL_CACHED = "#2a8a5e"
+BAR_CACHED = "#86bfa3"
 CHIP_BG_CACHED = "#ecf6f0"
 CHIP_FG_CACHED = "#1f6646"
 
 # EXEC — single amber hue family.
-RAIL_EXEC      = "#a87530"
-BAR_EXEC       = "#d3a76b"
-CHIP_BG_EXEC   = "#fbf3e5"
-CHIP_FG_EXEC   = "#7a5310"
+RAIL_EXEC = "#a87530"
+BAR_EXEC = "#d3a76b"
+CHIP_BG_EXEC = "#fbf3e5"
+CHIP_FG_EXEC = "#7a5310"
 
 # WARN — single red hue family.
-RAIL_WARN      = "#b53d29"
-BAR_WARN       = "#e8a397"
-CHIP_BG_WARN   = "#fbeae5"
-CHIP_FG_WARN   = "#8a2916"
+RAIL_WARN = "#b53d29"
+BAR_WARN = "#e8a397"
+CHIP_BG_WARN = "#fbeae5"
+CHIP_FG_WARN = "#8a2916"
 
 # MIXED rail: blue accent used only for the LEFT RAIL when a single row
 # combines cached + computed iterations. The bar/chip for a mixed row
 # still uses the EXEC family — the rail is the lone signal that this is
 # a hybrid state, so we don't introduce a fourth full kind.
-RAIL_MIXED     = "#336699"
+RAIL_MIXED = "#336699"
 
 # Summary chip background equals CHIP_BG so the summary header and the
 # row chip read as the same wash. (Two near-identical near-white shades
 # used to live here; consolidated into one per family.)
 SUMMARY_BG_CACHED = CHIP_BG_CACHED
-SUMMARY_BG_EXEC   = CHIP_BG_EXEC
+SUMMARY_BG_EXEC = CHIP_BG_EXEC
 
 # Neutrals — borders, dim text, table tints.
-INK         = "#222"
-INK_2       = "#444"
-INK_3       = "#666"
-INK_4       = "#888"
-INK_5       = "#999"
-RULE        = "#e6e6e6"
-RULE_SOFT   = "#f4f3ef"
-BG_PANEL    = "#fdfdfc"
+INK = "#222"
+INK_2 = "#444"
+INK_3 = "#666"
+INK_4 = "#888"
+INK_5 = "#999"
+RULE = "#e6e6e6"
+RULE_SOFT = "#f4f3ef"
+BG_PANEL = "#fdfdfc"
 BG_UPSTREAM = "#f6f7f8"
-BG_HOVER    = "#faf9f5"
-BG_DETAIL   = "#fafbfc"
+BG_HOVER = "#faf9f5"
+BG_DETAIL = "#fafbfc"
 
 # Bug-report pill (subtle tertiary link in v3).
 BUG_FG = "#888"
@@ -106,6 +102,7 @@ BUG_FG_HOVER = "#444"
 # ---------------------------------------------------------------------------
 # Semantic mappers
 # ---------------------------------------------------------------------------
+
 
 def kind_of(status: str) -> str:
     """Return ``'cached' | 'exec' | 'warn'`` for any :class:`BadgeStatus` value."""

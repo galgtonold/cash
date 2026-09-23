@@ -14,9 +14,11 @@ _MAX_FILE_DEPS_SHOWN = 8
 
 __all__ = ["ProvenanceRecord", "ProvenanceTracker"]
 
+
 @dataclass
 class ProvenanceRecord:
     """A single computation event in the provenance graph."""
+
     variable: str
     code: str
     inputs: list[str]
@@ -40,6 +42,7 @@ class ProvenanceRecord:
             "file_deps": self.file_deps,
         }
 
+
 class ProvenanceTracker:
     """Tracks the full provenance graph for all computed variables.
 
@@ -62,10 +65,17 @@ class ProvenanceTracker:
         # Maximum total timeline entries
         self.max_timeline = 1000
 
-    def record(self, variable: str, code: str, inputs: list[str],
-               status: str = "computed", duration_ms: float = 0.0,
-               lineage_hash: str = "", cell_index: int = None,
-               file_deps: list[str] = None):
+    def record(
+        self,
+        variable: str,
+        code: str,
+        inputs: list[str],
+        status: str = "computed",
+        duration_ms: float = 0.0,
+        lineage_hash: str = "",
+        cell_index: int = None,
+        file_deps: list[str] = None,
+    ):
         """Record a computation event.
 
         Args:
@@ -97,12 +107,12 @@ class ProvenanceTracker:
 
         # Trim per-variable history
         if len(self._history[variable]) > self.max_history_per_var:
-            self._history[variable] = self._history[variable][-self.max_history_per_var:]
+            self._history[variable] = self._history[variable][-self.max_history_per_var :]
 
         # Add to timeline
         self._timeline.append(record)
         if len(self._timeline) > self.max_timeline:
-            self._timeline = self._timeline[-self.max_timeline:]
+            self._timeline = self._timeline[-self.max_timeline :]
 
     def get_history(self, variable: str) -> list[ProvenanceRecord]:
         """Get the computation history for a variable."""
@@ -167,8 +177,7 @@ class ProvenanceTracker:
                     dependents.add(var_name)
         return dependents
 
-    def get_timeline(self, limit: int = 20,
-                     variable: str = None) -> list[ProvenanceRecord]:
+    def get_timeline(self, limit: int = 20, variable: str = None) -> list[ProvenanceRecord]:
         """Get recent timeline entries.
 
         Args:
@@ -210,7 +219,7 @@ class ProvenanceTracker:
             # Order: preserve first-seen order from _all_recorded_inputs so the
             # tree reads chronologically (creation step first, mutations after).
             for i, inp in enumerate(deps_here):
-                is_last = (i == len(deps_here) - 1)
+                is_last = i == len(deps_here) - 1
                 connector = "└─ " if is_last else "├─ "
                 inp_history = self._history.get(inp, [])
                 if not inp_history:
@@ -243,14 +252,12 @@ class ProvenanceTracker:
         """Return lines for the computation-timeline block."""
         lines = ["", "  Timeline:"]
         for record in history[-10:]:
-            ts = time.strftime('%H:%M:%S', time.localtime(record.timestamp))
+            ts = time.strftime("%H:%M:%S", time.localtime(record.timestamp))
             icon = {"computed": "🔧", "restored": "📦", "skipped": "⏭️"}.get(record.status, "❓")
             lines.append(f"    {ts} {icon} {record.status} ({record.duration_ms:.1f}ms)")
         return lines
 
-    def format_provenance(self, variable: str,
-                          show_graph: bool = False,
-                          show_timeline: bool = False) -> str:
+    def format_provenance(self, variable: str, show_graph: bool = False, show_timeline: bool = False) -> str:
         """Format provenance info as a readable string.
 
         Args:
@@ -300,11 +307,7 @@ class ProvenanceTracker:
         """
         records = self.get_history(variable) if variable else self._timeline
 
-        return json.dumps(
-            [r.to_dict() for r in records],
-            indent=2,
-            default=str
-        )
+        return json.dumps([r.to_dict() for r in records], indent=2, default=str)
 
     def clear(self):
         self._history.clear()
@@ -314,4 +317,3 @@ class ProvenanceTracker:
     def tracked_variables(self) -> set[str]:
         """Set of all variables with provenance data."""
         return set(self._history.keys())
-

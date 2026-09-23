@@ -20,6 +20,7 @@ one, and refusing a shim EVEN WHEN a real ``CallUnit`` site exists for it is
 the stronger claim -- the refusal check runs before any site is consulted, so
 it must win either way.
 """
+
 from __future__ import annotations
 
 import builtins
@@ -39,7 +40,9 @@ def call_cache(tmp_path):
 def _site_for(fn) -> CallSite:
     name = getattr(fn, "__qualname__", None) or getattr(fn, "__name__", "shim")
     return CallSite(
-        source=f"{name}(a)", free_names=frozenset({name, "a"}), occurrence_index=0,
+        source=f"{name}(a)",
+        free_names=frozenset({name, "a"}),
+        occurrence_index=0,
         computed_arg_positions=(0,),
     )
 
@@ -64,7 +67,8 @@ def test_every_installed_shim_is_passed_through(call_cache):
     Walks what the tracker actually installed rather than a hand-written list,
     so adding a tracked loader cannot regress this without failing here.
     """
-    import numpy, pandas
+    import numpy
+    import pandas
 
     ns: dict = {}
     with FileAccessTracker(ns):
@@ -78,6 +82,4 @@ def test_every_installed_shim_is_passed_through(call_cache):
         assert shims, "no shims installed; this test would be vacuous"
         for shim in shims:
             call_cache.set_sites([_site_for(shim)])
-            assert call_cache.resolve(shim) is shim, (
-                f"{getattr(shim, '__qualname__', shim)} would be intercepted"
-            )
+            assert call_cache.resolve(shim) is shim, f"{getattr(shim, '__qualname__', shim)} would be intercepted"

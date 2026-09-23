@@ -10,7 +10,6 @@ from cash.notebook.badge_renderer.view import (
     DecoratorCallGroup,
     ForLoopGroup,
     OverheadBreakdown,
-    Section,
     SectionKind,
     SkippedBucket,
     StatementRow,
@@ -22,24 +21,27 @@ from cash.notebook.badge_renderer.view_builder import (
 )
 from cash.notebook.cache_status import CacheStatus
 
-
 # ---------------------------------------------------------------------------
 # Status mapping
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("raw, expected", [
-    (CacheStatus.RESTORED, BadgeStatus.RESTORED),
-    (CacheStatus.COMPUTED, BadgeStatus.COMPUTED),
-    (CacheStatus.SKIPPED, BadgeStatus.SKIPPED),
-    (CacheStatus.ERROR, BadgeStatus.ERROR),
-    ("RESTORED", BadgeStatus.RESTORED),
-    ("computed", BadgeStatus.COMPUTED),
-    ("FUNCTION_CHANGED", BadgeStatus.FUNCTION_CHANGED),
-    ("MODULE_RELOADED", BadgeStatus.MODULE_RELOADED),
-    ("WARNING", BadgeStatus.WARNING),
-    ("garbage", BadgeStatus.WARNING),  # total function
-    (None, BadgeStatus.WARNING),
-])
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        (CacheStatus.RESTORED, BadgeStatus.RESTORED),
+        (CacheStatus.COMPUTED, BadgeStatus.COMPUTED),
+        (CacheStatus.SKIPPED, BadgeStatus.SKIPPED),
+        (CacheStatus.ERROR, BadgeStatus.ERROR),
+        ("RESTORED", BadgeStatus.RESTORED),
+        ("computed", BadgeStatus.COMPUTED),
+        ("FUNCTION_CHANGED", BadgeStatus.FUNCTION_CHANGED),
+        ("MODULE_RELOADED", BadgeStatus.MODULE_RELOADED),
+        ("WARNING", BadgeStatus.WARNING),
+        ("garbage", BadgeStatus.WARNING),  # total function
+        (None, BadgeStatus.WARNING),
+    ],
+)
 def test_map_status_is_total(raw, expected) -> None:
     assert map_status(raw) is expected
 
@@ -47,6 +49,7 @@ def test_map_status_is_total(raw, expected) -> None:
 # ---------------------------------------------------------------------------
 # Empty + minimal
 # ---------------------------------------------------------------------------
+
 
 def test_empty_metrics_produces_only_current_section() -> None:
     badge = build_interactive_badge([])
@@ -59,15 +62,17 @@ def test_empty_metrics_produces_only_current_section() -> None:
 
 
 def test_single_restored_metric_no_upstream() -> None:
-    metrics = [{
-        "code": "x = 1",
-        "status": str(CacheStatus.RESTORED),
-        "total_time": 0.005,
-        "saved_time": 0.3,
-        "source": "RAM",
-        "storage": ["RAM", "DISK"],
-        "restored_vars": ["x"],
-    }]
+    metrics = [
+        {
+            "code": "x = 1",
+            "status": str(CacheStatus.RESTORED),
+            "total_time": 0.005,
+            "saved_time": 0.3,
+            "source": "RAM",
+            "storage": ["RAM", "DISK"],
+            "restored_vars": ["x"],
+        }
+    ]
     badge = build_interactive_badge(metrics)
     assert badge.header.status is BadgeStatus.RESTORED
     assert badge.header.restored_count == 1
@@ -97,18 +102,18 @@ def test_computed_row_shows_compute_not_serialisation_overhead() -> None:
     a one-time cost you don't pay again). The executed time and the saved time
     must line up; the serialisation cost belongs in the overhead section.
     """
-    metrics = [{
-        "code": "df = make_frame()",
-        "status": str(CacheStatus.COMPUTED),
-        "execution_time": 0.44,   # pure compute
-        "total_time": 0.51,       # compute + serialise-into-cache overhead
-    }]
+    metrics = [
+        {
+            "code": "df = make_frame()",
+            "status": str(CacheStatus.COMPUTED),
+            "execution_time": 0.44,  # pure compute
+            "total_time": 0.51,  # compute + serialise-into-cache overhead
+        }
+    ]
     badge = build_interactive_badge(metrics)
     row = badge.sections[0].items[0]
     assert isinstance(row, StatementRow)
-    assert row.time_s == pytest.approx(0.44), (
-        "row must show the compute, not compute + serialisation overhead"
-    )
+    assert row.time_s == pytest.approx(0.44), "row must show the compute, not compute + serialisation overhead"
 
 
 def test_statement_row_exposes_cache_key_short_prefix() -> None:
@@ -118,12 +123,14 @@ def test_statement_row_exposes_cache_key_short_prefix() -> None:
     landed in the same cache slot or whether something nudged the inputs
     enough to force a new key.
     """
-    metrics = [{
-        "code": "y = x * 2",
-        "status": str(CacheStatus.COMPUTED),
-        "total_time": 0.01,
-        "cache_key": "stmt:a1b2c3d4e5f6789abcdef0123456789",
-    }]
+    metrics = [
+        {
+            "code": "y = x * 2",
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 0.01,
+            "cache_key": "stmt:a1b2c3d4e5f6789abcdef0123456789",
+        }
+    ]
     badge = build_interactive_badge(metrics)
     row = badge.sections[0].items[0]
     assert isinstance(row, StatementRow)
@@ -144,12 +151,14 @@ def test_statement_row_carries_miss_reason_through_to_view() -> None:
     builder must surface it so the html renderer can show "why did this
     cell re-run?" in the row's expanded detail.
     """
-    metrics = [{
-        "code": "y = x * 2",
-        "status": str(CacheStatus.COMPUTED),
-        "total_time": 0.01,
-        "miss_reason": "input lineage changed (one of: x, y)",
-    }]
+    metrics = [
+        {
+            "code": "y = x * 2",
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 0.01,
+            "miss_reason": "input lineage changed (one of: x, y)",
+        }
+    ]
     badge = build_interactive_badge(metrics)
     row = badge.sections[0].items[0]
     assert isinstance(row, StatementRow)
@@ -171,12 +180,14 @@ def test_statement_row_carries_display_code_through_to_view() -> None:
     ``display_code`` is display-only, for the badge to show what the user
     actually wrote. The two must never collapse into each other.
     """
-    metrics = [{
-        "code": "x = a + 1",
-        "display_code": "x = (\n    a + 1\n)",
-        "status": str(CacheStatus.COMPUTED),
-        "total_time": 0.5,
-    }]
+    metrics = [
+        {
+            "code": "x = a + 1",
+            "display_code": "x = (\n    a + 1\n)",
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 0.5,
+        }
+    ]
     badge = build_interactive_badge(metrics)
     row = badge.sections[0].items[0]
     assert isinstance(row, StatementRow)
@@ -197,10 +208,14 @@ def test_statement_row_display_code_is_none_when_metric_lacks_it() -> None:
     assert isinstance(row, StatementRow)
     assert row.display_code is None
 
-    metrics_explicit_none = [{
-        "code": "y = 1", "display_code": None,
-        "status": str(CacheStatus.COMPUTED), "total_time": 0.001,
-    }]
+    metrics_explicit_none = [
+        {
+            "code": "y = 1",
+            "display_code": None,
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 0.001,
+        }
+    ]
     badge2 = build_interactive_badge(metrics_explicit_none)
     row2 = badge2.sections[0].items[0]
     assert isinstance(row2, StatementRow)
@@ -214,17 +229,20 @@ def test_bare_expression_does_not_leak_richoutput_repr_into_output_vars() -> Non
     so would print ``<IPython.utils.capture.RichOutput object at 0x..>``
     inside the "Produced" field.
     """
+
     class _FakeRichOutput:
         def __repr__(self) -> str:
             return "<IPython.utils.capture.RichOutput object at 0xdead>"
 
-    metrics = [{
-        "code": "panel.shape",
-        "status": str(CacheStatus.COMPUTED),
-        "total_time": 0.003,
-        "evaluated_vars": [],          # AST analyser found no var writes
-        "outputs": [_FakeRichOutput()], # captured.outputs (rich display data)
-    }]
+    metrics = [
+        {
+            "code": "panel.shape",
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 0.003,
+            "evaluated_vars": [],  # AST analyser found no var writes
+            "outputs": [_FakeRichOutput()],  # captured.outputs (rich display data)
+        }
+    ]
     badge = build_interactive_badge(metrics)
     row = badge.sections[0].items[0]
     assert isinstance(row, StatementRow)
@@ -246,10 +264,10 @@ def test_mixed_status_summary() -> None:
 # Upstream partitioning
 # ---------------------------------------------------------------------------
 
+
 def test_upstream_metrics_go_to_upstream_section() -> None:
     metrics = [
-        {"code": "a=1", "status": str(CacheStatus.RESTORED), "is_upstream": True,
-         "saved_time": 0.1, "total_time": 0.0},
+        {"code": "a=1", "status": str(CacheStatus.RESTORED), "is_upstream": True, "saved_time": 0.1, "total_time": 0.0},
         {"code": "b=a+1", "status": str(CacheStatus.COMPUTED), "is_upstream": False, "total_time": 0.05},
     ]
     badge = build_interactive_badge(metrics)
@@ -280,14 +298,21 @@ def test_upstream_skipped_metrics_become_skipped_bucket() -> None:
 # Loop grouping
 # ---------------------------------------------------------------------------
 
+
 def test_for_loop_iterations_collapse_into_for_loop_group() -> None:
     metrics = [
-        {"code": "# __iteration_context__:abc\ny = x * 2",
-         "status": str(CacheStatus.COMPUTED), "total_time": 0.01,
-         "loop_vars": {"x": 1}},
-        {"code": "# __iteration_context__:abc\ny = x * 2",
-         "status": str(CacheStatus.COMPUTED), "total_time": 0.02,
-         "loop_vars": {"x": 2}},
+        {
+            "code": "# __iteration_context__:abc\ny = x * 2",
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 0.01,
+            "loop_vars": {"x": 1},
+        },
+        {
+            "code": "# __iteration_context__:abc\ny = x * 2",
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 0.02,
+            "loop_vars": {"x": 2},
+        },
     ]
     badge = build_interactive_badge(metrics)
     current = next(s for s in badge.sections if s.kind is SectionKind.CURRENT)
@@ -301,11 +326,15 @@ def test_for_loop_iterations_collapse_into_for_loop_group() -> None:
 
 def test_control_group_metrics_collapse_into_control_group() -> None:
     metrics = [
-        {"code": "z = 1", "status": str(CacheStatus.COMPUTED),
-         "control_context": "ctx1", "branch_label": "if",
-         "body_statements": ["if x:", "    z = 1"], "total_time": 0.01},
-        {"code": "z += 1", "status": str(CacheStatus.COMPUTED),
-         "control_context": "ctx1", "total_time": 0.005},
+        {
+            "code": "z = 1",
+            "status": str(CacheStatus.COMPUTED),
+            "control_context": "ctx1",
+            "branch_label": "if",
+            "body_statements": ["if x:", "    z = 1"],
+            "total_time": 0.01,
+        },
+        {"code": "z += 1", "status": str(CacheStatus.COMPUTED), "control_context": "ctx1", "total_time": 0.005},
     ]
     badge = build_interactive_badge(metrics)
     current = next(s for s in badge.sections if s.kind is SectionKind.CURRENT)
@@ -318,15 +347,20 @@ def test_control_group_metrics_collapse_into_control_group() -> None:
 # Decorators
 # ---------------------------------------------------------------------------
 
+
 def test_decorator_calls_become_their_own_section_grouped_by_func() -> None:
-    metrics = [{
-        "code": "f()", "status": str(CacheStatus.COMPUTED), "total_time": 0.1,
-        "decorator_calls": [
-            {"func_name": "f", "cache_hit": True, "execution_time": 0.001},
-            {"func_name": "f", "cache_hit": False, "execution_time": 0.05},
-            {"func_name": "g", "cache_hit": True, "execution_time": 0.002},
-        ],
-    }]
+    metrics = [
+        {
+            "code": "f()",
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 0.1,
+            "decorator_calls": [
+                {"func_name": "f", "cache_hit": True, "execution_time": 0.001},
+                {"func_name": "f", "cache_hit": False, "execution_time": 0.05},
+                {"func_name": "g", "cache_hit": True, "execution_time": 0.002},
+            ],
+        }
+    ]
     badge = build_interactive_badge(metrics)
     dec_section = next(s for s in badge.sections if s.kind is SectionKind.DECORATORS)
     func_names = {item.func_name for item in dec_section.items if isinstance(item, DecoratorCallGroup)}
@@ -335,8 +369,7 @@ def test_decorator_calls_become_their_own_section_grouped_by_func() -> None:
 
 def test_decorator_group_is_condensed_when_more_than_three_calls() -> None:
     calls = [{"func_name": "f", "cache_hit": True, "execution_time": 0.001} for _ in range(4)]
-    metrics = [{"code": "loop", "status": str(CacheStatus.COMPUTED), "total_time": 0.1,
-                "decorator_calls": calls}]
+    metrics = [{"code": "loop", "status": str(CacheStatus.COMPUTED), "total_time": 0.1, "decorator_calls": calls}]
     badge = build_interactive_badge(metrics)
     dec_section = next(s for s in badge.sections if s.kind is SectionKind.DECORATORS)
     group = dec_section.items[0]
@@ -346,6 +379,7 @@ def test_decorator_group_is_condensed_when_more_than_three_calls() -> None:
 # ---------------------------------------------------------------------------
 # Overhead
 # ---------------------------------------------------------------------------
+
 
 def test_overhead_section_only_when_nontrivial() -> None:
     # No timing breakdown → no section
@@ -372,7 +406,7 @@ def test_overhead_section_only_when_nontrivial() -> None:
     # Labels are short single words (they share one collapsed row and must not
     # ellipsis-clip); the full meaning rides along as a hover tooltip.
     labels = {e.label for e in breakdown.entries}
-    assert "badge" in labels          # merges badge setup + progress render
+    assert "badge" in labels  # merges badge setup + progress render
     assert "upstream" in labels
     upstream = next(e for e in breakdown.entries if e.label == "upstream")
     assert "upstream" in upstream.tooltip.lower()
@@ -386,20 +420,20 @@ def test_overhead_surfaces_cache_write_cost() -> None:
     ``total_time`` is cash hashing + serialising the result. That gap is exactly
     the "cache write" line — here 0.10s of serialisation on a 0.04s compute.
     """
-    metrics = [{
-        "code": "df = make_frame()",
-        "status": str(CacheStatus.COMPUTED),
-        "execution_time": 0.04,
-        "total_time": 0.14,   # 0.10s of that is serialise-into-cache
-    }]
+    metrics = [
+        {
+            "code": "df = make_frame()",
+            "status": str(CacheStatus.COMPUTED),
+            "execution_time": 0.04,
+            "total_time": 0.14,  # 0.10s of that is serialise-into-cache
+        }
+    ]
     badge = build_interactive_badge(
         metrics,
         timing_breakdown={"badge_init": 0.01},
         cell_total_time=0.15,
     )
-    breakdown = next(
-        s for s in badge.sections if s.kind is SectionKind.OVERHEAD
-    ).items[0]
+    breakdown = next(s for s in badge.sections if s.kind is SectionKind.OVERHEAD).items[0]
     assert isinstance(breakdown, OverheadBreakdown)
     entry = next((e for e in breakdown.entries if e.label == "cache"), None)
     assert entry is not None, [e.label for e in breakdown.entries]
@@ -410,6 +444,7 @@ def test_overhead_surfaces_cache_write_cost() -> None:
 # ---------------------------------------------------------------------------
 # Bug report
 # ---------------------------------------------------------------------------
+
 
 def test_bug_report_footer_is_always_emitted() -> None:
     """Footer is part of the badge UX; context is optional metadata, not a gate."""
@@ -425,10 +460,15 @@ def test_bug_report_url_under_size_limit() -> None:
     # Huge notebook source must still produce a valid (short-enough) URL.
     huge_cells = ["x = 1\n" * 1000 for _ in range(20)]
     metrics = [{"code": "f()", "status": "COMPUTED", "total_time": 0.1}]
-    url = build_bug_report_url(metrics, {
-        "version": "9.9", "python_version": "3.13", "backend": "file",
-        "notebook_source": huge_cells,
-    })
+    url = build_bug_report_url(
+        metrics,
+        {
+            "version": "9.9",
+            "python_version": "3.13",
+            "backend": "file",
+            "notebook_source": huge_cells,
+        },
+    )
     assert len(url) <= 7800 + len("https://github.com/galgtonold/cash/issues/new?title=...&body=")
 
 
@@ -450,9 +490,7 @@ def test_overhead_surfaces_remote_validation_with_its_count() -> None:
         },
         cell_total_time=1.3,
     )
-    breakdown = next(
-        s for s in badge.sections if s.kind is SectionKind.OVERHEAD
-    ).items[0]
+    breakdown = next(s for s in badge.sections if s.kind is SectionKind.OVERHEAD).items[0]
     remote = next(e for e in breakdown.entries if e.label == "remote")
     assert remote.time_s == pytest.approx(0.24)
     assert "14 sources checked" in remote.tooltip

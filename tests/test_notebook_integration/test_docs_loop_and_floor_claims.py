@@ -18,6 +18,7 @@ at 0.05 s each ... persists **nothing**". A loop that long is cached as a
 
 Counted, never timed.
 """
+
 import pytest
 from conftest import shows_cached, shows_executed
 
@@ -29,11 +30,10 @@ _COUNTER = (
     "def compute(t):\n"
     "    with LOG.open('a') as fh:\n"
     "        fh.write(str(t) + chr(10))\n"
-    "    time.sleep(0.2)\n"          # above the cost-model floor
+    "    time.sleep(0.2)\n"  # above the cost-model floor
     "    return len(str(t))\n"
 )
-_LOOP = ("for ticker in {lst}:\n    stats[ticker] = compute(ticker)\n"
-         "print('N', len(stats))")
+_LOOP = "for ticker in {lst}:\n    stats[ticker] = compute(ticker)\nprint('N', len(stats))"
 _BASE = "['AAPL', 'MSFT', 'GOOGL']"
 
 
@@ -49,9 +49,13 @@ def _recomputed_after(nb_runner, tmp_path, tag, edited, directive=""):
     nothing between it and the ``for`` line to break the backward scan.
     """
     log = tmp_path / (tag + ".log")
-    nb_runner.create_notebook([
-        _COUNTER.format(log=log), "stats = {}", directive + _LOOP.format(lst=_BASE),
-    ])
+    nb_runner.create_notebook(
+        [
+            _COUNTER.format(log=log),
+            "stats = {}",
+            directive + _LOOP.format(lst=_BASE),
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert _n(log) == 3, "baseline did not run all three iterations"
@@ -71,14 +75,10 @@ def test_reuse_is_a_prefix_property_by_default(nb_runner, tmp_path):
     prefix chain is still real at the statement level, but it stopped being
     what the reader pays for.
     """
-    assert _recomputed_after(
-        nb_runner, tmp_path, "same", _BASE) == 0, "an unchanged re-run recomputed"
-    assert _recomputed_after(
-        nb_runner, tmp_path, "append", "['AAPL', 'MSFT', 'GOOGL', 'NVDA']") == 1
-    assert _recomputed_after(
-        nb_runner, tmp_path, "last", "['AAPL', 'MSFT', 'NVDA']") == 1
-    assert _recomputed_after(
-        nb_runner, tmp_path, "first", "['AMZN', 'MSFT', 'GOOGL']") == 1, (
+    assert _recomputed_after(nb_runner, tmp_path, "same", _BASE) == 0, "an unchanged re-run recomputed"
+    assert _recomputed_after(nb_runner, tmp_path, "append", "['AAPL', 'MSFT', 'GOOGL', 'NVDA']") == 1
+    assert _recomputed_after(nb_runner, tmp_path, "last", "['AAPL', 'MSFT', 'NVDA']") == 1
+    assert _recomputed_after(nb_runner, tmp_path, "first", "['AMZN', 'MSFT', 'GOOGL']") == 1, (
         "editing the FIRST entry should cost exactly ONE compute() call under "
         "the default -- if this rises to 3, call-level caching stopped "
         "reaching this call site and notebook-path.md's default-case table "
@@ -96,14 +96,10 @@ def test_reuse_is_a_prefix_property_with_no_cache_calls(nb_runner, tmp_path):
     reach every statement (ignoring `no-cache-calls`) would still pass.
     """
     directive = "# @cash:no-cache-calls\n"
-    assert _recomputed_after(
-        nb_runner, tmp_path, "same", _BASE, directive) == 0, "an unchanged re-run recomputed"
-    assert _recomputed_after(
-        nb_runner, tmp_path, "append", "['AAPL', 'MSFT', 'GOOGL', 'NVDA']", directive) == 1
-    assert _recomputed_after(
-        nb_runner, tmp_path, "last", "['AAPL', 'MSFT', 'NVDA']", directive) == 1
-    assert _recomputed_after(
-        nb_runner, tmp_path, "first", "['AMZN', 'MSFT', 'GOOGL']", directive) == 3, (
+    assert _recomputed_after(nb_runner, tmp_path, "same", _BASE, directive) == 0, "an unchanged re-run recomputed"
+    assert _recomputed_after(nb_runner, tmp_path, "append", "['AAPL', 'MSFT', 'GOOGL', 'NVDA']", directive) == 1
+    assert _recomputed_after(nb_runner, tmp_path, "last", "['AAPL', 'MSFT', 'NVDA']", directive) == 1
+    assert _recomputed_after(nb_runner, tmp_path, "first", "['AMZN', 'MSFT', 'GOOGL']", directive) == 3, (
         "editing the FIRST entry must re-run all three compute() calls under "
         "no-cache-calls -- if this drops to 1, the opt-out stopped disabling "
         "call-level caching"
@@ -112,23 +108,24 @@ def test_reuse_is_a_prefix_property_with_no_cache_calls(nb_runner, tmp_path):
 
 def _loop_badge(nb_runner, iters, body_stmts):
     body = "\n".join(f"    v{k} = ({k} + i) * 2" for k in range(body_stmts))
-    nb_runner.create_notebook([
-        "%cash_badge print",
-        f"import time\nfor i in range({iters}):\n{body}\n    time.sleep(0.005)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "%cash_badge print",
+            f"import time\nfor i in range({iters}):\n{body}\n    time.sleep(0.005)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     out = nb_runner.get_output(2)
     return {
-        "single_unit": any("for i in range" in ln for ln in out.splitlines()
-                           if shows_executed(ln) or shows_cached(ln)),
+        "single_unit": any("for i in range" in ln for ln in out.splitlines() if shows_executed(ln) or shows_cached(ln)),
         "persisted": "DISK" in out,
         "out": out,
     }
 
 
 def test_a_short_loop_stays_per_iteration_and_persists_nothing(nb_runner):
-    r = _loop_badge(nb_runner, iters=60, body_stmts=1)   # 60 x 2 x 8ms < 1s
+    r = _loop_badge(nb_runner, iters=60, body_stmts=1)  # 60 x 2 x 8ms < 1s
     assert not r["single_unit"], f"expected per-iteration rows:\n{r['out'][:400]}"
     assert not r["persisted"], (
         "a loop of individually-cheap statements reached disk; the floor "
@@ -137,10 +134,8 @@ def test_a_short_loop_stays_per_iteration_and_persists_nothing(nb_runner):
 
 
 def test_a_long_loop_becomes_one_entry_and_does_persist(nb_runner):
-    r = _loop_badge(nb_runner, iters=60, body_stmts=3)   # 60 x 4 x 8ms > 1s
-    assert r["single_unit"], (
-        "expected the loop to collapse to a single badge row:\n" + r["out"][:400]
-    )
+    r = _loop_badge(nb_runner, iters=60, body_stmts=3)  # 60 x 4 x 8ms > 1s
+    assert r["single_unit"], "expected the loop to collapse to a single badge row:\n" + r["out"][:400]
     assert r["persisted"], (
         "the single-unit loop did not persist. storage.md says it does -- if "
         f"this is now false, that exception must come out:\n{r['out'][:400]}"

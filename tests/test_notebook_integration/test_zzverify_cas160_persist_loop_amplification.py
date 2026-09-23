@@ -18,6 +18,7 @@ Each column-add is made to clear cash's 10 ms "too cheap to cache" floor via a
 sleeping helper, so the persist machinery genuinely engages (an all-cheap loop
 would be skipped for an unrelated reason and prove nothing).
 """
+
 import os
 
 import pytest
@@ -26,8 +27,8 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(600)]
 
 ROWS = 200_000
 COLS = 25
-FINAL_BYTES = ROWS * COLS * 8                                   # 40 MB
-ALL_SNAPSHOT_BYTES = ROWS * 8 * (COLS * (COLS + 1) // 2)        # 520 MB
+FINAL_BYTES = ROWS * COLS * 8  # 40 MB
+ALL_SNAPSHOT_BYTES = ROWS * 8 * (COLS * (COLS + 1) // 2)  # 520 MB
 
 
 def _ascii(s):
@@ -48,19 +49,21 @@ def _cache_bytes(root):
 
 
 def test_persist_on_incremental_frame_loop_cache_size(nb_runner, tmp_path):
-    nb_runner.create_notebook([
-        "import cash\n%cash_on\n%cash_badge print",
-        "import numpy as np\nimport pandas as pd\nimport time",
-        f"ROWS = {ROWS}\nCOLS = {COLS}\nrng = np.random.default_rng(0)",
-        # Slow enough per column that each add clears the 10 ms floor.
-        "def slow_col(n):\n    time.sleep(0.03)\n    return rng.random(n)",
-        # The ticket's shape: persist on a loop that grows a frame a column at a time.
-        "# @cash:persist\n"
-        "df = pd.DataFrame(index=range(ROWS))\n"
-        "for i in range(COLS):\n"
-        "    df[f'c{i}'] = slow_col(ROWS)",
-        "print('shape=', df.shape)\nprint('nbytes=', int(df.values.nbytes))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import cash\n%cash_on\n%cash_badge print",
+            "import numpy as np\nimport pandas as pd\nimport time",
+            f"ROWS = {ROWS}\nCOLS = {COLS}\nrng = np.random.default_rng(0)",
+            # Slow enough per column that each add clears the 10 ms floor.
+            "def slow_col(n):\n    time.sleep(0.03)\n    return rng.random(n)",
+            # The ticket's shape: persist on a loop that grows a frame a column at a time.
+            "# @cash:persist\n"
+            "df = pd.DataFrame(index=range(ROWS))\n"
+            "for i in range(COLS):\n"
+            "    df[f'c{i}'] = slow_col(ROWS)",
+            "print('shape=', df.shape)\nprint('nbytes=', int(df.values.nbytes))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -86,9 +89,7 @@ def test_persist_on_incremental_frame_loop_cache_size(nb_runner, tmp_path):
     # a restart rebuilding it re-runs all 25 slow columns, so the end-of-cell
     # rule (`end_cell_persistence`) writes it as the cell leaves it. A snapshot
     # per add -- what CAS-160 is about -- would be 13x.
-    assert total < 2 * FINAL_BYTES, (
-        f"cell-top persist amplified the frame: {total:,} bytes"
-    )
+    assert total < 2 * FINAL_BYTES, f"cell-top persist amplified the frame: {total:,} bytes"
     # Nothing amplified, so the CAS-160 guard must stay silent. This is the
     # false-positive side of the guard: it must not shout at a healthy notebook.
     assert "runs in a loop and has already cached" not in raw5, (
@@ -97,14 +98,16 @@ def test_persist_on_incremental_frame_loop_cache_size(nb_runner, tmp_path):
 
 
 def _run_variant(nb_runner, tmp_path, loop_cell, label):
-    nb_runner.create_notebook([
-        "import cash\n%cash_on\n%cash_badge print",
-        "import numpy as np\nimport pandas as pd\nimport time",
-        f"ROWS = {ROWS}\nCOLS = {COLS}\nrng = np.random.default_rng(0)",
-        "def slow_col(n):\n    time.sleep(0.03)\n    return rng.random(n)",
-        loop_cell,
-        "print('shape=', df.shape)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import cash\n%cash_on\n%cash_badge print",
+            "import numpy as np\nimport pandas as pd\nimport time",
+            f"ROWS = {ROWS}\nCOLS = {COLS}\nrng = np.random.default_rng(0)",
+            "def slow_col(n):\n    time.sleep(0.03)\n    return rng.random(n)",
+            loop_cell,
+            "print('shape=', df.shape)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert f"shape= ({ROWS}, {COLS})" in nb_runner.get_output(6), nb_runner.get_output(6)
@@ -135,8 +138,7 @@ def _assert_bounded_and_warned(total, raw, label):
     # ...and loudly, once. Silence here is the actual CAS-160 bug: the user's
     # disk filled with no signal at all.
     assert "runs in a loop and has already cached" in raw, (
-        f"{label}: cache was bounded but the user was never told why. "
-        f"Cell output:\n{raw[:3000]}"
+        f"{label}: cache was bounded but the user was never told why. Cell output:\n{raw[:3000]}"
     )
     assert raw.count("runs in a loop and has already cached") == 1, (
         f"{label}: the amplification warning repeated instead of firing once"
@@ -148,7 +150,8 @@ def test_persist_directive_on_the_for_line(nb_runner, tmp_path):
     suite documents as correct). Every iteration is a persist target, so the
     guard must cap the intermediate snapshots and say so."""
     total, raw = _run_variant(
-        nb_runner, tmp_path,
+        nb_runner,
+        tmp_path,
         "df = pd.DataFrame(index=range(ROWS))\n"
         "# @cash:persist\n"
         "for i in range(COLS):\n"
@@ -162,7 +165,8 @@ def test_persist_directive_inside_the_loop_body(nb_runner, tmp_path):
     """Worst case: the directive sits on the column-add itself, so every
     iteration is a persist target."""
     total, raw = _run_variant(
-        nb_runner, tmp_path,
+        nb_runner,
+        tmp_path,
         "df = pd.DataFrame(index=range(ROWS))\n"
         "for i in range(COLS):\n"
         "    # @cash:persist\n"

@@ -27,6 +27,7 @@ Same class as the ``/proc`` pseudo-filesystem guard: cash's own I/O must never
 become a user-visible dependency. That one was found through a stale value,
 this one through a cache that would not settle.
 """
+
 import pytest
 
 from cash.notebook.file_tracker import FileAccessTracker, register_cache_dir
@@ -102,14 +103,10 @@ class TestACacheDirectoryNotCalledDotCash:
         entry = cache / ("a" * 64 + ".entry")
         entry.write_bytes(b"cached")
 
-        assert _tracked(tmp_path, entry), (
-            "fixture is wrong: this should be tracked before registering"
-        )
+        assert _tracked(tmp_path, entry), "fixture is wrong: this should be tracked before registering"
 
         register_cache_dir(str(cache))
-        assert not _tracked(tmp_path, entry), (
-            "cash's own entry file is still a user-visible dependency"
-        )
+        assert not _tracked(tmp_path, entry), "cash's own entry file is still a user-visible dependency"
 
     def test_user_data_beside_the_cache_is_still_tracked(self, tmp_path):
         """The control, and the reason the guard checks the FILENAME too.
@@ -130,9 +127,5 @@ class TestACacheDirectoryNotCalledDotCash:
         entry.write_bytes(b"cached")
 
         seen = _tracked(tmp_path, data, entry)
-        assert str(data).replace("\\", "/") in seen, (
-            f"a user data file living beside the cache was ignored: {seen}"
-        )
-        assert str(entry).replace("\\", "/") not in seen, (
-            f"cash's own entry file was tracked: {seen}"
-        )
+        assert str(data).replace("\\", "/") in seen, f"a user data file living beside the cache was ignored: {seen}"
+        assert str(entry).replace("\\", "/") not in seen, f"cash's own entry file was tracked: {seen}"

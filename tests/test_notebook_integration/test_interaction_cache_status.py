@@ -16,10 +16,12 @@ class TestCacheStatusValidation:
 
     def test_second_run_is_cached(self, nb_runner):
         """Second run of identical cells should hit cache, not recompute."""
-        nb_runner.create_notebook([
-            "x = 42",
-            "y = x * 2\nprint(f'y = {y}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 42",
+                "y = x * 2\nprint(f'y = {y}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.enable_debug()
 
@@ -38,10 +40,12 @@ class TestCacheStatusValidation:
 
     def test_edit_forces_recompute(self, nb_runner):
         """Editing a cell must force COMPUTED, not use stale cache."""
-        nb_runner.create_notebook([
-            "a = 10",
-            "b = a + 5\nprint(f'b = {b}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 10",
+                "b = a + 5\nprint(f'b = {b}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.enable_debug()
         nb_runner.run_all()
@@ -55,10 +59,12 @@ class TestCacheStatusValidation:
 
     def test_unchanged_cell_stays_cached(self, nb_runner):
         """A cell that hasn't changed should be served from cache."""
-        nb_runner.create_notebook([
-            "data = list(range(100))",
-            "total = sum(data)\nprint(f'total = {total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = list(range(100))",
+                "total = sum(data)\nprint(f'total = {total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.enable_debug()
 
@@ -73,11 +79,13 @@ class TestCacheStatusValidation:
 
     def test_upstream_edit_invalidates_downstream(self, nb_runner):
         """Editing an upstream cell should cause downstream to recompute."""
-        nb_runner.create_notebook([
-            "base = 5",
-            "derived = base ** 2\nprint(f'derived = {derived}')",
-            "final = derived + 1\nprint(f'final = {final}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "base = 5",
+                "derived = base ** 2\nprint(f'derived = {derived}')",
+                "final = derived + 1\nprint(f'final = {final}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.enable_debug()
         nb_runner.run_all()

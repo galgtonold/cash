@@ -15,6 +15,7 @@ So ``%cash_stats`` is the one surface that has to say it, and these pin that it
 does, in both the human and JSON forms, without inventing a problem when there
 isn't one.
 """
+
 from __future__ import annotations
 
 import json

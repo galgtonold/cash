@@ -2,6 +2,7 @@
 Batch 300: Deep caching status verification tests.
 Verify RESTORED/COMPUTED/SKIPPED status is correct across scenarios.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.interaction, pytest.mark.stress, pytest.mark.timeout(90)]
@@ -18,11 +19,13 @@ class TestDeepCacheStatusVerification:
         observed.  Enable persist-everything so the statement is genuinely
         cached on the first run and produces a real cache hit on the second.
         """
-        nb_runner.create_notebook([
-            "x = 42",
-            "y = x * 2",
-            "print(f'y={y}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 42",
+                "y = x * 2",
+                "print(f'y={y}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.enable_debug()
         nb_runner.enable_persist()
@@ -40,11 +43,13 @@ class TestDeepCacheStatusVerification:
 
     def test_edit_upstream_forces_recompute_downstream(self, nb_runner):
         """Editing upstream cell should force downstream recomputation."""
-        nb_runner.create_notebook([
-            "base = 10",
-            "derived = base * 3",
-            "print(f'derived={derived}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "base = 10",
+                "derived = base * 3",
+                "print(f'derived={derived}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.enable_debug()
         nb_runner.run_all()
@@ -58,13 +63,15 @@ class TestDeepCacheStatusVerification:
 
     def test_partial_edit_selective_invalidation(self, nb_runner):
         """Editing one branch should only invalidate that branch's downstream."""
-        nb_runner.create_notebook([
-            "a = 5\nb = 10",
-            "c = a * 2",
-            "d = b * 3",
-            "total = c + d",
-            "print(f'c={c},d={d},total={total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 5\nb = 10",
+                "c = a * 2",
+                "d = b * 3",
+                "total = c + d",
+                "print(f'c={c},d={d},total={total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.enable_debug()
         nb_runner.run_all()
@@ -79,11 +86,13 @@ class TestDeepCacheStatusVerification:
 
     def test_cache_after_kernel_restart(self, nb_runner):
         """Values should be correct after kernel restart (disk cache or recompute)."""
-        nb_runner.create_notebook([
-            "val = 777",
-            "result = val + 223",
-            "print(f'result={result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "val = 777",
+                "result = val + 223",
+                "print(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(3)

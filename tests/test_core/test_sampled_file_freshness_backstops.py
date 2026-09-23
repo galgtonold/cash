@@ -28,6 +28,7 @@ nanoseconds (``cp -p``, ``shutil.copystat``, GNU tar's pax headers) still are
 not -- on Windows, where there is no inode change time. Both arms are
 characterised here, at a lowered threshold rather than with a 130 MiB fixture.
 """
+
 from __future__ import annotations
 
 import os
@@ -51,9 +52,7 @@ _SAMPLE_ABOVE = 1024 * 1024
 @pytest.fixture
 def sampled_regime(monkeypatch):
     """Put the fixture files into the sampled regime without growing them."""
-    monkeypatch.setattr(
-        file_dep_snapshot, "_full_hash_max_bytes", lambda: _SAMPLE_ABOVE
-    )
+    monkeypatch.setattr(file_dep_snapshot, "_full_hash_max_bytes", lambda: _SAMPLE_ABOVE)
 
 
 def _big_csv(path, mib=9):
@@ -103,13 +102,12 @@ def _edit_in_place_preserving_mtime(path, restore="exact"):
     assert len(row) == 14
     with open(path, "r+b") as fh:
         fh.seek(size // 4)
-        fh.seek(-(size // 4) % 14, 1)      # land on a row boundary
+        fh.seek(-(size // 4) % 14, 1)  # land on a row boundary
         fh.write(row)
     if restore == "exact":
         os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
     elif restore == "seconds":
-        os.utime(path, ns=(before.st_atime_ns,
-                           (before.st_mtime_ns // 1_000_000_000) * 1_000_000_000))
+        os.utime(path, ns=(before.st_atime_ns, (before.st_mtime_ns // 1_000_000_000) * 1_000_000_000))
     else:
         raise AssertionError(f"unknown restore mode {restore!r}")
     return before
@@ -136,9 +134,10 @@ def test_a_small_file_does_not_bother(tmp_path):
     assert "ctime" not in snap[str(small)]
 
 
-@pytest.mark.skipif(sys.platform == "win32",
-                    reason="st_ctime is the creation time on Windows and does "
-                           "not move on an in-place edit -- measured")
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="st_ctime is the creation time on Windows and does not move on an in-place edit -- measured",
+)
 def test_the_edit_is_caught_on_posix(sampled_regime, tmp_path):
     """POSIX: the inode change time gives it away even with mtime restored."""
     path = _big_csv(str(tmp_path / "big.csv"))
@@ -147,6 +146,7 @@ def test_the_edit_is_caught_on_posix(sampled_regime, tmp_path):
     _edit_in_place_preserving_mtime(path)
 
     from cash.notebook.file_dep_snapshot import file_dep_is_fresh
+
     fresh, reason = file_dep_is_fresh(path, snap[path])
     assert not fresh
     assert reason == "ctime-sampled"
@@ -159,7 +159,7 @@ def _reader(cache_dir):
     @c.cache(assume_safe=True)
     def read_total(p):
         runs.append(1)
-        time.sleep(0.25)              # clear the persistence floor
+        time.sleep(0.25)  # clear the persistence floor
         with open(p, "rb") as fh:
             return sum(float(line.split(b",")[2]) for line in fh if line.strip())
 
@@ -206,8 +206,7 @@ def test_a_whole_second_restore_is_caught_anywhere(sampled_regime, tmp_path):
     assert len(runs) == 2
 
 
-def test_a_nanosecond_exact_restore_is_still_blind_on_windows(sampled_regime,
-                                                              tmp_path):
+def test_a_nanosecond_exact_restore_is_still_blind_on_windows(sampled_regime, tmp_path):
     """The characterisation of what remains, at a lowered threshold.
 
     A file above ``file_hash_full_max_bytes`` is sampled, and a tool that puts
@@ -228,7 +227,7 @@ def test_a_nanosecond_exact_restore_is_still_blind_on_windows(sampled_regime,
     if sys.platform == "win32":
         assert second == first and len(runs) == 1
     else:
-        assert second != first and len(runs) == 2   # ctime saves it
+        assert second != first and len(runs) == 2  # ctime saves it
 
 
 def test_an_unedited_big_file_still_hits(tmp_path):
@@ -255,5 +254,6 @@ def test_the_default_full_hash_threshold_covers_a_memmapped_npy():
     was served stale 3 of 3. Decided: raise the default to 256 MiB. The config
     field and the snapshot's fallback must agree."""
     from cash.config import CashConfig
+
     assert _HASH_FULL_MAX_BYTES_DEFAULT == 256 * 1024 * 1024
     assert CashConfig().file_hash_full_max_bytes == _HASH_FULL_MAX_BYTES_DEFAULT

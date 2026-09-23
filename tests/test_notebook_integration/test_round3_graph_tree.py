@@ -1,5 +1,7 @@
 """Batch 56: Graph & tree data structures — cash caching with graph algorithms."""
+
 import textwrap
+
 import pytest
 
 
@@ -9,8 +11,9 @@ class TestTreePatterns:
 
     def test_binary_tree_build_traverse(self, nb_runner):
         """Build binary tree in one cell, traverse in another."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class TreeNode:
                     def __init__(self, val, left=None, right=None):
                         self.val = val
@@ -22,7 +25,7 @@ class TestTreePatterns:
                         return []
                     return inorder(node.left) + [node.val] + inorder(node.right)
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 root = TreeNode(4,
                     TreeNode(2, TreeNode(1), TreeNode(3)),
                     TreeNode(6, TreeNode(5), TreeNode(7))
@@ -30,7 +33,7 @@ class TestTreePatterns:
                 traversal = inorder(root)
                 print(f"inorder={traversal}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 # Compute tree properties
                 def depth(node):
                     if node is None:
@@ -41,7 +44,8 @@ class TestTreePatterns:
                 count = len(traversal)
                 print(f"depth={d} count={count}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "inorder=[1, 2, 3, 4, 5, 6, 7]" in nb_runner.get_output(2)
@@ -49,8 +53,9 @@ class TestTreePatterns:
 
     def test_tree_change_propagates(self, nb_runner):
         """Changing tree structure propagates."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class Node:
                     def __init__(self, v, children=None):
                         self.v = v
@@ -61,17 +66,20 @@ class TestTreePatterns:
 
                 tree = Node(1, [Node(2), Node(3, [Node(4), Node(5)])])
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 total = tree_sum(tree)
                 print(f"total={total}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total=15" in nb_runner.get_output(2)
 
         # Rebuild tree with different values
-        nb_runner.set_cell_source(1, textwrap.dedent("""\
+        nb_runner.set_cell_source(
+            1,
+            textwrap.dedent("""\
             class Node:
                 def __init__(self, v, children=None):
                     self.v = v
@@ -81,7 +89,8 @@ class TestTreePatterns:
                 return node.v + sum(tree_sum(c) for c in node.children)
 
             tree = Node(10, [Node(20), Node(30, [Node(40), Node(50)])])
-        """))
+        """),
+        )
         nb_runner.run_all()
         assert "total=150" in nb_runner.get_output(2)
 
@@ -92,8 +101,9 @@ class TestGraphPatterns:
 
     def test_adjacency_list_bfs(self, nb_runner):
         """Graph with adjacency list and BFS."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from collections import deque
 
                 class Graph:
@@ -119,19 +129,20 @@ class TestGraphPatterns:
                                     queue.append(neighbor)
                         return order
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 g = Graph()
                 for u, v in [(1,2), (1,3), (2,4), (3,4), (4,5)]:
                     g.add_edge(u, v)
                 bfs_order = g.bfs(1)
                 print(f"bfs={bfs_order}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 # Use same graph for different start
                 bfs_from_5 = g.bfs(5)
                 print(f"from_5={bfs_from_5}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "bfs=[1, 2, 3, 4, 5]" in nb_runner.get_output(2)
@@ -139,8 +150,9 @@ class TestGraphPatterns:
 
     def test_graph_shortest_path(self, nb_runner):
         """Shortest path (Dijkstra-like) across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 import heapq
 
                 def dijkstra(graph, start):
@@ -164,12 +176,13 @@ class TestGraphPatterns:
                     'D': []
                 }
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 distances = dijkstra(graph, 'A')
                 sorted_dist = sorted(distances.items())
                 print(f"distances={sorted_dist}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -178,8 +191,9 @@ class TestGraphPatterns:
 
     def test_topological_sort(self, nb_runner):
         """Topological sort of DAG across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from collections import defaultdict, deque
 
                 class DAG:
@@ -210,13 +224,14 @@ class TestGraphPatterns:
                 for u, v in [('A','C'), ('B','C'), ('C','D'), ('B','D'), ('D','E')]:
                     dag.add_edge(u, v)
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 order = dag.topo_sort()
                 print(f"topo={order}")
                 # Verify C comes after A and B, D after C, E after D
                 print(f"valid={order.index('C') > order.index('A')}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)

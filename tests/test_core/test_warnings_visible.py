@@ -6,12 +6,11 @@ drowned out for anyone not actively listening. These tests pin the
 new behavior: visible to ``warnings``-aware users AND inspectable
 after the fact via the per-function rolling log.
 """
+
 from __future__ import annotations
 
 import asyncio
 import warnings
-
-import pytest
 
 from cash import Cash, CashCacheIneffectiveWarning
 

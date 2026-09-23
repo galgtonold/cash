@@ -13,6 +13,7 @@ isolated is not stored -- the same rule as an identity-coupled result or a call
 that mutated its arguments. Such a value is unpicklable too, so no disk tier
 could hold it either; only in-process repeat hits are given up.
 """
+
 from __future__ import annotations
 
 import threading
@@ -47,8 +48,7 @@ def test_a_result_holding_a_lock_is_recomputed(cash):
     assert second["rows"] == [1, 2, 3], "the caller's mutation reached the next call"
     assert first is not second
     assert len(runs) == 2
-    assert any(issubclass(w.category, CashCacheStoreFailedWarning) for w in seen), [
-        str(w.message) for w in seen]
+    assert any(issubclass(w.category, CashCacheStoreFailedWarning) for w in seen), [str(w.message) for w in seen]
 
 
 def test_the_reason_is_available_afterwards(cash):
@@ -95,13 +95,12 @@ def test_the_memory_backend_refuses_a_value_it_must_copy(tmp_path):
         backend.set("k", {"lock": threading.Lock()}, {"copy_required": True})
     assert backend.get("k") == (None, None)
 
-    backend.set("stmt", {"lock": threading.Lock()}, {})      # a notebook payload
+    backend.set("stmt", {"lock": threading.Lock()}, {})  # a notebook payload
     assert backend.get("stmt")[1] is not None
 
     # Decorated, but frozen: the caller has promised not to modify the result,
     # so handing the same object back is exactly what was asked for.
-    backend.set("frozen", {"lock": threading.Lock()},
-                {"decorator_entry": True})
+    backend.set("frozen", {"lock": threading.Lock()}, {"decorator_entry": True})
     assert backend.get("frozen")[1] is not None
 
 

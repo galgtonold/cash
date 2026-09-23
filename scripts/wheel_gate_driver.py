@@ -28,6 +28,7 @@ Protocol: JSON files in inbox/ -> results in outbox/.
   {"action":"delete","index":N}
   {"action":"quit"}
 """
+
 import json
 import os
 import queue
@@ -72,8 +73,7 @@ if os.path.exists(NB_PATH):
     nb = nbformat.read(NB_PATH, as_version=4)
 else:
     nb = nbformat.v4.new_notebook()
-    nb.metadata.kernelspec = {"name": KERNEL_NAME, "display_name": KERNEL_NAME,
-                              "language": "python"}
+    nb.metadata.kernelspec = {"name": KERNEL_NAME, "display_name": KERNEL_NAME, "language": "python"}
     nbformat.write(nb, NB_PATH)
 
 
@@ -83,10 +83,11 @@ def save():
 
 def api(path, method="GET", body=None):
     req = urllib.request.Request(
-        f"{BASE}/api/{path}", method=method,
+        f"{BASE}/api/{path}",
+        method=method,
         data=json.dumps(body).encode() if body else None,
-        headers={"Authorization": f"token {TOKEN}",
-                 "Content-Type": "application/json"})
+        headers={"Authorization": f"token {TOKEN}", "Content-Type": "application/json"},
+    )
     with urllib.request.urlopen(req, timeout=30) as r:
         raw = r.read()
     return json.loads(raw) if raw else None
@@ -94,11 +95,21 @@ def api(path, method="GET", body=None):
 
 env = dict(os.environ, JUPYTER_RUNTIME_DIR=RUNTIME)
 server = subprocess.Popen(
-    [sys.executable, "-m", "jupyter", "server", "--no-browser",
-     f"--port={PORT}", f"--IdentityProvider.token={TOKEN}",
-     f"--ServerApp.root_dir={WORK}", "--ServerApp.disable_check_xsrf=True"],
-    env=env, stdout=open(os.path.join(WORK, "server.log"), "w"),
-    stderr=subprocess.STDOUT)
+    [
+        sys.executable,
+        "-m",
+        "jupyter",
+        "server",
+        "--no-browser",
+        f"--port={PORT}",
+        f"--IdentityProvider.token={TOKEN}",
+        f"--ServerApp.root_dir={WORK}",
+        "--ServerApp.disable_check_xsrf=True",
+    ],
+    env=env,
+    stdout=open(os.path.join(WORK, "server.log"), "w"),
+    stderr=subprocess.STDOUT,
+)
 
 
 def _kill_server_tree():
@@ -110,8 +121,7 @@ def _kill_server_tree():
     """
     try:
         if os.name == "nt":
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(server.pid)],
-                           capture_output=True)
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(server.pid)], capture_output=True)
         else:
             server.terminate()
     except Exception:
@@ -119,6 +129,7 @@ def _kill_server_tree():
 
 
 import atexit
+
 atexit.register(_kill_server_tree)
 
 for _ in range(240):
@@ -159,16 +170,13 @@ def _start_session():
     global KERNEL_ID, SESSION_ID, kc, _boots_attempted
     _boots_attempted += 1
     if _boots_attempted <= _FAIL_BOOTS:
-        raise RuntimeError(
-            f"injected boot failure {_boots_attempted}/{_FAIL_BOOTS} "
-            "(CASH_DRIVER_FAIL_BOOTS)")
-    session = api("sessions", "POST", {
-        "path": NB_NAME, "type": "notebook", "name": NB_NAME,
-        "kernel": {"name": KERNEL_NAME}})
+        raise RuntimeError(f"injected boot failure {_boots_attempted}/{_FAIL_BOOTS} (CASH_DRIVER_FAIL_BOOTS)")
+    session = api(
+        "sessions", "POST", {"path": NB_NAME, "type": "notebook", "name": NB_NAME, "kernel": {"name": KERNEL_NAME}}
+    )
     KERNEL_ID = session["kernel"]["id"]
     SESSION_ID = session["id"]
-    print("session", SESSION_ID, "kernel", KERNEL_ID,
-          "kernelspec", KERNEL_NAME, flush=True)
+    print("session", SESSION_ID, "kernel", KERNEL_ID, "kernelspec", KERNEL_NAME, flush=True)
 
     cf = os.path.join(RUNTIME, f"kernel-{KERNEL_ID}.json")
     for _ in range(240):
@@ -209,12 +217,10 @@ def connect():
             _start_session()
             return
         except Exception as exc:
-            print(f"[boot] attempt {attempt}/{BOOT_ATTEMPTS} failed: "
-                  f"{type(exc).__name__}: {exc}", flush=True)
+            print(f"[boot] attempt {attempt}/{BOOT_ATTEMPTS} failed: {type(exc).__name__}: {exc}", flush=True)
             _discard_dead_session()
             if attempt == BOOT_ATTEMPTS:
-                raise SystemExit(
-                    f"kernel failed to start {BOOT_ATTEMPTS} times: {exc}")
+                raise SystemExit(f"kernel failed to start {BOOT_ATTEMPTS} times: {exc}")
             time.sleep(2.0 * attempt)
 
 
@@ -243,16 +249,19 @@ def execute(cell, timeout=3600):
         elif mt == "stream":
             outs.append(nbformat.v4.new_output("stream", name=c["name"], text=c["text"]))
         elif mt in ("display_data", "update_display_data"):
-            outs.append(nbformat.v4.new_output("display_data", data=c["data"],
-                                               metadata=c.get("metadata", {})))
+            outs.append(nbformat.v4.new_output("display_data", data=c["data"], metadata=c.get("metadata", {})))
         elif mt == "execute_result":
             cell["execution_count"] = c.get("execution_count")
-            outs.append(nbformat.v4.new_output(
-                "execute_result", data=c["data"], metadata=c.get("metadata", {}),
-                execution_count=c.get("execution_count")))
+            outs.append(
+                nbformat.v4.new_output(
+                    "execute_result",
+                    data=c["data"],
+                    metadata=c.get("metadata", {}),
+                    execution_count=c.get("execution_count"),
+                )
+            )
         elif mt == "error":
-            outs.append(nbformat.v4.new_output(
-                "error", ename=c["ename"], evalue=c["evalue"], traceback=c["traceback"]))
+            outs.append(nbformat.v4.new_output("error", ename=c["ename"], evalue=c["evalue"], traceback=c["traceback"]))
     return cell
 
 
@@ -272,9 +281,9 @@ def render(cell):
             if "text/html" in data:
                 parts.append("[HTML] " + " ".join(data["text/html"].split())[:700])
         elif t == "error":
-            parts.append("ERROR %s: %s\n%s" % (
-                out.get("ename"), out.get("evalue"),
-                "\n".join(out.get("traceback", []))[-2500:]))
+            parts.append(
+                "ERROR %s: %s\n%s" % (out.get("ename"), out.get("evalue"), "\n".join(out.get("traceback", []))[-2500:])
+            )
     return "\n".join(parts)
 
 

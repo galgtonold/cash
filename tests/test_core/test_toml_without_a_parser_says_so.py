@@ -15,6 +15,7 @@ The parser is faked out rather than the interpreter downgraded, so the branch
 is reachable on every version the suite runs on — otherwise this test would
 only ever run on 3.10 and only there would it catch a regression.
 """
+
 from __future__ import annotations
 
 import builtins
@@ -46,8 +47,7 @@ def no_toml_parser(monkeypatch):
 def _a_config(tmp_path):
     path = tmp_path / "pyproject.toml"
     path.write_text(
-        '[project]\nname = "demo"\nversion = "0"\n\n'
-        '[tool.cash]\ncache_dir = "/srv/somewhere"\n',
+        '[project]\nname = "demo"\nversion = "0"\n\n[tool.cash]\ncache_dir = "/srv/somewhere"\n',
         encoding="utf-8",
     )
     return path
@@ -107,19 +107,22 @@ def test_a_pyproject_without_a_cash_section_says_nothing(no_toml_parser, tmp_pat
     wrong, in nearly every project on a bare 3.10."""
     path = tmp_path / "pyproject.toml"
     path.write_text(
-        '[project]\nname = "demo"\n\n[tool.ruff]\nline-length = 100\n'
-        '# [tool.cash] is not configured\n',
+        '[project]\nname = "demo"\n\n[tool.ruff]\nline-length = 100\n# [tool.cash] is not configured\n',
         encoding="utf-8",
     )
     assert not _notices(path)
 
 
-@pytest.mark.parametrize("name, body", [
-    ("pyproject.toml", '[tool.cash.tiers]\nfoo = 1\n'),
-    ("pyproject.toml", '[tool]\ntool.cash.cache_dir = "x"\n'),
-    ("config.toml", '[cash]\ncache_dir = "x"\n'),
-    ("config.toml", '# a flat cash config file\ncache_dir = "x"\n'),
-], ids=["subtable", "dotted-key", "standalone-section", "standalone-flat"])
+@pytest.mark.parametrize(
+    "name, body",
+    [
+        ("pyproject.toml", "[tool.cash.tiers]\nfoo = 1\n"),
+        ("pyproject.toml", '[tool]\ntool.cash.cache_dir = "x"\n'),
+        ("config.toml", '[cash]\ncache_dir = "x"\n'),
+        ("config.toml", '# a flat cash config file\ncache_dir = "x"\n'),
+    ],
+    ids=["subtable", "dotted-key", "standalone-section", "standalone-flat"],
+)
 def test_every_shape_that_holds_settings_is_reported(no_toml_parser, tmp_path, name, body):
     path = tmp_path / name
     path.write_text(body, encoding="utf-8")

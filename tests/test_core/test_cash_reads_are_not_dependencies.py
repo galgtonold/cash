@@ -15,6 +15,7 @@ full came from the process-wide singleton, or a fresh read of the config
 files, never from the `Cash` instance doing the work -- so
 `Cash(file_hash_full_max_bytes=...)` on your own instance was ignored.
 """
+
 from __future__ import annotations
 
 import os
@@ -30,8 +31,7 @@ pytestmark = pytest.mark.core
 @pytest.fixture
 def project(tmp_path, monkeypatch):
     """A project directory with a pyproject.toml, as the cwd."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname="p"\nversion="1"\n',
-                                             encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="p"\nversion="1"\n', encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     return tmp_path
 
@@ -66,8 +66,7 @@ def test_editing_pyproject_does_not_recompute_it(project):
     c = Cash(backend=FileBackend(cache_dir=str(project / "cache")), register_magic=False)
     _, upper = _nested(c, str(data))
     upper()
-    (project / "pyproject.toml").write_text('[project]\nname="p"\nversion="2"\n',
-                                            encoding="utf-8")
+    (project / "pyproject.toml").write_text('[project]\nname="p"\nversion="2"\n', encoding="utf-8")
     assert upper.explain().reason == "hit"
 
 
@@ -88,8 +87,7 @@ def test_an_instance_threshold_is_used(tmp_path):
     so a touch (its timestamp backstop) recomputes -- it did not."""
     big = tmp_path / "big.bin"
     big.write_bytes(os.urandom(300_000))
-    c = Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False,
-             file_hash_full_max_bytes=1000)
+    c = Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False, file_hash_full_max_bytes=1000)
     runs = []
 
     @c.cache(assume_safe=True)

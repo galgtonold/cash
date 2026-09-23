@@ -17,6 +17,7 @@ disabled caching for the whole loop would satisfy "the annotated statement
 re-runs" while destroying the caching of every sibling around it — so each test
 pairs the annotated statement with an unannotated one in the SAME loop body.
 """
+
 import ast
 
 import pytest
@@ -44,17 +45,19 @@ def test_no_cache_inside_for_body_reexecutes(nb_runner):
     it must stay cached. Together they prove the annotation is both *honoured*
     and *scoped*.
     """
-    nb_runner.create_notebook([
-        "import numpy as np",
-        "acc = []\n"
-        "for t in range(2):\n"
-        "    # @cash:no-cache\n"
-        f"    a = {DRAW}\n"
-        f"    b = {DRAW}\n"
-        "    acc.append((a, b))\n"
-        "print('A=', [round(x[0], 12) for x in acc])\n"
-        "print('B=', [round(x[1], 12) for x in acc])",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np",
+            "acc = []\n"
+            "for t in range(2):\n"
+            "    # @cash:no-cache\n"
+            f"    a = {DRAW}\n"
+            f"    b = {DRAW}\n"
+            "    acc.append((a, b))\n"
+            "print('A=', [round(x[0], 12) for x in acc])\n"
+            "print('B=', [round(x[1], 12) for x in acc])",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     a1, b1 = _vals(nb_runner.get_output(2), "A="), _vals(nb_runner.get_output(2), "B=")
@@ -70,8 +73,7 @@ def test_no_cache_inside_for_body_reexecutes(nb_runner):
     # Control: the unannotated sibling still caches. Without this the test would
     # pass for a fix that simply stopped caching the whole loop.
     assert b1 == b2, (
-        f"the unannotated sibling stopped caching: the no-cache directive leaked "
-        f"across the loop body ({b1} vs {b2})"
+        f"the unannotated sibling stopped caching: the no-cache directive leaked across the loop body ({b1} vs {b2})"
     )
 
 
@@ -81,15 +83,17 @@ def test_no_cache_above_the_for_header_disables_the_whole_loop(nb_runner):
     Scoped to the loop, so it must reach every body statement — including the
     one that carries no annotation of its own.
     """
-    nb_runner.create_notebook([
-        "import numpy as np",
-        "acc = []\n"
-        "# @cash:no-cache\n"
-        "for t in range(2):\n"
-        f"    a = {DRAW}\n"
-        "    acc.append(a)\n"
-        "print('A=', [round(x, 12) for x in acc])",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np",
+            "acc = []\n"
+            "# @cash:no-cache\n"
+            "for t in range(2):\n"
+            f"    a = {DRAW}\n"
+            "    acc.append(a)\n"
+            "print('A=', [round(x, 12) for x in acc])",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     a1 = _vals(nb_runner.get_output(2), "A=")
@@ -104,14 +108,16 @@ def test_unannotated_loop_body_still_caches(nb_runner):
     Per-iteration loop caching is a headline feature (docs/index.md). If the fix
     made loop bodies uncacheable, this is what would catch it.
     """
-    nb_runner.create_notebook([
-        "import numpy as np",
-        "acc = []\n"
-        "for t in range(2):\n"
-        f"    a = {DRAW}\n"
-        "    acc.append(a)\n"
-        "print('A=', [round(x, 12) for x in acc])",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np",
+            "acc = []\n"
+            "for t in range(2):\n"
+            f"    a = {DRAW}\n"
+            "    acc.append(a)\n"
+            "print('A=', [round(x, 12) for x in acc])",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     a1 = _vals(nb_runner.get_output(2), "A=")
@@ -122,12 +128,12 @@ def test_unannotated_loop_body_still_caches(nb_runner):
 
 def test_no_cache_at_top_level_still_works(nb_runner):
     """Control: do not regress the placement that already worked."""
-    nb_runner.create_notebook([
-        "import numpy as np",
-        "# @cash:no-cache\n"
-        f"c = {DRAW}\n"
-        "print('C=', [round(c, 12)])",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np",
+            f"# @cash:no-cache\nc = {DRAW}\nprint('C=', [round(c, 12)])",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     c1 = _vals(nb_runner.get_output(2), "C=")
@@ -138,16 +144,18 @@ def test_no_cache_at_top_level_still_works(nb_runner):
 
 def test_no_cache_inside_if_branch_reexecutes(nb_runner):
     """``if`` bodies are decomposed per-statement by the same dispatcher."""
-    nb_runner.create_notebook([
-        "import numpy as np",
-        "flag = True",
-        "if flag:\n"
-        "    # @cash:no-cache\n"
-        f"    a = {DRAW}\n"
-        f"    b = {DRAW}\n"
-        "print('A=', [round(a, 12)])\n"
-        "print('B=', [round(b, 12)])",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np",
+            "flag = True",
+            "if flag:\n"
+            "    # @cash:no-cache\n"
+            f"    a = {DRAW}\n"
+            f"    b = {DRAW}\n"
+            "print('A=', [round(a, 12)])\n"
+            "print('B=', [round(b, 12)])",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     a1, b1 = _vals(nb_runner.get_output(3), "A="), _vals(nb_runner.get_output(3), "B=")
@@ -170,16 +178,18 @@ def test_no_cache_inside_while_single_unit_reexecutes(nb_runner):
     does cache when unannotated, so the re-execution here is attributable to the
     directive and nothing else.
     """
-    nb_runner.create_notebook([
-        "import numpy as np",
-        "i = 0\n"
-        "w = 0.0\n"
-        "while i < 2:\n"
-        "    # @cash:no-cache\n"
-        f"    w = {DRAW}\n"
-        "    i += 1\n"
-        "print('A=', [round(w, 12)])",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np",
+            "i = 0\n"
+            "w = 0.0\n"
+            "while i < 2:\n"
+            "    # @cash:no-cache\n"
+            f"    w = {DRAW}\n"
+            "    i += 1\n"
+            "print('A=', [round(w, 12)])",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     a1 = _vals(nb_runner.get_output(2), "A=")
@@ -190,15 +200,12 @@ def test_no_cache_inside_while_single_unit_reexecutes(nb_runner):
 
 def test_unannotated_while_single_unit_still_caches(nb_runner):
     """Control for the test above: the while unit caches when left alone."""
-    nb_runner.create_notebook([
-        "import numpy as np",
-        "i = 0\n"
-        "w = 0.0\n"
-        "while i < 2:\n"
-        f"    w = {DRAW}\n"
-        "    i += 1\n"
-        "print('A=', [round(w, 12)])",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np",
+            f"i = 0\nw = 0.0\nwhile i < 2:\n    w = {DRAW}\n    i += 1\nprint('A=', [round(w, 12)])",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     a1 = _vals(nb_runner.get_output(2), "A=")
@@ -211,15 +218,17 @@ def test_ttl_annotation_reaches_a_loop_body(nb_runner):
     """The hole was in the threading, not in ``no-cache`` specifically — every
     directive was being dropped. A ttl that has not expired must still cache.
     """
-    nb_runner.create_notebook([
-        "import numpy as np",
-        "acc = []\n"
-        "for t in range(2):\n"
-        "    # @cash:ttl=600\n"
-        f"    a = {DRAW}\n"
-        "    acc.append(a)\n"
-        "print('A=', [round(x, 12) for x in acc])",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np",
+            "acc = []\n"
+            "for t in range(2):\n"
+            "    # @cash:ttl=600\n"
+            f"    a = {DRAW}\n"
+            "    acc.append(a)\n"
+            "print('A=', [round(x, 12) for x in acc])",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     a1 = _vals(nb_runner.get_output(2), "A=")

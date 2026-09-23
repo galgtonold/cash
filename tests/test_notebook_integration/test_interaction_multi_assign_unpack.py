@@ -13,11 +13,13 @@ class TestMultipleAssignUnpack:
 
     def test_tuple_unpack(self, nb_runner):
         """Basic tuple unpacking with caching."""
-        nb_runner.create_notebook([
-            "data = (10, 20, 30)",
-            "a, b, c = data",
-            "total = a + b + c\nprint(f'total={total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = (10, 20, 30)",
+                "a, b, c = data",
+                "total = a + b + c\nprint(f'total={total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(3)
@@ -29,11 +31,13 @@ class TestMultipleAssignUnpack:
 
     def test_star_unpack_edit(self, nb_runner):
         """Star unpacking with edit propagation."""
-        nb_runner.create_notebook([
-            "values = [1, 2, 3, 4, 5]",
-            "first, *middle, last = values",
-            "print(f'first={first} middle={middle} last={last}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "values = [1, 2, 3, 4, 5]",
+                "first, *middle, last = values",
+                "print(f'first={first} middle={middle} last={last}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(3)
@@ -50,11 +54,13 @@ class TestMultipleAssignUnpack:
 
     def test_swap_pattern(self, nb_runner):
         """Variable swap pattern with caching."""
-        nb_runner.create_notebook([
-            "x = 'hello'\ny = 'world'",
-            "x, y = y, x",
-            "print(f'x={x} y={y}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 'hello'\ny = 'world'",
+                "x, y = y, x",
+                "print(f'x={x} y={y}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(3)

@@ -21,6 +21,7 @@ For the refusal tests this also strengthens the claim being made: with a real
 site registered, these prove the refusal wins over the CallUnit real-site
 path too, not merely over the decorator-fallback path a no-site call takes.
 """
+
 from __future__ import annotations
 
 import time
@@ -38,7 +39,9 @@ def call_cache(tmp_path):
 
 def _site(source="compute(x)", names=("compute", "x"), computed_arg_positions=(0,)):
     return CallSite(
-        source=source, free_names=frozenset(names), occurrence_index=0,
+        source=source,
+        free_names=frozenset(names),
+        occurrence_index=0,
         computed_arg_positions=computed_arg_positions,
     )
 
@@ -50,7 +53,7 @@ def test_stateful_callee_is_never_wrapped(call_cache):
     @cash.stateful
     def next_id():
         calls.append(1)
-        time.sleep(0.2)          # above the cost-model floor
+        time.sleep(0.2)  # above the cost-model floor
         return len(calls)
 
     call_cache.set_sites([_site(source="next_id()", names=("next_id",), computed_arg_positions=())])
@@ -62,6 +65,7 @@ def test_stateful_callee_is_never_wrapped(call_cache):
 
 def test_stateful_callee_is_not_recorded_as_intercepted(call_cache):
     """It must not show up on the badge as something cash cached."""
+
     @cash.stateful
     def next_id():
         return 1
@@ -69,9 +73,7 @@ def test_stateful_callee_is_not_recorded_as_intercepted(call_cache):
     call_cache.set_sites([_site(source="next_id()", names=("next_id",), computed_arg_positions=())])
     resolved = call_cache.resolve(next_id)
     resolved()
-    assert call_cache.drain_call_log() == [], (
-        "a refused @stateful callee produced an intercepted-call event"
-    )
+    assert call_cache.drain_call_log() == [], "a refused @stateful callee produced an intercepted-call event"
 
 
 def test_ordinary_callee_still_wrapped(call_cache):

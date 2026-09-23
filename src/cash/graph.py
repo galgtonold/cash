@@ -5,7 +5,6 @@ from __future__ import annotations
 __all__ = ["DependencyGraph"]
 
 
-
 class DependencyGraph:
     """
     Directed Acyclic Graph to track dependencies between functions and data sources.
@@ -69,7 +68,7 @@ class DependencyGraph:
             return None
 
         # cdn_resources='in_line' ensures JS is embedded, avoiding 404s for local files
-        net = Network(height="600px", width="100%", notebook=True, directed=True, cdn_resources='in_line')
+        net = Network(height="600px", width="100%", notebook=True, directed=True, cdn_resources="in_line")
 
         # Add nodes
         for node in self._dependencies:
@@ -94,7 +93,8 @@ class DependencyGraph:
             # This avoids issues with srcdoc length limits and escaping,
             # and ensures isolation from the notebook's CSS.
             import base64
-            html_base64 = base64.b64encode(html_content.encode('utf-8')).decode('utf-8')
+
+            html_base64 = base64.b64encode(html_content.encode("utf-8")).decode("utf-8")
             data_uri = f"data:text/html;base64,{html_base64}"
 
             return IPython.display.IFrame(src=data_uri, width="100%", height="650px")

@@ -14,28 +14,30 @@ class TestGeneratorEdits:
 
     def test_edit_generator_function(self, nb_runner):
         """Edit generator function, verify consumer updates."""
-        nb_runner.create_notebook([
-            "def gen_range(n):\n    for i in range(n):\n        yield i * 2",
-            "result = list(gen_range(5))\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def gen_range(n):\n    for i in range(n):\n        yield i * 2",
+                "result = list(gen_range(5))\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = [0, 2, 4, 6, 8]" in nb_runner.get_output(2)
 
         # Edit generator to yield squares
-        nb_runner.set_cell_source(
-            1, "def gen_range(n):\n    for i in range(n):\n        yield i ** 2"
-        )
+        nb_runner.set_cell_source(1, "def gen_range(n):\n    for i in range(n):\n        yield i ** 2")
         nb_runner.run_all()
         assert "result = [0, 1, 4, 9, 16]" in nb_runner.get_output(2)
 
     def test_edit_generator_param(self, nb_runner):
         """Edit parameter passed to generator."""
-        nb_runner.create_notebook([
-            "count = 3",
-            "def fib(n):\n    a, b = 0, 1\n    for _ in range(n):\n        yield a\n        a, b = b, a + b",
-            "fibs = list(fib(count))\nprint(f'fibs = {fibs}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "count = 3",
+                "def fib(n):\n    a, b = 0, 1\n    for _ in range(n):\n        yield a\n        a, b = b, a + b",
+                "fibs = list(fib(count))\nprint(f'fibs = {fibs}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "fibs = [0, 1, 1]" in nb_runner.get_output(3)
@@ -50,46 +52,48 @@ class TestMapFilterEdits:
 
     def test_edit_map_function(self, nb_runner):
         """Edit function used in map."""
-        nb_runner.create_notebook([
-            "data = [1, 2, 3, 4, 5]",
-            "mapped = list(map(lambda x: x * 2, data))",
-            "total = sum(mapped)\nprint(f'total = {total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = [1, 2, 3, 4, 5]",
+                "mapped = list(map(lambda x: x * 2, data))",
+                "total = sum(mapped)\nprint(f'total = {total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total = 30" in nb_runner.get_output(3)
 
-        nb_runner.set_cell_source(
-            2, "mapped = list(map(lambda x: x ** 2, data))"
-        )
+        nb_runner.set_cell_source(2, "mapped = list(map(lambda x: x ** 2, data))")
         nb_runner.run_all()
         assert "total = 55" in nb_runner.get_output(3)
 
     def test_edit_filter_predicate(self, nb_runner):
         """Edit filter predicate."""
-        nb_runner.create_notebook([
-            "nums = list(range(20))",
-            "filtered = list(filter(lambda x: x % 2 == 0, nums))",
-            "count = len(filtered)\nprint(f'count = {count}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "nums = list(range(20))",
+                "filtered = list(filter(lambda x: x % 2 == 0, nums))",
+                "count = len(filtered)\nprint(f'count = {count}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "count = 10" in nb_runner.get_output(3)
 
-        nb_runner.set_cell_source(
-            2, "filtered = list(filter(lambda x: x % 5 == 0, nums))"
-        )
+        nb_runner.set_cell_source(2, "filtered = list(filter(lambda x: x % 5 == 0, nums))")
         nb_runner.run_all()
         assert "count = 4" in nb_runner.get_output(3)
 
     def test_chain_map_filter_edit(self, nb_runner):
         """Chain map then filter, edit map."""
-        nb_runner.create_notebook([
-            "raw = list(range(1, 11))",
-            "doubled = [x * 2 for x in raw]",
-            "big = [x for x in doubled if x > 10]",
-            "total = sum(big)\nprint(f'total = {total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "raw = list(range(1, 11))",
+                "doubled = [x * 2 for x in raw]",
+                "big = [x for x in doubled if x > 10]",
+                "total = sum(big)\nprint(f'total = {total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         # doubled = [2,4,6,8,10,12,14,16,18,20], big = [12,14,16,18,20] -> 80

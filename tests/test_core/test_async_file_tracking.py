@@ -1,10 +1,9 @@
 """@cash.cache on async functions tracks file deps under concurrent gather."""
+
 from __future__ import annotations
 
 import asyncio
 import time
-
-import pytest
 
 from cash import Cash
 
@@ -31,6 +30,7 @@ async def test_async_auto_track_open(tmp_path):
     time.sleep(0.05)  # ensure mtime ticks
     path.write_text("v2")
     import os
+
     future = time.time() + 60
     os.utime(path, (future, future))
 
@@ -42,8 +42,10 @@ async def test_async_gather_isolated_file_deps(tmp_path):
     """Two parallel async cached funcs each reading distinct files
     must each only see their own file as a dep."""
     c = Cash(cache_dir=str(tmp_path), register_magic=False)
-    path_a = tmp_path / "a.txt"; path_a.write_text("a")
-    path_b = tmp_path / "b.txt"; path_b.write_text("b")
+    path_a = tmp_path / "a.txt"
+    path_a.write_text("a")
+    path_b = tmp_path / "b.txt"
+    path_b.write_text("b")
 
     @c.cache
     async def load_a():
@@ -64,6 +66,7 @@ async def test_async_gather_isolated_file_deps(tmp_path):
     time.sleep(0.05)
     path_a.write_text("aa")
     import os
+
     future = time.time() + 60
     os.utime(path_a, (future, future))
 
@@ -76,18 +79,8 @@ async def test_async_gather_isolated_file_deps(tmp_path):
 async def test_async_source_change_invalidates(tmp_path):
     """When the body of an async @cash.cache function changes, the cache misses.
     Mirrors the sync version in the validation harness."""
-    src1 = (
-        "import asyncio\n"
-        "async def f(x):\n"
-        "    await asyncio.sleep(0)\n"
-        "    return x * 2\n"
-    )
-    src2 = (
-        "import asyncio\n"
-        "async def f(x):\n"
-        "    await asyncio.sleep(0)\n"
-        "    return x * 3\n"
-    )
+    src1 = "import asyncio\nasync def f(x):\n    await asyncio.sleep(0)\n    return x * 2\n"
+    src2 = "import asyncio\nasync def f(x):\n    await asyncio.sleep(0)\n    return x * 3\n"
 
     c = Cash(cache_dir=str(tmp_path), register_magic=False)
 
@@ -101,9 +94,7 @@ async def test_async_source_change_invalidates(tmp_path):
     cached2 = c.cache(ns2["f"])
     # State hash should differ because the function source differs.
     r2 = await cached2(7)
-    assert r2 == 21, (
-        f"async source-change did not invalidate the cache: got {r2}, expected 21"
-    )
+    assert r2 == 21, f"async source-change did not invalidate the cache: got {r2}, expected 21"
 
 
 async def test_async_gather_cache_hit_across_tasks(tmp_path):
@@ -143,8 +134,7 @@ async def test_async_gather_cache_hit_across_tasks(tmp_path):
     r3, r4 = await asyncio.gather(load(), load())
     assert r3 == r4 == "v1"
     assert n["calls"] == initial_calls, (
-        f"second gather recomputed: calls went from {initial_calls} to {n['calls']}. "
-        f"Cross-task cache hit is broken."
+        f"second gather recomputed: calls went from {initial_calls} to {n['calls']}. Cross-task cache hit is broken."
     )
 
 
@@ -178,16 +168,14 @@ async def test_async_invalidation_visible_to_separate_task(tmp_path):
     time.sleep(0.05)  # ensure mtime ticks
     path.write_text("v2")
     import os
+
     future = time.time() + 60
     os.utime(path, (future, future))
 
     # Task B (fresh gather, not just a follow-up await): must observe
     # the mutation and recompute.
     (b_val,) = await asyncio.gather(load())
-    assert b_val == "v2", (
-        f"fresh task did not pick up the file change: got {b_val!r}"
-    )
+    assert b_val == "v2", f"fresh task did not pick up the file change: got {b_val!r}"
     assert n["calls"] > initial_calls, (
-        f"fresh task did not recompute after file mutation: "
-        f"calls stayed at {n['calls']} (was {initial_calls})"
+        f"fresh task did not recompute after file mutation: calls stayed at {n['calls']} (was {initial_calls})"
     )

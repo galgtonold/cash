@@ -20,14 +20,16 @@ pytestmark = [pytest.mark.timeout(120)]
 
 
 def test_copied_object_decorated_call_distinct(nb_runner):
-    nb_runner.create_notebook([
-        "import cash\nimport copy",
-        "class Cfg:\n    def __init__(self, v):\n        self.v = v",
-        "cfg = Cfg(5)",
-        "cfg2 = copy.copy(cfg)\ncfg2.v = 99",
-        "@cash.cache\ndef evaluate(c):\n    return c.v * 2",
-        "print('r=', evaluate(cfg), evaluate(cfg2))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import cash\nimport copy",
+            "class Cfg:\n    def __init__(self, v):\n        self.v = v",
+            "cfg = Cfg(5)",
+            "cfg2 = copy.copy(cfg)\ncfg2.v = 99",
+            "@cash.cache\ndef evaluate(c):\n    return c.v * 2",
+            "print('r=', evaluate(cfg), evaluate(cfg2))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_debug()
     nb_runner.run_all()
@@ -39,11 +41,13 @@ def test_copied_object_decorated_call_distinct(nb_runner):
 
 
 def test_notebook_defined_decorated_fn_edit(nb_runner):
-    nb_runner.create_notebook([
-        "import cash",
-        "@cash.cache\ndef score(x):\n    return x + 1",
-        "print('s=', score(10))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import cash",
+            "@cash.cache\ndef score(x):\n    return x + 1",
+            "print('s=', score(10))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_debug()
     nb_runner.run_all()
@@ -52,18 +56,18 @@ def test_notebook_defined_decorated_fn_edit(nb_runner):
     nb_runner.set_cell_source(2, "@cash.cache\ndef score(x):\n    return x + 100")
     nb_runner.run_all()
     out = nb_runner.get_output(3)
-    assert "s= 110" in out, (
-        f"edited notebook-defined @cash.cache function served stale result: {out!r}"
-    )
+    assert "s= 110" in out, f"edited notebook-defined @cash.cache function served stale result: {out!r}"
 
 
 def test_decorated_call_seen_by_lineage(nb_runner):
-    nb_runner.create_notebook([
-        "import cash",
-        "@cash.cache\ndef base_value():\n    return 7",
-        "v = base_value()",
-        "print('v2=', v * 2)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import cash",
+            "@cash.cache\ndef base_value():\n    return 7",
+            "v = base_value()",
+            "print('v2=', v * 2)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_debug()
     nb_runner.run_all()
@@ -73,6 +77,5 @@ def test_decorated_call_seen_by_lineage(nb_runner):
     nb_runner.run_cell(4)
     out = nb_runner.get_output(4)
     assert "v2= 18" in out, (
-        f"decorated-function edit not propagated through notebook lineage to "
-        f"the isolated downstream run: {out!r}"
+        f"decorated-function edit not propagated through notebook lineage to the isolated downstream run: {out!r}"
     )

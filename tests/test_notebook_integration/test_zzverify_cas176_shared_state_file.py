@@ -19,6 +19,7 @@ forever, on an unedited notebook. Since writers are scoped to what the running
 cell depends on, four separate files run 1 / 1 / 1 / 1; the shared file, which
 each cell really reads, still runs 4 / 3 / 2 / 1.
 """
+
 import json
 
 import pytest
@@ -70,9 +71,7 @@ def _measure(nb_runner, paths, label):
 
 def test_single_writer_cell_does_not_amplify(nb_runner, tmp_path):
     """Baseline: one writer cell runs exactly once per run_all."""
-    per_run = _measure(
-        nb_runner, {"a": tmp_path / "s.json"}, "1 cell (baseline)"
-    )
+    per_run = _measure(nb_runner, {"a": tmp_path / "s.json"}, "1 cell (baseline)")
     assert per_run["a"] == 1.0, per_run
 
 
@@ -80,7 +79,8 @@ def test_four_cells_sharing_one_state_file_amplify_quadratically(nb_runner, tmp_
     """The ticket's shape: nothing ever stabilises, and it gets worse per cell."""
     shared = tmp_path / "shared.json"
     per_run = _measure(
-        nb_runner, {k: shared for k in ("a", "b", "c", "d")},
+        nb_runner,
+        {k: shared for k in ("a", "b", "c", "d")},
         "4 cells, ONE SHARED file",
     )
     assert per_run == {"a": 4.0, "b": 3.0, "c": 2.0, "d": 1.0}, per_run
@@ -93,7 +93,8 @@ def test_four_cells_with_separate_files_run_once_each(nb_runner, tmp_path):
     plain kernel (round 24, r24s1). The shared file still amplifies: each cell
     reads the file the one before it wrote."""
     per_run = _measure(
-        nb_runner, {k: tmp_path / f"s_{k}.json" for k in ("a", "b", "c", "d")},
+        nb_runner,
+        {k: tmp_path / f"s_{k}.json" for k in ("a", "b", "c", "d")},
         "4 cells, FOUR SEPARATE files",
     )
     assert per_run == {"a": 1.0, "b": 1.0, "c": 1.0, "d": 1.0}, per_run

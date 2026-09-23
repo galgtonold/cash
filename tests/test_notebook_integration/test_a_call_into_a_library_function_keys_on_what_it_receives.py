@@ -11,6 +11,7 @@ sklearn's own globals, found state that is not plain data, and keyed the call
 on where its argument came from instead. A library's module state is no more
 covered by that key than by the content key; its code is code.
 """
+
 from pathlib import Path
 
 import pytest
@@ -34,7 +35,9 @@ SETUP = (
     "    return normalize(lengths)\n"
     "SEED = 1"
 )
-DOCS = "docs = pd.DataFrame({'text': ['alpha beta %d' % i for i in range(300)], 'title': ['t%d' % i for i in range(300)]})"
+DOCS = (
+    "docs = pd.DataFrame({'text': ['alpha beta %d' % i for i in range(300)], 'title': ['t%d' % i for i in range(300)]})"
+)
 VECTORS = "Z = fit_vectors(docs['text'], SEED)\nprint('Z', round(float(Z.sum()), 6))"
 
 
@@ -50,7 +53,7 @@ def test_fixing_the_titles_does_not_refit_on_identical_text(nb_runner):
     want = next(line for line in nb_runner.get_output(4).splitlines() if line.startswith("Z "))
     assert _fits(nb_runner) == 1
 
-    nb_runner.set_cell_source(3, DOCS.replace("'t%d'", "'Title %d'"))   # titles only
+    nb_runner.set_cell_source(3, DOCS.replace("'t%d'", "'Title %d'"))  # titles only
     nb_runner.run_cell(3)
     nb_runner.run_cell(4)
     assert want in nb_runner.get_output(4), nb_runner.get_output(4)
@@ -71,7 +74,9 @@ HELPER = (
 def test_a_notebook_helper_is_still_walked(nb_runner):
     """Only a library's function is taken as code: a helper defined in the
     notebook reading a global keeps its global in the key."""
-    nb_runner.create_notebook(["import cash\n%cash_on", HELPER, "out = [work(v) for v in [1, 2, 3]]\nprint('OUT', out)"])
+    nb_runner.create_notebook(
+        ["import cash\n%cash_on", HELPER, "out = [work(v) for v in [1, 2, 3]]\nprint('OUT', out)"]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "OUT [1, 2, 3]" in nb_runner.get_output(3)

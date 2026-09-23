@@ -6,7 +6,7 @@ import json
 import logging
 import os
 
-from cash.logging import JsonFormatter, CashLogHandler, setup_logging
+from cash.logging import CashLogHandler, JsonFormatter, setup_logging
 
 
 class TestJsonFormatter:
@@ -15,9 +15,7 @@ class TestJsonFormatter:
     def test_basic_format(self):
         fmt = JsonFormatter()
         record = logging.LogRecord(
-            name="cash.test", level=logging.INFO,
-            pathname="", lineno=0, msg="test message",
-            args=(), exc_info=None
+            name="cash.test", level=logging.INFO, pathname="", lineno=0, msg="test message", args=(), exc_info=None
         )
         result = fmt.format(record)
         data = json.loads(result)
@@ -29,9 +27,7 @@ class TestJsonFormatter:
     def test_extra_fields(self):
         fmt = JsonFormatter()
         record = logging.LogRecord(
-            name="cash", level=logging.DEBUG,
-            pathname="", lineno=0, msg="cache hit",
-            args=(), exc_info=None
+            name="cash", level=logging.DEBUG, pathname="", lineno=0, msg="cache hit", args=(), exc_info=None
         )
         record.event = "cache_hit"
         record.duration_ms = 1.5
@@ -49,9 +45,7 @@ class TestCashLogHandler:
     def test_emit_and_retrieve(self):
         handler = CashLogHandler()
         record = logging.LogRecord(
-            name="cash", level=logging.INFO,
-            pathname="", lineno=0, msg="test",
-            args=(), exc_info=None
+            name="cash", level=logging.INFO, pathname="", lineno=0, msg="test", args=(), exc_info=None
         )
         handler.emit(record)
         events = handler.get_events()
@@ -63,9 +57,7 @@ class TestCashLogHandler:
         handler.MAX_ENTRIES = 10
         for i in range(20):
             record = logging.LogRecord(
-                name="cash", level=logging.INFO,
-                pathname="", lineno=0, msg=f"msg-{i}",
-                args=(), exc_info=None
+                name="cash", level=logging.INFO, pathname="", lineno=0, msg=f"msg-{i}", args=(), exc_info=None
             )
             handler.emit(record)
         events = handler.get_events(limit=100)
@@ -78,9 +70,7 @@ class TestCashLogHandler:
         handler = CashLogHandler()
         for event_type in ["cache_hit", "cache_miss", "cache_hit"]:
             record = logging.LogRecord(
-                name="cash", level=logging.INFO,
-                pathname="", lineno=0, msg=event_type,
-                args=(), exc_info=None
+                name="cash", level=logging.INFO, pathname="", lineno=0, msg=event_type, args=(), exc_info=None
             )
             record.event = event_type
             handler.emit(record)
@@ -90,9 +80,7 @@ class TestCashLogHandler:
     def test_clear(self):
         handler = CashLogHandler()
         record = logging.LogRecord(
-            name="cash", level=logging.INFO,
-            pathname="", lineno=0, msg="test",
-            args=(), exc_info=None
+            name="cash", level=logging.INFO, pathname="", lineno=0, msg="test", args=(), exc_info=None
         )
         handler.emit(record)
         assert len(handler.get_events()) == 1
@@ -103,9 +91,7 @@ class TestCashLogHandler:
         handler = CashLogHandler()
         for i in range(10):
             record = logging.LogRecord(
-                name="cash", level=logging.INFO,
-                pathname="", lineno=0, msg=f"msg-{i}",
-                args=(), exc_info=None
+                name="cash", level=logging.INFO, pathname="", lineno=0, msg=f"msg-{i}", args=(), exc_info=None
             )
             handler.emit(record)
         events = handler.get_events(limit=3)
@@ -126,10 +112,7 @@ class TestSetupLogging:
         setup_logging(level=logging.INFO, json_output=True)
         cash_logger = logging.getLogger("cash")
         # Should have a handler with JsonFormatter
-        json_handlers = [
-            h for h in cash_logger.handlers
-            if isinstance(h.formatter, JsonFormatter)
-        ]
+        json_handlers = [h for h in cash_logger.handlers if isinstance(h.formatter, JsonFormatter)]
         assert len(json_handlers) > 0
 
     def test_file_logging(self, tmp_path):

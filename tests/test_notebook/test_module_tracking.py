@@ -10,15 +10,15 @@ Tests the FunctionTracker module tracking features:
 
 import sys
 import time
-import pytest
 from unittest.mock import MagicMock
 
-from cash.notebook.function_tracker import FunctionTracker
-from cash.notebook.ipython.magics import CashMagics
-from cash.core import Cash
-from cash.backends import InMemoryBackend
+import pytest
 from traitlets.config.configurable import Configurable
 
+from cash.backends import InMemoryBackend
+from cash.core import Cash
+from cash.notebook.function_tracker import FunctionTracker
+from cash.notebook.ipython.magics import CashMagics
 
 # ============================================================================
 # Fixtures
@@ -27,6 +27,7 @@ from traitlets.config.configurable import Configurable
 
 class MockShell(Configurable):
     """Mock IPython shell for testing."""
+
     def __init__(self):
         super().__init__()
         self.user_ns = {}
@@ -91,6 +92,7 @@ class TestTrackModule:
         """Track a module that's already imported."""
         module_name, module_file = temp_module
         import importlib
+
         importlib.import_module(module_name)
 
         result = tracker.track_module(module_name)
@@ -116,6 +118,7 @@ class TestTrackModule:
         """Module mtime is recorded on tracking."""
         module_name, module_file = temp_module
         import importlib
+
         importlib.import_module(module_name)
 
         tracker.track_module(module_name)
@@ -136,6 +139,7 @@ class TestCheckTrackedModules:
         """No changes detected when file hasn't been modified."""
         module_name, module_file = temp_module
         import importlib
+
         importlib.import_module(module_name)
 
         tracker.track_module(module_name)
@@ -146,13 +150,14 @@ class TestCheckTrackedModules:
         """Detect when a tracked module's file is modified."""
         module_name, module_file = temp_module
         import importlib
+
         importlib.import_module(module_name)
 
         tracker.track_module(module_name)
 
         # Modify the file (need to ensure mtime changes)
         time.sleep(0.1)
-        with open(module_file, 'w') as f:
+        with open(module_file, "w") as f:
             f.write("def helper(x):\n    return x * 3\n")
 
         changed = tracker.check_tracked_modules()
@@ -162,13 +167,14 @@ class TestCheckTrackedModules:
         """After detecting a change, subsequent check with no new changes returns empty."""
         module_name, module_file = temp_module
         import importlib
+
         importlib.import_module(module_name)
 
         tracker.track_module(module_name)
 
         # Modify and detect
         time.sleep(0.1)
-        with open(module_file, 'w') as f:
+        with open(module_file, "w") as f:
             f.write("def helper(x):\n    return x * 3\n")
 
         changed = tracker.check_tracked_modules()
@@ -197,6 +203,7 @@ class TestReloadModule:
         """Reload updates the module in sys.modules."""
         module_name, module_file = temp_module
         import importlib
+
         mod = importlib.import_module(module_name)
 
         tracker.track_module(module_name)
@@ -206,7 +213,7 @@ class TestReloadModule:
 
         # Modify the module
         time.sleep(0.1)
-        with open(module_file, 'w') as f:
+        with open(module_file, "w") as f:
             f.write("def helper(x):\n    return x * 3\n")
 
         # Reload
@@ -228,6 +235,7 @@ class TestReloadModule:
         """Reloading a module invalidates cached source hashes."""
         module_name, module_file = temp_module
         import importlib
+
         mod = importlib.import_module(module_name)
 
         # Cache the function hash
@@ -236,7 +244,7 @@ class TestReloadModule:
 
         # Modify the module
         time.sleep(0.1)
-        with open(module_file, 'w') as f:
+        with open(module_file, "w") as f:
             f.write("def helper(x):\n    return x * 3\n")
 
         # Reload (should clear cache)
@@ -261,6 +269,7 @@ class TestClear:
         """clear() removes all module tracking state."""
         module_name, module_file = temp_module
         import importlib
+
         importlib.import_module(module_name)
 
         tracker.track_module(module_name)
@@ -303,6 +312,7 @@ class TestCashTrackMagic:
 
         # Import it first
         import importlib
+
         importlib.import_module(module_name)
 
         magics.cash_track(module_name)
@@ -322,6 +332,7 @@ class TestCashTrackMagic:
         module_name, module_file = temp_module
 
         import importlib
+
         importlib.import_module(module_name)
 
         magics.cash_track(module_name)
@@ -338,6 +349,7 @@ class TestCashTrackMagic:
         module_name, module_file = temp_module
 
         import importlib
+
         importlib.import_module(module_name)
 
         magics.cash_track(module_name)
@@ -353,6 +365,7 @@ class TestCashTrackMagic:
         module_name, module_file = temp_module
 
         import importlib
+
         importlib.import_module(module_name)
 
         magics.cash_track(module_name)
@@ -360,7 +373,7 @@ class TestCashTrackMagic:
 
         # Modify the module file
         time.sleep(0.1)
-        with open(module_file, 'w') as f:
+        with open(module_file, "w") as f:
             f.write("def helper(x):\n    return x * 100\n")
 
         magics.cash_track("--check")
@@ -375,6 +388,7 @@ class TestCashTrackMagic:
         module_name, module_file = temp_module
 
         import importlib
+
         mod = importlib.import_module(module_name)
         assert mod.helper(5) == 10
 

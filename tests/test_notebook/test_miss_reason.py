@@ -23,6 +23,7 @@ absence of an entry is what made the old fallback expensive, and "first
 time" is self-evident to someone running a cell for the first time. The
 test below pins that absence on purpose — it is a decision, not a gap.
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -91,7 +92,7 @@ class TestMissReasonAttribution:
     def test_unchanged_re_run_is_restored_and_has_no_miss_reason(self, magics_fixture):
         magics, shell, _backend, _cash = magics_fixture
         # @cash:persist forces caching regardless of the 10 ms min-execution-time floor
-        magics.cash("", "# @cash:persist\nx = 21")               # first run, populates cache
+        magics.cash("", "# @cash:persist\nx = 21")  # first run, populates cache
         m = _last_metric(shell, magics, "# @cash:persist\nx = 21")  # re-run, expect hit
         assert m["status"] == CacheStatus.RESTORED
         # RESTORED rows don't have a miss to attribute.
@@ -122,7 +123,7 @@ class TestMissReasonAttribution:
         magics.cash("", "a = 1")
         magics.cash("", "c = 100")
         magics.cash("", "b = a + c")
-        magics.cash("", "a = 2")            # only `a` moves; `c` is untouched
+        magics.cash("", "a = 2")  # only `a` moves; `c` is untouched
         m = _last_metric(shell, magics, "b = a + c")
         assert m["status"] == CacheStatus.COMPUTED
         assert m.get("miss_reason") == "input changed: a", m.get("miss_reason")

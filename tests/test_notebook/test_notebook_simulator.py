@@ -7,6 +7,7 @@ a backend, an IPython shell, and the whole tracking-state graph. These
 tests construct a ``NotebookSimulator`` directly with a minimal fake shell
 and verify simulator-owned state without touching the orchestrator.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace

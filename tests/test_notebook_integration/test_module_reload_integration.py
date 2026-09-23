@@ -8,7 +8,9 @@ Tests that:
 3. Transitive module dependencies: when module A imports module B and B changes,
    statements depending on A are also invalidated.
 """
+
 import time
+
 import pytest
 from nbclient.exceptions import CellExecutionError
 
@@ -24,10 +26,12 @@ class TestModuleReloadIntegration:
         module_file = tmp_path / "mymod.py"
         module_file.write_text("def compute(x):\n    return x + 1\n")
 
-        nb_runner.create_notebook([
-            "import mymod",
-            "result = mymod.compute(10)\nprint(f'result={result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import mymod",
+                "result = mymod.compute(10)\nprint(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
 
         # First run: computes everything
@@ -46,20 +50,20 @@ class TestModuleReloadIntegration:
         # Third run: should detect the change and re-compute
         nb_runner.run_all()
         output3 = nb_runner.get_output(2)
-        assert "result=110" in output3, (
-            f"Expected result=110 after module change, got: {output3}"
-        )
+        assert "result=110" in output3, f"Expected result=110 after module change, got: {output3}"
 
     def test_module_reload_with_multiple_dependents(self, nb_runner, tmp_path):
         """Multiple cells depending on a changed module should all re-execute."""
         module_file = tmp_path / "helpers.py"
         module_file.write_text("def double(x):\n    return x * 2\n")
 
-        nb_runner.create_notebook([
-            "import helpers",
-            "a = helpers.double(5)\nprint(f'a={a}')",
-            "b = helpers.double(10)\nprint(f'b={b}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import helpers",
+                "a = helpers.double(5)\nprint(f'a={a}')",
+                "b = helpers.double(10)\nprint(f'b={b}')",
+            ]
+        )
         nb_runner.start_kernel()
 
         # First run
@@ -82,10 +86,12 @@ class TestModuleReloadIntegration:
         module_file = tmp_path / "trackmod.py"
         module_file.write_text("VAL = 42\n")
 
-        nb_runner.create_notebook([
-            "import trackmod",
-            "print(f'val={trackmod.VAL}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import trackmod",
+                "print(f'val={trackmod.VAL}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.enable_debug()
 
@@ -101,9 +107,7 @@ class TestModuleReloadIntegration:
         raw_output = nb_runner.get_output(2, filter_debug=False)
         # Either the value changed OR there's a reload notification in debug
         # The key assertion is that the value reflects the change
-        assert "val=99" in nb_runner.get_output(2), (
-            f"Expected val=99 after module reload. Raw output: {raw_output}"
-        )
+        assert "val=99" in nb_runner.get_output(2), f"Expected val=99 after module reload. Raw output: {raw_output}"
 
 
 class TestExceptionSurfacingIntegration:
@@ -111,9 +115,11 @@ class TestExceptionSurfacingIntegration:
 
     def test_import_error_surfaces(self, nb_runner):
         """ImportError from importing a nonexistent module should be visible."""
-        nb_runner.create_notebook([
-            "import nonexistent_module_xyz_12345",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import nonexistent_module_xyz_12345",
+            ]
+        )
         nb_runner.start_kernel()
 
         with pytest.raises(CellExecutionError) as exc_info:
@@ -123,9 +129,11 @@ class TestExceptionSurfacingIntegration:
 
     def test_value_error_surfaces(self, nb_runner):
         """ValueError raised in a cell should be visible."""
-        nb_runner.create_notebook([
-            "raise ValueError('this is a test error')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "raise ValueError('this is a test error')",
+            ]
+        )
         nb_runner.start_kernel()
 
         with pytest.raises(CellExecutionError) as exc_info:
@@ -135,9 +143,11 @@ class TestExceptionSurfacingIntegration:
 
     def test_error_in_second_statement_surfaces(self, nb_runner):
         """Error in the second statement of a cell should still surface."""
-        nb_runner.create_notebook([
-            "x = 42\nraise RuntimeError('second statement fails')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 42\nraise RuntimeError('second statement fails')",
+            ]
+        )
         nb_runner.start_kernel()
 
         with pytest.raises(CellExecutionError) as exc_info:
@@ -147,10 +157,12 @@ class TestExceptionSurfacingIntegration:
 
     def test_error_in_second_cell_surfaces(self, nb_runner):
         """Error in the second cell should surface after first cell succeeds."""
-        nb_runner.create_notebook([
-            "x = 10\nprint(f'x={x}')",
-            "raise TypeError('cell 2 error')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10\nprint(f'x={x}')",
+                "raise TypeError('cell 2 error')",
+            ]
+        )
         nb_runner.start_kernel()
 
         # Run first cell - should succeed
@@ -165,9 +177,11 @@ class TestExceptionSurfacingIntegration:
 
     def test_name_error_surfaces(self, nb_runner):
         """NameError from undefined variable should surface."""
-        nb_runner.create_notebook([
-            "print(undefined_var_xyz)",
-        ])
+        nb_runner.create_notebook(
+            [
+                "print(undefined_var_xyz)",
+            ]
+        )
         nb_runner.start_kernel()
 
         with pytest.raises(CellExecutionError) as exc_info:
@@ -191,16 +205,14 @@ class TestTransitiveDependencyIntegration:
         helpers_file.write_text("def add_one(x):\n    return x + 1\n")
 
         metrics_file = tmp_path / "metrics.py"
-        metrics_file.write_text(
-            "from helpers import add_one\n"
-            "def compute(x):\n"
-            "    return add_one(x) * 2\n"
-        )
+        metrics_file.write_text("from helpers import add_one\ndef compute(x):\n    return add_one(x) * 2\n")
 
-        nb_runner.create_notebook([
-            "import metrics",
-            "result = metrics.compute(10)\nprint(f'result={result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import metrics",
+                "result = metrics.compute(10)\nprint(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
 
         # First run: computes everything
@@ -220,9 +232,7 @@ class TestTransitiveDependencyIntegration:
         # Third run: should detect transitive change and re-compute
         nb_runner.run_all()
         output3 = nb_runner.get_output(2)
-        assert "result=220" in output3, (
-            f"Expected result=220 after helpers.py change (10+100)*2, got: {output3}"
-        )
+        assert "result=220" in output3, f"Expected result=220 after helpers.py change (10+100)*2, got: {output3}"
 
     def test_transitive_dep_multiple_dependents(self, nb_runner, tmp_path):
         """Multiple cells depending on a module whose sub-dep changed should all re-execute."""
@@ -230,17 +240,15 @@ class TestTransitiveDependencyIntegration:
         helpers_file.write_text("BASE = 10\n")
 
         svc_file = tmp_path / "svc.py"
-        svc_file.write_text(
-            "from helpers import BASE\n"
-            "def calc(x):\n"
-            "    return x + BASE\n"
-        )
+        svc_file.write_text("from helpers import BASE\ndef calc(x):\n    return x + BASE\n")
 
-        nb_runner.create_notebook([
-            "import svc",
-            "a = svc.calc(5)\nprint(f'a={a}')",
-            "b = svc.calc(20)\nprint(f'b={b}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import svc",
+                "a = svc.calc(5)\nprint(f'a={a}')",
+                "b = svc.calc(20)\nprint(f'b={b}')",
+            ]
+        )
         nb_runner.start_kernel()
 
         # First run
@@ -265,23 +273,17 @@ class TestTransitiveDependencyIntegration:
         utils_file.write_text("FACTOR = 2\n")
 
         svc_file = tmp_path / "chain_svc.py"
-        svc_file.write_text(
-            "from chain_utils import FACTOR\n"
-            "def multiply(x):\n"
-            "    return x * FACTOR\n"
-        )
+        svc_file.write_text("from chain_utils import FACTOR\ndef multiply(x):\n    return x * FACTOR\n")
 
         app_file = tmp_path / "chain_app.py"
-        app_file.write_text(
-            "from chain_svc import multiply\n"
-            "def run(x):\n"
-            "    return multiply(x) + 1\n"
-        )
+        app_file.write_text("from chain_svc import multiply\ndef run(x):\n    return multiply(x) + 1\n")
 
-        nb_runner.create_notebook([
-            "import chain_app",
-            "result = chain_app.run(5)\nprint(f'result={result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import chain_app",
+                "result = chain_app.run(5)\nprint(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
 
         # First run: 5*2+1 = 11
@@ -296,6 +298,4 @@ class TestTransitiveDependencyIntegration:
         # Re-run: 5*100+1 = 501
         nb_runner.run_all()
         output2 = nb_runner.get_output(2)
-        assert "result=501" in output2, (
-            f"Expected result=501 after chain_utils change, got: {output2}"
-        )
+        assert "result=501" in output2, f"Expected result=501 after chain_utils change, got: {output2}"

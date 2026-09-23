@@ -12,6 +12,7 @@ cell 2 runs after cell 3 was already executed, the virtual lineages already
 match the actual lineages — no mismatch is detected, so no downstream
 advancement check is needed and no broken vars are found.
 """
+
 import pytest
 
 pytestmark = pytest.mark.upstream
@@ -78,7 +79,8 @@ class TestOutOfOrderDownstreamFirst:
         nb_runner.run_cell(3)
         out3_rerun = nb_runner.get_output(3)
         assert "rolling_mean" in out3_rerun, (
-            f"Cell 3 should have restored df with rolling_mean column, got: {out3_rerun}")
+            f"Cell 3 should have restored df with rolling_mean column, got: {out3_rerun}"
+        )
 
         # Cell 2 should NOT re-compute; df lineage should be reset to virtual state
         # and the cell's statements should get cache hits.
@@ -87,8 +89,8 @@ class TestOutOfOrderDownstreamFirst:
 
         # Verify no upstream re-execution — this is the key correctness check
         assert "Auto-executing upstream" not in out2_rerun, (
-            f"Cell 2 should NOT auto-execute upstream when df is already correct. "
-            f"Got: {out2_rerun}")
+            f"Cell 2 should NOT auto-execute upstream when df is already correct. Got: {out2_rerun}"
+        )
 
     def test_downstream_first_with_file_dependency(self, nb_runner, tmp_path):
         """
@@ -99,12 +101,14 @@ class TestOutOfOrderDownstreamFirst:
 
         # Create test CSV
         csv_path = tmp_path / "data.csv"
-        csv_str = str(csv_path).replace('\\', '/')
-        pd.DataFrame({
-            'date': pd.date_range('2020-01-01', periods=100, freq='D'),
-            'price': range(100),
-            'volume': range(100, 200),
-        }).to_csv(csv_path, index=False)
+        csv_str = str(csv_path).replace("\\", "/")
+        pd.DataFrame(
+            {
+                "date": pd.date_range("2020-01-01", periods=100, freq="D"),
+                "price": range(100),
+                "volume": range(100, 200),
+            }
+        ).to_csv(csv_path, index=False)
 
         cell_1 = f"""\
 import pandas as pd
@@ -140,7 +144,8 @@ print(f"Display: {df.shape}, cols={list(df.columns)}")"""
         nb_runner.run_cell(2)
         out2_rerun = nb_runner.get_raw_output(2)
         assert "Auto-executing upstream" not in out2_rerun, (
-            f"Cell 2 should NOT auto-execute upstream. Got: {out2_rerun}")
+            f"Cell 2 should NOT auto-execute upstream. Got: {out2_rerun}"
+        )
 
     def test_downstream_first_repeated_assignment(self, nb_runner):
         """
@@ -197,7 +202,8 @@ print(f"Display: {df.shape}, cols={list(df.columns)}")"""
         nb_runner.run_cell(3)
         out3_rerun = nb_runner.get_raw_output(3)
         assert "Auto-executing upstream" not in out3_rerun, (
-            f"Cell 3 should NOT auto-execute upstream. Got: {out3_rerun}")
+            f"Cell 3 should NOT auto-execute upstream. Got: {out3_rerun}"
+        )
 
 
 class TestOutOfOrderEdgeCases:
@@ -208,11 +214,13 @@ class TestOutOfOrderEdgeCases:
         Execute the middle cell first. It should restore its inputs from
         cache and not mark anything as broken.
         """
-        nb_runner.create_notebook([
-            "x = 42\nprint(f'x={x}')",
-            "y = x * 2\nprint(f'y={y}')",
-            "z = y + 1\nprint(f'z={z}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 42\nprint(f'x={x}')",
+                "y = x * 2\nprint(f'y={y}')",
+                "z = y + 1\nprint(f'z={z}')",
+            ]
+        )
         nb_runner.start_kernel()
 
         # Populate cache
@@ -234,11 +242,13 @@ class TestOutOfOrderEdgeCases:
         Run the last cell, then the second-to-last. Second-to-last should
         not re-execute upstream when the variable is ahead.
         """
-        nb_runner.create_notebook([
-            "a = 10",
-            "b = a + 5\nprint(f'b={b}')",
-            "c = b * 2\nprint(f'c={c}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 10",
+                "b = a + 5\nprint(f'b={b}')",
+                "c = b * 2\nprint(f'c={c}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.enable_debug()  # needed for the "Auto-executing upstream" assertion below
 

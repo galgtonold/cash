@@ -21,6 +21,7 @@ Process A is held between import and its first call with a handshake file,
 not a sleep, and bytecode caching is off so a stale `.pyc` cannot fake either
 outcome (r17s3 hit that trap once).
 """
+
 from __future__ import annotations
 
 import os
@@ -36,7 +37,7 @@ pytestmark = pytest.mark.core
 OLD = "def bump(x):\n    return x + 1\n"
 NEW = "def bump(x):\n    return x + 100\n"
 
-MAIN = textwrap.dedent('''
+MAIN = textwrap.dedent("""
     import os, sys, time
     import cash
     from helper import bump
@@ -55,7 +56,7 @@ MAIN = textwrap.dedent('''
                     break
                 time.sleep(0.025)
         print(compute(1))
-''')
+""")
 
 
 def _project(tmp_path, helper_text):
@@ -82,8 +83,7 @@ def _edit(path, text):
 
 
 def _run(proj, env, *argv):
-    return subprocess.run([sys.executable, "main.py", *argv], cwd=str(proj),
-                          capture_output=True, text=True, env=env)
+    return subprocess.run([sys.executable, "main.py", *argv], cwd=str(proj), capture_output=True, text=True, env=env)
 
 
 def test_an_edit_between_import_and_first_call_is_not_served_to_the_restart(tmp_path):
@@ -91,21 +91,27 @@ def test_an_edit_between_import_and_first_call_is_not_served_to_the_restart(tmp_
     proj = _project(tmp_path, OLD)
     env = _env(tmp_path)
 
-    a = subprocess.Popen([sys.executable, "main.py", "wait"], cwd=str(proj),
-                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    a = subprocess.Popen(
+        [sys.executable, "main.py", "wait"],
+        cwd=str(proj),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
     for _ in range(400):
         if (proj / "ready").exists():
             break
         time.sleep(0.025)
     assert (proj / "ready").exists(), "process A never reached its first call"
-    _edit(proj / "helper.py", NEW)             # the deploy lands under A
+    _edit(proj / "helper.py", NEW)  # the deploy lands under A
     (proj / "go").write_text("", encoding="utf-8")
     a_out, a_err = a.communicate(timeout=60)
 
     assert a_out.strip() == "2", "A runs the code it imported"
     assert "KEY-SOURCE-CHANGED" in a_err, "nothing said the file changed under A"
 
-    b = _run(proj, env)                         # the restart
+    b = _run(proj, env)  # the restart
     assert b.stdout.strip() == "101", "the restarted process was served the old code's answer"
     assert "COMPUTE" in b.stderr
 
@@ -148,7 +154,7 @@ def test_an_unedited_helper_is_silent(tmp_path):
 # tester's "no network" control passed while the bug was still there.
 # ---------------------------------------------------------------------------
 
-OWN_OLD = textwrap.dedent('''
+OWN_OLD = textwrap.dedent("""
     import sys, time
     import cash
 
@@ -160,11 +166,11 @@ OWN_OLD = textwrap.dedent('''
 
     def unrelated():
         return 1
-''')
+""")
 OWN_NEW = OWN_OLD.replace("x * 14", "x * 3")
 OWN_ELSEWHERE = OWN_OLD.replace("return 1", "return 2")
 
-OWN_MAIN = textwrap.dedent('''
+OWN_MAIN = textwrap.dedent("""
     import os, sys, time
     from app import compute
 
@@ -175,10 +181,10 @@ OWN_MAIN = textwrap.dedent('''
                 break
             time.sleep(0.025)
     print(compute(3))
-''')
+""")
 
 # The same shape with the decorated function in the script itself.
-SCRIPT_OLD = OWN_OLD + textwrap.dedent('''
+SCRIPT_OLD = OWN_OLD + textwrap.dedent("""
     if __name__ == "__main__":
         import os
         if len(sys.argv) > 1 and sys.argv[1] == "wait":
@@ -188,7 +194,7 @@ SCRIPT_OLD = OWN_OLD + textwrap.dedent('''
                     break
                 time.sleep(0.025)
         print(compute(3))
-''')
+""")
 
 
 def _own_project(tmp_path, layout):
@@ -204,8 +210,14 @@ def _own_project(tmp_path, layout):
 
 def _edit_under_a(proj, env, edited, new_text):
     """Start A, let it import, edit *edited* on disk, then let A make its first call."""
-    a = subprocess.Popen([sys.executable, "main.py", "wait"], cwd=str(proj),
-                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    a = subprocess.Popen(
+        [sys.executable, "main.py", "wait"],
+        cwd=str(proj),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
     for _ in range(400):
         if (proj / "ready").exists():
             break
@@ -232,7 +244,7 @@ def test_an_edit_to_the_cached_function_itself_is_not_served_to_the_restart(tmp_
     assert "KEY-SOURCE-CHANGED" in a_err, "nothing said the file changed under A"
 
 
-IMPORT_WINDOW = textwrap.dedent('''
+IMPORT_WINDOW = textwrap.dedent("""
     import os, sys, time
     import cash
 
@@ -249,7 +261,7 @@ IMPORT_WINDOW = textwrap.dedent('''
         print("COMPUTE", file=sys.stderr, flush=True)  # @cash:assume-safe
         time.sleep(0.25)  # @cash:assume-safe
         return x * 14
-''')
+""")
 
 
 def test_an_edit_while_the_module_is_still_importing_is_not_served_to_the_restart(tmp_path):
@@ -264,9 +276,14 @@ def test_an_edit_while_the_module_is_still_importing_is_not_served_to_the_restar
     (proj / "main.py").write_text("from app import compute\nprint(compute(3))\n", encoding="utf-8")
     env = _env(tmp_path)
 
-    a = subprocess.Popen([sys.executable, "main.py"], cwd=str(proj), text=True,
-                         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                         env=dict(env, WAIT_IN_IMPORT="1"))
+    a = subprocess.Popen(
+        [sys.executable, "main.py"],
+        cwd=str(proj),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=dict(env, WAIT_IN_IMPORT="1"),
+    )
     for _ in range(400):
         if (proj / "ready").exists():
             break
@@ -313,7 +330,7 @@ def test_a_closure_in_an_edited_file_is_compared_without_raising(tmp_path, monke
     mod = importlib.import_module("closmod_r18")
     try:
         inner = mod.make(3)
-        _edit(tmp_path / "closmod_r18.py", src + "\nOTHER = 1\n")    # inner unchanged
+        _edit(tmp_path / "closmod_r18.py", src + "\nOTHER = 1\n")  # inner unchanged
         assert loaded_code_matches_disk(inner) is True
         _edit(tmp_path / "closmod_r18.py", src.replace("x * k", "x + k"))
         assert loaded_code_matches_disk(inner) is False

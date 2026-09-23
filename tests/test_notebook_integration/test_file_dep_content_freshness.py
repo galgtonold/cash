@@ -17,6 +17,7 @@ straight from cash's own debug trace (``%cash_debug on``) — ``Cache hit:
 False`` for that statement means it recomputed, ``Cache hit: True`` means it
 was restored. This is what a plain kernel vs a cached kernel differ on.
 """
+
 from __future__ import annotations
 
 import os
@@ -26,8 +27,8 @@ import pytest
 pytestmark = [pytest.mark.integration, pytest.mark.files, pytest.mark.timeout(90)]
 
 # content A and content B: DIFFERENT values, IDENTICAL byte length.
-_CONTENT_A = b"val\n10\n20\n30\n"   # sum(val) == 60
-_CONTENT_B = b"val\n40\n50\n60\n"   # sum(val) == 150
+_CONTENT_A = b"val\n10\n20\n30\n"  # sum(val) == 60
+_CONTENT_B = b"val\n40\n50\n60\n"  # sum(val) == 150
 assert len(_CONTENT_A) == len(_CONTENT_B)
 
 
@@ -40,15 +41,15 @@ def _read_csv_recomputed(raw: str) -> bool:
     tail = raw[idx:]
     hit_idx = tail.find("Cache hit:")
     assert hit_idx != -1, f"no cache verdict after read_csv statement: {tail[:400]!r}"
-    return "Cache hit: False" in tail[hit_idx:hit_idx + 40]
+    return "Cache hit: False" in tail[hit_idx : hit_idx + 40]
 
 
 def _reader_notebook(nb_runner, csv_str):
-    nb_runner.create_notebook([
-        "import pandas as pd\n"
-        f"df = pd.read_csv('{csv_str}')\n"
-        "print('sum =', int(df['val'].sum()))",
-    ])
+    nb_runner.create_notebook(
+        [
+            f"import pandas as pd\ndf = pd.read_csv('{csv_str}')\nprint('sum =', int(df['val'].sum()))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.enable_debug()
 
@@ -67,7 +68,7 @@ def test_cas98_touch_only_stays_cache_hit(nb_runner, tmp_path):
     # Touch: bump mtime far into the future, content and size unchanged.
     m = os.stat(csv).st_mtime
     os.utime(csv, (m + 100, m + 100))
-    assert csv.read_bytes() == _CONTENT_A          # content really is identical
+    assert csv.read_bytes() == _CONTENT_A  # content really is identical
 
     nb_runner.run_all()
     assert "sum = 60" in nb_runner.get_output(1)
@@ -93,14 +94,13 @@ def test_cas10_same_size_quick_edit_invalidates(nb_runner, tmp_path):
     # the sub-resolution / same-second edit CAS-10 describes.
     snapshot_mtime = os.stat(csv).st_mtime
     csv.write_bytes(_CONTENT_B)
-    assert os.stat(csv).st_size == len(_CONTENT_A)   # same byte length
+    assert os.stat(csv).st_size == len(_CONTENT_A)  # same byte length
     os.utime(csv, (snapshot_mtime, snapshot_mtime))
-    assert os.stat(csv).st_mtime == snapshot_mtime   # mtime is indistinguishable
+    assert os.stat(csv).st_mtime == snapshot_mtime  # mtime is indistinguishable
 
     nb_runner.run_all()
     assert "sum = 150" in nb_runner.get_output(1), (
-        "same-size edit with ambiguous mtime must re-execute the reader; "
-        f"got: {nb_runner.get_output(1)!r}"
+        f"same-size edit with ambiguous mtime must re-execute the reader; got: {nb_runner.get_output(1)!r}"
     )
     assert _read_csv_recomputed(nb_runner.get_raw_output(1)), (
         "content-different file must invalidate, but read_csv was restored"

@@ -37,8 +37,10 @@ was decided purely by whether 0.3s of sleep plus ~0.15s of work fitted under
 0.5s. It failed ~2 runs in 4 under parallel load and passed on an idle box,
 having never once verified a restore.
 """
-import pytest
+
 import time
+
+import pytest
 
 pytestmark = [pytest.mark.upstream, pytest.mark.core]
 
@@ -53,8 +55,7 @@ def _fingerprint(output: str) -> str:
     for line in output.splitlines():
         if line.startswith("CHK "):
             return line.strip()
-    raise AssertionError(
-        f"cell 4 produced no CHK fingerprint line; got:\n{output[:1000]}")
+    raise AssertionError(f"cell 4 produced no CHK fingerprint line; got:\n{output[:1000]}")
 
 
 class TestOutOfOrderDisplayThenCompute:
@@ -149,10 +150,7 @@ for _v in ['df', 't0', 'elapsed1', 'elapsed2', 'n']:
     except KeyError:
         pass
 """
-        import asyncio
-        nb_runner._run_async(
-            nb_runner.client.kc._async_execute_interactive(clear_code, store_history=False)
-        )
+        nb_runner._run_async(nb_runner.client.kc._async_execute_interactive(clear_code, store_history=False))
 
         # --- Out-of-order execution: cell 5, then cell 3, then cell 4 ---
         # Cell 5: triggers upstream restore of fully computed df
@@ -188,7 +186,8 @@ for _v in ['df', 't0', 'elapsed1', 'elapsed2', 'n']:
         assert chk_rerun == chk_first, (
             f"out-of-order execution reconstructed a DIFFERENT df.\n"
             f"  top-to-bottom: {chk_first}\n"
-            f"  after 5->3->4: {chk_rerun}")
+            f"  after 5->3->4: {chk_rerun}"
+        )
 
         # Timing is reported for diagnosis only. It is NOT asserted on: cell 4
         # mutates df in place, so its statements re-execute by design and the
@@ -199,12 +198,12 @@ for _v in ['df', 't0', 'elapsed1', 'elapsed2', 'n']:
         """
         Simplified version: 4 cells.
         After cache populated, reset and run: cell 4, cell 3, cell 3_compute.
-        
+
         Cell 1: x = 10
         Cell 2: y = x * 2 (expensive simulation with sleep)
         Cell 3: y  (display)
         Cell 4: z = y + 1; print(z)
-        
+
         Reset, run: 3 → 2.
         Cell 2 should restore from cache, not recompute.
         """
@@ -259,4 +258,5 @@ for _v in ['df', 't0', 'elapsed1', 'elapsed2', 'n']:
         # If cache restored, it should be < 0.3s
         assert t_elapsed < 0.4, (
             f"Cell 2 took {t_elapsed:.2f}s, suggesting it recomputed instead of "
-            f"restoring from cache. Debug output: {nb_runner.get_raw_output(2)[:500]}")
+            f"restoring from cache. Debug output: {nb_runner.get_raw_output(2)[:500]}"
+        )

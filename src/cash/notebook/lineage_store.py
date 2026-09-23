@@ -14,6 +14,7 @@ Invariants
 * The priority ladder lives in :meth:`resolve`: virtual → store →
   ``value._cash_lineage_hash`` → ``compute_hash_fn`` → ``sha256(str(value))``.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -64,6 +65,7 @@ class LineageStore:
         # Never a class, module or function: a tag on a class is inherited by
         # every instance, which then all key alike (cash.lineage_tag).
         from cash.lineage_tag import taggable
+
         if value is not None and taggable(value):
             try:
                 value._cash_lineage_hash = hash_
@@ -73,9 +75,7 @@ class LineageStore:
             except (AttributeError, TypeError):
                 # Builtins (int / str / ...) and slotted types reject attribute
                 # writes. The dict is still authoritative.
-                logger.debug(
-                    "LineageStore: cannot attach _cash_lineage_hash to %r", var
-                )
+                logger.debug("LineageStore: cannot attach _cash_lineage_hash to %r", var)
 
     def reset_to(self, var: str, hash_: str) -> None:
         """Resynchronise *var*'s lineage to *hash_* without touching the value.
@@ -111,6 +111,7 @@ class LineageStore:
             return None
         try:
             from cash.lineage_tag import own_tag
+
             attr = own_tag(value)
             if attr is not None:
                 return attr

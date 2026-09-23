@@ -32,6 +32,7 @@ readings exactly:
 So: report the number being enforced, and enforce a number sized from the
 volume as it is now, not as it was when the kernel started.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -40,7 +41,7 @@ import cash.backends.adaptive_caps as caps
 from cash.backends import FileBackend
 from cash.backends.adaptive_caps import adaptive_disk_cap, adaptive_disk_cap_for
 
-GIB = 1024 ** 3
+GIB = 1024**3
 
 
 @pytest.fixture
@@ -64,9 +65,12 @@ def volume(tmp_path, monkeypatch):
 
 
 def _backend(cache, adaptive=True, cap=None):
-    return FileBackend(str(cache),
-                       max_size_bytes=cap if cap is not None else caps.resolve_disk_cap(str(cache)),
-                       adaptive_cap=adaptive, flush_interval=0)
+    return FileBackend(
+        str(cache),
+        max_size_bytes=cap if cap is not None else caps.resolve_disk_cap(str(cache)),
+        adaptive_cap=adaptive,
+        flush_interval=0,
+    )
 
 
 def test_a_long_lived_kernel_does_not_keep_a_two_day_old_cap(volume):
@@ -100,15 +104,13 @@ def test_a_write_re_derives_the_cap_when_the_volume_has_moved(volume):
     cache, state = volume
 
     b = _backend(cache)
-    b.set("k", {"variables": {"v": b"x" * 1024}},
-          {"execution_time": 1.0, "size": 1024, "key": "k"})
+    b.set("k", {"variables": {"v": b"x" * 1024}}, {"execution_time": 1.0, "size": 1024, "key": "k"})
     b._writes.wait_all()
     assert b._max_size_bytes == adaptive_disk_cap(118 * GIB)
 
     state["free"] = 48 * GIB
-    b._cap_derived_at = 0.0          # the throttle, not the behaviour, under test
-    b.set("k2", {"variables": {"v": b"x" * 1024}},
-          {"execution_time": 1.0, "size": 1024, "key": "k2"})
+    b._cap_derived_at = 0.0  # the throttle, not the behaviour, under test
+    b.set("k2", {"variables": {"v": b"x" * 1024}}, {"execution_time": 1.0, "size": 1024, "key": "k2"})
     b._writes.wait_all()
     derived = b._max_size_bytes
     b.shutdown()
@@ -127,8 +129,7 @@ def test_an_explicit_cap_is_still_never_re_derived(volume):
     b._ensure_size_scanned()
     state["free"] = 4 * GIB
     b._refresh_adaptive_cap(force=True)
-    b.set("k", {"variables": {"v": b"x" * 1024}},
-          {"execution_time": 1.0, "size": 1024, "key": "k"})
+    b.set("k", {"variables": {"v": b"x" * 1024}}, {"execution_time": 1.0, "size": 1024, "key": "k"})
     b._writes.wait_all()
     assert b._max_size_bytes == chosen
     b.shutdown()
@@ -152,16 +153,14 @@ def test_the_re_derivation_is_throttled(volume):
     try:
         b = _backend(cache)
         for i in range(25):
-            b.set(f"k{i}", {"variables": {"v": b"x" * 1024}},
-                  {"execution_time": 1.0, "size": 1024, "key": f"k{i}"})
+            b.set(f"k{i}", {"variables": {"v": b"x" * 1024}}, {"execution_time": 1.0, "size": 1024, "key": f"k{i}"})
         b._writes.wait_all()
         b.shutdown()
     finally:
         caps._free_bytes_on_volume = real
 
     assert calls["n"] <= 3, (
-        f"25 writes measured free space {calls['n']} times; the re-derivation "
-        f"is meant to be throttled, not per-write"
+        f"25 writes measured free space {calls['n']} times; the re-derivation is meant to be throttled, not per-write"
     )
 
 
@@ -185,8 +184,7 @@ def test_cash_info_prints_the_cap_the_backend_would_enforce(volume, capsys, monk
     # `cash info` counts top-level *.entry itself. 21 GiB of real files is not
     # sparse on NTFS, so the count is stubbed -- it has its own tests, and
     # here it is only the courier for a footprint.
-    monkeypatch.setattr(cli, "_entry_totals", lambda d: (908, state["own"]),
-                        raising=True)
+    monkeypatch.setattr(cli, "_entry_totals", lambda d: (908, state["own"]), raising=True)
     config = get_config()
     monkeypatch.setattr(config, "cache_dir", str(cache))
     monkeypatch.setattr(config, "max_cache_size", None)
@@ -197,6 +195,5 @@ def test_cash_info_prints_the_cap_the_backend_would_enforce(volume, capsys, monk
     line = next(l for l in printed.splitlines() if l.strip().startswith("Max size:"))
     enforced = adaptive_disk_cap_for(str(cache), state["own"])
     assert human_bytes(enforced) in line, (
-        f"`cash info` says {line.strip()!r}; the backend would enforce "
-        f"{human_bytes(enforced)}"
+        f"`cash info` says {line.strip()!r}; the backend would enforce {human_bytes(enforced)}"
     )

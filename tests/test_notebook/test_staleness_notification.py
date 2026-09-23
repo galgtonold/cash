@@ -6,6 +6,7 @@ FUNC CHANGED and MODULE RELOADED, which render on the red rail and add to the
 CAS-273 that binary is near-permanently EXECUTED, so a fourth meaning would
 bury the one thing here worth reading.
 """
+
 from __future__ import annotations
 
 import types
@@ -18,8 +19,7 @@ def _stale_tracker(tmp_path):
     nb = tmp_path / "nb.ipynb"
     nb.write_text("{}", encoding="utf-8")
     t = StalenessTracker()
-    t.observe(running_code="THRESHOLD = 0.9", file_code="THRESHOLD = 0.5",
-              notebook_path=str(nb))
+    t.observe(running_code="THRESHOLD = 0.9", file_code="THRESHOLD = 0.5", notebook_path=str(nb))
     return t
 
 
@@ -62,8 +62,8 @@ def test_the_message_shows_the_running_code_not_the_file_code(tmp_path):
     running. This notification renders hint() straight to the user, so an
     inverted mapping would show them exactly the wrong line."""
     n = staleness_notification(_stale_tracker(tmp_path))
-    assert "THRESHOLD = 0.9" in n["code"]        # the RUNNING code
-    assert "THRESHOLD = 0.5" not in n["code"]    # NOT the file's stale copy
+    assert "THRESHOLD = 0.9" in n["code"]  # the RUNNING code
+    assert "THRESHOLD = 0.5" not in n["code"]  # NOT the file's stale copy
 
 
 def test_the_remedy_survives_print_modes_80_char_cap(tmp_path):
@@ -132,6 +132,7 @@ def test_a_raising_tracker_does_not_crash_the_notification_builder(tmp_path):
     failure mode to anticipate, so it must be unconditional: this test raises
     something outside either sibling's tuple to prove the guard is not
     accidentally narrow."""
+
     class _ExplodingTracker:
         def is_stale(self):
             raise RuntimeError("boom")

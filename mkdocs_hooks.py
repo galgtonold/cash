@@ -21,6 +21,7 @@ built site.  ``on_post_page`` rewrites them at build time to a path relative to
 the page being rendered, so they resolve no matter what base path the site is
 mounted at -- and with no client-side flash.
 """
+
 from __future__ import annotations
 
 import re
@@ -40,9 +41,7 @@ def rewrite_badge_paths(html: str, page_url: str) -> str:
     levels we must climb to reach the site root.
     """
     prefix = "../" * page_url.count("/")
-    return _ABS_BADGE_SRC.sub(
-        lambda m: m.group(1) + prefix + m.group(2) + m.group(3), html
-    )
+    return _ABS_BADGE_SRC.sub(lambda m: m.group(1) + prefix + m.group(2) + m.group(3), html)
 
 
 def on_post_page(output: str, *, page, config, **kwargs) -> str:  # noqa: ARG001

@@ -22,6 +22,7 @@ only reproduces against a LIVE Jupyter server, which the nbclient unit harness
 lacks (CAS-136/190); that end-to-end path is covered by ``scripts/wheel_gate.py``
 scenario S6.
 """
+
 import ast
 import asyncio
 from unittest.mock import MagicMock
@@ -46,7 +47,7 @@ class MockShell(Configurable):
         self.events = MagicMock()
         self.ast_transformers = []
         self.user_global_ns = self.user_ns
-        self.display_pub = type('MockDisplayPub', (), {'publish': MagicMock()})()
+        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
 
 
 @pytest.fixture
@@ -65,21 +66,25 @@ def magics_fixture():
 # (1) the routing decision
 # --------------------------------------------------------------------------
 
-@pytest.mark.parametrize("code,expected", [
-    ("for x in xs:\n    r = await f(x)", True),
-    ("while c:\n    await g()", True),
-    ("if c:\n    y = await h()", True),
-    ("with ctx:\n    await k()", True),
-    ("for x in xs:\n    async for y in z:\n        pass", True),
-    ("with a:\n    async with b:\n        pass", True),
-    # await nested inside a def / async def / lambda is a SEPARATE scope:
-    ("for x in xs:\n    def worker():\n        return await q()", False),
-    ("if c:\n    async def job():\n        await q()", False),
-    # plain control structures with no top-level await:
-    ("for x in xs:\n    acc.append(x)", False),
-    ("while n:\n    n -= 1", False),
-    ("with open('f') as fh:\n    data = fh.read()", False),
-])
+
+@pytest.mark.parametrize(
+    "code,expected",
+    [
+        ("for x in xs:\n    r = await f(x)", True),
+        ("while c:\n    await g()", True),
+        ("if c:\n    y = await h()", True),
+        ("with ctx:\n    await k()", True),
+        ("for x in xs:\n    async for y in z:\n        pass", True),
+        ("with a:\n    async with b:\n        pass", True),
+        # await nested inside a def / async def / lambda is a SEPARATE scope:
+        ("for x in xs:\n    def worker():\n        return await q()", False),
+        ("if c:\n    async def job():\n        await q()", False),
+        # plain control structures with no top-level await:
+        ("for x in xs:\n    acc.append(x)", False),
+        ("while n:\n    n -= 1", False),
+        ("with open('f') as fh:\n    data = fh.read()", False),
+    ],
+)
 def test_contains_top_level_await(code, expected):
     node = ast.parse(code).body[0]
     assert contains_top_level_await(node) is expected
@@ -88,6 +93,7 @@ def test_contains_top_level_await(code, expected):
 # --------------------------------------------------------------------------
 # (2) the async twin executes the await-loop as one unit
 # --------------------------------------------------------------------------
+
 
 def test_process_await_unit_runs_await_loop(magics_fixture):
     """The fix: an await-bearing for-loop runs via the flag-capable async unit,
@@ -107,9 +113,7 @@ def test_process_await_unit_runs_await_loop(magics_fixture):
     node = ast.parse(code).body[0]
     assert contains_top_level_await(node)
 
-    result = asyncio.run(
-        magics._control_structure_processor.process_await_unit(node, silent=True)
-    )
+    result = asyncio.run(magics._control_structure_processor.process_await_unit(node, silent=True))
 
     assert result.success, getattr(result, "error", None)
     assert shell.user_ns["results"] == [10, 20, 30]
@@ -130,7 +134,5 @@ def test_process_await_unit_reports_body_error(magics_fixture):
     code = "for x in xs:\n    r = await boom(x)"
     node = ast.parse(code).body[0]
 
-    result = asyncio.run(
-        magics._control_structure_processor.process_await_unit(node, silent=True)
-    )
+    result = asyncio.run(magics._control_structure_processor.process_await_unit(node, silent=True))
     assert not result.success

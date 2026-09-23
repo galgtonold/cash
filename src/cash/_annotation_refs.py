@@ -12,6 +12,7 @@ Resolution is best effort and never raises: a string annotation is resolved by
 name in the owner's module, generics are walked through ``typing.get_args``,
 and anything that cannot be resolved is skipped.
 """
+
 from __future__ import annotations
 
 import re
@@ -28,6 +29,7 @@ def _raw_annotations(owner: Any) -> dict:
     """*owner*'s own annotations, unevaluated where the runtime allows it."""
     try:
         import annotationlib  # Python 3.14+
+
         return dict(annotationlib.get_annotations(owner, format=annotationlib.Format.FORWARDREF))
     except ImportError:
         pass

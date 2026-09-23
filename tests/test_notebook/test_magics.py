@@ -1,11 +1,12 @@
+import time
 import unittest
 from unittest.mock import MagicMock, patch
-import time
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
-from cash.backends import InMemoryBackend
 
 from traitlets.config import Configurable
+
+from cash.backends import InMemoryBackend
+from cash.core import Cash
+from cash.notebook.ipython.magics import CashMagics
 
 # Captured at import time, before conftest's autouse ``disable_auto_magic_
 # registration`` fixture stubs ``Cash.register_magic`` to a no-op. The
@@ -13,26 +14,28 @@ from traitlets.config import Configurable
 # to exercise the path that fixture otherwise hides.
 _REAL_REGISTER_MAGIC = Cash.register_magic
 
+
 class MockShell(Configurable):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.user_ns = {}
-        self.user_ns['_ih'] = []  # Execution history
+        self.user_ns["_ih"] = []  # Execution history
         self.run_cell = MagicMock()
-        self.input_transformers_cleanup = [] # List of transformers
-        self.display_pub = type('MockDisplayPub', (), {'publish': MagicMock()})()
+        self.input_transformers_cleanup = []  # List of transformers
+        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
         self.ast_transformers = []  # AST transformers
         self.events = MagicMock()  # Event system
         self.events.register = MagicMock(return_value=None)
+
 
 class TestCashMagics(unittest.TestCase):
     def setUp(self):
         self.backend = InMemoryBackend()
         self.cash = Cash(backend=self.backend)
-        
+
         # Mock IPython shell
         self.shell = MockShell()
-        
+
         # Mock run_cell to actually execute code in user_ns
         def run_cell(cell):
             try:
@@ -40,17 +43,16 @@ class TestCashMagics(unittest.TestCase):
                 return MagicMock(success=True)
             except Exception as e:
                 return MagicMock(success=False, error_in_exec=e)
-                
-        self.shell.run_cell.side_effect = run_cell
-        
-        self.magics = CashMagics(self.shell, self.cash)
 
+        self.shell.run_cell.side_effect = run_cell
+
+        self.magics = CashMagics(self.shell, self.cash)
 
     def tearDown(self):
         """Clean up after each test."""
-        if hasattr(self, 'backend'):
+        if hasattr(self, "backend"):
             self.backend.clear()
-        if hasattr(self, 'shell') and hasattr(self.shell, 'user_ns'):
+        if hasattr(self, "shell") and hasattr(self.shell, "user_ns"):
             self.shell.user_ns.clear()
 
     def test_basic_caching(self):
@@ -59,16 +61,16 @@ class TestCashMagics(unittest.TestCase):
         cell = "# @cash:persist\na = 1 + 1"
         self.magics.cash("", cell)
 
-        self.assertEqual(self.shell.user_ns.get('a'), 2)
+        self.assertEqual(self.shell.user_ns.get("a"), 2)
         # With incremental caching, we store per statement.
         self.assertEqual(len(self.backend.list_entries()), 1)
 
         # 2. Modify 'a' in namespace to verify restoration
-        self.shell.user_ns['a'] = 99
+        self.shell.user_ns["a"] = 99
 
         # 3. Second run: Should restore 'a' = 2
         self.magics.cash("", cell)
-        self.assertEqual(self.shell.user_ns.get('a'), 2)
+        self.assertEqual(self.shell.user_ns.get("a"), 2)
 
     def test_incremental_caching(self):
         # Cell with two statements.
@@ -81,9 +83,9 @@ y = x + 5
 """
         # 1. First run
         self.magics.cash("", cell)
-        self.assertEqual(self.shell.user_ns.get('x'), 10)
-        self.assertEqual(self.shell.user_ns.get('y'), 15)
-        self.assertEqual(len(self.backend.list_entries()), 2) # Two statements cached
+        self.assertEqual(self.shell.user_ns.get("x"), 10)
+        self.assertEqual(self.shell.user_ns.get("y"), 15)
+        self.assertEqual(len(self.backend.list_entries()), 2)  # Two statements cached
 
         # 2. Change second statement
         cell_v2 = """# @cash:persist
@@ -94,8 +96,8 @@ y = x + 10
         self.magics.cash("", cell_v2)
 
         # Verify behavior: x should be restored from cache, y should be recomputed
-        self.assertEqual(self.shell.user_ns.get('x'), 10)
-        self.assertEqual(self.shell.user_ns.get('y'), 20)
+        self.assertEqual(self.shell.user_ns.get("x"), 10)
+        self.assertEqual(self.shell.user_ns.get("y"), 20)
 
         # Now we have 3 entries in cache:
         # - x = 10 (still valid from first run)
@@ -107,47 +109,47 @@ y = x + 10
         # Test enabling auto-caching
         self.magics.cash_on("")
         self.assertTrue(self.magics._auto_cache_enabled)
-        
+
         # Test disabling
         self.magics.cash_off("")
         self.assertFalse(self.magics._auto_cache_enabled)
 
     def test_input_dependency(self):
         # 1. Setup input
-        self.shell.user_ns['x'] = 10
-        
+        self.shell.user_ns["x"] = 10
+
         # 2. First run: y = x * 2
         cell = "y = x * 2"
         self.magics.cash("", cell)
-        self.assertEqual(self.shell.user_ns.get('y'), 20)
-        
+        self.assertEqual(self.shell.user_ns.get("y"), 20)
+
         # 3. Change input
-        self.shell.user_ns['x'] = 5
-        
+        self.shell.user_ns["x"] = 5
+
         # 4. Second run: Should recompute y = 10 (cache miss due to input change)
         self.magics.cash("", cell)
-        self.assertEqual(self.shell.user_ns.get('y'), 10)
+        self.assertEqual(self.shell.user_ns.get("y"), 10)
 
     def test_ttl(self):
         cell = "z = 100"
         self.magics.cash("ttl=1", cell)
-        self.assertEqual(self.shell.user_ns.get('z'), 100)
-        
+        self.assertEqual(self.shell.user_ns.get("z"), 100)
+
         # Modify z
-        self.shell.user_ns['z'] = 0
-        
+        self.shell.user_ns["z"] = 0
+
         # Immediate re-run -> Restore
         self.magics.cash("ttl=1", cell)
-        self.assertEqual(self.shell.user_ns.get('z'), 100)
-        
+        self.assertEqual(self.shell.user_ns.get("z"), 100)
+
         # Wait for TTL
         time.sleep(1.1)
-        self.shell.user_ns['z'] = 0
-        
+        self.shell.user_ns["z"] = 0
+
         # Re-run -> Recompute
         self.magics.cash("ttl=1", cell)
-        self.assertEqual(self.shell.user_ns.get('z'), 100)
-        
+        self.assertEqual(self.shell.user_ns.get("z"), 100)
+
         # Verify that we actually recomputed (mock side effect check?)
         # For now, just checking correctness is enough.
 
@@ -157,64 +159,65 @@ p = 10
 q = 20
 """
         self.magics.cash("", cell)
-        self.assertEqual(self.shell.user_ns.get('p'), 10)
-        self.assertEqual(self.shell.user_ns.get('q'), 20)
-        
-        self.shell.user_ns['p'] = 0
-        self.shell.user_ns['q'] = 0
-        
+        self.assertEqual(self.shell.user_ns.get("p"), 10)
+        self.assertEqual(self.shell.user_ns.get("q"), 20)
+
+        self.shell.user_ns["p"] = 0
+        self.shell.user_ns["q"] = 0
+
         self.magics.cash("", cell)
-        self.assertEqual(self.shell.user_ns.get('p'), 10)
-        self.assertEqual(self.shell.user_ns.get('q'), 20)
+        self.assertEqual(self.shell.user_ns.get("p"), 10)
+        self.assertEqual(self.shell.user_ns.get("q"), 20)
 
     def test_module_input_skipping(self):
         import time
-        self.shell.user_ns['time'] = time
-        self.shell.user_ns['x'] = 10
-        
+
+        self.shell.user_ns["time"] = time
+        self.shell.user_ns["x"] = 10
+
         # Should not warn or fail
         cell = """
 import time
 y = x * 2
 """
         self.magics.cash("", cell)
-        self.assertEqual(self.shell.user_ns.get('y'), 20)
+        self.assertEqual(self.shell.user_ns.get("y"), 20)
 
     def test_output_capture(self):
         cell = "print('Hello Cache')"
-        
+
         # 1. First run: Capture output
         # We need to mock capture_output or check if it works with MockShell?
         # IPython.utils.io.capture_output relies on sys.stdout/stderr redirection.
         # It should work in standard python env.
-        
+
         # We need to capture the *actual* stdout during the test to verify replay.
-        from io import StringIO
         import sys
-        
+        from io import StringIO
+
         # Capture stdout of the test process itself
         captured_stdout = StringIO()
         original_stdout = sys.stdout
         sys.stdout = captured_stdout
-        
+
         try:
             self.magics.cash("", cell)
         finally:
             sys.stdout = original_stdout
-            
+
         output = captured_stdout.getvalue()
         # Note: capture_output().show() prints to sys.stdout, so we should see it.
         self.assertIn("Hello Cache", output)
-        
+
         # 2. Second run: Replay
         captured_stdout = StringIO()
         sys.stdout = captured_stdout
-        
+
         try:
             self.magics.cash("", cell)
         finally:
             sys.stdout = original_stdout
-            
+
         output = captured_stdout.getvalue()
         self.assertIn("Hello Cache", output)
         # Note: With incremental caching, we might not print "[Restored from cache]" per statement if we commented it out.
@@ -222,77 +225,84 @@ y = x * 2
 
     def test_dependency_tracking_repro(self):
         # User reported: changing multiplier doesn't trigger re-run
-        self.shell.user_ns['multiplier'] = 10
-        self.shell.user_ns['result'] = 42
-        
+        self.shell.user_ns["multiplier"] = 10
+        self.shell.user_ns["result"] = 42
+
         cell = """
 print(f"Computing with multiplier {multiplier}...")
 final_value = result * multiplier
 """
         # 1. First run
         self.magics.cash("", cell)
-        self.assertEqual(self.shell.user_ns.get('final_value'), 420)
-        
+        self.assertEqual(self.shell.user_ns.get("final_value"), 420)
+
         # 2. Change multiplier
-        self.shell.user_ns['multiplier'] = 5
-        
+        self.shell.user_ns["multiplier"] = 5
+
         # 3. Second run - Should recompute
         self.magics.cash("", cell)
-        self.assertEqual(self.shell.user_ns.get('final_value'), 210)
+        self.assertEqual(self.shell.user_ns.get("final_value"), 210)
 
     def test_rich_output_capture(self):
         # @cash:persist forces caching regardless of the 10 ms min-execution-time floor
         cell = "# @cash:persist\n'rich_output'"
-        
+
         # 1. First run: Mock capture_output to return rich output
-        mock_output = {'data': {'text/plain': 'mock_data'}, 'metadata': {}}
-        
+        mock_output = {"data": {"text/plain": "mock_data"}, "metadata": {}}
+
         # We need to patch capture_output used in statement_processor.py where it's actually called
         # Also patch publish_display_data to avoid IPython initialization issues.
         # processor.py imports publish_display_data function-locally (CAS-132), so
         # it resolves through IPython.display at call time -- patch it at the
         # source. magics.py binds the name at import time, so it needs its own.
-        with patch('cash.notebook.statement.processor.capture_output') as mock_capture, \
-             patch('IPython.display.publish_display_data'), \
-             patch('cash.notebook.ipython.magics.publish_display_data'):
+        with (
+            patch("cash.notebook.statement.processor.capture_output") as mock_capture,
+            patch("IPython.display.publish_display_data"),
+            patch("cash.notebook.ipython.magics.publish_display_data"),
+        ):
             # Configure mock context manager
             mock_captured = MagicMock()
             mock_captured.stdout = ""
             mock_captured.stderr = ""
             mock_captured.outputs = [mock_output]
             mock_capture.return_value.__enter__.return_value = mock_captured
-            
+
             self.magics.cash("", cell)
-            
+
             # Verify it was stored
             entries = self.backend.list_entries()
             self.assertEqual(len(entries), 1)
             metadata = entries[0]
-            key = metadata['key']
+            key = metadata["key"]
             # backend.get now returns (metadata, data) where data is already a dict
             _, payload = self.backend.get(key)
-            self.assertEqual(payload['rich_outputs'], [mock_output])
-            
+            self.assertEqual(payload["rich_outputs"], [mock_output])
+
         # 2. Second run: Cache hit -> Replay
         # We need to patch publish_display_data in both modules where it can be called
-        with patch('IPython.display.publish_display_data') as mock_publish_sp, \
-             patch('cash.notebook.ipython.magics.publish_display_data') as mock_publish_magics:
+        with (
+            patch("IPython.display.publish_display_data") as mock_publish_sp,
+            patch("cash.notebook.ipython.magics.publish_display_data") as mock_publish_magics,
+        ):
             self.magics.cash("", cell)
-            
+
             # Verify publish_display_data was called in at least one location
             # The call might come from magics (for buffered outputs) or statement_processor
             combined_calls = mock_publish_sp.call_args_list + mock_publish_magics.call_args_list
-            
+
             # Check that at least one call was made with the expected arguments
             expected_call_found = False
             for call in combined_calls:
-                if call.kwargs.get('data') == mock_output['data'] and \
-                   call.kwargs.get('metadata') == mock_output['metadata']:
+                if (
+                    call.kwargs.get("data") == mock_output["data"]
+                    and call.kwargs.get("metadata") == mock_output["metadata"]
+                ):
                     expected_call_found = True
                     break
-            
-            self.assertTrue(expected_call_found,
-                f"Expected publish_display_data call not found. Calls: {combined_calls}")
+
+            self.assertTrue(
+                expected_call_found, f"Expected publish_display_data call not found. Calls: {combined_calls}"
+            )
 
     def test_cash_help_annotation_examples_parse(self):
         """Every '@cash:' line in %cash_help output must match the real parser.
@@ -302,8 +312,9 @@ final_value = result * multiplier
         with a space after the colon, which silently fails to parse because
         ANNOTATION_PATTERN requires the directive to follow the colon directly.
         """
-        from io import StringIO
         import sys
+        from io import StringIO
+
         from cash.notebook.annotations import ANNOTATION_PATTERN, parse_annotation_line
 
         captured = StringIO()
@@ -315,9 +326,7 @@ final_value = result * multiplier
             sys.stdout = original_stdout
 
         output = captured.getvalue()
-        annotation_lines = [
-            line for line in output.splitlines() if "@cash:" in line
-        ]
+        annotation_lines = [line for line in output.splitlines() if "@cash:" in line]
         # Sanity-check: the default help text should actually advertise annotations.
         self.assertTrue(
             annotation_lines,
@@ -357,7 +366,7 @@ def test_register_magic_registers_cash_on():
 
     cash = Cash(backend=InMemoryBackend(), register_magic=False)
 
-    with patch('IPython.get_ipython', return_value=shell):
+    with patch("IPython.get_ipython", return_value=shell):
         # Call the real implementation, not conftest's no-op stub.
         _REAL_REGISTER_MAGIC(cash)
 
@@ -366,5 +375,5 @@ def test_register_magic_registers_cash_on():
     assert isinstance(registered_magics, CashMagics)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

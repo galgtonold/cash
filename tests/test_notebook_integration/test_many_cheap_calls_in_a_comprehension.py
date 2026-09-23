@@ -11,6 +11,7 @@ run plain.
 Observed through the decision trace (``call_site_decided``), not wall time.
 A trivial callee makes the verdict certain: the key alone outweighs it.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
@@ -21,8 +22,7 @@ USE = "out = [norm(v) for v in values]\nprint('SUM', sum(out))"
 
 
 def _decided(trace, source):
-    return [e for e in trace.events("call_site_decided", phase="run_all")
-            if e.get("source") == source]
+    return [e for e in trace.events("call_site_decided", phase="run_all") if e.get("source") == source]
 
 
 def test_a_comprehension_of_cheap_calls_runs_them_plain(upstream_trace, nb_runner):
@@ -36,8 +36,7 @@ def test_a_comprehension_of_cheap_calls_runs_them_plain(upstream_trace, nb_runne
 def test_a_short_comprehension_is_not_judged(upstream_trace, nb_runner):
     """Under 50 calls nothing is sampled: a handful of elements is exactly
     where per-element reuse pays."""
-    t = upstream_trace(["def norm(v):\n    return v * 2\nvalues = list(range(20))", USE],
-                       lambda r: None)
+    t = upstream_trace(["def norm(v):\n    return v * 2\nvalues = list(range(20))", USE], lambda r: None)
 
     assert "SUM 380" in nb_runner.get_output(2)
     assert _decided(t, "norm(v)") == []

@@ -18,10 +18,10 @@ serialisation cost is attributed to the cell's overhead section instead.
 The ``time.sleep`` gives the compute a floor well above the serialisation and
 restore noise so the assertion is meaningful, not measuring jitter.
 """
+
 from __future__ import annotations
 
 import re
-
 
 BIG_DF = (
     "def _mk():\n"
@@ -32,17 +32,17 @@ BIG_DF = (
 
 
 def _stream_text(cell) -> str:
-    return "".join(
-        o.get("text", "") for o in cell.get("outputs", [])
-        if o.get("output_type") == "stream"
-    )
+    return "".join(o.get("text", "") for o in cell.get("outputs", []) if o.get("output_type") == "stream")
 
 
 def _set_print_badge(nb_runner) -> None:
-    nb_runner._run_async(nb_runner.client.kc._async_execute_interactive(
-        "get_ipython().run_line_magic('cash_badge', 'print')",
-        store_history=False, output_hook=lambda m: None,
-    ))
+    nb_runner._run_async(
+        nb_runner.client.kc._async_execute_interactive(
+            "get_ipython().run_line_magic('cash_badge', 'print')",
+            store_history=False,
+            output_hook=lambda m: None,
+        )
+    )
 
 
 def test_computed_time_matches_saved_time(nb_runner):
@@ -68,6 +68,4 @@ def test_computed_time_matches_saved_time(nb_runner):
     # would drop the saved number to ~0.01s).
     assert exec_t > 0.35, f"computed time {exec_t}s should reflect the ~0.4s compute"
     assert saved_t > 0.35, f"saved time {saved_t}s should reflect the ~0.4s compute"
-    assert abs(exec_t - saved_t) < 0.1, (
-        f"computed {exec_t}s and saved {saved_t}s should line up"
-    )
+    assert abs(exec_t - saved_t) < 0.1, f"computed {exec_t}s and saved {saved_t}s should line up"

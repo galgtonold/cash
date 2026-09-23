@@ -5,6 +5,7 @@ namedtuples, and uses K=3-outer / K=1-inner sampling for ordered containers.
 Originally lived inside `StatementProcessor`; consolidated into
 `object_hashing` so there is a single canonical sizer.
 """
+
 from __future__ import annotations
 
 import sys
@@ -18,22 +19,19 @@ from cash.notebook.object_hashing import estimate_object_size
 
 
 def test_csr_matrix_size_equals_data_plus_indices_plus_indptr():
-    m = sp.csr_matrix(([1.0] * 1000, ([0] * 1000, list(range(1000)))),
-                      shape=(1, 1000))
+    m = sp.csr_matrix(([1.0] * 1000, ([0] * 1000, list(range(1000)))), shape=(1, 1000))
     expected = m.data.nbytes + m.indices.nbytes + m.indptr.nbytes
     assert estimate_object_size(m) == expected
 
 
 def test_csc_matrix_size_equals_data_plus_indices_plus_indptr():
-    m = sp.csc_matrix(([1.0] * 1000, ([0] * 1000, list(range(1000)))),
-                      shape=(1, 1000))
+    m = sp.csc_matrix(([1.0] * 1000, ([0] * 1000, list(range(1000)))), shape=(1, 1000))
     expected = m.data.nbytes + m.indices.nbytes + m.indptr.nbytes
     assert estimate_object_size(m) == expected
 
 
 def test_coo_matrix_size_equals_data_plus_row_plus_col():
-    m = sp.coo_matrix(([1.0] * 1000, ([0] * 1000, list(range(1000)))),
-                      shape=(1, 1000))
+    m = sp.coo_matrix(([1.0] * 1000, ([0] * 1000, list(range(1000)))), shape=(1, 1000))
     expected = m.data.nbytes + m.row.nbytes + m.col.nbytes
     assert estimate_object_size(m) == expected
 
@@ -53,7 +51,7 @@ def test_dataclass_with_mixed_payload():
 
 
 def test_namedtuple_of_arrays():
-    Point = namedtuple('Point', 'x y')
+    Point = namedtuple("Point", "x y")
     pt = Point(np.zeros(1_000_000), np.zeros(1_000_000))  # 2 x 8_000_000 bytes
     size = estimate_object_size(pt)
     assert size > 16_000_000
@@ -63,6 +61,7 @@ def test_namedtuple_of_arrays():
 def test_dataclass_class_object_is_not_treated_as_instance():
     """``is_dataclass()`` returns True for both classes and instances;
     we must only recurse for instances."""
+
     @dataclass
     class Empty:
         x: int = 0
@@ -93,9 +92,10 @@ def test_heterogeneous_monotonic_list_uses_first_middle_last():
 
 def test_dict_of_dataframes_uses_first_and_last():
     import pandas as pd
+
     # First and last are 5MB DataFrames; middle ones are tiny.
-    big = pd.DataFrame({'x': np.zeros(625_000, dtype=np.float64)})  # ~5 MB
-    small = pd.DataFrame({'x': [0.0]})
+    big = pd.DataFrame({"x": np.zeros(625_000, dtype=np.float64)})  # ~5 MB
+    small = pd.DataFrame({"x": [0.0]})
     d = {0: big, 1: small, 2: small, 3: small, 4: big}
     size = estimate_object_size(d)
     # K=2 average is (5MB + 5MB) / 2 = 5 MB; x 5 entries = 25 MB
@@ -120,9 +120,9 @@ def test_bytes_and_bytearray_are_their_length():
 def test_depth_cap_terminates_deep_nesting():
     # Build a 6-deep nested dict — deeper than _MAX_ESTIMATE_DEPTH = 4
     payload = np.zeros(1_000_000, dtype=np.float64)  # 8 MB
-    d = {'leaf': payload}
+    d = {"leaf": payload}
     for _ in range(6):
-        d = {'level': d}
+        d = {"level": d}
     # Without depth cap this would recurse and find the 8 MB payload.
     # With the cap, it returns sys.getsizeof at depth 4 - small number.
     size = estimate_object_size(d)
@@ -139,5 +139,6 @@ def test_empty_containers_are_their_wrapper_size():
 def test_unknown_type_falls_back_to_sys_getsizeof():
     class Custom:
         pass
+
     obj = Custom()
     assert estimate_object_size(obj) == sys.getsizeof(obj)

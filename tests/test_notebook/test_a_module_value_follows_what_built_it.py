@@ -15,9 +15,10 @@ Found while adding per-symbol keys (e371578), whose own closure walk
 (``module_symbols``) has always followed these edges; the map is now built
 from that same analysis, so the two cannot disagree about what reaches what.
 """
+
 from cash.notebook.function_tracker import FunctionTracker
 
-SOURCE = '''
+SOURCE = """
 def build_table():
     return {"a": 1}
 
@@ -31,7 +32,7 @@ LO, HI = sorted(TABLE.values()) * 2
 
 def unrelated():
     return 0
-'''
+"""
 
 
 def _deps(tmp_path, source=SOURCE):

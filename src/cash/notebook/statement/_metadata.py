@@ -67,11 +67,7 @@ class StatementCacheMetadata:
     version_slot: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            f.name: value
-            for f in fields(self)
-            if (value := getattr(self, f.name)) is not None
-        }
+        return {f.name: value for f in fields(self) if (value := getattr(self, f.name)) is not None}
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> StatementCacheMetadata:

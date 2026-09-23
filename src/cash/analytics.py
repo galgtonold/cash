@@ -123,16 +123,14 @@ class AnalyticsManager:
         # it rather than carry a multi-GB/garbage file forever.
         with contextlib.suppress(OSError):
             if Path(self.db_path).stat().st_size > _MAX_DB_BYTES:
-                logger.debug("Analytics db %s exceeds %d bytes; recreating",
-                             self.db_path, _MAX_DB_BYTES)
+                logger.debug("Analytics db %s exceeds %d bytes; recreating", self.db_path, _MAX_DB_BYTES)
                 Path(self.db_path).unlink()
 
         try:  # (2)
             self._create_schema()
             return
         except sqlite3.Error as e:  # (3)
-            logger.debug("Analytics db at %s is unreadable (%s); recreating",
-                         self.db_path, e)
+            logger.debug("Analytics db at %s is unreadable (%s); recreating", self.db_path, e)
         try:
             with contextlib.suppress(FileNotFoundError):
                 Path(self.db_path).unlink()
@@ -171,11 +169,7 @@ class AnalyticsManager:
             """)
             conn.commit()
 
-    def record_event(self,
-                    status: str,
-                    execution_time: float,
-                    saved_time: float = 0.0,
-                    code_hash: str | None = None):
+    def record_event(self, status: str, execution_time: float, saved_time: float = 0.0, code_hash: str | None = None):
         """
         Record an execution event.
 
@@ -193,14 +187,7 @@ class AnalyticsManager:
             # No writable db this session; drop telemetry instead of
             # growing an in-memory buffer that can never flush.
             return
-        self._event_buffer.append((
-            self.session_id,
-            time.time(),
-            status,
-            execution_time,
-            saved_time,
-            code_hash
-        ))
+        self._event_buffer.append((self.session_id, time.time(), status, execution_time, saved_time, code_hash))
         if len(self._event_buffer) >= self._flush_threshold:
             self.flush()
 
@@ -213,10 +200,13 @@ class AnalyticsManager:
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
-                cursor.executemany("""
+                cursor.executemany(
+                    """
                     INSERT INTO events (session_id, timestamp, status, execution_time, saved_time, code_hash)
                     VALUES (?, ?, ?, ?, ?, ?)
-                """, events)
+                """,
+                    events,
+                )
                 conn.commit()
         except sqlite3.Error as exc:
             # analytics should be best-effort
@@ -235,7 +225,8 @@ class AnalyticsManager:
                 cursor = conn.cursor()
 
                 # Basic counts
-                cursor.execute("""
+                cursor.execute(
+                    """
                     SELECT
                         COUNT(*) as total_events,
                         SUM(CASE WHEN status = 'HIT' THEN 1 ELSE 0 END) as hits,
@@ -244,7 +235,9 @@ class AnalyticsManager:
                         SUM(execution_time) as total_execution_time
                     FROM events
                     WHERE session_id = ?
-                """, (session_id,))
+                """,
+                    (session_id,),
+                )
 
                 row = cursor.fetchone()
                 if not row:
@@ -252,8 +245,8 @@ class AnalyticsManager:
 
                 stats = dict(row)
                 # handle None values from SUM
-                stats['total_saved_time'] = stats['total_saved_time'] or 0.0
-                stats['total_execution_time'] = stats['total_execution_time'] or 0.0
+                stats["total_saved_time"] = stats["total_saved_time"] or 0.0
+                stats["total_execution_time"] = stats["total_execution_time"] or 0.0
 
                 return stats
         except sqlite3.Error:
@@ -284,9 +277,9 @@ class AnalyticsManager:
                     return {}
 
                 stats = dict(row)
-                 # handle None values from SUM
-                stats['total_saved_time'] = stats['total_saved_time'] or 0.0
-                stats['total_execution_time'] = stats['total_execution_time'] or 0.0
+                # handle None values from SUM
+                stats["total_saved_time"] = stats["total_saved_time"] or 0.0
+                stats["total_execution_time"] = stats["total_execution_time"] or 0.0
 
                 return stats
         except sqlite3.Error:
@@ -304,7 +297,8 @@ class AnalyticsManager:
                 # but 'unixepoch' modifier is available in newer ones.
                 # To be safe and compatible, we can use strftime with 'unixepoch' or just process in python if volume is low.
                 # Let's try standard SQLite date function.
-                cursor.execute("""
+                cursor.execute(
+                    """
                     SELECT
                         date(timestamp, 'unixepoch', 'localtime') as day,
                         SUM(saved_time) as saved
@@ -312,7 +306,9 @@ class AnalyticsManager:
                     GROUP BY day
                     ORDER BY day DESC
                     LIMIT ?
-                """, (limit,))
+                """,
+                    (limit,),
+                )
 
                 return cursor.fetchall()
         except sqlite3.Error:

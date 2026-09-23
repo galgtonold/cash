@@ -6,6 +6,7 @@ column warned ``IMPURE-SIDE-EFFECTS``. The escape analysis knows a local bound
 to a fresh allocation cannot reach caller state, but its list of "returns a new
 object" spellings missed the aggregations, the numpy builders and ``sorted()``.
 """
+
 from __future__ import annotations
 
 import warnings
@@ -111,6 +112,7 @@ def test_logging_through_get_logger_is_a_diagnostic_line(cash):
 def test_a_print_to_stdout_still_says_so(cash):
     """Deliberate, and older than this sweep: stdout may be the program's
     output, and a hit does not reprint it."""
+
     @cash.cache
     def chatty(n):
         print("working on", n)

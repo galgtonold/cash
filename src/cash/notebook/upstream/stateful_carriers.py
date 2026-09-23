@@ -60,11 +60,9 @@ __all__ = ["stateful_carrier_kind", "carrier_kind_from_producer"]
 # the backtest cell -> ``plt.subplots``, ``tight_layout`` and ``savefig`` re-ran
 # without the two ``.plot(ax=...)`` calls, and a wrong chart was written.
 _PRODUCER_PATTERNS: tuple[tuple[re.Pattern, str], ...] = (
-    (re.compile(r'\b(?:plt|pyplot)\s*\.\s*(?:subplots|subplot_mosaic|figure|subplot|axes)\s*\('),
-     'matplotlib Figure'),
-    (re.compile(r'\b(?:default_rng|RandomState|Generator|PCG64|MT19937|Philox|SFC64)\s*\('),
-     'numpy Generator'),
-    (re.compile(r'\brandom\s*\.\s*Random\s*\('), 'random.Random'),
+    (re.compile(r"\b(?:plt|pyplot)\s*\.\s*(?:subplots|subplot_mosaic|figure|subplot|axes)\s*\("), "matplotlib Figure"),
+    (re.compile(r"\b(?:default_rng|RandomState|Generator|PCG64|MT19937|Philox|SFC64)\s*\("), "numpy Generator"),
+    (re.compile(r"\brandom\s*\.\s*Random\s*\("), "random.Random"),
 )
 
 
@@ -76,13 +74,14 @@ def carrier_kind_from_producer(code: str) -> str | None:
             return kind
     return None
 
+
 _CARRIER_BASES: Mapping[str, str] = {
     # Seeded RNGs: each draw advances the bit stream. ``default_rng``
     # has been numpy's recommended API since 1.17.
-    'numpy.random._generator.Generator': 'numpy Generator',
-    'numpy.random.mtrand.RandomState': 'numpy RandomState',
-    'numpy.random.bit_generator.BitGenerator': 'numpy BitGenerator',
-    'random.Random': 'random.Random',
+    "numpy.random._generator.Generator": "numpy Generator",
+    "numpy.random.mtrand.RandomState": "numpy RandomState",
+    "numpy.random.bit_generator.BitGenerator": "numpy BitGenerator",
+    "random.Random": "random.Random",
     # Accumulate-then-flush builders: content is added by mutation and only
     # later written out, so a re-derived-but-unfilled builder writes a blank
     # artifact over a good one. These two are here rather than in a
@@ -94,14 +93,18 @@ _CARRIER_BASES: Mapping[str, str] = {
     # cacheable, so its producer is restored rather than re-derived and the
     # incoherence never arises -- measured, not assumed. Adding speculative
     # entries here is not free: a table hit FORCES a producer re-execution.
-    'matplotlib.figure.FigureBase': 'matplotlib Figure',      # Figure, SubFigure
-    'matplotlib.axes._base._AxesBase': 'matplotlib Axes',     # Axes + projections
+    "matplotlib.figure.FigureBase": "matplotlib Figure",  # Figure, SubFigure
+    "matplotlib.axes._base._AxesBase": "matplotlib Axes",  # Axes + projections
 }
 
 # Cheap pre-filter so the MRO walk only runs for plausibly-relevant objects.
 # Must list the top-level package of every key above.
 _CARRIER_MODULE_PREFIXES = (
-    'numpy', 'random', '_random', 'matplotlib', 'mpl_toolkits',
+    "numpy",
+    "random",
+    "_random",
+    "matplotlib",
+    "mpl_toolkits",
 )
 
 
@@ -112,7 +115,7 @@ def _mro_kind(value: Any) -> str | None:
     except AttributeError:  # pragma: no cover - exotic metaclass
         return None
     for base in mro:
-        module = getattr(base, '__module__', '') or ''
+        module = getattr(base, "__module__", "") or ""
         if not module.startswith(_CARRIER_MODULE_PREFIXES):
             continue
         kind = _CARRIER_BASES.get(f"{module}.{getattr(base, '__qualname__', '')}")

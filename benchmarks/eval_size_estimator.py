@@ -9,6 +9,7 @@ Usage:
     python benchmarks/eval_size_estimator.py --label before
     python benchmarks/eval_size_estimator.py --label after  --repeats 3
 """
+
 from __future__ import annotations
 
 import argparse
@@ -25,19 +26,23 @@ OUT_ROOT = REPO_ROOT / "benchmarks" / "results" / "size_estimator_eval"
 
 def _read_notebook_list(path: Path) -> list[Path]:
     lines = path.read_text(encoding="utf-8").splitlines()
-    return [REPO_ROOT / line.strip() for line in lines
-            if line.strip() and not line.startswith("#")]
+    return [REPO_ROOT / line.strip() for line in lines if line.strip() and not line.startswith("#")]
 
 
-def _run_one(notebook: Path, mode: str, results_dir: Path, repeats: int,
-             cache_root: Path) -> int:
+def _run_one(notebook: Path, mode: str, results_dir: Path, repeats: int, cache_root: Path) -> int:
     """Invoke bench_notebook_overhead.py for one (notebook, mode). Returns exit code."""
     cmd = [
-        sys.executable, str(BENCH_SCRIPT), str(notebook),
-        "--mode", mode,
-        "--repeats", str(repeats),
-        "--results-dir", str(results_dir),
-        "--cache-root", str(cache_root / notebook.stem),
+        sys.executable,
+        str(BENCH_SCRIPT),
+        str(notebook),
+        "--mode",
+        mode,
+        "--repeats",
+        str(repeats),
+        "--results-dir",
+        str(results_dir),
+        "--cache-root",
+        str(cache_root / notebook.stem),
         "--subprocess-per-repeat",
     ]
     print(f"  -> {notebook.name} [{mode}]")
@@ -47,16 +52,17 @@ def _run_one(notebook: Path, mode: str, results_dir: Path, repeats: int,
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Size-estimator reference-suite harness")
-    p.add_argument("--label", required=True, choices=["before", "after"],
-                   help="Output subdirectory label.")
-    p.add_argument("--repeats", type=int, default=3,
-                   help="Repeats per (notebook, mode). Repeat 0 is warmup. Default 3.")
-    p.add_argument("--notebook-list", type=Path, default=NOTEBOOK_LIST,
-                   help="Path to a file with one notebook path per line.")
-    p.add_argument("--modes", nargs="+", default=["cold", "warm"],
-                   help="Modes to run. Default: cold warm.")
-    p.add_argument("--continue-on-error", action="store_true",
-                   help="Continue running remaining notebooks if one fails.")
+    p.add_argument("--label", required=True, choices=["before", "after"], help="Output subdirectory label.")
+    p.add_argument(
+        "--repeats", type=int, default=3, help="Repeats per (notebook, mode). Repeat 0 is warmup. Default 3."
+    )
+    p.add_argument(
+        "--notebook-list", type=Path, default=NOTEBOOK_LIST, help="Path to a file with one notebook path per line."
+    )
+    p.add_argument("--modes", nargs="+", default=["cold", "warm"], help="Modes to run. Default: cold warm.")
+    p.add_argument(
+        "--continue-on-error", action="store_true", help="Continue running remaining notebooks if one fails."
+    )
     args = p.parse_args(argv)
 
     out_dir = OUT_ROOT / args.label
@@ -69,8 +75,7 @@ def main(argv: list[str] | None = None) -> int:
     cache_root.mkdir(parents=True, exist_ok=True)
 
     notebooks = _read_notebook_list(args.notebook_list)
-    print(f"Running {len(notebooks)} notebooks x {len(args.modes)} modes x "
-          f"{args.repeats} repeats -> {out_dir}")
+    print(f"Running {len(notebooks)} notebooks x {len(args.modes)} modes x {args.repeats} repeats -> {out_dir}")
 
     n_failures = 0
     for notebook in notebooks:

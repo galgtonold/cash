@@ -44,7 +44,9 @@ def _site(source="compute(x)", names=("compute", "x"), computed_arg_positions=(0
     (with a literal, not a variable read from a notebook's ``user_ns``).
     """
     return CallSite(
-        source=source, free_names=frozenset(names), occurrence_index=0,
+        source=source,
+        free_names=frozenset(names),
+        occurrence_index=0,
         computed_arg_positions=computed_arg_positions,
     )
 
@@ -55,7 +57,7 @@ def test_undecorated_function_is_cached(call_cache):
 
     def compute(x):
         calls.append(x)
-        time.sleep(ABOVE_PERSISTENCE_FLOOR_S)   # above the cost-model floor
+        time.sleep(ABOVE_PERSISTENCE_FLOOR_S)  # above the cost-model floor
         return x + 1
 
     call_cache.set_sites([_site()])
@@ -123,6 +125,7 @@ def test_wrapper_is_reused_for_the_same_function(call_cache):
     body actually re-executes: a fresh, but EQUAL, ``CallSite`` each
     iteration (see the ``_wrappers`` keying note in ``call_interception.py``).
     """
+
     def compute(x):
         return x + 1
 
@@ -152,9 +155,7 @@ def test_two_sites_at_the_same_index_get_distinct_wrappers_and_keys(call_cache):
     call_cache.set_sites([_site(source="compute(a + 100)", names=("compute", "a"))])
     wrapped_b = call_cache.resolve(compute, site_index=0)
 
-    assert wrapped_a is not wrapped_b, (
-        "two different call sites at the same index shared one wrapper"
-    )
+    assert wrapped_a is not wrapped_b, "two different call sites at the same index shared one wrapper"
     assert wrapped_a(5) == 6
     assert wrapped_b(5) == 6, (
         "the second site's wrapper served the first site's cached value "
@@ -221,6 +222,7 @@ def test_exceptions_propagate_and_are_not_cached(call_cache):
 
 def test_unhashable_arguments_still_execute(call_cache):
     """If the key cannot be built the call must still run, not fail."""
+
     def compute(gen):
         return sum(gen)
 

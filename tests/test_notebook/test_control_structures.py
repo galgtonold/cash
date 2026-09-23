@@ -9,9 +9,11 @@ These tests verify that:
 - Iteration context hashing differentiates cache keys per iteration.
 """
 
-import pytest
 import ast
 from unittest.mock import MagicMock
+
+import pytest
+
 from cash.notebook.cache_status import CacheStatus
 
 
@@ -20,36 +22,43 @@ class TestControlStructureDetection:
 
     def test_for_loop_detected(self):
         from cash.notebook.control_structures import is_control_structure
+
         node = ast.parse("for i in range(3): print(i)").body[0]
         assert is_control_structure(node) is True
 
     def test_while_loop_detected(self):
         from cash.notebook.control_structures import is_control_structure
+
         node = ast.parse("while True: break").body[0]
         assert is_control_structure(node) is True
 
     def test_if_statement_detected(self):
         from cash.notebook.control_structures import is_control_structure
+
         node = ast.parse("if x > 0: print('positive')").body[0]
         assert is_control_structure(node) is True
 
     def test_with_statement_detected(self):
         from cash.notebook.control_structures import is_control_structure
+
         node = ast.parse("with open('f') as f: pass").body[0]
         assert is_control_structure(node) is True
 
     def test_try_statement_detected(self):
         from cash.notebook.control_structures import is_control_structure
+
         node = ast.parse("try: pass\nexcept: pass").body[0]
         assert is_control_structure(node) is True
 
     def test_assignment_not_detected(self):
         from cash.notebook.control_structures import is_control_structure
+
         node = ast.parse("x = 1").body[0]
         assert is_control_structure(node) is False
 
     def test_expression_not_detected(self):
         from cash.notebook.control_structures import is_control_structure
+
         node = ast.parse("print('hello')").body[0]
         assert is_control_structure(node) is False
 
@@ -66,26 +75,25 @@ class TestControlStructureProcessor:
     @pytest.fixture
     def mock_statement_processor(self):
         processor = MagicMock()
-        processor.process_statement = MagicMock(return_value={
-            'status': CacheStatus.COMPUTED,
-            'execution_time': 0.01,
-            'stdout': '',
-            'stderr': '',
-            'outputs': []
-        })
+        processor.process_statement = MagicMock(
+            return_value={
+                "status": CacheStatus.COMPUTED,
+                "execution_time": 0.01,
+                "stdout": "",
+                "stderr": "",
+                "outputs": [],
+            }
+        )
         processor.variable_lineage = {}
         processor.vars_with_mutation_lineage = set()
-        processor.compute_hash = MagicMock(return_value='fakehash')
+        processor.compute_hash = MagicMock(return_value="fakehash")
         return processor
 
     @pytest.fixture
     def control_processor(self, mock_shell, mock_statement_processor):
         from cash.notebook.control_structures import ControlStructureProcessor
-        return ControlStructureProcessor(
-            mock_shell,
-            mock_statement_processor,
-            debug=True
-        )
+
+        return ControlStructureProcessor(mock_shell, mock_statement_processor, debug=True)
 
     # ---- For loops: per-iteration ----
 
@@ -113,7 +121,7 @@ class TestControlStructureProcessor:
         # Every call should have the iteration context marker
         for call in mock_statement_processor.process_statement.call_args_list:
             passed_code = call[0][0]
-            assert '# __iteration_context__:' in passed_code
+            assert "# __iteration_context__:" in passed_code
 
     def test_for_loop_body_statements_not_full_loop(self, control_processor, mock_shell, mock_statement_processor):
         """Body statements should be individual statements, not the full loop code."""
@@ -125,8 +133,8 @@ class TestControlStructureProcessor:
         for call in mock_statement_processor.process_statement.call_args_list:
             passed_code = call[0][0]
             # Should contain the body statement, not the full for-loop header
-            assert 'x = i * 2' in passed_code
-            assert 'for i in range' not in passed_code
+            assert "x = i * 2" in passed_code
+            assert "for i in range" not in passed_code
 
     def test_for_loop_different_context_per_iteration(self, control_processor, mock_shell, mock_statement_processor):
         """Different iterations should have different context hashes."""
@@ -140,8 +148,8 @@ class TestControlStructureProcessor:
         for call in calls:
             passed_code = call[0][0]
             # Extract the context hash
-            line = passed_code.split('\n')[0]
-            ctx_hash = line.split(': ')[1]
+            line = passed_code.split("\n")[0]
+            ctx_hash = line.split(": ")[1]
             ctx_hashes.add(ctx_hash)
 
         # Should have 2 different context hashes
@@ -150,9 +158,11 @@ class TestControlStructureProcessor:
     def test_for_loop_cached_all(self, control_processor, mock_shell, mock_statement_processor):
         """When all iterations are cached, report all cached."""
         mock_statement_processor.process_statement.return_value = {
-            'status': CacheStatus.RESTORED,
-            'execution_time': 0.0,
-            'stdout': '', 'stderr': '', 'outputs': []
+            "status": CacheStatus.RESTORED,
+            "execution_time": 0.0,
+            "stdout": "",
+            "stderr": "",
+            "outputs": [],
         }
 
         code = "for i in range(3): x = i"
@@ -169,12 +179,9 @@ class TestControlStructureProcessor:
         """When some iterations compute and some restore, track correctly."""
         # First 2 calls COMPUTED, last one RESTORED
         mock_statement_processor.process_statement.side_effect = [
-            {'status': CacheStatus.COMPUTED, 'execution_time': 0.01,
-             'stdout': '', 'stderr': '', 'outputs': []},
-            {'status': CacheStatus.RESTORED, 'execution_time': 0.0,
-             'stdout': '', 'stderr': '', 'outputs': []},
-            {'status': CacheStatus.COMPUTED, 'execution_time': 0.01,
-             'stdout': '', 'stderr': '', 'outputs': []},
+            {"status": CacheStatus.COMPUTED, "execution_time": 0.01, "stdout": "", "stderr": "", "outputs": []},
+            {"status": CacheStatus.RESTORED, "execution_time": 0.0, "stdout": "", "stderr": "", "outputs": []},
+            {"status": CacheStatus.COMPUTED, "execution_time": 0.01, "stdout": "", "stderr": "", "outputs": []},
         ]
 
         # 1 body statement × 3 iterations = 3 calls
@@ -198,9 +205,9 @@ class TestControlStructureProcessor:
         # Check that at least one metric has loop_vars
         loop_vars_found = False
         for m in result.metrics:
-            if 'loop_vars' in m:
+            if "loop_vars" in m:
                 loop_vars_found = True
-                assert 'i' in m['loop_vars']
+                assert "i" in m["loop_vars"]
         assert loop_vars_found
 
     # ---- Break/continue: single unit fallback ----
@@ -246,10 +253,12 @@ class TestControlStructureProcessor:
     def test_error_result_reported(self, control_processor, mock_shell, mock_statement_processor):
         """When statement processor returns ERROR, report failure."""
         mock_statement_processor.process_statement.return_value = {
-            'status': CacheStatus.ERROR,
-            'execution_time': 0.0,
-            'error': RuntimeError("test error"),
-            'stdout': '', 'stderr': '', 'outputs': []
+            "status": CacheStatus.ERROR,
+            "execution_time": 0.0,
+            "error": RuntimeError("test error"),
+            "stdout": "",
+            "stderr": "",
+            "outputs": [],
         }
 
         code = "for i in range(3): x = i"
@@ -263,7 +272,7 @@ class TestControlStructureProcessor:
 
     def test_if_statement_per_statement(self, control_processor, mock_shell, mock_statement_processor):
         """If statement should be processed per-statement (each body statement individually)."""
-        mock_shell.user_ns['condition'] = True
+        mock_shell.user_ns["condition"] = True
 
         code = "if condition:\n    x = 1\nelse:\n    x = 0"
         node = ast.parse(code).body[0]
@@ -275,8 +284,8 @@ class TestControlStructureProcessor:
         assert mock_statement_processor.process_statement.call_count == 1
         passed_code = mock_statement_processor.process_statement.call_args[0][0]
         # Should contain the body statement with control context prefix
-        assert 'x = 1' in passed_code
-        assert 'control_context' in passed_code
+        assert "x = 1" in passed_code
+        assert "control_context" in passed_code
 
     # ---- While loop: single unit ----
 
@@ -353,7 +362,7 @@ class TestControlStructureProcessor:
         # First call raises ValueError; second call (in handler) succeeds
         mock_statement_processor.process_statement.side_effect = [
             ValueError("test error"),
-            {'status': CacheStatus.COMPUTED, 'execution_time': 0.01, 'stdout': '', 'stderr': '', 'outputs': []},
+            {"status": CacheStatus.COMPUTED, "execution_time": 0.01, "stdout": "", "stderr": "", "outputs": []},
         ]
 
         code = "try:\n    x = int('abc')\nexcept ValueError:\n    x = -1"
@@ -374,7 +383,7 @@ class TestControlStructureProcessor:
 
         for call in mock_statement_processor.process_statement.call_args_list:
             passed_code = call[0][0]
-            assert '# control_context:' in passed_code
+            assert "# control_context:" in passed_code
 
     def test_try_metrics_tagged_with_control_type(self, control_processor, mock_shell, mock_statement_processor):
         """Metrics from try processing should have control_type = 'try'."""
@@ -384,7 +393,7 @@ class TestControlStructureProcessor:
         result = control_processor.process(node)
 
         for m in result.metrics:
-            assert m.get('control_type') == 'try'
+            assert m.get("control_type") == "try"
 
 
 class TestIterationContextHashing:
@@ -392,20 +401,23 @@ class TestIterationContextHashing:
 
     def test_context_hash_different_values(self):
         from cash.notebook.control_structures import compute_context_hash
-        h1 = compute_context_hash({'i': 0})
-        h2 = compute_context_hash({'i': 1})
+
+        h1 = compute_context_hash({"i": 0})
+        h2 = compute_context_hash({"i": 1})
         assert h1 != h2
 
     def test_context_hash_same_values(self):
         from cash.notebook.control_structures import compute_context_hash
-        h1 = compute_context_hash({'i': 5})
-        h2 = compute_context_hash({'i': 5})
+
+        h1 = compute_context_hash({"i": 5})
+        h2 = compute_context_hash({"i": 5})
         assert h1 == h2
 
     def test_context_hash_multiple_variables(self):
         from cash.notebook.control_structures import compute_context_hash
-        h1 = compute_context_hash({'i': 0, 'j': 0})
-        h2 = compute_context_hash({'i': 0, 'j': 1})
+
+        h1 = compute_context_hash({"i": 0, "j": 0})
+        h2 = compute_context_hash({"i": 0, "j": 1})
         assert h1 != h2
 
 
@@ -414,18 +426,21 @@ class TestTargetExtraction:
 
     def test_simple_name_target(self):
         from cash.notebook.control_structures import extract_target_names
+
         target = ast.parse("for i in range(3): pass").body[0].target
-        assert extract_target_names(target) == ['i']
+        assert extract_target_names(target) == ["i"]
 
     def test_tuple_target(self):
         from cash.notebook.control_structures import extract_target_names
+
         target = ast.parse("for x, y, z in items: pass").body[0].target
-        assert extract_target_names(target) == ['x', 'y', 'z']
+        assert extract_target_names(target) == ["x", "y", "z"]
 
     def test_nested_tuple_target(self):
         from cash.notebook.control_structures import extract_target_names
+
         target = ast.parse("for (a, b), c in items: pass").body[0].target
-        assert set(extract_target_names(target)) == {'a', 'b', 'c'}
+        assert set(extract_target_names(target)) == {"a", "b", "c"}
 
 
 class TestOutputFlushing:
@@ -442,137 +457,145 @@ class TestOutputFlushing:
         processor = MagicMock()
         processor.variable_lineage = {}
         processor.vars_with_mutation_lineage = set()
-        processor.compute_hash = MagicMock(return_value='fakehash')
+        processor.compute_hash = MagicMock(return_value="fakehash")
         return processor
 
     @pytest.fixture
     def control_processor(self, mock_shell, mock_statement_processor):
         from cash.notebook.control_structures import ControlStructureProcessor
-        return ControlStructureProcessor(
-            mock_shell,
-            mock_statement_processor,
-            debug=False
-        )
 
-    def test_for_loop_flushes_stdout_per_iteration(self, control_processor, mock_shell, mock_statement_processor, capsys):
+        return ControlStructureProcessor(mock_shell, mock_statement_processor, debug=False)
+
+    def test_for_loop_flushes_stdout_per_iteration(
+        self, control_processor, mock_shell, mock_statement_processor, capsys
+    ):
         """For loop body statements should flush stdout immediately, not after all iterations."""
         # Each process() call returns metrics with stdout
         call_count = [0]
+
         def mock_process(code, ttl=None, silent=True, annotation=None, **kwargs):
             call_count[0] += 1
             return {
-                'status': CacheStatus.COMPUTED,
-                'execution_time': 0.01,
-                'stdout': f'iteration {call_count[0]}\n',
-                'stderr': '',
-                'outputs': [],
-                'code': code,
+                "status": CacheStatus.COMPUTED,
+                "execution_time": 0.01,
+                "stdout": f"iteration {call_count[0]}\n",
+                "stderr": "",
+                "outputs": [],
+                "code": code,
             }
+
         mock_statement_processor.process_statement = mock_process
 
         code = "for i in range(3):\n    print(i)"
         node = ast.parse(code).body[0]
-        mock_shell.user_ns['range'] = range
+        mock_shell.user_ns["range"] = range
 
         result = control_processor.process(node)
 
         assert result.success is True
         # All output should have been printed (flushed) during processing
         captured = capsys.readouterr()
-        assert 'iteration 1' in captured.out
-        assert 'iteration 2' in captured.out
-        assert 'iteration 3' in captured.out
+        assert "iteration 1" in captured.out
+        assert "iteration 2" in captured.out
+        assert "iteration 3" in captured.out
 
     def test_for_loop_metrics_marked_as_flushed(self, control_processor, mock_shell, mock_statement_processor):
         """Metrics from for loop body statements should have _output_flushed=True."""
-        mock_statement_processor.process_statement = MagicMock(return_value={
-            'status': CacheStatus.COMPUTED,
-            'execution_time': 0.01,
-            'stdout': 'hello\n',
-            'stderr': '',
-            'outputs': [],
-            'code': 'print("hello")',
-        })
+        mock_statement_processor.process_statement = MagicMock(
+            return_value={
+                "status": CacheStatus.COMPUTED,
+                "execution_time": 0.01,
+                "stdout": "hello\n",
+                "stderr": "",
+                "outputs": [],
+                "code": 'print("hello")',
+            }
+        )
 
         code = "for i in range(2):\n    print('hello')"
         node = ast.parse(code).body[0]
-        mock_shell.user_ns['range'] = range
+        mock_shell.user_ns["range"] = range
 
         result = control_processor.process(node)
 
         assert result.success is True
         for m in result.metrics:
-            assert m.get('_output_flushed') is True
+            assert m.get("_output_flushed") is True
 
     def test_for_loop_flushes_stderr(self, control_processor, mock_shell, mock_statement_processor, capsys):
         """For loop should also flush stderr immediately."""
-        mock_statement_processor.process_statement = MagicMock(return_value={
-            'status': CacheStatus.COMPUTED,
-            'execution_time': 0.01,
-            'stdout': '',
-            'stderr': 'warning\n',
-            'outputs': [],
-            'code': 'import warnings; warnings.warn("test")',
-        })
+        mock_statement_processor.process_statement = MagicMock(
+            return_value={
+                "status": CacheStatus.COMPUTED,
+                "execution_time": 0.01,
+                "stdout": "",
+                "stderr": "warning\n",
+                "outputs": [],
+                "code": 'import warnings; warnings.warn("test")',
+            }
+        )
 
         code = "for i in range(2):\n    pass"
         node = ast.parse(code).body[0]
-        mock_shell.user_ns['range'] = range
+        mock_shell.user_ns["range"] = range
 
         control_processor.process(node)
 
         captured = capsys.readouterr()
         # stderr should contain warnings from both iterations
-        assert captured.err.count('warning') == 2
+        assert captured.err.count("warning") == 2
 
     def test_if_statement_flushes_stdout(self, control_processor, mock_shell, mock_statement_processor, capsys):
         """If statement body statements should flush stdout immediately."""
-        mock_statement_processor.process_statement = MagicMock(return_value={
-            'status': CacheStatus.COMPUTED,
-            'execution_time': 0.01,
-            'stdout': 'branch output\n',
-            'stderr': '',
-            'outputs': [],
-            'code': 'print("branch output")',
-        })
+        mock_statement_processor.process_statement = MagicMock(
+            return_value={
+                "status": CacheStatus.COMPUTED,
+                "execution_time": 0.01,
+                "stdout": "branch output\n",
+                "stderr": "",
+                "outputs": [],
+                "code": 'print("branch output")',
+            }
+        )
 
         code = "if True:\n    print('branch output')"
         node = ast.parse(code).body[0]
-        mock_shell.user_ns['True'] = True
+        mock_shell.user_ns["True"] = True
 
         result = control_processor.process(node)
 
         assert result.success is True
         captured = capsys.readouterr()
-        assert 'branch output' in captured.out
+        assert "branch output" in captured.out
         for m in result.metrics:
-            assert m.get('_output_flushed') is True
+            assert m.get("_output_flushed") is True
 
     def test_flush_metrics_output_helper(self):
         """flush_metrics_output should print stdout/stderr and mark as flushed."""
         from cash.notebook.control_structures.helpers import flush_metrics_output
 
-        metrics = {'stdout': 'hello\n', 'stderr': 'warn\n'}
+        metrics = {"stdout": "hello\n", "stderr": "warn\n"}
         import io
         import sys
+
         old_stdout, old_stderr = sys.stdout, sys.stderr
         sys.stdout = io.StringIO()
         sys.stderr = io.StringIO()
         try:
             flush_metrics_output(metrics)
-            assert sys.stdout.getvalue() == 'hello\n'
-            assert sys.stderr.getvalue() == 'warn\n'
+            assert sys.stdout.getvalue() == "hello\n"
+            assert sys.stderr.getvalue() == "warn\n"
         finally:
             sys.stdout, sys.stderr = old_stdout, old_stderr
-        assert metrics['_output_flushed'] is True
+        assert metrics["_output_flushed"] is True
 
     def test_flush_no_output_still_marks_flushed(self):
         """Metrics with no stdout/stderr should still be marked as flushed."""
         from cash.notebook.control_structures.helpers import flush_metrics_output
 
-        metrics = {'stdout': '', 'stderr': ''}
+        metrics = {"stdout": "", "stderr": ""}
         flush_metrics_output(metrics)
-        assert metrics['_output_flushed'] is True
+        assert metrics["_output_flushed"] is True
 
 
 class TestTeeWriter:
@@ -581,6 +604,7 @@ class TestTeeWriter:
     def test_tee_writer_writes_to_both_streams(self):
         """_TeeWriter should write to both the real stream and the buffer."""
         from io import StringIO
+
         from cash.notebook.statement import _TeeWriter
 
         real = StringIO()
@@ -593,6 +617,7 @@ class TestTeeWriter:
     def test_tee_writer_forwards_flush(self):
         """_TeeWriter.flush should flush the real stream."""
         from io import StringIO
+
         from cash.notebook.statement import _TeeWriter
 
         real = StringIO()
@@ -607,25 +632,29 @@ class TestTeeWriter:
     def test_tee_writer_getattr_delegation(self):
         """_TeeWriter should forward unknown attributes to the real stream."""
         from io import StringIO
+
         from cash.notebook.statement import _TeeWriter
 
         real = StringIO()
         chunks = []
         tee = _TeeWriter(real, chunks)
         # StringIO has 'encoding' attribute — forwarded via __getattr__
-        assert hasattr(tee, 'readable')
+        assert hasattr(tee, "readable")
 
     def test_tee_writer_batched_flush(self):
         """_TeeWriter should NOT flush on every write — only after the interval."""
         from io import StringIO
+
         from cash.notebook.statement import _TeeWriter
 
         flush_count = [0]
         real = StringIO()
         original_flush = real.flush
+
         def counting_flush():
             flush_count[0] += 1
             original_flush()
+
         real.flush = counting_flush
 
         chunks = []
@@ -636,12 +665,13 @@ class TestTeeWriter:
         # Should have far fewer flushes than writes
         assert flush_count[0] < 100, f"Too many flushes: {flush_count[0]} for 1000 writes"
         # But all data should be recorded
-        assert tee.getvalue().count('\n') == 1000
+        assert tee.getvalue().count("\n") == 1000
 
     def test_tee_output_captures_stdout(self):
         """_tee_output should record stdout while letting it through."""
         import sys
         from io import StringIO
+
         from cash.notebook.statement import _tee_output
 
         old_stdout = sys.stdout
@@ -659,6 +689,7 @@ class TestTeeWriter:
         """_tee_output should record stderr while letting it through."""
         import sys
         from io import StringIO
+
         from cash.notebook.statement import _tee_output
 
         old_stderr = sys.stderr
@@ -674,6 +705,7 @@ class TestTeeWriter:
     def test_tee_output_restores_streams_on_exception(self):
         """_tee_output should restore sys.stdout/stderr even on exception."""
         import sys
+
         from cash.notebook.statement import _tee_output
 
         orig_stdout = sys.stdout
@@ -709,29 +741,28 @@ class TestSingleUnitStreamOutput:
         processor = MagicMock()
         processor.variable_lineage = {}
         processor.vars_with_mutation_lineage = set()
-        processor.compute_hash = MagicMock(return_value='fakehash')
+        processor.compute_hash = MagicMock(return_value="fakehash")
         return processor
 
     @pytest.fixture
     def control_processor(self, mock_shell, mock_statement_processor):
         from cash.notebook.control_structures import ControlStructureProcessor
-        return ControlStructureProcessor(
-            mock_shell,
-            mock_statement_processor,
-            debug=False
-        )
+
+        return ControlStructureProcessor(mock_shell, mock_statement_processor, debug=False)
 
     def test_single_unit_passes_stream_output(self, control_processor, mock_shell, mock_statement_processor):
         """_execute_as_single_unit should pass stream_output=True to process()."""
-        mock_statement_processor.process_statement = MagicMock(return_value={
-            'status': CacheStatus.COMPUTED,
-            'execution_time': 0.5,
-            'stdout': 'progress\n',
-            'stderr': '',
-            'outputs': [],
-            'code': 'for i in range(100): pass',
-            '_output_flushed': True,
-        })
+        mock_statement_processor.process_statement = MagicMock(
+            return_value={
+                "status": CacheStatus.COMPUTED,
+                "execution_time": 0.5,
+                "stdout": "progress\n",
+                "stderr": "",
+                "outputs": [],
+                "code": "for i in range(100): pass",
+                "_output_flushed": True,
+            }
+        )
 
         code = "while True:\n    break"
         node = ast.parse(code).body[0]
@@ -740,19 +771,21 @@ class TestSingleUnitStreamOutput:
 
         # Verify process was called with stream_output=True
         call_kwargs = mock_statement_processor.process_statement.call_args
-        assert call_kwargs[1].get('stream_output') is True or (len(call_kwargs[0]) > 3 and call_kwargs[0][3] is True)
+        assert call_kwargs[1].get("stream_output") is True or (len(call_kwargs[0]) > 3 and call_kwargs[0][3] is True)
 
     def test_single_unit_metrics_output_flushed(self, control_processor, mock_shell, mock_statement_processor):
         """Metrics from single-unit execution should have _output_flushed when stream_output=True."""
-        mock_statement_processor.process_statement = MagicMock(return_value={
-            'status': CacheStatus.COMPUTED,
-            'execution_time': 0.5,
-            'stdout': 'output\n',
-            'stderr': '',
-            'outputs': [],
-            'code': 'while True: break',
-            '_output_flushed': True,
-        })
+        mock_statement_processor.process_statement = MagicMock(
+            return_value={
+                "status": CacheStatus.COMPUTED,
+                "execution_time": 0.5,
+                "stdout": "output\n",
+                "stderr": "",
+                "outputs": [],
+                "code": "while True: break",
+                "_output_flushed": True,
+            }
+        )
 
         code = "while True:\n    break"
         node = ast.parse(code).body[0]
@@ -760,4 +793,4 @@ class TestSingleUnitStreamOutput:
         result = control_processor.process(node)
         assert result.success is True
         # The metrics should have _output_flushed from the process call
-        assert result.metrics[0].get('_output_flushed') is True
+        assert result.metrics[0].get("_output_flushed") is True

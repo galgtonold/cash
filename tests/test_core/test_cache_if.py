@@ -1,4 +1,5 @@
 """@cash.cache(cache_if=...) — conditional caching based on a result predicate."""
+
 from __future__ import annotations
 
 import asyncio
@@ -37,8 +38,7 @@ def test_cache_if_false_skips_store(tmp_path):
     assert lookup("k") is None
     assert lookup("k") is None
     assert n["calls"] == 2, (
-        f"None returns should not be cached when cache_if=lambda r: r is not None "
-        f"(calls={n['calls']})"
+        f"None returns should not be cached when cache_if=lambda r: r is not None (calls={n['calls']})"
     )
 
 
@@ -46,6 +46,7 @@ def test_cache_if_mixed_outcomes(tmp_path):
     """A predicate that gates on the result value: some inputs cache, others don't."""
     c = Cash(cache_dir=str(tmp_path), register_magic=False)
     n = {"calls": 0}
+
     # Sentinel: when the input is "skip", return a value the predicate rejects.
     @c.cache(cache_if=lambda r: r != "no")
     def f(x):
@@ -95,10 +96,7 @@ def test_cache_if_predicate_exception_skips_store(tmp_path):
         assert f(7) == 21
         # Predicate raises again → still no cache, but no second warning.
         assert f(7) == 21
-    assert n["calls"] == 2, (
-        f"buggy predicate must not allow caching; expected 2 computes, "
-        f"got {n['calls']}"
-    )
+    assert n["calls"] == 2, f"buggy predicate must not allow caching; expected 2 computes, got {n['calls']}"
     # Exact category match — CashImpurityWarning subclasses
     # CashCacheIneffectiveWarning and would also be emitted because
     # `n["calls"] += 1` is a scope mutation. We're asserting on the
@@ -161,6 +159,4 @@ def test_cache_if_function_exception_unaffected(tmp_path):
     with pytest.raises(ValueError, match="boom"):
         f(1)
 
-    assert predicate_called["yes"] is False, (
-        "predicate must not be called when the function raises"
-    )
+    assert predicate_called["yes"] is False, "predicate must not be called when the function raises"

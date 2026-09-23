@@ -32,7 +32,6 @@ Rep 0 is the upstream-simulation desync (``b`` still IS ``holder['k']``; it is
 but ``b`` is now a deserialised copy of neither). The failure messages below tag
 each rep with the bind cell's state so the two never get conflated.
 """
-import asyncio
 
 import pytest
 
@@ -65,8 +64,8 @@ MUTATE = "obj.inner.append(42)\nobj.tag = 'mutated'"
 # lands rather than silently masking it.
 _CAS206 = pytest.mark.xfail(
     reason="CAS-206: upstream re-derivation swaps live `obj` while the container "
-           "keeps the original, so identity breaks on the COLD run too "
-           "(bind cell reports 'executed', not 'RESTORED' — CAS-188's half is fixed)",
+    "keeps the original, so identity breaks on the COLD run too "
+    "(bind cell reports 'executed', not 'RESTORED' — CAS-188's half is fixed)",
     strict=False,
 )
 # `b = list(lst)` aliases one level DOWN (`b[0] is lst[0]` while `b is not lst`).
@@ -74,20 +73,20 @@ _CAS206 = pytest.mark.xfail(
 # can do real work, so it is deliberately outside the CAS-188 fix.
 _ELEMENT_ALIAS = pytest.mark.xfail(
     reason="element-level aliasing through a freshly-built container; the binding "
-           "itself is not the alias, so the CAS-188 refusal does not apply",
+    "itself is not the alias, so the CAS-188 refusal does not apply",
     strict=False,
 )
 
 FORMS = [
     ("attr", "b = obj.inner", "b is obj.inner", "b", "[42]"),
-    pytest.param("subscript", "b = holder['k']", "b is obj",
-                 "getattr(b, 'tag', 'MISSING')", "mutated", marks=_CAS206),
-    pytest.param("index", "b = lst[0]", "b is obj",
-                 "getattr(b, 'tag', 'MISSING')", "mutated", marks=_CAS206),
-    pytest.param("call", "b = list(lst)", "b[0] is obj",
-                 "getattr(b[0], 'tag', 'MISSING')", "mutated", marks=_ELEMENT_ALIAS),
-    pytest.param("ternary", "b = obj if True else None", "b is obj",
-                 "getattr(b, 'tag', 'MISSING')", "mutated", marks=_CAS206),
+    pytest.param("subscript", "b = holder['k']", "b is obj", "getattr(b, 'tag', 'MISSING')", "mutated", marks=_CAS206),
+    pytest.param("index", "b = lst[0]", "b is obj", "getattr(b, 'tag', 'MISSING')", "mutated", marks=_CAS206),
+    pytest.param(
+        "call", "b = list(lst)", "b[0] is obj", "getattr(b[0], 'tag', 'MISSING')", "mutated", marks=_ELEMENT_ALIAS
+    ),
+    pytest.param(
+        "ternary", "b = obj if True else None", "b is obj", "getattr(b, 'tag', 'MISSING')", "mutated", marks=_CAS206
+    ),
 ]
 
 # Every form, unmarked: this is the CAS-188 property proper.
@@ -136,12 +135,11 @@ def _restart(nb_runner):
 
 def _cells(bind, id_expr, val_expr):
     return [
-        SETUP,                                              # 1
-        BUILD,                                              # 2
-        f"# @cash:persist\n{bind}",                         # 3
-        MUTATE,                                             # 4
-        _live(f"print('same', {id_expr})",
-              f"print('val', {val_expr})"),                 # 5
+        SETUP,  # 1
+        BUILD,  # 2
+        f"# @cash:persist\n{bind}",  # 3
+        MUTATE,  # 4
+        _live(f"print('same', {id_expr})", f"print('val', {val_expr})"),  # 5
     ]
 
 
@@ -177,8 +175,7 @@ def test_computed_rhs_alias_identity_holds(nb_runner, name, bind, id_expr, val_e
 @pytest.mark.parametrize("name,bind,id_expr,val_expr,expected", FORMS)
 def test_computed_rhs_alias_matches_plain_kernel(tmp_path, name, bind, id_expr, val_expr, expected):
     """Ground truth: cash ON must print exactly what a cash-OFF kernel prints."""
-    cells_off = [BUILD, bind, MUTATE,
-                 f"print('same', {id_expr})\nprint('val', {val_expr})"]
+    cells_off = [BUILD, bind, MUTATE, f"print('same', {id_expr})\nprint('val', {val_expr})"]
 
     def _run(work_dir, cells, with_cash, probe_cell):
         work_dir.mkdir(parents=True, exist_ok=True)
@@ -202,16 +199,12 @@ def test_computed_rhs_alias_matches_plain_kernel(tmp_path, name, bind, id_expr, 
         a spurious blank line, which reads as a cash bug and is not one. The
         badge is cash-only chrome and is filtered by the same rule.
         """
-        return "\n".join(
-            ln for ln in raw.splitlines() if ln.startswith(("same ", "val "))
-        ).strip()
+        return "\n".join(ln for ln in raw.splitlines() if ln.startswith(("same ", "val "))).strip()
 
     off = _probe_lines(_run(tmp_path / "off", cells_off, False, 4))
     on_lines = _probe_lines(_run(tmp_path / "on", _cells(bind, id_expr, val_expr), True, 5))
 
-    assert off == f"same True\nval {expected}", (
-        f"[{name}] the cash-off oracle itself is wrong -- test bug: {off!r}"
-    )
+    assert off == f"same True\nval {expected}", f"[{name}] the cash-off oracle itself is wrong -- test bug: {off!r}"
     assert on_lines == off, (
         f"[{name}] cash ON disagrees with a plain kernel on `{bind}`.\n"
         f"--- cash OFF ---\n{off!r}\n--- cash ON ---\n{on_lines!r}"

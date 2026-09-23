@@ -1,4 +1,5 @@
 """Unit tests for the cost-model eval helpers."""
+
 from __future__ import annotations
 
 import pytest
@@ -8,50 +9,69 @@ from benchmarks._cost_model_eval import (
     CellRestore,
     classify_oracle,
     join_residuals,
-    score_confusion_matrix,
     render_report,
+    score_confusion_matrix,
 )
 
 
 def test_classify_oracle_caches_when_restore_much_cheaper():
     # compute = 1.0s, actual restore = 0.05s, write overhead ε=0.10
     # → caching saves 1.0 - 0.05*1.10 = 0.945s; way > 20% threshold
-    assert classify_oracle(
-        t_compute=1.0, t_restore_actual=0.05,
-        epsilon_write=0.10, min_savings_pct=0.20,
-    ) == "cache"
+    assert (
+        classify_oracle(
+            t_compute=1.0,
+            t_restore_actual=0.05,
+            epsilon_write=0.10,
+            min_savings_pct=0.20,
+        )
+        == "cache"
+    )
 
 
 def test_classify_oracle_skips_when_restore_dominates():
     # compute = 0.5s, restore = 1.0s → never worth caching
-    assert classify_oracle(
-        t_compute=0.5, t_restore_actual=1.0,
-        epsilon_write=0.10, min_savings_pct=0.20,
-    ) == "skip"
+    assert (
+        classify_oracle(
+            t_compute=0.5,
+            t_restore_actual=1.0,
+            epsilon_write=0.10,
+            min_savings_pct=0.20,
+        )
+        == "skip"
+    )
 
 
 def test_classify_oracle_skips_when_savings_below_threshold():
     # compute = 1.0s, restore = 0.85s, ε=0.10 → effective restore 0.935s
     # savings = 0.065s = 6.5% of compute, below 20% threshold
-    assert classify_oracle(
-        t_compute=1.0, t_restore_actual=0.85,
-        epsilon_write=0.10, min_savings_pct=0.20,
-    ) == "skip"
+    assert (
+        classify_oracle(
+            t_compute=1.0,
+            t_restore_actual=0.85,
+            epsilon_write=0.10,
+            min_savings_pct=0.20,
+        )
+        == "skip"
+    )
 
 
 def test_join_residuals_pairs_decision_and_restore():
     decisions = [
-        CellDecision(cell_id=2, repeat=1, t_compute=2.0,
-                     est_obj_size_bytes=50_000_000,
-                     est_restore_seconds=0.08,
-                     type_name="DataFrame", family="dataframe_numeric",
-                     policy_decision="cache",
-                     policy_reason=None,
-                     expected_label="cache"),
+        CellDecision(
+            cell_id=2,
+            repeat=1,
+            t_compute=2.0,
+            est_obj_size_bytes=50_000_000,
+            est_restore_seconds=0.08,
+            type_name="DataFrame",
+            family="dataframe_numeric",
+            policy_decision="cache",
+            policy_reason=None,
+            expected_label="cache",
+        ),
     ]
     restores = [
-        CellRestore(cell_id=2, repeat=1, t_restore_actual=0.35,
-                    t_warm_policy=0.35),
+        CellRestore(cell_id=2, repeat=1, t_restore_actual=0.35, t_warm_policy=0.35),
     ]
     residuals = join_residuals(decisions, restores)
     assert len(residuals) == 1
@@ -66,11 +86,11 @@ def test_join_residuals_pairs_decision_and_restore():
 
 def test_score_confusion_matrix_counts_each_quadrant():
     rows = [
-        {"policy_decision": "cache", "oracle_decision": "cache"},   # TP
-        {"policy_decision": "cache", "oracle_decision": "cache"},   # TP
+        {"policy_decision": "cache", "oracle_decision": "cache"},  # TP
+        {"policy_decision": "cache", "oracle_decision": "cache"},  # TP
         {"policy_decision": "skip-cost", "oracle_decision": "skip"},  # TN
         {"policy_decision": "skip-floor", "oracle_decision": "skip"},  # TN
-        {"policy_decision": "cache", "oracle_decision": "skip"},    # FP
+        {"policy_decision": "cache", "oracle_decision": "skip"},  # FP
         {"policy_decision": "skip-cost", "oracle_decision": "cache"},  # FN
     ]
     cm = score_confusion_matrix(rows)
@@ -84,12 +104,20 @@ def test_score_confusion_matrix_counts_each_quadrant():
 def test_render_report_contains_required_sections():
     cm = {"TP": 5, "TN": 2, "FP": 1, "FN": 0, "accuracy": 7 / 8}
     residuals = [
-        {"cell_id": 2, "repeat": 1, "family": "dataframe_numeric",
-         "size_mb": 50.0, "t_compute": 2.0,
-         "t_restore_predicted": 0.08, "t_restore_actual": 0.35,
-         "abs_err": 0.27, "rel_err": 0.77,
-         "policy_decision": "cache", "oracle_decision": "cache",
-         "expected_label": "cache"},
+        {
+            "cell_id": 2,
+            "repeat": 1,
+            "family": "dataframe_numeric",
+            "size_mb": 50.0,
+            "t_compute": 2.0,
+            "t_restore_predicted": 0.08,
+            "t_restore_actual": 0.35,
+            "abs_err": 0.27,
+            "rel_err": 0.77,
+            "policy_decision": "cache",
+            "oracle_decision": "cache",
+            "expected_label": "cache",
+        },
     ]
     wall = {"cold": 60.0, "warm_policy": 8.0, "warm_oracle": 6.5}
     report = render_report(cm, residuals, wall, n_cells=12, n_repeats=3)

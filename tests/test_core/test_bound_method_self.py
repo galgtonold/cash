@@ -5,12 +5,11 @@ Before the fix, ``self`` never appeared in ``args`` for bound-method
 decoration, so two instances with different state shared one entry and
 silently returned each other's results.
 """
+
 from __future__ import annotations
 
 import threading
 import warnings
-
-import pytest
 
 from cash import Cash, FileBackend
 from cash.exceptions import CashCacheIneffectiveWarning

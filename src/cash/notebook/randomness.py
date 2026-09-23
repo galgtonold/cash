@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import ast
 import functools
-import secrets
 import hashlib
 import inspect
 import logging
 import re
+import secrets
 import types
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -17,9 +17,41 @@ from typing import NamedTuple
 from ..diagnostics import warn_diagnostic_explicit
 from ..exceptions import CashWarning
 
-__all__ = ["CashRandomnessWarning", "RandomnessCallInfo", "RANDOM_FUNCTIONS", "SEED_FUNCTIONS", "MODULE_ALIASES", "RNG_CARRIER_CONSTRUCTORS", "RandomnessVisitor", "RandomnessDetector", "check_and_warn_randomness", "describe_random_call", "format_stale_randomness_message", "warn_stale_randomness", "format_unseeded_estimator_fit_message", "format_stale_estimator_fit_message", "warn_unseeded_estimator_fit", "warn_stale_estimator_fit", "capture_rng_state", "restore_rng_state", "capture_object_rng_states", "restore_object_rng_states", "get_used_rng_modules", "get_drawing_rng_modules", "get_seeding_rng_modules", "seed_cells_not_yet_run", "rng_modules_changed", "rng_lineage_fingerprint", "rng_virtual_var", "hidden_lineage_reads", "hidden_lineage_writes", "hidden_write_lineage"]
+__all__ = [
+    "CashRandomnessWarning",
+    "RandomnessCallInfo",
+    "RANDOM_FUNCTIONS",
+    "SEED_FUNCTIONS",
+    "MODULE_ALIASES",
+    "RNG_CARRIER_CONSTRUCTORS",
+    "RandomnessVisitor",
+    "RandomnessDetector",
+    "check_and_warn_randomness",
+    "describe_random_call",
+    "format_stale_randomness_message",
+    "warn_stale_randomness",
+    "format_unseeded_estimator_fit_message",
+    "format_stale_estimator_fit_message",
+    "warn_unseeded_estimator_fit",
+    "warn_stale_estimator_fit",
+    "capture_rng_state",
+    "restore_rng_state",
+    "capture_object_rng_states",
+    "restore_object_rng_states",
+    "get_used_rng_modules",
+    "get_drawing_rng_modules",
+    "get_seeding_rng_modules",
+    "seed_cells_not_yet_run",
+    "rng_modules_changed",
+    "rng_lineage_fingerprint",
+    "rng_virtual_var",
+    "hidden_lineage_reads",
+    "hidden_lineage_writes",
+    "hidden_write_lineage",
+]
 
 logger = logging.getLogger(__name__)
+
 
 class CashRandomnessWarning(CashWarning):
     """Warning issued when unseeded randomness is detected in cached code.
@@ -34,6 +66,7 @@ class CashRandomnessWarning(CashWarning):
     filters written against ``UserWarning`` keep working.
     """
 
+
 @dataclass
 class RandomnessCallInfo:
     """Information about a detected randomness call.
@@ -46,72 +79,138 @@ class RandomnessCallInfo:
     through the module-level seed ledger (:meth:`RandomnessDetector.is_seeded`).
     See ``_resolve_carrier_calls``.
     """
+
     module: str
     function: str
     lineno: int
     col_offset: int
     carrier: str | None = None
 
+
 # Comprehensive mapping of randomness functions by module
 RANDOM_FUNCTIONS = {
     # Python stdlib random
-    'random': {
-        'random', 'randint', 'randrange', 'choice', 'choices',
-        'shuffle', 'sample', 'uniform', 'triangular',
-        'betavariate', 'expovariate', 'gammavariate', 'gauss',
-        'lognormvariate', 'normalvariate', 'vonmisesvariate',
-        'paretovariate', 'weibullvariate', 'getrandbits', 'randbytes'
+    "random": {
+        "random",
+        "randint",
+        "randrange",
+        "choice",
+        "choices",
+        "shuffle",
+        "sample",
+        "uniform",
+        "triangular",
+        "betavariate",
+        "expovariate",
+        "gammavariate",
+        "gauss",
+        "lognormvariate",
+        "normalvariate",
+        "vonmisesvariate",
+        "paretovariate",
+        "weibullvariate",
+        "getrandbits",
+        "randbytes",
     },
     # NumPy random
-    'numpy.random': {
-        'rand', 'randn', 'randint', 'random_integers', 'random_sample',
-        'random', 'ranf', 'sample', 'choice', 'shuffle', 'permutation',
-        'beta', 'binomial', 'chisquare', 'dirichlet', 'exponential',
-        'f', 'gamma', 'geometric', 'gumbel', 'hypergeometric',
-        'laplace', 'logistic', 'lognormal', 'logseries', 'multinomial',
-        'multivariate_normal', 'negative_binomial', 'noncentral_chisquare',
-        'noncentral_f', 'normal', 'pareto', 'poisson', 'power',
-        'rayleigh', 'standard_cauchy', 'standard_exponential',
-        'standard_gamma', 'standard_normal', 'standard_t', 'triangular',
-        'uniform', 'vonmises', 'wald', 'weibull', 'zipf',
+    "numpy.random": {
+        "rand",
+        "randn",
+        "randint",
+        "random_integers",
+        "random_sample",
+        "random",
+        "ranf",
+        "sample",
+        "choice",
+        "shuffle",
+        "permutation",
+        "beta",
+        "binomial",
+        "chisquare",
+        "dirichlet",
+        "exponential",
+        "f",
+        "gamma",
+        "geometric",
+        "gumbel",
+        "hypergeometric",
+        "laplace",
+        "logistic",
+        "lognormal",
+        "logseries",
+        "multinomial",
+        "multivariate_normal",
+        "negative_binomial",
+        "noncentral_chisquare",
+        "noncentral_f",
+        "normal",
+        "pareto",
+        "poisson",
+        "power",
+        "rayleigh",
+        "standard_cauchy",
+        "standard_exponential",
+        "standard_gamma",
+        "standard_normal",
+        "standard_t",
+        "triangular",
+        "uniform",
+        "vonmises",
+        "wald",
+        "weibull",
+        "zipf",
         # Generator methods
-        'integers', 'bytes'
+        "integers",
+        "bytes",
     },
     # PyTorch
-    'torch': {
-        'rand', 'randn', 'randint', 'randperm',
-        'rand_like', 'randn_like', 'randint_like',
-        'bernoulli', 'multinomial', 'normal', 'poisson'
+    "torch": {
+        "rand",
+        "randn",
+        "randint",
+        "randperm",
+        "rand_like",
+        "randn_like",
+        "randint_like",
+        "bernoulli",
+        "multinomial",
+        "normal",
+        "poisson",
     },
     # TensorFlow
-    'tensorflow.random': {
-        'uniform', 'normal', 'truncated_normal', 'shuffle',
-        'categorical', 'gamma', 'poisson', 'stateless_uniform',
-        'stateless_normal', 'stateless_truncated_normal'
+    "tensorflow.random": {
+        "uniform",
+        "normal",
+        "truncated_normal",
+        "shuffle",
+        "categorical",
+        "gamma",
+        "poisson",
+        "stateless_uniform",
+        "stateless_normal",
+        "stateless_truncated_normal",
     },
     # Shortened aliases (tf.random)
-    'tf.random': {
-        'uniform', 'normal', 'truncated_normal', 'shuffle',
-        'categorical', 'gamma', 'poisson'
-    },
+    "tf.random": {"uniform", "normal", "truncated_normal", "shuffle", "categorical", "gamma", "poisson"},
 }
 
 # Seed functions by module
 SEED_FUNCTIONS = {
-    'random': {'seed'},
-    'numpy.random': {'seed'},
-    'numpy': {'random.seed'},  # np.random.seed()
-    'torch': {'manual_seed', 'cuda.manual_seed', 'cuda.manual_seed_all'},
-    'tensorflow.random': {'set_seed'},
-    'tensorflow': {'random.set_seed'},
-    'tf.random': {'set_seed'},
-    'tf': {'random.set_seed'},
+    "random": {"seed"},
+    "numpy.random": {"seed"},
+    "numpy": {"random.seed"},  # np.random.seed()
+    "torch": {"manual_seed", "cuda.manual_seed", "cuda.manual_seed_all"},
+    "tensorflow.random": {"set_seed"},
+    "tensorflow": {"random.set_seed"},
+    "tf.random": {"set_seed"},
+    "tf": {"random.set_seed"},
 }
 
 # Module aliases commonly used
 MODULE_ALIASES = {
-    'np': 'numpy',
-    'tf': 'tensorflow',
+    "np": "numpy",
+    "tf": "tensorflow",
 }
 
 # -----------------------------------------------------------------------------
@@ -137,17 +236,17 @@ MODULE_ALIASES = {
 # perfectly reproducible generators.  Sharing the kind constants is what keeps
 # the two channels from drifting into two different notions of an RNG.
 
-_KIND_NP_GENERATOR = 'numpy.Generator'
-_KIND_NP_RANDOMSTATE = 'numpy.RandomState'
-_KIND_PY_RANDOM = 'random.Random'
+_KIND_NP_GENERATOR = "numpy.Generator"
+_KIND_NP_RANDOMSTATE = "numpy.RandomState"
+_KIND_PY_RANDOM = "random.Random"
 
 # Constructors that MINT a carrier, keyed by the kind they produce.
 RNG_CARRIER_CONSTRUCTORS = {
-    'numpy.random.default_rng': _KIND_NP_GENERATOR,
-    'numpy.random.Generator': _KIND_NP_GENERATOR,
-    'numpy.random.RandomState': _KIND_NP_RANDOMSTATE,
-    'random.Random': _KIND_PY_RANDOM,
-    'random.SystemRandom': _KIND_PY_RANDOM,
+    "numpy.random.default_rng": _KIND_NP_GENERATOR,
+    "numpy.random.Generator": _KIND_NP_GENERATOR,
+    "numpy.random.RandomState": _KIND_NP_RANDOMSTATE,
+    "random.Random": _KIND_PY_RANDOM,
+    "random.SystemRandom": _KIND_PY_RANDOM,
 }
 
 # Bare constructor names, for ``from numpy.random import default_rng`` when the
@@ -160,36 +259,40 @@ RNG_CARRIER_CONSTRUCTORS = {
 # more likely to be ``typing.Generator`` or a user's own class, and mistaking one
 # for an RNG would warn about code that has no randomness in it at all.
 _BARE_CARRIER_CONSTRUCTORS = {
-    'default_rng': _KIND_NP_GENERATOR,
+    "default_rng": _KIND_NP_GENERATOR,
 }
 
 # numpy bit generators: ``Generator(PCG64(42))`` is seeded, ``Generator(PCG64())``
 # is not, so the seed question recurses one level into the bit generator.
-_NP_BIT_GENERATORS = frozenset({
-    'PCG64', 'PCG64DXSM', 'MT19937', 'Philox', 'SFC64',
-})
+_NP_BIT_GENERATORS = frozenset(
+    {
+        "PCG64",
+        "PCG64DXSM",
+        "MT19937",
+        "Philox",
+        "SFC64",
+    }
+)
 
 # Which draw methods each carrier kind offers.  Reusing RANDOM_FUNCTIONS keeps
 # one list of "what counts as a draw" per module rather than two.
 _CARRIER_DRAW_FUNCTIONS = {
-    _KIND_NP_GENERATOR: RANDOM_FUNCTIONS['numpy.random'],
-    _KIND_NP_RANDOMSTATE: RANDOM_FUNCTIONS['numpy.random'],
-    _KIND_PY_RANDOM: RANDOM_FUNCTIONS['random'],
+    _KIND_NP_GENERATOR: RANDOM_FUNCTIONS["numpy.random"],
+    _KIND_NP_RANDOMSTATE: RANDOM_FUNCTIONS["numpy.random"],
+    _KIND_PY_RANDOM: RANDOM_FUNCTIONS["random"],
 }
 
 # The module each carrier kind is attributed to in the warning message.
 _CARRIER_MODULES = {
-    _KIND_NP_GENERATOR: 'numpy.random',
-    _KIND_NP_RANDOMSTATE: 'numpy.random',
-    _KIND_PY_RANDOM: 'random',
+    _KIND_NP_GENERATOR: "numpy.random",
+    _KIND_NP_RANDOMSTATE: "numpy.random",
+    _KIND_PY_RANDOM: "random",
 }
 
 # Any name that could be a draw off some carrier.  Used as a cheap pre-filter
 # while visiting; the kind-specific set above makes the real decision once the
 # carrier's kind is known.
-_ANY_CARRIER_DRAW_FUNCTION = frozenset(
-    RANDOM_FUNCTIONS['numpy.random'] | RANDOM_FUNCTIONS['random']
-)
+_ANY_CARRIER_DRAW_FUNCTION = frozenset(RANDOM_FUNCTIONS["numpy.random"] | RANDOM_FUNCTIONS["random"])
 
 
 def _rng_constructor_is_seeded(node: ast.Call) -> bool:
@@ -205,7 +308,7 @@ def _rng_constructor_is_seeded(node: ast.Call) -> bool:
     how a warning gets filtered out wholesale and stops protecting anyone.
     """
     args = list(node.args)
-    args.extend(kw.value for kw in node.keywords if kw.arg in ('seed', 'bit_generator'))
+    args.extend(kw.value for kw in node.keywords if kw.arg in ("seed", "bit_generator"))
 
     if not args:
         return False
@@ -217,10 +320,11 @@ def _rng_constructor_is_seeded(node: ast.Call) -> bool:
         if isinstance(first.func, ast.Attribute):
             inner_name = first.func.attr
         else:
-            inner_name = getattr(first.func, 'id', None)
+            inner_name = getattr(first.func, "id", None)
         if inner_name in _NP_BIT_GENERATORS:
             return _rng_constructor_is_seeded(first)
     return True
+
 
 class RandomnessVisitor(ast.NodeVisitor):
     """AST visitor that detects randomness and seed calls."""
@@ -339,7 +443,8 @@ class RandomnessVisitor(ast.NodeVisitor):
     def visit_Assign(self, node: ast.Assign):
         """Track ``rng = np.random.default_rng()`` and friends."""
         self._track_carrier_binding(
-            [t.id for t in node.targets if isinstance(t, ast.Name)], node.value,
+            [t.id for t in node.targets if isinstance(t, ast.Name)],
+            node.value,
         )
         self.generic_visit(node)
 
@@ -401,7 +506,7 @@ class RandomnessVisitor(ast.NodeVisitor):
             return _BARE_CARRIER_CONSTRUCTORS.get(chain[0])
 
         resolved_base = self._resolve_module(chain[0]) or chain[0]
-        full_name = '.'.join([*resolved_base.split('.'), *chain[1:]])
+        full_name = ".".join([*resolved_base.split("."), *chain[1:]])
         return RNG_CARRIER_CONSTRUCTORS.get(full_name)
 
     def visit_Call(self, node: ast.Call):
@@ -413,7 +518,7 @@ class RandomnessVisitor(ast.NodeVisitor):
             return
 
         # Build the full dotted name
-        full_name = '.'.join(chain)
+        full_name = ".".join(chain)
 
         # Check various patterns
         self._check_random_call(chain, full_name, node)
@@ -458,7 +563,7 @@ class RandomnessVisitor(ast.NodeVisitor):
                 # the runtime length of ``args``, so no later index can be named.
                 # Stop rather than mis-attribute one parameter's risk to another.
                 break
-            self._record_call_arg(callee, ('pos', index), value, node)
+            self._record_call_arg(callee, ("pos", index), value, node)
 
         for kw in node.keywords:
             if kw.arg is None:
@@ -466,8 +571,11 @@ class RandomnessVisitor(ast.NodeVisitor):
             self._record_call_arg(callee, kw.arg, kw.value, node)
 
     def _record_call_arg(
-        self, callee: str, param_ref: str | tuple[str, int],
-        value: ast.expr, node: ast.Call,
+        self,
+        callee: str,
+        param_ref: str | tuple[str, int],
+        value: ast.expr,
+        node: ast.Call,
     ):
         """Record *value* as a candidate RNG argument bound to *param_ref*.
 
@@ -480,15 +588,9 @@ class RandomnessVisitor(ast.NodeVisitor):
         kind = self._carrier_kind_of(value)
         if kind is not None:
             seeded = _rng_constructor_is_seeded(value)
-            self.call_arg_candidates.append(
-                (callee, param_ref, ('inline', kind, seeded),
-                 node.lineno, node.col_offset)
-            )
+            self.call_arg_candidates.append((callee, param_ref, ("inline", kind, seeded), node.lineno, node.col_offset))
         elif isinstance(value, ast.Name):
-            self.call_arg_candidates.append(
-                (callee, param_ref, ('alias', value.id),
-                 node.lineno, node.col_offset)
-            )
+            self.call_arg_candidates.append((callee, param_ref, ("alias", value.id), node.lineno, node.col_offset))
 
     def _check_carrier_call(self, chain: list[str], node: ast.Call):
         """Collect ``<name>.<draw>()`` as a *candidate* carrier draw.
@@ -502,7 +604,7 @@ class RandomnessVisitor(ast.NodeVisitor):
         """
         if len(chain) != 2:
             return  # ``np.random.rand()`` (3) is the module path's job;
-                    # ``self.rng.normal()`` (3) is a known gap.
+            # ``self.rng.normal()`` (3) is a known gap.
         base, func_name = chain
         if func_name not in _ANY_CARRIER_DRAW_FUNCTION:
             return
@@ -519,9 +621,7 @@ class RandomnessVisitor(ast.NodeVisitor):
         if base not in self.carrier_assigns:
             for owner, params in reversed(self._function_stack):
                 if base in params:
-                    self.param_draws.setdefault(owner, []).append(
-                        (base, func_name, node.lineno, node.col_offset)
-                    )
+                    self.param_draws.setdefault(owner, []).append((base, func_name, node.lineno, node.col_offset))
                     return
 
         self.carrier_calls.append((base, func_name, node.lineno, node.col_offset))
@@ -541,33 +641,31 @@ class RandomnessVisitor(ast.NodeVisitor):
             # e.g. nr.rand -> numpy.random.rand
 
             # Start with resolved base
-            full_path_parts = resolved_base.split('.')
+            full_path_parts = resolved_base.split(".")
             # Add remaining parts of the chain (excluding the base we just resolved)
             full_path_parts.extend(chain[1:])
 
-            resolved_full_name = '.'.join(full_path_parts)
+            resolved_full_name = ".".join(full_path_parts)
 
             # Check against known randomness functions
             for module, funcs in RANDOM_FUNCTIONS.items():
                 # Check for exact match: module.func
                 if resolved_full_name == f"{module}.{func_name}" and func_name in funcs:
-                    self.random_calls.append(RandomnessCallInfo(
-                        module=module,
-                        function=func_name,
-                        lineno=node.lineno,
-                        col_offset=node.col_offset
-                    ))
+                    self.random_calls.append(
+                        RandomnessCallInfo(
+                            module=module, function=func_name, lineno=node.lineno, col_offset=node.col_offset
+                        )
+                    )
                     return
 
                 # Check for parent module match: module.submodule.func
-                if resolved_full_name.startswith(module + '.') and func_name in funcs:
-                   self.random_calls.append(RandomnessCallInfo(
-                       module=module,
-                       function=func_name,
-                       lineno=node.lineno,
-                       col_offset=node.col_offset
-                   ))
-                   return
+                if resolved_full_name.startswith(module + ".") and func_name in funcs:
+                    self.random_calls.append(
+                        RandomnessCallInfo(
+                            module=module, function=func_name, lineno=node.lineno, col_offset=node.col_offset
+                        )
+                    )
+                    return
 
         # 2. Handle direct function imports (chain length 1)
         # e.g. from random import random; random()
@@ -575,14 +673,14 @@ class RandomnessVisitor(ast.NodeVisitor):
             if func_name in self.imports:
                 imported_from = self.imports[func_name]
                 for module, funcs in RANDOM_FUNCTIONS.items():
-                    if imported_from == f"{module}.{func_name}" or \
-                       (imported_from.startswith(module + '.') and func_name in funcs):
-                        self.random_calls.append(RandomnessCallInfo(
-                            module=module,
-                            function=func_name,
-                            lineno=node.lineno,
-                            col_offset=node.col_offset
-                        ))
+                    if imported_from == f"{module}.{func_name}" or (
+                        imported_from.startswith(module + ".") and func_name in funcs
+                    ):
+                        self.random_calls.append(
+                            RandomnessCallInfo(
+                                module=module, function=func_name, lineno=node.lineno, col_offset=node.col_offset
+                            )
+                        )
                         return
 
     def _check_seed_call(self, chain: list[str], full_name: str, node: ast.Call):
@@ -594,9 +692,9 @@ class RandomnessVisitor(ast.NodeVisitor):
             base = chain[0]
             resolved_base = self._resolve_module(base) or base
 
-            full_path_parts = resolved_base.split('.')
+            full_path_parts = resolved_base.split(".")
             full_path_parts.extend(chain[1:])
-            resolved_full_name = '.'.join(full_path_parts)
+            resolved_full_name = ".".join(full_path_parts)
 
             for module, seed_funcs in SEED_FUNCTIONS.items():
                 # Exact match: module.seed
@@ -609,15 +707,15 @@ class RandomnessVisitor(ast.NodeVisitor):
                 # Check if it matches a known full path seed like 'numpy.random.seed'
                 # The SEED_FUNCTIONS keys are modules, values are function names or 'submod.func'
                 for seed_func_signature in seed_funcs:
-                     if resolved_full_name == f"{module}.{seed_func_signature}":
-                         self.seed_calls.append((module, node.lineno))
-                         if _is_entropy_seed(node):
-                             self.entropy_seed_calls.append((module, node.lineno))
-                         return
+                    if resolved_full_name == f"{module}.{seed_func_signature}":
+                        self.seed_calls.append((module, node.lineno))
+                        if _is_entropy_seed(node):
+                            self.entropy_seed_calls.append((module, node.lineno))
+                        return
 
         # 2. Handle direct function imports
         else:
-             if func_name in self.imports:
+            if func_name in self.imports:
                 imported_from = self.imports[func_name]
                 for module, _seed_funcs in SEED_FUNCTIONS.items():
                     if imported_from == f"{module}.{func_name}":
@@ -626,6 +724,7 @@ class RandomnessVisitor(ast.NodeVisitor):
                             self.entropy_seed_calls.append((module, node.lineno))
                         return
 
+
 class _ScanResult(NamedTuple):
     """One statement's purely-source-derived randomness facts.
 
@@ -633,6 +732,7 @@ class _ScanResult(NamedTuple):
     contract that lets ``RandomnessDetector._scan`` memoize this by source
     string and reuse it for the life of the session.
     """
+
     random_calls: tuple[RandomnessCallInfo, ...]
     seed_calls: tuple[tuple[str, int], ...]
     carrier_assigns: tuple[tuple[str, tuple[str, bool]], ...]
@@ -731,7 +831,7 @@ class RandomnessDetector:
             self._warned.add(key)
         return True
 
-    def _scan(self, code: str) -> '_ScanResult':
+    def _scan(self, code: str) -> "_ScanResult":
         """Parse + visit *code*, memoized per source string.
 
         Everything returned is an immutable, purely-source-derived fact, so the
@@ -807,13 +907,15 @@ class RandomnessDetector:
                 continue
             if func_name not in _CARRIER_DRAW_FUNCTIONS.get(kind, frozenset()):
                 continue
-            found.append(RandomnessCallInfo(
-                module=_CARRIER_MODULES.get(kind, kind),
-                function=func_name,
-                lineno=lineno,
-                col_offset=col_offset,
-                carrier=base,
-            ))
+            found.append(
+                RandomnessCallInfo(
+                    module=_CARRIER_MODULES.get(kind, kind),
+                    function=func_name,
+                    lineno=lineno,
+                    col_offset=col_offset,
+                    carrier=base,
+                )
+            )
         return found
 
     def register_param_draws(self, param_draws) -> None:
@@ -844,6 +946,7 @@ class RandomnessDetector:
         if shell is None:
             try:
                 from IPython import get_ipython
+
                 shell = get_ipython()
             except ImportError:  # IPython is an optional dependency
                 return None
@@ -938,7 +1041,7 @@ class RandomnessDetector:
             if draw is None:
                 continue
 
-            if arg_spec[0] == 'inline':
+            if arg_spec[0] == "inline":
                 _tag, kind, seeded = arg_spec
             else:  # ('alias', name): resolve the argument against session state
                 _tag, name = arg_spec
@@ -950,25 +1053,27 @@ class RandomnessDetector:
                 continue
 
             draw_fn, _dl, _dc = draw
-            found.append(RandomnessCallInfo(
-                module=_CARRIER_MODULES.get(kind, kind),
-                function=draw_fn,
-                lineno=lineno,
-                col_offset=col_offset,
-                carrier=param,
-            ))
+            found.append(
+                RandomnessCallInfo(
+                    module=_CARRIER_MODULES.get(kind, kind),
+                    function=draw_fn,
+                    lineno=lineno,
+                    col_offset=col_offset,
+                    carrier=param,
+                )
+            )
         return found
 
     def mark_seeded(self, module: str):
         self.seeded_modules.add(module)
         # Also mark parent modules
-        if '.' in module:
-            parent = module.rsplit('.', 1)[0]
+        if "." in module:
+            parent = module.rsplit(".", 1)[0]
             self.seeded_modules.add(parent)
 
     def _get_parent_module(self, module: str) -> str | None:
-        if '.' in module:
-            return module.rsplit('.', 1)[0]
+        if "." in module:
+            return module.rsplit(".", 1)[0]
         return None
 
     def is_seeded(self, module: str) -> bool:
@@ -1117,7 +1222,7 @@ def format_stale_randomness_message(call: RandomnessCallInfo) -> str:
 
 def warn_stale_randomness(
     code: str,
-    unseeded_calls: 'Iterable[RandomnessCallInfo]',
+    unseeded_calls: "Iterable[RandomnessCallInfo]",
     detector: RandomnessDetector,
     suppress_warning: bool = False,
 ) -> None:
@@ -1152,13 +1257,14 @@ def warn_stale_randomness(
             code="RANDOM-REPLAYED",
             what=message,
             fix=_REPLAY_FIX,
-            filename='<cash>', lineno=call.lineno, registry=None,
+            filename="<cash>",
+            lineno=call.lineno,
+            registry=None,
         )
 
+
 def check_and_warn_randomness(
-    code: str,
-    detector: RandomnessDetector,
-    suppress_warning: bool = False
+    code: str, detector: RandomnessDetector, suppress_warning: bool = False
 ) -> tuple[list[RandomnessCallInfo], bool]:
     """
     Check code for unseeded randomness and issue warnings.
@@ -1210,7 +1316,9 @@ def check_and_warn_randomness(
                 code="RANDOM-UNSEEDED",
                 what=warning_msg,
                 fix=_UNSEEDED_FIX,
-                filename='<cash>', lineno=call.lineno, registry=None,
+                filename="<cash>",
+                lineno=call.lineno,
+                registry=None,
             )
 
     return unseeded_calls, has_seed_calls
@@ -1235,6 +1343,7 @@ def check_and_warn_randomness(
 # so users' existing warning filters and the once-per-statement contract carry
 # over unchanged. There is no ``lineno`` to attribute (the hazard is not on any
 # one source line), so ``0`` is used.
+
 
 def format_unseeded_estimator_fit_message(receiver: str) -> str:
     """Compute-time message for caching an unseeded estimator fit.
@@ -1269,7 +1378,7 @@ def format_stale_estimator_fit_message(receiver: str) -> str:
 
 def warn_unseeded_estimator_fit(
     code: str,
-    receivers: 'Iterable[str]',
+    receivers: "Iterable[str]",
     detector: RandomnessDetector,
     suppress_warning: bool = False,
 ) -> None:
@@ -1301,13 +1410,15 @@ def warn_unseeded_estimator_fit(
             code="RANDOM-UNSEEDED",
             what=message,
             fix=_UNSEEDED_FIT_FIX,
-            filename='<cash>', lineno=0, registry=None,
+            filename="<cash>",
+            lineno=0,
+            registry=None,
         )
 
 
 def warn_stale_estimator_fit(
     code: str,
-    receivers: 'Iterable[str]',
+    receivers: "Iterable[str]",
     detector: RandomnessDetector,
     suppress_warning: bool = False,
 ) -> None:
@@ -1330,12 +1441,16 @@ def warn_stale_estimator_fit(
             code="RANDOM-REPLAYED",
             what=message,
             fix=_REPLAY_FIT_FIX,
-            filename='<cash>', lineno=0, registry=None,
+            filename="<cash>",
+            lineno=0,
+            registry=None,
         )
+
 
 # =============================================================================
 # RNG State Capture and Restore
 # =============================================================================
+
 
 def capture_rng_state() -> dict:
     """
@@ -1346,31 +1461,35 @@ def capture_rng_state() -> dict:
         Only includes modules that are currently imported.
     """
     import sys
+
     state = {}
 
     # Standard library random
-    if 'random' in sys.modules:
+    if "random" in sys.modules:
         import random
+
         try:
-            state['random'] = random.getstate()
+            state["random"] = random.getstate()
         except (TypeError, AttributeError) as e:
             logger.debug("[RANDOMNESS] Failed to capture random state: %s", e)
 
     # NumPy random
-    if 'numpy' in sys.modules or 'numpy.random' in sys.modules:
+    if "numpy" in sys.modules or "numpy.random" in sys.modules:
         try:
             import numpy as np
-            state['numpy.random'] = np.random.get_state()
+
+            state["numpy.random"] = np.random.get_state()
         except (ImportError, AttributeError) as e:
             logger.debug("[RANDOMNESS] Failed to capture numpy random state: %s", e)
 
     # PyTorch (if available)
-    if 'torch' in sys.modules:
+    if "torch" in sys.modules:
         try:
             import torch
-            state['torch'] = torch.get_rng_state()
+
+            state["torch"] = torch.get_rng_state()
             if torch.cuda.is_available():
-                state['torch.cuda'] = torch.cuda.get_rng_state_all()
+                state["torch.cuda"] = torch.cuda.get_rng_state_all()
         except (ImportError, RuntimeError) as e:
             logger.debug("[RANDOMNESS] Failed to capture torch random state: %s", e)
 
@@ -1378,6 +1497,7 @@ def capture_rng_state() -> dict:
     # We'll skip TF for now as it doesn't have easy getstate/setstate
 
     return state
+
 
 def restore_rng_state(state: dict) -> None:
     """
@@ -1392,30 +1512,34 @@ def restore_rng_state(state: dict) -> None:
         return
 
     # Standard library random
-    if 'random' in state and 'random' in sys.modules:
+    if "random" in state and "random" in sys.modules:
         import random
+
         try:
-            random.setstate(state['random'])
+            random.setstate(state["random"])
         except (TypeError, ValueError) as e:
             logger.debug("[RANDOMNESS] Failed to restore random state: %s", e)
 
     # NumPy random
-    if 'numpy.random' in state and ('numpy' in sys.modules or 'numpy.random' in sys.modules):
+    if "numpy.random" in state and ("numpy" in sys.modules or "numpy.random" in sys.modules):
         try:
             import numpy as np
-            np.random.set_state(state['numpy.random'])
+
+            np.random.set_state(state["numpy.random"])
         except (ImportError, TypeError, ValueError) as e:
             logger.debug("[RANDOMNESS] Failed to restore numpy random state: %s", e)
 
     # PyTorch
-    if 'torch' in state and 'torch' in sys.modules:
+    if "torch" in state and "torch" in sys.modules:
         try:
             import torch
-            torch.set_rng_state(state['torch'])
-            if 'torch.cuda' in state and torch.cuda.is_available():
-                torch.cuda.set_rng_state_all(state['torch.cuda'])
+
+            torch.set_rng_state(state["torch"])
+            if "torch.cuda" in state and torch.cuda.is_available():
+                torch.cuda.set_rng_state_all(state["torch.cuda"])
         except (ImportError, RuntimeError) as e:
             logger.debug("[RANDOMNESS] Failed to restore torch random state: %s", e)
+
 
 # -----------------------------------------------------------------------------
 # Per-object RNG carriers
@@ -1454,7 +1578,7 @@ def _classify_rng_carrier(obj: object) -> str | None:
     """
     import sys
 
-    if 'numpy' in sys.modules or 'numpy.random' in sys.modules:
+    if "numpy" in sys.modules or "numpy.random" in sys.modules:
         try:
             import numpy as np
 
@@ -1469,13 +1593,13 @@ def _classify_rng_carrier(obj: object) -> str | None:
         except (ImportError, AttributeError):
             pass
 
-    if 'random' in sys.modules:
+    if "random" in sys.modules:
         try:
             import random
 
             if isinstance(obj, random.Random):
                 # ``random.*`` module functions delegate to this singleton.
-                if obj is not getattr(random, '_inst', None):
+                if obj is not getattr(random, "_inst", None):
                     return _KIND_PY_RANDOM
                 return None
         except (ImportError, AttributeError):
@@ -1485,7 +1609,8 @@ def _classify_rng_carrier(obj: object) -> str | None:
 
 
 def capture_object_rng_states(
-    names: 'Iterable[str]', user_ns: dict[str, object],
+    names: "Iterable[str]",
+    user_ns: dict[str, object],
 ) -> dict[str, dict]:
     """Capture the post-state of any RNG carrier bound to one of ``names``.
 
@@ -1527,13 +1652,14 @@ def capture_object_rng_states(
             logger.debug("[RANDOMNESS] Failed to capture RNG state for %r: %s", name, e)
             continue
 
-        states[name] = {'kind': kind, 'state': state}
+        states[name] = {"kind": kind, "state": state}
 
     return states
 
 
 def restore_object_rng_states(
-    states: dict[str, dict] | None, user_ns: dict[str, object],
+    states: dict[str, dict] | None,
+    user_ns: dict[str, object],
 ) -> None:
     """Inject captured per-object RNG states back onto the live carriers.
 
@@ -1552,8 +1678,8 @@ def restore_object_rng_states(
 
     for name, entry in states.items():
         try:
-            kind = entry['kind']
-            state = entry['state']
+            kind = entry["kind"]
+            state = entry["state"]
         except (TypeError, KeyError):
             continue
 
@@ -1604,8 +1730,7 @@ def _scan_rng_modules(code: str) -> tuple[frozenset, frozenset, frozenset, froze
     # an *earlier* statement are not visible here — this scan is deliberately
     # stateless, and the per-object channel (``capture_object_rng_states``) is
     # what replays those.
-    carriers = frozenset(_CARRIER_MODULES.get(kind, kind)
-                         for kind, _seeded in visitor.carrier_assigns.values())
+    carriers = frozenset(_CARRIER_MODULES.get(kind, kind) for kind, _seeded in visitor.carrier_assigns.values())
     return drawn, seeded, entropy, drawn | seeded | carriers
 
 
@@ -1697,6 +1822,7 @@ def get_seeding_rng_modules(code: str) -> set[str]:
 # no RNG-specific branching elsewhere. Adding a second hidden dependency later
 # means teaching these three functions about it, nothing more.
 
+
 def rng_virtual_var(module: str) -> str:
     """Name of the virtual lineage variable modelling *module*'s global RNG state.
 
@@ -1764,7 +1890,7 @@ def observed_rng_reads(tracking_state, code: str) -> set[str]:
     if not ledger or not code:
         return set()
     try:
-        digest = hashlib.sha256(code.encode('utf-8')).hexdigest()
+        digest = hashlib.sha256(code.encode("utf-8")).hexdigest()
     except (AttributeError, UnicodeEncodeError):
         return set()
     modules = ledger.get(digest)
@@ -1810,14 +1936,14 @@ def hidden_write_lineage(producing_key: str) -> str:
     both caught). Overwrite, not chain: editing an *earlier* seed must not
     invalidate a draw governed by a *later* one.
     """
-    return hashlib.sha256(producing_key.encode('utf-8')).hexdigest()
+    return hashlib.sha256(producing_key.encode("utf-8")).hexdigest()
 
 
 def seed_cells_not_yet_run(
     drawing_modules: set[str],
-    notebook_cells: 'list[str]',
+    notebook_cells: "list[str]",
     executed_cell_hashes: set[str],
-) -> 'list[tuple[str, int]]':
+) -> "list[tuple[str, int]]":
     """Notebook cells that SEED a drawn module but whose source has not run (ADR-017).
 
     The detection core for the bare-``seed()`` edit-without-rerun defect.
@@ -1851,7 +1977,7 @@ def seed_cells_not_yet_run(
         seeded = get_seeding_rng_modules(src) & drawing_modules
         if not seeded:
             continue
-        digest = hashlib.sha256(src.encode('utf-8')).hexdigest()
+        digest = hashlib.sha256(src.encode("utf-8")).hexdigest()
         if digest in executed_cell_hashes:
             continue  # this exact seed cell source has run — not stale
         for module in sorted(seeded):
@@ -1860,7 +1986,8 @@ def seed_cells_not_yet_run(
 
 
 def rng_lineage_fingerprint(
-    variable_lineage: Mapping[str, str], modules: Iterable[str],
+    variable_lineage: Mapping[str, str],
+    modules: Iterable[str],
 ) -> tuple:
     """The seeds in force for *modules* — an invalidation key for a saved position.
 
@@ -1876,9 +2003,7 @@ def rng_lineage_fingerprint(
     correct position, so cash freezes the one it first saw — the same
     "non-determinism frozen, not blocked" rule the rest of the system follows.
     """
-    return tuple(sorted(
-        (m, variable_lineage.get(rng_virtual_var(m))) for m in modules
-    ))
+    return tuple(sorted((m, variable_lineage.get(rng_virtual_var(m))) for m in modules))
 
 
 def rng_modules_changed(before: dict, after: dict) -> set[str]:
@@ -1918,7 +2043,7 @@ def _rng_states_equal(before: object, after: object) -> bool:
     """
     if before is after:
         return True
-    b_tobytes, a_tobytes = getattr(before, 'tobytes', None), getattr(after, 'tobytes', None)
+    b_tobytes, a_tobytes = getattr(before, "tobytes", None), getattr(after, "tobytes", None)
     if callable(b_tobytes) and callable(a_tobytes):
         return b_tobytes() == a_tobytes()  # numpy ndarray
     if isinstance(before, (tuple, list)) and isinstance(after, (tuple, list)):
@@ -1934,7 +2059,7 @@ def _rng_states_equal(before: object, after: object) -> bool:
             return all(_rng_states_equal(x, y) for x, y in zip(before, after))
     if isinstance(before, (int, float, complex, str, bytes, bool, type(None))):
         return type(before) is type(after) and before == after
-    b_np, a_np = getattr(before, 'numpy', None), getattr(after, 'numpy', None)
+    b_np, a_np = getattr(before, "numpy", None), getattr(after, "numpy", None)
     if callable(b_np) and callable(a_np):
         try:
             return b_np().tobytes() == a_np().tobytes()  # torch tensor
@@ -1953,14 +2078,14 @@ def _digest_rng_state(value: object) -> str:
     h = hashlib.sha256()
 
     def feed(item: object) -> None:
-        tobytes = getattr(item, 'tobytes', None)
+        tobytes = getattr(item, "tobytes", None)
         if callable(tobytes):
             h.update(tobytes())
         elif isinstance(item, (tuple, list)):
             for sub in item:
                 feed(sub)
         else:
-            h.update(repr(item).encode('utf-8'))
+            h.update(repr(item).encode("utf-8"))
 
     feed(value)
     return h.hexdigest()

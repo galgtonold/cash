@@ -33,7 +33,7 @@ That's the decorator path. In a notebook the equivalents are `%cash_debug on`, `
 
 ## In a script: `CASH_SUMMARY` and `CASH_DEBUG`
 
-<!-- claim: cash/core.py:Cash._print_run_summary @54975534, cash/core.py:Cash._log_decorator_call @9cd86d9d -->
+<!-- claim: cash/core.py:Cash._print_run_summary @8e96e43d, cash/core.py:Cash._log_decorator_call @929cb7ab -->
 A script shows nothing about the cache by default. Two environment variables
 change that without touching the code:
 
@@ -87,7 +87,7 @@ fetch_user(42)                      # compute and store
 fetch_user.explain(42)              # hit
 ```
 
-<!-- claim: cash/core.py:CacheExplanation @9f1db6f8 broad="the field list and reason set are a claim about the whole dataclass", cash/core.py:Cash._explain_call @69e9c98d -->
+<!-- claim: cash/core.py:CacheExplanation @9f1db6f8 broad="the field list and reason set are a claim about the whole dataclass", cash/core.py:Cash._explain_call @53d8e7d6 -->
 The return value is a `CacheExplanation` dataclass (`would_hit`, `reason`, `func_name`, `cache_key`, `details`, `cache_dir`) with six fields and one of six reason codes. `cache_dir` is the directory the answer was read from, so an explain that reads a different cache from the one you expected (a nested `pyproject.toml`, say) shows it:
 
 | `reason` | Meaning | Key `details` |
@@ -105,7 +105,7 @@ The return value is a `CacheExplanation` dataclass (`would_hit`, `reason`, `func
 
 Inside a notebook, `%cash_debug on` raises the cash logger to DEBUG and prints labelled lines from each subsystem as cells execute. Turn it off with `%cash_debug off` (or pipe to JSON with `%cash_debug json`, or to a file with `%cash_debug file <path>`).
 
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @ce13e22b -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @3a834f1c -->
 The five log prefixes you'll see most:
 
 | Prefix | What it tells you |
@@ -142,7 +142,7 @@ For health checks rather than per-call diagnostics, you want aggregates.
 %cash_stats
 ```
 
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @b0b7e9c7 -->
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @f3f94b42 -->
 Prints a summary of this kernel session (a restart resets it): cells executed, statements computed / restored / skipped, hit rate, and a time ledger of gross saved, cash overhead, and net saved. The net line is the honest headline, and it is **not** gross minus overhead: it credits only savings a measurement backs — one this session took by recomputing the same statement (*verified*), or the least an earlier kernel on this machine ever measured (*measured*), which is what lets a Restart & Run All report a number rather than a range — minus the measured overhead. Gross is printed beside it and labelled *(estimated)*, because it values each restore at what the entry cost when first written and nothing re-measures that. The consequence is deliberate understatement — an overstatement would be the bug — and a real loss prints as one ("cash cost you Xs this session"). `%cash_stats json` returns the same numbers as a dict (including `total_overhead`, `total_verified_saved`, `total_measured_saved`, `net_time_saved`, `net_time_saved_upper_bound`, and `discarded_writes`); `%cash_stats reset` zeros the counters, and forgets the measurements kept beside the cache — it cannot claim to have forgotten a baseline and then credit a later hit against it.
 
 If a cache write ever failed, a **discarded writes** line appears with the count and the first cause. Read it before anything else on the page: that work was never stored, so it recomputes every run, and no counter above can reveal it — a discarded write is not a miss, it is a hit that never got the chance to exist. Nothing raised when it happened, so the rest of the summary can look perfectly healthy. A `reset` deliberately does not clear these; the entries are still missing from disk afterwards.
@@ -213,7 +213,7 @@ cash clear ./notebooks/analysis.ipynb # delete the sibling .cash
 
 ### "Hit rate is low"
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_info @5ecbb192 -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_info @4765fb6e -->
 Start with `cache_info()['warnings']` (decorator) or `%cash_stats` (notebook) — `cache_info()` returns a plain dict, so subscript it; `.warnings` raises `AttributeError`. Look for:
 
 - `CashRandomnessWarning` — unseeded RNG; pass `random_state=42` (or whatever) to make calls reproducible.
@@ -236,7 +236,7 @@ The opposite mystery: you edited code, but Cash is serving a stale value. Call `
 cash inspect ./.cash
 ```
 
-<!-- claim: cash/__main__.py:_inspect_cache_dir @c4025bfc -->
+<!-- claim: cash/__main__.py:_inspect_cache_dir @5372c14d -->
 The output gives the entry count, the total size, and a **per-function table sorted by size** — so the thing filling your disk is the first row, not something you have to work out. Drill into one with `cash inspect --function NAME` — each row shows what that entry *saves* alongside its size, so you can tell a cheap 5 MB entry from a 900-byte one worth 41 seconds — and drop what you no longer want with `cash clear --function NAME` or `cash clear --entry ID`. If a single statement rather than a function is responsible, consider `# @cash:no-cache` on cheap statements you don't need to cache, or pick a different backend (`SQLiteBackend` is more efficient for thousands of small entries — see [Choosing a backend](choosing-a-backend.md)).
 
 <!-- claim: cash/analytics.py:AnalyticsManager.__init__ @a1cb2e47 -->
@@ -251,7 +251,7 @@ The output gives the entry count, the total size, and a **per-function table sor
     oversized, so you should never see an error about it; if you want to reset the
     telemetry, just delete the file.
 
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_repair @2cfd33e0, cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_export @1ce0818b, cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_import @1a4d7a1b -->
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_repair @95849d4b, cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_export @d9f6e534, cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_import @cde3d810 -->
 ## Cache management — export, import, clear
 
 When diagnosis is done and you need to *act*, four notebook magics and one CLI command cover the lifecycle:
@@ -310,7 +310,7 @@ explorer.get_preview(key)              # peek at a stored value
 explorer.clear_function("mod.func")    # surgical per-function clear
 ```
 
-<!-- claim: cash/ui/explorer.py:CacheExplorer @326b80ba broad="the listed method set is a claim about the whole class", cash/core.py:Cash.explorer @599913c8 -->
+<!-- claim: cash/ui/explorer.py:CacheExplorer @65748b90 broad="the listed method set is a claim about the whole class", cash/core.py:Cash.explorer @599913c8 -->
 `CacheExplorer` is the read-side: list, search, preview, and surgically clear entries by function name without touching the rest of the cache. `CacheDebugger` is a step-through inspector for the notebook decision pipeline — drives the same machinery `%cash_on` uses but stops between phases so you can see what Cash sees.
 
 Both are experimental: stick to `f.explain()` and `%cash_debug` for anything that needs to survive a version bump.

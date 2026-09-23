@@ -6,24 +6,24 @@ Covers:
   - Early cell_id capture in _execute_cell (magics)
 """
 
-import os
+import contextlib
 import json
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from cash.notebook.server_discovery import (
     extract_notebook_path_from_vscode_cell_id,
-    set_notebook_path,
     get_notebook_path,
     invalidate_notebook_path_cache,
+    set_notebook_path,
 )
-import contextlib
-
 
 # ---------------------------------------------------------------------------
 # extract_notebook_path_from_vscode_cell_id
 # ---------------------------------------------------------------------------
+
 
 class TestExtractNotebookPathFromVscodeCellId:
     """Tests for extract_notebook_path_from_vscode_cell_id."""
@@ -41,17 +41,21 @@ class TestExtractNotebookPathFromVscodeCellId:
     def test_valid_vscode_uri_existing_file(self, tmp_path):
         """A real VS Code cell ID URI pointing to an existing .ipynb should be decoded."""
         nb = tmp_path / "demo.ipynb"
-        nb.write_text(json.dumps({
-            "cells": [],
-            "metadata": {},
-            "nbformat": 4,
-            "nbformat_minor": 5,
-        }))
+        nb.write_text(
+            json.dumps(
+                {
+                    "cells": [],
+                    "metadata": {},
+                    "nbformat": 4,
+                    "nbformat_minor": 5,
+                }
+            )
+        )
         # Construct a VS Code-style URI
         # On Windows: vscode-notebook-cell:/c%3A/Users/.../demo.ipynb#W1sZmlsZQ==
         raw_path = str(nb).replace("\\", "/")
         # Encode the colon after the drive letter
-        if len(raw_path) > 1 and raw_path[1] == ':':
+        if len(raw_path) > 1 and raw_path[1] == ":":
             encoded_path = "/" + raw_path[0] + "%3A" + raw_path[2:]
         else:
             encoded_path = raw_path
@@ -72,7 +76,7 @@ class TestExtractNotebookPathFromVscodeCellId:
         txt_file = tmp_path / "notes.txt"
         txt_file.write_text("hello")
         raw_path = str(txt_file).replace("\\", "/")
-        if len(raw_path) > 1 and raw_path[1] == ':':
+        if len(raw_path) > 1 and raw_path[1] == ":":
             encoded_path = "/" + raw_path[0] + "%3A" + raw_path[2:]
         else:
             encoded_path = raw_path
@@ -85,11 +89,18 @@ class TestExtractNotebookPathFromVscodeCellId:
         sub = tmp_path / "My Notebooks"
         sub.mkdir()
         nb = sub / "test.ipynb"
-        nb.write_text(json.dumps({
-            "cells": [], "metadata": {}, "nbformat": 4, "nbformat_minor": 5,
-        }))
+        nb.write_text(
+            json.dumps(
+                {
+                    "cells": [],
+                    "metadata": {},
+                    "nbformat": 4,
+                    "nbformat_minor": 5,
+                }
+            )
+        )
         raw_path = str(nb).replace("\\", "/")
-        if len(raw_path) > 1 and raw_path[1] == ':':
+        if len(raw_path) > 1 and raw_path[1] == ":":
             encoded_path = "/" + raw_path[0] + "%3A" + raw_path[2:]
         else:
             encoded_path = raw_path
@@ -104,11 +115,18 @@ class TestExtractNotebookPathFromVscodeCellId:
     def test_no_fragment(self, tmp_path):
         """URI without a fragment (#...) should still work."""
         nb = tmp_path / "nofrag.ipynb"
-        nb.write_text(json.dumps({
-            "cells": [], "metadata": {}, "nbformat": 4, "nbformat_minor": 5,
-        }))
+        nb.write_text(
+            json.dumps(
+                {
+                    "cells": [],
+                    "metadata": {},
+                    "nbformat": 4,
+                    "nbformat_minor": 5,
+                }
+            )
+        )
         raw_path = str(nb).replace("\\", "/")
-        if len(raw_path) > 1 and raw_path[1] == ':':
+        if len(raw_path) > 1 and raw_path[1] == ":":
             encoded_path = "/" + raw_path[0] + "%3A" + raw_path[2:]
         else:
             encoded_path = raw_path
@@ -121,6 +139,7 @@ class TestExtractNotebookPathFromVscodeCellId:
 # ---------------------------------------------------------------------------
 # set_notebook_path / get_notebook_path integration
 # ---------------------------------------------------------------------------
+
 
 class TestSetNotebookPath:
     """Tests for set_notebook_path and its effect on get_notebook_path."""
@@ -148,18 +167,21 @@ class TestSetNotebookPath:
         # We can't easily assert get_notebook_path() == None without mocking
         # all fallback methods, but we can check the module-level cache directly.
         import cash.notebook.server_discovery as utils_mod
+
         assert utils_mod._cached_notebook_path is None
 
     def test_set_empty_string_ignored(self):
         """Empty string should not update the cache."""
         set_notebook_path("")
         import cash.notebook.server_discovery as utils_mod
+
         assert utils_mod._cached_notebook_path is None
 
     def test_set_none_ignored(self):
         """None should not update the cache."""
         set_notebook_path(None)
         import cash.notebook.server_discovery as utils_mod
+
         assert utils_mod._cached_notebook_path is None
 
     def test_invalidate_clears_set_path(self, tmp_path):
@@ -169,12 +191,14 @@ class TestSetNotebookPath:
         set_notebook_path(str(nb))
         invalidate_notebook_path_cache()
         import cash.notebook.server_discovery as utils_mod
+
         assert utils_mod._cached_notebook_path is None
 
 
 # ---------------------------------------------------------------------------
 # Early cell_id capture in _execute_cell
 # ---------------------------------------------------------------------------
+
 
 class TestEarlyCellIdCapture:
     """Test that _execute_cell extracts cell_id and notebook path early."""
@@ -191,12 +215,12 @@ class TestEarlyCellIdCapture:
         shell.get_parent.return_value = None
 
         # Create CashMagics instance
-        with patch.object(CashMagics, '__init__', lambda self, s, **kw: None):
+        with patch.object(CashMagics, "__init__", lambda self, s, **kw: None):
             m = CashMagics.__new__(CashMagics)
             m.shell = shell
             m._auto_cache_enabled = True
             m._benchmark_config = None
-            m._badge_mode = 'off'
+            m._badge_mode = "off"
             m._debug = False
             m._current_cell_id = None
             m._in_sync_cell = False
@@ -227,33 +251,26 @@ class TestEarlyCellIdCapture:
     def test_captures_cellid_from_parent_metadata(self, magics_fixture):
         """cell_id should be extracted from shell.get_parent() metadata."""
         m = magics_fixture
-        m.shell.get_parent.return_value = {
-            'metadata': {
-                'cellId': 'vscode-notebook-cell:/fake/path.ipynb#W1s'
-            }
-        }
+        m.shell.get_parent.return_value = {"metadata": {"cellId": "vscode-notebook-cell:/fake/path.ipynb#W1s"}}
         # We need _execute_cell to run far enough to set _current_cell_id.
         # It will error somewhere after the cell_id capture, which is fine.
         import contextlib
+
         with contextlib.suppress(Exception):
             m._execute_cell("x = 1")
 
-        assert m._current_cell_id == 'vscode-notebook-cell:/fake/path.ipynb#W1s'
+        assert m._current_cell_id == "vscode-notebook-cell:/fake/path.ipynb#W1s"
 
     def test_captures_cellid_from_vscode_nested_metadata(self, magics_fixture):
         """cell_id under metadata.vscode.cellId should also be captured."""
         m = magics_fixture
         m.shell.get_parent.return_value = {
-            'metadata': {
-                'vscode': {
-                    'cellId': 'vscode-notebook-cell:/nested/path.ipynb#W2s'
-                }
-            }
+            "metadata": {"vscode": {"cellId": "vscode-notebook-cell:/nested/path.ipynb#W2s"}}
         }
         with contextlib.suppress(Exception):
             m._execute_cell("x = 1")
 
-        assert m._current_cell_id == 'vscode-notebook-cell:/nested/path.ipynb#W2s'
+        assert m._current_cell_id == "vscode-notebook-cell:/nested/path.ipynb#W2s"
 
     def test_no_parent_metadata_sets_none(self, magics_fixture):
         """When get_parent returns None, cell_id should be None."""
@@ -267,17 +284,22 @@ class TestEarlyCellIdCapture:
     def test_seeds_notebook_path_from_vscode_cellid(self, magics_fixture, tmp_path):
         """If cell_id is a valid VS Code URI, notebook path should be seeded."""
         nb = tmp_path / "demo.ipynb"
-        nb.write_text(json.dumps({
-            "cells": [], "metadata": {}, "nbformat": 4, "nbformat_minor": 5,
-        }))
+        nb.write_text(
+            json.dumps(
+                {
+                    "cells": [],
+                    "metadata": {},
+                    "nbformat": 4,
+                    "nbformat_minor": 5,
+                }
+            )
+        )
         raw_path = str(nb).replace("\\", "/")
-        encoded = "/" + raw_path[0] + "%3A" + raw_path[2:] if len(raw_path) > 1 and raw_path[1] == ':' else raw_path
+        encoded = "/" + raw_path[0] + "%3A" + raw_path[2:] if len(raw_path) > 1 and raw_path[1] == ":" else raw_path
         cell_id = f"vscode-notebook-cell:{encoded}#W1sZmlsZQ%3D%3D"
 
         m = magics_fixture
-        m.shell.get_parent.return_value = {
-            'metadata': {'cellId': cell_id}
-        }
+        m.shell.get_parent.return_value = {"metadata": {"cellId": cell_id}}
         invalidate_notebook_path_cache()
         with contextlib.suppress(Exception):
             m._execute_cell("x = 1")

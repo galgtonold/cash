@@ -15,6 +15,7 @@ restored, not its pre-mutation constructor.
 
 Run through ``scripts/fails_first.py`` to confirm these fail without the fix.
 """
+
 import pytest
 
 pytestmark = pytest.mark.core
@@ -31,12 +32,14 @@ def _num(out: str) -> str:
 
 
 def test_arg_mutation_edit_invalidates_cached_reader_same_cell(nb_runner):
-    nb_runner.create_notebook([
-        "pass",
-        "def proc(x):\n    x.append(1)",
-        f"data = list(range(400000))\nproc(data)\n{_READER}",
-        "print('RESULT', result)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "pass",
+            "def proc(x):\n    x.append(1)",
+            f"data = list(range(400000))\nproc(data)\n{_READER}",
+            "print('RESULT', result)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     v1 = _num(nb_runner.get_output(4))
@@ -52,12 +55,14 @@ def test_arg_mutation_edit_invalidates_cached_reader_same_cell(nb_runner):
 def test_arg_mutation_edit_invalidates_cached_reader_separate_cell(nb_runner):
     # Reader lives in a LATER cell -> also exercises cross-cell restore of the
     # mutated object (must restore the mutation, not the pre-mutation ctor).
-    nb_runner.create_notebook([
-        "pass",
-        "def proc(x):\n    x.append(1)",
-        "data = list(range(400000))\nproc(data)",
-        f"{_READER}\nprint('RESULT', result)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "pass",
+            "def proc(x):\n    x.append(1)",
+            "data = list(range(400000))\nproc(data)",
+            f"{_READER}\nprint('RESULT', result)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     v1 = _num(nb_runner.get_output(4))
@@ -73,15 +78,17 @@ def test_arg_mutation_edit_invalidates_cached_reader_separate_cell(nb_runner):
 def test_arg_mutation_no_edit_still_hits(nb_runner):
     """Guard against over-invalidation: with proc UNCHANGED, re-running the reader
     must serve the same value (the fix must not force a spurious recompute)."""
-    nb_runner.create_notebook([
-        "pass",
-        "def proc(x):\n    x.append(1)",
-        "data = list(range(400000))\nproc(data)",
-        f"{_READER}\nprint('RESULT', result)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "pass",
+            "def proc(x):\n    x.append(1)",
+            "data = list(range(400000))\nproc(data)",
+            f"{_READER}\nprint('RESULT', result)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     v1 = _num(nb_runner.get_output(4))
-    nb_runner.run_cells([4])          # re-run the reader only, no edit
+    nb_runner.run_cells([4])  # re-run the reader only, no edit
     v2 = _num(nb_runner.get_output(4))
     assert v1 == v2 and v1.isdigit(), f"unexpected change on no-edit re-run ({v1} -> {v2})"

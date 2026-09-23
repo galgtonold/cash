@@ -15,6 +15,7 @@ This pins the CURRENT behaviour and the doc caveat that describes it
 (`docs/tutorials/feature-guides/debugging-and-monitoring.md`). If the blind
 spot is ever closed, this test fails — delete it and the caveat together.
 """
+
 import json
 import re
 
@@ -22,7 +23,7 @@ import pytest
 
 pytestmark = [pytest.mark.integration]
 
-_SLEEP = 0.4          # well above the cost-model floor
+_SLEEP = 0.4  # well above the cost-model floor
 
 
 def _cells(setup, decorator):
@@ -30,9 +31,8 @@ def _cells(setup, decorator):
         "import cash, time\n%cash_on\n%cash_badge off",
         setup,
         f"{decorator}\ndef slow(x):\n    time.sleep({_SLEEP})\n    return x + 1",
-        "print('R', slow(1), slow(1))",                       # miss, then hit
-        "i = slow.cache_info()\n"
-        "print('INFO %s %.3f' % (i['hits'], i['total_time_saved']))",
+        "print('R', slow(1), slow(1))",  # miss, then hit
+        "i = slow.cache_info()\nprint('INFO %s %.3f' % (i['hits'], i['total_time_saved']))",
         "%cash_stats json",
     ]
 
@@ -42,8 +42,7 @@ def _run(nb_runner, setup, decorator):
     nb_runner.start_kernel()
     nb_runner.run_all()
 
-    info = next(ln for ln in nb_runner.get_output(5).splitlines()
-                if ln.strip().startswith("INFO"))
+    info = next(ln for ln in nb_runner.get_output(5).splitlines() if ln.strip().startswith("INFO"))
     _, hits, saved = info.split()
 
     blob = re.search(r"\{.*\}", nb_runner.get_output(6), re.S)
@@ -58,8 +57,7 @@ def test_global_decorator_is_credited(nb_runner):
     assert hits == 1, f"the second call was not a cache hit ({hits})"
     assert saved > _SLEEP / 2, f"cache_info recorded no real saving ({saved})"
     assert gross > _SLEEP / 2, (
-        f"%cash_stats did not credit a GLOBAL decorator hit ({gross}); the "
-        "CAS-222 fix has regressed"
+        f"%cash_stats did not credit a GLOBAL decorator hit ({gross}); the CAS-222 fix has regressed"
     )
 
 

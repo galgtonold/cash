@@ -8,14 +8,16 @@ The bug was originally reported via the financial_analysis_demo notebook:
 the user added `%cash_provenance df --graph` and got an empty graph even
 though `df` had been computed from prior cells.
 """
+
 from __future__ import annotations
 
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
 from traitlets.config.configurable import Configurable
 
-from cash.core import Cash
 from cash.backends import InMemoryBackend
+from cash.core import Cash
 from cash.notebook.ipython.magics import CashMagics
 
 
@@ -59,6 +61,7 @@ def test_metrics_carries_inputs_on_second_run(magics_fixture):
     on the metrics dict.
     """
     from cash.notebook.annotations import CacheAnnotation
+
     magics, shell, _ = magics_fixture
     shell.user_ns["a"] = 1
     shell.user_ns["b"] = 2
@@ -67,8 +70,7 @@ def test_metrics_carries_inputs_on_second_run(magics_fixture):
     shell.user_ns.pop("c", None)
     metrics2 = magics._statement_processor.process_statement("c = a + b", annotation=annotation)
     assert set(metrics2.get("inputs", [])) >= {"a", "b"}, (
-        f"inputs missing on second-run metrics; status={metrics2['status']}, "
-        f"got inputs={metrics2.get('inputs')}"
+        f"inputs missing on second-run metrics; status={metrics2['status']}, got inputs={metrics2.get('inputs')}"
     )
 
 
@@ -92,6 +94,7 @@ def test_graph_renders_as_tree_with_transitive_deps():
     should indent 'a' under 'b', not put both at the same level.
     """
     from cash.notebook.provenance import ProvenanceTracker
+
     pv = ProvenanceTracker()
     pv.record("a", code="a = 1", inputs=[])
     pv.record("b", code="b = a + 1", inputs=["a"])
@@ -119,6 +122,7 @@ def test_graph_marks_external_inputs_as_leaves():
     an `(external)` tag rather than being expanded further.
     """
     from cash.notebook.provenance import ProvenanceTracker
+
     pv = ProvenanceTracker()
     pv.record("f", code="def f(x): return np.mean(x)", inputs=["np"])
     pv.record("y", code="y = f(data)", inputs=["f", "data"])
@@ -128,8 +132,7 @@ def test_graph_marks_external_inputs_as_leaves():
     assert "(external)" in text, f"expected external marker for np/data:\n{text}"
     # np must not be expanded — it has no record, so it's a leaf.
     np_lines = [line for line in block if " np" in line]
-    assert any("(external)" in line for line in np_lines), \
-        f"np should be marked external:\n{text}"
+    assert any("(external)" in line for line in np_lines), f"np should be marked external:\n{text}"
 
 
 def test_graph_walks_union_of_history_records():
@@ -142,6 +145,7 @@ def test_graph_walks_union_of_history_records():
     the graph shows nothing.
     """
     from cash.notebook.provenance import ProvenanceTracker
+
     pv = ProvenanceTracker()
     pv.record("df", code="df = pd.read_csv('x.csv')", inputs=["pd"])
     # Later: df is mutated; its inputs only list df (self-reference)
@@ -151,14 +155,14 @@ def test_graph_walks_union_of_history_records():
     text = "\n".join(block)
     # The creation record had pd as an input — must surface in the graph.
     assert "pd" in text and "(external)" in text, (
-        f"Expected 'pd (external)' from the creation record (record 1).\n"
-        f"Got:\n{text}"
+        f"Expected 'pd (external)' from the creation record (record 1).\nGot:\n{text}"
     )
 
 
 def test_graph_breaks_self_reference_cycle():
     """A variable that lists itself as an input must not cause infinite recursion."""
     from cash.notebook.provenance import ProvenanceTracker
+
     pv = ProvenanceTracker()
     # df depends on df (the financial-demo case: df['SMA'] = df.groupby(...))
     pv.record("df", code="df = pd.read_csv('x.csv')", inputs=[])
@@ -168,5 +172,4 @@ def test_graph_breaks_self_reference_cycle():
     text = "\n".join(block)
     # Self-ref should NOT render df under df. The graph should be empty or
     # contain only external inputs.
-    assert "    └─ df " not in text and "    ├─ df " not in text, \
-        f"self-reference to df should be suppressed:\n{text}"
+    assert "    └─ df " not in text and "    ├─ df " not in text, f"self-reference to df should be suppressed:\n{text}"

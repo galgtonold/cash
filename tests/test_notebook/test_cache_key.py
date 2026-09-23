@@ -14,12 +14,12 @@ Tests cover:
 import hashlib
 from unittest.mock import MagicMock
 
-from cash.notebook.cache_key import compute_cache_key, CacheKeyContext, FunctionTrackerProtocol
-
+from cash.notebook.cache_key import CacheKeyContext, FunctionTrackerProtocol, compute_cache_key
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _source_hash(code: str) -> str:
     """Compute the same SHA-256 source hash that compute_cache_key uses."""
@@ -34,6 +34,7 @@ def _expected_key(combined: str) -> str:
 # ---------------------------------------------------------------------------
 # Basic behaviour
 # ---------------------------------------------------------------------------
+
 
 class TestBasicCacheKey:
     """Fundamental cache key properties."""
@@ -81,6 +82,7 @@ class TestBasicCacheKey:
 # ---------------------------------------------------------------------------
 # Input lineage priority
 # ---------------------------------------------------------------------------
+
 
 class TestInputLineagePriority:
     """virtual_lineage > variable_lineage > _cash_lineage_hash > compute_hash > str."""
@@ -150,6 +152,7 @@ class TestInputLineagePriority:
 # Module handling
 # ---------------------------------------------------------------------------
 
+
 class TestModuleHandling:
     """Modules go to module_source_hashes, not input_hashes."""
 
@@ -160,35 +163,31 @@ class TestModuleHandling:
             user_ns={},
             virtual_modules={"os"},
         )
-        _, _, input_hashes, _, module_hashes = compute_cache_key(
-            "path = os.getcwd()", {"os"}, ctx=ctx
-        )
+        _, _, input_hashes, _, module_hashes = compute_cache_key("path = os.getcwd()", {"os"}, ctx=ctx)
         assert input_hashes == []
         assert any("os:mod_lineage" in h for h in module_hashes)
 
     def test_actual_module_in_user_ns(self):
         """types.ModuleType in user_ns is detected as module."""
         import os
+
         ctx = CacheKeyContext(
             variable_lineage={"os": "os_lineage"},
             user_ns={"os": os},
         )
-        _, _, input_hashes, _, module_hashes = compute_cache_key(
-            "p = os.path", {"os"}, ctx=ctx
-        )
+        _, _, input_hashes, _, module_hashes = compute_cache_key("p = os.path", {"os"}, ctx=ctx)
         assert input_hashes == []
         assert any("os:os_lineage" in h for h in module_hashes)
 
     def test_module_without_lineage_excluded(self):
         """Module without variable_lineage entry is skipped entirely."""
         import os
+
         ctx = CacheKeyContext(
             variable_lineage={},
             user_ns={"os": os},
         )
-        _, _, input_hashes, _, module_hashes = compute_cache_key(
-            "p = os.path", {"os"}, ctx=ctx
-        )
+        _, _, input_hashes, _, module_hashes = compute_cache_key("p = os.path", {"os"}, ctx=ctx)
         assert input_hashes == []
         assert module_hashes == []
 
@@ -197,21 +196,18 @@ class TestModuleHandling:
 # Skipped names
 # ---------------------------------------------------------------------------
 
+
 class TestSkippedNames:
     """get_ipython and __builtins__ are always excluded."""
 
     def test_get_ipython_skipped(self):
         ctx = CacheKeyContext(variable_lineage={}, user_ns={})
-        _, _, input_hashes, _, _ = compute_cache_key(
-            "x = 1", {"get_ipython"}, ctx=ctx
-        )
+        _, _, input_hashes, _, _ = compute_cache_key("x = 1", {"get_ipython"}, ctx=ctx)
         assert input_hashes == []
 
     def test_builtins_skipped(self):
         ctx = CacheKeyContext(variable_lineage={}, user_ns={})
-        _, _, input_hashes, _, _ = compute_cache_key(
-            "x = 1", {"__builtins__"}, ctx=ctx
-        )
+        _, _, input_hashes, _, _ = compute_cache_key("x = 1", {"__builtins__"}, ctx=ctx)
         assert input_hashes == []
 
 
@@ -219,11 +215,13 @@ class TestSkippedNames:
 # Function tracking
 # ---------------------------------------------------------------------------
 
+
 class TestFunctionTracking:
     """Callable inputs get both lineage hash and source hash."""
 
     def test_function_source_hash_included(self):
         """Function tracker source hash appears in func_source_hashes."""
+
         def my_func():
             return 42
 
@@ -235,14 +233,13 @@ class TestFunctionTracking:
             user_ns={"my_func": my_func},
             function_tracker=tracker,
         )
-        _, _, input_hashes, func_hashes, _ = compute_cache_key(
-            "y = my_func()", {"my_func"}, ctx=ctx
-        )
+        _, _, input_hashes, func_hashes, _ = compute_cache_key("y = my_func()", {"my_func"}, ctx=ctx)
         assert "func_lineage" in input_hashes
         assert any("func_src_hash" in h for h in func_hashes)
 
     def test_no_function_tracker_means_no_func_hashes(self):
         """Without function_tracker, func_source_hashes is empty."""
+
         def my_func():
             return 42
 
@@ -250,15 +247,14 @@ class TestFunctionTracking:
             variable_lineage={"my_func": "func_lineage"},
             user_ns={"my_func": my_func},
         )
-        _, _, _, func_hashes, _ = compute_cache_key(
-            "y = my_func()", {"my_func"}, ctx=ctx
-        )
+        _, _, _, func_hashes, _ = compute_cache_key("y = my_func()", {"my_func"}, ctx=ctx)
         assert func_hashes == []
 
 
 # ---------------------------------------------------------------------------
 # Occurrence index
 # ---------------------------------------------------------------------------
+
 
 class TestOccurrenceIndex:
     """Duplicate statements within a cell get distinct keys."""
@@ -283,6 +279,7 @@ class TestOccurrenceIndex:
 # CacheKeyContext
 # ---------------------------------------------------------------------------
 
+
 class TestCacheKeyContext:
     """Verify CacheKeyContext properly bundles parameters."""
 
@@ -296,6 +293,7 @@ class TestCacheKeyContext:
 # ---------------------------------------------------------------------------
 # Input ordering
 # ---------------------------------------------------------------------------
+
 
 class TestInputOrdering:
     """Inputs are sorted for deterministic keys."""
@@ -314,6 +312,7 @@ class TestInputOrdering:
 # ---------------------------------------------------------------------------
 # Protocol check
 # ---------------------------------------------------------------------------
+
 
 class TestFunctionTrackerProtocol:
     """FunctionTrackerProtocol is a runtime_checkable Protocol."""

@@ -15,6 +15,7 @@ import pytest
 
 pytestmark = [pytest.mark.loops, pytest.mark.upstream]
 
+
 class TestLoopOrderChangeNoCascade:
     """Changing loop iteration order should not cascade to unrelated upstream."""
 
@@ -23,20 +24,22 @@ class TestLoopOrderChangeNoCascade:
         Cell 1: x = 100 (expensive upstream)
         Cell 2: loop over ["A", "B", "C"] building dict with x
         Cell 3: downstream using dict
-        
+
         Reorder loop to ["C", "B", "A"] → should NOT re-execute cell 1.
         """
-        nb_runner.create_notebook([
-            # Cell 1: "Expensive" upstream computation
-            "x = 100",
-            # Cell 2: Loop building dict using x
-            """result = {}
+        nb_runner.create_notebook(
+            [
+                # Cell 1: "Expensive" upstream computation
+                "x = 100",
+                # Cell 2: Loop building dict using x
+                """result = {}
 for name in ["A", "B", "C"]:
     result[name] = x + len(name)""",
-            # Cell 3: Downstream
-            """print(f"Keys: {sorted(result.keys())}")
-print(f"Values: {sorted(result.values())}")"""
-        ])
+                # Cell 3: Downstream
+                """print(f"Keys: {sorted(result.keys())}")
+print(f"Values: {sorted(result.values())}")""",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -44,9 +47,12 @@ print(f"Values: {sorted(result.values())}")"""
         assert "'A'" in output1 and "'B'" in output1 and "'C'" in output1
 
         # Reorder loop elements
-        nb_runner.set_cell_source(2, """result = {}
+        nb_runner.set_cell_source(
+            2,
+            """result = {}
 for name in ["C", "B", "A"]:
-    result[name] = x + len(name)""")
+    result[name] = x + len(name)""",
+        )
 
         # Only re-run downstream cell (cell 3)
         nb_runner.run_cell(3)
@@ -61,21 +67,23 @@ for name in ["C", "B", "A"]:
         Cell 2: total = sum(y) (transform)
         Cell 3: loop building dict using total
         Cell 4: downstream
-        
+
         Add element to loop → should NOT re-execute cells 1-2.
         """
-        nb_runner.create_notebook([
-            # Cell 1
-            "y = [1, 2, 3]",
-            # Cell 2: transform
-            "total = sum(y)",
-            # Cell 3: loop
-            """stats = {}
+        nb_runner.create_notebook(
+            [
+                # Cell 1
+                "y = [1, 2, 3]",
+                # Cell 2: transform
+                "total = sum(y)",
+                # Cell 3: loop
+                """stats = {}
 for k in ["mean", "max"]:
     stats[k] = total""",
-            # Cell 4: downstream
-            """print(f"Stats: {stats}")"""
-        ])
+                # Cell 4: downstream
+                """print(f"Stats: {stats}")""",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -83,9 +91,12 @@ for k in ["mean", "max"]:
         assert "'mean'" in output1 and "'max'" in output1
 
         # Add element to loop
-        nb_runner.set_cell_source(3, """stats = {}
+        nb_runner.set_cell_source(
+            3,
+            """stats = {}
 for k in ["mean", "max", "min"]:
-    stats[k] = total""")
+    stats[k] = total""",
+        )
 
         # Only run downstream (cell 4)
         nb_runner.run_cell(4)
@@ -99,13 +110,15 @@ for k in ["mean", "max", "min"]:
         """
         Remove an element from loop → should not cascade to upstream.
         """
-        nb_runner.create_notebook([
-            "base = 10",
-            """d = {}
+        nb_runner.create_notebook(
+            [
+                "base = 10",
+                """d = {}
 for x in ["A", "B", "C"]:
     d[x] = base""",
-            """print(f"Keys: {sorted(d.keys())}")"""
-        ])
+                """print(f"Keys: {sorted(d.keys())}")""",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -113,9 +126,12 @@ for x in ["A", "B", "C"]:
         assert "'A'" in output1 and "'B'" in output1 and "'C'" in output1
 
         # Remove "B"
-        nb_runner.set_cell_source(2, """d = {}
+        nb_runner.set_cell_source(
+            2,
+            """d = {}
 for x in ["A", "C"]:
-    d[x] = base""")
+    d[x] = base""",
+        )
 
         nb_runner.run_cell(3)
 
@@ -131,18 +147,20 @@ for x in ["A", "C"]:
         Cell 3: total = sum(processed)
         Cell 4: loop building dict using total
         Cell 5: downstream
-        
+
         Change loop → cells 1-3 should NOT re-execute.
         """
-        nb_runner.create_notebook([
-            "data = list(range(10))",
-            "processed = [x * 2 for x in data]",
-            "total = sum(processed)",
-            """info = {}
+        nb_runner.create_notebook(
+            [
+                "data = list(range(10))",
+                "processed = [x * 2 for x in data]",
+                "total = sum(processed)",
+                """info = {}
 for k in ["sum", "count"]:
     info[k] = total""",
-            """print(f"Info: {info}")"""
-        ])
+                """print(f"Info: {info}")""",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -150,9 +168,12 @@ for k in ["sum", "count"]:
         assert "'sum'" in output1 and "'count'" in output1
 
         # Add element to loop
-        nb_runner.set_cell_source(4, """info = {}
+        nb_runner.set_cell_source(
+            4,
+            """info = {}
 for k in ["sum", "count", "avg"]:
-    info[k] = total""")
+    info[k] = total""",
+        )
 
         nb_runner.run_cell(5)
 
@@ -167,12 +188,14 @@ class TestLoopOrderChangeCorrectness:
 
     def test_dict_final_state_correct_after_reorder(self, nb_runner):
         """Dict should have all keys regardless of iteration order."""
-        nb_runner.create_notebook([
-            """d = {}
+        nb_runner.create_notebook(
+            [
+                """d = {}
 for x in ["A", "B", "C"]:
     d[x] = ord(x)""",
-            """print(f"d = {dict(sorted(d.items()))}")"""
-        ])
+                """print(f"d = {dict(sorted(d.items()))}")""",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -180,9 +203,12 @@ for x in ["A", "B", "C"]:
         assert "'A': 65" in output1
 
         # Reorder
-        nb_runner.set_cell_source(1, """d = {}
+        nb_runner.set_cell_source(
+            1,
+            """d = {}
 for x in ["C", "A", "B"]:
-    d[x] = ord(x)""")
+    d[x] = ord(x)""",
+        )
         nb_runner.run_all()
 
         output2 = nb_runner.get_output(2)
@@ -191,12 +217,14 @@ for x in ["C", "A", "B"]:
 
     def test_loop_replace_element_produces_correct_dict(self, nb_runner):
         """Replace 'B' with 'Z' in loop → dict should have A, Z, C (no B)."""
-        nb_runner.create_notebook([
-            """d = {}
+        nb_runner.create_notebook(
+            [
+                """d = {}
 for x in ["A", "B", "C"]:
     d[x] = x.lower()""",
-            """print(f"Keys: {sorted(d.keys())}")"""
-        ])
+                """print(f"Keys: {sorted(d.keys())}")""",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -204,9 +232,12 @@ for x in ["A", "B", "C"]:
         assert "'A'" in output1 and "'B'" in output1 and "'C'" in output1
 
         # Replace B with Z
-        nb_runner.set_cell_source(1, """d = {}
+        nb_runner.set_cell_source(
+            1,
+            """d = {}
 for x in ["A", "Z", "C"]:
-    d[x] = x.lower()""")
+    d[x] = x.lower()""",
+        )
         nb_runner.run_all()
 
         output2 = nb_runner.get_output(2)
@@ -218,13 +249,15 @@ for x in ["A", "Z", "C"]:
         Only run downstream cell after modifying loop.
         Upstream checker should detect the change and re-execute just the loop.
         """
-        nb_runner.create_notebook([
-            "base = 42",
-            """counts = {}
+        nb_runner.create_notebook(
+            [
+                "base = 42",
+                """counts = {}
 for name in ["Alice", "Bob"]:
     counts[name] = base + len(name)""",
-            """print(f"Counts: {counts}")"""
-        ])
+                """print(f"Counts: {counts}")""",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -232,9 +265,12 @@ for name in ["Alice", "Bob"]:
         assert "'Alice'" in output1 and "'Bob'" in output1
 
         # Add "Carol" to loop but only run cell 3
-        nb_runner.set_cell_source(2, """counts = {}
+        nb_runner.set_cell_source(
+            2,
+            """counts = {}
 for name in ["Alice", "Bob", "Carol"]:
-    counts[name] = base + len(name)""")
+    counts[name] = base + len(name)""",
+        )
 
         nb_runner.run_cell(3)
 
@@ -251,19 +287,21 @@ class TestUpstreamMetricsAccuracy:
         Changing a loop should not show upstream restores for unrelated variables.
         This tests the 'bogus time saved' bug.
         """
-        nb_runner.create_notebook([
-            # Cell 1: Setup
-            "x = 100\ny = 200",
-            # Cell 2: Transform (independent of loop)
-            "z = x + y",
-            # Cell 3: Loop
-            """d = {}
+        nb_runner.create_notebook(
+            [
+                # Cell 1: Setup
+                "x = 100\ny = 200",
+                # Cell 2: Transform (independent of loop)
+                "z = x + y",
+                # Cell 3: Loop
+                """d = {}
 for k in ["a", "b"]:
     d[k] = z""",
-            # Cell 4: Downstream
-            """print(f"d = {d}")
-print(f"z = {z}")"""
-        ])
+                # Cell 4: Downstream
+                """print(f"d = {d}")
+print(f"z = {z}")""",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -271,9 +309,12 @@ print(f"z = {z}")"""
         assert "'a'" in output1 and "'b'" in output1
 
         # Add element to loop
-        nb_runner.set_cell_source(3, """d = {}
+        nb_runner.set_cell_source(
+            3,
+            """d = {}
 for k in ["a", "b", "c"]:
-    d[k] = z""")
+    d[k] = z""",
+        )
 
         # Run downstream only
         nb_runner.run_cell(4)

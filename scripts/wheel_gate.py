@@ -84,6 +84,7 @@ baseline is stale. Takes roughly
 --reuse-venv. Kept OUT of the default pytest collection because it is slow; see
 tests/test_wheel_gate/ for the CI shim (skipped unless CASH_WHEEL_GATE=1).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -122,12 +123,12 @@ def _venv_python() -> Path:
 # small shell helpers
 # ---------------------------------------------------------------------------
 
+
 def run(cmd, *, cwd=None, env=None, check=True, quiet=False) -> subprocess.CompletedProcess:
     cmd = [str(c) for c in cmd]
     if not quiet:
         print("  $", " ".join(cmd))
-    cp = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True,
-                        encoding="utf-8", errors="replace")
+    cp = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if cp.returncode != 0 and check:
         print(cp.stdout[-3000:])
         print(cp.stderr[-3000:])
@@ -140,8 +141,7 @@ def _free_port(port: int) -> None:
     if os.name != "nt":
         return
     try:
-        out = subprocess.run(["netstat", "-ano", "-p", "tcp"],
-                             capture_output=True, text=True).stdout
+        out = subprocess.run(["netstat", "-ano", "-p", "tcp"], capture_output=True, text=True).stdout
     except Exception:
         return
     pids = set()
@@ -158,15 +158,14 @@ def _free_port(port: int) -> None:
 # phase 1: build wheel
 # ---------------------------------------------------------------------------
 
+
 def build_wheel() -> Path:
     DIST_DIR.mkdir(parents=True, exist_ok=True)
     print(f"[build] python -m build --wheel --outdir {DIST_DIR}")
-    cp = run([DEV_PYTHON, "-m", "build", "--wheel", "--outdir", DIST_DIR, REPO_ROOT],
-             check=False)
+    cp = run([DEV_PYTHON, "-m", "build", "--wheel", "--outdir", DIST_DIR, REPO_ROOT], check=False)
     if cp.returncode != 0:
         print("[build] isolated build failed; retrying --no-isolation")
-        cp = run([DEV_PYTHON, "-m", "build", "--wheel", "--no-isolation",
-                  "--outdir", DIST_DIR, REPO_ROOT], check=False)
+        cp = run([DEV_PYTHON, "-m", "build", "--wheel", "--no-isolation", "--outdir", DIST_DIR, REPO_ROOT], check=False)
     wheels = sorted(DIST_DIR.glob("cash_lib-*.whl"), key=lambda p: p.stat().st_mtime)
     if cp.returncode != 0 or not wheels:
         raise SystemExit("wheel build failed and no prebuilt wheel in DIST_DIR")
@@ -178,6 +177,7 @@ def build_wheel() -> Path:
 # ---------------------------------------------------------------------------
 # phase 2/3: venv + kernelspec
 # ---------------------------------------------------------------------------
+
 
 def _venv_provisioned(py: Path) -> bool:
     if not py.exists():
@@ -205,14 +205,26 @@ def setup_venv(wheel: Path, *, reuse: bool) -> Path:
     run([py, "-m", "pip", "install", "--upgrade", "pip", "--quiet"])
     # extras on a local wheel path: pip supports "<path>.whl[extra]"
     print("[venv] installing wheel[all] + gate deps (this is the slow step)")
-    run([py, "-m", "pip", "install", f"{wheel}[all]",
-         "pandas", "numpy", "scikit-learn",
-         "jupyter-server", "jupyter-client", "nbformat", "ipykernel",
-         "--quiet"])
+    run(
+        [
+            py,
+            "-m",
+            "pip",
+            "install",
+            f"{wheel}[all]",
+            "pandas",
+            "numpy",
+            "scikit-learn",
+            "jupyter-server",
+            "jupyter-client",
+            "nbformat",
+            "ipykernel",
+            "--quiet",
+        ]
+    )
     # Register a UNIQUE kernelspec INTO the venv (--sys-prefix, NEVER --user):
     # guarantees the kernel resolves to the venv interpreter.
-    run([py, "-m", "ipykernel", "install", "--sys-prefix",
-         "--name", KERNEL_NAME, "--display-name", KERNEL_NAME])
+    run([py, "-m", "ipykernel", "install", "--sys-prefix", "--name", KERNEL_NAME, "--display-name", KERNEL_NAME])
     if not _venv_provisioned(py):
         raise SystemExit("venv provisioning check failed after install")
     print("[venv] provisioned OK")
@@ -222,6 +234,7 @@ def setup_venv(wheel: Path, *, reuse: bool) -> Path:
 # ---------------------------------------------------------------------------
 # driver client (file-based inbox/outbox protocol)
 # ---------------------------------------------------------------------------
+
 
 class Driver:
     def __init__(self, py: Path, work: Path, port: int):
@@ -249,15 +262,16 @@ class Driver:
         )
         out = open(self.work / "driver.out", "w", encoding="utf-8")
         self.proc = subprocess.Popen(
-            [str(self.py), str(DRIVER_SRC)],
-            cwd=str(self.work), env=env, stdout=out, stderr=subprocess.STDOUT)
+            [str(self.py), str(DRIVER_SRC)], cwd=str(self.work), env=env, stdout=out, stderr=subprocess.STDOUT
+        )
         # readiness: poll driver.out for the DRIVER READY banner
         t0 = time.time()
         log = self.work / "driver.out"
         while time.time() - t0 < ready_timeout:
             if self.proc.poll() is not None:
-                raise SystemExit(f"driver died during boot; see {log}\n"
-                                 f"{log.read_text(encoding='utf-8', errors='replace')[-2000:]}")
+                raise SystemExit(
+                    f"driver died during boot; see {log}\n{log.read_text(encoding='utf-8', errors='replace')[-2000:]}"
+                )
             try:
                 if "DRIVER READY" in log.read_text(encoding="utf-8", errors="replace"):
                     return
@@ -314,8 +328,7 @@ class Driver:
         if self.proc:
             try:
                 if os.name == "nt":
-                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(self.proc.pid)],
-                                   capture_output=True)
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(self.proc.pid)], capture_output=True)
                 else:
                     self.proc.terminate()
             except Exception:
@@ -327,12 +340,13 @@ class Driver:
 # scenario scaffolding
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class Result:
     name: str
     title: str
-    expected: str            # "RED" or "GREEN"
-    status: str = "ERROR"    # observed: "RED" / "GREEN" / "ERROR"
+    expected: str  # "RED" or "GREEN"
+    status: str = "ERROR"  # observed: "RED" / "GREEN" / "ERROR"
     detail: str = ""
     evidence: dict = field(default_factory=dict)
 
@@ -351,9 +365,7 @@ def _fresh_work(name: str) -> Path:
 
 def _guard_venv(drv: Driver, venv_dir: Path) -> None:
     """Prove the kernel really runs in the venv (install-layout is exercised)."""
-    drv.set(0, "import sys, cash\n"
-               "print('GUARD_PREFIX', sys.prefix)\n"
-               "print('GUARD_CASH', cash.__file__)")
+    drv.set(0, "import sys, cash\nprint('GUARD_PREFIX', sys.prefix)\nprint('GUARD_CASH', cash.__file__)")
     out = drv.run(0).get("out", "")
     vp = str(venv_dir).lower()
     if vp not in out.lower():
@@ -388,6 +400,7 @@ def _coloured_pixels(path: Path) -> int:
     """
     import numpy as np
     from PIL import Image
+
     try:
         with Image.open(path) as im:
             arr = np.asarray(im.convert("RGB")).astype(int)
@@ -398,6 +411,7 @@ def _coloured_pixels(path: Path) -> int:
 
 def _sha(path: Path) -> str:
     import hashlib
+
     try:
         return hashlib.sha256(path.read_bytes()).hexdigest()[:8]
     except OSError:
@@ -407,6 +421,7 @@ def _sha(path: Path) -> str:
 # ----- shared sklearn-pipeline cells (S1 + S3) -----------------------------
 
 _CELL_ON = 'import cash\n%cash_on\nprint("cash on")'
+
 
 def _pipeline_cells(counter_file: str):
     """make_classification -> DataFrame -> train_test_split -> @cash.cache train."""
@@ -453,6 +468,7 @@ def _pipeline_cells(counter_file: str):
 # S1 -- restart survival of @cash.cache on the sklearn pipeline (CAS-202)
 # ---------------------------------------------------------------------------
 
+
 def scenario_s1(py: Path, port: int) -> Result:
     # Baseline flipped RED -> GREEN when CAS-202 was fixed (core.py
     # _hash_arg_payload now keys a content-bearing argument on its stable
@@ -465,8 +481,8 @@ def scenario_s1(py: Path, port: int) -> Result:
     drv = Driver(py, work, port)
     try:
         drv.start()
-        _guard_venv(drv, VENV_DIR)          # cell 0 becomes the guard...
-        for i, src in enumerate(cells):     # ...then overwrite 0..4 with the pipeline
+        _guard_venv(drv, VENV_DIR)  # cell 0 becomes the guard...
+        for i, src in enumerate(cells):  # ...then overwrite 0..4 with the pipeline
             drv.set(i, src)
         # cold run-all
         cold_steps = []
@@ -488,8 +504,10 @@ def scenario_s1(py: Path, port: int) -> Result:
             r.detail = f"model restored after restart (fit ran {n_warm}x total)"
         else:
             r.status = "RED"
-            r.detail = (f"@cash.cache re-trained after restart: fit body ran "
-                        f"{n_warm}x (cold {n_cold} + retrain {n_warm - n_cold})")
+            r.detail = (
+                f"@cash.cache re-trained after restart: fit body ran "
+                f"{n_warm}x (cold {n_cold} + retrain {n_warm - n_cold})"
+            )
     except SystemExit as e:
         r.status, r.detail = "ERROR", str(e)
     except Exception:
@@ -575,6 +593,7 @@ def scenario_s3(py: Path, port: int) -> Result:
 # S4 -- a plain @cash.cache int fn survives a restart (control) -> GREEN
 # ---------------------------------------------------------------------------
 
+
 def scenario_s4(py: Path, port: int) -> Result:
     r = Result("S4", "plain @cash.cache int fn survives a restart (control)", "GREEN")
     work = _fresh_work("s4")
@@ -628,19 +647,23 @@ def scenario_s4(py: Path, port: int) -> Result:
 # S2 -- to_csv audit-log not re-fired by a downstream reader (CAS-196) -> RED
 # ---------------------------------------------------------------------------
 
+
 def _write_etl_data(work: Path, n: int = 400_000) -> None:
     """Deterministic retail-ETL CSVs (a shrunk gen_data.py) for the S2 pipeline."""
     import numpy as np
     import pandas as pd
+
     rng = np.random.default_rng(20260717)
     n_prod, cats, n_months = 800, ["Electronics", "Grocery", "Apparel", "Home", "Toys"], 24
     pid_dim = np.arange(1, n_prod + 1)
     cat_idx = rng.integers(0, len(cats), size=n_prod)
-    products = pd.DataFrame({
-        "product_id": pid_dim,
-        "category": [cats[i] for i in cat_idx],
-        "base_price": np.round(rng.uniform(5, 200, size=n_prod), 2),
-    })
+    products = pd.DataFrame(
+        {
+            "product_id": pid_dim,
+            "category": [cats[i] for i in cat_idx],
+            "base_price": np.round(rng.uniform(5, 200, size=n_prod), 2),
+        }
+    )
     products.to_csv(work / "products.csv", index=False)
     pid = rng.integers(1, n_prod + 1, size=n)
     month = rng.integers(0, n_months, size=n)
@@ -658,14 +681,16 @@ def _write_etl_data(work: Path, n: int = 400_000) -> None:
     erode[cat_of_pid == "Grocery"] = 0.003
     cost_frac = np.clip(0.60 + erode * month + rng.normal(0, 0.02, size=n), 0.3, 0.98)
     unit_cost = np.round(unit_price * cost_frac, 2)
-    pd.DataFrame({
-        "order_id": np.arange(1, n + 1),
-        "product_id": pid,
-        "order_date": order_date.dt.strftime("%Y-%m-%d"),
-        "quantity": qty,
-        "unit_price": unit_price,
-        "unit_cost": unit_cost,
-    }).to_csv(work / "sales.csv", index=False)
+    pd.DataFrame(
+        {
+            "order_id": np.arange(1, n + 1),
+            "product_id": pid,
+            "order_date": order_date.dt.strftime("%Y-%m-%d"),
+            "quantity": qty,
+            "unit_price": unit_price,
+            "unit_cost": unit_cost,
+        }
+    ).to_csv(work / "sales.csv", index=False)
 
 
 # Cells mirror the round-7 P1 CAS-196 repro (nb.py). The DOWNSTREAM READER (cell
@@ -673,35 +698,47 @@ def _write_etl_data(work: Path, n: int = 400_000) -> None:
 # its non-idempotent `to_csv(..., mode='a')` append -- so reconstructing the
 # reader re-fires the append.
 _S2_CELLS = [
-    'import cash\n%cash_on\nprint("cash on")',                                       # 0
-    "import pandas as pd\nimport numpy as np\nprint('imports ok')",                  # 1
-    "sales = pd.read_csv('sales.csv')\nprint('sales', sales.shape)",                 # 2
-    "products = pd.read_csv('products.csv')\nprint('products', products.shape)",     # 3
-    ("sales['order_date'] = pd.to_datetime(sales['order_date'])\n"
-     "sales['revenue'] = sales['quantity'] * sales['unit_price']\n"
-     "sales['cost'] = sales['quantity'] * sales['unit_cost']\n"
-     "sales['month'] = sales['order_date'].dt.to_period('M').astype(str)\n"
-     "print('clean rev_sum', round(float(sales['revenue'].sum()), 2))"),            # 4
-    ("merged = sales.merge(products[['product_id','category']], on='product_id', how='left')\n"
-     "print('merged', merged.shape)"),                                              # 5
-    ("agg = merged.groupby(['category','month'], as_index=False).agg("
-     "revenue=('revenue','sum'), cost=('cost','sum'))\n"
-     "agg['margin'] = (agg['revenue'] - agg['cost']) / agg['revenue']\n"
-     "print('agg', agg.shape)"),                                                    # 6
-    ("slopes = {}\n"
-     "for cat, g in agg.groupby('category'):\n"
-     "    g = g.sort_values('month'); x = np.arange(len(g)); yv = g['margin'].to_numpy()\n"
-     "    slopes[cat] = float(np.polyfit(x, yv, 1)[0])\n"
-     "worst = min(slopes, key=slopes.get)\n"
-     "print('FASTEST_DECLINING', worst, round(slopes[worst], 6))"),                 # 7
-    ("audit_row = pd.DataFrame([{'answer': worst, 'slope': round(slopes[worst], 6)}])\n"
-     "audit_row.to_csv('audit.log', mode='a', header=False, index=False)\n"
-     "receipt = 'audit-appended'\n"
-     "print('AUDIT_APPENDED', worst)"),                                             # 8  WRITER
-    ("agg.to_csv('summary.csv', index=False)\nprint('SUMMARY_WRITTEN', agg.shape)"), # 9
-    ("print('READER worst=', worst, 'receipt=', receipt, 'n_slopes=', len(slopes))\n"
-     "reader_out = f'{worst}:{round(slopes[worst],6)}'\n"
-     "print('READER_OUT', reader_out)"),                                            # 10 READER
+    'import cash\n%cash_on\nprint("cash on")',  # 0
+    "import pandas as pd\nimport numpy as np\nprint('imports ok')",  # 1
+    "sales = pd.read_csv('sales.csv')\nprint('sales', sales.shape)",  # 2
+    "products = pd.read_csv('products.csv')\nprint('products', products.shape)",  # 3
+    (
+        "sales['order_date'] = pd.to_datetime(sales['order_date'])\n"
+        "sales['revenue'] = sales['quantity'] * sales['unit_price']\n"
+        "sales['cost'] = sales['quantity'] * sales['unit_cost']\n"
+        "sales['month'] = sales['order_date'].dt.to_period('M').astype(str)\n"
+        "print('clean rev_sum', round(float(sales['revenue'].sum()), 2))"
+    ),  # 4
+    (
+        "merged = sales.merge(products[['product_id','category']], on='product_id', how='left')\n"
+        "print('merged', merged.shape)"
+    ),  # 5
+    (
+        "agg = merged.groupby(['category','month'], as_index=False).agg("
+        "revenue=('revenue','sum'), cost=('cost','sum'))\n"
+        "agg['margin'] = (agg['revenue'] - agg['cost']) / agg['revenue']\n"
+        "print('agg', agg.shape)"
+    ),  # 6
+    (
+        "slopes = {}\n"
+        "for cat, g in agg.groupby('category'):\n"
+        "    g = g.sort_values('month'); x = np.arange(len(g)); yv = g['margin'].to_numpy()\n"
+        "    slopes[cat] = float(np.polyfit(x, yv, 1)[0])\n"
+        "worst = min(slopes, key=slopes.get)\n"
+        "print('FASTEST_DECLINING', worst, round(slopes[worst], 6))"
+    ),  # 7
+    (
+        "audit_row = pd.DataFrame([{'answer': worst, 'slope': round(slopes[worst], 6)}])\n"
+        "audit_row.to_csv('audit.log', mode='a', header=False, index=False)\n"
+        "receipt = 'audit-appended'\n"
+        "print('AUDIT_APPENDED', worst)"
+    ),  # 8  WRITER
+    ("agg.to_csv('summary.csv', index=False)\nprint('SUMMARY_WRITTEN', agg.shape)"),  # 9
+    (
+        "print('READER worst=', worst, 'receipt=', receipt, 'n_slopes=', len(slopes))\n"
+        "reader_out = f'{worst}:{round(slopes[worst],6)}'\n"
+        "print('READER_OUT', reader_out)"
+    ),  # 10 READER
     ("sales_consumer = int(sales['quantity'].sum())\nprint('SALES_CONSUMER', sales_consumer)"),  # 11
 ]
 _S2_READER = 10
@@ -736,7 +773,7 @@ def scenario_s2(py: Path, port: int) -> Result:
     # cell's reconstruction. Baseline flipped RED -> GREEN with that fix.
     r = Result("S2", "to_csv audit-log not re-fired during reconstruction (CAS-196)", "GREEN")
     try:
-        baseline = _s2_baseline_lines(py, port)      # %cash_off ground truth
+        baseline = _s2_baseline_lines(py, port)  # %cash_off ground truth
     except SystemExit as e:
         r.status, r.detail = "ERROR", f"baseline failed: {e}"
         return r
@@ -748,8 +785,8 @@ def scenario_s2(py: Path, port: int) -> Result:
     drv = Driver(py, work, port)
     try:
         drv.start()
-        _guard_venv(drv, VENV_DIR)               # guard reuses cell 0 slot...
-        for i, src in enumerate(_S2_CELLS):      # ...then S2 overwrites with %cash_on
+        _guard_venv(drv, VENV_DIR)  # guard reuses cell 0 slot...
+        for i, src in enumerate(_S2_CELLS):  # ...then S2 overwrites with %cash_on
             drv.set(i, src)
         for i in range(len(_S2_CELLS)):
             drv.run(i)
@@ -758,7 +795,7 @@ def scenario_s2(py: Path, port: int) -> Result:
         # needs `receipt` (produced by the writer cell) -> cash reconstructs
         # upstream. A correct system must NOT re-fire the non-idempotent append.
         drv.restart()
-        drv.run(0)                               # %cash_on
+        drv.run(0)  # %cash_on
         reader_out = drv.run(_S2_READER).get("out", "")
         n_reader = _lines(audit)
         r.evidence = {
@@ -777,8 +814,10 @@ def scenario_s2(py: Path, port: int) -> Result:
             r.detail = "downstream reader raised UpstreamStateError reconstructing the writer"
         else:
             r.status = "RED"
-            r.detail = (f"cash re-fired the non-idempotent to_csv append: no-cash={baseline} "
-                        f"line vs cash run-all={n_runall}, after-reader={n_reader} lines")
+            r.detail = (
+                f"cash re-fired the non-idempotent to_csv append: no-cash={baseline} "
+                f"line vs cash run-all={n_runall}, after-reader={n_reader} lines"
+            )
     except SystemExit as e:
         r.status, r.detail = "ERROR", str(e)
     except Exception:
@@ -802,24 +841,30 @@ def scenario_s2(py: Path, port: int) -> Result:
 # the evicted intermediate, wedging the tail. The scope gate must reconstruct
 # only what the current cell's lineage needs.
 _S5_CELLS = [
-    ('import cash\n%cash_on\n'
-     'import matplotlib\nmatplotlib.use("Agg")\nimport matplotlib.pyplot as plt\n'
-     'import pandas as pd, numpy as np\nprint("cash on")'),                          # 0
-    ("records = pd.DataFrame({'cat': list('abcde'), 'v': [10, 20, 30, 40, 50]})\n"
-     "print('records', records.shape)"),                                            # 1
-    ("summary = records.groupby('cat', as_index=False).agg(total=('v', 'sum'))\n"
-     "print('summary', summary.shape)"),                                            # 2
-    ("itm = summary['total'].tolist()\n"                     # RAM-only intermediate
-     "fig, ax = plt.subplots()\n"
-     "ax.pie(itm, labels=summary['cat'].tolist())\n"        # non-cacheable draw
-     "fig.savefig('chart.png')\n"                           # the plot writer
-     "print('PLOTTED', len(itm))"),                                                 # 3
-    ("grand_total = int(records['v'].sum())\n"              # depends ONLY on records
-     "print('GRAND_TOTAL', grand_total)"),                                          # 4
-    ("n_cats = int(records['cat'].nunique())\n"            # also plot-independent
-     "print('N_CATS', n_cats)"),                                                    # 5
+    (
+        "import cash\n%cash_on\n"
+        'import matplotlib\nmatplotlib.use("Agg")\nimport matplotlib.pyplot as plt\n'
+        'import pandas as pd, numpy as np\nprint("cash on")'
+    ),  # 0
+    ("records = pd.DataFrame({'cat': list('abcde'), 'v': [10, 20, 30, 40, 50]})\nprint('records', records.shape)"),  # 1
+    ("summary = records.groupby('cat', as_index=False).agg(total=('v', 'sum'))\nprint('summary', summary.shape)"),  # 2
+    (
+        "itm = summary['total'].tolist()\n"  # RAM-only intermediate
+        "fig, ax = plt.subplots()\n"
+        "ax.pie(itm, labels=summary['cat'].tolist())\n"  # non-cacheable draw
+        "fig.savefig('chart.png')\n"  # the plot writer
+        "print('PLOTTED', len(itm))"
+    ),  # 3
+    (
+        "grand_total = int(records['v'].sum())\n"  # depends ONLY on records
+        "print('GRAND_TOTAL', grand_total)"
+    ),  # 4
+    (
+        "n_cats = int(records['cat'].nunique())\n"  # also plot-independent
+        "print('N_CATS', n_cats)"
+    ),  # 5
 ]
-_S5_TAIL = 4   # 0-based index of the independent downstream cell (grand_total)
+_S5_TAIL = 4  # 0-based index of the independent downstream cell (grand_total)
 
 
 def scenario_s5(py: Path, port: int) -> Result:
@@ -833,8 +878,8 @@ def scenario_s5(py: Path, port: int) -> Result:
     drv = Driver(py, work, port)
     try:
         drv.start()
-        _guard_venv(drv, VENV_DIR)               # guard reuses cell 0 slot...
-        for i, src in enumerate(_S5_CELLS):      # ...then S5 overwrites with %cash_on
+        _guard_venv(drv, VENV_DIR)  # guard reuses cell 0 slot...
+        for i, src in enumerate(_S5_CELLS):  # ...then S5 overwrites with %cash_on
             drv.set(i, src)
         for i in range(len(_S5_CELLS)):
             drv.run(i)
@@ -845,10 +890,10 @@ def scenario_s5(py: Path, port: int) -> Result:
         # with the plot; a correct system reconstructs only ``records`` and never
         # touches the plot writer.
         drv.restart()
-        drv.run(0)                               # imports + %cash_on
-        drv.run(1)                               # records
-        drv.run(2)                               # summary
-        chart.unlink()                           # remove the plot artifact
+        drv.run(0)  # imports + %cash_on
+        drv.run(1)  # records
+        drv.run(2)  # summary
+        chart.unlink()  # remove the plot artifact
         tail_out = drv.run(_S5_TAIL).get("out", "")
         chart_recreated = chart.exists()
         upstream_error = "UpstreamStateError" in tail_out
@@ -862,19 +907,21 @@ def scenario_s5(py: Path, port: int) -> Result:
             r.status, r.detail = "ERROR", "plot cell never wrote chart.png on run-all"
         elif upstream_error:
             r.status = "RED"
-            r.detail = ("running an unrelated downstream cell raised "
-                        "UpstreamStateError reconstructing the plot cell")
+            r.detail = "running an unrelated downstream cell raised UpstreamStateError reconstructing the plot cell"
         elif chart_recreated:
             r.status = "RED"
-            r.detail = ("cash re-fired the plot writer (fig.savefig) during an "
-                        "unrelated cell's reconstruction: deleted chart.png was "
-                        "re-created")
+            r.detail = (
+                "cash re-fired the plot writer (fig.savefig) during an "
+                "unrelated cell's reconstruction: deleted chart.png was "
+                "re-created"
+            )
         elif "GRAND_TOTAL 150" not in tail_out:
             r.status, r.detail = "ERROR", f"tail cell produced wrong value: {tail_out[:200]!r}"
         else:
             r.status = "GREEN"
-            r.detail = ("unrelated cell reconstructed only its own lineage: plot "
-                        "writer not re-fired, no UpstreamStateError")
+            r.detail = (
+                "unrelated cell reconstructed only its own lineage: plot writer not re-fired, no UpstreamStateError"
+            )
     except SystemExit as e:
         r.status, r.detail = "ERROR", str(e)
     except Exception:
@@ -941,9 +988,10 @@ def scenario_s6(py: Path, port: int) -> Result:
             r.status = "RED"
             r.detail = "await inside for-loop body raised SyntaxError under %cash_on"
         elif not correct or n_cold != 5:
-            r.status, r.detail = "ERROR", (
-                f"await-loop produced wrong result/counter: correct={correct}, "
-                f"body_calls={n_cold} (expected 5)")
+            r.status, r.detail = (
+                "ERROR",
+                (f"await-loop produced wrong result/counter: correct={correct}, body_calls={n_cold} (expected 5)"),
+            )
         else:
             r.status = "GREEN"
             r.detail = f"await-loop ran under %cash_on: results correct, body ran {n_cold}x, no SyntaxError"
@@ -979,6 +1027,7 @@ def scenario_s6(py: Path, port: int) -> Result:
 # still present (which is exactly why nothing else notices).
 # ---------------------------------------------------------------------------
 
+
 def _write_s7_data(work: Path, n: int = 4000) -> None:
     """Deterministic mini sales/products CSVs for the S7 attribution pipeline.
 
@@ -988,97 +1037,113 @@ def _write_s7_data(work: Path, n: int = 4000) -> None:
     """
     import numpy as np
     import pandas as pd
+
     rng = np.random.default_rng(20260720)
     cats = ["Electronics", "Grocery", "Apparel", "Home"]
     n_prod = 60
-    pd.DataFrame({
-        "product_id": np.arange(1, n_prod + 1),
-        "category": [cats[i % len(cats)] for i in range(n_prod)],
-    }).to_csv(work / "products.csv", index=False)
+    pd.DataFrame(
+        {
+            "product_id": np.arange(1, n_prod + 1),
+            "category": [cats[i % len(cats)] for i in range(n_prod)],
+        }
+    ).to_csv(work / "products.csv", index=False)
     month = rng.integers(0, 12, size=n)
-    order_date = pd.to_datetime(dict(year=np.full(n, 2024), month=month + 1,
-                                     day=rng.integers(1, 29, size=n)))
+    order_date = pd.to_datetime(dict(year=np.full(n, 2024), month=month + 1, day=rng.integers(1, 29, size=n)))
     unit_price = np.round(rng.uniform(5, 200, size=n), 2)
     # A month-indexed cost drift so the per-category margin curves actually move
     # (a flat line would still be coloured, but a moving one makes an empty
     # redraw unmistakable).
     cost_frac = np.clip(0.55 + 0.012 * month + rng.normal(0, 0.02, size=n), 0.3, 0.95)
-    pd.DataFrame({
-        "order_id": np.arange(1, n + 1),
-        "product_id": rng.integers(1, n_prod + 1, size=n),
-        "order_date": order_date.dt.strftime("%Y-%m-%d"),
-        "units": rng.integers(1, 20, size=n),
-        "unit_price": unit_price,
-        "unit_cost": np.round(unit_price * cost_frac, 2),
-        "discount": np.round(rng.uniform(0, 0.2, size=n), 3),
-    }).to_csv(work / "sales.csv", index=False)
+    pd.DataFrame(
+        {
+            "order_id": np.arange(1, n + 1),
+            "product_id": rng.integers(1, n_prod + 1, size=n),
+            "order_date": order_date.dt.strftime("%Y-%m-%d"),
+            "units": rng.integers(1, 20, size=n),
+            "unit_price": unit_price,
+            "unit_cost": np.round(unit_price * cost_frac, 2),
+            "discount": np.round(rng.uniform(0, 0.2, size=n), 3),
+        }
+    ).to_csv(work / "sales.csv", index=False)
 
 
 _S7_CELLS = [
-    _CELL_ON,                                                                    # 0
-    ("import pandas as pd, numpy as np, os\n"
-     "SALES, PRODUCTS = 'sales.csv', 'products.csv'\n"
-     "def load_sales(path):\n"
-     "    open('s7_load.log', 'a').write('L')   # external counter\n"
-     "    df = pd.read_csv(path)\n"
-     "    df['order_date'] = pd.to_datetime(df['order_date'], format='%Y-%m-%d')\n"
-     "    return df\n"
-     "def add_margin(df):\n"
-     "    open('s7_derive.log', 'a').write('D')   # external counter\n"
-     "    return df.assign(\n"
-     "        revenue=df['units'] * df['unit_price'] * (1 - df['discount']),\n"
-     "        cogs=df['units'] * df['unit_cost'],\n"
-     "    ).assign(margin=lambda d: d['revenue'] - d['cogs'])\n"
-     "def build_monthly(df):\n"
-     "    open('s7_agg.log', 'a').write('G')   # external counter\n"
-     "    m = (df.groupby(['category', 'month'])\n"
-     "           .agg(revenue=('revenue', 'sum'), margin=('margin', 'sum'))\n"
-     "           .reset_index())\n"
-     "    return m.assign(margin_pct=lambda d: d['margin'] / d['revenue'] * 100)\n"
-     "print('DEFS ok', round(os.path.getsize(SALES) / 1e3, 1), 'kB')"),          # 1
-    ("raw = load_sales(SALES)\n"
-     "prod = pd.read_csv(PRODUCTS)\n"
-     "raw = raw.merge(prod, on='product_id', how='left')\n"
-     "raw = raw.assign(month=raw['order_date'].dt.to_period('M').astype(str))\n"
-     "print('RAW', raw.shape)"),                                                 # 2
-    ("priced = add_margin(raw)\n"
-     "print('PRICED', round(float(priced['margin'].sum()), 2))"),                # 3
-    ("monthly = build_monthly(priced)\n"
-     "print('MONTHLY', monthly.shape)"),                                         # 4
+    _CELL_ON,  # 0
+    (
+        "import pandas as pd, numpy as np, os\n"
+        "SALES, PRODUCTS = 'sales.csv', 'products.csv'\n"
+        "def load_sales(path):\n"
+        "    open('s7_load.log', 'a').write('L')   # external counter\n"
+        "    df = pd.read_csv(path)\n"
+        "    df['order_date'] = pd.to_datetime(df['order_date'], format='%Y-%m-%d')\n"
+        "    return df\n"
+        "def add_margin(df):\n"
+        "    open('s7_derive.log', 'a').write('D')   # external counter\n"
+        "    return df.assign(\n"
+        "        revenue=df['units'] * df['unit_price'] * (1 - df['discount']),\n"
+        "        cogs=df['units'] * df['unit_cost'],\n"
+        "    ).assign(margin=lambda d: d['revenue'] - d['cogs'])\n"
+        "def build_monthly(df):\n"
+        "    open('s7_agg.log', 'a').write('G')   # external counter\n"
+        "    m = (df.groupby(['category', 'month'])\n"
+        "           .agg(revenue=('revenue', 'sum'), margin=('margin', 'sum'))\n"
+        "           .reset_index())\n"
+        "    return m.assign(margin_pct=lambda d: d['margin'] / d['revenue'] * 100)\n"
+        "print('DEFS ok', round(os.path.getsize(SALES) / 1e3, 1), 'kB')"
+    ),  # 1
+    (
+        "raw = load_sales(SALES)\n"
+        "prod = pd.read_csv(PRODUCTS)\n"
+        "raw = raw.merge(prod, on='product_id', how='left')\n"
+        "raw = raw.assign(month=raw['order_date'].dt.to_period('M').astype(str))\n"
+        "print('RAW', raw.shape)"
+    ),  # 2
+    ("priced = add_margin(raw)\nprint('PRICED', round(float(priced['margin'].sum()), 2))"),  # 3
+    ("monthly = build_monthly(priced)\nprint('MONTHLY', monthly.shape)"),  # 4
     # A SECOND for-loop, on an unrelated object. The fix must NOT promote this
     # one (``g.sort_values(...)`` touches no figure carrier) -- it is the
     # over-scheduling control that rides along inside the same notebook.
-    ("open('s7_trend.log', 'a').write('T')   # external counter\n"
-     "slopes = {}\n"
-     "for cat, g in monthly.groupby('category'):\n"
-     "    g = g.sort_values('month')\n"
-     "    x = np.arange(len(g))\n"
-     "    slopes[cat] = float(np.polyfit(x, g['margin_pct'].values, 1)[0])\n"
-     "trend = pd.Series(slopes).sort_values()\n"
-     "print('FASTEST_DECLINE', trend.index[0], round(float(trend.iloc[0]), 4))"),  # 5
-    ("line = (str(trend.index[0]) + ',' + format(float(trend.iloc[0]), '.6f')\n"
-     "        + ',' + str(len(monthly)) + '\\n')\n"
-     "with open('audit.log', 'a') as f:\n"
-     "    f.write(line)\n"
-     "print('AUDIT_APPENDED', line.strip())"),                                   # 6  WRITER
-    ("summary = monthly.pivot(index='month', columns='category',\n"
-     "                        values='margin_pct').round(6)\n"
-     "summary.to_csv('summary.csv')\n"
-     "print('SUMMARY', summary.shape)"),                                         # 7
-    ("import matplotlib\n"
-     "matplotlib.use('Agg')\n"
-     "import matplotlib.pyplot as plt\n"
-     "fig, ax = plt.subplots(figsize=(9, 5))\n"
-     "for c in summary.columns:\n"                    # <- THE loop that fills it
-     "    ax.plot(range(len(summary)), summary[c].values, label=c)\n"
-     "ax.set_title('Margin pct by category')\n"
-     "ax.set_xlabel('month index')\n"
-     "ax.legend()\n"
-     "fig.savefig('chart.png', dpi=90)\n"             # <- the plot writer
-     "print('CHART_WRITTEN')"),                                                  # 8  PLOT
-    ("audit_lines = open('audit.log').read().strip().split('\\n')\n"
-     "print('AUDIT_LINES', len(audit_lines))\n"
-     "print('AUDIT_LAST', audit_lines[-1])"),                                    # 9  READER
+    (
+        "open('s7_trend.log', 'a').write('T')   # external counter\n"
+        "slopes = {}\n"
+        "for cat, g in monthly.groupby('category'):\n"
+        "    g = g.sort_values('month')\n"
+        "    x = np.arange(len(g))\n"
+        "    slopes[cat] = float(np.polyfit(x, g['margin_pct'].values, 1)[0])\n"
+        "trend = pd.Series(slopes).sort_values()\n"
+        "print('FASTEST_DECLINE', trend.index[0], round(float(trend.iloc[0]), 4))"
+    ),  # 5
+    (
+        "line = (str(trend.index[0]) + ',' + format(float(trend.iloc[0]), '.6f')\n"
+        "        + ',' + str(len(monthly)) + '\\n')\n"
+        "with open('audit.log', 'a') as f:\n"
+        "    f.write(line)\n"
+        "print('AUDIT_APPENDED', line.strip())"
+    ),  # 6  WRITER
+    (
+        "summary = monthly.pivot(index='month', columns='category',\n"
+        "                        values='margin_pct').round(6)\n"
+        "summary.to_csv('summary.csv')\n"
+        "print('SUMMARY', summary.shape)"
+    ),  # 7
+    (
+        "import matplotlib\n"
+        "matplotlib.use('Agg')\n"
+        "import matplotlib.pyplot as plt\n"
+        "fig, ax = plt.subplots(figsize=(9, 5))\n"
+        "for c in summary.columns:\n"  # <- THE loop that fills it
+        "    ax.plot(range(len(summary)), summary[c].values, label=c)\n"
+        "ax.set_title('Margin pct by category')\n"
+        "ax.set_xlabel('month index')\n"
+        "ax.legend()\n"
+        "fig.savefig('chart.png', dpi=90)\n"  # <- the plot writer
+        "print('CHART_WRITTEN')"
+    ),  # 8  PLOT
+    (
+        "audit_lines = open('audit.log').read().strip().split('\\n')\n"
+        "print('AUDIT_LINES', len(audit_lines))\n"
+        "print('AUDIT_LAST', audit_lines[-1])"
+    ),  # 9  READER
 ]
 _S7_READER = 9
 
@@ -1098,8 +1163,8 @@ def scenario_s7(py: Path, port: int) -> Result:
     drv = Driver(py, work, port)
     try:
         drv.start()
-        _guard_venv(drv, VENV_DIR)               # guard reuses cell 0 slot...
-        for i, src in enumerate(_S7_CELLS):      # ...then S7 overwrites with %cash_on
+        _guard_venv(drv, VENV_DIR)  # guard reuses cell 0 slot...
+        for i, src in enumerate(_S7_CELLS):  # ...then S7 overwrites with %cash_on
             drv.set(i, src)
         # Run everything UP TO but not including the reader: the chart written
         # here is the oracle (the loop demonstrably ran, in-line, this session).
@@ -1123,31 +1188,38 @@ def scenario_s7(py: Path, port: int) -> Result:
             "audit_lines_after_runall": audit_runall,
             "audit_lines_after_reader": _lines(audit),
             "reader_ok": "AUDIT_LINES 1" in reader_out,
-            "counters": {name: _count(work / name) for name in
-                         ("s7_load.log", "s7_derive.log", "s7_agg.log", "s7_trend.log")},
+            "counters": {
+                name: _count(work / name) for name in ("s7_load.log", "s7_derive.log", "s7_agg.log", "s7_trend.log")
+            },
         }
         if col_runall < 500:
-            r.status, r.detail = "ERROR", (
-                f"run-all chart is not a drawn chart: {col_runall} coloured px "
-                f"(expected thousands) -- the plot cell never drew")
+            r.status, r.detail = (
+                "ERROR",
+                (
+                    f"run-all chart is not a drawn chart: {col_runall} coloured px "
+                    f"(expected thousands) -- the plot cell never drew"
+                ),
+            )
         elif audit_runall != 1:
-            r.status, r.detail = "ERROR", (
-                f"audit.log should hold 1 line after run-all, got {audit_runall}")
+            r.status, r.detail = "ERROR", (f"audit.log should hold 1 line after run-all, got {audit_runall}")
         elif col_reader <= 0:
             r.status = "RED"
-            r.detail = ("the downstream reader re-saved an EMPTY figure over the "
-                        f"chart: {col_runall} -> {col_reader} coloured px (grey "
-                        "axes survive, so nothing else notices)")
+            r.detail = (
+                "the downstream reader re-saved an EMPTY figure over the "
+                f"chart: {col_runall} -> {col_reader} coloured px (grey "
+                "axes survive, so nothing else notices)"
+            )
         elif col_reader < col_runall * 0.9:
             r.status = "RED"
-            r.detail = (f"the reader re-saved a partially-drawn figure: "
-                        f"{col_runall} -> {col_reader} coloured px")
+            r.detail = f"the reader re-saved a partially-drawn figure: {col_runall} -> {col_reader} coloured px"
         elif "AUDIT_LINES 1" not in reader_out:
             r.status, r.detail = "ERROR", f"reader produced wrong output: {reader_out[:200]!r}"
         else:
             r.status = "GREEN"
-            r.detail = (f"loop-drawn figure was rebuilt before re-saving: chart kept "
-                        f"{col_reader} coloured px (run-all {col_runall})")
+            r.detail = (
+                f"loop-drawn figure was rebuilt before re-saving: chart kept "
+                f"{col_reader} coloured px (run-all {col_runall})"
+            )
     except SystemExit as e:
         r.status, r.detail = "ERROR", str(e)
     except Exception:
@@ -1172,13 +1244,14 @@ SCENARIOS = {
 # main
 # ---------------------------------------------------------------------------
 
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="CAS-190 wheel-gate harness")
     ap.add_argument("--wheel", help="use a prebuilt wheel instead of building")
-    ap.add_argument("--reuse-venv", action="store_true",
-                    help="reuse an already-provisioned venv (skip rebuild/install)")
-    ap.add_argument("--scenarios", default="S1,S2,S3,S4,S5,S6,S7",
-                    help="comma list of scenarios to run (default all)")
+    ap.add_argument(
+        "--reuse-venv", action="store_true", help="reuse an already-provisioned venv (skip rebuild/install)"
+    )
+    ap.add_argument("--scenarios", default="S1,S2,S3,S4,S5,S6,S7", help="comma list of scenarios to run (default all)")
     ap.add_argument("--port-base", type=int, default=8921)
     args = ap.parse_args()
 
@@ -1216,8 +1289,7 @@ def main() -> int:
     print(f"{'id':<4}{'status':<8}{'expected':<10}{'match':<7}title")
     print("-" * 78)
     for r in results:
-        print(f"{r.name:<4}{r.status:<8}{r.expected:<10}"
-              f"{('yes' if r.matches else 'NO'):<7}{r.title}")
+        print(f"{r.name:<4}{r.status:<8}{r.expected:<10}{('yes' if r.matches else 'NO'):<7}{r.title}")
     for r in results:
         print(f"\n[{r.name}] {r.detail}\n      evidence={r.evidence}")
 
@@ -1230,16 +1302,17 @@ def main() -> int:
     print(f"GREEN (invariant held): {greens or 'none'}")
     print(f"elapsed {dur}s")
     if mism:
-        print(f"BASELINE MISMATCH on {[r.name for r in mism]} -- "
-              "a green invariant regressed OR a known bug was fixed (update baseline).")
+        print(
+            f"BASELINE MISMATCH on {[r.name for r in mism]} -- "
+            "a green invariant regressed OR a known bug was fixed (update baseline)."
+        )
         return 1
     # Describe what was actually observed. The old wording ("known-open bugs
     # still RED, controls still GREEN") was hardcoded from a baseline where
     # S1/S2 were expected RED; once those were fixed it printed a flat
     # contradiction of the matrix immediately above it.
     if reds:
-        print(f"baseline matched: {len(greens)} GREEN, {len(reds)} RED "
-              f"(still-open: {', '.join(reds)}).")
+        print(f"baseline matched: {len(greens)} GREEN, {len(reds)} RED (still-open: {', '.join(reds)}).")
     else:
         print(f"baseline matched: all {len(greens)} scenarios GREEN.")
     return 0

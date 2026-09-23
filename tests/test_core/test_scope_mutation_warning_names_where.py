@@ -7,6 +7,7 @@ global 'LEDGER'". True, but the global lives in ``docmind.llm`` and is moved by
 named. In a larger code base the reader has to trace that by hand, while cash
 already knew which helper's read it was watching.
 """
+
 from __future__ import annotations
 
 import os
@@ -19,7 +20,7 @@ import pytest
 
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
 
-LLM = textwrap.dedent('''
+LLM = textwrap.dedent("""
     class Ledger:
         def __init__(self):
             self.calls = 0
@@ -33,25 +34,25 @@ LLM = textwrap.dedent('''
         text = prompt.upper()
         LEDGER.record()
         return text
-''')
+""")
 
-PIPELINE = textwrap.dedent('''
+PIPELINE = textwrap.dedent("""
     import llm
 
     def review(doc):
         return llm.complete("review " + doc)
-''')
+""")
 
-MAIN = textwrap.dedent('''
+MAIN = textwrap.dedent("""
     import cash
     import pipeline
 
     review = cash.cache(pipeline.review)
     review("a")
     review("b")
-''')
+""")
 
-OWN = textwrap.dedent('''
+OWN = textwrap.dedent("""
     import cash
 
     class Counter:
@@ -71,15 +72,16 @@ OWN = textwrap.dedent('''
 
     work(1)
     work(2)
-''')
+""")
 
 
 def _run(tmp_path, files):
     for name, text in files.items():
         (tmp_path / name).write_text(text)
     env = dict(os.environ, CASH_CACHE_DIR=str(tmp_path / ".cash"), PYTHONWARNINGS="always")
-    proc = subprocess.run([sys.executable, "main.py"], cwd=tmp_path, env=env,
-                          capture_output=True, text=True, timeout=120)
+    proc = subprocess.run(
+        [sys.executable, "main.py"], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120
+    )
     assert proc.returncode == 0, proc.stderr
     return proc.stderr
 

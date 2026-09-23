@@ -3,6 +3,7 @@
 lock), the call falls back to an unlocked compute instead of crashing. A working
 lock must still collapse concurrent same-key computes to one.
 """
+
 from __future__ import annotations
 
 import threading
@@ -24,6 +25,7 @@ class _RaisingLockBackend(InMemoryBackend):
 
             def __exit__(self_, *a):
                 return False
+
         return _BadLock()
 
 
@@ -45,6 +47,7 @@ class _ReleaseFailLockBackend(InMemoryBackend):
             def __exit__(self_, *a):
                 outer._lk.release()
                 raise RuntimeError("release failed")
+
         return _CM()
 
 
@@ -75,11 +78,12 @@ def test_lock_acquire_failure_falls_back_unlocked():
 
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
-        assert f(7) == 49                     # no crash
-        warned = any(issubclass(x.category, CashCacheIneffectiveWarning)
-                     and "lock" in str(x.message).lower() for x in w)
+        assert f(7) == 49  # no crash
+        warned = any(
+            issubclass(x.category, CashCacheIneffectiveWarning) and "lock" in str(x.message).lower() for x in w
+        )
     assert warned
-    assert calls["n"] == 1                    # computed unlocked
+    assert calls["n"] == 1  # computed unlocked
 
 
 def test_lock_release_failure_does_not_recompute():
@@ -91,7 +95,7 @@ def test_lock_release_failure_does_not_recompute():
         calls["n"] += 1
         return x * 2
 
-    assert f(5) == 10                         # compute ran inside lock; release raised
+    assert f(5) == 10  # compute ran inside lock; release raised
     assert calls["n"] == 1, "compute must not re-run on release failure"
 
 

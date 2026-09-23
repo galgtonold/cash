@@ -89,15 +89,14 @@ _ABSENT_MARKER = "absent"
 # only when the metadata moved (``_unchanged_since_hashed``), so that write is
 # not seen below the cap either, until the file is touched -- a documented
 # limitation; the cap still decides how a file whose metadata moved is hashed.
-_HASH_FULL_MAX_BYTES_DEFAULT = 256 * 1024 * 1024      # 256 MiB
+_HASH_FULL_MAX_BYTES_DEFAULT = 256 * 1024 * 1024  # 256 MiB
 
 
 #: The config of the `Cash` instance whose call is running, set by its
 #: wrapper. The threshold used to come from the process-wide singleton, or a
 #: fresh `get_config()` when there was none, so `Cash(file_hash_full_max_bytes=
 #: ...)` on an instance of your own was silently ignored.
-ACTIVE_CONFIG: contextvars.ContextVar[Any] = contextvars.ContextVar(
-    "cash_active_config", default=None)
+ACTIVE_CONFIG: contextvars.ContextVar[Any] = contextvars.ContextVar("cash_active_config", default=None)
 
 
 def _full_hash_max_bytes() -> int:
@@ -121,16 +120,20 @@ def _full_hash_max_bytes() -> int:
         config = ACTIVE_CONFIG.get()
         if config is None:
             import cash
+
             config = getattr(getattr(cash, "_global_cash", None), "config", None)
         if config is None:
             from cash.config import get_config
+
             config = get_config()
         value = int(config.file_hash_full_max_bytes)
     except Exception:  # noqa: BLE001 - teardown, or a config that cannot load
         return _HASH_FULL_MAX_BYTES_DEFAULT
     return value if value > 0 else _HASH_FULL_MAX_BYTES_DEFAULT
-_HASH_SAMPLE_REGION_BYTES = 256 * 1024        # 256 KiB per sampled region
-_HASH_READ_CHUNK = 1024 * 1024                # 1 MiB streaming chunk
+
+
+_HASH_SAMPLE_REGION_BYTES = 256 * 1024  # 256 KiB per sampled region
+_HASH_READ_CHUNK = 1024 * 1024  # 1 MiB streaming chunk
 
 
 #: Digests already computed this process, keyed by the file's identity AND its
@@ -252,6 +255,7 @@ def realpath_of_read_this_run(path: str) -> tuple[str, os.stat_result | None]:
     missing file, a short ``~`` name -- is resolved in full.
     """
     import stat as _stat
+
     if _HASH_EPOCH is None:
         return os.path.realpath(path), None
     key = ("" if os.path.isabs(path) else os.getcwd(), path)
@@ -266,8 +270,7 @@ def realpath_of_read_this_run(path: str) -> tuple[str, os.stat_result | None]:
             st = os.lstat(absolute)
         except (OSError, ValueError):
             st = None
-        if (st is not None and _stat.S_ISREG(st.st_mode)
-                and not getattr(st, "st_file_attributes", 0) & _REPARSE_POINT):
+        if st is not None and _stat.S_ISREG(st.st_mode) and not getattr(st, "st_file_attributes", 0) & _REPARSE_POINT:
             resolved = os.path.join(realpath_this_run(parent), name)
             _remember_realpath(key, resolved)
             return resolved, st
@@ -305,7 +308,9 @@ def realpath_this_run(path: str) -> str:
 
 
 def file_content_hash(
-    path: str, size: int | None = None, full_hash_max: int | None = None,
+    path: str,
+    size: int | None = None,
+    full_hash_max: int | None = None,
     st: os.stat_result | None = None,
 ) -> str | None:
     """Return a stable content hash for *path*, or ``None`` if unreadable.
@@ -349,8 +354,14 @@ def file_content_hash(
             # and was hashed once for each. Where it gives none (st_ino 0 --
             # including every stat a Windows directory listing returns), the
             # absolute path stands in for it, so both spellings still share.
-            memo_key = (os.path.normcase(os.path.abspath(path)) if not st.st_ino else "",
-                        st.st_dev, st.st_ino, size, st.st_mtime_ns, getattr(st, "st_ctime_ns", 0))
+            memo_key = (
+                os.path.normcase(os.path.abspath(path)) if not st.st_ino else "",
+                st.st_dev,
+                st.st_ino,
+                size,
+                st.st_mtime_ns,
+                getattr(st, "st_ctime_ns", 0),
+            )
             cached = _HASH_MEMO.get(memo_key)
             if cached is not None and (
                 (cached[2] is not None and cached[2] == _HASH_EPOCH)
@@ -399,7 +410,8 @@ def file_content_hash(
 
 
 def snapshot_file_deps(
-    paths: set[str], known: dict[str, tuple[Any, str]] | None = None,
+    paths: set[str],
+    known: dict[str, tuple[Any, str]] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Return ``{path: {'mtime', 'size', 'hash'}}`` for paths that exist.
 
@@ -575,7 +587,7 @@ def split_file_dep_value(value: dict[str, Any]) -> tuple[float, int | None]:
     the size check is skipped downstream. ``hash`` is read separately by
     :func:`file_dep_is_fresh`.
     """
-    return float(value.get('mtime', 0.0)), value.get('size')
+    return float(value.get("mtime", 0.0)), value.get("size")
 
 
 #: How far two timestamps may differ and still count as the same one, for a
@@ -699,8 +711,11 @@ def _unchanged_since_hashed(st: os.stat_result, stored: dict[str, Any]) -> bool:
     # The same file, where the stat says which: a directory listing's does not
     # (``st_ino`` 0), and that is the cost of taking one listing for thousands
     # of files rather than a stat each (see ``stats_from_listings``).
-    if st.st_ino and stored.get("ino") is not None and (
-            (st.st_dev, st.st_ino) != (stored.get("dev"), stored.get("ino"))):
+    if (
+        st.st_ino
+        and stored.get("ino") is not None
+        and ((st.st_dev, st.st_ino) != (stored.get("dev"), stored.get("ino")))
+    ):
         return False
     if os.name != "nt" and stored.get("ctime_ns") != getattr(st, "st_ctime_ns", None):
         return False
@@ -708,7 +723,9 @@ def _unchanged_since_hashed(st: os.stat_result, stored: dict[str, Any]) -> bool:
 
 
 def file_dep_is_fresh(
-    resolved_path: str, stored: dict[str, Any], full_hash_max: int | None = None,
+    resolved_path: str,
+    stored: dict[str, Any],
+    full_hash_max: int | None = None,
     listed: os.stat_result | None = None,
 ) -> tuple[bool, str | None]:
     """Return ``(is_fresh, stale_reason)`` for a resolved file dependency.
@@ -762,9 +779,12 @@ def file_dep_is_fresh(
     # file is hashed in full: there content is the authority, not the size or
     # the time the listing reports. A sampled file keeps its timestamps as a
     # backstop, so it gets a stat of its own.
-    if (listed is not None and stored_hash is not None
-            and listed.st_size <= full_hash_max
-            and (stored_size is None or stored_size <= full_hash_max)):
+    if (
+        listed is not None
+        and stored_hash is not None
+        and listed.st_size <= full_hash_max
+        and (stored_size is None or stored_size <= full_hash_max)
+    ):
         st = listed
     else:
         try:
@@ -786,8 +806,7 @@ def file_dep_is_fresh(
             # two digests are not comparable, and "content changed" blamed
             # the data for a setting (round 20). A snapshot says which; one
             # written before it did records a ctime only when sampled.
-            recorded_sampled = (stored["sampled"] if "sampled" in stored
-                                else "ctime_ns" in stored or "ctime" in stored)
+            recorded_sampled = stored["sampled"] if "sampled" in stored else "ctime_ns" in stored or "ctime" in stored
             if recorded_sampled != (st.st_size > full_hash_max):
                 return False, "hash-mode"
             return False, "content"
@@ -870,8 +889,9 @@ def code_root_of(module_name: str | None) -> str | None:
     return root
 
 
-def attach_code_relative(snapshot: dict[str, dict[str, Any]] | None,
-                         module_name: str | None) -> dict[str, dict[str, Any]] | None:
+def attach_code_relative(
+    snapshot: dict[str, dict[str, Any]] | None, module_name: str | None
+) -> dict[str, dict[str, Any]] | None:
     """Mark the snapshot entries that live under the writer's code root."""
     if not snapshot or not module_name:
         return snapshot
@@ -883,7 +903,7 @@ def attach_code_relative(snapshot: dict[str, dict[str, Any]] | None,
         if not isinstance(entry, dict) or entry.get(_REMOTE_MARKER):
             continue
         if not os.path.isabs(path):
-            continue                      # relative twins already re-resolve
+            continue  # relative twins already re-resolve
         native = os.path.normcase(os.path.normpath(path))
         if not native.startswith(root_key):
             continue

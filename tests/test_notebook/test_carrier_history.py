@@ -4,6 +4,7 @@ Runtime and simulation each compute it from their own statements, so what
 must hold is: same drawing -> same fingerprint whatever the figure's own
 lineage, and anything that can change the picture -> a different one or none.
 """
+
 from cash.notebook.carrier_history import carrier_history_fingerprint
 
 CHART = [
@@ -42,9 +43,11 @@ def test_an_edited_fill_counts():
 def test_a_statement_not_recognised_as_drawing_still_counts():
     """``ax2 = axes[1]`` draws nothing and ``ax2`` is not what ``subplots``
     bound -- but the bar after it is part of the picture."""
-    chart = [("fig, axes = plt.subplots(1, 2)", {"plt": "P"}),
-             ("ax2 = axes[1]", {"axes": "X1"}),
-             ("ax2.bar(range(3), totals)", {"ax2": "B1", "totals": "T1"})]
+    chart = [
+        ("fig, axes = plt.subplots(1, 2)", {"plt": "P"}),
+        ("ax2 = axes[1]", {"axes": "X1"}),
+        ("ax2.bar(range(3), totals)", {"ax2": "B1", "totals": "T1"}),
+    ]
     changed = _with(chart, 2, lineages={"ax2": "B1", "totals": "T2"})
     assert carrier_history_fingerprint(changed, "fig") != carrier_history_fingerprint(chart, "fig")
 
@@ -57,9 +60,11 @@ def test_what_ran_before_the_figure_was_made_does_not_count():
 def test_each_figure_has_its_own_history():
     """``fig`` is bound again for a second chart: the first chart's bars are
     not part of it, the second chart's are."""
-    second = CHART + [("plt.close(fig)", {"plt": "P", "fig": "F2"}),
-                      ("fig, axes = plt.subplots(1, 2)", {"plt": "P"}),
-                      ("axes[0].bar(range(3), data[:3])", {"axes": "X1", "data": "D1"})]
+    second = CHART + [
+        ("plt.close(fig)", {"plt": "P", "fig": "F2"}),
+        ("fig, axes = plt.subplots(1, 2)", {"plt": "P"}),
+        ("axes[0].bar(range(3), data[:3])", {"axes": "X1", "data": "D1"}),
+    ]
     first_bars = _with(second, 2, lineages={"ax": "A1", "data": "D2"})
     second_bars = _with(second, 7, lineages={"axes": "X1", "data": "D2"})
     assert carrier_history_fingerprint(first_bars, "fig") == carrier_history_fingerprint(second, "fig")

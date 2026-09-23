@@ -50,13 +50,14 @@ class TestPrependedStatementInputs:
         checker = _checker(live={"np": object(), "MULT": 3})
 
         out = checker._prepend_rng_chain_for_reexecuted_draws(
-            NOTEBOOK, [REEXECUTED_DRAW], 4,
+            NOTEBOOK,
+            [REEXECUTED_DRAW],
+            4,
         )
 
         assert CHAIN_DRAW in out, "the RNG chain must still be rebuilt"
         assert "n = 500" in out, (
-            "the prepended draw reads 'n'; without its definition the "
-            "reconstruction raises NameError"
+            "the prepended draw reads 'n'; without its definition the reconstruction raises NameError"
         )
         assert out.index("n = 500") < out.index(CHAIN_DRAW)
 
@@ -69,7 +70,9 @@ class TestPrependedStatementInputs:
         checker = _checker(live={"np": object(), "MULT": 3, "n": 500})
 
         out = checker._prepend_rng_chain_for_reexecuted_draws(
-            NOTEBOOK, [REEXECUTED_DRAW], 4,
+            NOTEBOOK,
+            [REEXECUTED_DRAW],
+            4,
         )
 
         assert CHAIN_DRAW in out
@@ -89,7 +92,9 @@ class TestPrependedStatementInputs:
         checker = _checker(live={"np": object(), "MULT": 3})
 
         out = checker._prepend_rng_chain_for_reexecuted_draws(
-            notebook, ["arr = np.random.randn(5) * MULT"], 6,
+            notebook,
+            ["arr = np.random.randn(5) * MULT"],
+            6,
         )
 
         assert out.index("rows = 10") < out.index("n = rows * 50")
@@ -101,7 +106,9 @@ class TestPrependedStatementInputs:
 
         statements = ["total = 1 + 2"]
         out = checker._prepend_rng_chain_for_reexecuted_draws(
-            NOTEBOOK, statements, 4,
+            NOTEBOOK,
+            statements,
+            4,
         )
 
         assert out == statements

@@ -16,6 +16,7 @@ refuse the orphaned write and warn, rather than write a figure the user did not
 draw. The oracle is the PNG geometry on disk; the corruption is invisible from
 inside the kernel.
 """
+
 import os
 
 import pytest
@@ -39,13 +40,14 @@ _CLEAR_WRITE_RECORD = (
 
 def _png_geometry(path):
     from matplotlib import image as mpimg
+
     h, w = mpimg.imread(path).shape[:2]
     return (w, h)
 
 
 def _chart_path(tmp_path):
     # Short path (Windows MAX_PATH hygiene) with a unique name per test.
-    p = f"C:/Temp/cas187_{os.getpid()}_{id(tmp_path) & 0xffff}.png"
+    p = f"C:/Temp/cas187_{os.getpid()}_{id(tmp_path) & 0xFFFF}.png"
     if os.path.exists(p):
         os.remove(p)
     return p
@@ -57,22 +59,22 @@ def test_healthy_plt_savefig_writes_the_real_chart_and_does_not_refuse(nb_runner
     os.makedirs("C:/Temp", exist_ok=True)
     chart = _chart_path(tmp_path)
 
-    nb_runner.create_notebook([
-        "import os\nimport matplotlib\nmatplotlib.use('Agg')\n"
-        "import matplotlib.pyplot as plt\nimport cash\n%cash_on\n%cash_badge print",
-        "names = ['a', 'b', 'c']\ntotals = [3, 5, 2]",
-        "fig, ax = plt.subplots(figsize=(8, 4.5), dpi=120)\n"
-        "ax.bar(names, totals)\nax.set_title('Totals')\n"
-        f"plt.savefig(r'{chart}')",
-        "grand_total = sum(totals)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import os\nimport matplotlib\nmatplotlib.use('Agg')\n"
+            "import matplotlib.pyplot as plt\nimport cash\n%cash_on\n%cash_badge print",
+            "names = ['a', 'b', 'c']\ntotals = [3, 5, 2]",
+            "fig, ax = plt.subplots(figsize=(8, 4.5), dpi=120)\n"
+            "ax.bar(names, totals)\nax.set_title('Totals')\n"
+            f"plt.savefig(r'{chart}')",
+            "grand_total = sum(totals)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
     # The user's geometry, not matplotlib's 640x480 default -> a real chart.
-    assert _png_geometry(chart) == (960, 540), (
-        "the healthy run must write the user's figure at its own geometry"
-    )
+    assert _png_geometry(chart) == (960, 540), "the healthy run must write the user's figure at its own geometry"
 
     # A plain unrelated re-run must not disturb it either.
     nb_runner.run_cell(4)
@@ -90,22 +92,24 @@ def test_orphaned_plt_savefig_is_refused_not_blanked(nb_runner, tmp_path):
     os.makedirs("C:/Temp", exist_ok=True)
     chart = _chart_path(tmp_path)
 
-    nb_runner.create_notebook([
-        "import os\nimport matplotlib\nmatplotlib.use('Agg')\n"
-        "import matplotlib.pyplot as plt\nimport cash\n%cash_on\n%cash_badge print",  # 1
-        "d = r'C:/Temp'\nnames = ['a', 'b', 'c']\ntotals = [3, 5, 2]",                 # 2
-        "fig, ax = plt.subplots(figsize=(8, 4.5), dpi=120)\n"                          # 3
-        "ax.bar(names, totals)\nax.set_title('Totals')\n"
-        f"plt.savefig(os.path.join(d, {os.path.basename(chart)!r}))\nplt.close('all')",
-        "grand_total = sum(totals)",                                                   # 4 unrelated
-        _CLEAR_WRITE_RECORD,                                                           # 5
-    ])
+    nb_runner.create_notebook(
+        [
+            "import os\nimport matplotlib\nmatplotlib.use('Agg')\n"
+            "import matplotlib.pyplot as plt\nimport cash\n%cash_on\n%cash_badge print",  # 1
+            "d = r'C:/Temp'\nnames = ['a', 'b', 'c']\ntotals = [3, 5, 2]",  # 2
+            "fig, ax = plt.subplots(figsize=(8, 4.5), dpi=120)\n"  # 3
+            "ax.bar(names, totals)\nax.set_title('Totals')\n"
+            f"plt.savefig(os.path.join(d, {os.path.basename(chart)!r}))\nplt.close('all')",
+            "grand_total = sum(totals)",  # 4 unrelated
+            _CLEAR_WRITE_RECORD,  # 5
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert _png_geometry(chart) == (960, 540), "run_all must produce the real chart first"
 
-    nb_runner.run_cell(5)   # model the post-restart write-record state
-    nb_runner.run_cell(4)   # unrelated cell -> its sim would orphan the savefig
+    nb_runner.run_cell(5)  # model the post-restart write-record state
+    nb_runner.run_cell(4)  # unrelated cell -> its sim would orphan the savefig
 
     assert _png_geometry(chart) == (960, 540), (
         "cash silently overwrote the user's chart with a blank 640x480 default "

@@ -56,13 +56,29 @@ __all__ = [
 # Resolved to real types once at import; every public itertools iterator is a
 # C-level self-iterator, so the generic test below also catches any we miss.
 _ITERTOOLS_TYPES: tuple[type, ...] = tuple(
-    t for t in (
+    t
+    for t in (
         getattr(itertools, name, None)
         for name in (
-            'count', 'cycle', 'chain', 'repeat', 'accumulate', 'compress',
-            'dropwhile', 'filterfalse', 'groupby', 'islice', 'permutations',
-            'combinations', 'combinations_with_replacement', 'product',
-            'starmap', 'takewhile', 'zip_longest', 'pairwise', 'batched',
+            "count",
+            "cycle",
+            "chain",
+            "repeat",
+            "accumulate",
+            "compress",
+            "dropwhile",
+            "filterfalse",
+            "groupby",
+            "islice",
+            "permutations",
+            "combinations",
+            "combinations_with_replacement",
+            "product",
+            "starmap",
+            "takewhile",
+            "zip_longest",
+            "pairwise",
+            "batched",
         )
     )
     if isinstance(t, type)
@@ -75,8 +91,7 @@ _GENERATOR_TYPES: tuple[type, ...] = (
 )
 
 _QUEUE_TYPES: tuple[type, ...] = tuple(
-    t for t in (getattr(queue, n, None) for n in ('Queue', 'SimpleQueue'))
-    if isinstance(t, type)
+    t for t in (getattr(queue, n, None) for n in ("Queue", "SimpleQueue")) if isinstance(t, type)
 )
 
 
@@ -87,7 +102,7 @@ def _is_self_iterator(obj: Any) -> bool:
     whose ``__iter__`` hands back a fresh cursor each time.
     """
     cls = type(obj)
-    if not hasattr(cls, '__iter__') or not hasattr(cls, '__next__'):
+    if not hasattr(cls, "__iter__") or not hasattr(cls, "__next__"):
         return False
     try:
         return iter(obj) is obj
@@ -111,7 +126,7 @@ def _hits_byref_fallback(obj: Any) -> bool:
     succeeds while ``deepcopy`` chokes on its internal ``threading.Lock`` — so
     queues are classified by an explicit ``isinstance`` branch instead.)
     """
-    if hasattr(type(obj), '__deepcopy__') or hasattr(type(obj), '__copy__'):
+    if hasattr(type(obj), "__deepcopy__") or hasattr(type(obj), "__copy__"):
         return False
     try:
         obj.__reduce_ex__(4)
@@ -162,17 +177,17 @@ def consumable_state(obj: Any) -> Any | None:
     # reading it neither advances nor closes them.
     if isinstance(obj, types.GeneratorType):
         try:
-            return ('gen', inspect.getgeneratorstate(obj))
+            return ("gen", inspect.getgeneratorstate(obj))
         except (TypeError, AttributeError):
             return None
     if isinstance(obj, types.CoroutineType):
         try:
-            return ('coro', inspect.getcoroutinestate(obj))
+            return ("coro", inspect.getcoroutinestate(obj))
         except (TypeError, AttributeError):
             return None
     if isinstance(obj, types.AsyncGeneratorType):
         try:
-            return ('agen', inspect.getasyncgenstate(obj))
+            return ("agen", inspect.getasyncgenstate(obj))
         except (TypeError, AttributeError):
             return None
     # Queues report their depth directly. ``qsize`` is documented as
@@ -180,22 +195,22 @@ def consumable_state(obj: Any) -> Any | None:
     # the single reader, so it is exact here.
     if isinstance(obj, _QUEUE_TYPES):
         try:
-            return ('qsize', obj.qsize())
+            return ("qsize", obj.qsize())
         except (NotImplementedError, AttributeError, ValueError):
             return None
     # Open file handles: byte offset is exact and cheap. Closed/unseekable
     # streams raise -> no probe.
-    if hasattr(obj, 'tell') and hasattr(obj, 'read'):
+    if hasattr(obj, "tell") and hasattr(obj, "read"):
         try:
-            return ('tell', obj.tell(), bool(getattr(obj, 'closed', False)))
+            return ("tell", obj.tell(), bool(getattr(obj, "closed", False)))
         except (OSError, ValueError, AttributeError):
             return None
     # ``itertools.count`` renders its next value (``count(5)``); the other
     # itertools iterators keep their cursor entirely in C with no observable
     # handle, so they fall through to ``None``.
-    if isinstance(obj, getattr(itertools, 'count', ())):
+    if isinstance(obj, getattr(itertools, "count", ())):
         try:
-            return ('count', repr(obj))
+            return ("count", repr(obj))
         except Exception:  # noqa: BLE001 - repr of a foreign object
             return None
     return None

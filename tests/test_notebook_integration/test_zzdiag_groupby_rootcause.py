@@ -49,7 +49,4 @@ def test_mutation_inside_sample_window(nb_runner):
 
 def test_mutation_outside_sample_window(nb_runner):
     truth, got = _run_variant(nb_runner, row=999)  # reproduces the CAS-86 repro
-    assert truth in got, (
-        f"out-of-sample mutation stale (expected, matches CAS-86 repro). "
-        f"plain={truth!r} cash={got!r}"
-    )
+    assert truth in got, f"out-of-sample mutation stale (expected, matches CAS-86 repro). plain={truth!r} cash={got!r}"

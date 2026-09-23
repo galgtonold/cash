@@ -14,6 +14,7 @@ The HTTP path is exercised against a real local server rather than a mocked
 ``urlopen``: HEAD semantics, header casing and the ranged-GET fallback are
 exactly the parts a mock would define into existence.
 """
+
 from __future__ import annotations
 
 import sys
@@ -40,6 +41,7 @@ def _fresh_warning_ledgers():
 # ---------------------------------------------------------------------------
 # A real local origin, so the HTTP path is tested against HTTP.
 # ---------------------------------------------------------------------------
+
 
 class _Origin:
     """Serves one object whose validators the test controls."""
@@ -106,9 +108,7 @@ class TestHttpToken:
 
     def test_head_is_the_request_made(self, origin):
         RemoteFileDataSource(origin.url).state_token()
-        assert origin.requests == ["HEAD"], (
-            "checking freshness must not download the object"
-        )
+        assert origin.requests == ["HEAD"], "checking freshness must not download the object"
 
     def test_falls_back_to_a_ranged_get_when_head_is_refused(self, origin):
         origin.allow_head = False
@@ -138,6 +138,7 @@ class TestHttpToken:
 # Version-pinned URLs: immutable by the storage contract, so free to check.
 # ---------------------------------------------------------------------------
 
+
 class TestPinnedVersions:
     @pytest.mark.parametrize(
         "url, expected",
@@ -156,7 +157,7 @@ class TestPinnedVersions:
         [
             "s3://bucket/key",
             "s3://bucket/releases/v1.2.3/data.parquet",  # looks pinned, isn't
-            "https://host/key?versionId=",                # empty pin is no pin
+            "https://host/key?versionId=",  # empty pin is no pin
             "gs://bucket/generation",
         ],
     )
@@ -183,8 +184,7 @@ class TestImmutableAndMaxAge:
 
         origin.etag = '"v2"'
         assert source.state_token() == first, (
-            "immutable=True is a promise the object cannot change; honouring it "
-            "is the whole point of the flag"
+            "immutable=True is a promise the object cannot change; honouring it is the whole point of the flag"
         )
         assert origin.requests == ["HEAD"]
 
@@ -199,14 +199,13 @@ class TestImmutableAndMaxAge:
         source = RemoteFileDataSource(origin.url)
         source.state_token()
         source.state_token()
-        assert origin.requests == ["HEAD", "HEAD"], (
-            "max_age defaults to 0 - correctness first"
-        )
+        assert origin.requests == ["HEAD", "HEAD"], "max_age defaults to 0 - correctness first"
 
 
 # ---------------------------------------------------------------------------
 # Failure is closed.
 # ---------------------------------------------------------------------------
+
 
 class TestFailureIsClosed:
     def test_unreachable_store_yields_a_fresh_token_each_time(self, monkeypatch):
@@ -241,8 +240,10 @@ class TestFailureIsClosed:
 # fsspec-addressed objects.
 # ---------------------------------------------------------------------------
 
+
 def _fake_fsspec(info: dict):
     """A stand-in fsspec exposing exactly the surface the resolver uses."""
+
     class FS:
         def info(self, path):
             return dict(info)
@@ -267,9 +268,7 @@ class TestFsspecToken:
         assert RemoteFileDataSource("s3://bucket/key").state_token() == expected
 
     def test_falls_back_to_mtime_and_size(self, monkeypatch):
-        monkeypatch.setitem(
-            sys.modules, "fsspec", _fake_fsspec({"LastModified": "2026-07-26", "size": 10})
-        )
+        monkeypatch.setitem(sys.modules, "fsspec", _fake_fsspec({"LastModified": "2026-07-26", "size": 10}))
         token = RemoteFileDataSource("s3://bucket/key").state_token()
         assert token == "mtime:2026-07-26|size:10"
 
@@ -294,15 +293,14 @@ class TestFsspecToken:
         module.core = types.SimpleNamespace(url_to_fs=url_to_fs)
         monkeypatch.setitem(sys.modules, "fsspec", module)
 
-        RemoteFileDataSource(
-            "s3://bucket/key", storage_options={"profile": "analytics"}
-        ).state_token()
+        RemoteFileDataSource("s3://bucket/key", storage_options={"profile": "analytics"}).state_token()
         assert seen == {"profile": "analytics"}
 
 
 # ---------------------------------------------------------------------------
 # The whole point: it invalidates a real cache, identically on any machine.
 # ---------------------------------------------------------------------------
+
 
 class TestAsACacheDependency:
     def test_a_changed_object_invalidates_the_entry(self, origin):
@@ -357,8 +355,7 @@ class TestRevalidationWindow:
 
         assert first == second
         assert origin.requests == ["HEAD"], (
-            "the window must reach a separately-constructed source, or it cannot "
-            "reach an auto-tracked read at all"
+            "the window must reach a separately-constructed source, or it cannot reach an auto-tracked read at all"
         )
 
     def test_a_per_source_window_overrides_the_default(self, origin):

@@ -4,6 +4,7 @@ The state hasher folds a DataSource's *token* into the cache key, so a custom
 source must return a value that changes (a version/digest), not a bool. A bool
 can't track changes - the cache would silently never invalidate - so Cash warns.
 """
+
 from __future__ import annotations
 
 import warnings
@@ -21,7 +22,7 @@ class VersionSource(DataSource):
         return "version"
 
     def has_changed(self):
-        return self.version          # a VALUE, not a bool
+        return self.version  # a VALUE, not a bool
 
     def update_state(self) -> None:
         pass
@@ -71,7 +72,7 @@ def test_value_source_invalidates_via_depends_on():
 
     assert g(5) == "5:v1"
     src.version = "v2"
-    assert g(5) == "5:v2"            # invalidated
+    assert g(5) == "5:v2"  # invalidated
     src.version = "v3"
     assert g(5) == "5:v3"
     assert calls["n"] == 3
@@ -122,9 +123,9 @@ def test_bool_source_warns():
         warnings.simplefilter("always")
         # Clear the module-level dedup so the warning can fire in this test.
         import cash.data_source as ds_mod
+
         ds_mod._warned_bool_token_sources.discard("BoolSource")
         g(1)
-        assert any(
-            issubclass(x.category, CashCacheIneffectiveWarning) and "bool" in str(x.message)
-            for x in w
-        ), [str(x.message) for x in w]
+        assert any(issubclass(x.category, CashCacheIneffectiveWarning) and "bool" in str(x.message) for x in w), [
+            str(x.message) for x in w
+        ]

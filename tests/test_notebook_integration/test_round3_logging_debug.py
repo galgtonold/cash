@@ -1,5 +1,7 @@
 """Batch 54: Logging & debug patterns — cash caching with logging, warnings, traceback."""
+
 import textwrap
+
 import pytest
 
 
@@ -9,8 +11,9 @@ class TestLoggingPatterns:
 
     def test_basic_logging_setup(self, nb_runner):
         """Logger setup and usage across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 import logging
                 import io
 
@@ -23,7 +26,7 @@ class TestLoggingPatterns:
                 logger.handlers = [handler]
                 logger.setLevel(logging.DEBUG)
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 logger.info("started processing")
                 logger.warning("something unusual")
                 logger.debug("debug info")
@@ -32,7 +35,8 @@ class TestLoggingPatterns:
                 print(f"lines={line_count}")
                 print(f"has_warning={'WARNING' in log_output}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "lines=3" in nb_runner.get_output(2)
@@ -40,8 +44,9 @@ class TestLoggingPatterns:
 
     def test_custom_log_filter(self, nb_runner):
         """Custom log filter across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 import logging
                 import io
 
@@ -61,7 +66,7 @@ class TestLoggingPatterns:
                 logger.handlers = [handler]
                 logger.setLevel(logging.DEBUG)
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 logger.debug("hidden")
                 logger.info("also hidden")
                 logger.warning("visible1")
@@ -71,7 +76,8 @@ class TestLoggingPatterns:
                 print(f"visible_count={len(lines)}")
                 print(f"first={lines[0]}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -85,8 +91,9 @@ class TestWarningsPatterns:
 
     def test_custom_warning(self, nb_runner):
         """Custom warning class across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 import warnings
 
                 class DeprecationWarning2(UserWarning):
@@ -99,7 +106,7 @@ class TestWarningsPatterns:
                 def new_api(x):
                     return x * 3
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 with warnings.catch_warnings(record=True) as w:
                     warnings.simplefilter("always")
                     result = old_api(5)
@@ -107,7 +114,8 @@ class TestWarningsPatterns:
                     warn_msg = str(w[0].message) if w else "none"
                 print(f"result={result} warns={warn_count} msg={warn_msg}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -122,8 +130,9 @@ class TestContextManagerPatterns:
 
     def test_contextlib_contextmanager(self, nb_runner):
         """@contextmanager decorator across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from contextlib import contextmanager
 
                 @contextmanager
@@ -138,14 +147,15 @@ class TestContextManagerPatterns:
                         elapsed = time.time() - start
                         log.append(f"end:{name}:{elapsed:.3f}s")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 with timer_context("computation") as log:
                     result = sum(range(10000))
                     log.append(f"computed:{result}")
                 print(f"log_count={len(log)} first={log[0]}")
                 print(f"has_end={'end:computation' in log[2]}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -155,8 +165,9 @@ class TestContextManagerPatterns:
 
     def test_nested_context_managers(self, nb_runner):
         """Nested context managers across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class TrackingCM:
                     history = []
                     def __init__(self, name):
@@ -168,13 +179,14 @@ class TestContextManagerPatterns:
                         TrackingCM.history.append(f"exit:{self.name}")
                         return False
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 with TrackingCM("outer") as o:
                     with TrackingCM("inner") as i:
                         TrackingCM.history.append("work")
                 print(f"history={TrackingCM.history}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -185,16 +197,18 @@ class TestContextManagerPatterns:
 
     def test_suppress_context(self, nb_runner):
         """contextlib.suppress across cells."""
-        nb_runner.create_notebook([
-            "from contextlib import suppress",
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                "from contextlib import suppress",
+                textwrap.dedent("""\
                 results = []
                 for val in ['10', 'abc', '20', None, '30']:
                     with suppress(TypeError, ValueError):
                         results.append(int(val))
                 print(f"results={results}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "results=[10, 20, 30]" in nb_runner.get_output(2)

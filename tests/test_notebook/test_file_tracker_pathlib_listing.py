@@ -6,6 +6,7 @@ through ``_NormalAccessor``, and on 3.13 ``Path.glob`` goes through
 round-22 notebook globbing a ledger folder with ``Path.glob`` on 3.13 never
 saw the new month's file.
 """
+
 import glob
 import os
 import pathlib
@@ -29,6 +30,5 @@ def test_listing_records_the_directory(tmp_path, listing):
     (tmp_path / "a.csv").write_text("x")
     with FileAccessTracker({}) as tracker:
         LISTINGS[listing](str(tmp_path))
-    listed = {os.path.normcase(os.path.abspath(p)).rstrip("\\/")
-              for p in tracker.get_accessed_files()}
+    listed = {os.path.normcase(os.path.abspath(p)).rstrip("\\/") for p in tracker.get_accessed_files()}
     assert os.path.normcase(str(tmp_path)) in listed, sorted(listed)

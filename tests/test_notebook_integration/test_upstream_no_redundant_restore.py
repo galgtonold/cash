@@ -24,22 +24,14 @@ def test_no_redundant_upstream_restore_with_functions(nb_runner):
     When a cell uses df and upstream cells define functions used on df,
     re-running the cell should NOT restore upstream df statements.
     """
-    nb_runner.create_notebook([
-        # Cell 1: Define a transform function and apply it
-        (
-            "def double(x):\n"
-            "    return x * 2\n"
-            "data = [1, 2, 3, 4, 5]\n"
-            "result = [double(x) for x in data]"
-        ),
-        # Cell 2: Use result in a loop
-        (
-            "total = 0\n"
-            "for val in result:\n"
-            "    total += val\n"
-            "print(f'Total: {total}')"
-        ),
-    ])
+    nb_runner.create_notebook(
+        [
+            # Cell 1: Define a transform function and apply it
+            ("def double(x):\n    return x * 2\ndata = [1, 2, 3, 4, 5]\nresult = [double(x) for x in data]"),
+            # Cell 2: Use result in a loop
+            ("total = 0\nfor val in result:\n    total += val\nprint(f'Total: {total}')"),
+        ]
+    )
     nb_runner.start_kernel()
 
     # First run: everything computed fresh
@@ -54,9 +46,7 @@ def test_no_redundant_upstream_restore_with_functions(nb_runner):
 
     # Check that no upstream restoration badge appears
     raw_output = nb_runner.get_raw_output(2)
-    assert "Restored" not in raw_output, (
-        f"Unexpected upstream restoration on re-run. Output: {raw_output}"
-    )
+    assert "Restored" not in raw_output, f"Unexpected upstream restoration on re-run. Output: {raw_output}"
 
 
 def test_no_redundant_restore_multi_transform(nb_runner):
@@ -64,20 +54,18 @@ def test_no_redundant_restore_multi_transform(nb_runner):
     Multiple chained transformations on the same variable should not
     trigger redundant upstream restorations when re-executing a downstream cell.
     """
-    nb_runner.create_notebook([
-        # Cell 1: Create data
-        "data = list(range(10))",
-        # Cell 2: Transform step 1
-        "data = [x + 1 for x in data]",
-        # Cell 3: Transform step 2 with user-defined function
-        (
-            "def square(x):\n"
-            "    return x ** 2\n"
-            "data = [square(x) for x in data]"
-        ),
-        # Cell 4: Use data
-        "total = sum(data)\nprint(f'Sum: {total}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            # Cell 1: Create data
+            "data = list(range(10))",
+            # Cell 2: Transform step 1
+            "data = [x + 1 for x in data]",
+            # Cell 3: Transform step 2 with user-defined function
+            ("def square(x):\n    return x ** 2\ndata = [square(x) for x in data]"),
+            # Cell 4: Use data
+            "total = sum(data)\nprint(f'Sum: {total}')",
+        ]
+    )
     nb_runner.start_kernel()
 
     # First run: everything computed
@@ -91,9 +79,7 @@ def test_no_redundant_restore_multi_transform(nb_runner):
     assert "Sum:" in output2
 
     raw_output = nb_runner.get_raw_output(4)
-    assert "Restored" not in raw_output, (
-        f"Unexpected upstream restoration. Output: {raw_output}"
-    )
+    assert "Restored" not in raw_output, f"Unexpected upstream restoration. Output: {raw_output}"
 
 
 def test_no_redundant_restore_third_reexecution(nb_runner):
@@ -111,23 +97,16 @@ def test_no_redundant_restore_third_reexecution(nb_runner):
     but after _sync_simulation_cache_lineages(), subsequent runs should
     match.
     """
-    nb_runner.create_notebook([
-        # Cell 1: Create data
-        "data = list(range(20))",
-        # Cell 2: Transform with user-defined function
-        (
-            "def transform(x):\n"
-            "    return x ** 2 + 1\n"
-            "data = [transform(x) for x in data]"
-        ),
-        # Cell 3: Use data in a loop
-        (
-            "total = 0\n"
-            "for val in data:\n"
-            "    total += val\n"
-            "print(f'Total: {total}')"
-        ),
-    ])
+    nb_runner.create_notebook(
+        [
+            # Cell 1: Create data
+            "data = list(range(20))",
+            # Cell 2: Transform with user-defined function
+            ("def transform(x):\n    return x ** 2 + 1\ndata = [transform(x) for x in data]"),
+            # Cell 3: Use data in a loop
+            ("total = 0\nfor val in data:\n    total += val\nprint(f'Total: {total}')"),
+        ]
+    )
     nb_runner.start_kernel()
 
     # First run
@@ -148,9 +127,7 @@ def test_no_redundant_restore_third_reexecution(nb_runner):
     assert "Total:" in output3
 
     raw_output = nb_runner.get_raw_output(3)
-    assert "Restored" not in raw_output, (
-        f"Unexpected upstream restoration on 3rd run. Output: {raw_output}"
-    )
+    assert "Restored" not in raw_output, f"Unexpected upstream restoration on 3rd run. Output: {raw_output}"
 
 
 def test_no_redundant_restore_control_structure_upstream(nb_runner, tmp_path):
@@ -163,24 +140,26 @@ def test_no_redundant_restore_control_structure_upstream(nb_runner, tmp_path):
     # Create a data file
     data_file = tmp_path / "test_data.csv"
     data_file.write_text("a,b\n1,2\n3,4\n5,6\n")
-    data_path_str = str(data_file).replace('\\', '/')
+    data_path_str = str(data_file).replace("\\", "/")
 
-    nb_runner.create_notebook([
-        # Cell 1: Conditional data loading (control structure)
-        (
-            "import os\n"
-            f"path = '{data_path_str}'\n"
-            "if os.path.exists(path):\n"
-            "    with open(path) as f:\n"
-            "        lines = f.readlines()\n"
-            "    data = [line.strip() for line in lines[1:]]\n"
-            "else:\n"
-            "    data = []\n"
-            "print(f'Loaded {len(data)} rows')"
-        ),
-        # Cell 2: Process data
-        "result = len(data)\nprint(f'Result: {result}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            # Cell 1: Conditional data loading (control structure)
+            (
+                "import os\n"
+                f"path = '{data_path_str}'\n"
+                "if os.path.exists(path):\n"
+                "    with open(path) as f:\n"
+                "        lines = f.readlines()\n"
+                "    data = [line.strip() for line in lines[1:]]\n"
+                "else:\n"
+                "    data = []\n"
+                "print(f'Loaded {len(data)} rows')"
+            ),
+            # Cell 2: Process data
+            "result = len(data)\nprint(f'Result: {result}')",
+        ]
+    )
     nb_runner.start_kernel()
 
     # First run
@@ -196,6 +175,4 @@ def test_no_redundant_restore_control_structure_upstream(nb_runner, tmp_path):
     # Third re-run
     nb_runner.run_cell(2)
     raw_output = nb_runner.get_raw_output(2)
-    assert "Restored" not in raw_output, (
-        f"Unexpected upstream restoration. Output: {raw_output}"
-    )
+    assert "Restored" not in raw_output, f"Unexpected upstream restoration. Output: {raw_output}"

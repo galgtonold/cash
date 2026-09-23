@@ -4,6 +4,7 @@ The integration arm is
 ``test_notebook_integration/test_a_call_keys_on_what_it_receives.py``; this
 pins the key's two changes and each reason :func:`_keys_by_content` says no.
 """
+
 import ast
 
 import pytest
@@ -34,8 +35,7 @@ def _ctx(cleaned_lineage):
 
 
 def _key(site, ctx, by_content):
-    return call_cache_key(site, ctx=ctx, arg_digests=["features"], loop_vars={"0:W": 3},
-                          by_content=by_content)
+    return call_cache_key(site, ctx=ctx, arg_digests=["features"], loop_vars={"0:W": 3}, by_content=by_content)
 
 
 def _fn(source, **namespace):
@@ -44,6 +44,7 @@ def _fn(source, **namespace):
 
 
 # -- the key ------------------------------------------------------------------
+
 
 def test_the_site_knows_which_names_only_feed_an_argument():
     assert _site().content_names == {"make_features", "cleaned", "W"}
@@ -60,11 +61,18 @@ BY_NAME = "models = {key: fit_series(g, PARAMS, cutoff) for key, g in groups}"
 
 def _by_name_key(cutoff_lineage, cutoff_value, params=None):
     site = _site(BY_NAME)
-    ctx = CacheKeyContext(variable_lineage={"PARAMS": "p", "cutoff": cutoff_lineage,
-                                            "fit_series": "f", "groups": "g"}, user_ns={})
+    ctx = CacheKeyContext(
+        variable_lineage={"PARAMS": "p", "cutoff": cutoff_lineage, "fit_series": "f", "groups": "g"}, user_ns={}
+    )
     args = (None, params or {"alpha": 0.5}, cutoff_value)
-    return call_cache_key(site, ctx=ctx, arg_digests=["group"], loop_vars={},
-                          by_content=True, name_digests=CallUnit._name_digests(site, args, {}))
+    return call_cache_key(
+        site,
+        ctx=ctx,
+        arg_digests=["group"],
+        loop_vars={},
+        by_content=True,
+        name_digests=CallUnit._name_digests(site, args, {}),
+    )
 
 
 def test_the_site_knows_which_arguments_are_passed_by_name():
@@ -104,8 +112,9 @@ def test_the_argument_value_still_decides():
 def test_a_key_by_content_never_equals_one_by_statement():
     site = _site("x = f(a + 1)")
     ctx = CacheKeyContext(variable_lineage={"a": "l", "f": "g"}, user_ns={})
-    assert (call_cache_key(site, ctx=ctx, arg_digests=["d"], loop_vars={}, by_content=True)
-            != call_cache_key(site, ctx=ctx, arg_digests=["d"], loop_vars={}, by_content=False))
+    assert call_cache_key(site, ctx=ctx, arg_digests=["d"], loop_vars={}, by_content=True) != call_cache_key(
+        site, ctx=ctx, arg_digests=["d"], loop_vars={}, by_content=False
+    )
 
 
 # -- when it may be -------------------------------------------------------------
@@ -131,14 +140,21 @@ def test_plain_arguments_and_a_pure_callee_are_keyed_by_content():
 def test_an_attribute_named_like_a_global_is_not_read_as_that_global():
     """``os.open`` loads the attribute ``open``, not the global -- which in a
     notebook is cash's file-tracking wrapper."""
-    fn = _fn("import os\ndef f(x):\n    fd = os.open('p', os.O_RDONLY)\n    return x",
-             open=lambda *a: None)
+    fn = _fn("import os\ndef f(x):\n    fd = os.open('p', os.O_RDONLY)\n    return x", open=lambda *a: None)
     assert _decide(fn, (1,))
 
 
-@pytest.mark.parametrize("arg", [
-    object(), iter([1, 2]), (i for i in range(2)), np.array([object()]), [1, object()],
-], ids=["object", "iterator", "generator", "object_array", "list_holding_one"])
+@pytest.mark.parametrize(
+    "arg",
+    [
+        object(),
+        iter([1, 2]),
+        (i for i in range(2)),
+        np.array([object()]),
+        [1, object()],
+    ],
+    ids=["object", "iterator", "generator", "object_array", "list_holding_one"],
+)
 def test_an_argument_whose_state_its_hash_may_miss_keeps_the_statement(arg):
     assert not _decide(_fn(PURE), (arg,))
 
@@ -151,12 +167,16 @@ def test_a_dunder_loop_entry_is_not_asked():
     assert _decide(_fn(PURE), (1,), {"0:__iterable_lineage__": object()})
 
 
-@pytest.mark.parametrize("source", [
-    "conn = object()\ndef f(x):\n    return (conn, x)",
-    "conn = object()\ndef helper():\n    return conn\ndef f(x):\n    return helper()",
-    "def make():\n    conn = object()\n    def f(x):\n        return (conn, x)\n    return f\nf = make()",
-    "def f(x, cache=[object()]):\n    return x",
-], ids=["global", "through_a_helper", "closure", "default"])
+@pytest.mark.parametrize(
+    "source",
+    [
+        "conn = object()\ndef f(x):\n    return (conn, x)",
+        "conn = object()\ndef helper():\n    return conn\ndef f(x):\n    return helper()",
+        "def make():\n    conn = object()\n    def f(x):\n        return (conn, x)\n    return f\nf = make()",
+        "def f(x, cache=[object()]):\n    return x",
+    ],
+    ids=["global", "through_a_helper", "closure", "default"],
+)
 def test_a_callee_reaching_such_state_keeps_the_statement(source):
     """CAS-256's ``fetch_next(conn)``, reached through the callee instead of
     an argument: two statements must keep their own entries."""

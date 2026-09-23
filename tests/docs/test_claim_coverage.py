@@ -23,6 +23,7 @@ a signature reference, a network example that must not run. Gating on "this page
 verifies no claim" conflates the two and flags thirteen pages, most of them
 correctly written.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -144,14 +145,10 @@ def _claims(body: str):
 @pytest.mark.parametrize(
     "label, body, expected",
     [
-        ("repeated args collapse to unique keys",
-         "for x in range(10):\n    f(x % 3)\n", [("f", 7, 3)]),
-        ("distinct args are all misses",
-         "for x in range(3):\n    f(x)\n", [("f", 0, 3)]),
-        ("literal list iterable",
-         "for x in [1, 1, 2]:\n    f(x)\n", [("f", 1, 2)]),
-        ("nested loops multiply out",
-         "for a in range(2):\n    for b in range(2):\n        f(a + b)\n", [("f", 1, 3)]),
+        ("repeated args collapse to unique keys", "for x in range(10):\n    f(x % 3)\n", [("f", 7, 3)]),
+        ("distinct args are all misses", "for x in range(3):\n    f(x)\n", [("f", 0, 3)]),
+        ("literal list iterable", "for x in [1, 1, 2]:\n    f(x)\n", [("f", 1, 2)]),
+        ("nested loops multiply out", "for a in range(2):\n    for b in range(2):\n        f(a + b)\n", [("f", 1, 3)]),
     ],
 )
 def test_loop_expansion_counts_argument_uniqueness(label, body, expected):

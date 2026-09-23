@@ -13,6 +13,7 @@ over costly inputs an entry (round 25, r25s2). Inside a loop nothing is final
 -- the next iteration overwrites it -- and the inputs' unsaved cost only grows
 with every iteration, so every iteration qualified.
 """
+
 SETUP = (
     "import pandas as pd, numpy as np\n"
     "idx = pd.date_range('2013-01-01', periods=300)\n"
@@ -32,14 +33,13 @@ LOOP = (
 
 def _entries(cash_magics):
     backend = cash_magics._cash_instance.backend
-    return sum(len(getattr(t, '_store', {}) or {}) for t in getattr(backend, 'backends', [backend]))
+    return sum(len(getattr(t, "_store", {}) or {}) for t in getattr(backend, "backends", [backend]))
 
 
 def _expected():
-    import pandas as pd
     ns: dict = {}
     exec(SETUP + "\n" + LOOP, ns)
-    return int(ns['members'].values.sum())
+    return int(ns["members"].values.sum())
 
 
 def test_a_cheap_loop_body_stores_no_entry_per_iteration(cash_magics):
@@ -49,15 +49,16 @@ def test_a_cheap_loop_body_stores_no_entry_per_iteration(cash_magics):
     written = _entries(cash_magics) - before
     assert written < 20, (
         f"{written} entries written for a 120-iteration loop whose body costs "
-        "~0.1 ms a statement; each is a snapshot of the frame it changes")
-    assert int(cash_magics.shell.user_ns['members'].values.sum()) == _expected()
+        "~0.1 ms a statement; each is a snapshot of the frame it changes"
+    )
+    assert int(cash_magics.shell.user_ns["members"].values.sum()) == _expected()
 
 
 def test_the_loop_is_still_right_when_run_again(cash_magics):
     cash_magics.cash("", SETUP)
     cash_magics.cash("", LOOP)
     cash_magics.cash("", LOOP)
-    assert int(cash_magics.shell.user_ns['members'].values.sum()) == _expected()
+    assert int(cash_magics.shell.user_ns["members"].values.sum()) == _expected()
 
 
 def test_a_long_cheap_itertuples_loop_runs_as_one_unit(cash_magics):
@@ -68,6 +69,7 @@ def test_a_long_cheap_itertuples_loop_runs_as_one_unit(cash_magics):
     refused to re-evaluate a header whose value is a one-shot iterator, which
     itertuples() makes afresh every time it is called."""
     from cash.notebook.control_structures.for_handler import ForLoopHandler
+
     calls = []
     orig = ForLoopHandler._should_execute_loop_as_single_unit
 
@@ -83,7 +85,7 @@ def test_a_long_cheap_itertuples_loop_runs_as_one_unit(cash_magics):
     finally:
         ForLoopHandler._should_execute_loop_as_single_unit = orig
     assert calls and calls[0] is True, calls
-    assert int(cash_magics.shell.user_ns['members'].values.sum()) == _expected()
+    assert int(cash_magics.shell.user_ns["members"].values.sum()) == _expected()
 
 
 def test_a_stored_iterator_still_never_runs_twice(cash_magics):
@@ -91,4 +93,4 @@ def test_a_stored_iterator_still_never_runs_twice(cash_magics):
     generator yields nothing the second time."""
     cash_magics.cash("", "rows = iter(range(200))")
     cash_magics.cash("", "out = []\nfor r in rows:\n    out.append(r * 2)")
-    assert cash_magics.shell.user_ns['out'] == [r * 2 for r in range(200)]
+    assert cash_magics.shell.user_ns["out"] == [r * 2 for r in range(200)]

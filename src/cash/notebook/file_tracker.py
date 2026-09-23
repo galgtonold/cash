@@ -35,7 +35,7 @@ from cash.utils import is_remote_url, normalize_path
 # by the store's own validator (ETag / version id / generation). ``file://`` is
 # excluded: it names a local path that can genuinely be stat'ed. See CAS-236.
 
-__all__ =["FileDependencyRegistry", "PostImportHook", "FileAccessTracker", "FileDependencies"]
+__all__ = ["FileDependencyRegistry", "PostImportHook", "FileAccessTracker", "FileDependencies"]
 
 # Type alias for file dependency tracking: maps normalized file path -> mtime at read time
 FileDependencies = dict[str, float]
@@ -52,8 +52,8 @@ from cash.effect_observer import _active_observer as _active_effect_observer
 # Active tracker for the current asyncio task / thread.
 # Read by the patched I/O dispatchers to decide whether to record the
 # access. Isolated per task/thread by contextvars semantics.
-_active_tracker: contextvars.ContextVar[Optional["FileAccessTracker"]] = (
-    contextvars.ContextVar("_active_tracker", default=None)
+_active_tracker: contextvars.ContextVar[Optional["FileAccessTracker"]] = contextvars.ContextVar(
+    "_active_tracker", default=None
 )
 
 
@@ -81,6 +81,7 @@ class untracked:
     def __exit__(self, *exc: Any) -> None:
         _active_effect_observer.reset(self._observer_token)
         _active_tracker.reset(self._token)
+
 
 # Per-target install lock: the dispatcher wrappers are installed once
 # per (module/dict, attr-name) pair for the lifetime of the process.
@@ -117,8 +118,7 @@ _PSEUDO_FS_PREFIXES: tuple[str, ...] = ("/proc/", "/sys/", "/dev/")
 #: pandas (`filepath_or_buffer`, `path_or_buf`, `io` for read_excel, `path`),
 #: numpy (`file`, `fname`), joblib (`filename`), pyarrow (`source`,
 #: `input_file`) and polars (`source`).
-_PATH_KWARGS = ("filepath_or_buffer", "path_or_buf", "source", "input_file",
-                "path", "file", "fname", "filename", "io")
+_PATH_KWARGS = ("filepath_or_buffer", "path_or_buf", "source", "input_file", "path", "file", "fname", "filename", "io")
 
 
 def _regular_file_stat(path: str) -> tuple[int, int, int] | None:
@@ -130,6 +130,7 @@ def _regular_file_stat(path: str) -> tuple[int, int, int] | None:
     (CAS-114) is about.
     """
     import stat as _stat
+
     try:
         st = os.stat(path)
     except (OSError, ValueError):
@@ -190,14 +191,30 @@ def _is_pseudo_fs(path: str) -> bool:
 
 #: Modules that look up package METADATA or RESOURCES -- never user data.
 _METADATA_MODULES: tuple[str, ...] = (
-    "importlib.metadata", "importlib_metadata", "importlib.resources",
-    "importlib_resources", "pkg_resources", "pkgutil",
+    "importlib.metadata",
+    "importlib_metadata",
+    "importlib.resources",
+    "importlib_resources",
+    "pkg_resources",
+    "pkgutil",
 )
 
 #: Modules a read passes through between the code that asked for it and the OS.
 _READ_PLUMBING: tuple[str, ...] = (
-    "io", "_io", "codecs", "pathlib", "contextlib", "zipfile", "shutil",
-    "tempfile", "os", "posixpath", "ntpath", "genericpath", "fnmatch", "glob",
+    "io",
+    "_io",
+    "codecs",
+    "pathlib",
+    "contextlib",
+    "zipfile",
+    "shutil",
+    "tempfile",
+    "os",
+    "posixpath",
+    "ntpath",
+    "genericpath",
+    "fnmatch",
+    "glob",
     "cash",
 )
 
@@ -224,6 +241,7 @@ def _norm_dir(path: str) -> str:
 def _interpreter_roots() -> tuple[str, ...]:
     """The standard library, its compiled extensions and zipped stdlib."""
     import sysconfig
+
     roots: set[str] = set()
     paths = sysconfig.get_paths()
     for key in ("stdlib", "platstdlib"):
@@ -248,6 +266,7 @@ def _site_roots() -> tuple[str, ...]:
     """
     import site
     import sysconfig
+
     roots: set[str] = set()
     paths = sysconfig.get_paths()
     for key in ("purelib", "platlib"):
@@ -256,7 +275,7 @@ def _site_roots() -> tuple[str, ...]:
     try:
         for entry in site.getsitepackages():
             roots.add(_norm_dir(entry))
-    except AttributeError:          # virtualenv's old site.py
+    except AttributeError:  # virtualenv's old site.py
         pass
     try:
         roots.add(_norm_dir(site.getusersitepackages()))
@@ -265,8 +284,7 @@ def _site_roots() -> tuple[str, ...]:
     # On Windows `getsitepackages()` also lists the installation prefix itself.
     # That is the standard library's parent -- or, for a venv created as the
     # project folder, the user's whole project -- never a package directory.
-    prefixes = {_norm_dir(p) for p in (sys.prefix, sys.exec_prefix,
-                                       sys.base_prefix, sys.base_exec_prefix)}
+    prefixes = {_norm_dir(p) for p in (sys.prefix, sys.exec_prefix, sys.base_prefix, sys.base_exec_prefix)}
     return tuple(sorted(roots - prefixes))
 
 
@@ -305,9 +323,9 @@ def _installed_data_file(path_nc: str, own_package: str | None) -> bool:
         return True
     for root in _site_roots():
         if path_nc.startswith(root):
-            top = path_nc[len(root):].split("/", 1)[0]
+            top = path_nc[len(root) :].split("/", 1)[0]
             name = top.split(".", 1)[0].split("-", 1)[0]
-            return "/" in path_nc[len(root):] and name != own_package
+            return "/" in path_nc[len(root) :] and name != own_package
     return False
 
 
@@ -353,8 +371,7 @@ def incidental_read(path: str, own_package: str | None = None) -> str | None:
         module = frame.f_globals.get("__name__") or ""
         kind = _MODULE_KIND.get(module)
         if kind is None:
-            kind = (_in_modules(module, _METADATA_MODULES), _in_modules(module, _READ_PLUMBING),
-                    module.split(".")[0])
+            kind = (_in_modules(module, _METADATA_MODULES), _in_modules(module, _READ_PLUMBING), module.split(".")[0])
             if len(_MODULE_KIND) < 8192:
                 _MODULE_KIND[module] = kind
         is_metadata, is_plumbing, top = kind
@@ -371,14 +388,12 @@ def incidental_read(path: str, own_package: str | None = None) -> str | None:
                 # worker, a launcher) must not turn every read into one.
                 spec = frame.f_globals.get("__spec__")
                 origin = getattr(spec, "origin", None)
-                if (getattr(spec, "_initializing", False) and isinstance(origin, str)
-                        and _under(_nc(origin), installed)):
+                if getattr(spec, "_initializing", False) and isinstance(origin, str) and _under(_nc(origin), installed):
                     return "library import"
             if not reader_seen and not is_plumbing:
                 reader_seen = True
                 package_dir = _module_package_dir(module) if module else None
-                if (package_dir and _under(package_dir, installed)
-                        and path_nc.startswith(package_dir)):
+                if package_dir and _under(package_dir, installed) and path_nc.startswith(package_dir):
                     return "library resource"
         frame = frame.f_back
     return None
@@ -424,16 +439,21 @@ _CASH_CACHE_DIRS_LOCK = threading.Lock()
 #: bug this guard exists to prevent. A missed dependency serves a stale value
 #: silently; an extra one only costs a recompute.
 _CASH_FILE_SUFFIXES: tuple[str, ...] = (
-    ".entry",           # one file per entry (format v2)
-    ".meta", ".data",   # the pair entries were stored as before v2
-    ".part",            # a write still in flight
-    ".db", ".db-wal", ".db-shm",   # SQLiteBackend
+    ".entry",  # one file per entry (format v2)
+    ".meta",
+    ".data",  # the pair entries were stored as before v2
+    ".part",  # a write still in flight
+    ".db",
+    ".db-wal",
+    ".db-shm",  # SQLiteBackend
 )
-_CASH_FILE_NAMES: frozenset[str] = frozenset({
-    "CACHE_VERSION",        # the on-disk format stamp
-    "_loop_split.json",     # the notebook loop-split store
-    "_compute_baselines.json",   # measured compute costs, for %cash_stats
-})
+_CASH_FILE_NAMES: frozenset[str] = frozenset(
+    {
+        "CACHE_VERSION",  # the on-disk format stamp
+        "_loop_split.json",  # the notebook loop-split store
+        "_compute_baselines.json",  # measured compute costs, for %cash_stats
+    }
+)
 
 
 def register_cache_dir(path: str) -> None:
@@ -495,8 +515,12 @@ def _is_user_file(filename: str) -> bool:
     global _LIBRARY_ROOTS
     if _LIBRARY_ROOTS is None:
         import sysconfig
-        roots = {os.path.normcase(os.path.abspath(p)) for key, p in sysconfig.get_paths().items()
-                 if key in ("stdlib", "platstdlib", "purelib", "platlib") and p}
+
+        roots = {
+            os.path.normcase(os.path.abspath(p))
+            for key, p in sysconfig.get_paths().items()
+            if key in ("stdlib", "platstdlib", "purelib", "platlib") and p
+        }
         roots.add(_CASH_PACKAGE_DIR)
         _LIBRARY_ROOTS = tuple(sorted(roots))
     norm = os.path.normcase(os.path.abspath(filename)) if filename and not filename.startswith("<") else ""
@@ -518,7 +542,7 @@ def _record_read(code: Any, abs_path: str, stat: Any) -> None:
     if abs_path not in reads and len(reads) >= _READS_PER_CODE_MAX:
         _READS_BY_CODE[code] = None
     else:
-        reads[abs_path] = stat          # the LATEST read: a memo refilled is current again
+        reads[abs_path] = stat  # the LATEST read: a memo refilled is current again
 
 
 def _is_cash_wrapper(filename: str) -> bool:
@@ -538,7 +562,7 @@ def _credit_read_to_stack(abs_path: str, tracker: "FileAccessTracker") -> None:
         code = frame.f_code
         kind = _frame_kind(code.co_filename)
         if kind == "wrapper":
-            break                    # the cached call's own wrapper: the walk ends
+            break  # the cached call's own wrapper: the walk ends
         if kind == "user":
             tracker._note_reading_code(code)
             _record_read(code, abs_path, stat)
@@ -555,9 +579,15 @@ def _frame_kind(filename: str) -> str:
     remembered per filename: every read walks the stack."""
     kind = _FRAME_KIND.get(filename)
     if kind is None:
-        kind = ("wrapper" if _is_cash_wrapper(filename)
-                else "cash" if filename and os.path.normcase(filename).startswith(_CASH_PACKAGE_DIR)
-                else "user" if _is_user_file(filename) else "other")
+        kind = (
+            "wrapper"
+            if _is_cash_wrapper(filename)
+            else "cash"
+            if filename and os.path.normcase(filename).startswith(_CASH_PACKAGE_DIR)
+            else "user"
+            if _is_user_file(filename)
+            else "other"
+        )
         if len(_FRAME_KIND) < 8192:
             _FRAME_KIND[filename] = kind
     return kind
@@ -594,7 +624,7 @@ def _note_untracked_read(path: Any) -> None:
             if kind == "wrapper":
                 break
             if kind == "cash" and not codes:
-                return               # cash reading its own files
+                return  # cash reading its own files
             if kind == "user":
                 codes.append(frame.f_code)
             frame, depth = frame.f_back, depth + 1
@@ -667,9 +697,10 @@ def _dispatch_track(path: Any) -> None:
     if _tracker is not None:
         _tracker._track_path(path)
 
+
 def _find_patch_targets(func_pattern: str, module_obj: Any) -> list:
     """Return the list of attribute names to patch on *module_obj*."""
-    if func_pattern.endswith('*'):
+    if func_pattern.endswith("*"):
         prefix = func_pattern[:-1]
         return [name for name in dir(module_obj) if name.startswith(prefix)]
     if hasattr(module_obj, func_pattern):
@@ -697,7 +728,7 @@ def _install_module_patches(module_name: str, module_obj: Any) -> None:
             original_func = getattr(module_obj, name)
 
             # Install-once skip.
-            if getattr(original_func, '_is_file_tracker_patch', False):
+            if getattr(original_func, "_is_file_tracker_patch", False):
                 continue
 
             real_original = _unwrap_to_real(original_func)
@@ -730,12 +761,12 @@ def _patch_pathlib_accessor() -> None:
     installed in its place would bind as a method and swallow ``path`` as
     ``self`` — hence ``staticmethod``.
     """
-    accessor = getattr(pathlib, '_NormalAccessor', None)
+    accessor = getattr(pathlib, "_NormalAccessor", None)
     if accessor is None:
         return  # 3.11+: patching io.open already covers pathlib
 
-    original = getattr(accessor, 'open', None)
-    if original is None or getattr(original, '_is_file_tracker_patch', False):
+    original = getattr(accessor, "open", None)
+    if original is None or getattr(original, "_is_file_tracker_patch", False):
         return
 
     real_original = _unwrap_to_real(original)
@@ -767,9 +798,8 @@ def _patch_pathlib_listing() -> None:
     """
     import glob as glob_module
 
-    targets = [(getattr(pathlib, '_NormalAccessor', None), ('scandir', 'listdir'))]
-    targets += [(getattr(glob_module, name, None), ('scandir',))
-                for name in ('_Globber', '_StringGlobber')]
+    targets = [(getattr(pathlib, "_NormalAccessor", None), ("scandir", "listdir"))]
+    targets += [(getattr(glob_module, name, None), ("scandir",)) for name in ("_Globber", "_StringGlobber")]
     factory = FileDependencyRegistry()._create_listdir_handler
     for owner, names in targets:
         if owner is None:
@@ -778,7 +808,7 @@ def _patch_pathlib_listing() -> None:
             original = owner.__dict__.get(name)
             if isinstance(original, staticmethod):
                 original = original.__func__
-            if original is None or getattr(original, '_is_file_tracker_patch', False):
+            if original is None or getattr(original, "_is_file_tracker_patch", False):
                 continue
             real_original = _unwrap_to_real(original)
             if not callable(real_original):
@@ -821,11 +851,11 @@ def _patch_pathlib_stat() -> None:
     with the old sizes. Patched where ``stat`` is defined on ``Path``'s MRO,
     since pathlib has moved it between versions.
     """
-    owner = next((k for k in pathlib.Path.__mro__ if 'stat' in k.__dict__), None)
+    owner = next((k for k in pathlib.Path.__mro__ if "stat" in k.__dict__), None)
     if owner is None:
         return
-    original = owner.__dict__['stat']
-    if getattr(original, '_is_file_tracker_patch', False) or not callable(original):
+    original = owner.__dict__["stat"]
+    if getattr(original, "_is_file_tracker_patch", False) or not callable(original):
         return
 
     @functools.wraps(original)
@@ -838,7 +868,7 @@ def _patch_pathlib_stat() -> None:
     tracked_path_stat._is_file_tracker_patch = True
     tracked_path_stat._original_func = original
     try:
-        setattr(owner, 'stat', tracked_path_stat)
+        setattr(owner, "stat", tracked_path_stat)
     except (AttributeError, TypeError) as e:
         logger.debug("[FILE_TRACKER] Failed to patch %s.stat: %s", owner.__name__, e)
 
@@ -876,6 +906,7 @@ def _patch_thread_pool_submit() -> None:
 
 class _WorkerReads:
     """What a task run in a worker process returned, and the files it read."""
+
     __slots__ = ("value", "files", "absent")
 
     def __init__(self, value: Any, files: list[str], absent: list[str]) -> None:
@@ -893,6 +924,7 @@ class _ReadsInWorker:
     A cached function the task calls there propagates its reads -- and on a
     hit, its recorded ones -- into that tracker like into any outer call's.
     """
+
     __slots__ = ("fn",)
 
     def __init__(self, fn: Callable[..., Any]) -> None:
@@ -905,8 +937,7 @@ class _ReadsInWorker:
         tracker = FileAccessTracker()
         with tracker:
             value = self.fn(*args, **kwargs)
-        return _WorkerReads(value, sorted(tracker.get_accessed_files()),
-                            sorted(tracker.get_absent_files()))
+        return _WorkerReads(value, sorted(tracker.get_accessed_files()), sorted(tracker.get_absent_files()))
 
 
 class _RelayFuture(concurrent.futures.Future):
@@ -988,11 +1019,11 @@ def _unwrap_to_real(func: Any) -> Any:
     closure on ``_track_path``.
     """
     seen: set[int] = set()
-    while getattr(func, '_is_file_tracker_patch', False):
+    while getattr(func, "_is_file_tracker_patch", False):
         if id(func) in seen:  # broken/circular chain, bail
             break
         seen.add(id(func))
-        next_func = getattr(func, '_original_func', None)
+        next_func = getattr(func, "_original_func", None)
         if next_func is None or not callable(next_func):
             break
         func = next_func
@@ -1004,38 +1035,39 @@ class FileDependencyRegistry:
     Registry for file dependency handlers.
     Allows easy extension of file tracking to new libraries and functions.
     """
+
     _instance = None
 
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
-            cls._instance.handlers = {} # Map module -> list of (func_name, handler_factory)
+            cls._instance.handlers = {}  # Map module -> list of (func_name, handler_factory)
             cls._instance._initialize_defaults()
         return cls._instance
 
     def _initialize_defaults(self):
         """Initialize default handlers for common libraries."""
         # Builtins
-        self.register('builtins', 'open', self._create_open_handler)
+        self.register("builtins", "open", self._create_open_handler)
 
         # io (used by pathlib)
-        self.register('io', 'open', self._create_open_handler)
+        self.register("io", "open", self._create_open_handler)
 
         # Pandas
-        self.register('pandas', 'read_*', self._create_path_arg_handler)
+        self.register("pandas", "read_*", self._create_path_arg_handler)
 
         # Polars
-        self.register('polars', 'read_csv', self._create_path_arg_handler)
-        self.register('polars', 'read_parquet', self._create_path_arg_handler)
-        self.register('polars', 'read_json', self._create_path_arg_handler)
-        self.register('polars', 'read_ndjson', self._create_path_arg_handler)
-        self.register('polars', 'read_ipc', self._create_path_arg_handler)
-        self.register('polars', 'read_avro', self._create_path_arg_handler)
-        self.register('polars', 'read_excel', self._create_path_arg_handler)
-        self.register('polars', 'scan_csv', self._create_path_arg_handler)
-        self.register('polars', 'scan_parquet', self._create_path_arg_handler)
-        self.register('polars', 'scan_ipc', self._create_path_arg_handler)
-        self.register('polars', 'scan_ndjson', self._create_path_arg_handler)
+        self.register("polars", "read_csv", self._create_path_arg_handler)
+        self.register("polars", "read_parquet", self._create_path_arg_handler)
+        self.register("polars", "read_json", self._create_path_arg_handler)
+        self.register("polars", "read_ndjson", self._create_path_arg_handler)
+        self.register("polars", "read_ipc", self._create_path_arg_handler)
+        self.register("polars", "read_avro", self._create_path_arg_handler)
+        self.register("polars", "read_excel", self._create_path_arg_handler)
+        self.register("polars", "scan_csv", self._create_path_arg_handler)
+        self.register("polars", "scan_parquet", self._create_path_arg_handler)
+        self.register("polars", "scan_ipc", self._create_path_arg_handler)
+        self.register("polars", "scan_ndjson", self._create_path_arg_handler)
 
         # Numpy
         # pyarrow reads in C++, so nothing passes through a patched open(): a
@@ -1044,32 +1076,32 @@ class FileDependencyRegistry:
         # numbers (CAS-115). Path-taking readers only -- a class such as
         # ParquetFile is left alone, since replacing it with a function would
         # break isinstance checks.
-        self.register('pyarrow.csv', 'read_csv', self._create_path_arg_handler)
-        self.register('pyarrow.csv', 'open_csv', self._create_path_arg_handler)
-        self.register('pyarrow.parquet', 'read_table', self._create_path_arg_handler)
-        self.register('pyarrow.parquet', 'read_pandas', self._create_path_arg_handler)
-        self.register('pyarrow.feather', 'read_table', self._create_path_arg_handler)
-        self.register('pyarrow.feather', 'read_feather', self._create_path_arg_handler)
-        self.register('pyarrow.json', 'read_json', self._create_path_arg_handler)
+        self.register("pyarrow.csv", "read_csv", self._create_path_arg_handler)
+        self.register("pyarrow.csv", "open_csv", self._create_path_arg_handler)
+        self.register("pyarrow.parquet", "read_table", self._create_path_arg_handler)
+        self.register("pyarrow.parquet", "read_pandas", self._create_path_arg_handler)
+        self.register("pyarrow.feather", "read_table", self._create_path_arg_handler)
+        self.register("pyarrow.feather", "read_feather", self._create_path_arg_handler)
+        self.register("pyarrow.json", "read_json", self._create_path_arg_handler)
 
-        self.register('numpy', 'load', self._create_path_arg_handler)
-        self.register('numpy', 'loadtxt', self._create_path_arg_handler)
-        self.register('numpy', 'genfromtxt', self._create_path_arg_handler)
-        self.register('numpy', 'fromfile', self._create_path_arg_handler)
+        self.register("numpy", "load", self._create_path_arg_handler)
+        self.register("numpy", "loadtxt", self._create_path_arg_handler)
+        self.register("numpy", "genfromtxt", self._create_path_arg_handler)
+        self.register("numpy", "fromfile", self._create_path_arg_handler)
 
         # pyarrow.dataset reads in C++ like the rest of pyarrow; `read_table`
         # was registered and `dataset()` was not, so one entry point of an
         # otherwise-covered library went stale (found attacking the decorator
         # before round 26).
-        self.register('pyarrow.dataset', 'dataset', self._create_path_arg_handler)
+        self.register("pyarrow.dataset", "dataset", self._create_path_arg_handler)
 
         # linecache reads through `tokenize._builtin_open`, a reference taken
         # at import time, so the patched `open` never sees it. Source files are
         # left out: linecache is what `inspect.getsource` (and every traceback)
         # reads with, and recording those made a module's own source a data
         # dependency of the functions in it.
-        self.register('linecache', 'getline', self._create_source_reader_handler)
-        self.register('linecache', 'getlines', self._create_source_reader_handler)
+        self.register("linecache", "getline", self._create_source_reader_handler)
+        self.register("linecache", "getlines", self._create_source_reader_handler)
 
         # sqlite3 opens the database in C, so nothing reaches a patched
         # reader: a cached `select sum(x)` returned 1 where an uncached run
@@ -1077,17 +1109,17 @@ class FileDependencyRegistry:
         # connection did too (found attacking the decorator before round 26).
         # The connection's path is the dependency; a URI or ":memory:" has no
         # file behind it and `_track_path` drops what it cannot resolve.
-        self.register('sqlite3', 'connect', self._create_path_arg_handler)
-        self.register('sqlite3.dbapi2', 'connect', self._create_path_arg_handler)
+        self.register("sqlite3", "connect", self._create_path_arg_handler)
+        self.register("sqlite3.dbapi2", "connect", self._create_path_arg_handler)
 
         # Joblib
-        self.register('joblib', 'load', self._create_path_arg_handler)
+        self.register("joblib", "load", self._create_path_arg_handler)
 
         # Pickle
-        self.register('pickle', 'load', self._create_path_arg_handler)
+        self.register("pickle", "load", self._create_path_arg_handler)
 
         # Json
-        self.register('json', 'load', self._create_path_arg_handler)
+        self.register("json", "load", self._create_path_arg_handler)
 
         # Directory listing: a cell that enumerates a directory and
         # reads the matches gets file-deps only for the files READ on the first
@@ -1095,10 +1127,10 @@ class FileDependencyRegistry:
         # directory itself as a dependency - adding/removing an entry bumps the
         # directory's own mtime on local filesystems, so the existing mtime
         # freshness check invalidates the reader.
-        self.register('glob', 'glob', self._create_glob_dir_handler)
-        self.register('glob', 'iglob', self._create_glob_dir_handler)
-        self.register('os', 'listdir', self._create_listdir_handler)
-        self.register('os', 'scandir', self._create_listdir_handler)
+        self.register("glob", "glob", self._create_glob_dir_handler)
+        self.register("glob", "iglob", self._create_glob_dir_handler)
+        self.register("os", "listdir", self._create_listdir_handler)
+        self.register("os", "scandir", self._create_listdir_handler)
 
         # Existence probes: "is there a config here?" The ABSENCE of a file is
         # an input -- it selects the defaults branch -- and it was the only
@@ -1108,10 +1140,10 @@ class FileDependencyRegistry:
         # everywhere: a round-16 tester got directory B's answer in directory
         # A, silently, 4/4. Only a NEGATIVE result is recorded; a probe that
         # says yes is followed by the read that tracks it properly.
-        self.register('os.path', 'exists', self._create_exists_handler)
-        self.register('os.path', 'isfile', self._create_exists_handler)
-        self.register('genericpath', 'exists', self._create_exists_handler)
-        self.register('genericpath', 'isfile', self._create_exists_handler)
+        self.register("os.path", "exists", self._create_exists_handler)
+        self.register("os.path", "isfile", self._create_exists_handler)
+        self.register("genericpath", "exists", self._create_exists_handler)
+        self.register("genericpath", "isfile", self._create_exists_handler)
 
     def register(self, module_name: str, func_name: str, handler_factory: Callable[..., Any]):
         """
@@ -1142,13 +1174,14 @@ class FileDependencyRegistry:
         ignore the argument and consult ``_active_tracker`` directly —
         that way one patch serves any number of concurrent trackers.
         """
+
         def tracked_open(file, *args, **kwargs):
-            mode = args[0] if args else kwargs.get('mode', 'r')
+            mode = args[0] if args else kwargs.get("mode", "r")
             # `w+` and `x+` start from an empty file, so nothing the code reads
             # back existed before it: a write, not an input. Pillow saves every
             # image with "w+b", and round 21 found each `savefig` recorded as a
             # dependency on its own output.
-            if 'r' in mode or ('+' in mode and 'w' not in mode and 'x' not in mode):
+            if "r" in mode or ("+" in mode and "w" not in mode and "x" not in mode):
                 _tracker = _active_tracker.get()
                 if _tracker is not None:
                     _tracker._track_path(file)
@@ -1165,7 +1198,7 @@ class FileDependencyRegistry:
                         raise
                 elif isinstance(file, (str, bytes, os.PathLike)):
                     _note_untracked_read(file)
-            elif any(ch in mode for ch in ('w', 'a', 'x')):
+            elif any(ch in mode for ch in ("w", "a", "x")):
                 # Not a dependency -- a WRITE is an effect, not an input, and
                 # folding it into the key would invalidate a function on its
                 # own output. It is recorded for the effect observer instead:
@@ -1177,6 +1210,7 @@ class FileDependencyRegistry:
                 if _observer is not None and not _is_cash_internal(file):
                     _observer.record_write(file)
             return original_func(file, *args, **kwargs)
+
         return tracked_open
 
     @staticmethod
@@ -1187,6 +1221,7 @@ class FileDependencyRegistry:
         — see :meth:`_create_open_handler`. The built-in wrapper
         consults ``_active_tracker`` directly.
         """
+
         # Positional OR keyword. The wrapper used to demand the path as its
         # first positional parameter, and these wrappers are installed once,
         # process-wide, on the first cached call -- so from then on
@@ -1194,8 +1229,7 @@ class FileDependencyRegistry:
         # `pq.read_table(source=p)` raised TypeError EVERYWHERE in the process,
         # inside cached code or not. Measured while adding the pyarrow readers.
         def tracked_func(*args, **kwargs):
-            target = args[0] if args else next(
-                (kwargs[k] for k in _PATH_KWARGS if k in kwargs), None)
+            target = args[0] if args else next((kwargs[k] for k in _PATH_KWARGS if k in kwargs), None)
             if isinstance(target, (str, bytes, os.PathLike)):
                 _tracker = _active_tracker.get()
                 if _tracker is not None:
@@ -1203,6 +1237,7 @@ class FileDependencyRegistry:
                 else:
                     _note_untracked_read(target)
             return original_func(*args, **kwargs)
+
         return tracked_func
 
     @staticmethod
@@ -1213,8 +1248,9 @@ class FileDependencyRegistry:
         The directory's mtime is what we track for membership changes.
         """
         import glob as _glob
+
         try:
-            parts = str(pattern).replace('\\', '/').split('/')
+            parts = str(pattern).replace("\\", "/").split("/")
         except (TypeError, ValueError):
             return None
         base: list[str] = []
@@ -1222,7 +1258,7 @@ class FileDependencyRegistry:
             if _glob.has_magic(p):
                 break
             base.append(p)
-        return '/'.join(base) or '.'
+        return "/".join(base) or "."
 
     @staticmethod
     def _create_exists_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):
@@ -1236,6 +1272,7 @@ class FileDependencyRegistry:
         that can work: call through first, and only consult the tracker when
         the answer was False.
         """
+
         def tracked_exists(path, *args, **kwargs):
             result = original_func(path, *args, **kwargs)
             if not result:
@@ -1243,6 +1280,7 @@ class FileDependencyRegistry:
                 if _tracker is not None and isinstance(path, (str, bytes, os.PathLike)):
                     _tracker._track_absent(path)
             return result
+
         return tracked_exists
 
     #: Suffixes of files that hold code, not data (see `_create_source_reader_handler`).
@@ -1269,11 +1307,11 @@ class FileDependencyRegistry:
         So a name is tracked only if it is a real file on disk, which is the
         only thing linecache can usefully have read.
         """
+
         def tracked_source_reader(filename, *args, **kwargs):
             if isinstance(filename, (str, bytes, os.PathLike)):
                 text = os.fsdecode(filename) if isinstance(filename, bytes) else str(filename)
-                if (not text.startswith("<")
-                        and not text.endswith(FileDependencyRegistry._SOURCE_SUFFIXES)):
+                if not text.startswith("<") and not text.endswith(FileDependencyRegistry._SOURCE_SUFFIXES):
                     _tracker = _active_tracker.get()
                     if _tracker is not None:
                         try:
@@ -1283,11 +1321,13 @@ class FileDependencyRegistry:
                         if real:
                             _tracker._track_path(filename)
             return original_func(filename, *args, **kwargs)
+
         return tracked_source_reader
 
     @staticmethod
     def _create_glob_dir_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):
         """Track the directory a ``glob`` pattern enumerates."""
+
         def tracked_glob(pathname, *args, **kwargs):
             _tracker = _active_tracker.get()
             if _tracker is not None:
@@ -1295,18 +1335,22 @@ class FileDependencyRegistry:
                 if base is not None:
                     _tracker._track_path(base)
             return original_func(pathname, *args, **kwargs)
+
         return tracked_glob
 
     @staticmethod
     def _create_listdir_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):
         """Track the directory passed to ``os.listdir`` / ``os.scandir``."""
-        def tracked_listdir(path='.', *args, **kwargs):
+
+        def tracked_listdir(path=".", *args, **kwargs):
             if isinstance(path, (str, bytes, os.PathLike)):
                 _tracker = _active_tracker.get()
                 if _tracker is not None:
                     _tracker._track_path(path)
             return original_func(path, *args, **kwargs)
+
         return tracked_listdir
+
 
 class PostImportHook(importlib.abc.MetaPathFinder):
     """Intercepts imports of registered modules to patch them after loading.
@@ -1316,6 +1360,7 @@ class PostImportHook(importlib.abc.MetaPathFinder):
     — :func:`_install_module_patches` routes file reads via
     ``_active_tracker`` so the same patches serve every tracker.
     """
+
     def __init__(self) -> None:
         self._skip: set[str] = set()  # Avoid recursion
 
@@ -1327,11 +1372,11 @@ class PostImportHook(importlib.abc.MetaPathFinder):
         # Note: We match top-level packages mainly.
         # e.g. 'pandas.io' -> we patch 'pandas' too?
         # The handlers are registered by module name.
-        top_level = fullname.split('.')[0]
+        top_level = fullname.split(".")[0]
 
         targets = FileDependencyRegistry().handlers.keys()
         if fullname not in targets and top_level not in targets:
-             return None
+            return None
 
         # It's a target. We need to let the real import happen, then patch.
         self._skip.add(fullname)
@@ -1346,6 +1391,7 @@ class PostImportHook(importlib.abc.MetaPathFinder):
         # Wrap the loader
         spec.loader = _PatchingLoader(spec.loader, fullname)
         return spec
+
 
 class _PatchingLoader:
     def __init__(self, original_loader, fullname):
@@ -1377,6 +1423,7 @@ def _ensure_import_hook_installed() -> None:
             _shared_import_hook = PostImportHook()
             sys.meta_path.insert(0, _shared_import_hook)
 
+
 class FileAccessTracker:
     """Context manager that intercepts file I/O to record which files a
     statement reads.
@@ -1405,15 +1452,14 @@ class FileAccessTracker:
     because the *output* of a statement is hashed directly, not the files it
     writes.
     """
-    def __init__(self, user_ns=None, propagate_to_parent: bool = False,
-                 hash_on_read: bool = False):
+
+    def __init__(self, user_ns=None, propagate_to_parent: bool = False, hash_on_read: bool = False):
         self.accessed_files = set()
         # The top-level package of the code being cached, when *user_ns* is a
         # module's globals (the decorator): an installed tool's own files are
         # its data. A notebook's namespace is `__main__` -- no package.
         name = user_ns.get("__name__") if isinstance(user_ns, dict) else None
-        self._own_package = (name.split(".")[0] if isinstance(name, str)
-                             and name != "__main__" else None)
+        self._own_package = name.split(".")[0] if isinstance(name, str) and name != "__main__" else None
         # The content hash of each regular file WHEN IT WAS FIRST READ, for a
         # caller that stores what the block read (the decorator). Taken at
         # store time instead, a file changed mid-call by a writer that moves no
@@ -1563,6 +1609,7 @@ class FileAccessTracker:
             # stable across os.chdir() calls. Resolved once per cell run
             # (``realpath_this_run``): a loop reads the same files again.
             from cash.notebook.file_dep_snapshot import realpath_of_read_this_run
+
             resolved, read_lstat = realpath_of_read_this_run(raw_path)
             abs_path = normalize_path(resolved)
         except (TypeError, ValueError, OSError) as e:
@@ -1642,8 +1689,11 @@ class FileAccessTracker:
             # Absolute paths only: a relative twin is re-resolved against the
             # cwd at check time, and a chdir during the call would make its
             # stat look like a change that never happened.
-            st = (_regular_file_stat(abs_path) if lstat is None
-                  else (lstat.st_size, lstat.st_mtime_ns, getattr(lstat, "st_ctime_ns", 0)))
+            st = (
+                _regular_file_stat(abs_path)
+                if lstat is None
+                else (lstat.st_size, lstat.st_mtime_ns, getattr(lstat, "st_ctime_ns", 0))
+            )
             if st is not None:
                 self.read_stats[abs_path] = st
                 if self._hash_on_read:
@@ -1663,6 +1713,7 @@ class FileAccessTracker:
     def _digest_now(self, abs_path: str, size: int) -> str | None:
         """The file's content hash as the body is about to read it."""
         from cash.notebook.file_dep_snapshot import file_content_hash
+
         t0 = time.perf_counter()
         try:
             return file_content_hash(abs_path, size)
@@ -1738,7 +1789,7 @@ class FileAccessTracker:
 
     def _apply_patches(self):
         # 1. Patch Builtins
-        _install_module_patches('builtins', builtins)
+        _install_module_patches("builtins", builtins)
 
         # 2. Patch User Namespace (for interactive sessions showing 'open')
         self._patch_user_ns()
@@ -1757,7 +1808,7 @@ class FileAccessTracker:
         # 3. Patch Loaded Modules
         # Iterate over registered modules
         for mod_name in self.registry.handlers:
-            if mod_name == 'builtins':
+            if mod_name == "builtins":
                 continue
 
             if mod_name in sys.modules:
@@ -1768,28 +1819,23 @@ class FileAccessTracker:
         """Patch open in user namespace (IPython specific). Self-heals
         by walking past any leaked wrappers to the real callable."""
         # Handle user_ns['open'] — skip if dispatcher already installed.
-        if 'open' in self.user_ns and not getattr(
-            self.user_ns['open'], '_is_file_tracker_patch', False
-        ):
-            real_open = _unwrap_to_real(self.user_ns['open'])
+        if "open" in self.user_ns and not getattr(self.user_ns["open"], "_is_file_tracker_patch", False):
+            real_open = _unwrap_to_real(self.user_ns["open"])
             factory = self.registry._create_open_handler
             wrapper = factory(real_open, _dispatch_track)
             wrapper._is_file_tracker_patch = True
             wrapper._original_func = real_open
 
-            self.user_ns['open'] = wrapper
+            self.user_ns["open"] = wrapper
 
         # Handle user_ns['__builtins__']['open'] (if dict)
-        if '__builtins__' in self.user_ns:
-            bs = self.user_ns['__builtins__']
-            if isinstance(bs, dict) and 'open' in bs and not getattr(
-                bs['open'], '_is_file_tracker_patch', False
-            ):
-                real_open = _unwrap_to_real(bs['open'])
+        if "__builtins__" in self.user_ns:
+            bs = self.user_ns["__builtins__"]
+            if isinstance(bs, dict) and "open" in bs and not getattr(bs["open"], "_is_file_tracker_patch", False):
+                real_open = _unwrap_to_real(bs["open"])
                 factory = self.registry._create_open_handler
                 wrapper = factory(real_open, _dispatch_track)
                 wrapper._is_file_tracker_patch = True
                 wrapper._original_func = real_open
 
-                bs['open'] = wrapper
-
+                bs["open"] = wrapper

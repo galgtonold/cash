@@ -1,15 +1,18 @@
 """Tests for %cash_benchmark magic command."""
-import pytest
+
 from unittest.mock import MagicMock
+
+import pytest
 from traitlets.config import Configurable
 
+from cash.backends import InMemoryBackend
 from cash.core import Cash
 from cash.notebook.ipython.magics import CashMagics
-from cash.backends import InMemoryBackend
 
 
 class MockShell(Configurable):
     """Mock IPython shell for testing."""
+
     def __init__(self):
         super().__init__()
         self.user_ns = {}
@@ -18,7 +21,7 @@ class MockShell(Configurable):
         self.events = MagicMock()
         self.ast_transformers = []
         self.user_global_ns = self.user_ns
-        self.display_pub = type('MockDisplayPub', (), {'publish': MagicMock()})()
+        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
 
 
 @pytest.fixture
@@ -45,8 +48,8 @@ class TestBenchmarkMagic:
         assert "Mode enabled" in captured.out
         assert "3 iterations" in captured.out
         assert magics._benchmark_config is not None
-        assert magics._benchmark_config['iterations'] == 3
-        assert magics._benchmark_config['active'] is True
+        assert magics._benchmark_config["iterations"] == 3
+        assert magics._benchmark_config["active"] is True
 
     def test_benchmark_custom_iterations(self, magics_fixture, capsys):
         """Custom iteration count."""
@@ -54,7 +57,7 @@ class TestBenchmarkMagic:
         magics.cash_benchmark("5")
         captured = capsys.readouterr()
         assert "5 iterations" in captured.out
-        assert magics._benchmark_config['iterations'] == 5
+        assert magics._benchmark_config["iterations"] == 5
 
     def test_benchmark_cold_start(self, magics_fixture, capsys):
         """Cold start flag."""
@@ -62,7 +65,7 @@ class TestBenchmarkMagic:
         magics.cash_benchmark("--cold")
         captured = capsys.readouterr()
         assert "cold start" in captured.out
-        assert magics._benchmark_config['cold_start'] is True
+        assert magics._benchmark_config["cold_start"] is True
 
     def test_benchmark_compare_mode(self, magics_fixture, capsys):
         """Compare mode flag."""
@@ -70,7 +73,7 @@ class TestBenchmarkMagic:
         magics.cash_benchmark("--compare")
         captured = capsys.readouterr()
         assert "compare mode" in captured.out
-        assert magics._benchmark_config['compare_mode'] is True
+        assert magics._benchmark_config["compare_mode"] is True
 
     def test_benchmark_combined_flags(self, magics_fixture, capsys):
         """Multiple flags and iterations."""
@@ -80,31 +83,31 @@ class TestBenchmarkMagic:
         assert "10 iterations" in captured.out
         assert "cold start" in captured.out
         assert "compare mode" in captured.out
-        assert magics._benchmark_config['iterations'] == 10
-        assert magics._benchmark_config['cold_start'] is True
-        assert magics._benchmark_config['compare_mode'] is True
+        assert magics._benchmark_config["iterations"] == 10
+        assert magics._benchmark_config["cold_start"] is True
+        assert magics._benchmark_config["compare_mode"] is True
 
     def test_benchmark_max_iterations(self, magics_fixture, capsys):
         """Iterations capped at 100."""
         magics, shell, backend = magics_fixture
         magics.cash_benchmark("999")
-        assert magics._benchmark_config['iterations'] == 100
+        assert magics._benchmark_config["iterations"] == 100
 
     def test_benchmark_one_shot(self, magics_fixture, capsys):
         """Benchmark config is deactivated after use."""
         magics, shell, backend = magics_fixture
         magics.cash_benchmark("")
-        assert magics._benchmark_config['active'] is True
+        assert magics._benchmark_config["active"] is True
 
         # Simulate the _execute_cell check
-        magics._benchmark_config['active'] = False
-        assert magics._benchmark_config['active'] is False
+        magics._benchmark_config["active"] = False
+        assert magics._benchmark_config["active"] is False
 
     def test_benchmark_init_default(self, magics_fixture):
         """Benchmark config starts as None."""
         magics, shell, backend = magics_fixture
         # _benchmark_config should be initialized to None
-        assert hasattr(magics, '_benchmark_config')
+        assert hasattr(magics, "_benchmark_config")
 
     def test_run_benchmark_basic(self, magics_fixture, capsys):
         """Test _run_benchmark produces output."""
@@ -149,15 +152,16 @@ class TestBenchmarkMagic:
         original, unpatched IPython ``run_cell`` (``_original_run_cell``).
         """
         import time as _time
+
         magics, shell, backend = magics_fixture
 
         # Genuine (uncached) recompute path: counts every invocation and is
         # deliberately slow so its mean dwarfs a cache hit. This mimics the
         # original, unpatched IPython run_cell that executes the user code.
-        uncached_runs = {'n': 0}
+        uncached_runs = {"n": 0}
 
         def fake_original_run_cell(code, *args, **kwargs):
-            uncached_runs['n'] += 1
+            uncached_runs["n"] += 1
             _time.sleep(0.005)
             return MagicMock(success=True)
 
@@ -165,14 +169,14 @@ class TestBenchmarkMagic:
 
         # Cash-cached path: computes once (cold store), then serves instant
         # cache hits — exactly what _execute_cell does for a cached statement.
-        cache_state = {'stored': False}
-        cached_computes = {'n': 0}
+        cache_state = {"stored": False}
+        cached_computes = {"n": 0}
 
         def fake_execute_cell(code, *args, **kwargs):
-            if not cache_state['stored']:
-                cached_computes['n'] += 1
+            if not cache_state["stored"]:
+                cached_computes["n"] += 1
                 _time.sleep(0.005)  # cold store
-                cache_state['stored'] = True
+                cache_state["stored"] = True
             # else: cache hit — return instantly, no recompute
             return None
 
@@ -180,20 +184,22 @@ class TestBenchmarkMagic:
 
         iterations = 3
         magics._run_benchmark(
-            "y = slow_compute()", iterations=iterations,
-            cold_start=False, compare_mode=True,
+            "y = slow_compute()",
+            iterations=iterations,
+            cold_start=False,
+            compare_mode=True,
         )
         out = capsys.readouterr().out
 
         # THE CAS-168 assertion: the uncached arm really recomputed on every
         # iteration. Pre-fix this is 0 — the arm went through the cache path
         # (fake_execute_cell) instead of the uncached path.
-        assert uncached_runs['n'] == iterations, (
+        assert uncached_runs["n"] == iterations, (
             f"uncached arm recomputed {uncached_runs['n']}x, expected {iterations} "
             "(without-caching arm was served from cache)"
         )
         # The with-caching arm was warmed exactly once, then measured pure hits.
-        assert cached_computes['n'] == 1
+        assert cached_computes["n"] == 1
         # And the reported speedup is a real number, not the resolution fallback.
         assert "Speedup" in out
         assert "n/a" not in out

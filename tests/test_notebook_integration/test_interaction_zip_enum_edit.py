@@ -13,11 +13,13 @@ class TestZipEnumEdits:
 
     def test_zip_edit_one_list(self, nb_runner):
         """Edit one of two zipped lists."""
-        nb_runner.create_notebook([
-            "names = ['Alice', 'Bob', 'Charlie']",
-            "scores = [90, 85, 78]",
-            "pairs = list(zip(names, scores))\nprint(f'pairs = {pairs}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "names = ['Alice', 'Bob', 'Charlie']",
+                "scores = [90, 85, 78]",
+                "pairs = list(zip(names, scores))\nprint(f'pairs = {pairs}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "('Alice', 90)" in nb_runner.get_output(3)
@@ -29,10 +31,12 @@ class TestZipEnumEdits:
 
     def test_enumerate_with_edit(self, nb_runner):
         """Edit list, enumerate indexes correctly reflect."""
-        nb_runner.create_notebook([
-            "items = ['apple', 'banana', 'cherry']",
-            "indexed = list(enumerate(items, start=1))\nprint(f'indexed = {indexed}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "items = ['apple', 'banana', 'cherry']",
+                "indexed = list(enumerate(items, start=1))\nprint(f'indexed = {indexed}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "(1, 'apple')" in nb_runner.get_output(2)
@@ -45,10 +49,12 @@ class TestZipEnumEdits:
 
     def test_zip_longest_edit(self, nb_runner):
         """Edit data in zip_longest scenario."""
-        nb_runner.create_notebook([
-            "from itertools import zip_longest\na = [1, 2, 3]\nb = ['x', 'y']",
-            "result = list(zip_longest(a, b, fillvalue='?'))\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from itertools import zip_longest\na = [1, 2, 3]\nb = ['x', 'y']",
+                "result = list(zip_longest(a, b, fillvalue='?'))\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "(3, '?')" in nb_runner.get_output(2)

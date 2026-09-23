@@ -1,4 +1,5 @@
-﻿"""Tests for serialization functionality."""
+"""Tests for serialization functionality."""
+
 import pytest
 
 
@@ -6,20 +7,22 @@ def _has_parquet_support():
     """Check if pyarrow or fastparquet is available."""
     try:
         import pyarrow  # noqa: F401
+
         return True
     except ImportError:
         try:
             import fastparquet  # noqa: F401
+
             return True
         except ImportError:
             return False
 
 
 def test_get_serializer_dataframe(sample_dataframe):
-    from cash.backends.serialization import get_serializer, ParquetSerializer, PickleSerializer
-    
+    from cash.backends.serialization import ParquetSerializer, PickleSerializer, get_serializer
+
     serializer = get_serializer(sample_dataframe)
-    
+
     # Should return ParquetSerializer if pyarrow/fastparquet available
     # Otherwise PickleSerializer (fallback)
     if _has_parquet_support():
@@ -31,39 +34,42 @@ def test_get_serializer_dataframe(sample_dataframe):
 @pytest.mark.skipif(not _has_parquet_support(), reason="pyarrow or fastparquet required")
 def test_parquet_serialization(sample_dataframe):
     import pandas as pd
+
     from cash.backends.serialization import ParquetSerializer
-    
+
     df = sample_dataframe.copy()
-    df['strings'] = ['x', 'y', 'z']
-    
+    df["strings"] = ["x", "y", "z"]
+
     serializer = ParquetSerializer()
     data = serializer.serialize(df)
-    
+
     assert isinstance(data, bytes)
-    
+
     df_restored = serializer.deserialize(data)
     pd.testing.assert_frame_equal(df, df_restored)
 
 
 def test_pickle_fallback():
     from cash.backends.serialization import PickleSerializer
-    
+
     serializer = PickleSerializer()
-    data = {'a': 1, 'b': 2, 'nested': [1, 2, 3]}
-    
+    data = {"a": 1, "b": 2, "nested": [1, 2, 3]}
+
     serialized = serializer.serialize(data)
     assert isinstance(serialized, bytes)
-    
+
     restored = serializer.deserialize(serialized)
     assert data == restored
 
 
 # --- Corruption and edge-case tests ---
 
+
 def test_pickle_deserialize_corrupted_bytes():
     """PickleSerializer.deserialize() raises on corrupted / truncated bytes."""
-    from cash.backends.serialization import PickleSerializer
     import pickle
+
+    from cash.backends.serialization import PickleSerializer
 
     serializer = PickleSerializer()
     with pytest.raises((pickle.UnpicklingError, EOFError, Exception)):
@@ -82,7 +88,7 @@ def test_pickle_deserialize_truncated():
 
 def test_get_serializer_non_dataframe_returns_pickle():
     """get_serializer returns PickleSerializer for non-DataFrame types."""
-    from cash.backends.serialization import get_serializer, PickleSerializer
+    from cash.backends.serialization import PickleSerializer, get_serializer
 
     for obj in [None, 42, "hello", [1, 2, 3], {"a": 1}]:
         serializer = get_serializer(obj)
@@ -95,7 +101,8 @@ def test_get_serializer_numpy_array_returns_pickle():
     """get_serializer returns PickleSerializer for numpy arrays (not DataFrames)."""
     pytest.importorskip("numpy")
     import numpy as np
-    from cash.backends.serialization import get_serializer, PickleSerializer
+
+    from cash.backends.serialization import PickleSerializer, get_serializer
 
     arr = np.array([1, 2, 3])
     serializer = get_serializer(arr)

@@ -13,11 +13,13 @@ class TestOrderedDictOps:
 
     def test_ordered_dict_basic(self, nb_runner):
         """OrderedDict preserves insertion order with caching."""
-        nb_runner.create_notebook([
-            "from collections import OrderedDict",
-            "od = OrderedDict([('b', 2), ('a', 1), ('c', 3)])",
-            "keys = list(od.keys())\nprint(f'keys={keys}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from collections import OrderedDict",
+                "od = OrderedDict([('b', 2), ('a', 1), ('c', 3)])",
+                "keys = list(od.keys())\nprint(f'keys={keys}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(3)
@@ -29,12 +31,14 @@ class TestOrderedDictOps:
 
     def test_ordered_dict_edit(self, nb_runner):
         """Edit OrderedDict, verify order update."""
-        nb_runner.create_notebook([
-            "from collections import OrderedDict",
-            "items = [('x', 10), ('y', 20), ('z', 30)]",
-            "od = OrderedDict(items)\nfirst = list(od.keys())[0]",
-            "print(f'first={first}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from collections import OrderedDict",
+                "items = [('x', 10), ('y', 20), ('z', 30)]",
+                "od = OrderedDict(items)\nfirst = list(od.keys())[0]",
+                "print(f'first={first}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(4)

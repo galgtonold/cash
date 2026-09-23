@@ -5,6 +5,7 @@ from 3,000 files made one per file per lookup (round 23). A directory listing
 reports every entry's size and times at once. It is taken only for files
 hashed in full, where content -- not the listing -- decides freshness.
 """
+
 from __future__ import annotations
 
 import os
@@ -55,6 +56,7 @@ def per_file_stats(monkeypatch, tmp_path):
         if str(tmp_path) in os.fspath(path):
             counted.append(os.fspath(path))
         return real(path, *a, **k)
+
     monkeypatch.setattr(os, "stat", counting)
     return counted
 
@@ -68,7 +70,11 @@ def test_a_crowded_directory_is_listed_not_stat_ed(tmp_path, per_file_stats):
     assert per_file_stats == [], f"{len(per_file_stats)} per-file stats beside the listing"
 
 
-@pytest.mark.xfail(os.name == "nt", strict=True, reason="Windows: an edit that keeps the size and puts the mtime back is not seen once the file had settled -- a documented limitation (known-limitations: an edit that keeps size and timestamps); Linux and macOS catch it through the inode change time")
+@pytest.mark.xfail(
+    os.name == "nt",
+    strict=True,
+    reason="Windows: an edit that keeps the size and puts the mtime back is not seen once the file had settled -- a documented limitation (known-limitations: an edit that keeps size and timestamps); Linux and macOS catch it through the inode change time",
+)
 def test_an_edit_that_keeps_size_and_time_is_still_caught(tmp_path):
     paths = _inputs(tmp_path)
     checker, metadata = _check(paths)
@@ -96,6 +102,7 @@ def test_a_sampled_file_gets_a_stat_of_its_own(tmp_path, monkeypatch, per_file_s
     listing's timestamps are the one thing that can lag."""
     monkeypatch.setattr(file_dep_snapshot, "_full_hash_max_bytes", lambda: 16)
     import cash.notebook.statement.freshness as freshness
+
     monkeypatch.setattr(freshness, "_full_hash_max_bytes", lambda: 16)
     paths = _inputs(tmp_path)
     checker, metadata = _check(paths)
@@ -112,6 +119,7 @@ def test_cash_lists_through_the_unpatched_scandir(tmp_path, monkeypatch):
 
     def tracked(*_a, **_k):
         raise AssertionError("listed through the tracked os.scandir")
+
     tracked._original_func = real
     monkeypatch.setattr(os, "scandir", tracked)
     listed = stats_from_listings(paths)

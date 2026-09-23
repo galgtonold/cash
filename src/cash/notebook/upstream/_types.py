@@ -8,6 +8,7 @@ NotebookSimulator (orchestrator) applies RestoreOp to TrackingState.
 These objects are the *interface* of each phase. Adding cross-phase data
 means adding a field here, not threading a parameter through call chains.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -119,6 +120,7 @@ class CacheRestore:
     Captures one restore event. The orchestrator applies it to TrackingState
     after the phase completes.
     """
+
     var_name: str
     lineage_hash: str | None
     code: str | None = None
@@ -137,6 +139,7 @@ class LineageReset:
     Used when a current-cell output's lineage advances downstream after
     a mismatch resolution.
     """
+
     var_name: str
     lineage_hash: str
 
@@ -165,12 +168,17 @@ class RestoreCollector:
         file_deps: set[str] | None = None,
         value: Any = None,
     ) -> None:
-        self._restores.append(CacheRestore(
-            var_name=var_name, lineage_hash=lineage_hash,
-            code=code, code_hash=code_hash,
-            input_lineages=input_lineages, file_deps=file_deps,
-            value=value,
-        ))
+        self._restores.append(
+            CacheRestore(
+                var_name=var_name,
+                lineage_hash=lineage_hash,
+                code=code,
+                code_hash=code_hash,
+                input_lineages=input_lineages,
+                file_deps=file_deps,
+                value=value,
+            )
+        )
 
     def record_lineage_reset(self, var_name: str, lineage_hash: str) -> None:
         self._resets.append(LineageReset(var_name=var_name, lineage_hash=lineage_hash))

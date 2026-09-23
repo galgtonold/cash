@@ -1,6 +1,8 @@
 """Batch 97 – graph algorithms: BFS, DFS, shortest path."""
 
-import textwrap, pytest
+import textwrap
+
+import pytest
 
 pytestmark = [pytest.mark.stress, pytest.mark.integration]
 
@@ -10,8 +12,9 @@ class TestGraphAlgorithms:
 
     def test_bfs(self, nb_runner):
         """Breadth-first search traversal."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from collections import deque
 
                 def bfs(graph, start):
@@ -37,8 +40,9 @@ class TestGraphAlgorithms:
                 }
                 order = bfs(graph, 'A')
             """),
-            "print(f'bfs={order}')",
-        ])
+                "print(f'bfs={order}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -47,8 +51,9 @@ class TestGraphAlgorithms:
 
     def test_dfs(self, nb_runner):
         """Depth-first search traversal."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 def dfs(graph, start):
                     visited = []
                     stack = [start]
@@ -74,8 +79,9 @@ class TestGraphAlgorithms:
                 }
                 order = dfs(graph, 'A')
             """),
-            "print(f'dfs={order}')",
-        ])
+                "print(f'dfs={order}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -85,8 +91,9 @@ class TestGraphAlgorithms:
 
     def test_dijkstra(self, nb_runner):
         """Dijkstra's shortest path algorithm."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 import heapq
 
                 def dijkstra(graph, start):
@@ -114,8 +121,9 @@ class TestGraphAlgorithms:
                 }
                 distances, _ = dijkstra(graph, 'A')
             """),
-            "print(f'dist={distances}')",
-        ])
+                "print(f'dist={distances}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -126,8 +134,9 @@ class TestGraphAlgorithms:
 
     def test_topological_sort(self, nb_runner):
         """Topological sort of a DAG."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 def topo_sort(deps):
                     # deps maps task -> list of prerequisites
                     # Build adjacency: prerequisite -> tasks that depend on it
@@ -161,26 +170,29 @@ class TestGraphAlgorithms:
                 }
                 order = topo_sort(deps)
             """),
-            "print(f'order={order}')",
-        ])
+                "print(f'order={order}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
         assert "order=" in out
         # Parse the list from output: order=['install', 'lint', 'build', 'test', 'deploy']
         import ast
+
         order_str = out.strip().split("order=")[1]
         order_list = ast.literal_eval(order_str)
         # install must come before build, build before test, test before deploy
-        assert order_list.index('install') < order_list.index('build')
-        assert order_list.index('build') < order_list.index('test')
-        assert order_list.index('test') < order_list.index('deploy')
+        assert order_list.index("install") < order_list.index("build")
+        assert order_list.index("build") < order_list.index("test")
+        assert order_list.index("test") < order_list.index("deploy")
 
     def test_graph_propagation(self, nb_runner):
         """Graph with upstream edge change propagation."""
-        nb_runner.create_notebook([
-            "edges = [('A', 'B'), ('B', 'C'), ('C', 'D')]",
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                "edges = [('A', 'B'), ('B', 'C'), ('C', 'D')]",
+                textwrap.dedent("""\
                 from collections import defaultdict
                 graph = defaultdict(list)
                 for u, v in edges:
@@ -195,8 +207,9 @@ class TestGraphAlgorithms:
                     stack.extend(graph[node])
                 reachable = sorted(reachable)
             """),
-            "print(f'reachable={reachable}')",
-        ])
+                "print(f'reachable={reachable}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "['A', 'B', 'C', 'D']" in nb_runner.get_output(3)

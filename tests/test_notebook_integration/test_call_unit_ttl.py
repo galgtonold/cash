@@ -24,6 +24,7 @@ does not, the harness is measuring something other than expiry.
 into a file dependency -- that changes the entry every run and disables the
 caching under test.
 """
+
 import time
 
 import pytest
@@ -80,8 +81,7 @@ def test_a_long_ttl_still_serves_the_call(nb_runner, tmp_path):
     """CONTROL, and the one that matters most: an over-eager fix that simply
     stopped caching intercepted calls would satisfy every other test here."""
     assert _run(nb_runner, tmp_path, "# @cash:ttl=3600", "t3600") == 0, (
-        "a long ttl re-executed the call -- call caching has been broken rather "
-        "than made TTL-aware"
+        "a long ttl re-executed the call -- call caching has been broken rather than made TTL-aware"
     )
 
 
@@ -104,6 +104,5 @@ def test_an_unannotated_statement_is_unaffected(nb_runner, tmp_path):
 def test_the_statement_and_the_call_expire_together(nb_runner, tmp_path):
     """Both layers honour the same annotation, so adding `no-cache-calls` --
     the workaround this bug forced -- no longer changes the outcome."""
-    with_optout = _run(
-        nb_runner, tmp_path, "# @cash:no-cache-calls\n# @cash:ttl=0", "t0_optout")
+    with_optout = _run(nb_runner, tmp_path, "# @cash:no-cache-calls\n# @cash:ttl=0", "t0_optout")
     assert with_optout == 1, "the opt-out arm did not re-execute"

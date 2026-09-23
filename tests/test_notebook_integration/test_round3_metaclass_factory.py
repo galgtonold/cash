@@ -1,6 +1,8 @@
 """Batch 89 – metaclass and class factory patterns."""
 
-import textwrap, pytest
+import textwrap
+
+import pytest
 
 pytestmark = [pytest.mark.stress, pytest.mark.integration]
 
@@ -10,8 +12,9 @@ class TestMetaclass:
 
     def test_basic_metaclass(self, nb_runner):
         """Simple metaclass that adds a registry."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class RegistryMeta(type):
                     _registry = {}
                     def __new__(mcs, name, bases, namespace):
@@ -34,8 +37,9 @@ class TestMetaclass:
 
                 registered = sorted(RegistryMeta._registry.keys())
             """),
-            "print(f'registered={registered}')",
-        ])
+                "print(f'registered={registered}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -45,8 +49,9 @@ class TestMetaclass:
 
     def test_singleton_metaclass(self, nb_runner):
         """Singleton pattern via metaclass."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class SingletonMeta(type):
                     _instances = {}
                     def __call__(cls, *args, **kwargs):
@@ -62,8 +67,9 @@ class TestMetaclass:
                 db2 = Database()
                 same = db1 is db2
             """),
-            "print(f'same={same} conn={db1.connection}')",
-        ])
+                "print(f'same={same} conn={db1.connection}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -72,8 +78,9 @@ class TestMetaclass:
 
     def test_metaclass_validation(self, nb_runner):
         """Metaclass that validates class attributes."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class ValidatedMeta(type):
                     def __new__(mcs, name, bases, namespace):
                         required = namespace.get('_required_attrs', [])
@@ -93,8 +100,9 @@ class TestMetaclass:
                 config_host = Config.host
                 config_port = Config.port
             """),
-            "print(f'valid={valid} host={config_host} port={config_port}')",
-        ])
+                "print(f'valid={valid} host={config_host} port={config_port}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -108,8 +116,9 @@ class TestClassFactory:
 
     def test_type_factory(self, nb_runner):
         """Create classes dynamically with type()."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 def make_model(name, fields):
                     def init(self, **kwargs):
                         for f in fields:
@@ -124,8 +133,9 @@ class TestClassFactory:
                 u = User(name='Alice', age=30)
                 p = Product(title='Widget', price=9.99)
             """),
-            "print(f'user={u}')\nprint(f'product={p}')",
-        ])
+                "print(f'user={u}')\nprint(f'product={p}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -135,9 +145,10 @@ class TestClassFactory:
 
     def test_factory_propagation(self, nb_runner):
         """Class factory with upstream field change propagation."""
-        nb_runner.create_notebook([
-            "fields = ['x', 'y']",
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                "fields = ['x', 'y']",
+                textwrap.dedent("""\
                 def make_point(field_list):
                     def init(self, **kwargs):
                         for f in field_list:
@@ -150,8 +161,9 @@ class TestClassFactory:
                 p = Point(x=1, y=2)
                 d = p.to_dict()
             """),
-            "print(f'd={d}')",
-        ])
+                "print(f'd={d}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "x" in nb_runner.get_output(3)

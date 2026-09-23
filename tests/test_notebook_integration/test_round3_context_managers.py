@@ -1,5 +1,7 @@
 """Batch 68: Context managers & resource management — cash caching with with-statements."""
+
 import textwrap
+
 import pytest
 
 
@@ -9,8 +11,9 @@ class TestContextManagerBasics:
 
     def test_custom_context_manager(self, nb_runner):
         """Custom context manager with __enter__/__exit__."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class Timer:
                     def __init__(self, label):
                         self.label = label
@@ -28,10 +31,11 @@ class TestContextManagerBasics:
                     total = sum(range(100000))
                 print(f"total={total} timed={t.elapsed is not None}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 print(f"label={t.label} elapsed_positive={t.elapsed > 0}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total=4999950000" in nb_runner.get_output(1)
@@ -41,8 +45,9 @@ class TestContextManagerBasics:
 
     def test_contextlib_redirect_stdout(self, nb_runner):
         """contextlib.redirect_stdout pattern across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 import io
 
                 buffer = io.StringIO()
@@ -52,11 +57,12 @@ class TestContextManagerBasics:
                 captured = buffer.getvalue()
                 print(f"captured_len={len(captured)}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 lines = captured.strip().split('\\n')
                 print(f"lines={lines}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "captured_len=" in nb_runner.get_output(1)
@@ -66,8 +72,9 @@ class TestContextManagerBasics:
 
     def test_nested_context_managers(self, nb_runner):
         """Nested context managers across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class Indent:
                     def __init__(self, label, level):
                         self.label = label
@@ -87,10 +94,11 @@ class TestContextManagerBasics:
                 log_entries = [entry1, entry2, entry3]
                 print(f"entries={log_entries}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 print(f"log_count={len(log_entries)}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "[outer] start" in nb_runner.get_output(1)
@@ -104,8 +112,9 @@ class TestResourcePatterns:
 
     def test_suppress_exceptions(self, nb_runner):
         """contextlib.suppress pattern."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from contextlib import suppress
 
                 results = []
@@ -115,11 +124,12 @@ class TestResourcePatterns:
                         results.append(int(item))
                 print(f"results={results}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 total = sum(results)
                 print(f"total={total}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "results=[10, 20, 30]" in nb_runner.get_output(1)
@@ -127,8 +137,9 @@ class TestResourcePatterns:
 
     def test_exitstack(self, nb_runner):
         """ExitStack for dynamic context management."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from contextlib import ExitStack
 
                 cleanup_log = []
@@ -147,12 +158,13 @@ class TestResourcePatterns:
                     names = [r.name for r in resources]
                 print(f"names={names}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 # Verify LIFO cleanup order
                 closed = [e for e in cleanup_log if e.startswith('closed')]
                 print(f"cleanup_order={closed}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "names=['r0', 'r1', 'r2']" in nb_runner.get_output(1)
@@ -163,8 +175,9 @@ class TestResourcePatterns:
 
     def test_context_manager_propagation(self, nb_runner):
         """Context manager results propagate on change."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from contextlib import contextmanager
 
                 @contextmanager
@@ -178,17 +191,20 @@ class TestResourcePatterns:
                     snapshot = dict(db)
                 print(f"snapshot={snapshot}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 print(f"name={snapshot['name']} count={len(snapshot['data'])}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "name=test" in nb_runner.get_output(2)
         assert "count=3" in nb_runner.get_output(2)
 
         # Change DB name and data
-        nb_runner.set_cell_source(1, textwrap.dedent("""\
+        nb_runner.set_cell_source(
+            1,
+            textwrap.dedent("""\
             from contextlib import contextmanager
 
             @contextmanager
@@ -200,7 +216,8 @@ class TestResourcePatterns:
                 db['data'].extend([10, 20, 30, 40, 50])
                 snapshot = dict(db)
             print(f"snapshot={snapshot}")
-        """))
+        """),
+        )
         nb_runner.run_cells([1, 2])
         assert "name=production" in nb_runner.get_output(2)
         assert "count=5" in nb_runner.get_output(2)

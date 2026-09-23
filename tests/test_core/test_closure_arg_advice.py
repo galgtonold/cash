@@ -12,6 +12,7 @@ The fix line was built from the argument's type name, which for a closure is
 `function` -- a hasher for every function in the process, and the obvious one
 (by name) collides every closure a factory makes.
 """
+
 from __future__ import annotations
 
 import functools
@@ -28,6 +29,7 @@ pytestmark = pytest.mark.core
 def make_scaler(k):
     def scale(x):
         return x * k
+
     return scale
 
 
@@ -50,13 +52,18 @@ def c(tmp_path):
     Cash._WARNED_UNHASHABLE.update(saved)
 
 
-@pytest.mark.parametrize("arg", [
-    make_scaler(2),
-    lambda x: x,
-    functools.partial(make_scaler(2), 1),
-], ids=["closure", "lambda", "partial-of-closure"])
+@pytest.mark.parametrize(
+    "arg",
+    [
+        make_scaler(2),
+        lambda x: x,
+        functools.partial(make_scaler(2), 1),
+    ],
+    ids=["closure", "lambda", "partial-of-closure"],
+)
 def test_a_code_argument_is_not_told_to_register_a_type_wide_hasher(c, arg):
     """THE BUG: the fix line said `register_hasher(function, ...)`."""
+
     @c.cache
     def apply_to(fn, x):
         return x
@@ -73,6 +80,7 @@ def test_a_code_argument_is_not_told_to_register_a_type_wide_hasher(c, arg):
 
 def test_an_ordinary_unhashable_type_still_gets_the_hasher_advice(c):
     """The control: for a live object the type-wide hasher IS the right fix."""
+
     @c.cache
     def query(session, n):
         return n
@@ -117,6 +125,7 @@ def test_registering_a_hasher_for_an_ordinary_type_is_silent(c):
 # override=True a re-key of every DataFrame function -- while the lambda was
 # the culprit. Each candidate is now hashed on its own.
 # ---------------------------------------------------------------------------
+
 
 def test_a_frame_next_to_a_lambda_blames_the_lambda(c):
     pd = pytest.importorskip("pandas")

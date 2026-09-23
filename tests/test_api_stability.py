@@ -1,28 +1,33 @@
 """Tests for cash.experimental namespace."""
+
 import pytest
 
 
 def test_experimental_import_cache_explorer():
     """Test that CacheExplorer can be imported from experimental."""
     from cash.experimental import CacheExplorer
+
     assert CacheExplorer is not None
 
 
 def test_experimental_import_cache_debugger():
     """Test that CacheDebugger can be imported from experimental."""
     from cash.experimental import CacheDebugger
+
     assert CacheDebugger is not None
 
 
 def test_experimental_import_analytics():
     """Test that AnalyticsManager can be imported from experimental."""
     from cash.experimental import AnalyticsManager
+
     assert AnalyticsManager is not None
 
 
 def test_experimental_import_tiered_backend():
     """Test that TieredBackend can be imported from experimental."""
     from cash.experimental import TieredBackend
+
     assert TieredBackend is not None
 
 
@@ -35,40 +40,64 @@ def test_experimental_import_nonexistent():
 def test_core_exports_stable():
     """Test that core __init__ exports only stable APIs."""
     import cash
+
     expected_stable = {
         # Core API
-        'Cash', 'CacheExplanation', 'cache', 'show_stats',
-        'register_hasher', 'reset_session', 'configure', 'cleanup',
-        'help',  # public since d30849a (orientation summary, aimed at coding agents)
-        'disabled',  # public since round 19 (a no-cache block that restores CASH_DISABLE)
+        "Cash",
+        "CacheExplanation",
+        "cache",
+        "show_stats",
+        "register_hasher",
+        "reset_session",
+        "configure",
+        "cleanup",
+        "help",  # public since d30849a (orientation summary, aimed at coding agents)
+        "disabled",  # public since round 19 (a no-cache block that restores CASH_DISABLE)
         # Purity declarations
-        'pure', 'stateful', 'is_pure', 'is_stateful',
-        'analyze_function_purity', 'mark_pure', 'mark_stateful',
+        "pure",
+        "stateful",
+        "is_pure",
+        "is_stateful",
+        "analyze_function_purity",
+        "mark_pure",
+        "mark_stateful",
         # Code-surface opt-out
-        'opaque',  # public since 06c2bd6 (decorator form of the escape hatch)
-        'mark_opaque',  # public since 06c2bd6 (same, for a class you cannot edit)
+        "opaque",  # public since 06c2bd6 (decorator form of the escape hatch)
+        "mark_opaque",  # public since 06c2bd6 (same, for a class you cannot edit)
         # Configuration
-        'get_config', 'CashConfig', 'create_default_config',
+        "get_config",
+        "CashConfig",
+        "create_default_config",
         # Backends
-        'InMemoryBackend', 'FileBackend', 'SQLiteBackend',
-        'CascadingBackend',
+        "InMemoryBackend",
+        "FileBackend",
+        "SQLiteBackend",
+        "CascadingBackend",
         # Data sources
-        'DataSource', 'FileDataSource',
-        'RemoteFileDataSource',  # public since CAS-236 (track s3://, gs://, http(s):// objects)
+        "DataSource",
+        "FileDataSource",
+        "RemoteFileDataSource",  # public since CAS-236 (track s3://, gs://, http(s):// objects)
         # Exception hierarchy
-        'CashError', 'CacheBackendError', 'CacheExpiredError',
-        'CacheSerializationError', 'DependencyNotFoundError',
-        'AmbiguousCellError', 'UpstreamStateError',
+        "CashError",
+        "CacheBackendError",
+        "CacheExpiredError",
+        "CacheSerializationError",
+        "DependencyNotFoundError",
+        "AmbiguousCellError",
+        "UpstreamStateError",
         # public since the round-26 forward-reference fix: a cell that
         # reads a name only a LATER cell binds now fails instead of
         # caching against a namespace an in-order run cannot rebuild.
-        'ForwardReferenceError',
-        'CacheKeyComputationError', 'CashImpureFunctionError',
+        "ForwardReferenceError",
+        "CacheKeyComputationError",
+        "CashImpureFunctionError",
         # Warnings
-        'CashWarning', 'CashCacheIneffectiveWarning',
-        'CashCacheStoreFailedWarning', 'CashImpurityWarning',
-        'CashRandomnessWarning',  # public since CAS-114 (users filter on it)
-        'CashUpstreamSyntaxWarning',  # public since CAS-173 (users filter on it)
+        "CashWarning",
+        "CashCacheIneffectiveWarning",
+        "CashCacheStoreFailedWarning",
+        "CashImpurityWarning",
+        "CashRandomnessWarning",  # public since CAS-114 (users filter on it)
+        "CashUpstreamSyntaxWarning",  # public since CAS-173 (users filter on it)
     }
     actual = set(cash.__all__)
     assert actual == expected_stable

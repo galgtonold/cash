@@ -28,7 +28,6 @@ test here into one that passes while proving nothing:
    ticket). Every probe cell here is built by ``_live`` and asserts ``RESTORED``
    is absent, so a regression in that scoping fails loudly instead of lying.
 """
-import asyncio
 
 import pytest
 
@@ -40,12 +39,7 @@ SETUP = "import cash\n%cash_on\n%cash_badge print"
 
 WARM_REPS = 4  # 1 cold + 3 warm re-runs.
 
-BOX = (
-    "class Box:\n"
-    "    def __init__(self):\n"
-    "        self.tag = None\n"
-    "obj = Box()"
-)
+BOX = "class Box:\n    def __init__(self):\n        self.tag = None\nobj = Box()"
 
 
 def _restart(nb_runner):
@@ -63,6 +57,7 @@ def _live(*lines: str) -> str:
 # The core guarantee: identity survives warm re-runs
 # ----------------------------------------------------------------------
 
+
 def test_alias_identity_holds_across_warm_reruns(nb_runner):
     """THE CAS-184 guard: ``backup = obj`` keeps ``backup is obj`` on every re-run.
 
@@ -71,16 +66,18 @@ def test_alias_identity_holds_across_warm_reruns(nb_runner):
     ``backup``. A plain custom class suffices -- the bug is in the ASSIGNMENT, not
     in sklearn, so nothing here needs a heavy library.
     """
-    nb_runner.create_notebook([
-        SETUP,                                                          # 1
-        BOX,                                                            # 2
-        "# @cash:persist\nbackup = obj",                                # 3
-        "obj.tag = 'fitted'",                                           # 4
-        _live(
-            "print('same', backup is obj)",
-            "print('backup_tag', backup.tag)",
-        ),                                                              # 5
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,  # 1
+            BOX,  # 2
+            "# @cash:persist\nbackup = obj",  # 3
+            "obj.tag = 'fitted'",  # 4
+            _live(
+                "print('same', backup is obj)",
+                "print('backup_tag', backup.tag)",
+            ),  # 5
+        ]
+    )
     nb_runner.start_kernel()
 
     for rep in range(WARM_REPS):
@@ -91,8 +88,7 @@ def test_alias_identity_holds_across_warm_reruns(nb_runner):
             f"the live namespace -- this probe is invalid, not passing: {out!r}"
         )
         assert "same True" in out, (
-            f"rep {rep}: alias identity broken -- `backup = obj` restored a copy "
-            f"(CAS-184): {out!r}"
+            f"rep {rep}: alias identity broken -- `backup = obj` restored a copy (CAS-184): {out!r}"
         )
         assert "backup_tag fitted" in out, (
             f"rep {rep}: mutation through `obj` invisible via `backup` -- the alias "
@@ -108,18 +104,20 @@ def test_alias_mutation_visible_through_both_names(nb_runner):
     (``backup.append``) also proves the restore is not handing back a copy in the
     other direction.
     """
-    nb_runner.create_notebook([
-        SETUP,                                        # 1
-        "data = [1]",                                 # 2
-        "# @cash:persist\nbackup = data",             # 3
-        "data.append(2)",                             # 4
-        "backup.append(3)",                           # 5
-        _live(
-            "print('same', backup is data)",
-            "print('data', data)",
-            "print('backup', backup)",
-        ),                                            # 6
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,  # 1
+            "data = [1]",  # 2
+            "# @cash:persist\nbackup = data",  # 3
+            "data.append(2)",  # 4
+            "backup.append(3)",  # 5
+            _live(
+                "print('same', backup is data)",
+                "print('data', data)",
+                "print('backup', backup)",
+            ),  # 6
+        ]
+    )
     nb_runner.start_kernel()
 
     for rep in range(WARM_REPS):
@@ -142,9 +140,13 @@ def test_alias_output_matches_plain_kernel_ground_truth(tmp_path):
     """
     probe = "print('same', backup is obj)\nprint('backup_tag', backup.tag)"
     cells_off = [BOX, "backup = obj", "obj.tag = 'fitted'", probe]
-    cells_on = [SETUP, BOX, "# @cash:persist\nbackup = obj", "obj.tag = 'fitted'",
-                _live("print('same', backup is obj)",
-                      "print('backup_tag', backup.tag)")]
+    cells_on = [
+        SETUP,
+        BOX,
+        "# @cash:persist\nbackup = obj",
+        "obj.tag = 'fitted'",
+        _live("print('same', backup is obj)", "print('backup_tag', backup.tag)"),
+    ]
 
     def _run(work_dir, cells, with_cash, probe_cell):
         work_dir.mkdir(parents=True, exist_ok=True)
@@ -169,16 +171,12 @@ def test_alias_output_matches_plain_kernel_ground_truth(tmp_path):
         which reads as a cash bug and is not one. The badge is cash-only chrome
         and is filtered by the same rule.
         """
-        return "\n".join(
-            ln for ln in raw.splitlines() if ln.startswith(("same ", "backup_tag "))
-        ).strip()
+        return "\n".join(ln for ln in raw.splitlines() if ln.startswith(("same ", "backup_tag "))).strip()
 
     off = _probe_lines(_run(tmp_path / "off", cells_off, False, 4))
     on_lines = _probe_lines(_run(tmp_path / "on", cells_on, True, 5))
 
-    assert off == "same True\nbackup_tag fitted", (
-        f"the cash-off oracle itself is wrong -- test bug: {off!r}"
-    )
+    assert off == "same True\nbackup_tag fitted", f"the cash-off oracle itself is wrong -- test bug: {off!r}"
     assert on_lines == off, (
         "cash ON disagrees with a plain kernel on alias identity.\n"
         f"--- cash OFF ---\n{off!r}\n--- cash ON ---\n{on_lines!r}"
@@ -194,12 +192,14 @@ def test_alias_after_restart_reconstructs_source(nb_runner):
     unless the upstream simulation re-derives ``obj`` first. It does; this pins
     that, because a NameError would be a strictly worse bug than the one fixed.
     """
-    nb_runner.create_notebook([
-        SETUP,                                                          # 1
-        BOX,                                                            # 2
-        "# @cash:persist\nbackup = obj",                                # 3
-        _live("print('same', backup is obj)"),                          # 4
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,  # 1
+            BOX,  # 2
+            "# @cash:persist\nbackup = obj",  # 3
+            _live("print('same', backup is obj)"),  # 4
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -230,11 +230,13 @@ def test_alias_bind_is_reported_not_cached(nb_runner):
     serialises the object at all. Refusing to cache a pointer copy cannot cost
     anything -- there is no work to save.
     """
-    nb_runner.create_notebook([
-        SETUP,
-        "data = [1, 2, 3]",
-        "# @cash:persist\nbackup = data",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            "data = [1, 2, 3]",
+            "# @cash:persist\nbackup = data",
+        ]
+    )
     nb_runner.start_kernel()
 
     for rep in range(WARM_REPS):
@@ -251,20 +253,22 @@ def test_chained_and_tuple_alias_forms_keep_identity(nb_runner):
     Both bind existing objects to new names by pointer copy, so both carry the
     same identity guarantee and the same zero cost as ``b = a``.
     """
-    nb_runner.create_notebook([
-        SETUP,                                        # 1
-        "a = [1]\nd = [9]",                           # 2
-        "# @cash:persist\nb = c = a",                 # 3
-        "# @cash:persist\ne, f = a, d",               # 4
-        "a.append(2)",                                # 5
-        _live(
-            "print('b', b is a)",
-            "print('c', c is a)",
-            "print('e', e is a)",
-            "print('f', f is d)",
-            "print('b_val', b)",
-        ),                                            # 6
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,  # 1
+            "a = [1]\nd = [9]",  # 2
+            "# @cash:persist\nb = c = a",  # 3
+            "# @cash:persist\ne, f = a, d",  # 4
+            "a.append(2)",  # 5
+            _live(
+                "print('b', b is a)",
+                "print('c', c is a)",
+                "print('e', e is a)",
+                "print('f', f is d)",
+                "print('b_val', b)",
+            ),  # 6
+        ]
+    )
     nb_runner.start_kernel()
 
     for rep in range(WARM_REPS):
@@ -272,15 +276,14 @@ def test_chained_and_tuple_alias_forms_keep_identity(nb_runner):
         out = nb_runner.get_output(6)
         assert "RESTORED" not in out, f"rep {rep}: probe cell replayed: {out!r}"
         for name in ("b", "c", "e", "f"):
-            assert f"{name} True" in out, (
-                f"rep {rep}: `{name}` lost identity with its source: {out!r}"
-            )
+            assert f"{name} True" in out, f"rep {rep}: `{name}` lost identity with its source: {out!r}"
         assert "b_val [1, 2]" in out, f"rep {rep}: alias missed mutation: {out!r}"
 
 
 # ----------------------------------------------------------------------
 # Scope of the refusal: it must stay narrow
 # ----------------------------------------------------------------------
+
 
 def test_computed_rhs_still_caches(nb_runner):
     """The refusal stays NARROW: a CALL on the RHS still caches.
@@ -301,14 +304,16 @@ def test_computed_rhs_still_caches(nb_runner):
     now; see ``reference_alias_targets``. Computed-key subscripts (``a[i]``,
     ``df[mask]``) remain cached — those can be real filters.
     """
-    nb_runner.create_notebook([
-        SETUP,                                        # 1
-        "a = [1, 2, 3]",                              # 2
-        "# @cash:persist\nb = a.copy()",              # 3
-        "# @cash:persist\nc = list(a)",               # 4
-        "i = 0",                                      # 5
-        "# @cash:persist\nd = a[i]",                  # 6  computed key -> filter-shaped
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,  # 1
+            "a = [1, 2, 3]",  # 2
+            "# @cash:persist\nb = a.copy()",  # 3
+            "# @cash:persist\nc = list(a)",  # 4
+            "i = 0",  # 5
+            "# @cash:persist\nd = a[i]",  # 6  computed key -> filter-shaped
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -317,8 +322,7 @@ def test_computed_rhs_still_caches(nb_runner):
         for cell in (3, 4, 6):
             out = nb_runner.get_output(cell)
             assert "Alias assignment" not in out, (
-                f"rep {rep}: computed RHS in cell {cell} wrongly refused as an "
-                f"alias -- the gate is over-broad: {out!r}"
+                f"rep {rep}: computed RHS in cell {cell} wrongly refused as an alias -- the gate is over-broad: {out!r}"
             )
 
 
@@ -329,19 +333,19 @@ def test_unpack_from_single_name_is_not_an_alias(nb_runner):
     different object from ``a``, so refusing to cache it would be unjustified by
     either half of the argument.
     """
-    nb_runner.create_notebook([
-        SETUP,                                        # 1
-        "a = ([1], [2])",                             # 2
-        "# @cash:persist\nb, c = a",                  # 3
-        _live("print('b_is_a', b is a)", "print('b_is_a0', b is a[0])"),  # 4
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,  # 1
+            "a = ([1], [2])",  # 2
+            "# @cash:persist\nb, c = a",  # 3
+            _live("print('b_is_a', b is a)", "print('b_is_a0', b is a[0])"),  # 4
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
     out3 = nb_runner.get_output(3)
-    assert "Alias assignment" not in out3, (
-        f"an unpack was misclassified as an alias bind: {out3!r}"
-    )
+    assert "Alias assignment" not in out3, f"an unpack was misclassified as an alias bind: {out3!r}"
     out4 = nb_runner.get_output(4)
     assert "b_is_a False" in out4, out4
     assert "b_is_a0 True" in out4, out4

@@ -5,10 +5,10 @@ a non-decorated function dependency, only a graph edge was added and the state
 hasher contributed the empty string, so the declared dep was inert. These assert
 that editing a declared plain-callable dep on disk (+ reload) invalidates.
 """
+
 import importlib
 import os
 import sys
-import tempfile
 import time
 import warnings
 
@@ -36,7 +36,7 @@ class TestDependsOnPlainFunction:
 
             f = c.cache(standalone, depends_on=[mod.g_proxy])
             assert f(2) == 4
-            assert f.explain(2).reason == "hit"          # warm
+            assert f.explain(2).reason == "hit"  # warm
 
             time.sleep(0.02)
             _write_mod(str(tmp_path), "cas110mod", "def g_proxy(x):\n    return x + 999\n")
@@ -60,7 +60,7 @@ class TestDependsOnPlainFunction:
 
             f = c.cache(standalone, depends_on=[mod.g_proxy])
             f(5)
-            assert f.explain(5).reason == "hit"          # no edit → still hit
+            assert f.explain(5).reason == "hit"  # no edit → still hit
         finally:
             sys.path.remove(str(tmp_path))
             sys.modules.pop("cas110mod2", None)

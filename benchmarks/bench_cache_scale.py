@@ -22,6 +22,7 @@ What to watch:
 Usage:
     python benchmarks/bench_cache_scale.py [--counts 1000,10000,50000]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -48,10 +49,16 @@ def build_directory(cache_dir: Path, n: int, payload: bytes) -> float:
     t0 = time.perf_counter()
     for i in range(n):
         stem = f"{i:064x}"
-        meta = {"key": f"mod.f:state:{i}:args", "func_name": "mod.f",
-                "size": len(payload), "created_at": time.time(),
-                "last_access": time.time(), "access_count": 1,
-                "execution_time": 0.5, "storage": ["DISK"]}
+        meta = {
+            "key": f"mod.f:state:{i}:args",
+            "func_name": "mod.f",
+            "size": len(payload),
+            "created_at": time.time(),
+            "last_access": time.time(),
+            "access_count": 1,
+            "execution_time": 0.5,
+            "storage": ["DISK"],
+        }
         (cache_dir / f"{stem}.meta").write_bytes(pickle.dumps(meta))
         (cache_dir / f"{stem}.data").write_bytes(payload)
     return time.perf_counter() - t0
@@ -68,11 +75,10 @@ def time_first_access(cache_dir: Path) -> float:
         "from cash.backends import FileBackend\n"
         "b = FileBackend(sys.argv[1])\n"
         "t = time.perf_counter()\n"
-        "b.get('mod.f:state:0:args')\n"          # forces _ensure_initialized
+        "b.get('mod.f:state:0:args')\n"  # forces _ensure_initialized
         "print(time.perf_counter() - t)\n"
     )
-    out = subprocess.run([sys.executable, "-c", script, str(cache_dir)],
-                         capture_output=True, text=True, cwd=str(REPO))
+    out = subprocess.run([sys.executable, "-c", script, str(cache_dir)], capture_output=True, text=True, cwd=str(REPO))
     if out.returncode != 0:
         print(out.stderr[-1500:])
         raise SystemExit(1)
@@ -96,8 +102,9 @@ def time_steady_state(cache_dir: Path, n: int) -> tuple[float, float]:
         "    sets.append(time.perf_counter() - t)\n"
         "print(statistics.median(gets), statistics.median(sets))\n"
     )
-    out = subprocess.run([sys.executable, "-c", script, str(cache_dir), str(n)],
-                         capture_output=True, text=True, cwd=str(REPO))
+    out = subprocess.run(
+        [sys.executable, "-c", script, str(cache_dir), str(n)], capture_output=True, text=True, cwd=str(REPO)
+    )
     if out.returncode != 0:
         print(out.stderr[-1500:])
         raise SystemExit(1)
@@ -113,11 +120,14 @@ def time_inspect(cache_dir: Path) -> float:
     measures the antivirus rather than the command -- 269 s versus 2 s at 20k
     entries. The warm number is what a user with an existing cache sees.
     """
+
     def once() -> float:
         t = time.perf_counter()
-        subprocess.run([sys.executable, "-m", "cash", "inspect", str(cache_dir)],
-                       capture_output=True, text=True, cwd=str(REPO))
+        subprocess.run(
+            [sys.executable, "-m", "cash", "inspect", str(cache_dir)], capture_output=True, text=True, cwd=str(REPO)
+        )
         return time.perf_counter() - t
+
     once()
     return once()
 
@@ -125,8 +135,7 @@ def time_inspect(cache_dir: Path) -> float:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--counts", default="1000,10000,50000")
-    ap.add_argument("--payload", type=int, default=512,
-                    help="bytes per entry (default 512)")
+    ap.add_argument("--payload", type=int, default=512, help="bytes per entry (default 512)")
     args = ap.parse_args()
     counts = [int(c) for c in args.counts.split(",")]
     payload = b"x" * args.payload
@@ -134,8 +143,9 @@ def main() -> int:
     root = Path(tempfile.mkdtemp(prefix="cash_scale_"))
     try:
         print(f"payload {args.payload} B per entry, flat directory\n")
-        print(f"  {'entries':>9}{'build':>9}{'1st access':>13}{'get':>11}"
-              f"{'set':>11}{'cash inspect':>15}{'dir bytes':>13}")
+        print(
+            f"  {'entries':>9}{'build':>9}{'1st access':>13}{'get':>11}{'set':>11}{'cash inspect':>15}{'dir bytes':>13}"
+        )
         for n in counts:
             cache_dir = root / f"c{n}"
             build = build_directory(cache_dir, n, payload)
@@ -144,14 +154,16 @@ def main() -> int:
             # it would land on cash's ledger. Running the access twice warms
             # whatever it touches; the SECOND number is the per-process cost a
             # real user pays, on files the machine has already seen.
-            time_first_access(cache_dir)          # discard: pays the AV tax
+            time_first_access(cache_dir)  # discard: pays the AV tax
             first = time_first_access(cache_dir)
             get, put = time_steady_state(cache_dir, n)
             insp = time_inspect(cache_dir)
             total = sum(f.stat().st_size for f in cache_dir.iterdir())
-            print(f"  {n:>9,}{build:>8.1f}s{first*1000:>11.1f} ms"
-                  f"{get*1e6:>8.0f} us{put*1e6:>8.0f} us"
-                  f"{insp:>13.2f} s{total/1e6:>10.1f} MB")
+            print(
+                f"  {n:>9,}{build:>8.1f}s{first * 1000:>11.1f} ms"
+                f"{get * 1e6:>8.0f} us{put * 1e6:>8.0f} us"
+                f"{insp:>13.2f} s{total / 1e6:>10.1f} MB"
+            )
             shutil.rmtree(cache_dir, ignore_errors=True)
         return 0
     finally:

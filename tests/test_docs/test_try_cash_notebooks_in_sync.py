@@ -5,6 +5,7 @@ is generated from it by ``scripts/build_try_cash_colab.py`` (only the setup cell
 differs). These tests fail if the committed Colab notebook drifts from what the
 generator produces, or if the two notebooks diverge anywhere but the setup cell.
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -28,8 +29,7 @@ def test_colab_notebook_matches_generator():
     expected = _generator().render()
     actual = COLAB.read_text(encoding="utf-8")
     assert actual == expected, (
-        "examples/try_cash_colab.ipynb is stale — "
-        "run `python scripts/build_try_cash_colab.py` and commit the result."
+        "examples/try_cash_colab.ipynb is stale — run `python scripts/build_try_cash_colab.py` and commit the result."
     )
 
 

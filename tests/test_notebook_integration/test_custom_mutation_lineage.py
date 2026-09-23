@@ -42,12 +42,13 @@ _BOX = (
 
 
 class TestCustomMutationLineage:
-
     def test_custom_method_mutation_invalidates_cached_consumer(self, nb_runner):
-        nb_runner.create_notebook([
-            _BOX,
-            "box = Box()\nbox.add(10)\nresult = box.total()\nprint(f'result={result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                _BOX,
+                "box = Box()\nbox.add(10)\nresult = box.total()\nprint(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.enable_persist()
         nb_runner.run_all()
@@ -58,14 +59,15 @@ class TestCustomMutationLineage:
             "box = Box()\nbox.add(10)\nbox.add(20)\nresult = box.total()\nprint(f'result={result}')",
         )
         nb_runner.run_all()
-        assert "result=30" in nb_runner.get_output(2), \
-            f"stale cached consumer: {nb_runner.get_output(2)!r}"
+        assert "result=30" in nb_runner.get_output(2), f"stale cached consumer: {nb_runner.get_output(2)!r}"
 
     def test_builtin_method_mutation_invalidates_cached_consumer(self, nb_runner):
-        nb_runner.create_notebook([
-            _BOX,
-            "box = Box()\nbox.items.append(10)\nresult = box.total()\nprint(f'result={result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                _BOX,
+                "box = Box()\nbox.items.append(10)\nresult = box.total()\nprint(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.enable_persist()
         nb_runner.run_all()
@@ -76,8 +78,7 @@ class TestCustomMutationLineage:
             "box = Box()\nbox.items.append(10)\nbox.items.append(20)\nresult = box.total()\nprint(f'result={result}')",
         )
         nb_runner.run_all()
-        assert "result=30" in nb_runner.get_output(2), \
-            f"stale cached consumer: {nb_runner.get_output(2)!r}"
+        assert "result=30" in nb_runner.get_output(2), f"stale cached consumer: {nb_runner.get_output(2)!r}"
 
 
 _STACK = (
@@ -105,10 +106,12 @@ class TestBroadCustomMutators:
 
     def test_picklable_custom_mutator_invalidates_consumer(self, nb_runner):
         """stack.push -- custom name, picklable receiver -> observed precisely."""
-        nb_runner.create_notebook([
-            _STACK,
-            "s = Stack()\ns.push(1)\nresult = s.total()\nprint(f'result={result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                _STACK,
+                "s = Stack()\ns.push(1)\nresult = s.total()\nprint(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.enable_persist()
         nb_runner.run_all()
@@ -119,15 +122,16 @@ class TestBroadCustomMutators:
             "s = Stack()\ns.push(1)\ns.push(2)\nresult = s.total()\nprint(f'result={result}')",
         )
         nb_runner.run_all()
-        assert "result=3" in nb_runner.get_output(2), \
-            f"stale cached consumer: {nb_runner.get_output(2)!r}"
+        assert "result=3" in nb_runner.get_output(2), f"stale cached consumer: {nb_runner.get_output(2)!r}"
 
     def test_unpicklable_custom_mutator_invalidates_consumer(self, nb_runner):
         """bus.on(callable) -- custom name, unpicklable receiver -> assume-mutate."""
-        nb_runner.create_notebook([
-            _BUS_CLS,
-            "bus = Bus()\nbus.on(str.upper)\nresult = bus.emit('hi')\nprint(f'result={result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                _BUS_CLS,
+                "bus = Bus()\nbus.on(str.upper)\nresult = bus.emit('hi')\nprint(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.enable_persist()
         nb_runner.run_all()

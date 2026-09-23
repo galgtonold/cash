@@ -6,6 +6,7 @@ returned value with a lineage hash would reference an entry that does not
 exist. A downstream cached function would then key on a lineage hash with no
 backing entry. Lineage is now attached only when the value is actually stored.
 """
+
 from __future__ import annotations
 
 import tempfile
@@ -23,7 +24,7 @@ class Result:
 def test_rejected_value_has_no_lineage_hash():
     c = Cash(backend=InMemoryBackend())
 
-    @c.cache(cache_if=lambda r: False)        # never store
+    @c.cache(cache_if=lambda r: False)  # never store
     def produce(n):
         return Result(list(range(n)))
 
@@ -34,7 +35,7 @@ def test_rejected_value_has_no_lineage_hash():
 def test_accepted_value_still_has_lineage_hash():
     c = Cash(backend=InMemoryBackend())
 
-    @c.cache(cache_if=lambda r: True)         # always store
+    @c.cache(cache_if=lambda r: True)  # always store
     def produce(n):
         return Result(list(range(n)))
 
@@ -49,7 +50,7 @@ def test_downstream_recomputes_for_rejected_upstream():
     pd = pytest.importorskip("pandas")
     c = Cash(backend=FileBackend(cache_dir=tempfile.mkdtemp()))
 
-    @c.cache(cache_if=lambda df: False)       # upstream never cached
+    @c.cache(cache_if=lambda df: False)  # upstream never cached
     def load(n):
         return pd.DataFrame({"v": range(n)})
 
@@ -61,7 +62,7 @@ def test_downstream_recomputes_for_rejected_upstream():
         return int(df["v"].sum())
 
     assert total(load(5)) == 10
-    assert total(load(5)) == 10               # equal content -> downstream hit by content
+    assert total(load(5)) == 10  # equal content -> downstream hit by content
     assert calls["n"] == 1
-    assert total(load(6)) == 15               # different content -> recompute
+    assert total(load(6)) == 15  # different content -> recompute
     assert calls["n"] == 2

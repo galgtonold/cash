@@ -16,6 +16,7 @@ The repair has two halves, and the first alone does nothing:
 That second half is why keying on the LIVE RNG state cannot work: the live state
 is a function of the cache, not of the current seed.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -31,12 +32,12 @@ class TestModuleDetection:
     """Seeding and drawing must resolve to the SAME module name or nothing matches."""
 
     def test_numpy_seed_and_draw_agree(self):
-        assert get_seeding_rng_modules("np.random.seed(0)") == {'numpy.random'}
-        assert get_drawing_rng_modules("a = np.random.rand(3)") == {'numpy.random'}
+        assert get_seeding_rng_modules("np.random.seed(0)") == {"numpy.random"}
+        assert get_drawing_rng_modules("a = np.random.rand(3)") == {"numpy.random"}
 
     def test_stdlib_seed_and_draw_agree(self):
-        assert get_seeding_rng_modules("random.seed(0)") == {'random'}
-        assert get_drawing_rng_modules("x = random.random()") == {'random'}
+        assert get_seeding_rng_modules("random.seed(0)") == {"random"}
+        assert get_drawing_rng_modules("x = random.random()") == {"random"}
 
     def test_a_seed_is_not_a_draw(self):
         """Only a draw's result depends on the state, so only a draw is keyed."""
@@ -55,32 +56,34 @@ class TestRngReplayGate:
 
     def _restorer(self, epochs):
         return StatementRestorer(
-            shell=object(), file_deps=object(), rng_seed_epochs=epochs,
+            shell=object(),
+            file_deps=object(),
+            rng_seed_epochs=epochs,
         )
 
     def test_matching_epoch_still_replays(self):
         """Within one seeding regime, replay is what keeps the stream coherent."""
-        r = self._restorer({'numpy.random': 'stmt:aaa'})
-        assert r._rng_replay_is_current({'rng_epochs': {'numpy.random': 'stmt:aaa'}}) is True
+        r = self._restorer({"numpy.random": "stmt:aaa"})
+        assert r._rng_replay_is_current({"rng_epochs": {"numpy.random": "stmt:aaa"}}) is True
 
     def test_changed_epoch_suppresses_replay(self):
         """The regression: after a re-seed, replay would discard the new seed."""
-        r = self._restorer({'numpy.random': 'stmt:bbb'})
-        assert r._rng_replay_is_current({'rng_epochs': {'numpy.random': 'stmt:aaa'}}) is False
+        r = self._restorer({"numpy.random": "stmt:bbb"})
+        assert r._rng_replay_is_current({"rng_epochs": {"numpy.random": "stmt:aaa"}}) is False
 
     def test_legacy_entry_without_epochs_still_replays(self):
         """Entries cached before CAS-223 keep their previous behaviour."""
-        r = self._restorer({'numpy.random': 'stmt:bbb'})
-        assert r._rng_replay_is_current({'rng_state': {'x': 1}}) is True
+        r = self._restorer({"numpy.random": "stmt:bbb"})
+        assert r._rng_replay_is_current({"rng_state": {"x": 1}}) is True
 
     def test_unknown_module_does_not_suppress(self):
         """No epoch for a module means nothing is known to have changed."""
         r = self._restorer({})
-        assert r._rng_replay_is_current({'rng_epochs': {'numpy.random': 'stmt:aaa'}}) is True
+        assert r._rng_replay_is_current({"rng_epochs": {"numpy.random": "stmt:aaa"}}) is True
 
     def test_any_changed_module_suppresses(self):
-        r = self._restorer({'numpy.random': 'stmt:aaa', 'random': 'stmt:CHANGED'})
-        payload = {'rng_epochs': {'numpy.random': 'stmt:aaa', 'random': 'stmt:zzz'}}
+        r = self._restorer({"numpy.random": "stmt:aaa", "random": "stmt:CHANGED"})
+        payload = {"rng_epochs": {"numpy.random": "stmt:aaa", "random": "stmt:zzz"}}
         assert r._rng_replay_is_current(payload) is False
 
 
@@ -88,11 +91,11 @@ def test_default_ledger_is_isolated():
     """Two restorers built without a ledger must not share one dict."""
     a = StatementRestorer(shell=object(), file_deps=object())
     b = StatementRestorer(shell=object(), file_deps=object())
-    a._rng_seed_epochs['numpy.random'] = 'stmt:aaa'
+    a._rng_seed_epochs["numpy.random"] = "stmt:aaa"
     assert b._rng_seed_epochs == {}
 
 
-@pytest.mark.parametrize('seeded_first', [True, False])
+@pytest.mark.parametrize("seeded_first", [True, False])
 def test_epoch_ledger_is_shared_with_the_processor(seeded_first):
     """The restorer must observe seeds executed AFTER it was constructed.
 
@@ -103,6 +106,6 @@ def test_epoch_ledger_is_shared_with_the_processor(seeded_first):
     ledger: dict[str, str] = {}
     r = StatementRestorer(shell=object(), file_deps=object(), rng_seed_epochs=ledger)
     if seeded_first:
-        ledger['numpy.random'] = 'stmt:aaa'
-    ledger['numpy.random'] = 'stmt:bbb'
-    assert r._rng_replay_is_current({'rng_epochs': {'numpy.random': 'stmt:aaa'}}) is False
+        ledger["numpy.random"] = "stmt:aaa"
+    ledger["numpy.random"] = "stmt:bbb"
+    assert r._rng_replay_is_current({"rng_epochs": {"numpy.random": "stmt:aaa"}}) is False

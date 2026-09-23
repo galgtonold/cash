@@ -11,15 +11,15 @@ Measures key performance characteristics:
 - Statement processing overhead
 """
 
-import time
-import hashlib
-import pickle
 import ast
-import sys
+import hashlib
 import os
+import pickle
+import sys
+import time
 
 # Add src to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 
 def benchmark(func, iterations=1000, label=None):
@@ -118,8 +118,9 @@ def bench_backend_operations():
     """Benchmark backend get/set operations."""
     print("\n=== Backend Operations ===")
 
-    from cash.backends import InMemoryBackend, FileBackend
     import tempfile
+
+    from cash.backends import FileBackend, InMemoryBackend
 
     # InMemoryBackend
     mem = InMemoryBackend()
@@ -132,7 +133,9 @@ def bench_backend_operations():
     with tempfile.TemporaryDirectory() as tmpdir:
         fb = FileBackend(tmpdir)
         data = list(range(100))
-        benchmark(lambda: fb.set("key_bench", data, {"code": "x=range(100)"}), label="File set (100 ints)", iterations=200)
+        benchmark(
+            lambda: fb.set("key_bench", data, {"code": "x=range(100)"}), label="File set (100 ints)", iterations=200
+        )
         fb.set("key_bench", data, {"code": "x=range(100)"})
         benchmark(lambda: fb.get("key_bench"), label="File get (hit)", iterations=200)
         benchmark(lambda: fb.get("nonexistent_key"), label="File get (miss)", iterations=200)
@@ -160,16 +163,10 @@ def bench_lineage_key_computation():
     print("\n=== Cache Key Pipeline ===")
 
     code = "result = compute(data, params)"
-    input_lineages = {
-        "compute": "abc123def456",
-        "data": "789ghi012jkl",
-        "params": "345mno678pqr"
-    }
+    input_lineages = {"compute": "abc123def456", "data": "789ghi012jkl", "params": "345mno678pqr"}
 
     def compute_cache_key():
-        sorted_lineages = ':'.join(
-            f"{k}={v}" for k, v in sorted(input_lineages.items())
-        )
+        sorted_lineages = ":".join(f"{k}={v}" for k, v in sorted(input_lineages.items()))
         key_material = f"{code}|{sorted_lineages}"
         return hashlib.sha256(key_material.encode()).hexdigest()
 
@@ -180,7 +177,7 @@ def bench_purity_check():
     """Benchmark purity checking overhead."""
     print("\n=== Purity Check ===")
 
-    from cash.notebook.purity import is_pure, is_stateful, is_known_pure, pure, stateful
+    from cash.notebook.purity import is_known_pure, is_pure, is_stateful, pure, stateful
 
     @pure
     def my_pure_func(x):
@@ -201,6 +198,7 @@ def bench_purity_check():
 
     # Full purity check (parse + check)
     code = "result = sorted(data)"
+
     def full_purity_check():
         tree = ast.parse(code)
         for node in ast.walk(tree):

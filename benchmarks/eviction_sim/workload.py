@@ -22,6 +22,7 @@ undo).  The *engine* turns them into cache requests the way cash does:
 The session ops are generated independently of the policy under test, so
 every policy sees the same user behaviour for a given seed.
 """
+
 from __future__ import annotations
 
 import math
@@ -34,10 +35,10 @@ class Stmt:
     nb: int
     cell: int
     idx: int
-    inputs: list          # global stmt ids (earlier)
-    compute: float        # seconds
-    size: int             # serialized bytes
-    loop_iters: int = 0   # >0: a loop statement, one entry per iteration
+    inputs: list  # global stmt ids (earlier)
+    compute: float  # seconds
+    size: int  # serialized bytes
+    loop_iters: int = 0  # >0: a loop statement, one entry per iteration
     version: int = 0
     history: list = field(default_factory=lambda: [0])
 
@@ -72,7 +73,7 @@ class Params:
     p_large: float = 0.2
     p_large_hi: float = 0.65
     p_large_pivot: float = 0.1
-    size_scale: float = 1.0     # multiply every size (workload archetypes)
+    size_scale: float = 1.0  # multiply every size (workload archetypes)
     loop_cell_frac: float = 0.08
     loop_iters: tuple = (20, 200)
     days: int = 40
@@ -82,9 +83,9 @@ class Params:
     p_midday_restart: float = 0.04
     p_switch_notebook: float = 0.3
     p_morning_runall: float = 0.6
-    restore_bps: float = 400e6      # deserialize throughput
+    restore_bps: float = 400e6  # deserialize throughput
     restore_floor: float = 0.002
-    persist_floor: float = 0.1      # cash's compute floor for persisting
+    persist_floor: float = 0.1  # cash's compute floor for persisting
     seed: int = 0
 
 
@@ -117,8 +118,8 @@ class Project:
                     size = int(min(4e9, max(32, size * p.size_scale)))
                     iters = rng.randint(*p.loop_iters) if is_loop else 0
                     if iters:
-                        compute = compute / 4          # per iteration
-                        size = max(200, size // 50)    # per iteration
+                        compute = compute / 4  # per iteration
+                        size = max(200, size // 50)  # per iteration
                     st = Stmt(nb, c, s, sorted(set(inputs)), compute, size, iters)
                     self.stmts.append(st)
                     ids.append(sid)
@@ -177,8 +178,8 @@ class Engine:
         self.disk = disk
         self.ram = ram
         self.p = proj.p
-        self.mem: dict[int, int] = {}       # sid -> key materialised in the kernel
-        self.time = 0.0                     # user-visible seconds
+        self.mem: dict[int, int] = {}  # sid -> key materialised in the kernel
+        self.time = 0.0  # user-visible seconds
         self.compute_s = 0.0
         self.restore_s = 0.0
         self.requests = 0
@@ -194,8 +195,7 @@ class Engine:
         return 0.0003 + size / 2e9
 
     def admitted(self, size, compute):
-        return (compute >= self.p.persist_floor
-                and compute - self.restore_cost(size) > 0.2 * compute)
+        return compute >= self.p.persist_floor and compute - self.restore_cost(size) > 0.2 * compute
 
     def _lookup(self, key, size, compute, slot):
         self.requests += 1
@@ -223,8 +223,7 @@ class Engine:
     def _store(self, key, size, compute, slot):
         meta = {"slot": slot, "nb": self.proj.stmts[slot[0]].nb, "loop": len(slot) > 1}
         # RAM admission = Gate 0 (10 ms floor) + Gate A against the RAM copy cost
-        if (self.ram is not None and compute >= 0.01
-                and self.ram_cost(size) <= max(0.05, 0.8 * compute)):
+        if self.ram is not None and compute >= 0.01 and self.ram_cost(size) <= max(0.05, 0.8 * compute):
             self.ram.insert(key, size, compute - self.ram_cost(size), meta)
         if self.disk is not None and self.admitted(size, compute):
             self.disk.insert(key, size, compute - self.restore_cost(size), meta)

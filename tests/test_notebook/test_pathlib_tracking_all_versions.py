@@ -17,6 +17,7 @@ These tests assert the OUTCOME (the path is tracked) rather than which
 attribute got patched, so they stay meaningful when pathlib is restructured
 again.
 """
+
 from __future__ import annotations
 
 import pathlib

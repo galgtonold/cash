@@ -17,6 +17,7 @@ Replays the notebook's own cells through a real kernel in notebook order, then
 re-runs cells the way the markdown tells the reader to, and asserts the
 claims. Any drift between the prose and the engine fails here.
 """
+
 import pathlib
 
 import pytest
@@ -39,11 +40,17 @@ def _code_cells():
     detached checkout), which is still better than not checking at all.
     """
     import subprocess
+
     import nbformat
+
     try:
         raw = subprocess.run(
             ["git", "show", f"HEAD:{NB.relative_to(REPO).as_posix()}"],
-            cwd=REPO, capture_output=True, text=True, timeout=30, check=True,
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
         ).stdout
         nb = nbformat.reads(raw, as_version=4)
     except (subprocess.SubprocessError, OSError, ValueError):
@@ -54,6 +61,7 @@ def _code_cells():
 def _n_calls(out: str) -> int:
     """Read the executions count the notebook's own `show()` prints."""
     import re
+
     m = re.findall(r"\((\d+) real executions so far\)", out)
     assert m, f"no counter line in output:\n{out}"
     return int(m[-1])
@@ -80,8 +88,9 @@ def _sub_calls(out: str) -> list[tuple[int, int]]:
     this one's and no "interception is off here" assertion can ever fail.
     """
     import re
+
     rows: list[tuple[int, int]] = []
-    owner_is_upstream = True          # anything before the first row is a header
+    owner_is_upstream = True  # anything before the first row is a header
     for line in out.splitlines():
         stripped = line.lstrip()
         # Any row line marks a new owner -- including an uncacheable one,
@@ -113,9 +122,7 @@ def test_demo_notebook_claims_hold(nb_runner):
     # The cold run must MISS, or every "it hit" assertion below would also hold
     # for a build where interception never engaged at all.
     cold = _sub_calls(nb_runner.get_output(APPEND_PLAIN))
-    assert cold == [(0, 1)] * 3, (
-        f"the first run should show three missed sub-calls, got {cold}"
-    )
+    assert cold == [(0, 1)] * 3, f"the first run should show three missed sub-calls, got {cold}"
 
     # Claim 1: the plain append loop is cached automatically -- no directive,
     # a re-run does no work.
@@ -125,21 +132,16 @@ def test_demo_notebook_claims_hold(nb_runner):
         "notebook claims the undirected append loop is cached by default; the "
         f"re-run's sub-calls did not all hit:\n{out}"
     )
-    assert "[intercepted]" in out, (
-        f"the badge does not confirm interception on the undirected call:\n{out}"
-    )
+    assert "[intercepted]" in out, f"the badge does not confirm interception on the undirected call:\n{out}"
 
     # Claim 2: with the opt-out, interception genuinely switches off -- no
     # sub-call rows at all, so every call really executed.
     nb_runner.run_cell(APPEND_NO_CACHE_CALLS)
     out = nb_runner.get_output(APPEND_NO_CACHE_CALLS)
     assert _sub_calls(out) == [], (
-        "notebook claims no-cache-calls disables call caching; the badge still "
-        f"reports intercepted sub-calls:\n{out}"
+        f"notebook claims no-cache-calls disables call caching; the badge still reports intercepted sub-calls:\n{out}"
     )
-    assert "[intercepted]" not in out, (
-        f"a no-cache-calls statement must not carry the intercepted tag:\n{out}"
-    )
+    assert "[intercepted]" not in out, f"a no-cache-calls statement must not carry the intercepted tag:\n{out}"
     assert "out2 = [2, 3, 4]" in out, f"the append stopped running:\n{out}"
 
     # Claim 3: reordering the UNDIRECTED fold costs nothing -- this is the
@@ -150,9 +152,7 @@ def test_demo_notebook_claims_hold(nb_runner):
     )
     nb_runner.run_cell(FOLD_PLAIN)
     out = nb_runner.get_output(FOLD_PLAIN)
-    assert _sub_calls(out) == [(1, 1)] * 3, (
-        f"reordering the undirected fold cost executions:\n{out}"
-    )
+    assert _sub_calls(out) == [(1, 1)] * 3, f"reordering the undirected fold cost executions:\n{out}"
     assert "SUM 63" in out, f"the reordered fold gave a different answer:\n{out}"
 
     # Claim 4: the SAME reorder, under no-cache-calls, re-executes -- the
@@ -164,9 +164,7 @@ def test_demo_notebook_claims_hold(nb_runner):
     )
     nb_runner.run_cell(FOLD_NO_CACHE_CALLS)
     out = nb_runner.get_output(FOLD_NO_CACHE_CALLS)
-    assert _sub_calls(out) == [], (
-        f"no-cache-calls should have left the reorder uncached:\n{out}"
-    )
+    assert _sub_calls(out) == [], f"no-cache-calls should have left the reorder uncached:\n{out}"
     assert "SUM 69" in out, f"the reordered fold gave a different answer:\n{out}"
 
     # Claim 5: an ineligible call (merge reads its own target) is silently not
@@ -174,10 +172,7 @@ def test_demo_notebook_claims_hold(nb_runner):
     # no wrong value, no [intercepted] tag.
     out = nb_runner.get_output(INELIGIBLE)
     assert "acc = 5" in out, f"the ineligible-call cell produced a wrong value:\n{out}"
-    assert "[intercepted]" not in out, (
-        f"merge() reads its own target and must not be tagged intercepted:\n{out}"
-    )
+    assert "[intercepted]" not in out, f"merge() reads its own target and must not be tagged intercepted:\n{out}"
     assert "matched no cacheable call" not in out, (
-        "the noop warning was removed under default-on; it must not resurface:\n"
-        + out
+        "the noop warning was removed under default-on; it must not resurface:\n" + out
     )

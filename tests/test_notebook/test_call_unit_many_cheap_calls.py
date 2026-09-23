@@ -10,6 +10,7 @@ timed plain, and a new statement run starts over.
 
 Overhead is made deterministic here by slowing the lookup.
 """
+
 from __future__ import annotations
 
 import time
@@ -19,8 +20,13 @@ import pytest
 from cash.notebook import call_unit as cu
 from cash.notebook.call_interception import CallSite
 
-SITE = CallSite(source="work(v + 0)", free_names=frozenset({"work"}), occurrence_index=0,
-                computed_arg_positions=(0,), local_arg_positions=(0,))
+SITE = CallSite(
+    source="work(v + 0)",
+    free_names=frozenset({"work"}),
+    occurrence_index=0,
+    computed_arg_positions=(0,),
+    local_arg_positions=(0,),
+)
 N = cu._GUARD_AFTER_CALLS + cu._PLAIN_SAMPLES + 40
 
 
@@ -33,6 +39,7 @@ def slow_lookup(monkeypatch):
         lookups.append(key)
         time.sleep(0.002)
         return real(self, key)
+
     monkeypatch.setattr(cu.CallUnit, "_lookup", lookup)
     return lookups
 
@@ -67,7 +74,7 @@ def test_expensive_calls_are_never_run_plain_to_measure_them(call_unit_harness, 
 
     def work(v):
         ran.append(v)
-        time.sleep(0.005)          # over the (lowered) cheap bar and the store floor
+        time.sleep(0.005)  # over the (lowered) cheap bar and the store floor
         return v * 2
 
     unit = call_unit_harness(lineage={"work": "w"}, user_ns={})
@@ -89,8 +96,9 @@ def test_calls_a_hit_could_not_beat_stop_being_cached(call_unit_harness, slow_lo
     being cached. Keying and looking it up alone cost as much as the call: a
     hit would never have been faster. Measured on the same samples, a site
     whose key and lookup cost at least the call runs plain."""
+
     def work(v):
-        time.sleep(0.0015)         # under the 2 ms lookup; well under 4x the miss
+        time.sleep(0.0015)  # under the 2 ms lookup; well under 4x the miss
         return v * 2
 
     unit = call_unit_harness(lineage={"work": "w"}, user_ns={})
@@ -122,13 +130,31 @@ def test_every_call_is_counted_including_the_plain_ones(call_unit_harness, slow_
 def test_the_sub_call_line_says_how_many_ran_plain():
     from cash.notebook.badge_renderer.renderers.text import render_text
     from cash.notebook.badge_renderer.view_builder import build_interactive_badge
-    event = {"func_name": "m.work", "call_source": "work(v)", "occurrence_index": 0, "intercepted": True,
-             "cache_key": None, "execution_time": 0.001, "time_saved": 0.0}
-    calls = ([dict(event, cache_hit=True) for _ in range(3)]
-             + [dict(event, cache_hit=False, ran_plain=True) for _ in range(5)])
-    out = render_text(build_interactive_badge([
-        {"status": "COMPUTED", "code": "out = [work(v) for v in xs]", "execution_time": 0.1,
-         "decorator_calls": calls}]))
+
+    event = {
+        "func_name": "m.work",
+        "call_source": "work(v)",
+        "occurrence_index": 0,
+        "intercepted": True,
+        "cache_key": None,
+        "execution_time": 0.001,
+        "time_saved": 0.0,
+    }
+    calls = [dict(event, cache_hit=True) for _ in range(3)] + [
+        dict(event, cache_hit=False, ran_plain=True) for _ in range(5)
+    ]
+    out = render_text(
+        build_interactive_badge(
+            [
+                {
+                    "status": "COMPUTED",
+                    "code": "out = [work(v) for v in xs]",
+                    "execution_time": 0.1,
+                    "decorator_calls": calls,
+                }
+            ]
+        )
+    )
     assert "sub-call work(v): 3/8 hit" in out, out
     assert "5 run plain" in out, out
 
@@ -140,11 +166,28 @@ def test_a_row_whose_calls_were_served_says_what_they_saved():
     row says what its cached calls saved."""
     from cash.notebook.badge_renderer.renderers.text import render_text
     from cash.notebook.badge_renderer.view_builder import build_interactive_badge
-    hit = {"func_name": "m.evaluate", "call_source": "evaluate(name)", "occurrence_index": 0,
-           "intercepted": True, "cache_key": "call:ab", "cache_hit": True,
-           "execution_time": 0.0, "time_saved": 3.02}
-    out = render_text(build_interactive_badge([
-        {"status": "COMPUTED", "code": "results[name] = evaluate(name)", "execution_time": 0.03,
-         "decorator_calls": [hit]}]))
+
+    hit = {
+        "func_name": "m.evaluate",
+        "call_source": "evaluate(name)",
+        "occurrence_index": 0,
+        "intercepted": True,
+        "cache_key": "call:ab",
+        "cache_hit": True,
+        "execution_time": 0.0,
+        "time_saved": 3.02,
+    }
+    out = render_text(
+        build_interactive_badge(
+            [
+                {
+                    "status": "COMPUTED",
+                    "code": "results[name] = evaluate(name)",
+                    "execution_time": 0.03,
+                    "decorator_calls": [hit],
+                }
+            ]
+        )
+    )
     row = next(line for line in out.splitlines() if "results[name]" in line)
     assert "saved 3.02s" in row, out

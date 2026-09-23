@@ -8,25 +8,26 @@ is a setting of ``sys``, replayed for a statement that reads ``sys``; an
 import does not read it, but finding a module that is not loaded yet depends
 on it.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.upstream, pytest.mark.timeout(300)]
 
-MODULE = ("def slow(x):\n"
-          "    _ = sum(i * i for i in range(2_000_000))\n"
-          "    return x * 3\n")
+MODULE = "def slow(x):\n    _ = sum(i * i for i in range(2_000_000))\n    return x * 3\n"
 
 
 def test_jumping_below_the_import_after_a_restart(nb_runner, tmp_path):
     lib = tmp_path / "lib"
     lib.mkdir()
     (lib / "btsyspath.py").write_text(MODULE, encoding="utf-8")
-    nb_runner.create_notebook([
-        "import cash\n%cash_on\n%cash_badge print",
-        f"import sys\nsys.path.insert(0, {str(lib)!r})\nimport btsyspath\nX = 5",
-        "y = btsyspath.slow(X)",
-        "print('Y', y)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import cash\n%cash_on\n%cash_badge print",
+            f"import sys\nsys.path.insert(0, {str(lib)!r})\nimport btsyspath\nX = 5",
+            "y = btsyspath.slow(X)",
+            "print('Y', y)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "Y 15" in nb_runner.get_output(4), nb_runner.get_raw_output(4)

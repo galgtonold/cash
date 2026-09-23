@@ -1,16 +1,17 @@
-﻿from cash.notebook.cache_status import CacheStatus
+from cash.notebook.cache_status import CacheStatus
+
 """Direct import tests for statement_processor module.
 
 Verifies that the StatementProcessor class and its TypedDicts can be
 imported and instantiated directly, improving test coverage visibility.
 """
 
+from cash.notebook._protocols import TrackingState
 from cash.notebook.statement import (
     ProcessResult,
     StatementProcessor,
     _ProcessResultRequired,
 )
-from cash.notebook._protocols import TrackingState
 
 
 class TestProcessResultTypes:
@@ -71,9 +72,7 @@ class TestStatementProcessorImport:
             "_analyze_and_hash",
         ]
         for method_name in expected_methods:
-            assert hasattr(StatementProcessor, method_name), (
-                f"StatementProcessor missing method {method_name}"
-            )
+            assert hasattr(StatementProcessor, method_name), f"StatementProcessor missing method {method_name}"
 
     def test_has_set_tracking_state(self):
         """StatementProcessor should have the new set_tracking_state method."""
@@ -117,6 +116,7 @@ class TestTrackingState:
     def test_all_fields_present(self):
         """All documented fields should exist."""
         import dataclasses
+
         field_names = {f.name for f in dataclasses.fields(TrackingState)}
         expected = {
             "executed_cell_codes",

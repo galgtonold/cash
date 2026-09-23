@@ -26,7 +26,7 @@ Walk through these questions top to bottom and stop at the first match:
 
 ## The backend table
 
-<!-- claim: cash/backends/__init__.py:__all__ @c2e4bb9a broad="the count and the table are a claim about the exported backend set" -->
+<!-- claim: cash/backends/__init__.py:__all__ @9359c304 broad="the count and the table are a claim about the exported backend set" -->
 | Backend | Persistence | Speed | Sharing | Best for |
 |---------|-------------|-------|---------|----------|
 | `InMemoryBackend` | Kernel restart clears | Fastest | Single process | Quick experiments |
@@ -46,7 +46,7 @@ c = Cash(backend=InMemoryBackend(max_entries=500))
 c.register_magic()
 ```
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend.__init__ @9d9cca39, cash/backends/memory_backend.py:InMemoryBackend._evict @050aceb5, cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @2f16cf81, cash/backends/memory_backend.py:InMemoryBackend._gdsf_priority @1174b102 -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend.__init__ @a902d53c, cash/backends/memory_backend.py:InMemoryBackend._evict @050aceb5, cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @2f16cf81, cash/backends/memory_backend.py:InMemoryBackend._gdsf_priority @6ba0f19d -->
 A plain dict guarded by light bookkeeping. Reads and writes deep-copy by default so a downstream mutation can't poison the cache. Eviction has **three** triggers:
 
 1. `max_entries` — a hard LRU cap, evicting oldest-accessed first (`_evict_lru`).
@@ -103,10 +103,10 @@ When the cache exceeds `max_size_bytes`, entries are evicted until it fits under
 
 The ranking never opens the entries. It comes from one `scandir` (sizes, and mtime as last access) plus `_rank.log`, a small file in the cache directory where each write and each access flush records the entry's priority (in batches, so a write pays nothing extra) — so a new process, after a kernel restart, still knows what the entries it did not write are worth. The file is advisory: delete it, or let two processes interleave into it, and nothing breaks; entries with no record rank as if their cost were unknown and small, and an old entry that is still being read gets a record on its next access flush. The ranking is a queue drained across many eviction passes, which matters: once a cache is full it evicts on most writes, so re-ranking per pass would put a directory walk on nearly every write.
 
-<!-- claim: cash/backends/versions.py:superseded_to_drop @78fde8bf, cash/backends/value_policy.py:BYTES_PER_COMPUTE_SECOND == 67108864, cash/backends/versions.py:MAX_SUPERSEDED == 16, cash/backends/file_backend.py:FileBackend._prune_versions @2c5b49f1 -->
+<!-- claim: cash/backends/versions.py:superseded_to_drop @aba940f2, cash/backends/value_policy.py:BYTES_PER_COMPUTE_SECOND == 67108864, cash/backends/versions.py:MAX_SUPERSEDED == 16, cash/backends/file_backend.py:FileBackend._prune_versions @ba054a8d -->
 **Old versions of a notebook statement are pruned before the cap is reached.** A statement re-run on changed inputs writes a new entry, and the old one used to stay until the cap evicted it. The cap is a quarter of the disk tier's room, so a notebook that rebuilt a 700 MB feature frame nine times kept all nine. When a statement's new result is written, its older versions are now kept newest first, while what they add up to fits `64 MiB` for each second the version took to compute. The most recent older version always stays, so undoing an edit is still served. A few bytes that took a minute keep up to 16 older versions. A large frame that takes a second to rebuild keeps one. A version this process has read is never pruned. Only notebook statements are versioned this way, recognised by their source and the names they bind. Decorator calls, call-level entries and loop iterations are left to the cap.
 
-<!-- claim: cash/notebook/call_refs.py:with_call_refs @d122ad44, cash/notebook/call_refs.py:resolve_call_refs @85e761f3 -->
+<!-- claim: cash/notebook/call_refs.py:with_call_refs @eeb6e01e, cash/notebook/call_refs.py:resolve_call_refs @85e761f3 -->
 **A value built from cached calls is stored once.** `models = {k: fit(g) for k, g in groups}` caches each `fit` under its call, and the statement's own entry used to hold the whole dict again. Its entry now refers to those call entries for any value that is still what the call returned (checked by a SHA-256 of the value's pickle), so a restart still restores `models` directly while the fits are on disk once. A statement that is nothing but the call, such as `net, inside, _ = net_returns(orders, 12)`, needs no check: nothing runs between the call's return and the names being bound. It refers to the call's entry without pickling the result, and to each unpacked name's item of it. A version of the statement counts the bytes it refers to when versions are pruned, and the call entries only a pruned version referred to go with it. A reference to a call entry that is gone, or holds something else, makes the statement recompute. The record behind this, `_versions.log`, is advisory like `_rank.log`: losing it costs some pruning, never a value.
 
 **Key parameters** — `cache_dir`, `compress` (gzip; usually only worth it for CSV/JSON), `max_size_bytes` (None = unlimited), `flush_interval` (seconds; 0 = flush on every write), `default_ttl` (seconds).
@@ -370,7 +370,7 @@ export CASH_TIER_2_TYPE=s3
 export CASH_TIER_2_BUCKET=my-team-cache
 ```
 
-<!-- claim: cash/backends/factory.py:build_backend_from_config @838026dc, cash/backends/factory.py:_build_single_backend @51cf2da8 -->
+<!-- claim: cash/backends/factory.py:build_backend_from_config @838026dc, cash/backends/factory.py:_build_single_backend @52da1a02 -->
 The tier list, when non-empty, takes precedence over the single-backend `CASH_BACKEND` field. The same fields are available under `[tool.cash]` in `pyproject.toml` and `[cash]` in `~/.config/cash/config.toml`. See the [Configuration reference](../../getting-started/configuration.md) for the full resolution order.
 
 ## Notebook vs decorator — same backend
@@ -394,7 +394,7 @@ Env vars resolve to the same `CashConfig` regardless of entry point. There is no
 
 ## API reference (compact)
 
-<!-- claim: cash/backends/__init__.py:__all__ @c2e4bb9a broad="the import-path column is a claim about what the package exports" -->
+<!-- claim: cash/backends/__init__.py:__all__ @9359c304 broad="the import-path column is a claim about what the package exports" -->
 **Every** backend below imports from `cash.backends`. The four that are always
 available — no extra to install, nothing to assemble — are re-exported from the
 top-level `cash` as well, and that is the shorter spelling to reach for:

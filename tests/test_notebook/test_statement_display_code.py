@@ -1,4 +1,5 @@
 """The metrics dict carries a display-only copy of the statement's source."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
@@ -21,6 +22,7 @@ _PERSIST = CacheAnnotation(persist=True)
 
 class MockShell(Configurable):
     """Mock IPython shell for testing."""
+
     def __init__(self):
         super().__init__()
         self.user_ns = {}
@@ -29,7 +31,7 @@ class MockShell(Configurable):
         self.events = MagicMock()
         self.ast_transformers = []
         self.user_global_ns = self.user_ns
-        self.display_pub = type('MockDisplayPub', (), {'publish': MagicMock()})()
+        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
 
 
 @pytest.fixture
@@ -50,7 +52,8 @@ def test_display_code_is_recorded_when_supplied(processor_fixture):
     shell.user_ns["a"] = 1
 
     metrics = processor.process_statement(
-        "x = a + 1", display_code="x = (\n    a + 1\n)",
+        "x = a + 1",
+        display_code="x = (\n    a + 1\n)",
     )
 
     assert metrics["display_code"] == "x = (\n    a + 1\n)"
@@ -86,7 +89,9 @@ def test_display_code_does_not_change_the_cache_key(processor_fixture):
 
     first = processor.process_statement("x = a + 1", display_code="x = a + 1", annotation=_PERSIST)
     second = processor.process_statement(
-        "x = a + 1", display_code="x = (\n    a + 1\n)", annotation=_PERSIST,
+        "x = a + 1",
+        display_code="x = (\n    a + 1\n)",
+        annotation=_PERSIST,
     )
 
     assert first["status"] == CacheStatus.COMPUTED
@@ -126,30 +131,26 @@ def test_a_control_body_statement_has_no_display_code(processor_fixture):
     ``try`` bodies.
     """
     processor, shell, backend, magics = processor_fixture
-    magics._badge_mode = 'html'
-    shell.user_ns['xs'] = [1, 2, 3]
-    cell = (
-        "for i in xs:\n"
-        "    y = i + 1\n"
-        "z = 99\n"
-    )
+    magics._badge_mode = "html"
+    shell.user_ns["xs"] = [1, 2, 3]
+    cell = "for i in xs:\n    y = i + 1\nz = 99\n"
 
-    with patch.object(magics, '_render_interactive_badge') as mock_badge:
+    with patch.object(magics, "_render_interactive_badge") as mock_badge:
         magics.cash("", cell)
 
     # Premises: both the loop body and the sibling statement actually ran,
     # so a false pass can't hide behind a cell that silently did nothing.
     # `y` is overwritten each iteration, so it holds the LAST one (i=3).
-    assert shell.user_ns.get('y') == 4
-    assert shell.user_ns.get('z') == 99
+    assert shell.user_ns.get("y") == 4
+    assert shell.user_ns.get("z") == 99
 
     all_metrics = mock_badge.call_args_list[-1][0][0]
-    loop_rows = [m for m in all_metrics if 'loop_vars' in m]
-    sibling_rows = [m for m in all_metrics if m.get('code') == 'z = 99']
+    loop_rows = [m for m in all_metrics if "loop_vars" in m]
+    sibling_rows = [m for m in all_metrics if m.get("code") == "z = 99"]
 
     assert loop_rows, "premise: the loop produced its own per-iteration rows"
     assert len(loop_rows) == 3, "premise: one row per iteration (3 elements in xs)"
-    assert all(row.get('display_code') is None for row in loop_rows)
+    assert all(row.get("display_code") is None for row in loop_rows)
 
     assert sibling_rows, "premise: the sibling top-level statement has its own row"
-    assert all(row.get('display_code') is not None for row in sibling_rows)
+    assert all(row.get("display_code") is not None for row in sibling_rows)

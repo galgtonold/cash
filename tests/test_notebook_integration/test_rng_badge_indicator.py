@@ -5,6 +5,7 @@ line; an *unseeded* draw's pill uses the warn-red family, flags that its cached
 value is a frozen replay, and bumps the badge's header warning count. Behaviour
 is unchanged — this is advisory only.
 """
+
 import pytest
 
 pytestmark = pytest.mark.libraries
@@ -57,9 +58,7 @@ def test_reexecuted_seed_explains_why(nb_runner):
     nb_runner.set_cell_source(2, data.replace("MULT = 100.0", "MULT = 200.0"))
     nb_runner.run_cell(3)  # downstream-only re-run forces the seed to re-run
     html = _badge_html(nb_runner, 3)
-    assert "re-run to restore the random stream" in html, (
-        "the re-executed seed should explain why it re-ran"
-    )
+    assert "re-run to restore the random stream" in html, "the re-executed seed should explain why it re-ran"
 
 
 _SK_SETUP = (
@@ -72,10 +71,13 @@ _SK_SETUP = (
 @pytest.mark.timeout(240)
 def test_inline_unseeded_fit_flagged(nb_runner):
     """An inline/anonymous unseeded estimator fit is flagged on the badge (Stage 3)."""
-    nb_runner.create_notebook([
-        C_ON, _SK_SETUP,
-        "clf = RandomForestClassifier(n_estimators=40).fit(X, y)\nprint('S', round(clf.score(X, y), 3))",
-    ])
+    nb_runner.create_notebook(
+        [
+            C_ON,
+            _SK_SETUP,
+            "clf = RandomForestClassifier(n_estimators=40).fit(X, y)\nprint('S', round(clf.score(X, y), 3))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     html = _badge_html(nb_runner, 3)
@@ -86,10 +88,13 @@ def test_inline_unseeded_fit_flagged(nb_runner):
 @pytest.mark.timeout(240)
 def test_inline_seeded_fit_not_flagged(nb_runner):
     """A seeded inline fit must not be flagged as unseeded (Stage 3)."""
-    nb_runner.create_notebook([
-        C_ON, _SK_SETUP,
-        "clf = RandomForestClassifier(n_estimators=40, random_state=1).fit(X, y)\nprint('S', round(clf.score(X, y), 3))",
-    ])
+    nb_runner.create_notebook(
+        [
+            C_ON,
+            _SK_SETUP,
+            "clf = RandomForestClassifier(n_estimators=40, random_state=1).fit(X, y)\nprint('S', round(clf.score(X, y), 3))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     html = _badge_html(nb_runner, 3)
@@ -97,9 +102,7 @@ def test_inline_seeded_fit_not_flagged(nb_runner):
 
 
 _HELPER_UNSEEDED = (
-    "import numpy as np\n"
-    "def make_data():\n"
-    "    return np.random.rand(3)  # unseeded draw, hidden from the AST"
+    "import numpy as np\ndef make_data():\n    return np.random.rand(3)  # unseeded draw, hidden from the AST"
 )
 
 

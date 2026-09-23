@@ -11,6 +11,7 @@ converging), so the honest fix is to warn.
 The warning is advisory: behaviour is unchanged, and a fixed-int seed or a
 ``# @cash:no-cache`` annotation is the way out, both named in the message.
 """
+
 import pytest
 
 pytestmark = pytest.mark.libraries
@@ -25,29 +26,29 @@ def _cell_warnings(nb_runner, cell_num):
 
 @pytest.mark.timeout(180)
 def test_entropy_reseed_warns_about_frozen_downstream(nb_runner):
-    nb_runner.create_notebook([
-        C_ON,
-        "import numpy as np\nnp.random.seed(None)\nx = np.random.rand(3)\nprint('X', float(x.sum()))",
-    ])
+    nb_runner.create_notebook(
+        [
+            C_ON,
+            "import numpy as np\nnp.random.seed(None)\nx = np.random.rand(3)\nprint('X', float(x.sum()))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     out = _cell_warnings(nb_runner, 2)
     assert "seed(None)" in out, f"no entropy-reseed warning emitted:\n{out}"
-    assert "no-cache" in out or "fixed" in out, (
-        f"the warning must name a way out:\n{out}"
-    )
+    assert "no-cache" in out or "fixed" in out, f"the warning must name a way out:\n{out}"
 
 
 @pytest.mark.timeout(180)
 def test_fixed_seed_does_not_warn(nb_runner):
     """A reproducible seed is not an entropy reseed and must stay silent."""
-    nb_runner.create_notebook([
-        C_ON,
-        "import numpy as np\nnp.random.seed(42)\nx = np.random.rand(3)\nprint('X', float(x.sum()))",
-    ])
+    nb_runner.create_notebook(
+        [
+            C_ON,
+            "import numpy as np\nnp.random.seed(42)\nx = np.random.rand(3)\nprint('X', float(x.sum()))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     out = _cell_warnings(nb_runner, 2)
-    assert "seed(None)" not in out, (
-        f"a fixed-int seed must not trigger the entropy-reseed warning:\n{out}"
-    )
+    assert "seed(None)" not in out, f"a fixed-int seed must not trigger the entropy-reseed warning:\n{out}"

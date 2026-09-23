@@ -5,6 +5,7 @@ Round 19 (r19s3): the testing guide's ``no_cache`` fixture ended with
 to run with no cache -- that switched caching ON from the first test that used
 the fixture, and every later test read and wrote the cache.
 """
+
 from __future__ import annotations
 
 import os
@@ -47,7 +48,7 @@ def test_it_is_restored_when_the_block_raises(restore_disable):
     assert c.config.disable is False
 
 
-CONFTEST = '''\
+CONFTEST = """\
 import cash
 import pytest
 
@@ -55,14 +56,14 @@ import pytest
 def no_cache():
     with cash.disabled():
         yield
-'''
+"""
 
-TEST_A = '''\
+TEST_A = """\
 def test_a(no_cache):
     assert True
-'''
+"""
 
-TEST_B = '''\
+TEST_B = """\
 import cash
 
 calls = []
@@ -76,18 +77,22 @@ def test_b_runs_uncached():
     f(1)
     f(1)
     assert calls == [1, 1], "CASH_DISABLE=1 was switched off by the fixture"
-'''
+"""
 
 
 def test_the_documented_fixture_leaves_a_cash_disable_run_uncached(tmp_path):
     for name, text in (("conftest.py", CONFTEST), ("test_a.py", TEST_A), ("test_b.py", TEST_B)):
         (tmp_path / name).write_text(textwrap.dedent(text), encoding="utf-8")
-    env = {k: v for k, v in os.environ.items()
-           if not k.startswith(("CASH_", "PYTEST_XDIST"))}
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("CASH_", "PYTEST_XDIST"))}
     env.update(CASH_DISABLE="1", CASH_CACHE_DIR=str(tmp_path / ".cash"))
-    p = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
-                        "-p", "no:randomly", "test_a.py", "test_b.py"],
-                       cwd=str(tmp_path), env=env, capture_output=True, text=True, timeout=240)
+    p = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "no:randomly", "test_a.py", "test_b.py"],
+        cwd=str(tmp_path),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=240,
+    )
     assert p.returncode == 0, p.stdout[-3000:] + p.stderr[-2000:]
     written = [f for _, _, files in os.walk(tmp_path / ".cash") for f in files if f.endswith(".entry")]
     assert not written, f"a CASH_DISABLE=1 run wrote {written}"

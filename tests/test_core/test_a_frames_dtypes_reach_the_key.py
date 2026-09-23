@@ -7,6 +7,7 @@ the naive one's ``TypeError: Cannot convert tz-naive timestamps`` -- and so did
 ``int64``/``Int64`` (pd.NA semantics), ``int64``/``int32``, ``bool``/``int64``,
 and a categorical against an object column.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -36,15 +37,20 @@ def _pair(seen, left, right):
     return first, second, len(calls)
 
 
-@pytest.mark.parametrize("left, right", [
-    (pd.Series(pd.to_datetime(["2020-06-01 12:00"])),
-     pd.Series(pd.to_datetime(["2020-06-01 12:00"]).tz_localize("UTC"))),
-    (pd.Series([1, 2], dtype="int64"), pd.Series([1, 2], dtype="Int64")),
-    (pd.Series([1, 2], dtype="int64"), pd.Series([1, 2], dtype="int32")),
-    (pd.Series([1, 0], dtype="bool"), pd.Series([1, 0], dtype="int64")),
-    (pd.Series(["a", "b"], dtype="object"), pd.Series(["a", "b"], dtype="category")),
-    (pd.DataFrame({"a": [1, 2]}, dtype="int64"), pd.DataFrame({"a": [1, 2]}, dtype="int32")),
-])
+@pytest.mark.parametrize(
+    "left, right",
+    [
+        (
+            pd.Series(pd.to_datetime(["2020-06-01 12:00"])),
+            pd.Series(pd.to_datetime(["2020-06-01 12:00"]).tz_localize("UTC")),
+        ),
+        (pd.Series([1, 2], dtype="int64"), pd.Series([1, 2], dtype="Int64")),
+        (pd.Series([1, 2], dtype="int64"), pd.Series([1, 2], dtype="int32")),
+        (pd.Series([1, 0], dtype="bool"), pd.Series([1, 0], dtype="int64")),
+        (pd.Series(["a", "b"], dtype="object"), pd.Series(["a", "b"], dtype="category")),
+        (pd.DataFrame({"a": [1, 2]}, dtype="int64"), pd.DataFrame({"a": [1, 2]}, dtype="int32")),
+    ],
+)
 def test_two_dtypes_are_two_entries(seen, left, right):
     first, second, ran = _pair(seen, left, right)
     assert first != second, f"both calls answered {first!r}"

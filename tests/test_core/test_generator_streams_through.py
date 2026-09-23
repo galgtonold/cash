@@ -27,6 +27,7 @@ What must hold at the same time, and is why this is not a two-line change:
   caller's loop, or a slow consumer would make a trivial generator look
   expensive enough to persist.
 """
+
 from __future__ import annotations
 
 import itertools
@@ -79,8 +80,7 @@ def test_the_producer_never_runs_ahead_of_the_consumer(c):
         for item in stream():
             seen.append(item)
             assert len(produced) == len(seen), (
-                f"producer is {len(produced) - len(seen)} items ahead -- "
-                f"it was drained, not streamed"
+                f"producer is {len(produced) - len(seen)} items ahead -- it was drained, not streamed"
             )
 
     assert seen == [0, 1, 2, 3, 4]
@@ -90,6 +90,7 @@ def test_the_first_item_arrives_before_the_last_is_produced(c):
     """The same property in wall-clock terms, kept because it is what a user
     actually feels. Generous threshold: it only has to separate 'streamed'
     from 'the whole 0.4s of work happened first'."""
+
     @c.cache
     def slow_stream():
         for i in range(4):
@@ -142,7 +143,7 @@ def test_a_partially_consumed_generator_stores_nothing(c):
         warnings.simplefilter("ignore")
         for item in stream():
             if item == 2:
-                break                      # abandon it
+                break  # abandon it
         # A truncated entry would serve [0, 1, 2] here. It must recompute.
         assert list(stream()) == [0, 1, 2, 3, 4, 5]
     assert len(calls) == 2, "the abandoned run must not have been stored"
@@ -182,9 +183,7 @@ def test_a_lazily_read_file_is_still_a_dependency(c, tmp_path):
         warnings.simplefilter("ignore")
         assert list(stream()) == ["start", "v1"]
         data.write_text("v2", encoding="utf-8")
-        assert list(stream()) == ["start", "v2"], (
-            "editing a file the generator reads lazily must invalidate"
-        )
+        assert list(stream()) == ["start", "v2"], "editing a file the generator reads lazily must invalidate"
 
 
 def test_the_callers_own_file_reads_are_not_attributed(c, tmp_path):
@@ -213,6 +212,7 @@ def test_the_callers_own_file_reads_are_not_attributed(c, tmp_path):
 def test_a_slow_consumer_does_not_inflate_the_recorded_time(c):
     """Execution time drives the persistence decision, so it has to be the
     producer's, not wall-clock across a slow loop."""
+
     @c.cache
     def quick_stream():
         yield from range(3)
@@ -220,15 +220,13 @@ def test_a_slow_consumer_does_not_inflate_the_recorded_time(c):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         for _ in quick_stream():
-            time.sleep(0.2)                # the CALLER is slow, not the function
+            time.sleep(0.2)  # the CALLER is slow, not the function
     saved = quick_stream.cache_info()["total_time_saved"]
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         list(quick_stream())
-    assert quick_stream.cache_info()["total_time_saved"] - saved < 0.3, (
-        "the caller's sleep was charged to the function"
-    )
+    assert quick_stream.cache_info()["total_time_saved"] - saved < 0.3, "the caller's sleep was charged to the function"
 
 
 # --------------------------------------------------------------------------
@@ -242,6 +240,7 @@ def test_the_caller_keeps_items_received_before_an_exception(c):
     sees everything produced up to the failure -- which is what the uncached
     generator does, and the whole point of not changing behaviour.
     """
+
     @c.cache
     def stream():
         yield 0
@@ -260,6 +259,7 @@ def test_the_caller_keeps_items_received_before_an_exception(c):
 def test_abandoning_a_multi_chunk_stream_leaves_no_chunks_behind(c):
     """Chunks written before the caller gave up are unreferenced -- no manifest
     names them -- so they are dropped. Otherwise every abandoned run leaks."""
+
     @c.cache(chunk_max_items=2)
     def stream():
         yield from range(20)
@@ -267,12 +267,11 @@ def test_abandoning_a_multi_chunk_stream_leaves_no_chunks_behind(c):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         it = stream()
-        for _ in range(7):          # forces at least three chunk writes
+        for _ in range(7):  # forces at least three chunk writes
             next(it)
         it.close()
 
-    leftover = [e for e in c.backend.list_entries()
-                if "chunk_" in str(e.get("key", ""))]
+    leftover = [e for e in c.backend.list_entries() if "chunk_" in str(e.get("key", ""))]
     assert not leftover, f"orphan chunks left behind: {leftover}"
 
 
@@ -331,6 +330,7 @@ def test_a_cached_generator_consuming_another_one_streams(c):
 def test_argument_mutation_is_still_reported_for_a_generator(c):
     """`_check_argument_mutation` used to run right after the call. It now runs
     at exhaustion, so it needs to be shown still running at all."""
+
     @c.cache
     def stream(rows):
         rows.append("mutated")
@@ -399,6 +399,7 @@ def test_a_cached_generator_survives_a_fresh_cash_instance(tmp_path):
             for i in range(5):
                 time.sleep(0.03)
                 yield i
+
         return stream
 
     with warnings.catch_warnings():
@@ -434,8 +435,7 @@ def test_a_manifest_whose_chunks_vanished_is_a_miss_not_a_short_answer(tmp_path)
         assert len(runs) == 1
 
         # Lose one chunk, as eviction would.
-        key = next(e["key"] for e in c.backend.list_entries()
-                   if str(e["key"]).endswith(":chunk_1"))
+        key = next(e["key"] for e in c.backend.list_entries() if str(e["key"]).endswith(":chunk_1"))
         c.backend.delete(key)
 
         assert list(stream()) == [0, 1, 2, 3, 4, 5], "a short answer was served"

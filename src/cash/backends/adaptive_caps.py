@@ -26,6 +26,7 @@ RAM source guards its import and falls back to a fixed cap when it is
 missing — importing psutil unconditionally here would make a bare
 ``pip install cash-lib`` unimportable.
 """
+
 from __future__ import annotations
 
 import logging
@@ -57,8 +58,9 @@ def human_bytes(n: int | None) -> str:
         size /= 1024
     return f"{size:.1f} TiB"  # unreachable; keeps type-checkers happy
 
-_MIB = 1024 ** 2
-_GIB = 1024 ** 3
+
+_MIB = 1024**2
+_GIB = 1024**3
 
 # --- Disk-tier policy ------------------------------------------------------
 # A quarter of free space, but never less than 8 GiB (so a laptop still gets
@@ -123,6 +125,7 @@ def adaptive_ram_cap(total_ram_bytes: int | None) -> int:
 # Machine-reading resolvers — thin wrappers that measure, then delegate.
 # ---------------------------------------------------------------------------
 
+
 def _free_bytes_on_volume(path: str) -> int:
     """Free bytes on the volume holding *path*.
 
@@ -164,8 +167,8 @@ def _total_system_ram() -> int | None:
 #: record as a dependency -- reading a live kernel file into a cache key is a
 #: mistake this codebase has made once already, with ``/proc/meminfo``.
 _CGROUP_LIMIT_PATHS: tuple[str, ...] = (
-    "/sys/fs/cgroup/memory.max",                     # cgroup v2
-    "/sys/fs/cgroup/memory/memory.limit_in_bytes",   # cgroup v1
+    "/sys/fs/cgroup/memory.max",  # cgroup v2
+    "/sys/fs/cgroup/memory/memory.limit_in_bytes",  # cgroup v1
 )
 
 #: cgroup v1 spells "no limit" as a huge sentinel rather than a word. Anything
@@ -191,7 +194,7 @@ def _cgroup_memory_limit() -> int | None:
                 raw = fh.read().strip()
         except OSError:
             continue
-        if not raw or raw == "max":          # v2's word for "no limit"
+        if not raw or raw == "max":  # v2's word for "no limit"
             continue
         try:
             value = int(raw)
@@ -215,8 +218,7 @@ def _memory_budget() -> int | None:
 def resolve_disk_cap(cache_dir: str) -> int:
     """Adaptive disk-tier cap for the volume that holds *cache_dir*."""
     cap = adaptive_disk_cap(_free_bytes_on_volume(cache_dir))
-    logger.debug("[CAPS] adaptive disk cap for %s: %d bytes (%.1f GiB)",
-                 cache_dir, cap, cap / _GIB)
+    logger.debug("[CAPS] adaptive disk cap for %s: %d bytes (%.1f GiB)", cache_dir, cap, cap / _GIB)
     return cap
 
 

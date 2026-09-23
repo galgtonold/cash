@@ -19,6 +19,7 @@ in this repo's diagrams while staying dependency-free (no node/npm in CI). If a
 diagram ever fails to render despite passing here, re-run a real-parser check
 and extend the rules — see ``_REAL_PARSER_NOTE``.
 """
+
 from __future__ import annotations
 
 import re
@@ -40,10 +41,27 @@ _MERMAID_BLOCK_RE = re.compile(r"^```mermaid\s*$(?P<body>.*?)^```\s*$", re.M | r
 
 # Diagram types mermaid understands (first non-empty line of a block).
 _DIAGRAM_TYPES = (
-    "flowchart", "graph", "sequenceDiagram", "classDiagram", "stateDiagram",
-    "stateDiagram-v2", "erDiagram", "journey", "gantt", "pie", "mindmap",
-    "timeline", "gitGraph", "quadrantChart", "requirementDiagram", "C4Context",
-    "sankey-beta", "xychart-beta", "block-beta", "packet-beta", "architecture-beta",
+    "flowchart",
+    "graph",
+    "sequenceDiagram",
+    "classDiagram",
+    "stateDiagram",
+    "stateDiagram-v2",
+    "erDiagram",
+    "journey",
+    "gantt",
+    "pie",
+    "mindmap",
+    "timeline",
+    "gitGraph",
+    "quadrantChart",
+    "requirementDiagram",
+    "C4Context",
+    "sankey-beta",
+    "xychart-beta",
+    "block-beta",
+    "packet-beta",
+    "architecture-beta",
 )
 
 # A plain (single-character-delimited) node label: ``ID[text]`` or ``ID{text}``.
@@ -86,13 +104,8 @@ def test_mermaid_blocks_declare_a_known_diagram_type() -> None:
     for md, line, body in _mermaid_blocks():
         first = next((ln.strip() for ln in body.splitlines() if ln.strip()), "")
         if not first.startswith(_DIAGRAM_TYPES):
-            problems.append(
-                f"  {md.relative_to(DOCS_ROOT).as_posix()}:{line}: "
-                f"unknown diagram type {first[:40]!r}"
-            )
-    assert not problems, "Mermaid blocks with an unrecognised diagram type:\n" + "\n".join(
-        problems
-    )
+            problems.append(f"  {md.relative_to(DOCS_ROOT).as_posix()}:{line}: unknown diagram type {first[:40]!r}")
+    assert not problems, "Mermaid blocks with an unrecognised diagram type:\n" + "\n".join(problems)
 
 
 def test_mermaid_node_delimiters_are_balanced() -> None:
@@ -134,7 +147,4 @@ def test_mermaid_labels_with_parens_are_quoted() -> None:
                         f"unquoted label contains parentheses -> mermaid parse error; "
                         f'quote it as ["..."]: {m.group(0)[:70]}'
                     )
-    assert not problems, (
-        "Mermaid labels with unquoted parentheses (these fail to render):\n"
-        + "\n".join(problems)
-    )
+    assert not problems, "Mermaid labels with unquoted parentheses (these fail to render):\n" + "\n".join(problems)

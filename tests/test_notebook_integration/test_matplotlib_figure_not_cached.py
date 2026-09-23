@@ -12,6 +12,7 @@ The fix refuses to cache Figure/Axes outright -- they are identity-coupled to
 pyplot's globals and cost ~0.04s to build, so caching them is all risk and no
 reward.  These tests pin the user-visible contract, not the implementation.
 """
+
 import pytest
 from conftest import shows_cached
 
@@ -42,19 +43,19 @@ def test_savefig_writes_the_real_chart_not_a_blank_image(nb_runner, tmp_path):
     chart = (tmp_path / "chart.png").as_posix()
     blank = (tmp_path / "blank.png").as_posix()
 
-    nb_runner.create_notebook([
-        SETUP,
-        # The exact idiom from the bug report: draw on ax, save via pyplot's global.
-        "fig, ax = plt.subplots(figsize=(8, 4.5), dpi=120)\n"
-        "ax.bar(['ent/low', 'ent/med', 'pro/low', 'free/high'], [103399, 24212, 24095, 812])\n"
-        f"plt.savefig('{chart}')\n"
-        "print('chart saved')",
-        # Baseline: same geometry, axes but no data. fig.savefig() is object-bound,
-        # so this renders the same whether or not the bug is present.
-        "figb, axb = plt.subplots(figsize=(8, 4.5), dpi=120)\n"
-        f"figb.savefig('{blank}')\n"
-        "print('blank saved')",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            # The exact idiom from the bug report: draw on ax, save via pyplot's global.
+            "fig, ax = plt.subplots(figsize=(8, 4.5), dpi=120)\n"
+            "ax.bar(['ent/low', 'ent/med', 'pro/low', 'free/high'], [103399, 24212, 24095, 812])\n"
+            f"plt.savefig('{chart}')\n"
+            "print('chart saved')",
+            # Baseline: same geometry, axes but no data. fig.savefig() is object-bound,
+            # so this renders the same whether or not the bug is present.
+            f"figb, axb = plt.subplots(figsize=(8, 4.5), dpi=120)\nfigb.savefig('{blank}')\nprint('blank saved')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -80,13 +81,15 @@ def test_user_figure_is_still_pyplots_current_figure(nb_runner):
     This is the whole bug in one line -- it flipped True->False purely by
     turning cash on, on the first run.
     """
-    nb_runner.create_notebook([
-        SETUP,
-        "fig9, ax9 = plt.subplots(figsize=(3, 2))\n"
-        "ax9.plot([1, 2, 3], [1, 4, 9])\n"
-        "print('IS_GCF:', fig9 is plt.gcf())\n"
-        "print('LINES_ON_SAVED_FIG:', len(plt.gcf().axes[0].lines) if plt.gcf().axes else 0)",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            "fig9, ax9 = plt.subplots(figsize=(3, 2))\n"
+            "ax9.plot([1, 2, 3], [1, 4, 9])\n"
+            "print('IS_GCF:', fig9 is plt.gcf())\n"
+            "print('LINES_ON_SAVED_FIG:', len(plt.gcf().axes[0].lines) if plt.gcf().axes else 0)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -107,12 +110,14 @@ def test_ordinary_statements_still_cache_alongside_a_figure(nb_runner):
     "Input variable missing lineage" -- any of the three would make this control
     vacuous rather than protective.
     """
-    nb_runner.create_notebook([
-        "import matplotlib.pyplot as plt\nimport cash\nimport time\n%cash_on\n%cash_badge print",
-        "def slow(i):\n    time.sleep(0.05)\n    return i * i",
-        "vals = [slow(i) for i in range(6)]\nprint('VALS:', vals)",
-        "fig, ax = plt.subplots()\nprint('made fig')",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import matplotlib.pyplot as plt\nimport cash\nimport time\n%cash_on\n%cash_badge print",
+            "def slow(i):\n    time.sleep(0.05)\n    return i * i",
+            "vals = [slow(i) for i in range(6)]\nprint('VALS:', vals)",
+            "fig, ax = plt.subplots()\nprint('made fig')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -127,10 +132,12 @@ def test_ordinary_statements_still_cache_alongside_a_figure(nb_runner):
 @pytest.mark.timeout(90)
 def test_badge_tells_the_truth_about_the_refused_figure(nb_runner):
     """Control: the refusal is surfaced with an honest reason, not silent."""
-    nb_runner.create_notebook([
-        SETUP,
-        "fig, ax = plt.subplots()\nprint('made fig')",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            "fig, ax = plt.subplots()\nprint('made fig')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -149,20 +156,23 @@ def test_subplot_mosaic_dict_is_not_cached(nb_runner):
     single-Axes case: the drawn Axes must stay pyplot's current figure.
     """
     import matplotlib
+
     mpl_ver = tuple(int(x) for x in matplotlib.__version__.split(".")[:2])
     if mpl_ver < (3, 3):
         pytest.skip("subplot_mosaic added in matplotlib 3.3")
 
-    nb_runner.create_notebook([
-        SETUP,
-        # subplot_mosaic returns (fig, dict); take [1] to bind ONLY the dict of
-        # Axes -- destructuring `fig, axd = ...` would bind a bare Figure that
-        # trips the check anyway, so this isolates the dict-container path.
-        "axd = plt.subplot_mosaic([['a', 'b']], figsize=(4, 2))[1]\n"
-        "axd['a'].plot([1, 2, 3], [1, 4, 9])\n"
-        "print('IS_GCF:', axd['a'].figure is plt.gcf())\n"
-        "print('LINES:', len(plt.gcf().axes[0].lines) if plt.gcf().axes else 0)",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            # subplot_mosaic returns (fig, dict); take [1] to bind ONLY the dict of
+            # Axes -- destructuring `fig, axd = ...` would bind a bare Figure that
+            # trips the check anyway, so this isolates the dict-container path.
+            "axd = plt.subplot_mosaic([['a', 'b']], figsize=(4, 2))[1]\n"
+            "axd['a'].plot([1, 2, 3], [1, 4, 9])\n"
+            "print('IS_GCF:', axd['a'].figure is plt.gcf())\n"
+            "print('LINES:', len(plt.gcf().axes[0].lines) if plt.gcf().axes else 0)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 

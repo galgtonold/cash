@@ -16,13 +16,12 @@ which an in-process test cannot express; and writing the function inside a test
 body would make ``conf`` a closure variable (``LOAD_DEREF``), which compiles
 differently from the module-level ``import`` that real code uses.
 """
+
 from __future__ import annotations
 
 import subprocess
 import sys
 import types
-
-import pytest
 
 import cash
 
@@ -61,8 +60,10 @@ def _run(tmp_path):
     # sees a stale hit. Observed as an intermittent CI failure across OS/versions.
     # ``-B`` writes no .pyc, so ``conf.py`` is always compiled fresh from source.
     cp = subprocess.run(
-        [sys.executable, "-B", "main.py"], cwd=str(tmp_path),
-        capture_output=True, text=True,
+        [sys.executable, "-B", "main.py"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
     )
     assert cp.returncode == 0, "script failed:\n" + cp.stdout + "\n" + cp.stderr
     return cp.stdout.strip()
@@ -108,6 +109,7 @@ def test_installed_module_attrs_do_not_churn_the_key():
     excludes them.
     """
     import math
+
     calls = []
 
     @cash.cache

@@ -5,6 +5,7 @@ The end-to-end contract is pinned in
 decisions a real kernel cannot reach without sleeping or corrupting an entry,
 each of which is a place a plausible implementation goes subtly wrong.
 """
+
 from __future__ import annotations
 
 import time
@@ -45,21 +46,27 @@ def test_a_falsy_ttl_is_not_treated_as_absent():
     assert _unit(None)._ttl_fresh({"timestamp": time.time()}) is True
 
 
-@pytest.mark.parametrize("age, ttl, fresh", [
-    (0.0, 30, True),      # just written
-    (10.0, 30, True),     # inside the window
-    (100.0, 30, False),   # past it
-])
+@pytest.mark.parametrize(
+    "age, ttl, fresh",
+    [
+        (0.0, 30, True),  # just written
+        (10.0, 30, True),  # inside the window
+        (100.0, 30, False),  # past it
+    ],
+)
 def test_expiry_tracks_the_recorded_timestamp(age, ttl, fresh):
     metadata = {"timestamp": time.time() - age}
     assert _unit(ttl)._ttl_fresh(metadata) is fresh
 
 
-@pytest.mark.parametrize("metadata", [
-    {},                          # no timestamp recorded
-    {"timestamp": None},
-    {"timestamp": "not-a-time"},
-])
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {},  # no timestamp recorded
+        {"timestamp": None},
+        {"timestamp": "not-a-time"},
+    ],
+)
 def test_an_entry_without_a_usable_timestamp_expires(metadata):
     """Fail SAFE, not fast. An unreadable timestamp reads as the epoch, so the
     entry expires under any TTL rather than being served forever to a caller

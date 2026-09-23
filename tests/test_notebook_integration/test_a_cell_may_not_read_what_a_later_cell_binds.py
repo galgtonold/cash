@@ -17,6 +17,7 @@ name bound both above and below, must keep working. The second is the common
 shape (a variable set early and reassigned later in the notebook) and failing
 it would make cash unusable.
 """
+
 import pytest
 from nbclient.exceptions import CellExecutionError
 
@@ -25,32 +26,34 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(240)]
 
 def test_reading_a_name_only_a_later_cell_binds_fails(nb_runner):
     """r26s5's shape: run the later binding first, then the earlier reader."""
-    nb_runner.create_notebook([
-        "import cash\n%cash_on",
-        "y = x + 1\nprint('Y', y)",        # cell 2 reads x
-        "x = 10\nprint('X', x)",           # cell 3 binds it
-    ])
+    nb_runner.create_notebook(
+        [
+            "import cash\n%cash_on",
+            "y = x + 1\nprint('Y', y)",  # cell 2 reads x
+            "x = 10\nprint('X', x)",  # cell 3 binds it
+        ]
+    )
     nb_runner.start_kernel()
-    nb_runner.run_cell(3)                   # bind x, so the name exists
+    nb_runner.run_cell(3)  # bind x, so the name exists
     with pytest.raises(CellExecutionError) as exc:
-        nb_runner.run_cell(2)               # now read it from above
+        nb_runner.run_cell(2)  # now read it from above
 
     text = str(exc.value)
     assert "ForwardReferenceError" in text, text
-    assert "Y 11" not in text, (
-        "the cell produced a value from a binding below it:\n" + text
-    )
+    assert "Y 11" not in text, "the cell produced a value from a binding below it:\n" + text
     # The message has to be actionable on its own: which name, which cell.
     assert "`x`" in text and "cell 3" in text, text
 
 
 def test_a_name_bound_above_still_works(nb_runner):
     """The control. Ordinary downstream reads must be untouched."""
-    nb_runner.create_notebook([
-        "import cash\n%cash_on",
-        "x = 10\nprint('X', x)",
-        "y = x + 1\nprint('Y', y)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import cash\n%cash_on",
+            "x = 10\nprint('X', x)",
+            "y = x + 1\nprint('Y', y)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "Y 11" in nb_runner.get_output(3), nb_runner.get_raw_output(3)
@@ -63,12 +66,14 @@ def test_a_name_bound_above_and_again_below_still_works(nb_runner):
     ordinary notebook, not a forward reference: the read resolves to the
     binding above it.
     """
-    nb_runner.create_notebook([
-        "import cash\n%cash_on",
-        "x = 10",
-        "y = x + 1\nprint('Y', y)",
-        "x = 99\nprint('X', x)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import cash\n%cash_on",
+            "x = 10",
+            "y = x + 1\nprint('Y', y)",
+            "x = 99\nprint('X', x)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "Y 11" in nb_runner.get_output(3), nb_runner.get_raw_output(3)
@@ -76,11 +81,13 @@ def test_a_name_bound_above_and_again_below_still_works(nb_runner):
 
 def test_a_function_defined_below_and_called_above_fails(nb_runner):
     """Same rule for a def, which is how it usually happens in practice."""
-    nb_runner.create_notebook([
-        "import cash\n%cash_on",
-        "v = helper(3)\nprint('V', v)",
-        "def helper(n):\n    return n * 2",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import cash\n%cash_on",
+            "v = helper(3)\nprint('V', v)",
+            "def helper(n):\n    return n * 2",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_cell(3)
     with pytest.raises(CellExecutionError) as exc:
@@ -102,12 +109,14 @@ def test_a_function_body_may_name_something_bound_below(nb_runner):
     Refusing this shape broke `test_downward_function_dependency`, whose
     notebook runs perfectly well from the top.
     """
-    nb_runner.create_notebook([
-        "import cash\n%cash_on",
-        "def a(n):\n    return b(n) * 2",     # names b, defined below
-        "def b(n):\n    return n + 1",
-        "r = a(3)\nprint(f'r={r}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import cash\n%cash_on",
+            "def a(n):\n    return b(n) * 2",  # names b, defined below
+            "def b(n):\n    return n + 1",
+            "r = a(3)\nprint(f'r={r}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "r=8" in nb_runner.get_output(4), nb_runner.get_raw_output(4)
@@ -115,11 +124,13 @@ def test_a_function_body_may_name_something_bound_below(nb_runner):
 
 def test_a_decorator_bound_below_still_fails(nb_runner):
     """...but a decorator IS evaluated at definition time, so it is a read."""
-    nb_runner.create_notebook([
-        "import cash\n%cash_on",
-        "@deco\ndef f():\n    return 1",
-        "def deco(fn):\n    return fn",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import cash\n%cash_on",
+            "@deco\ndef f():\n    return 1",
+            "def deco(fn):\n    return fn",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_cell(3)
     with pytest.raises(CellExecutionError) as exc:

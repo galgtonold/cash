@@ -10,6 +10,7 @@ a call replaces its callee expression only, so an argument runs whether the
 outer call hits or not -- taking the inner one as well costs nothing and is
 the only way its work is ever reused.
 """
+
 from pathlib import Path
 
 import pytest
@@ -23,7 +24,8 @@ SETUP = (
     "    os.write(fd, name.encode())\n    os.close(fd)\n"
     "def fit(xs, k):\n    mark('f')\n    time.sleep(0.4)\n    return [x * k for x in xs]\n"
     "def weights(scores, cap):\n    mark('w')\n    return sum(scores) + cap\n"
-    "data = list(range(200))\nK = 3\n")
+    "data = list(range(200))\nK = 3\n"
+)
 NESTED = "out = weights(fit(data, K), 10)\nprint('OUT', out)"
 
 
@@ -44,8 +46,8 @@ def test_the_nested_call_is_restored(nb_runner):
     nb_runner.run_cell(2)
     assert "OUT 59711" in nb_runner.get_output(2), nb_runner.get_raw_output(2)
     assert _runs(nb_runner, "f") == 1, (
-        "the nested fit ran again although its arguments did not change:\n"
-        + nb_runner.get_raw_output(2))
+        "the nested fit ran again although its arguments did not change:\n" + nb_runner.get_raw_output(2)
+    )
 
 
 def test_a_changed_argument_still_re_runs_the_nested_call(nb_runner):

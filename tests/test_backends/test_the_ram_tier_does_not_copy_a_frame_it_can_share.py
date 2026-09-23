@@ -8,6 +8,7 @@ in-place edit cannot reach the cached value. With pandas copy-on-write, which
 is always on from pandas 3, a SHALLOW copy already guarantees that: the first
 write to either side copies the data then, and only the part written.
 """
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -15,8 +16,8 @@ import pytest
 from cash.backends.memory_backend import InMemoryBackend
 
 pytestmark = pytest.mark.skipif(
-    int(pd.__version__.split(".")[0]) < 3,
-    reason="copy-on-write is always on only from pandas 3")
+    int(pd.__version__.split(".")[0]) < 3, reason="copy-on-write is always on only from pandas 3"
+)
 
 
 def _frame():
@@ -27,18 +28,19 @@ def test_a_stored_frame_shares_its_data_until_written():
     df = _frame()
     copy = InMemoryBackend._safe_deep_copy(df)
     assert np.shares_memory(copy["x"].to_numpy(), df["x"].to_numpy()), (
-        "the frame was copied in full; under copy-on-write a shallow copy is safe")
+        "the frame was copied in full; under copy-on-write a shallow copy is safe"
+    )
 
 
 def test_writing_either_side_does_not_reach_the_other():
     df = _frame()
     backend = InMemoryBackend()
     backend.set("k", {"variables": {"df": df}}, {"execution_time": 1.0})
-    df.loc[0, "x"] = -1.0                       # the user edits their frame
+    df.loc[0, "x"] = -1.0  # the user edits their frame
     _meta, stored = backend.get("k")
     restored = stored["variables"]["df"]
     assert restored.loc[0, "x"] == 0.0, "an edit after the store reached the cache"
-    restored.loc[1, "x"] = -2.0                 # the user edits the restored frame
+    restored.loc[1, "x"] = -2.0  # the user edits the restored frame
     _meta, again = backend.get("k")
     assert again["variables"]["df"].loc[1, "x"] == 1.0, "an edit to a restored frame reached the cache"
 

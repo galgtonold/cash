@@ -6,6 +6,7 @@ the rule that routes an Axes argument as drawn-on sat behind an early return
 for statements without a method call -- and the saved chart had an empty
 panel. ``df.plot(ax=ax)`` was always right: it has a method-call receiver.
 """
+
 import hashlib
 from pathlib import Path
 

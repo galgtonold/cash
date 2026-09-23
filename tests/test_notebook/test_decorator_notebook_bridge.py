@@ -9,13 +9,13 @@ Tests the integration between @cash.cache decorator and notebook caching:
 5. Non-hashable parameter handling
 """
 
-import pytest
 import hashlib
 import time
 from unittest.mock import patch
-from cash.core import Cash
-from cash.notebook import badge_renderer as _badge
 
+import pytest
+
+from cash.core import Cash
 
 # ============================================================================
 # A1: Decorator Call Logging
@@ -37,12 +37,12 @@ class TestDecoratorCallLogging:
         calls = c.drain_decorator_calls()
 
         assert len(calls) == 1
-        assert calls[0]['func_name'] == Cash._get_func_key(compute)
-        assert calls[0]['cache_hit'] is False
-        assert calls[0]['execution_time'] > 0
-        assert calls[0]['args_hash'] != ''
-        assert calls[0]['cache_key'] != ''
-        assert 'timestamp' in calls[0]
+        assert calls[0]["func_name"] == Cash._get_func_key(compute)
+        assert calls[0]["cache_hit"] is False
+        assert calls[0]["execution_time"] > 0
+        assert calls[0]["args_hash"] != ""
+        assert calls[0]["cache_key"] != ""
+        assert "timestamp" in calls[0]
 
     def test_call_log_on_cache_hit(self):
         """Second call (cache hit) should log the call with cache_hit=True."""
@@ -59,8 +59,8 @@ class TestDecoratorCallLogging:
         calls = c.drain_decorator_calls()
 
         assert len(calls) == 1
-        assert calls[0]['cache_hit'] is True
-        assert calls[0]['execution_time'] >= 0
+        assert calls[0]["cache_hit"] is True
+        assert calls[0]["execution_time"] >= 0
 
     def test_drain_clears_log(self):
         """drain_decorator_calls should clear the log."""
@@ -92,10 +92,10 @@ class TestDecoratorCallLogging:
 
         calls = c.drain_decorator_calls()
         assert len(calls) == 4
-        assert calls[0]['cache_hit'] is False  # miss
-        assert calls[1]['cache_hit'] is False  # miss
-        assert calls[2]['cache_hit'] is False  # miss
-        assert calls[3]['cache_hit'] is True   # hit
+        assert calls[0]["cache_hit"] is False  # miss
+        assert calls[1]["cache_hit"] is False  # miss
+        assert calls[2]["cache_hit"] is False  # miss
+        assert calls[3]["cache_hit"] is True  # hit
 
     def test_different_functions_logged_separately(self):
         """Calls to different cached functions should be logged with correct func_name."""
@@ -114,8 +114,8 @@ class TestDecoratorCallLogging:
 
         calls = c.drain_decorator_calls()
         assert len(calls) == 2
-        assert 'func_a' in calls[0]['func_name']
-        assert 'func_b' in calls[1]['func_name']
+        assert "func_a" in calls[0]["func_name"]
+        assert "func_b" in calls[1]["func_name"]
 
     def test_call_log_with_ttl(self):
         """TTL-decorated functions should also be logged."""
@@ -129,7 +129,7 @@ class TestDecoratorCallLogging:
         calls = c.drain_decorator_calls()
 
         assert len(calls) == 1
-        assert calls[0]['cache_hit'] is False
+        assert calls[0]["cache_hit"] is False
 
     def test_call_log_when_serialization_fails(self):
         """When args can't be serialized, call should still be logged."""
@@ -146,7 +146,7 @@ class TestDecoratorCallLogging:
         calls = c.drain_decorator_calls()
         assert len(calls) == 1
         # Should show unhashable since generator can't be pickled
-        assert calls[0]['cache_hit'] is False
+        assert calls[0]["cache_hit"] is False
 
     def test_call_log_preserves_return_value(self):
         """Call logging should not affect the return value."""
@@ -154,7 +154,7 @@ class TestDecoratorCallLogging:
 
         @c.cache
         def compute(x):
-            return x ** 2
+            return x**2
 
         assert compute(5) == 25
         assert compute(5) == 25  # cache hit
@@ -194,7 +194,7 @@ class TestTypeHasherRegistry:
 
         calls = c.drain_decorator_calls()
         assert len(calls) == 2
-        assert calls[1]['cache_hit'] is True
+        assert calls[1]["cache_hit"] is True
 
     def test_register_hasher_different_values(self):
         """Different values of custom type should produce different hashes."""
@@ -218,15 +218,16 @@ class TestTypeHasherRegistry:
 
         calls = c.drain_decorator_calls()
         assert len(calls) == 2
-        assert calls[0]['cache_hit'] is False
-        assert calls[1]['cache_hit'] is False
+        assert calls[0]["cache_hit"] is False
+        assert calls[1]["cache_hit"] is False
         # Different args hashes
-        assert calls[0]['args_hash'] != calls[1]['args_hash']
+        assert calls[0]["args_hash"] != calls[1]["args_hash"]
 
     def test_register_hasher_via_global(self):
         """register_hasher should be accessible from the module level."""
         import cash
-        assert hasattr(cash, 'register_hasher')
+
+        assert hasattr(cash, "register_hasher")
         assert callable(cash.register_hasher)
 
     def test_hasher_priority_cash_hash_first(self):
@@ -257,7 +258,7 @@ class TestTypeHasherRegistry:
         calls = c.drain_decorator_calls()
         assert len(calls) == 2
         # Second call should be a hit because _cash_lineage_hash is the same
-        assert calls[1]['cache_hit'] is True
+        assert calls[1]["cache_hit"] is True
 
 
 # ============================================================================
@@ -288,7 +289,7 @@ class TestBuiltinTypeHashers:
         assert result2 == 6
 
         calls = c.drain_decorator_calls()
-        assert calls[1]['cache_hit'] is True
+        assert calls[1]["cache_hit"] is True
 
     def test_numpy_array_different(self):
         """Different numpy arrays should produce different hashes."""
@@ -305,8 +306,8 @@ class TestBuiltinTypeHashers:
         process(np.array([4, 5, 6]))
 
         calls = c.drain_decorator_calls()
-        assert calls[0]['cache_hit'] is False
-        assert calls[1]['cache_hit'] is False
+        assert calls[0]["cache_hit"] is False
+        assert calls[1]["cache_hit"] is False
 
     def test_pandas_dataframe(self):
         """pandas DataFrames should be hashed via hash_pandas_object."""
@@ -319,14 +320,14 @@ class TestBuiltinTypeHashers:
         def process(df):
             return df.sum().to_dict()
 
-        df1 = pd.DataFrame({'a': [1, 2], 'b': [3, 4]})
+        df1 = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
         result1 = process(df1)
 
-        df2 = pd.DataFrame({'a': [1, 2], 'b': [3, 4]})
+        df2 = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
         result2 = process(df2)
 
         calls = c.drain_decorator_calls()
-        assert calls[1]['cache_hit'] is True
+        assert calls[1]["cache_hit"] is True
         assert result1 == result2
 
     def test_pandas_series(self):
@@ -347,7 +348,7 @@ class TestBuiltinTypeHashers:
         result2 = process(s2)
 
         calls = c.drain_decorator_calls()
-        assert calls[1]['cache_hit'] is True
+        assert calls[1]["cache_hit"] is True
         assert result1 == result2
 
 
@@ -380,15 +381,15 @@ class TestNonHashableFallback:
         def process(d):
             return sum(d.values())
 
-        result1 = process({'a': 1, 'b': 2})
-        result2 = process({'a': 1, 'b': 2})
+        result1 = process({"a": 1, "b": 2})
+        result2 = process({"a": 1, "b": 2})
 
         calls = c.drain_decorator_calls()
         assert len(calls) == 2
         assert result1 == 3
         assert result2 == 3
         # Dicts are picklable so this should be a cache hit
-        assert calls[1]['cache_hit'] is True
+        assert calls[1]["cache_hit"] is True
 
     def test_list_args_work(self):
         """Lists should be hashable via pickle."""
@@ -402,7 +403,7 @@ class TestNonHashableFallback:
         result2 = process([1, 2, 3])
 
         calls = c.drain_decorator_calls()
-        assert calls[1]['cache_hit'] is True
+        assert calls[1]["cache_hit"] is True
         assert result1 == result2 == 6
 
     def test_mixed_args_with_non_hashable(self):
@@ -441,11 +442,11 @@ class TestLineageAttachment:
 
         @c.cache
         def create_df():
-            return pd.DataFrame({'a': [1, 2, 3]})
+            return pd.DataFrame({"a": [1, 2, 3]})
 
         df = create_df()
-        assert hasattr(df, '_cash_lineage_hash')
-        assert df._cash_lineage_hash != ''
+        assert hasattr(df, "_cash_lineage_hash")
+        assert df._cash_lineage_hash != ""
 
     def test_pandas_series_lineage(self):
         """pandas Series should get _cash_lineage_hash attached."""
@@ -459,7 +460,7 @@ class TestLineageAttachment:
             return pd.Series([1, 2, 3])
 
         s = create_series()
-        assert hasattr(s, '_cash_lineage_hash')
+        assert hasattr(s, "_cash_lineage_hash")
 
     def test_non_dataframe_no_lineage(self):
         """Non-DataFrame results should not have _cash_lineage_hash."""
@@ -470,7 +471,7 @@ class TestLineageAttachment:
             return x * 2
 
         result = compute(5)
-        assert not hasattr(result, '_cash_lineage_hash')
+        assert not hasattr(result, "_cash_lineage_hash")
 
 
 # ============================================================================
@@ -532,7 +533,7 @@ class TestSourceAwareCacheInvalidation:
         assert h1 != ""
 
         # Simulate getsource failure (e.g., IPython context with %cash_on)
-        with patch('cash.notebook.analysis.inspect.getsource', side_effect=OSError):
+        with patch("cash.notebook.analysis.inspect.getsource", side_effect=OSError):
             h2 = CodeAnalyzer.get_source_hash(my_func)
             assert h2 != "", "Should fall back to bytecode hash"
 
@@ -540,7 +541,7 @@ class TestSourceAwareCacheInvalidation:
         def my_func2(x):
             return x + 2
 
-        with patch('cash.notebook.analysis.inspect.getsource', side_effect=OSError):
+        with patch("cash.notebook.analysis.inspect.getsource", side_effect=OSError):
             h3 = CodeAnalyzer.get_source_hash(my_func2)
             assert h3 != ""
             assert h3 != h2, "Different bytecodes should produce different hashes"
@@ -560,13 +561,14 @@ class TestSourceAwareCacheInvalidation:
 
         # Clear cache and simulate getsource failure
         ft._source_cache.clear()
-        with patch('cash.notebook.function_tracker.inspect.getsource', side_effect=OSError):
+        with patch("cash.notebook.function_tracker.inspect.getsource", side_effect=OSError):
             h2 = ft.get_function_source_hash(my_func)
             assert h2 is not None, "Should fall back to bytecode hash"
 
     def test_bytecode_fallback_for_wrapped_function(self):
         """Bytecode fallback should follow __wrapped__ for functools.wraps wrappers."""
         import functools
+
         from cash.notebook.analysis import CodeAnalyzer
 
         def original(x):
@@ -576,7 +578,7 @@ class TestSourceAwareCacheInvalidation:
         def wrapper(*args, **kwargs):
             return original(*args, **kwargs)
 
-        with patch('cash.notebook.analysis.inspect.getsource', side_effect=OSError):
+        with patch("cash.notebook.analysis.inspect.getsource", side_effect=OSError):
             h = CodeAnalyzer.get_source_hash(wrapper)
             assert h != "", "Should use __wrapped__.__code__ as fallback"
 
@@ -609,7 +611,7 @@ class TestDataFrameLibraryOnboarding:
         assert result2 == 6
 
         calls = c.drain_decorator_calls()
-        assert calls[1]['cache_hit'] is True
+        assert calls[1]["cache_hit"] is True
 
     def test_polars_dataframe_different(self):
         """Different polars DataFrames should produce different hashes."""
@@ -626,8 +628,8 @@ class TestDataFrameLibraryOnboarding:
         process(pl.DataFrame({"a": [4, 5, 6]}))
 
         calls = c.drain_decorator_calls()
-        assert calls[0]['cache_hit'] is False
-        assert calls[1]['cache_hit'] is False
+        assert calls[0]["cache_hit"] is False
+        assert calls[1]["cache_hit"] is False
 
     def test_polars_series_hash(self):
         """polars Series should be hashable."""
@@ -648,7 +650,7 @@ class TestDataFrameLibraryOnboarding:
         process(s2)
 
         calls = c.drain_decorator_calls()
-        assert calls[1]['cache_hit'] is True
+        assert calls[1]["cache_hit"] is True
 
     def test_polars_lazyframe_hash(self):
         """polars LazyFrame should be hashable via explain()."""
@@ -668,7 +670,7 @@ class TestDataFrameLibraryOnboarding:
         get_plan(lf2)
 
         calls = c.drain_decorator_calls()
-        assert calls[1]['cache_hit'] is True
+        assert calls[1]["cache_hit"] is True
 
     def test_polars_dataframe_lineage(self):
         """polars DataFrame result should get _cash_lineage_hash attached."""
@@ -682,7 +684,7 @@ class TestDataFrameLibraryOnboarding:
             return pl.DataFrame({"a": [1, 2, 3]})
 
         df = create_df()
-        assert hasattr(df, '_cash_lineage_hash')
+        assert hasattr(df, "_cash_lineage_hash")
 
     def test_pyarrow_table_hash(self):
         """PyArrow Table should be hashable."""
@@ -703,7 +705,7 @@ class TestDataFrameLibraryOnboarding:
         process(t2)
 
         calls = c.drain_decorator_calls()
-        assert calls[1]['cache_hit'] is True
+        assert calls[1]["cache_hit"] is True
 
     def test_pyarrow_different_tables(self):
         """Different PyArrow Tables should produce different hashes."""
@@ -720,8 +722,8 @@ class TestDataFrameLibraryOnboarding:
         process(pa.table({"a": [3, 4, 5]}))
 
         calls = c.drain_decorator_calls()
-        assert calls[0]['cache_hit'] is False
-        assert calls[1]['cache_hit'] is False
+        assert calls[0]["cache_hit"] is False
+        assert calls[1]["cache_hit"] is False
 
     def test_builtin_type_hash_module_dispatch(self):
         """_try_builtin_type_hash should dispatch based on module, not just type name."""
@@ -769,7 +771,7 @@ class TestDecoratorFileDependencies:
         # Same file, same content → cache hit
         load_data()
         calls = c.drain_decorator_calls()
-        assert calls[1]['cache_hit'] is True
+        assert calls[1]["cache_hit"] is True
 
     def test_file_depends_on_invalidates_on_change(self, tmp_path):
         """Cache should invalidate when tracked file changes."""
@@ -786,7 +788,6 @@ class TestDecoratorFileDependencies:
         assert "1,2" in result1
 
         # Modify the file
-        import time
         time.sleep(0.05)  # Ensure mtime changes
         data_file.write_text("a,b\n5,6")
 
@@ -811,7 +812,7 @@ class TestDecoratorFileDependencies:
         process()
 
         calls = c.drain_decorator_calls()
-        assert calls[1]['cache_hit'] is True
+        assert calls[1]["cache_hit"] is True
 
     def test_file_depends_on_registers_datasource(self, tmp_path):
         """file_depends_on should register FileDataSource in the graph."""
@@ -844,7 +845,7 @@ class TestDecoratorFileDependencies:
         assert result == "original"
 
         calls = c.drain_decorator_calls()
-        assert calls[0]['cache_hit'] is False
+        assert calls[0]["cache_hit"] is False
 
 
 # ============================================================================
@@ -925,9 +926,9 @@ class TestDecoratorIntrospectionAPI:
         compute(2)  # hit
 
         info = compute.cache_info()
-        assert info['hits'] == 3
-        assert info['misses'] == 2
-        assert info['hit_rate'] == 3 / 5
+        assert info["hits"] == 3
+        assert info["misses"] == 2
+        assert info["hit_rate"] == 3 / 5
 
     def test_cache_info_initial(self):
         """cache_info() should be zero before any calls."""
@@ -938,9 +939,9 @@ class TestDecoratorIntrospectionAPI:
             return x
 
         info = compute.cache_info()
-        assert info['hits'] == 0
-        assert info['misses'] == 0
-        assert info['hit_rate'] == 0.0
+        assert info["hits"] == 0
+        assert info["misses"] == 0
+        assert info["hit_rate"] == 0.0
 
     def test_cache_clear_resets_stats(self):
         """cache_clear() should reset hit/miss stats."""
@@ -954,13 +955,13 @@ class TestDecoratorIntrospectionAPI:
         compute(1)
 
         info = compute.cache_info()
-        assert info['hits'] == 1
+        assert info["hits"] == 1
 
         compute.cache_clear()
 
         info2 = compute.cache_info()
-        assert info2['hits'] == 0
-        assert info2['misses'] == 0
+        assert info2["hits"] == 0
+        assert info2["misses"] == 0
 
     def test_cache_info_has_total_time_saved(self):
         """cache_info() should track total time saved by cache hits."""
@@ -974,8 +975,8 @@ class TestDecoratorIntrospectionAPI:
         compute(1)  # hit
 
         info = compute.cache_info()
-        assert 'total_time_saved' in info
-        assert info['total_time_saved'] >= 0
+        assert "total_time_saved" in info
+        assert info["total_time_saved"] >= 0
 
     def test_wrapped_attribute(self):
         """Decorated function should have __wrapped__ pointing to original."""
@@ -985,8 +986,8 @@ class TestDecoratorIntrospectionAPI:
         def my_func(x):
             return x
 
-        assert hasattr(my_func, '__wrapped__')
-        assert my_func.__wrapped__.__name__ == 'my_func'
+        assert hasattr(my_func, "__wrapped__")
+        assert my_func.__wrapped__.__name__ == "my_func"
 
     def test_functools_wraps_preserved(self):
         """Decorated function should preserve name and docstring."""
@@ -997,5 +998,5 @@ class TestDecoratorIntrospectionAPI:
             """This is the docstring."""
             return x
 
-        assert my_documented_func.__name__ == 'my_documented_func'
+        assert my_documented_func.__name__ == "my_documented_func"
         assert my_documented_func.__doc__ == "This is the docstring."

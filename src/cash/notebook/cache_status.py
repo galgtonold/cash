@@ -17,6 +17,7 @@ class CacheStatus(enum.Enum):
     def __str__(self) -> str:  # noqa: D105
         return self.value
 
+
 class ExecutionResult:
     """Result of executing a single statement.
 

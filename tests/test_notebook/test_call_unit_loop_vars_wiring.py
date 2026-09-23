@@ -18,6 +18,7 @@ production pipeline (`CashMagics.cash()` -> `StatementProcessor` ->
 `test_badge_sub_units.py`'s `MockShell` exercises for the loop-header
 stamping wiring.
 """
+
 from __future__ import annotations
 
 import ast
@@ -45,7 +46,7 @@ class MockShell(Configurable):
         self.events = MagicMock()
         self.ast_transformers = []
         self.user_global_ns = self.user_ns
-        self.display_pub = type('MockDisplayPub', (), {'publish': MagicMock()})()
+        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
 
 
 @pytest.fixture
@@ -118,8 +119,8 @@ def test_hidden_state_call_gets_a_distinct_value_per_iteration(magics_fixture):
     magics_obj, shell, backend = magics_fixture
     magics_obj.cash("", _DEFS_CELL.strip())
     magics_obj.cash("", _LOOP_CELL.strip())
-    assert shell.user_ns['results'] == {1: 1, 2: 2, 3: 3}
-    assert shell.user_ns['counter']['n'] == 3, (
+    assert shell.user_ns["results"] == {1: 1, 2: 2, 3: 3}
+    assert shell.user_ns["counter"]["n"] == 3, (
         "fetch_next() ran a different number of times than there were "
         "iterations -- either under-called (a false hit) or over-called "
         "(caching never engaged)"
@@ -153,22 +154,20 @@ def test_hidden_state_loop_vars_still_discriminate_on_a_rerun(magics_fixture):
     magics_obj, shell, backend = magics_fixture
     magics_obj.cash("", _DEFS_CELL.strip())
     magics_obj.cash("", _LOOP_CELL.strip())
-    assert shell.user_ns['results'] == {1: 1, 2: 2, 3: 3}
-    assert shell.user_ns['counter']['n'] == 3
+    assert shell.user_ns["results"] == {1: 1, 2: 2, 3: 3}
+    assert shell.user_ns["counter"]["n"] == 3
 
     magics_obj.cash("", _LOOP_CELL.strip())
-    rerun = shell.user_ns['results']
+    rerun = shell.user_ns["results"]
     assert len(set(rerun.values())) == 3, (
         f"the rerun's three iterations collapsed onto shared entries ({rerun}) "
         "-- loop_vars stopped discriminating across cells"
     )
-    assert rerun == {1: 4, 2: 5, 3: 6}, (
-        "with no checker to restore the self-write, a rerun accumulates; "
-        f"got {rerun}"
-    )
+    assert rerun == {1: 4, 2: 5, 3: 6}, f"with no checker to restore the self-write, a rerun accumulates; got {rerun}"
 
 
 # --------------------------------------------------------- stack safety
+
 
 def _bare_statement_processor():
     backend = InMemoryBackend()
@@ -194,13 +193,11 @@ def test_loop_vars_scope_pops_even_when_the_body_raises():
     assert proc.current_loop_vars() == {}
 
     with pytest.raises(ValueError):
-        with proc.loop_vars_scope({'t': 1}):
-            assert proc.current_loop_vars() == {'t': 1}
+        with proc.loop_vars_scope({"t": 1}):
+            assert proc.current_loop_vars() == {"t": 1}
             raise ValueError("body statement blew up")
 
-    assert proc.current_loop_vars() == {}, (
-        "loop_vars_scope leaked a stack entry across an exception"
-    )
+    assert proc.current_loop_vars() == {}, "loop_vars_scope leaked a stack entry across an exception"
 
 
 def test_loop_vars_scope_nests_innermost_wins():
@@ -213,11 +210,11 @@ def test_loop_vars_scope_nests_innermost_wins():
     is about the STACK mechanics (LIFO push/pop), not re-testing the merge.
     """
     proc = _bare_statement_processor()
-    with proc.loop_vars_scope({'outer': 1}):
-        assert proc.current_loop_vars() == {'outer': 1}
-        with proc.loop_vars_scope({'outer': 1, 'inner': 2}):
-            assert proc.current_loop_vars() == {'outer': 1, 'inner': 2}
-        assert proc.current_loop_vars() == {'outer': 1}, (
+    with proc.loop_vars_scope({"outer": 1}):
+        assert proc.current_loop_vars() == {"outer": 1}
+        with proc.loop_vars_scope({"outer": 1, "inner": 2}):
+            assert proc.current_loop_vars() == {"outer": 1, "inner": 2}
+        assert proc.current_loop_vars() == {"outer": 1}, (
             "popping the inner loop's vars did not restore the outer loop's"
         )
 
@@ -236,6 +233,7 @@ def test_loop_vars_scope_nests_innermost_wins():
 # kernel) lives in `test_call_unit_loop_vars_real_kernel.py`'s
 # `test_nested_loop_reusing_the_target_name_*` / `test_sibling_loops_*` tests.
 
+
 def test_loop_var_digests_scope_pops_in_lockstep_with_loop_vars():
     """The digests stack must be exception-safe too, popped by the SAME
     `finally` that pops the values stack -- not a second, independent
@@ -251,13 +249,11 @@ def test_loop_var_digests_scope_pops_in_lockstep_with_loop_vars():
     assert proc.current_loop_var_digests() == {}
 
     with pytest.raises(ValueError):
-        with proc.loop_vars_scope({'t': 1}, {'t': 'digest-A'}):
-            assert proc.current_loop_var_digests() == {'t': 'digest-A'}
+        with proc.loop_vars_scope({"t": 1}, {"t": "digest-A"}):
+            assert proc.current_loop_var_digests() == {"t": "digest-A"}
             raise ValueError("body statement blew up")
 
-    assert proc.current_loop_var_digests() == {}, (
-        "loop_var_digests_scope leaked a stack entry across an exception"
-    )
+    assert proc.current_loop_var_digests() == {}, "loop_var_digests_scope leaked a stack entry across an exception"
 
 
 def test_loop_var_digests_reused_name_resolves_to_the_current_scope():
@@ -279,20 +275,21 @@ def test_loop_var_digests_reused_name_resolves_to_the_current_scope():
     it.
     """
     proc = _bare_statement_processor()
-    with proc.loop_vars_scope({'t': 1, 'outer_only': 99}, {'t': 'outer-digest', 'outer_only': 'outer-only-digest'}):
+    with proc.loop_vars_scope({"t": 1, "outer_only": 99}, {"t": "outer-digest", "outer_only": "outer-only-digest"}):
         assert proc.current_loop_var_digests() == {
-            't': 'outer-digest', 'outer_only': 'outer-only-digest',
+            "t": "outer-digest",
+            "outer_only": "outer-only-digest",
         }
-        with proc.loop_vars_scope({'t': 2}, {'t': 'inner-digest'}):
+        with proc.loop_vars_scope({"t": 2}, {"t": "inner-digest"}):
             # Inner scope's OWN reused name shadows the outer's.
-            assert proc.current_loop_var_digests()['t'] == 'inner-digest'
+            assert proc.current_loop_var_digests()["t"] == "inner-digest"
             # An OUTER-only name (not reused/re-pushed by the inner scope)
             # must still resolve -- proves this is a MERGE across the whole
             # stack, not a top-of-stack-only lookup that would lose it.
-            assert proc.current_loop_var_digests()['outer_only'] == 'outer-only-digest'
+            assert proc.current_loop_var_digests()["outer_only"] == "outer-only-digest"
         # Inner scope popped -- 't' must resolve back to the OUTER's digest,
         # not linger at the inner's.
-        assert proc.current_loop_var_digests()['t'] == 'outer-digest', (
+        assert proc.current_loop_var_digests()["t"] == "outer-digest", (
             "the inner scope's digest for a reused name leaked past its pop"
         )
     assert proc.current_loop_vars() == {}
@@ -314,6 +311,7 @@ def test_loop_var_digests_reused_name_resolves_to_the_current_scope():
 # `test_call_unit_loop_vars_real_kernel.py`'s
 # `test_call_inside_a_name_reusing_inner_loop_*` tests.
 
+
 def test_depth_keyed_scope_gives_a_reused_name_two_distinct_slots():
     """The exact shape CAS-257 defect 1 reports: ``for q in A: for q in B:
     <call>`` -- while BOTH scopes are simultaneously active (the call sits
@@ -332,12 +330,12 @@ def test_depth_keyed_scope_gives_a_reused_name_two_distinct_slots():
     entirely from either dict).
     """
     proc = _bare_statement_processor()
-    with proc.loop_vars_scope({'q': 'p'}, {'q': 'digest-outer'}):
-        with proc.loop_vars_scope({'q': 7}, {'q': 'digest-inner'}):
+    with proc.loop_vars_scope({"q": "p"}, {"q": "digest-outer"}):
+        with proc.loop_vars_scope({"q": 7}, {"q": "digest-inner"}):
             values = proc.current_loop_vars_for_call_key()
             digests = proc.current_loop_var_digests_for_call_key()
-            assert values == {'0:q': 'p', '1:q': 7}
-            assert digests == {'0:q': 'digest-outer', '1:q': 'digest-inner'}
+            assert values == {"0:q": "p", "1:q": 7}
+            assert digests == {"0:q": "digest-outer", "1:q": "digest-inner"}
 
 
 def test_depth_keyed_scope_pop_restores_the_single_outer_slot():
@@ -348,11 +346,11 @@ def test_depth_keyed_scope_pop_restores_the_single_outer_slot():
     already requires of the un-keyed digest stack).
     """
     proc = _bare_statement_processor()
-    with proc.loop_vars_scope({'q': 'p'}, {'q': 'digest-outer'}):
-        with proc.loop_vars_scope({'q': 7}, {'q': 'digest-inner'}):
+    with proc.loop_vars_scope({"q": "p"}, {"q": "digest-outer"}):
+        with proc.loop_vars_scope({"q": 7}, {"q": "digest-inner"}):
             pass
-        assert proc.current_loop_vars_for_call_key() == {'0:q': 'p'}
-        assert proc.current_loop_var_digests_for_call_key() == {'0:q': 'digest-outer'}
+        assert proc.current_loop_vars_for_call_key() == {"0:q": "p"}
+        assert proc.current_loop_var_digests_for_call_key() == {"0:q": "digest-outer"}
     assert proc.current_loop_vars_for_call_key() == {}
     assert proc.current_loop_var_digests_for_call_key() == {}
 
@@ -384,16 +382,14 @@ def test_depth_prefix_is_positional_not_order_dependent():
     instead), even though it is the SAME call site.
     """
     proc = _bare_statement_processor()
-    with proc.loop_vars_scope({'q': 'p'}, {'q': 'digest-p'}):
+    with proc.loop_vars_scope({"q": "p"}, {"q": "digest-p"}):
         first = proc.current_loop_var_digests_for_call_key()
-    with proc.loop_vars_scope({'q': 'r'}, {'q': 'digest-r'}):
+    with proc.loop_vars_scope({"q": "r"}, {"q": "digest-r"}):
         second = proc.current_loop_var_digests_for_call_key()
 
-    assert set(first) == {'0:q'}
-    assert set(second) == {'0:q'}
-    assert first['0:q'] != second['0:q'], (
-        "different values at the same depth must still discriminate"
-    )
+    assert set(first) == {"0:q"}
+    assert set(second) == {"0:q"}
+    assert first["0:q"] != second["0:q"], "different values at the same depth must still discriminate"
 
 
 def test_depth_keyed_scope_keeps_a_value_with_no_matching_digest():
@@ -430,19 +426,18 @@ def test_depth_keyed_scope_keeps_a_value_with_no_matching_digest():
     `'0:extra'` is gone from both dicts, not merely missing its digest.
     """
     proc = _bare_statement_processor()
-    with proc.loop_vars_scope({'q': 1, 'extra': 'no-digest-for-me'}, {'q': 'digest-q'}):
+    with proc.loop_vars_scope({"q": 1, "extra": "no-digest-for-me"}, {"q": "digest-q"}):
         values = proc.current_loop_vars_for_call_key()
         digests = proc.current_loop_var_digests_for_call_key()
 
-    assert values == {'0:q': 1, '0:extra': 'no-digest-for-me'}, (
+    assert values == {"0:q": 1, "0:extra": "no-digest-for-me"}, (
         "the value-only entry must keep its slot, not be dropped"
     )
-    assert digests == {'0:q': 'digest-q'}, (
-        "no digest should be invented for the value-only entry"
-    )
+    assert digests == {"0:q": "digest-q"}, "no digest should be invented for the value-only entry"
 
 
 # --------------------------------------------------------- for_handler.py's own guard
+
 
 class _ShellStub:
     def __init__(self):
@@ -458,15 +453,15 @@ class _StatementProcessorWithoutLoopVarsScope:
     def __init__(self):
         self.variable_lineage: dict = {}
         self.vars_with_mutation_lineage: set = set()
-        self.compute_hash = lambda v: 'fakehash'
+        self.compute_hash = lambda v: "fakehash"
 
     def process_statement(self, code, ttl, silent, annotation=None, is_last=True):
         return {
-            'status': CacheStatus.COMPUTED,
-            'execution_time': 0.01,
-            'stdout': '',
-            'stderr': '',
-            'outputs': [],
+            "status": CacheStatus.COMPUTED,
+            "execution_time": 0.01,
+            "stdout": "",
+            "stderr": "",
+            "outputs": [],
         }
 
 
@@ -492,7 +487,10 @@ def test_for_loop_runs_even_when_statement_processor_lacks_loop_vars_scope():
 
     shell = _ShellStub()
     handler = ForLoopHandler(
-        shell, _StatementProcessorWithoutLoopVarsScope(), debug=False, dispatcher=MagicMock(),
+        shell,
+        _StatementProcessorWithoutLoopVarsScope(),
+        debug=False,
+        dispatcher=MagicMock(),
     )
     node = ast.parse("for x in [1, 2]:\n    y = x\n").body[0]
 

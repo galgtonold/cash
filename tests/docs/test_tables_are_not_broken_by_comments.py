@@ -23,6 +23,7 @@ tests, which is exactly the gap that made the derived ``tests_docs`` figure
 unreproducible and failed the release's doc-number gate. A test over files
 that are not in the repository also cannot fail for anyone else.
 """
+
 from __future__ import annotations
 
 import pathlib
@@ -69,19 +70,8 @@ def test_no_html_comment_inside_a_markdown_table(page: pathlib.Path):
 
 def test_the_detector_catches_the_shape_it_is_meant_to_catch():
     """Without this, a detector that never fires would pass the suite above."""
-    broken = (
-        "| A | B |\n"
-        "|---|---|\n"
-        "<!-- claim: mod.py:Sym == 1 -->\n"
-        "| one | two |\n"
-    )
+    broken = "| A | B |\n|---|---|\n<!-- claim: mod.py:Sym == 1 -->\n| one | two |\n"
     assert _table_interior_comments(broken) == [(3, "<!-- claim: mod.py:Sym == 1 -->")]
 
-    fine = (
-        "<!-- claim: mod.py:Sym == 1 -->\n"
-        "\n"
-        "| A | B |\n"
-        "|---|---|\n"
-        "| one | two |\n"
-    )
+    fine = "<!-- claim: mod.py:Sym == 1 -->\n\n| A | B |\n|---|---|\n| one | two |\n"
     assert _table_interior_comments(fine) == []

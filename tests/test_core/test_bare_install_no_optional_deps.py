@@ -27,6 +27,7 @@ this into a real bare-install simulation, so any future stray top-level import
 of numpy/pandas/ipywidgets/... is caught by the same guard rather than needing
 a new test each time.
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -168,21 +169,15 @@ def test_import_cash_without_optional_deps(bare_install_run):
 
 def test_decorator_round_trip_without_optional_deps(bare_install_run):
     """The decorator must actually cache — 2nd call is a HIT, not a recompute."""
-    line = next(
-        line for line in bare_install_run.stdout.splitlines()
-        if line.startswith("PHASE2_ROUNDTRIP")
-    )
+    line = next(line for line in bare_install_run.stdout.splitlines() if line.startswith("PHASE2_ROUNDTRIP"))
     _, first, second, n_calls, hits = line.split()
 
-    assert first == second == "5", line          # same answer both times
+    assert first == second == "5", line  # same answer both times
     assert n_calls == "1", f"2nd call recomputed instead of hitting cache: {line}"
     assert hits == "1", f"cash did not record a cache hit: {line}"
 
 
 def test_cli_entry_point_without_optional_deps(bare_install_run):
     """The `cash` console script (cash.__main__:main) must run."""
-    line = next(
-        line for line in bare_install_run.stdout.splitlines()
-        if line.startswith("PHASE3_CLI")
-    )
+    line = next(line for line in bare_install_run.stdout.splitlines() if line.startswith("PHASE3_CLI"))
     assert "cash" in line and line.strip() != "PHASE3_CLI", line

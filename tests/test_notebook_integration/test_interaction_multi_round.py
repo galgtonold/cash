@@ -13,10 +13,12 @@ class TestMultiRoundRefinement:
 
     def test_five_round_formula_refinement(self, nb_runner):
         """Edit formula cell 5 times sequentially."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "result = x\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "result = x\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = 10" in nb_runner.get_output(2)
@@ -48,10 +50,12 @@ class TestMultiRoundRefinement:
 
     def test_alternating_data_source(self, nb_runner):
         """Alternate data sources, verify correct propagation each time."""
-        nb_runner.create_notebook([
-            "source = [1, 2, 3]",
-            "total = sum(source)\nprint(f'total = {total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "source = [1, 2, 3]",
+                "total = sum(source)\nprint(f'total = {total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total = 6" in nb_runner.get_output(2)
@@ -68,10 +72,12 @@ class TestMultiRoundRefinement:
 
     def test_refine_function_multiple_times(self, nb_runner):
         """Refine function definition through multiple iterations."""
-        nb_runner.create_notebook([
-            "def transform(x):\n    return x",
-            "vals = [1, 2, 3, 4, 5]\nresult = [transform(v) for v in vals]\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def transform(x):\n    return x",
+                "vals = [1, 2, 3, 4, 5]\nresult = [transform(v) for v in vals]\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = [1, 2, 3, 4, 5]" in nb_runner.get_output(2)

@@ -8,6 +8,7 @@ cash.notebook.badge_renderer.view_builder._statement_row_from_metric.
 Timing values and cache_key prefixes are plausible-looking but
 hand-chosen — the rendered HTML structure is what matters for docs.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -255,10 +256,7 @@ FIXTURES: dict[str, MetricsList] = {
             "code": "out.append(fetch(entity))",
             "total_time": 0.212,
             "evaluated_vars": ["out"],
-            "uncacheable_reasons": [
-                "In-place mutation on: out "
-                "(receiver lineage bumped; statement re-executes)"
-            ],
+            "uncacheable_reasons": ["In-place mutation on: out (receiver lineage bumped; statement re-executes)"],
             "is_upstream": False,
         },
     ],

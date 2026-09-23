@@ -7,6 +7,7 @@ cache". Editing ``make`` did invalidate -- the method is followed as code. The
 class-attribute channel read ``A.make`` statically, got the ``classmethod``
 object, which is not callable, and tried to hash it as a data constant.
 """
+
 from __future__ import annotations
 
 import os
@@ -18,7 +19,7 @@ import pytest
 
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
 
-MODELS = textwrap.dedent('''
+MODELS = textwrap.dedent("""
     import functools
 
     class A:
@@ -39,9 +40,9 @@ MODELS = textwrap.dedent('''
         @functools.cached_property
         def cached(self):
             return 2
-''')
+""")
 
-MAIN = textwrap.dedent('''
+MAIN = textwrap.dedent("""
     import time
     import cash
     from models import A
@@ -53,7 +54,7 @@ MAIN = textwrap.dedent('''
         return A.twice(A.make(v)) + A.RATE
 
     print("RESULT", parse(2))
-''')
+""")
 
 
 def _run(tmp_path, factor=10, rate=0):
@@ -62,10 +63,10 @@ def _run(tmp_path, factor=10, rate=0):
     # No .pyc: Python validates one by whole-second mtime and size, so the
     # RATE 0 -> 1 edit (same size) landing in the second run's second loaded
     # the old bytecode, and printed 400 with or without cash.
-    env = dict(os.environ, CASH_CACHE_DIR=str(tmp_path / ".cash"), PYTHONWARNINGS="always",
-               PYTHONDONTWRITEBYTECODE="1")
-    proc = subprocess.run([sys.executable, "main.py"], cwd=tmp_path, env=env,
-                          capture_output=True, text=True, timeout=120)
+    env = dict(os.environ, CASH_CACHE_DIR=str(tmp_path / ".cash"), PYTHONWARNINGS="always", PYTHONDONTWRITEBYTECODE="1")
+    proc = subprocess.run(
+        [sys.executable, "main.py"], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120
+    )
     assert proc.returncode == 0, proc.stderr
     return proc.stdout.strip(), proc.stderr
 

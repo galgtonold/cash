@@ -12,7 +12,7 @@ def sink(payload):
 
 def audited_helper(uid):
     """Its own impurity, waived here."""
-    sink({"audited": uid})              # @cash:assume-safe
+    sink({"audited": uid})  # @cash:assume-safe
     return uid
 
 

@@ -13,11 +13,13 @@ class TestDequeRotate:
 
     def test_deque_rotate_basic(self, nb_runner):
         """Create deque, rotate, verify caching."""
-        nb_runner.create_notebook([
-            "from collections import deque",
-            "d = deque([1, 2, 3, 4, 5])\nd.rotate(2)",
-            "result = list(d)\nprint(f'result={result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from collections import deque",
+                "d = deque([1, 2, 3, 4, 5])\nd.rotate(2)",
+                "result = list(d)\nprint(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(3)
@@ -30,12 +32,14 @@ class TestDequeRotate:
 
     def test_deque_maxlen_edit(self, nb_runner):
         """Deque with maxlen, edit propagation."""
-        nb_runner.create_notebook([
-            "from collections import deque",
-            "size = 3",
-            "d = deque(range(10), maxlen=size)\nresult = list(d)",
-            "print(f'result={result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from collections import deque",
+                "size = 3",
+                "d = deque(range(10), maxlen=size)\nresult = list(d)",
+                "print(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(4)
@@ -48,12 +52,14 @@ class TestDequeRotate:
 
     def test_deque_appendleft_pattern(self, nb_runner):
         """Build deque via appendleft in same cell."""
-        nb_runner.create_notebook([
-            "from collections import deque",
-            "items = [10, 20, 30]",
-            "d = deque()\nfor item in items:\n    d.appendleft(item)\nresult = list(d)",
-            "print(f'result={result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from collections import deque",
+                "items = [10, 20, 30]",
+                "d = deque()\nfor item in items:\n    d.appendleft(item)\nresult = list(d)",
+                "print(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(4)

@@ -9,6 +9,7 @@ line in every debug loop.
 Each statement now compiles under a stable, per-statement ``<cash-{digest}>``
 name whose source is registered in linecache.
 """
+
 import inspect
 import linecache
 import traceback
@@ -35,7 +36,7 @@ class MockShell(Configurable):
         self.events = MagicMock()
         self.ast_transformers = []
         self.user_global_ns = self.user_ns
-        self.display_pub = type('MockDisplayPub', (), {'publish': MagicMock()})()
+        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
 
 
 @pytest.fixture
@@ -54,6 +55,7 @@ def magics_fixture():
 # the helper itself
 # --------------------------------------------------------------------------
 
+
 def test_register_cell_source_is_stable_and_resolvable():
     """Same source -> same name (one linecache entry, not unbounded growth)."""
     src = "def f():\n    return 1\n"
@@ -70,14 +72,17 @@ def test_register_cell_source_distinguishes_statements():
     assert a != b
 
 
-@pytest.mark.parametrize("name,expected", [
-    ("<cash-6f20c37e324f>", True),
-    ("<cash>", True),            # historical bare form still recognised
-    ("/home/u/real_module.py", False),
-    ("<string>", False),
-    ("", False),
-    (None, False),
-])
+@pytest.mark.parametrize(
+    "name,expected",
+    [
+        ("<cash-6f20c37e324f>", True),
+        ("<cash>", True),  # historical bare form still recognised
+        ("/home/u/real_module.py", False),
+        ("<string>", False),
+        ("", False),
+        (None, False),
+    ],
+)
 def test_is_cash_filename(name, expected):
     assert is_cash_filename(name) is expected
 
@@ -85,6 +90,7 @@ def test_is_cash_filename(name, expected):
 # --------------------------------------------------------------------------
 # the actual CAS-201 symptom
 # --------------------------------------------------------------------------
+
 
 def test_traceback_shows_source_of_cell_defined_function(magics_fixture):
     """The failing line appears in the traceback, not a bare '<cash>' frame."""

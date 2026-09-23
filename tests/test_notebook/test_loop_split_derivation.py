@@ -10,6 +10,7 @@ These are unit tests of the derivation itself; the behavioural proof (an
 upstream edit still invalidates a split loop) lives in the integration suite.
 This file's job is to make the two sides' *inputs* provably identical.
 """
+
 from __future__ import annotations
 
 import ast
@@ -49,7 +50,7 @@ def test_split_sources_survive_a_source_round_trip(src):
     therefore has to survive a trip through source, which is what re-parsing
     here simulates."""
     a = split_sources(_for(src), 5)
-    assert split_sources(_for(src), 5) == a                    # independent parse
+    assert split_sources(_for(src), 5) == a  # independent parse
     assert split_sources(_for(ast.unparse(_for(src))), 5) == a  # unparse/reparse
 
 
@@ -102,8 +103,8 @@ def test_source_hash_ignores_formatting_but_not_meaning():
     loose and an EDITED loop keeps a ``k`` chosen for different code, which
     is a correctness problem."""
     a = _for("for i in range(100):\n    result = result + 1")
-    b = _for("for i in range(100):\n        result = result + 1")   # reindented
-    c = _for("for i in range(100):\n    result = result + 2")       # edited
+    b = _for("for i in range(100):\n        result = result + 1")  # reindented
+    c = _for("for i in range(100):\n    result = result + 2")  # edited
     assert loop_source_hash(a) == loop_source_hash(b)
     assert loop_source_hash(a) != loop_source_hash(c)
 
@@ -125,13 +126,16 @@ class TestLoopSplitStore:
     def test_unknown_loop_has_no_verdict(self, tmp_path):
         assert LoopSplitStore(str(tmp_path)).get("nope") is None
 
-    @pytest.mark.parametrize("payload", [
-        "{ not json at all",
-        json.dumps({"version": 999, "splits": {"abc": 5}}),
-        json.dumps({"version": 1, "splits": "not a dict"}),
-        json.dumps({"version": 1, "splits": {"abc": -1}}),
-        json.dumps({"version": 1, "splits": {"abc": "five"}}),
-    ])
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            "{ not json at all",
+            json.dumps({"version": 999, "splits": {"abc": 5}}),
+            json.dumps({"version": 1, "splits": "not a dict"}),
+            json.dumps({"version": 1, "splits": {"abc": -1}}),
+            json.dumps({"version": 1, "splits": {"abc": "five"}}),
+        ],
+    )
     def test_a_broken_store_means_no_split_not_a_crash(self, tmp_path, payload):
         """Failure mode must be "no optimisation", never a raise or a wrong
         answer."""
@@ -148,6 +152,7 @@ class TestLoopSplitStore:
         a verdict is recorded, because each loads from disk only once. The
         runtime would then record a split the simulator never applies."""
         from cash.notebook.loop_split import _reset_stores_for_tests
+
         _reset_stores_for_tests()
         a = get_store(str(tmp_path))
         b = get_store(str(tmp_path))

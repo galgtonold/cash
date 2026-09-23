@@ -43,6 +43,7 @@ def reset_cash_state(tmp_path, monkeypatch):
     another page's back out of it on the next run.
     """
     import cash
+
     monkeypatch.setenv("CASH_CACHE_DIR", str(tmp_path / ".cash"))
     cash.reset_session()
     # And again through the live singleton. The env var only reaches an
@@ -71,23 +72,29 @@ def mock_aiohttp(monkeypatch):
     class _FakeResponse:
         def __init__(self, data):
             self._data = data
+
         async def json(self):
             return self._data
+
         async def __aenter__(self):
             return self
+
         async def __aexit__(self, *args):
             return None
 
     class _FakeSession:
         async def __aenter__(self):
             return self
+
         async def __aexit__(self, *args):
             return None
+
         def get(self, url):
             # Deterministic response so cache assertions work.
             @asynccontextmanager
             async def cm():
                 yield _FakeResponse({"url": url, "stub": True})
+
             return cm()
 
     monkeypatch.setattr(aiohttp, "ClientSession", lambda *a, **kw: _FakeSession())
@@ -103,6 +110,7 @@ def mock_anthropic(monkeypatch):
     IS installed this fixture no-ops so integration tests can use the real SDK.
     """
     import sys
+
     if "anthropic" in sys.modules:
         yield
         return
@@ -172,12 +180,9 @@ def parquet_stubs(tmp_path, monkeypatch):
     _wrote_real_parquet = False
     try:
         import pandas as _pd
-        _pd.DataFrame({"col1": ["val1"], "col2": ["val2"]}).to_parquet(
-            data_dir / "features.parquet"
-        )
-        _pd.DataFrame({"col1": ["val1"], "col2": ["val2"]}).to_parquet(
-            data_dir / "labels.parquet"
-        )
+
+        _pd.DataFrame({"col1": ["val1"], "col2": ["val2"]}).to_parquet(data_dir / "features.parquet")
+        _pd.DataFrame({"col1": ["val1"], "col2": ["val2"]}).to_parquet(data_dir / "labels.parquet")
         _wrote_real_parquet = True
     except Exception:
         pass
@@ -186,9 +191,7 @@ def parquet_stubs(tmp_path, monkeypatch):
         (data_dir / "features.parquet").write_bytes(b"stub-features")
         (data_dir / "labels.parquet").write_bytes(b"stub-labels")
     (data_dir / "features.csv").write_bytes(b"col1,col2\nval1,val2\n")
-    (data_dir / "raw.csv").write_text(
-        "amount,target\n10.0,0\n20.0,1\n30.0,0\n", encoding="utf-8"
-    )
+    (data_dir / "raw.csv").write_text("amount,target\n10.0,0\n20.0,1\n30.0,0\n", encoding="utf-8")
 
     # CSV for README.md quick-start fence ("large_dataset.csv").
     (tmp_path / "large_dataset.csv").write_text(
@@ -204,17 +207,11 @@ def parquet_stubs(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     (tmp_path / "transactions.csv").write_text(
-        "customer_id,amount,date\n"
-        "1,50.0,2024-01-10\n"
-        "1,30.0,2024-02-15\n"
-        "2,20.0,2024-01-05\n"
-        "3,100.0,2024-03-01\n",
+        "customer_id,amount,date\n1,50.0,2024-01-10\n1,30.0,2024-02-15\n2,20.0,2024-01-05\n3,100.0,2024-03-01\n",
         encoding="utf-8",
     )
     # CSV for production-transition.md Step 1.
-    (tmp_path / "data.csv").write_text(
-        "amount\n10.0\n20.0\n30.0\n", encoding="utf-8"
-    )
+    (tmp_path / "data.csv").write_text("amount\n10.0\n20.0\n30.0\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     # Isolation, stated rather than inherited, and ABSOLUTE.
     #
@@ -232,9 +229,15 @@ def parquet_stubs(tmp_path, monkeypatch):
 
         # A minimal DataFrame-like object returned by fake read_* calls.
         # Needs .describe() for README.md and other methods used across docs.
-        def _df_merge(self, *a, **kw): return self
-        def _df_to_sql(self, *a, **kw): return None
-        def _df_describe(self): return "stub describe"
+        def _df_merge(self, *a, **kw):
+            return self
+
+        def _df_to_sql(self, *a, **kw):
+            return None
+
+        def _df_describe(self):
+            return "stub describe"
+
         _FakeDF = type(
             "DataFrame",
             (),
@@ -251,7 +254,6 @@ def parquet_stubs(tmp_path, monkeypatch):
         fake_pd.DataFrame = _FakeDF
         monkeypatch.setitem(sys.modules, "pandas", fake_pd)
     else:
-        import pandas as real_pd
         import types
 
         # Extend the real pandas stub if it doesn't have read_csv (shouldn't
@@ -268,6 +270,7 @@ def mock_register_magic(monkeypatch):
     test environment without IPython this can fail. Patching it avoids that.
     """
     import cash
+
     monkeypatch.setattr(cash.Cash, "register_magic", lambda self: None)
     yield
 
@@ -282,6 +285,7 @@ def mock_time_sleep(monkeypatch):
     killed the worker. A 1 ms sleep still yields.
     """
     import time
+
     real_sleep = time.sleep
     monkeypatch.setattr(time, "sleep", lambda s: real_sleep(min(s, 0.001)) if s > 0 else real_sleep(0))
     yield
@@ -297,12 +301,14 @@ def mock_pyarrow(monkeypatch):
     is genuinely unavailable.
     """
     import sys
+
     if "pyarrow" in sys.modules:
         yield
         return
     # Try importing the real pyarrow first — if it works, don't stub.
     try:
         import pyarrow  # noqa: F401
+
         yield
         return
     except ImportError:
@@ -328,6 +334,7 @@ def mock_pyarrow(monkeypatch):
 def mock_openai(monkeypatch):
     """Stub openai module for llm-api-calls.md."""
     import sys
+
     if "openai" in sys.modules:
         yield
         return
@@ -358,6 +365,7 @@ def mock_openai(monkeypatch):
 def mock_httpx(monkeypatch):
     """Stub httpx module for llm-api-calls.md."""
     import sys
+
     if "httpx" in sys.modules:
         yield
         return
@@ -384,11 +392,13 @@ def mock_requests(monkeypatch):
 
     if "requests" in sys.modules:
         import requests
+
         monkeypatch.setattr(requests, "get", lambda *a, **kw: _FakeResp())
         monkeypatch.setattr(requests, "post", lambda *a, **kw: _FakeResp())
         yield
     else:
         import types
+
         fake_requests = types.ModuleType("requests")
         fake_requests.get = lambda *a, **kw: _FakeResp()
         fake_requests.post = lambda *a, **kw: _FakeResp()
@@ -402,6 +412,7 @@ def mock_redis(monkeypatch):
     try:
         import fakeredis
         import redis as _redis
+
         monkeypatch.setattr(_redis, "Redis", fakeredis.FakeStrictRedis)
         monkeypatch.setattr(_redis, "StrictRedis", fakeredis.FakeStrictRedis)
     except ImportError:
@@ -414,6 +425,7 @@ def mock_boto3(monkeypatch):
     """Stub boto3.client/resource for doc tests."""
     import sys
     import types
+
     if "boto3" not in sys.modules:
         fake_boto3 = types.ModuleType("boto3")
         fake_boto3.client = lambda *a, **kw: types.SimpleNamespace(
@@ -423,8 +435,10 @@ def mock_boto3(monkeypatch):
         fake_boto3.resource = lambda *a, **kw: types.SimpleNamespace()
         monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
     else:
-        import boto3
         from unittest.mock import MagicMock
+
+        import boto3
+
         mock_client = MagicMock()
         mock_client.put_object.return_value = {}
         mock_client.get_object.return_value = {"Body": types.SimpleNamespace(read=lambda: b"stub")}
@@ -437,17 +451,24 @@ def mock_boto3(monkeypatch):
 def mock_polars(monkeypatch):
     """Stub polars module for doc tests (polars not installed in test env)."""
     import sys
+
     if "polars" in sys.modules:
         yield
         return
     import types
+
     fake_pl = types.ModuleType("polars")
+
     class _FakeLazyFrame:
-        def collect(self): return self
+        def collect(self):
+            return self
+
     class _FakeDataFrame:
         pass
+
     class _FakeSeries:
         pass
+
     fake_pl.DataFrame = _FakeDataFrame
     fake_pl.LazyFrame = _FakeLazyFrame
     # ``Series`` is not used by any doc fence -- it is here because THIRD-PARTY
@@ -475,6 +496,7 @@ def reset_ipy_shell():
     yield
     try:
         from IPython.core.interactiveshell import InteractiveShell
+
         if InteractiveShell._instance is not None:
             InteractiveShell.clear_instance()
     except Exception:
@@ -486,6 +508,7 @@ def mock_my_lib(monkeypatch):
     """Stub fictional 'my_lib' module used in custom-file-sources.md doc examples."""
     import sys
     import types
+
     if "my_lib" not in sys.modules:
         fake_my_lib = types.ModuleType("my_lib")
         fake_my_lib.read_data = lambda path, **kwargs: {"path": str(path), "stub": True}
@@ -509,14 +532,14 @@ def mock_pipeline(monkeypatch, tmp_path):
     """
     import sys
     import types
+
     if "pipeline" in sys.modules:
         yield
         return
     from cash import Cash
 
     fake_pipeline = types.ModuleType("pipeline")
-    stub_cash = Cash(cache_dir=str(tmp_path / "pipeline_stub_cache"),
-                     register_magic=False)
+    stub_cash = Cash(cache_dir=str(tmp_path / "pipeline_stub_cache"), register_magic=False)
 
     @stub_cash.cache
     def train(features):
@@ -577,6 +600,7 @@ def mock_sklearn(monkeypatch):
     instead. It appears only where sklearn is absent, i.e. CI.
     """
     import sys
+
     if "sklearn" in sys.modules:
         yield
         return
@@ -653,8 +677,7 @@ def pytest_terminal_summary(terminalreporter: "TerminalReporter", exitstatus: in
         total = row["total_fences"]
         skipped = row["skipped_fences"]
         terminalreporter.write_line(
-            f"  {page}: {tested}/{total} fences tested"
-            + (f" ({len(skipped)} skipped)" if skipped else "")
+            f"  {page}: {tested}/{total} fences tested" + (f" ({len(skipped)} skipped)" if skipped else "")
         )
         for line, reason in skipped:
             terminalreporter.write_line(f"      line {line}: {reason}")

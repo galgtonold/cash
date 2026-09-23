@@ -13,10 +13,12 @@ class TestMatrixComputations:
 
     def test_matrix_transpose_edit(self, nb_runner):
         """Edit matrix, transpose updates."""
-        nb_runner.create_notebook([
-            "matrix = [[1, 2, 3], [4, 5, 6]]",
-            "transposed = list(map(list, zip(*matrix)))\nprint(f'transposed = {transposed}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "matrix = [[1, 2, 3], [4, 5, 6]]",
+                "transposed = list(map(list, zip(*matrix)))\nprint(f'transposed = {transposed}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "transposed = [[1, 4], [2, 5], [3, 6]]" in nb_runner.get_output(2)
@@ -27,10 +29,12 @@ class TestMatrixComputations:
 
     def test_matrix_row_sums_edit(self, nb_runner):
         """Edit matrix data, row sum computation updates."""
-        nb_runner.create_notebook([
-            "grid = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]",
-            "row_sums = [sum(row) for row in grid]\nprint(f'row_sums = {row_sums}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "grid = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]",
+                "row_sums = [sum(row) for row in grid]\nprint(f'row_sums = {row_sums}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "row_sums = [6, 15, 24]" in nb_runner.get_output(2)
@@ -41,10 +45,12 @@ class TestMatrixComputations:
 
     def test_flatten_and_aggregate(self, nb_runner):
         """Edit nested list, flatten + aggregate updates."""
-        nb_runner.create_notebook([
-            "nested = [[1, 2], [3, 4], [5, 6]]",
-            "flat = [x for row in nested for x in row]\ntotal = sum(flat)\nprint(f'flat={flat} total={total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "nested = [[1, 2], [3, 4], [5, 6]]",
+                "flat = [x for row in nested for x in row]\ntotal = sum(flat)\nprint(f'flat={flat} total={total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "flat=[1, 2, 3, 4, 5, 6]" in nb_runner.get_output(2)

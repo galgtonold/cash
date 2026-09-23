@@ -13,12 +13,14 @@ class TestTextwrapFormat:
 
     def test_dedent_basic(self, nb_runner):
         """Dedent indented text, verify caching."""
-        nb_runner.create_notebook([
-            "import textwrap",
-            "raw = '    line1\\n    line2\\n    line3'",
-            "cleaned = textwrap.dedent(raw)\nlines = cleaned.strip().split('\\n')",
-            "print(f'count={len(lines)} first={lines[0]}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import textwrap",
+                "raw = '    line1\\n    line2\\n    line3'",
+                "cleaned = textwrap.dedent(raw)\nlines = cleaned.strip().split('\\n')",
+                "print(f'count={len(lines)} first={lines[0]}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(4)
@@ -32,13 +34,15 @@ class TestTextwrapFormat:
 
     def test_fill_wrap_edit(self, nb_runner):
         """textwrap.fill with width edit."""
-        nb_runner.create_notebook([
-            "import textwrap",
-            "text = 'The quick brown fox jumps over the lazy dog near the river bank'",
-            "width = 20",
-            "wrapped = textwrap.fill(text, width=width)\nline_count = len(wrapped.split('\\n'))",
-            "print(f'lines={line_count}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import textwrap",
+                "text = 'The quick brown fox jumps over the lazy dog near the river bank'",
+                "width = 20",
+                "wrapped = textwrap.fill(text, width=width)\nline_count = len(wrapped.split('\\n'))",
+                "print(f'lines={line_count}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(5)
@@ -52,12 +56,14 @@ class TestTextwrapFormat:
 
     def test_indent_pattern(self, nb_runner):
         """textwrap.indent with prefix."""
-        nb_runner.create_notebook([
-            "import textwrap",
-            "text = 'line1\\nline2\\nline3'",
-            "indented = textwrap.indent(text, '>>> ')\nfirst_line = indented.split('\\n')[0]",
-            "print(f'first={first_line}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import textwrap",
+                "text = 'line1\\nline2\\nline3'",
+                "indented = textwrap.indent(text, '>>> ')\nfirst_line = indented.split('\\n')[0]",
+                "print(f'first={first_line}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(4)

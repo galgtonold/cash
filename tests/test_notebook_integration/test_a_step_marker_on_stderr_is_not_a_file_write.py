@@ -8,6 +8,7 @@ cells it needs take 4 s: each statement reaching ``mark`` counted as writing
 a file of unknown kind, had no record of its files after the restart, and was
 re-fired.
 """
+
 import pytest
 
 pytest.importorskip("pandas")
@@ -23,10 +24,8 @@ MARKERS = {
 def _cells(marker):
     return [
         "import cash\n%cash_on\n%cash_badge print",
-        "import os, sys, time\nimport pandas as pd\n"
-        "def mark(step):\n    " + marker,
-        "def load():\n    mark('load')\n    return pd.DataFrame({'m': [1, 1, 2], 'v': [3.0, 4.0, 5.0]})\n"
-        "raw = load()",
+        "import os, sys, time\nimport pandas as pd\ndef mark(step):\n    " + marker,
+        "def load():\n    mark('load')\n    return pd.DataFrame({'m': [1, 1, 2], 'v': [3.0, 4.0, 5.0]})\nraw = load()",
         "def fit(frame):\n    mark('fit')\n    time.sleep(0.2)\n    return float(frame['v'].sum())\n"
         "model = fit(raw)\nprint('MODEL', model)",
         "print('BY MONTH', raw.groupby('m').size().to_dict())",

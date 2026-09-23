@@ -1,4 +1,5 @@
 """Result types and JSON persistence for the overhead benchmark."""
+
 from __future__ import annotations
 
 import dataclasses

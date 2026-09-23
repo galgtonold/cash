@@ -13,6 +13,7 @@ and the replay re-ran only the writes it could see in the statement text:
 The helper's ``savefig`` sits in its body, and the ``scores`` it plots is a
 global the call site never names; the planner saw neither.
 """
+
 import hashlib
 from pathlib import Path
 
@@ -22,24 +23,28 @@ pytest.importorskip("matplotlib")
 
 pytestmark = [pytest.mark.integration, pytest.mark.upstream]
 
-SETUP = ("import os, shutil, glob\nimport matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt\n"
-         "files = sorted(glob.glob('in/*.txt'))\n"
-         "def load(paths):\n    return sum(int(open(p).read()) for p in paths)\n"
-         "base = load(files)\n"
-         "LEAF = 40")
+SETUP = (
+    "import os, shutil, glob\nimport matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt\n"
+    "files = sorted(glob.glob('in/*.txt'))\n"
+    "def load(paths):\n    return sum(int(open(p).read()) for p in paths)\n"
+    "base = load(files)\n"
+    "LEAF = 40"
+)
 MODEL = "scores = [base * LEAF * k for k in (1, 2, 3)]"
-REPORT = ("shutil.rmtree('report', ignore_errors=True)\n"
-          "os.makedirs('report')\n"
-          "def save_png(kind, path):\n"
-          "    f, ax = plt.subplots(figsize=(3, 3))\n"
-          "    ax.plot(scores)\n"
-          "    ax.set_title(kind)\n"
-          "    f.savefig(path, dpi=40)\n"
-          "    plt.close(f)\n"
-          "for kind in ['roc', 'pr']:\n"
-          "    save_png(kind, f'report/{kind}.png')\n"
-          "open('report/metrics.txt', 'w').write(str(scores))\n"
-          "total = sum(scores)")
+REPORT = (
+    "shutil.rmtree('report', ignore_errors=True)\n"
+    "os.makedirs('report')\n"
+    "def save_png(kind, path):\n"
+    "    f, ax = plt.subplots(figsize=(3, 3))\n"
+    "    ax.plot(scores)\n"
+    "    ax.set_title(kind)\n"
+    "    f.savefig(path, dpi=40)\n"
+    "    plt.close(f)\n"
+    "for kind in ['roc', 'pr']:\n"
+    "    save_png(kind, f'report/{kind}.png')\n"
+    "open('report/metrics.txt', 'w').write(str(scores))\n"
+    "total = sum(scores)"
+)
 TAIL = "print('total', total)"
 # Reads files the planner cannot name, so it cannot prove any write unread.
 TAIL_READING_FILES = "print('total', total, [len(open(p).read()) for p in files])"

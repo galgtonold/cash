@@ -8,6 +8,7 @@ had used the default backend first (so ``.cash/`` exists) died with
 looks for entries in a directory, reported "nothing here" either way.
 ``SQLiteBackend``'s own default says ``.cash/cache.db``.
 """
+
 from __future__ import annotations
 
 import os
@@ -17,7 +18,7 @@ import textwrap
 
 import pytest
 
-PROGRAM = textwrap.dedent('''
+PROGRAM = textwrap.dedent("""
     import time
     import cash
 
@@ -27,7 +28,7 @@ PROGRAM = textwrap.dedent('''
         return n * 2
 
     print("RESULT", slow(3))
-''')
+""")
 
 
 def _project(tmp_path, pyproject):
@@ -37,16 +38,24 @@ def _project(tmp_path, pyproject):
 
 
 def _run(project, *args):
-    done = subprocess.run([sys.executable, *(args or ("run.py",))], cwd=str(project),
-                          capture_output=True, text=True, timeout=180,
-                          env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+    done = subprocess.run(
+        [sys.executable, *(args or ("run.py",))],
+        cwd=str(project),
+        capture_output=True,
+        text=True,
+        timeout=180,
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+    )
     return done
 
 
-@pytest.mark.parametrize("pyproject", [
-    '[tool.cash]\nbackend = "sqlite"\n',
-    '[tool.cash]\n[[tool.cash.tiers]]\ntype = "sqlite"\n',
-])
+@pytest.mark.parametrize(
+    "pyproject",
+    [
+        '[tool.cash]\nbackend = "sqlite"\n',
+        '[tool.cash]\n[[tool.cash.tiers]]\ntype = "sqlite"\n',
+    ],
+)
 @pytest.mark.timeout(300)
 def test_the_database_goes_inside_the_cache_directory(tmp_path, pyproject):
     project = _project(tmp_path, pyproject)
@@ -58,8 +67,8 @@ def test_the_database_goes_inside_the_cache_directory(tmp_path, pyproject):
 
 @pytest.mark.timeout(300)
 def test_it_does_not_crash_when_the_cache_directory_already_exists(tmp_path):
-    project = _project(tmp_path, '[tool.cash]\n')
-    assert "RESULT 6" in _run(project).stdout                  # default backend makes .cash/
+    project = _project(tmp_path, "[tool.cash]\n")
+    assert "RESULT 6" in _run(project).stdout  # default backend makes .cash/
     (project / "pyproject.toml").write_text('[tool.cash]\nbackend = "sqlite"\n', encoding="utf-8")
     done = _run(project)
     assert "RESULT 6" in done.stdout, done.stderr[-1500:]
@@ -72,7 +81,8 @@ def test_a_database_at_the_old_location_keeps_working(tmp_path):
     `.cash`; the fix must not make `makedirs` crash on it, or lose it."""
     project = _project(tmp_path, '[tool.cash]\nbackend = "sqlite"\n')
     import sqlite3
-    sqlite3.connect(str(project / ".cash")).close()            # the old layout
+
+    sqlite3.connect(str(project / ".cash")).close()  # the old layout
     done = _run(project)
     assert "RESULT 6" in done.stdout, done.stderr[-1500:]
     assert "Traceback" not in done.stderr, done.stderr[-1500:]

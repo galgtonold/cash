@@ -6,6 +6,7 @@ code on every run -- and in one report an unrelated false positive
 Each silenced pattern below has a control next to it that must still warn: the
 point is to stop the noise, not to go quiet on the code the warning is for.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -46,6 +47,7 @@ def _ambient(fn):
 
 # -- fresh locals ------------------------------------------------------------
 
+
 def tuple_unpacked(n):
     a, b = [], []
     for i in range(n):
@@ -69,8 +71,9 @@ def pipeline(path, products):
     return df
 
 
-@pytest.mark.parametrize("fn", [tuple_unpacked, view_of_a_local, pipeline],
-                         ids=["r17s2-tuple-unpack", "r17s4-local-view", "r17s1-pipeline"])
+@pytest.mark.parametrize(
+    "fn", [tuple_unpacked, view_of_a_local, pipeline], ids=["r17s2-tuple-unpack", "r17s4-local-view", "r17s1-pipeline"]
+)
 def test_mutating_what_the_function_made_is_not_flagged(fn):
     assert not _mutations(fn), _mutations(fn)
 
@@ -88,12 +91,12 @@ def mutates_a_view_of_a_parameter(arr):
 
 def mutates_a_helpers_result(path):
     df = read_export(path)
-    df["x"] = 1                     # before any copy: may be someone else's
+    df["x"] = 1  # before any copy: may be someone else's
     return df
 
 
 def mutates_what_fit_returned(model, x):
-    model = model.fit(x)            # sklearn returns self
+    model = model.fit(x)  # sklearn returns self
     model.coef_ = 0
     return model
 
@@ -107,14 +110,21 @@ def mutates_an_element_of_a_fresh_dict():
 def rebinds_in_a_loop(groups):
     x = []
     for x in groups:
-        x.append(1)                 # the caller's lists
+        x.append(1)  # the caller's lists
     return groups
 
 
-@pytest.mark.parametrize("fn", [
-    mutates_a_parameter, mutates_a_view_of_a_parameter, mutates_a_helpers_result,
-    mutates_what_fit_returned, mutates_an_element_of_a_fresh_dict, rebinds_in_a_loop,
-])
+@pytest.mark.parametrize(
+    "fn",
+    [
+        mutates_a_parameter,
+        mutates_a_view_of_a_parameter,
+        mutates_a_helpers_result,
+        mutates_what_fit_returned,
+        mutates_an_element_of_a_fresh_dict,
+        rebinds_in_a_loop,
+    ],
+)
 def test_mutating_what_someone_else_holds_still_warns(fn):
     """The controls. `rebinds_in_a_loop` was silent BEFORE this change too:
     the old rule ignored for-loop bindings, so `x = []` made `x` fresh."""
@@ -122,6 +132,7 @@ def test_mutating_what_someone_else_holds_still_warns(fn):
 
 
 # -- ambient reads that only reach a log line ---------------------------------
+
 
 def timed_in_a_print(files):
     for p in files:
@@ -158,13 +169,13 @@ def test_a_timer_only_logged_is_not_an_ambient_read():
     assert not _ambient(timed_in_a_logger)
 
 
-@pytest.mark.parametrize("fn", [returns_the_clock, logs_and_returns_the_clock,
-                                the_clock_decides])
+@pytest.mark.parametrize("fn", [returns_the_clock, logs_and_returns_the_clock, the_clock_decides])
 def test_a_clock_that_reaches_the_result_still_warns(fn):
     assert _ambient(fn), f"{fn.__name__} went quiet"
 
 
 # -- where the finding is -----------------------------------------------------
+
 
 def test_lines_are_file_lines_and_the_file_is_named():
     """Lines counted from the decorator sent three testers to the wrong line."""
@@ -188,10 +199,12 @@ def test_the_warning_names_the_defining_file(tmp_path):
 
 # -- printed once -------------------------------------------------------------
 
+
 def test_key_opaque_callable_prints_once_in_a_plain_script(tmp_path):
     """It went to logging's last-resort handler AND to warnings: twice."""
     script = tmp_path / "job.py"
-    script.write_text(textwrap.dedent("""
+    script.write_text(
+        textwrap.dedent("""
         import cash
 
         class Opaque:
@@ -202,11 +215,14 @@ def test_key_opaque_callable_prints_once_in_a_plain_script(tmp_path):
             return cb(x)
 
         f(Opaque(), -5)
-    """), encoding="utf-8")
+    """),
+        encoding="utf-8",
+    )
     env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
     env["CASH_CACHE_DIR"] = str(tmp_path / ".cash")
-    out = subprocess.run([sys.executable, str(script)], capture_output=True, text=True,
-                         env=env, encoding="utf-8", errors="replace")
+    out = subprocess.run(
+        [sys.executable, str(script)], capture_output=True, text=True, env=env, encoding="utf-8", errors="replace"
+    )
     assert out.stderr.count("[KEY-OPAQUE-CALLABLE]") == 1, out.stderr
 
 
@@ -215,6 +231,7 @@ def test_a_configured_log_still_gets_it():
     import logging
 
     from cash.diagnostics import log_diagnostic
+
     records = []
 
     class Grab(logging.Handler):

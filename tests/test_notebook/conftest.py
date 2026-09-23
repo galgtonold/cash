@@ -1,6 +1,7 @@
 """Fixtures shared across ``tests/test_notebook`` (in addition to the
 repo-root ``tests/conftest.py``, which pytest already applies here too).
 """
+
 from __future__ import annotations
 
 import pytest
@@ -29,9 +30,7 @@ def call_unit_harness():
         state = {"lineage": dict(lineage), "user_ns": dict(user_ns)}
 
         def ctx_provider():
-            return CacheKeyContext(
-                variable_lineage=state["lineage"], user_ns=state["user_ns"]
-            )
+            return CacheKeyContext(variable_lineage=state["lineage"], user_ns=state["user_ns"])
 
         unit = CallUnit(cash_instance=_fresh_cash_instance(), ctx_provider=ctx_provider)
         unit.set_lineage = lambda new: state.__setitem__("lineage", dict(new))

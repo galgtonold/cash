@@ -3,6 +3,7 @@ Batch 313: Sorting with custom key functions interaction tests.
 Tests that editing sort keys or comparison functions properly
 invalidates sorted outputs downstream.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.interaction, pytest.mark.stress, pytest.mark.timeout(90)]
@@ -13,13 +14,15 @@ class TestSortingKeyInteraction:
 
     def test_sort_by_key_edit(self, nb_runner):
         """Editing sort key function should propagate."""
-        nb_runner.create_notebook([
-            "items = [('banana', 3), ('apple', 1), ('cherry', 2)]",
-            "def sort_key(item):\n    return item[0]",
-            "sorted_items = sorted(items, key=sort_key)",
-            "result = [x[0] for x in sorted_items]",
-            "print(f'result={result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "items = [('banana', 3), ('apple', 1), ('cherry', 2)]",
+                "def sort_key(item):\n    return item[0]",
+                "sorted_items = sorted(items, key=sort_key)",
+                "result = [x[0] for x in sorted_items]",
+                "print(f'result={result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(5)
@@ -33,12 +36,14 @@ class TestSortingKeyInteraction:
 
     def test_sort_reverse_edit(self, nb_runner):
         """Editing sort direction should propagate."""
-        nb_runner.create_notebook([
-            "data = [5, 3, 8, 1, 9]",
-            "ascending = True",
-            "ordered = sorted(data, reverse=not ascending)",
-            "print(f'ordered={ordered}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = [5, 3, 8, 1, 9]",
+                "ascending = True",
+                "ordered = sorted(data, reverse=not ascending)",
+                "print(f'ordered={ordered}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(4)
@@ -51,13 +56,15 @@ class TestSortingKeyInteraction:
 
     def test_multi_key_sort_edit(self, nb_runner):
         """Editing multi-key sort criteria should propagate."""
-        nb_runner.create_notebook([
-            "records = [('Alice', 85), ('Bob', 92), ('Charlie', 85), ('David', 92)]",
-            "def multi_key(r):\n    return (-r[1], r[0])",
-            "ranked = sorted(records, key=multi_key)",
-            "names = [r[0] for r in ranked]",
-            "print(f'names={names}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "records = [('Alice', 85), ('Bob', 92), ('Charlie', 85), ('David', 92)]",
+                "def multi_key(r):\n    return (-r[1], r[0])",
+                "ranked = sorted(records, key=multi_key)",
+                "names = [r[0] for r in ranked]",
+                "print(f'names={names}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(5)

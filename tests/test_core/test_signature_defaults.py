@@ -17,6 +17,7 @@ The tests below pin both directions. Retraining on a changed default is the fix;
 **still hitting on an unchanged default** is the regression that would make the
 fix worse than the bug.
 """
+
 from __future__ import annotations
 
 import tempfile
@@ -69,9 +70,11 @@ def _make_train(n_default):
     even when source IS available -- i.e. a plain .py file whose default is
     driven by a config constant, not just a notebook.
     """
+
     def train(x, n_estimators=n_default):
         _RUNS.append("train")
         return ("model", n_estimators)
+
     return train
 
 
@@ -241,10 +244,9 @@ def test_unhashable_default_fails_safe():
         assert wrapped(3) == 6
 
     assert len(_RUNS) == 2, "cached despite an unhashable default it cannot check"
-    assert any(
-        issubclass(w.category, CashCacheIneffectiveWarning) and "default" in str(w.message)
-        for w in caught
-    ), f"no warning naming the default: {[str(w.message) for w in caught]}"
+    assert any(issubclass(w.category, CashCacheIneffectiveWarning) and "default" in str(w.message) for w in caught), (
+        f"no warning naming the default: {[str(w.message) for w in caught]}"
+    )
 
 
 def test_mutable_default_is_not_frozen_at_first_call():

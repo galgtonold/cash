@@ -12,14 +12,14 @@ anyway, and served as a hit (round 28, r28s5: ~400 MiB frames restoring in
 
 def _waivers(cash_magics, tmp_path):
     from cash.notebook.statement.processor import StatementProcessor
+
     orig = StatementProcessor._should_skip_large_object_caching
     seen = {}
 
     def spy(self, captured_vars, execution_time, force_persist, has_file_dependencies=False):
         for name in captured_vars:
             seen[name] = has_file_dependencies
-        return orig(self, captured_vars, execution_time, force_persist,
-                    has_file_dependencies=has_file_dependencies)
+        return orig(self, captured_vars, execution_time, force_persist, has_file_dependencies=has_file_dependencies)
 
     StatementProcessor._should_skip_large_object_caching = spy
     try:
@@ -27,7 +27,9 @@ def _waivers(cash_magics, tmp_path):
         path.write_text("a,b\n" + "\n".join(f"{i},{i * 2}" for i in range(2000)), encoding="utf-8")
         cash_magics.cash("", f"import pandas as pd\ndf = pd.read_csv(r'{path}')")
         # Real work, so it clears the too-cheap floor and reaches the check.
-        cash_magics.cash("", "big = pd.concat([df] * 50, ignore_index=True).assign(w=sum(i * i for i in range(400_000)))")
+        cash_magics.cash(
+            "", "big = pd.concat([df] * 50, ignore_index=True).assign(w=sum(i * i for i in range(400_000)))"
+        )
     finally:
         StatementProcessor._should_skip_large_object_caching = orig
     return seen

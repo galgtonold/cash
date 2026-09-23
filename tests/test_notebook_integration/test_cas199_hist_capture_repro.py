@@ -15,6 +15,7 @@ identity-coupled (live Axes/Figure) receiver as a draw even when its return is
 captured, keyed on the RECEIVER (not the return type, not the statement shape),
 so a genuine pure capture (``m = df.corr()``, DataFrame receiver) still caches.
 """
+
 import pytest
 from conftest import shows_cached
 
@@ -40,18 +41,18 @@ def test_captured_hist_survives_figure_reconstruction(nb_runner, tmp_path):
     """
     chart = (tmp_path / "panel.png").as_posix()
     blank = (tmp_path / "blank.png").as_posix()
-    nb_runner.create_notebook([
-        SETUP,
-        "data = np.arange(500) % 11",
-        "fig, (axp, axh) = plt.subplots(1, 2, figsize=(8, 3), dpi=100)",
-        "axp.plot(range(20), [i * i for i in range(20)])",       # artist-return control (CAS-194)
-        "counts, bins, patches = axh.hist(data, bins=11)",       # CAPTURED data-tuple return
-        f"fig.savefig('{chart}')\n"
-        "print('LINES:', len(axp.lines), 'PATCH:', len(axh.patches))",
-        # A same-geometry blank baseline for the pixel check.
-        f"figb, axb = plt.subplots(1, 2, figsize=(8, 3), dpi=100)\n"
-        f"figb.savefig('{blank}')\nprint('blank saved')",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            "data = np.arange(500) % 11",
+            "fig, (axp, axh) = plt.subplots(1, 2, figsize=(8, 3), dpi=100)",
+            "axp.plot(range(20), [i * i for i in range(20)])",  # artist-return control (CAS-194)
+            "counts, bins, patches = axh.hist(data, bins=11)",  # CAPTURED data-tuple return
+            f"fig.savefig('{chart}')\nprint('LINES:', len(axp.lines), 'PATCH:', len(axh.patches))",
+            # A same-geometry blank baseline for the pixel check.
+            f"figb, axb = plt.subplots(1, 2, figsize=(8, 3), dpi=100)\nfigb.savefig('{blank}')\nprint('blank saved')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "LINES: 1 PATCH: 11" in nb_runner.get_output(6)
@@ -73,6 +74,7 @@ def test_captured_hist_survives_figure_reconstruction(nb_runner, tmp_path):
     # The chart on disk must not be a blank two-axes render.
     import numpy as np
     from matplotlib import image as mpimg
+
     chart_px = mpimg.imread(tmp_path / "panel.png")
     blank_px = mpimg.imread(tmp_path / "blank.png")
     differing = float((np.abs(chart_px - blank_px) > 0.01).any(axis=-1).mean())
@@ -94,13 +96,15 @@ def test_captured_pie_sibling_survives_reconstruction(nb_runner, tmp_path):
     its wedges were never redrawn (WEDGES: 0).
     """
     chart = (tmp_path / "pie.png").as_posix()
-    nb_runner.create_notebook([
-        SETUP,
-        "sizes = [30, 20, 50]",
-        "fig, ax = plt.subplots(figsize=(3, 3), dpi=100)",
-        "wedges, texts = ax.pie(sizes)",                         # CAPTURED tuple return
-        f"fig.savefig('{chart}')\nprint('WEDGES:', len(ax.patches))",
-    ])
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            "sizes = [30, 20, 50]",
+            "fig, ax = plt.subplots(figsize=(3, 3), dpi=100)",
+            "wedges, texts = ax.pie(sizes)",  # CAPTURED tuple return
+            f"fig.savefig('{chart}')\nprint('WEDGES:', len(ax.patches))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "WEDGES: 3" in nb_runner.get_output(5)
@@ -125,11 +129,13 @@ def test_pure_capture_on_ordinary_receiver_still_caches(nb_runner):
     model keeps it, so CACHED is a real signal (a cheap op the cost model
     declines would make the assertion vacuous).
     """
-    nb_runner.create_notebook([
-        "import pandas as pd\nimport numpy as np\nimport cash\n%cash_on\n%cash_badge print",
-        "df = pd.DataFrame(np.random.RandomState(0).randn(300000, 40))",
-        "m = df.corr()\nprint('SHAPE:', m.shape)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import pandas as pd\nimport numpy as np\nimport cash\n%cash_on\n%cash_badge print",
+            "df = pd.DataFrame(np.random.RandomState(0).randn(300000, 40))",
+            "m = df.corr()\nprint('SHAPE:', m.shape)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 

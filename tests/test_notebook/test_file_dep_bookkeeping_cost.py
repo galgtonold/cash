@@ -12,6 +12,7 @@ nearly all of it in the same place (2026-09-14):
   iteration, but its recorded files were MERGED, so iteration k snapshotted all
   k files so far: 865,265 hashes in one cell.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -44,6 +45,7 @@ class _Frame:
 # Rebinding replaces a variable's files; an in-place change adds to them.    #
 # --------------------------------------------------------------------------- #
 
+
 def test_a_rebound_variable_keeps_only_its_new_files(tmp_path):
     a, b = _aged(tmp_path, "a.csv"), _aged(tmp_path, "b.csv")
     state, deps = _state(), StatementFileDeps()
@@ -73,6 +75,7 @@ def test_a_restored_variable_carries_exactly_its_entry_files(tmp_path):
 # One digest per file per cell run.                                          #
 # --------------------------------------------------------------------------- #
 
+
 @pytest.fixture(autouse=True)
 def _no_cell_run_leaks(monkeypatch):
     """Each test starts and ends outside any cell run."""
@@ -83,8 +86,9 @@ def _no_cell_run_leaks(monkeypatch):
 @pytest.fixture
 def count_hashes(monkeypatch):
     hashed: list[int] = []
-    monkeypatch.setattr(file_dep_snapshot, "hashlib", types.SimpleNamespace(
-        sha256=lambda *a: hashed.append(1) or hashlib.sha256(*a)))
+    monkeypatch.setattr(
+        file_dep_snapshot, "hashlib", types.SimpleNamespace(sha256=lambda *a: hashed.append(1) or hashlib.sha256(*a))
+    )
     file_dep_snapshot._HASH_MEMO.clear()
     yield hashed
     file_dep_snapshot._HASH_MEMO.clear()
@@ -98,12 +102,12 @@ def test_one_cell_run_hashes_each_file_once(tmp_path, monkeypatch, count_hashes)
     monkeypatch.setattr(file_dep_snapshot.time, "monotonic", lambda: clock[0])
     file_dep_snapshot.begin_file_state_epoch()
     file_dep_snapshot.file_content_hash(path)
-    clock[0] += 600                                 # ten minutes into the same cell
+    clock[0] += 600  # ten minutes into the same cell
     file_dep_snapshot.file_content_hash(path)
     assert len(count_hashes) == 1, "one cell run hashed an unchanged file twice"
     file_dep_snapshot.end_file_state_epoch()
 
-    file_dep_snapshot.begin_file_state_epoch()      # the next cell looks again
+    file_dep_snapshot.begin_file_state_epoch()  # the next cell looks again
     file_dep_snapshot.file_content_hash(path)
     assert len(count_hashes) == 2
     file_dep_snapshot.end_file_state_epoch()
@@ -137,7 +141,7 @@ def test_a_nested_cell_run_is_the_same_run(tmp_path, monkeypatch, count_hashes):
     file_dep_snapshot.file_content_hash(path)
     file_dep_snapshot.end_file_state_epoch()
     clock[0] += 60
-    file_dep_snapshot.file_content_hash(path)       # still the outer run
+    file_dep_snapshot.file_content_hash(path)  # still the outer run
     file_dep_snapshot.end_file_state_epoch()
     assert len(count_hashes) == 1
 
@@ -186,11 +190,10 @@ def test_without_a_file_identity_the_path_keeps_files_apart(tmp_path, count_hash
     a = _aged(tmp_path, "a.csv", b"x" * 2048)
     b = _aged(tmp_path, "b.csv", b"y" * 2048)
     fields = list(os.stat(a))
-    fields[1] = 0                                    # st_ino
+    fields[1] = 0  # st_ino
     same = os.stat_result(fields)
     file_dep_snapshot.begin_file_state_epoch()
-    assert (file_dep_snapshot.file_content_hash(a, st=same)
-            != file_dep_snapshot.file_content_hash(b, st=same))
+    assert file_dep_snapshot.file_content_hash(a, st=same) != file_dep_snapshot.file_content_hash(b, st=same)
 
 
 def test_an_edit_between_cell_runs_is_seen(tmp_path, monkeypatch, count_hashes):

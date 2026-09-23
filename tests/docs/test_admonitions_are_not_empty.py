@@ -20,12 +20,11 @@ length of 0. Indenting the comment fixes it, and the claim parser already
 Source-level rather than render-level on purpose: it needs no build, no
 browser, and it names the offending line.
 """
+
 from __future__ import annotations
 
 import pathlib
 import re
-
-import pytest
 
 DOCS = pathlib.Path(__file__).resolve().parents[2] / "docs"
 _TITLE = re.compile(r"^(\?{3}\+?|!{3})\s")
@@ -48,11 +47,7 @@ def _offenders(path: pathlib.Path) -> list[tuple[int, str, str]]:
 
 
 def test_no_admonition_is_orphaned_from_its_body():
-    found = {
-        p.relative_to(DOCS).as_posix(): _offenders(p)
-        for p in _pages()
-        if _offenders(p)
-    }
+    found = {p.relative_to(DOCS).as_posix(): _offenders(p) for p in _pages() if _offenders(p)}
     assert not found, "\n".join(
         f"{page}:{ln} — the line after this admonition title is not indented, "
         f"so the block renders EMPTY.\n    title: {title}\n    next : {nxt}"
@@ -65,18 +60,14 @@ def test_the_check_can_actually_fire(tmp_path):
     """Positive control. A scan that matches nothing passes vacuously."""
     broken = tmp_path / "broken.md"
     broken.write_text(
-        '??? question "Title"\n'
-        "<!-- claim: cash/core.py:Thing @deadbeef -->\n"
-        "    body text\n",
+        '??? question "Title"\n<!-- claim: cash/core.py:Thing @deadbeef -->\n    body text\n',
         encoding="utf-8",
     )
     assert _offenders(broken), "the detector missed a known-broken admonition"
 
     ok = tmp_path / "ok.md"
     ok.write_text(
-        '??? question "Title"\n'
-        "    <!-- claim: cash/core.py:Thing @deadbeef -->\n"
-        "    body text\n",
+        '??? question "Title"\n    <!-- claim: cash/core.py:Thing @deadbeef -->\n    body text\n',
         encoding="utf-8",
     )
     assert not _offenders(ok), "the detector flagged a correctly-indented body"
@@ -84,10 +75,5 @@ def test_the_check_can_actually_fire(tmp_path):
 
 def test_there_are_admonitions_to_check():
     """Non-vacuity: the glob must actually be finding admonitions."""
-    total = sum(
-        1
-        for p in _pages()
-        for line in p.read_text(encoding="utf-8").splitlines()
-        if _TITLE.match(line)
-    )
+    total = sum(1 for p in _pages() for line in p.read_text(encoding="utf-8").splitlines() if _TITLE.match(line))
     assert total > 20, f"only {total} admonitions found; the scan looks broken"

@@ -9,6 +9,7 @@ to refresh the constants.
 Constants source: ``benchmarks/results/ser_deser_matrix.frozen.csv``
 (committed alongside this module).
 """
+
 from __future__ import annotations
 
 # Map runtime ``type(value).__name__`` strings to the family used in the
@@ -22,7 +23,7 @@ _TYPE_TO_FAMILY: dict[str, str] = {
     "csc_matrix": "sparse",
     "dict": "dict_shallow",
     "list": "list_flat",
-    "tuple": "list_flat",          # treat like list for cost
+    "tuple": "list_flat",  # treat like list for cost
     "bytes": "bytes",
     "bytearray": "bytes",
 }
@@ -83,8 +84,8 @@ _COEFFS: dict[tuple[str, str, str], tuple[float, float]] = {
     ("_GENERIC", "s3", "serialize"): (8.015874e-02, 5.000000e-08),  # derived, not measured
     ("bytes", "disk", "deserialize"): (6.589985e-03, 6.508211e-10),  # R2=1.000 n=6 worst=1.1x
     ("bytes", "disk", "serialize"): (6.787004e-04, 1.192182e-09),  # R2=0.827 n=6 worst=1.6x
-    ("bytes", "ram", "deserialize"): (5.299982e-06, 0.000000e+00),  # R2=-0.364 n=6 worst=1.1x
-    ("bytes", "ram", "serialize"): (1.615001e-05, 0.000000e+00),  # R2=-0.028 n=6 worst=1.1x
+    ("bytes", "ram", "deserialize"): (5.299982e-06, 0.000000e00),  # R2=-0.364 n=6 worst=1.1x
+    ("bytes", "ram", "serialize"): (1.615001e-05, 0.000000e00),  # R2=-0.028 n=6 worst=1.1x
     ("bytes", "redis", "deserialize"): (1.158999e-03, 2.000000e-08),  # derived, not measured
     ("bytes", "redis", "serialize"): (5.678700e-04, 2.000000e-08),  # derived, not measured
     ("bytes", "s3", "deserialize"): (8.131800e-02, 5.000000e-08),  # derived, not measured

@@ -14,6 +14,7 @@ report use the refitted model.
 Everything here is a pure function of its arguments. The callers decide which
 ingredients they have; this module decides how they combine.
 """
+
 from __future__ import annotations
 
 import ast
@@ -30,11 +31,15 @@ logger = logging.getLogger(__name__)
 def read_module_source_hash(mod_file: str, dep_files: set[str] | None = None) -> str | None:
     # Imported on use: the ``statement`` package imports this module.
     from .statement.file_deps import read_module_source_hash as read
+
     return read(mod_file, dep_files)
 
 
 def module_read_lineage(
-    function_tracker: Any, var_name: str, value: Any, code: str | None,
+    function_tracker: Any,
+    var_name: str,
+    value: Any,
+    code: str | None,
 ) -> str | None:
     """What a statement reading module *var_name* depends on, narrowed to the
     names it reads -- or None, meaning the module's whole lineage, as before.
@@ -69,6 +74,7 @@ def module_read_lineage(
     if not (mod_file and os.path.isfile(mod_file) and names & _tracked(function_tracker)):
         return None
     from .module_symbols import static_attribute_reads
+
     attrs = static_attribute_reads(code, var_name)
     if not attrs:
         return None
@@ -83,8 +89,7 @@ def output_lineage(
     module_component: str = "",
 ) -> str:
     """The lineage hash of one output of a statement."""
-    lineage_str = (f"{source_hash}:{':'.join(sorted(input_lineages))}"
-                   f"{file_component}{func_component}{module_component}")
+    lineage_str = f"{source_hash}:{':'.join(sorted(input_lineages))}{file_component}{func_component}{module_component}"
     return hashlib.sha256(lineage_str.encode("utf-8")).hexdigest()
 
 
@@ -103,7 +108,11 @@ def _tracked(function_tracker: Any) -> set[str]:
 
 
 def _closure_with_deps(
-    function_tracker: Any, mod_file: str, owners: set[str], attrs: Iterable[str], tag: str,
+    function_tracker: Any,
+    mod_file: str,
+    owners: set[str],
+    attrs: Iterable[str],
+    tag: str,
 ) -> str | None:
     """What *attrs* reach inside *mod_file*, plus the module's tracked
     dependency files whole; None when the closure cannot be bounded.
@@ -113,6 +122,7 @@ def _closure_with_deps(
     (:func:`_from_module_hash`) -- so they bound a closure the same way.
     """
     from .module_symbols import closure_digest
+
     digest = closure_digest(mod_file, attrs)
     if digest is None:
         return None
@@ -141,8 +151,7 @@ def _from_module_hash(module_name: str, function_tracker: Any, name: str | None 
     if not (mod_file and os.path.isfile(mod_file)):
         return ""
     if name is not None:
-        narrowed = _closure_with_deps(
-            function_tracker, mod_file, {module_name}, {name}, "fromsym:" + module_name)
+        narrowed = _closure_with_deps(function_tracker, mod_file, {module_name}, {name}, "fromsym:" + module_name)
         if narrowed is not None:
             return f":from_sym_src:{narrowed}"
     digest = read_module_source_hash(mod_file)
@@ -158,7 +167,7 @@ def imported_from(var_name: str, code: str, tree: ast.Module | None = None) -> t
     for node in parsed.body:
         if isinstance(node, ast.ImportFrom) and node.module:
             for alias in node.names:
-                if (alias.asname or alias.name) == var_name and alias.name != '*':
+                if (alias.asname or alias.name) == var_name and alias.name != "*":
                     return node.module, alias.name
     return None
 
@@ -205,8 +214,7 @@ def module_source_component(
         # name keeps working; for an unaliased import the two are equal, so
         # no existing lineage moves.
         names = {getattr(value, "__name__", var_name), var_name}
-        if not (mod_file and os.path.isfile(mod_file)
-                and names & _tracked(function_tracker)):
+        if not (mod_file and os.path.isfile(mod_file) and names & _tracked(function_tracker)):
             return ""
         parents = getattr(function_tracker, "_dep_file_to_parents", None) or {}
         dep_files = {dep for dep, owners in parents.items() if names & set(owners)}
@@ -222,8 +230,7 @@ def module_source_component(
         # Narrowed only when THIS statement is the `from ... import` that bound
         # it. A callable a module function returns (`fn = helpers.make()`)
         # has no import to read a name from, and keeps the whole module.
-        return _from_module_hash(obj_module, function_tracker,
-                                 _imported_name(var_name, code, tree))
+        return _from_module_hash(obj_module, function_tracker, _imported_name(var_name, code, tree))
 
     try:
         parsed = tree if tree is not None else ast.parse(code.strip())

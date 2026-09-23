@@ -18,6 +18,7 @@ whereas under ``nb_runner`` it lands in a subprocess kernel's cell stderr and ca
 only be string-matched. The real-kernel end of the contract lives in
 ``tests/test_notebook_integration/test_allow_random_annotation_integration.py``.
 """
+
 from __future__ import annotations
 
 import warnings
@@ -89,7 +90,8 @@ class TestWarningEmitted:
     def test_unseeded_random_warns(self, magics_fixture):
         magics, _shell, _backend, _cash = magics_fixture
         caught = _run_capturing_warnings(
-            magics, "import numpy as np\nx = np.random.rand(1000)",
+            magics,
+            "import numpy as np\nx = np.random.rand(1000)",
         )
         assert len(caught) == 1
         msg = str(caught[0].message)
@@ -101,7 +103,8 @@ class TestWarningEmitted:
         place the directive is discoverable from the notebook itself."""
         magics, _shell, _backend, _cash = magics_fixture
         caught = _run_capturing_warnings(
-            magics, "import random\nx = random.random()",
+            magics,
+            "import random\nx = random.random()",
         )
         assert len(caught) == 1
         assert "@cash:allow-random" in str(caught[0].message)
@@ -109,7 +112,8 @@ class TestWarningEmitted:
     def test_stdlib_random_warns(self, magics_fixture):
         magics, _shell, _backend, _cash = magics_fixture
         caught = _run_capturing_warnings(
-            magics, "import random\nx = random.randint(0, 10)",
+            magics,
+            "import random\nx = random.randint(0, 10)",
         )
         assert len(caught) == 1
         assert "random.randint" in str(caught[0].message)
@@ -161,7 +165,8 @@ class TestWarningClassContract:
         the statement is compiled under — rather than leaking an internal path."""
         magics, _shell, _backend, _cash = magics_fixture
         caught = _run_capturing_warnings(
-            magics, "import numpy as np\nx = np.random.rand(1000)",
+            magics,
+            "import numpy as np\nx = np.random.rand(1000)",
         )
         assert len(caught) == 1
         assert caught[0].filename == "<cash>"
@@ -197,11 +202,7 @@ class TestSuppression:
         magics, _shell, _backend, _cash = magics_fixture
         caught = _run_capturing_warnings(
             magics,
-            "import numpy as np\n"
-            "# @cash:allow-random\n"
-            "quiet = np.random.rand(1000)\n"
-            "\n"
-            "loud = np.random.randn(1000)\n",
+            "import numpy as np\n# @cash:allow-random\nquiet = np.random.rand(1000)\n\nloud = np.random.randn(1000)\n",
         )
         assert len(caught) == 1
         assert "numpy.random.randn" in str(caught[0].message)
@@ -292,10 +293,12 @@ class TestDedupe:
         """Dedupe keys on source, so edited code is a new warning."""
         magics, _shell, _backend, _cash = magics_fixture
         first = _run_capturing_warnings(
-            magics, "import numpy as np\nx = np.random.rand(1000)",
+            magics,
+            "import numpy as np\nx = np.random.rand(1000)",
         )
         second = _run_capturing_warnings(
-            magics, "import numpy as np\nx = np.random.rand(2000)",
+            magics,
+            "import numpy as np\nx = np.random.rand(2000)",
         )
         assert len(first) == 1
         assert len(second) == 1
@@ -304,9 +307,7 @@ class TestDedupe:
         magics, _shell, _backend, _cash = magics_fixture
         caught = _run_capturing_warnings(
             magics,
-            "import numpy as np\n"
-            "a = np.random.rand(1000)\n"
-            "b = np.random.randn(1000)\n",
+            "import numpy as np\na = np.random.rand(1000)\nb = np.random.randn(1000)\n",
         )
         assert len(caught) == 2
 
@@ -317,10 +318,7 @@ class TestDedupe:
         magics, _shell, _backend, _cash = magics_fixture
         caught = _run_capturing_warnings(
             magics,
-            "import numpy as np\n"
-            "acc = []\n"
-            "for i in range(50):\n"
-            "    acc.append(np.random.rand())\n",
+            "import numpy as np\nacc = []\nfor i in range(50):\n    acc.append(np.random.rand())\n",
         )
         assert len(caught) == 1
 
@@ -336,12 +334,7 @@ class TestAnnotationDoesNotChangeCacheability:
 
     def test_annotated_statement_still_restores_from_cache(self, magics_fixture):
         magics, _shell, _backend, _cash = magics_fixture
-        code = (
-            "import numpy as np\n"
-            "# @cash:persist\n"
-            "# @cash:allow-random\n"
-            "x = np.random.rand(1000)"
-        )
+        code = "import numpy as np\n# @cash:persist\n# @cash:allow-random\nx = np.random.rand(1000)"
         magics.cash("", code)
         m = _last_metric(magics, code)
         assert m["status"] == CacheStatus.RESTORED
@@ -402,18 +395,17 @@ class TestStaleRandomnessAnnouncedOnRestore:
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always")
                 magics.cash("", code)
-            per_run.append([
-                str(w.message) for w in caught
-                if issubclass(w.category, CashRandomnessWarning)
-            ])
+            per_run.append([str(w.message) for w in caught if issubclass(w.category, CashRandomnessWarning)])
         return per_run
 
     def test_restore_announces_the_replay(self, magics_fixture):
         magics, shell, _backend, _cash = magics_fixture
         import numpy as np
-        shell.user_ns['np'] = np
+
+        shell.user_ns["np"] = np
         runs = self._restore_warnings(
-            magics, "# @cash:persist\nx = np.random.rand(200000)",
+            magics,
+            "# @cash:persist\nx = np.random.rand(200000)",
         )
         # Cold run: source-level advice.
         assert len(runs[0]) == 1
@@ -430,13 +422,16 @@ class TestStaleRandomnessAnnouncedOnRestore:
         between run 2 and run 20, so it is stated once per session."""
         magics, shell, _backend, _cash = magics_fixture
         import numpy as np
-        shell.user_ns['np'] = np
+
+        shell.user_ns["np"] = np
         runs = self._restore_warnings(
-            magics, "# @cash:persist\nx = np.random.rand(200000)", runs=4,
+            magics,
+            "# @cash:persist\nx = np.random.rand(200000)",
+            runs=4,
         )
         assert len(runs[0]) == 1  # cold: "detected"
         assert len(runs[1]) == 1  # first restore: "restored from cache"
-        assert runs[2] == []      # thereafter: silence
+        assert runs[2] == []  # thereafter: silence
         assert runs[3] == []
 
     def test_non_random_restore_is_silent(self, magics_fixture):
@@ -444,7 +439,8 @@ class TestStaleRandomnessAnnouncedOnRestore:
         'you hit the cache' banner over every restore in the notebook."""
         magics, _shell, _backend, _cash = magics_fixture
         runs = self._restore_warnings(
-            magics, "# @cash:persist\ny = sum(i * i for i in range(200000))",
+            magics,
+            "# @cash:persist\ny = sum(i * i for i in range(200000))",
         )
         assert runs == [[], []]
 
@@ -453,10 +449,12 @@ class TestStaleRandomnessAnnouncedOnRestore:
         what a recompute would produce, so there is nothing to report."""
         magics, shell, _backend, _cash = magics_fixture
         import numpy as np
-        shell.user_ns['np'] = np
+
+        shell.user_ns["np"] = np
         magics.cash("", "np.random.seed(0)")
         runs = self._restore_warnings(
-            magics, "# @cash:persist\nx = np.random.rand(200000)",
+            magics,
+            "# @cash:persist\nx = np.random.rand(200000)",
         )
         assert runs == [[], []]
 
@@ -465,9 +463,11 @@ class TestStaleRandomnessAnnouncedOnRestore:
         none: the user would think they had silenced it and still get noise."""
         magics, shell, _backend, _cash = magics_fixture
         import numpy as np
-        shell.user_ns['np'] = np
+
+        shell.user_ns["np"] = np
         runs = self._restore_warnings(
-            magics, "# @cash:persist\n# @cash:allow-random\nx = np.random.rand(200000)",
+            magics,
+            "# @cash:persist\n# @cash:allow-random\nx = np.random.rand(200000)",
         )
         assert runs == [[], []]
 
@@ -476,9 +476,10 @@ class TestStaleRandomnessAnnouncedOnRestore:
         no-cache, which would silently undo the documented policy."""
         magics, shell, _backend, _cash = magics_fixture
         import numpy as np
-        shell.user_ns['np'] = np
+
+        shell.user_ns["np"] = np
         code = "# @cash:persist\nx = np.random.rand(200000)"
         first = _last_metric(magics, code)
         second = _last_metric(magics, code)
-        assert first['status'] == CacheStatus.COMPUTED
-        assert second['status'] == CacheStatus.RESTORED
+        assert first["status"] == CacheStatus.COMPUTED
+        assert second["status"] == CacheStatus.RESTORED

@@ -23,7 +23,6 @@ def _calls(src: str) -> list[str]:
 
 
 class TestEligibility(unittest.TestCase):
-
     def test_accumulator_fold_extracts_the_call(self):
         """``s += compute(x)`` — compute reads x, not s."""
         self.assertEqual(_calls("s += compute(x)"), ["compute(x)"])
@@ -67,9 +66,7 @@ class TestEligibility(unittest.TestCase):
 
     def test_multiple_independent_calls_are_all_returned(self):
         """Siblings are separate work and each deserves its own entry."""
-        self.assertEqual(
-            _calls("out.append(f(x) + g(y))"), ["f(x)", "g(y)"]
-        )
+        self.assertEqual(_calls("out.append(f(x) + g(y))"), ["f(x)", "g(y)"])
 
     def test_call_reading_the_target_deep_inside_is_excluded(self):
         """The target check must see through attributes and subscripts."""

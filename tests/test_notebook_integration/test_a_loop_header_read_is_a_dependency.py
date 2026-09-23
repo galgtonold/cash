@@ -48,21 +48,18 @@ around it.
 Pre-existing since 2026-05-29 at the latest; reproduced on the round-24, -25
 and -26 builds as well as this one.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 
-LOOP = ("ALIAS = {}\n"
-        "for line in DATA.read_text().splitlines()[1:]:\n"
-        "    o, n = line.split('\\t')\n"
-        "    ALIAS[o] = n")
+LOOP = "ALIAS = {}\nfor line in DATA.read_text().splitlines()[1:]:\n    o, n = line.split('\\t')\n    ALIAS[o] = n"
 
 READ = "print('R', [ALIAS.get(s, s) for s in ['LOC1', 'LOC3']])"
 
 
 def _write(path, third):
-    path.write_text("old\tnew\nLOC1\tGENE_A\nLOC2\tGENE_B\nLOC3\t%s\n" % third,
-                    encoding="utf-8")
+    path.write_text("old\tnew\nLOC1\tGENE_A\nLOC2\tGENE_B\nLOC3\t%s\n" % third, encoding="utf-8")
 
 
 def test_a_for_loop_header_read_invalidates_what_the_loop_built(nb_runner, tmp_path):
@@ -75,12 +72,13 @@ def test_a_for_loop_header_read_invalidates_what_the_loop_built(nb_runner, tmp_p
     data = tmp_path / "alias.tsv"
     _write(data, "GENE_C_OLD")
 
-    nb_runner.create_notebook([
-        "import cash\n%cash_on\nfrom pathlib import Path\n"
-        "DATA = Path(r'" + str(data) + "')",
-        LOOP,
-        READ,
-    ])
+    nb_runner.create_notebook(
+        [
+            "import cash\n%cash_on\nfrom pathlib import Path\nDATA = Path(r'" + str(data) + "')",
+            LOOP,
+            READ,
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "GENE_C_OLD" in nb_runner.get_output(3), nb_runner.get_raw_output(3)
@@ -91,8 +89,7 @@ def test_a_for_loop_header_read_invalidates_what_the_loop_built(nb_runner, tmp_p
     out = nb_runner.get_output(3)
     assert "GENE_C_NEW" in out, (
         "the loop's source file changed and the cell below served the old "
-        "value; a Restart & Run All gives GENE_C_NEW:\n"
-        + nb_runner.get_raw_output(3)
+        "value; a Restart & Run All gives GENE_C_NEW:\n" + nb_runner.get_raw_output(3)
     )
 
 
@@ -106,12 +103,14 @@ def test_the_same_loop_with_its_input_bound_in_a_tracked_cell(nb_runner, tmp_pat
     data = tmp_path / "alias_tracked.tsv"
     _write(data, "GENE_C_OLD")
 
-    nb_runner.create_notebook([
-        "import cash\n%cash_on",
-        "from pathlib import Path\nDATA = Path(r'" + str(data) + "')",
-        LOOP,
-        READ,
-    ])
+    nb_runner.create_notebook(
+        [
+            "import cash\n%cash_on",
+            "from pathlib import Path\nDATA = Path(r'" + str(data) + "')",
+            LOOP,
+            READ,
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "GENE_C_OLD" in nb_runner.get_output(4), nb_runner.get_raw_output(4)
@@ -126,12 +125,13 @@ def test_the_same_shape_written_as_one_statement_already_works(nb_runner, tmp_pa
     data = tmp_path / "alias2.tsv"
     _write(data, "GENE_C_OLD")
 
-    nb_runner.create_notebook([
-        "import cash\n%cash_on\nfrom pathlib import Path\n"
-        "DATA = Path(r'" + str(data) + "')",
-        "ALIAS = dict(l.split('\\t') for l in DATA.read_text().splitlines()[1:])",
-        READ,
-    ])
+    nb_runner.create_notebook(
+        [
+            "import cash\n%cash_on\nfrom pathlib import Path\nDATA = Path(r'" + str(data) + "')",
+            "ALIAS = dict(l.split('\\t') for l in DATA.read_text().splitlines()[1:])",
+            READ,
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "GENE_C_OLD" in nb_runner.get_output(3), nb_runner.get_raw_output(3)
@@ -150,16 +150,17 @@ def test_an_unchanged_file_still_restores(nb_runner, tmp_path):
     data = tmp_path / "alias3.tsv"
     _write(data, "GENE_C_OLD")
 
-    nb_runner.create_notebook([
-        "import cash\n%cash_on\nfrom pathlib import Path\nimport sys\n"
-        "DATA = Path(r'" + str(data) + "')",
-        "ALIAS = {}\n"
-        "for line in DATA.read_text().splitlines()[1:]:\n"
-        "    print('RAN', file=sys.stderr)\n"
-        "    o, n = line.split('\\t')\n"
-        "    ALIAS[o] = n",
-        "print('R', len(ALIAS))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import cash\n%cash_on\nfrom pathlib import Path\nimport sys\nDATA = Path(r'" + str(data) + "')",
+            "ALIAS = {}\n"
+            "for line in DATA.read_text().splitlines()[1:]:\n"
+            "    print('RAN', file=sys.stderr)\n"
+            "    o, n = line.split('\\t')\n"
+            "    ALIAS[o] = n",
+            "print('R', len(ALIAS))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "R 3" in nb_runner.get_output(3), nb_runner.get_raw_output(3)

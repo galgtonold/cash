@@ -13,40 +13,47 @@ loop body must inherit the loop's ``loop_header`` / ``loop_header_chain`` /
 ``body_index_chain`` stamps, or the badge view-builder has no way to nest it
 under the loop and renders it as a sibling instead.
 """
+
 from __future__ import annotations
+
+from unittest.mock import MagicMock
 
 import pytest
 from traitlets.config import Configurable
-from unittest.mock import MagicMock
 
-from cash.core import Cash
 from cash.backends import InMemoryBackend
-from cash.notebook.ipython.magics import CashMagics
+from cash.core import Cash
+from cash.notebook.badge_renderer.renderers.html import render_html
+from cash.notebook.badge_renderer.renderers.text import render_text
 from cash.notebook.badge_renderer.view import (
-    BadgeStatus,
     SubUnitGroup,
     build_sub_unit_groups,
 )
 from cash.notebook.badge_renderer.view_builder import build_interactive_badge
-from cash.notebook.badge_renderer.renderers.html import render_html
-from cash.notebook.badge_renderer.renderers.text import render_text
 from cash.notebook.control_structures.for_handler import (
     _stamp_call_events_body_index,
     _stamp_call_events_loop_header,
 )
+from cash.notebook.ipython.magics import CashMagics
 
 
 def _event(source, occ, hit, key="call:abcdef0123456789", **extra):
     e = {
-        "call_source": source, "occurrence_index": occ, "cache_hit": hit,
-        "cache_key": key, "execution_time": 0.5, "time_saved": 0.5,
-        "intercepted": True, "func_name": "compute",
+        "call_source": source,
+        "occurrence_index": occ,
+        "cache_hit": hit,
+        "cache_key": key,
+        "execution_time": 0.5,
+        "time_saved": 0.5,
+        "intercepted": True,
+        "func_name": "compute",
     }
     e.update(extra)
     return e
 
 
 # --------------------------------------------------------- build_sub_unit_groups
+
 
 def test_two_sites_calling_the_same_function_are_two_groups():
     """The property this task exists for: SAME callee, DIFFERENT call sites.
@@ -57,10 +64,12 @@ def test_two_sites_calling_the_same_function_are_two_groups():
     since both events are still func_name=="compute"; this one would not
     (len(groups) would collapse to 1).
     """
-    groups = build_sub_unit_groups([
-        _event("compute(x)", 0, False),
-        _event("compute(y)", 0, True),
-    ])
+    groups = build_sub_unit_groups(
+        [
+            _event("compute(x)", 0, False),
+            _event("compute(y)", 0, True),
+        ]
+    )
     assert len(groups) == 2
     assert {g.call_source for g in groups} == {"compute(x)", "compute(y)"}
 
@@ -89,10 +98,12 @@ def test_same_call_source_different_occurrence_index_are_two_groups():
     """Two textually-identical calls at different AST positions (e.g. two
     ``compute(x)`` literals in the same statement) must stay separate too --
     call_source alone is not a unique site, occurrence_index disambiguates."""
-    groups = build_sub_unit_groups([
-        _event("compute(x)", 0, True),
-        _event("compute(x)", 1, False),
-    ])
+    groups = build_sub_unit_groups(
+        [
+            _event("compute(x)", 0, True),
+            _event("compute(x)", 1, False),
+        ]
+    )
     assert len(groups) == 2
     assert {g.occurrence_index for g in groups} == {0, 1}
 
@@ -118,36 +129,38 @@ def test_miss_reason_absent_is_none_not_fabricated():
 
 def test_malformed_events_do_not_raise():
     """The badge must never blow up on a legacy/malformed event dict."""
-    groups = build_sub_unit_groups([
-        {"intercepted": True},  # no call_source/occurrence_index/cache_hit at all
-        "not even a dict",
-        None,
-    ])
+    groups = build_sub_unit_groups(
+        [
+            {"intercepted": True},  # no call_source/occurrence_index/cache_hit at all
+            "not even a dict",
+            None,
+        ]
+    )
     assert isinstance(groups, list)
 
 
 # --------------------------------------------------------- view_builder wiring
 
+
 def _metrics_two_sites():
-    return [{
-        "status": "COMPUTED",
-        "code": "out = compute(x) + compute(y)",
-        "total_time": 1.0,
-        "evaluated_vars": ["out"],
-        "decorator_calls": [
-            _event("compute(x)", 0, False),
-            _event("compute(y)", 1, True),
-        ],
-        "is_upstream": False,
-    }]
+    return [
+        {
+            "status": "COMPUTED",
+            "code": "out = compute(x) + compute(y)",
+            "total_time": 1.0,
+            "evaluated_vars": ["out"],
+            "decorator_calls": [
+                _event("compute(x)", 0, False),
+                _event("compute(y)", 1, True),
+            ],
+            "is_upstream": False,
+        }
+    ]
 
 
 def test_view_builder_populates_row_sub_units_grouped_by_site():
     badge = build_interactive_badge(_metrics_two_sites())
-    rows = [
-        item for section in badge.sections for item in section.items
-        if hasattr(item, "sub_units")
-    ]
+    rows = [item for section in badge.sections for item in section.items if hasattr(item, "sub_units")]
     assert rows, "no StatementRow found in the built badge"
     row = rows[0]
     assert len(row.sub_units) == 2
@@ -181,10 +194,15 @@ def test_text_badge_shows_both_call_sites_as_separate_lines():
 def test_no_sub_units_means_no_sub_call_section():
     """Positive control: an ordinary statement with no intercepted calls must
     not grow a Sub-calls section."""
-    metrics = [{
-        "status": "COMPUTED", "code": "x = 1", "total_time": 0.01,
-        "evaluated_vars": ["x"], "is_upstream": False,
-    }]
+    metrics = [
+        {
+            "status": "COMPUTED",
+            "code": "x = 1",
+            "total_time": 0.01,
+            "evaluated_vars": ["x"],
+            "is_upstream": False,
+        }
+    ]
     html = render_html(build_interactive_badge(metrics))
     text = render_text(build_interactive_badge(metrics))
     assert "Sub-calls" not in html
@@ -192,6 +210,7 @@ def test_no_sub_units_means_no_sub_call_section():
 
 
 # --------------------------------------------------------- loop-nesting stamps
+
 
 def test_stamp_call_events_loop_header_propagates_to_events():
     m = {"decorator_calls": [_event("compute(x)", 0, True)]}
@@ -205,8 +224,8 @@ def test_stamp_call_events_loop_header_prepends_for_nesting():
     """Outer loop's header must end up FIRST in the chain (outermost-first),
     matching the enclosing metric's own chain convention exactly."""
     m = {"decorator_calls": [_event("compute(x)", 0, True)]}
-    _stamp_call_events_loop_header(m, "for y in inner:")   # inner runs first
-    _stamp_call_events_loop_header(m, "for x in outer:")   # then outer prepends
+    _stamp_call_events_loop_header(m, "for y in inner:")  # inner runs first
+    _stamp_call_events_loop_header(m, "for x in outer:")  # then outer prepends
     event = m["decorator_calls"][0]
     assert event["loop_header_chain"] == ["for x in outer:", "for y in inner:"]
     # first-writer-wins for the scalar field, same as the metric-level rule
@@ -235,6 +254,7 @@ def test_stamp_call_events_no_decorator_calls_key_is_a_noop():
 
 # --------------------------------------------------------- real pipeline (e2e)
 
+
 class MockShell(Configurable):
     """Same mock shell ``test_single_unit_caching.py`` uses for real per-
     iteration for-loop tests -- runs the actual production pipeline
@@ -250,7 +270,7 @@ class MockShell(Configurable):
         self.events = MagicMock()
         self.ast_transformers = []
         self.user_global_ns = self.user_ns
-        self.display_pub = type('MockDisplayPub', (), {'publish': MagicMock()})()
+        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
 
 
 @pytest.fixture
@@ -306,31 +326,25 @@ def test_real_for_loop_stamps_call_events_with_loop_header(magics_fixture):
     # were logged even though the directive engaged with no warning).
     magics_obj, shell, backend = magics_fixture
     all_metrics = _run_real_for_loop_and_capture_metrics(magics_obj, shell, _LOOP_CODE)
-    assert shell.user_ns['results'] == {1: 2, 2: 3, 3: 4}
+    assert shell.user_ns["results"] == {1: 2, 2: 3, 3: 4}
 
-    body_stmts = [m for m in all_metrics if '# __iteration_context__:' in m.get('code', '')]
+    body_stmts = [m for m in all_metrics if "# __iteration_context__:" in m.get("code", "")]
     assert body_stmts, "expected per-iteration body metrics"
 
-    stamped_events = [
-        (m, e)
-        for m in body_stmts
-        for e in (m.get('decorator_calls') or [])
-        if e.get('intercepted')
-    ]
+    stamped_events = [(m, e) for m in body_stmts for e in (m.get("decorator_calls") or []) if e.get("intercepted")]
     assert stamped_events, (
-        "no intercepted call events were recorded -- either cache-calls did not "
-        "engage or the drain wiring regressed"
+        "no intercepted call events were recorded -- either cache-calls did not engage or the drain wiring regressed"
     )
     for owner, e in stamped_events:
-        assert e.get('loop_header'), f"event missing loop_header: {e}"
-        assert e.get('loop_header_chain'), f"event missing loop_header_chain: {e}"
-        assert e.get('body_index_chain'), f"event missing body_index_chain: {e}"
+        assert e.get("loop_header"), f"event missing loop_header: {e}"
+        assert e.get("loop_header_chain"), f"event missing loop_header_chain: {e}"
+        assert e.get("body_index_chain"), f"event missing body_index_chain: {e}"
         # Must match the ENCLOSING statement's own stamp exactly, not just be
         # present -- a wrong-but-nonempty value would pass a bare truthiness
         # check and still misplace the row in the badge.
-        assert e['loop_header'] == owner['loop_header']
-        assert e['loop_header_chain'] == owner['loop_header_chain']
-        assert e['body_index_chain'] == owner.get('body_index_chain')
+        assert e["loop_header"] == owner["loop_header"]
+        assert e["loop_header_chain"] == owner["loop_header_chain"]
+        assert e["body_index_chain"] == owner.get("body_index_chain")
 
 
 def _run_real_for_loop_and_capture_metrics(magics_obj, shell, code: str) -> list:
@@ -387,7 +401,7 @@ def test_real_for_loop_renders_sub_calls_nested_under_the_loop(magics_fixture):
     """
     magics_obj, shell, backend = magics_fixture
     all_metrics = _run_real_for_loop_and_capture_metrics(magics_obj, shell, _LOOP_CODE)
-    assert shell.user_ns['results'] == {1: 2, 2: 3, 3: 4}
+    assert shell.user_ns["results"] == {1: 2, 2: 3, 3: 4}
 
     badge = build_interactive_badge(all_metrics)
     html = render_html(badge)
@@ -401,12 +415,8 @@ def test_real_for_loop_renders_sub_calls_nested_under_the_loop(magics_fixture):
     # row-level ``<dt>Sub-calls</dt>`` drawer (that one only exists for a
     # bare ``StatementRow``, which a loop-body statement is not).
     assert "c3-loop-body" in html, "expected the loop to render at all"
-    assert "c3-subunit-table" in html, (
-        "expected the loop-nested Sub-calls block, not the row-level one"
-    )
-    assert "<dt>Sub-calls</dt>" not in html, (
-        "loop-body sub-calls rendered via the WRONG (row-level) drawer path"
-    )
+    assert "c3-subunit-table" in html, "expected the loop-nested Sub-calls block, not the row-level one"
+    assert "<dt>Sub-calls</dt>" not in html, "loop-body sub-calls rendered via the WRONG (row-level) drawer path"
     assert "Sub-calls" in html
     assert "compute(t)" in html
 
@@ -423,17 +433,22 @@ def test_real_for_loop_renders_sub_calls_nested_under_the_loop(magics_fixture):
         sub_indent = len(lines[i]) - len(lines[i].lstrip(" "))
         prev_indent = len(prev) - len(prev.lstrip(" "))
         assert sub_indent > prev_indent, (
-            f"sub-call line is not nested deeper than its statement line:\n"
-            f"{prev!r}\n{lines[i]!r}"
+            f"sub-call line is not nested deeper than its statement line:\n{prev!r}\n{lines[i]!r}"
         )
-        assert "results[" in prev, (
-            f"line before a sub-call line is not the owning iteration's row:\n{prev!r}"
-        )
+        assert "results[" in prev, f"line before a sub-call line is not the owning iteration's row:\n{prev!r}"
 
 
 def _one_site(*events):
-    return [{"status": "COMPUTED", "code": "m = score(y, p)", "total_time": 0.1,
-             "evaluated_vars": ["m"], "decorator_calls": list(events), "is_upstream": False}]
+    return [
+        {
+            "status": "COMPUTED",
+            "code": "m = score(y, p)",
+            "total_time": 0.1,
+            "evaluated_vars": ["m"],
+            "decorator_calls": list(events),
+            "is_upstream": False,
+        }
+    ]
 
 
 def test_a_call_cash_did_nothing_with_has_no_sub_call_line():
@@ -444,8 +459,10 @@ def test_a_call_cash_did_nothing_with_has_no_sub_call_line():
 
 
 def test_a_stored_miss_a_hit_and_a_legacy_event_keep_their_line():
-    for event in (_event("score(y, p)", 0, False, stored=True),
-                  _event("score(y, p)", 0, True),
-                  _event("score(y, p)", 0, False)):
+    for event in (
+        _event("score(y, p)", 0, False, stored=True),
+        _event("score(y, p)", 0, True),
+        _event("score(y, p)", 0, False),
+    ):
         text = render_text(build_interactive_badge(_one_site(event)))
         assert "sub-call score(y, p)" in text, (event, text)

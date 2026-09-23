@@ -13,12 +13,14 @@ class TestCounterStatistics:
 
     def test_counter_most_common(self, nb_runner):
         """Counter.most_common with caching."""
-        nb_runner.create_notebook([
-            "from collections import Counter",
-            "words = ['apple', 'banana', 'apple', 'cherry', 'apple', 'banana']",
-            "counts = Counter(words)\ntop = counts.most_common(2)",
-            "print(f'top={top}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from collections import Counter",
+                "words = ['apple', 'banana', 'apple', 'cherry', 'apple', 'banana']",
+                "counts = Counter(words)\ntop = counts.most_common(2)",
+                "print(f'top={top}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(4)
@@ -32,12 +34,14 @@ class TestCounterStatistics:
 
     def test_counter_edit_data(self, nb_runner):
         """Edit data, verify counter updates."""
-        nb_runner.create_notebook([
-            "from collections import Counter",
-            "data = [1, 1, 2, 2, 2, 3]",
-            "c = Counter(data)\nmost = c.most_common(1)[0]",
-            "print(f'most={most}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "from collections import Counter",
+                "data = [1, 1, 2, 2, 2, 3]",
+                "c = Counter(data)\nmost = c.most_common(1)[0]",
+                "print(f'most={most}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(4)
@@ -50,12 +54,14 @@ class TestCounterStatistics:
 
     def test_statistics_measures(self, nb_runner):
         """statistics.mean/median/stdev with caching."""
-        nb_runner.create_notebook([
-            "import statistics",
-            "data = [10, 20, 30, 40, 50]",
-            "m = statistics.mean(data)\nmed = statistics.median(data)",
-            "print(f'mean={m} median={med}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "import statistics",
+                "data = [10, 20, 30, 40, 50]",
+                "m = statistics.mean(data)\nmed = statistics.median(data)",
+                "print(f'mean={m} median={med}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(4)

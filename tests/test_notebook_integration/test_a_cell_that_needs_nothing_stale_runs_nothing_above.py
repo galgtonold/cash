@@ -7,6 +7,7 @@ grid search and the calibration below the edit all ran again, and the report
 writers wiped and rebuilt ``report/`` -- none of which the cell reads. The same
 cell in a plain kernel takes under a second.
 """
+
 import pytest
 
 pytest.importorskip("pandas")

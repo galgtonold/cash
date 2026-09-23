@@ -12,13 +12,14 @@ producer above it that called a function too.
 Counted, not timed: a tee on ``StatementProcessor.process_statement`` in the
 new kernel counts the statements that ran, by their text.
 """
+
 import ast
 
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(600)]
 
-_TEE = '''
+_TEE = """
 import cash.notebook.statement.processor as _p
 C = _p.StatementProcessor
 if not hasattr(C, "_test_orig"):
@@ -35,26 +36,28 @@ if not hasattr(C, "_test_orig"):
         return r
     C.process_statement = _tee
 C._test_ran = []
-'''
-_UNTEE = '''
+"""
+_UNTEE = """
 import cash.notebook.statement.processor as _p
 C = _p.StatementProcessor
 if hasattr(C, "_test_orig"):
     C.process_statement = C._test_orig
     del C._test_orig
-'''
+"""
 _RAN = "__import__('cash.notebook.statement.processor', fromlist=['_']).StatementProcessor._test_ran"
 
 #: ``load`` is quick, so ``raw`` lives in RAM only and is gone after the
 #: restart -- the shape that makes a re-run expensive: rebuilding an input
 #: the restored statement never needed (in r23s2, a loop over 1,312 files).
-SETUP = ("import time\n"
-         "SCALE = 3\n"
-         "def load(n):\n"
-         "    return [i * SCALE for i in range(n)]\n"
-         "def slow_summary(xs):\n"
-         "    time.sleep(0.4)\n"
-         "    return sum(xs) + OFFSET")
+SETUP = (
+    "import time\n"
+    "SCALE = 3\n"
+    "def load(n):\n"
+    "    return [i * SCALE for i in range(n)]\n"
+    "def slow_summary(xs):\n"
+    "    time.sleep(0.4)\n"
+    "    return sum(xs) + OFFSET"
+)
 OFFSET = "OFFSET = 0"
 LOAD = "raw = load(1000)"
 SUMMARY = "summary = slow_summary(raw)"
@@ -105,12 +108,14 @@ def test_a_call_on_a_module_does_not_change_it_after_a_restart(nb_runner, _teed)
     unknown method that mutates its receiver and bumped ``pd`` -- the key of
     every statement reading ``pd`` moved, and nothing restored (r23s2)."""
     pytest.importorskip("pandas")
-    cells = ["import cash\n%cash_on",
-             "import time\nimport pandas as pd\npd.set_option('display.width', 160)\n"
-             "def slow_total(t):\n    time.sleep(0.4)\n    return int(t['v'].sum())",
-             "raw = pd.DataFrame({'v': range(1000)})",
-             "total = slow_total(raw)",
-             "print('T', total)"]
+    cells = [
+        "import cash\n%cash_on",
+        "import time\nimport pandas as pd\npd.set_option('display.width', 160)\n"
+        "def slow_total(t):\n    time.sleep(0.4)\n    return int(t['v'].sum())",
+        "raw = pd.DataFrame({'v': range(1000)})",
+        "total = slow_total(raw)",
+        "print('T', total)",
+    ]
     nb_runner.create_notebook(cells)
     nb_runner.start_kernel()
     nb_runner.run_all()
@@ -143,8 +148,7 @@ def _restores_only_the_report(nb_runner, cells: list[str]) -> list[str]:
     return [c for c in ast.literal_eval(nb_runner.peek(_RAN)) if "__CASH_PEEK__" not in c]
 
 
-SLOW_LEN = ("import time\nfrom pathlib import Path\n"
-            "def slow_len(p):\n    time.sleep(0.4)\n    return len(str(p)) * 1000")
+SLOW_LEN = "import time\nfrom pathlib import Path\ndef slow_len(p):\n    time.sleep(0.4)\n    return len(str(p)) * 1000"
 
 
 def test_a_value_built_by_an_imported_class_is_restored_after_a_restart(nb_runner, _teed):
@@ -152,9 +156,10 @@ def test_a_value_built_by_an_imported_class_is_restored_after_a_restart(nb_runne
     ``DATA``'s lineage. After a restart ``Path`` was not imported yet, the
     simulation left the digest out, and nothing built from ``DATA`` restored
     (r23s2: ``EXPORTS``, and so every table in the notebook)."""
-    ran = _restores_only_the_report(nb_runner, [
-        "import cash\n%cash_on", SLOW_LEN, "DATA = Path('data_dir')",
-        "total = slow_len(DATA)", "print('T', total)"])
+    ran = _restores_only_the_report(
+        nb_runner,
+        ["import cash\n%cash_on", SLOW_LEN, "DATA = Path('data_dir')", "total = slow_len(DATA)", "print('T', total)"],
+    )
     assert ran == ["print('T', total)"], f"ran after the restart: {ran}"
 
 
@@ -162,9 +167,16 @@ def test_a_path_a_directory_is_made_from_is_restored_after_a_restart(nb_runner, 
     """r23s2's ``PACK = Path('pack'); PACK.mkdir(exist_ok=True)``: ``Path``'s
     digest in ``OUT``'s lineage, and a method called on ``OUT`` that is decided
     without a verdict (it writes the filesystem, not the object)."""
-    ran = _restores_only_the_report(nb_runner, [
-        "import cash\n%cash_on", SLOW_LEN, "OUT = Path('out_dir')\nOUT.mkdir(exist_ok=True)",
-        "total = slow_len(OUT)", "print('T', total)"])
+    ran = _restores_only_the_report(
+        nb_runner,
+        [
+            "import cash\n%cash_on",
+            SLOW_LEN,
+            "OUT = Path('out_dir')\nOUT.mkdir(exist_ok=True)",
+            "total = slow_len(OUT)",
+            "print('T', total)",
+        ],
+    )
     assert ran == ["print('T', total)"], f"ran after the restart: {ran}"
 
 
@@ -175,11 +187,13 @@ def test_names_from_a_module_not_loaded_yet_are_restored_after_a_restart(nb_runn
     simulation meets the import, so it took both for modules, had no digest,
     and every call of the helper got a lineage the runtime never gave it
     (r23s2: ``from statsmodels... import ExponentialSmoothing``, a 45 s cell)."""
-    cells = ["import cash\n%cash_on",
-             "import time\nfrom zipapp import get_interpreter\nfrom wave import Wave_read, Wave_write\n"
-             "def slow_hue(r):\n    time.sleep(0.4)\n    assert Wave_read and Wave_write\n    return round(r * 2, 4) if get_interpreter else None",
-             "hue = slow_hue(0.3)",
-             "print('H', hue)"]
+    cells = [
+        "import cash\n%cash_on",
+        "import time\nfrom zipapp import get_interpreter\nfrom wave import Wave_read, Wave_write\n"
+        "def slow_hue(r):\n    time.sleep(0.4)\n    assert Wave_read and Wave_write\n    return round(r * 2, 4) if get_interpreter else None",
+        "hue = slow_hue(0.3)",
+        "print('H', hue)",
+    ]
     nb_runner.create_notebook(cells)
     nb_runner.start_kernel()
     nb_runner.run_all()
@@ -187,8 +201,9 @@ def test_names_from_a_module_not_loaded_yet_are_restored_after_a_restart(nb_runn
     nb_runner.restart()
     nb_runner._inject_notebook_path()
     nb_runner.run_cell(1)
-    assert nb_runner.peek("[m for m in ('zipapp', 'wave') if m in __import__('sys').modules]") == "[]", \
+    assert nb_runner.peek("[m for m in ('zipapp', 'wave') if m in __import__('sys').modules]") == "[]", (
         "the modules are loaded already: this would not exercise the recorded bindings"
+    )
     nb_runner.peek(f"exec({_TEE!r}, {{}})")
     nb_runner.peek("get_ipython().run_line_magic('cash_on', '')")
     nb_runner.run_cell(4)
@@ -203,34 +218,47 @@ def test_a_call_the_runtime_saw_leave_its_receiver_alone_does_not_change_it_afte
     know, so the runtime watches the receiver, sees it unchanged, and records
     that verdict. The record died with the kernel; after a restart the
     simulation assumed the unknown method mutates ``x`` and bumped it."""
-    ran = _restores_only_the_report(nb_runner, [
-        "import cash\n%cash_on",
-        "import time\nfrom fractions import Fraction\n"
-        "def slow_num(x):\n    time.sleep(0.4)\n    return x.numerator * 1000",
-        "x = Fraction(1, 3)\nx.limit_denominator(10)",
-        "total = slow_num(x)", "print('T', total)"])
+    ran = _restores_only_the_report(
+        nb_runner,
+        [
+            "import cash\n%cash_on",
+            "import time\nfrom fractions import Fraction\n"
+            "def slow_num(x):\n    time.sleep(0.4)\n    return x.numerator * 1000",
+            "x = Fraction(1, 3)\nx.limit_denominator(10)",
+            "total = slow_num(x)",
+            "print('T', total)",
+        ],
+    )
     assert ran == ["print('T', total)"], f"ran after the restart: {ran}"
 
 
 def test_a_value_built_by_a_notebook_class_is_restored_after_a_restart(nb_runner, _teed):
     """``b = Box(3)``: the runtime folds ``Box``'s source digest into ``b``'s
     lineage, and after a restart ``class Box`` has not run again."""
-    ran = _restores_only_the_report(nb_runner, [
-        "import cash\n%cash_on",
-        "import time\nclass Box:\n    def __init__(self, n):\n        self.n = n\n"
-        "def slow_n(b):\n    time.sleep(0.4)\n    return b.n * 1000",
-        "b = Box(3)",
-        "total = slow_n(b)", "print('T', total)"])
+    ran = _restores_only_the_report(
+        nb_runner,
+        [
+            "import cash\n%cash_on",
+            "import time\nclass Box:\n    def __init__(self, n):\n        self.n = n\n"
+            "def slow_n(b):\n    time.sleep(0.4)\n    return b.n * 1000",
+            "b = Box(3)",
+            "total = slow_n(b)",
+            "print('T', total)",
+        ],
+    )
     assert ran == ["print('T', total)"], f"ran after the restart: {ran}"
 
 
-@pytest.mark.parametrize("cell, edit, want", [
-    # The callee's own source: its digest, and so the key, moves.
-    (2, SETUP.replace("sum(xs) + OFFSET", "sum(xs) + OFFSET + 1"), "S 1498501"),
-    # A global only the callee reads: the callee component, at the call's
-    # position, moves.
-    (3, "OFFSET = 7", "S 1498507"),
-])
+@pytest.mark.parametrize(
+    "cell, edit, want",
+    [
+        # The callee's own source: its digest, and so the key, moves.
+        (2, SETUP.replace("sum(xs) + OFFSET", "sum(xs) + OFFSET + 1"), "S 1498501"),
+        # A global only the callee reads: the callee component, at the call's
+        # position, moves.
+        (3, "OFFSET = 7", "S 1498507"),
+    ],
+)
 def test_an_edit_before_the_restart_is_not_served_the_old_value(nb_runner, _teed, cell, edit, want):
     nb_runner.create_notebook(CELLS)
     nb_runner.start_kernel()

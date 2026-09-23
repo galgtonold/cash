@@ -5,6 +5,7 @@ These tests verify that print() statements inside for loops produce output
 that appears in the cell output as each iteration runs, rather than being
 batched until the entire loop completes.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.loops, pytest.mark.control]
@@ -12,11 +13,13 @@ pytestmark = [pytest.mark.loops, pytest.mark.control]
 
 def test_for_loop_print_appears_in_output(nb_runner):
     """Print statements inside a for loop should appear in the cell output."""
-    nb_runner.create_notebook([
-        """for i in range(5):
+    nb_runner.create_notebook(
+        [
+            """for i in range(5):
     print(f'Step {i}: processing')
 print('Done')"""
-    ])
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -31,8 +34,9 @@ def test_for_loop_print_with_status_updates(nb_runner):
     Simulate a long-running loop with status updates (like the CFD demo).
     Output should contain all status prints.
     """
-    nb_runner.create_notebook([
-        """import time
+    nb_runner.create_notebook(
+        [
+            """import time
 residuals = []
 for step in range(10):
     residual = 1.0 / (step + 1)
@@ -41,7 +45,8 @@ for step in range(10):
 
 print(f'\\nSimulation complete')
 print(f'Final residual: {residuals[-1]:.2e}')"""
-    ])
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -59,13 +64,15 @@ def test_for_loop_cached_print_replays(nb_runner):
     On second run with identical code, cached stdout should be replayed
     from the cache (not re-executed) and still appear in output.
     """
-    nb_runner.create_notebook([
-        """results = []
+    nb_runner.create_notebook(
+        [
+            """results = []
 for i in range(3):
     results.append(i * 10)
     print(f'Computed: {i * 10}')
 print(f'Total: {sum(results)}')"""
-    ])
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -86,11 +93,13 @@ print(f'Total: {sum(results)}')"""
 
 def test_nested_loop_print_output(nb_runner):
     """Print inside nested loops should all appear in output."""
-    nb_runner.create_notebook([
-        """for i in range(3):
+    nb_runner.create_notebook(
+        [
+            """for i in range(3):
     for j in range(2):
         print(f'({i},{j})')"""
-    ])
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -102,14 +111,16 @@ def test_nested_loop_print_output(nb_runner):
 
 def test_if_statement_print_in_output(nb_runner):
     """Print statements in if/else branches should appear in output."""
-    nb_runner.create_notebook([
-        """x = 42
+    nb_runner.create_notebook(
+        [
+            """x = 42
 if x > 0:
     print(f'x={x} is positive')
     print('All good')
 else:
     print('x is non-positive')"""
-    ])
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -120,11 +131,13 @@ else:
 
 def test_for_loop_with_conditional_print(nb_runner):
     """For loop with conditional printing should show all expected outputs."""
-    nb_runner.create_notebook([
-        """for i in range(10):
+    nb_runner.create_notebook(
+        [
+            """for i in range(10):
     if i % 3 == 0:
         print(f'Step {i}: milestone')"""
-    ])
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -137,13 +150,15 @@ def test_for_loop_with_conditional_print(nb_runner):
 
 def test_while_loop_single_unit_prints(nb_runner):
     """While loops execute as single unit — print output should still appear."""
-    nb_runner.create_notebook([
-        """i = 0
+    nb_runner.create_notebook(
+        [
+            """i = 0
 while i < 5:
     print(f'while iteration {i}')
     i += 1
 print('while done')"""
-    ])
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -155,14 +170,16 @@ print('while done')"""
 
 def test_for_loop_with_break_single_unit_prints(nb_runner):
     """For loop with break executes as single unit — prints should stream."""
-    nb_runner.create_notebook([
-        """for i in range(100):
+    nb_runner.create_notebook(
+        [
+            """for i in range(100):
     print(f'processing {i}')
     if i >= 4:
         print('stopping early')
         break
 print('loop exited')"""
-    ])
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -175,13 +192,15 @@ print('loop exited')"""
 
 def test_for_loop_with_continue_single_unit_prints(nb_runner):
     """For loop with continue executes as single unit — prints should still appear."""
-    nb_runner.create_notebook([
-        """for i in range(6):
+    nb_runner.create_notebook(
+        [
+            """for i in range(6):
     if i % 2 == 0:
         continue
     print(f'odd: {i}')
 print('done')"""
-    ])
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -194,15 +213,17 @@ print('done')"""
 
 def test_single_unit_cached_replay(nb_runner):
     """Single-unit loop output should replay correctly from cache on second run."""
-    nb_runner.create_notebook([
-        """total = 0
+    nb_runner.create_notebook(
+        [
+            """total = 0
 for i in range(5):
     total += i
     if i == 3:
         break
     print(f'added {i}, total={total}')
 print(f'final total={total}')"""
-    ])
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 

@@ -28,6 +28,7 @@ The pre-analysis entry is also an entry nothing will ever read again: every
 later run keys the call the analysed way. So this wasted a compute AND left a
 permanent orphan in the cache directory, both of which are asserted below.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -111,14 +112,12 @@ def test_locking_admits_exactly_one_thread(tmp_path, n_threads):
     @c.cache(assume_safe=True)
     def heavy(k):
         runs.append(threading.current_thread().name)
-        time.sleep(0.4)          # long enough that the others really overlap
+        time.sleep(0.4)  # long enough that the others really overlap
         return _helper(k)
 
     _run_threads(lambda: heavy(21), n_threads)
 
-    assert len(runs) == 1, (
-        f"{len(runs)} threads entered the body with use_locking=True: {runs}"
-    )
+    assert len(runs) == 1, f"{len(runs)} threads entered the body with use_locking=True: {runs}"
 
 
 def test_without_locking_every_thread_computes(tmp_path):
@@ -162,8 +161,7 @@ def test_concurrent_first_calls_agree_on_one_cache_key(tmp_path):
     _run_threads(call, 8)
 
     assert len(set(keys)) == 1, (
-        f"eight concurrent first calls resolved {len(set(keys))} different "
-        f"cache keys for one call: {sorted(set(keys))}"
+        f"eight concurrent first calls resolved {len(set(keys))} different cache keys for one call: {sorted(set(keys))}"
     )
 
 

@@ -13,12 +13,14 @@ class TestDataPipelineEdits:
 
     def test_filter_transform_aggregate(self, nb_runner):
         """Three-stage pipeline: filter → transform → aggregate."""
-        nb_runner.create_notebook([
-            "raw = [1, -2, 3, -4, 5, -6, 7, -8, 9, -10]",
-            "filtered = [x for x in raw if x > 0]",
-            "transformed = [x ** 2 for x in filtered]",
-            "total = sum(transformed)\nprint(f'total = {total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "raw = [1, -2, 3, -4, 5, -6, 7, -8, 9, -10]",
+                "filtered = [x for x in raw if x > 0]",
+                "transformed = [x ** 2 for x in filtered]",
+                "total = sum(transformed)\nprint(f'total = {total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         # 1+9+25+49+81 = 165
@@ -32,12 +34,14 @@ class TestDataPipelineEdits:
 
     def test_edit_transform_stage(self, nb_runner):
         """Edit the transformation in the middle of a pipeline."""
-        nb_runner.create_notebook([
-            "prices = [10.0, 20.0, 30.0, 40.0]",
-            "discounted = [p * 0.9 for p in prices]",
-            "with_tax = [p * 1.1 for p in discounted]",
-            "total = round(sum(with_tax), 2)\nprint(f'total = {total}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "prices = [10.0, 20.0, 30.0, 40.0]",
+                "discounted = [p * 0.9 for p in prices]",
+                "with_tax = [p * 1.1 for p in discounted]",
+                "total = round(sum(with_tax), 2)\nprint(f'total = {total}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         # 10*.9*1.1 + 20*.9*1.1 + ... = 9.9+19.8+29.7+39.6 = 99.0
@@ -51,12 +55,14 @@ class TestDataPipelineEdits:
 
     def test_dict_pipeline_edit(self, nb_runner):
         """Dict-based pipeline: lookup → transform → format."""
-        nb_runner.create_notebook([
-            "inventory = {'apple': 50, 'banana': 30, 'cherry': 20}",
-            "threshold = 25",
-            "low_stock = {k: v for k, v in inventory.items() if v <= threshold}",
-            "report = ', '.join(f'{k}:{v}' for k, v in sorted(low_stock.items()))\nprint(f'report = {report}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "inventory = {'apple': 50, 'banana': 30, 'cherry': 20}",
+                "threshold = 25",
+                "low_stock = {k: v for k, v in inventory.items() if v <= threshold}",
+                "report = ', '.join(f'{k}:{v}' for k, v in sorted(low_stock.items()))\nprint(f'report = {report}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "report = cherry:20" in nb_runner.get_output(4)

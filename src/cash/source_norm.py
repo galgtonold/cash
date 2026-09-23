@@ -156,13 +156,15 @@ def _docstring_owners(tree: ast.AST, module: bool) -> list[ast.AST]:
     """
     found = []
     for node in ast.walk(tree):
-        if not (isinstance(node, _DOCSTRING_OWNERS)
-                or (module and isinstance(node, ast.Module))):
+        if not (isinstance(node, _DOCSTRING_OWNERS) or (module and isinstance(node, ast.Module))):
             continue
         body = node.body
-        if (body and isinstance(body[0], ast.Expr)
-                and isinstance(body[0].value, ast.Constant)
-                and isinstance(body[0].value.value, str)):
+        if (
+            body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
             found.append(node)
     return found
 
@@ -273,14 +275,14 @@ def strip_docstrings(source: str) -> str:
             after = after.lstrip()[1:]
         if not after.strip():
             if before.strip():
-                replacement = [before.rstrip() + "\n"]    # def f(): "doc"
+                replacement = [before.rstrip() + "\n"]  # def f(): "doc"
             else:
-                replacement = []                          # a line of its own
+                replacement = []  # a line of its own
         elif before.strip():
             replacement = [before.rstrip() + " " + after.lstrip()]
         else:
             replacement = [before + after.lstrip()]
-        lines[first:last + 1] = replacement
+        lines[first : last + 1] = replacement
     return "".join(lines)
 
 
@@ -340,11 +342,21 @@ def normalize_source_for_hash(source: str) -> str:
 # against the real signature; a parameter added there and forgotten here
 # merely reverts that parameter to the old over-invalidating behaviour,
 # which is the safe direction to fail in.
-_CACHE_DECORATOR_PARAMS = frozenset({
-    "depends_on", "dynamic_depends_on", "file_depends_on", "ttl", "cache_if",
-    "chunk_max_items", "chunk_max_bytes", "strict", "assume_safe",
-    "allow_random", "frozen",
-})
+_CACHE_DECORATOR_PARAMS = frozenset(
+    {
+        "depends_on",
+        "dynamic_depends_on",
+        "file_depends_on",
+        "ttl",
+        "cache_if",
+        "chunk_max_items",
+        "chunk_max_bytes",
+        "strict",
+        "assume_safe",
+        "allow_random",
+        "frozen",
+    }
+)
 _CACHE_DECORATOR_NAME = "cache"
 
 
@@ -366,8 +378,7 @@ def _is_cache_decorator(node: ast.expr) -> bool:
     if isinstance(node, ast.Call):
         if node.args:
             return False
-        if any(kw.arg is None or kw.arg not in _CACHE_DECORATOR_PARAMS
-               for kw in node.keywords):
+        if any(kw.arg is None or kw.arg not in _CACHE_DECORATOR_PARAMS for kw in node.keywords):
             return False
         target = node.func
     if isinstance(target, ast.Attribute):
@@ -499,8 +510,7 @@ def code_consts_without_docstring(code: types.CodeType) -> tuple:
     if sys.version_info >= (3, 14):
         has_doc = bool(code.co_flags & _CO_HAS_DOCSTRING)
     else:
-        has_doc = (bool(code.co_flags & _CO_OPTIMIZED)
-                   and not code.co_name.startswith("<"))
+        has_doc = bool(code.co_flags & _CO_OPTIMIZED) and not code.co_name.startswith("<")
     return (None,) + consts[1:] if has_doc else consts
 
 
@@ -524,8 +534,7 @@ def _stabilize_const(const: object, depth: int) -> str:
 
 def _code_atoms(code: types.CodeType, depth: int = 0) -> str:
     """Serialize a code object's behaviour-bearing fields."""
-    consts = ",".join(_stabilize_const(c, depth)
-                      for c in code_consts_without_docstring(code))
+    consts = ",".join(_stabilize_const(c, depth) for c in code_consts_without_docstring(code))
     return _SEP.join(
         (
             code.co_code.hex(),
@@ -636,6 +645,7 @@ def _process_start_time() -> float:
     started: float | None = None
     try:
         import psutil  # type: ignore[import-not-found]
+
         started = float(psutil.Process().create_time())
     except Exception:  # noqa: BLE001 - optional dependency, any failure
         started = None
@@ -647,18 +657,22 @@ def _process_start_time() -> float:
             k32 = ctypes.WinDLL("kernel32", use_last_error=True)
             creation, exit_, kernel, user = (wintypes.FILETIME() for _ in range(4))
             k32.GetCurrentProcess.restype = wintypes.HANDLE
-            if k32.GetProcessTimes(k32.GetCurrentProcess(), ctypes.byref(creation),
-                                   ctypes.byref(exit_), ctypes.byref(kernel),
-                                   ctypes.byref(user)):
+            if k32.GetProcessTimes(
+                k32.GetCurrentProcess(),
+                ctypes.byref(creation),
+                ctypes.byref(exit_),
+                ctypes.byref(kernel),
+                ctypes.byref(user),
+            ):
                 ticks = (creation.dwHighDateTime << 32) | creation.dwLowDateTime
-                started = ticks / 1e7 - 11644473600.0     # FILETIME epoch -> Unix
+                started = ticks / 1e7 - 11644473600.0  # FILETIME epoch -> Unix
         except Exception:  # noqa: BLE001
             started = None
     if started is None and os.path.exists("/proc/self/stat"):
         try:
             with open("/proc/self/stat", encoding="ascii") as fh:
                 fields = fh.read().rsplit(")", 1)[1].split()
-            start_ticks = int(fields[19])                 # field 22 overall
+            start_ticks = int(fields[19])  # field 22 overall
             with open("/proc/stat", encoding="ascii") as fh:
                 btime = next(int(line.split()[1]) for line in fh if line.startswith("btime"))
             started = btime + start_ticks / os.sysconf("SC_CLK_TCK")
@@ -738,9 +752,10 @@ def _pyc_proves_unchanged(path: str, st: object) -> bool:
     if len(header) < 16 or header[:4] != importlib.util.MAGIC_NUMBER:
         return False
     if int.from_bytes(header[4:8], "little") != 0:
-        return False                  # hash-based pyc: no timestamp to compare
-    return (int.from_bytes(header[8:12], "little") == (int(st.st_mtime) & 0xFFFFFFFF)
-            and int.from_bytes(header[12:16], "little") == (st.st_size & 0xFFFFFFFF))
+        return False  # hash-based pyc: no timestamp to compare
+    return int.from_bytes(header[8:12], "little") == (int(st.st_mtime) & 0xFFFFFFFF) and int.from_bytes(
+        header[12:16], "little"
+    ) == (st.st_size & 0xFFFFFFFF)
 
 
 def _code_objects(code: types.CodeType):
@@ -782,7 +797,7 @@ def loaded_code_matches_disk(fn: object) -> bool:
         return True
     module = _compiled_module(path)
     if module is None:
-        return False          # the file no longer compiles: it is not what runs
+        return False  # the file no longer compiles: it is not what runs
     live = bytecode_identity(fn)
     if live is None:
         return True
@@ -806,7 +821,7 @@ def _class_functions(cls: type) -> list[types.FunctionType]:
     """The plain functions defined directly in *cls*, unwrapping descriptors."""
     found = []
     for value in vars(cls).values():
-        func = getattr(value, "__func__", value)          # staticmethod / classmethod
+        func = getattr(value, "__func__", value)  # staticmethod / classmethod
         if isinstance(value, property):
             func = value.fget
         if isinstance(func, types.FunctionType) and getattr(func, "_cash_cached", False):

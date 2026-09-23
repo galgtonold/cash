@@ -1,6 +1,8 @@
 """Batch 96 – matrix/linear algebra with pure Python lists."""
 
-import textwrap, pytest
+import textwrap
+
+import pytest
 
 pytestmark = [pytest.mark.stress, pytest.mark.integration]
 
@@ -10,8 +12,9 @@ class TestMatrixOps:
 
     def test_matrix_multiply(self, nb_runner):
         """Matrix multiplication with nested lists."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 def mat_mul(A, B):
                     rows_a, cols_a = len(A), len(A[0])
                     rows_b, cols_b = len(B), len(B[0])
@@ -27,8 +30,9 @@ class TestMatrixOps:
                 B = [[5, 6], [7, 8]]
                 C = mat_mul(A, B)
             """),
-            "print(f'C={C}')",
-        ])
+                "print(f'C={C}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -36,16 +40,18 @@ class TestMatrixOps:
 
     def test_matrix_transpose(self, nb_runner):
         """Transpose a matrix."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 def transpose(M):
                     return [list(row) for row in zip(*M)]
 
                 M = [[1, 2, 3], [4, 5, 6]]
                 T = transpose(M)
             """),
-            "print(f'M={M}')\nprint(f'T={T}')",
-        ])
+                "print(f'M={M}')\nprint(f'T={T}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -53,8 +59,9 @@ class TestMatrixOps:
 
     def test_identity_and_trace(self, nb_runner):
         """Identity matrix and trace."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 def identity(n):
                     return [[1 if i == j else 0 for j in range(n)] for i in range(n)]
 
@@ -67,8 +74,9 @@ class TestMatrixOps:
                 M = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
                 tr_m = trace(M)
             """),
-            "print(f'tr_I={tr} tr_M={tr_m}')",
-        ])
+                "print(f'tr_I={tr} tr_M={tr_m}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -77,16 +85,18 @@ class TestMatrixOps:
 
     def test_matrix_propagation(self, nb_runner):
         """Matrix computation with upstream change propagation."""
-        nb_runner.create_notebook([
-            "scale = 2",
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                "scale = 2",
+                textwrap.dedent("""\
                 def scale_matrix(M, s):
                     return [[x * s for x in row] for row in M]
                 M = [[1, 2], [3, 4]]
                 scaled = scale_matrix(M, scale)
             """),
-            "print(f'scaled={scaled}')",
-        ])
+                "print(f'scaled={scaled}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "[[2, 4], [6, 8]]" in nb_runner.get_output(3)
@@ -97,8 +107,9 @@ class TestMatrixOps:
 
     def test_dot_product(self, nb_runner):
         """Vector dot product."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 def dot(a, b):
                     return sum(x * y for x, y in zip(a, b))
 
@@ -107,8 +118,9 @@ class TestMatrixOps:
                 result = dot(v1, v2)
                 magnitude = sum(x**2 for x in v1) ** 0.5
             """),
-            "print(f'dot={result} mag={magnitude:.4f}')",
-        ])
+                "print(f'dot={result} mag={magnitude:.4f}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)

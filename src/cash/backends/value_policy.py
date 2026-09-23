@@ -43,10 +43,10 @@ What this never overrides is an explicit decision. ``@cash.cache`` and
 honour that -- the same exemption they have from the compute floor and the
 cost model. The caller-facing half lives in ``TieredBackend.set``.
 """
+
 from __future__ import annotations
 
-__all__ = ["BYTES_PER_COMPUTE_SECOND", "WORTH_CEILING_BYTES_PER_SECOND",
-           "WORTH_FLOOR_BYTES", "worth_its_bytes"]
+__all__ = ["BYTES_PER_COMPUTE_SECOND", "WORTH_CEILING_BYTES_PER_SECOND", "WORTH_FLOOR_BYTES", "worth_its_bytes"]
 
 #: Bytes of cache one second of compute pays for a SUPERSEDED copy -- a spare
 #: kept in case you undo. Used by :mod:`cash.backends.versions`.

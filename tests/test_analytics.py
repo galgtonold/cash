@@ -1,4 +1,5 @@
 """Tests for the AnalyticsManager (analytics.py)."""
+
 import logging
 import os
 
@@ -32,9 +33,9 @@ class TestAnalyticsManager:
         am = AnalyticsManager(db_path=db_path)
         am.record_event("HIT", 0.001, saved_time=1.5, code_hash="abc123")
         stats = am.get_session_stats()
-        assert stats['total_events'] == 1
-        assert stats['hits'] == 1
-        assert stats['total_saved_time'] == 1.5
+        assert stats["total_events"] == 1
+        assert stats["hits"] == 1
+        assert stats["total_saved_time"] == 1.5
 
     def test_record_multiple_events(self, tmp_path):
         """Record multiple events and check counts."""
@@ -46,10 +47,10 @@ class TestAnalyticsManager:
         am.record_event("EXECUTION", 0.5)
 
         stats = am.get_session_stats()
-        assert stats['total_events'] == 4
-        assert stats['hits'] == 2
-        assert stats['misses'] == 2
-        assert stats['total_saved_time'] == 3.0
+        assert stats["total_events"] == 4
+        assert stats["hits"] == 2
+        assert stats["misses"] == 2
+        assert stats["total_saved_time"] == 3.0
 
     def test_session_isolation(self, tmp_path):
         """Different sessions have separate stats."""
@@ -62,8 +63,8 @@ class TestAnalyticsManager:
 
         stats1 = am1.get_session_stats()
         stats2 = am2.get_session_stats()
-        assert stats1['hits'] == 1
-        assert stats2['hits'] == 0
+        assert stats1["hits"] == 1
+        assert stats2["hits"] == 0
 
     def test_get_global_stats(self, tmp_path):
         """Global stats aggregate across sessions."""
@@ -76,8 +77,8 @@ class TestAnalyticsManager:
         am2.record_event("MISS", 0.5)
 
         global_stats = am2.get_global_stats()
-        assert global_stats['total_sessions'] == 2
-        assert global_stats['total_events'] == 2
+        assert global_stats["total_sessions"] == 2
+        assert global_stats["total_events"] == 2
 
     def test_get_daily_savings(self, tmp_path):
         """Daily savings aggregation returns data."""
@@ -98,14 +99,14 @@ class TestAnalyticsManager:
         am = AnalyticsManager(db_path=db_path)
         stats = am.get_session_stats()
         # Could be empty dict or zero values
-        assert stats.get('total_events', 0) == 0
+        assert stats.get("total_events", 0) == 0
 
     def test_get_stats_for_nonexistent_session(self, tmp_path):
         """Stats for unknown session return empty/zero."""
         db_path = str(tmp_path / "analytics.db")
         am = AnalyticsManager(db_path=db_path)
         stats = am.get_stats_for_session("nonexistent")
-        assert stats.get('total_events', 0) == 0
+        assert stats.get("total_events", 0) == 0
 
     def test_db_path_creates_parent_directory(self, tmp_path):
         """If db_path directory doesn't exist, it's created."""
@@ -160,7 +161,7 @@ class TestCorruptDbSelfHeal:
         db_path.write_bytes(b"not a database at all")
 
         with caplog.at_level(logging.WARNING, logger="cash.analytics"):
-            AnalyticsManager(db_path=str(db_path))   # heals it
+            AnalyticsManager(db_path=str(db_path))  # heals it
             am2 = AnalyticsManager(db_path=str(db_path))  # opens the healed db
             am2.record_event("HIT", 0.001)
 

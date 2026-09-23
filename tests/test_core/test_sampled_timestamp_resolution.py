@@ -26,6 +26,7 @@ so upgrading does not invalidate every large file at once.
 The timings here are set with ``os.utime`` rather than raced for: a test that
 has to land an edit inside a 10 ms window is a test that fails on a loaded box.
 """
+
 from __future__ import annotations
 
 import os
@@ -41,16 +42,14 @@ from cash.notebook.file_dep_snapshot import (
 
 pytestmark = pytest.mark.core
 
-_SAMPLE_ABOVE = 1024 * 1024                 # lowered threshold: 1 MiB
-_BIG = 2 * 1024 * 1024                      # 2 MiB -> sampled regime
+_SAMPLE_ABOVE = 1024 * 1024  # lowered threshold: 1 MiB
+_BIG = 2 * 1024 * 1024  # 2 MiB -> sampled regime
 
 
 @pytest.fixture(autouse=True)
 def sampled_regime(monkeypatch):
     """Sampled, without a 65 MiB fixture: the regime is what is under test."""
-    monkeypatch.setattr(
-        file_dep_snapshot, "_full_hash_max_bytes", lambda: _SAMPLE_ABOVE
-    )
+    monkeypatch.setattr(file_dep_snapshot, "_full_hash_max_bytes", lambda: _SAMPLE_ABOVE)
 
 
 def _big_file(tmp_path, name="big.bin"):
@@ -86,14 +85,11 @@ def test_an_edit_inside_the_old_tolerance_is_caught(tmp_path):
     snap = snapshot_file_deps({path})[path]
     assert file_dep_is_fresh(path, snap) == (True, None)
 
-    slack_ns = int(_LEGACY_TIMESTAMP_TOLERANCE_SECONDS * 1e9) // 2      # 5 ms
+    slack_ns = int(_LEGACY_TIMESTAMP_TOLERANCE_SECONDS * 1e9) // 2  # 5 ms
     _edit_in_place(path, snap["mtime_ns"] + slack_ns)
 
     fresh, reason = file_dep_is_fresh(path, snap)
-    assert fresh is False, (
-        "a same-size edit that moved the mtime by less than the old tolerance "
-        "was served from cache"
-    )
+    assert fresh is False, "a same-size edit that moved the mtime by less than the old tolerance was served from cache"
     assert reason == "mtime-sampled"
 
 
@@ -158,6 +154,4 @@ def test_a_full_hashed_file_ignores_timestamps_entirely(tmp_path):
     st = os.stat(small)
     os.utime(small, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))
 
-    assert file_dep_is_fresh(str(small), snap) == (True, None), (
-        "a touch on a full-hashed file must remain a hit"
-    )
+    assert file_dep_is_fresh(str(small), snap) == (True, None), "a touch on a full-hashed file must remain a hit"

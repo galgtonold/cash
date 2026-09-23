@@ -20,34 +20,34 @@ from IPython.display import HTML, display, publish_display_data
 
 from ...core import Cash
 from ...utils import safe_text
-from ._args import strip_inline_comment
 from .. import badge_renderer as _badge
+from .. import compute_baselines
 from .._protocols import ShellProtocol
 from ..audit import AuditLogger
 from ..cache_status import CacheStatus
-from .. import compute_baselines
-from .cell_executor import (
-    CellExecutor,
-    _EarlyReturn,
-    _PipelineSyntaxError,
-    discarded_writes_notification,
-)
 from ..control_structures import ControlStructureProcessor
-from .error_display import show_clean_error as _show_clean_error_impl
-from .admin import CashAdminMagicsMixin
 from ..module_invalidator import ModuleInvalidator
 from ..object_hashing import compute_hash
-from ..restore import Restorer
 from ..provenance import ProvenanceTracker
+from ..restore import Restorer
 from ..statement import ProcessResult, StatementProcessor
+
 # The SAME floor reader the cache-write decision uses. The cacheable/trivial
 # split in %cash_stats is only honest if "worth caching" means exactly what the
 # cache meant by it, so this deliberately shares the reader rather than
 # re-deriving the threshold here.
 from ..statement.processor import _config_float
 from ..upstream import UpstreamChecker
-
+from ._args import strip_inline_comment
 from ._types import CellMetrics, TimingBreakdown
+from .admin import CashAdminMagicsMixin
+from .cell_executor import (
+    CellExecutor,
+    _EarlyReturn,
+    _PipelineSyntaxError,
+    discarded_writes_notification,
+)
+from .error_display import show_clean_error as _show_clean_error_impl
 
 __all__ = ["CashMagics"]
 
@@ -90,45 +90,45 @@ def new_session_stats() -> dict[str, Any]:
     reset must forget everything the stats claim to summarise.
     """
     return {
-            'cells_executed': 0,
-            'statements_computed': 0,
-            'statements_restored': 0,
-            'statements_skipped': 0,
-            'total_compute_time': 0.0,
-            'total_restored_time': 0.0,
-            # GROSS avoided recompute. Every contribution is a ``saved_time``
-            # copied off cache metadata — i.e. how long the statement took when
-            # it was FIRST computed, on a possibly colder machine. It is an
-            # estimate of a counterfactual, never a measurement of this
-            # session, and it may overstate without bound.
-            'total_time_saved': 0.0,
-            # The subset of ``total_time_saved`` whose baseline this session
-            # measured itself: the statement was COMPUTED here before it was
-            # RESTORED here, so the recompute cost is known under today's
-            # conditions rather than assumed from the cache.
-            'total_verified_saved': 0.0,
-            # The subset whose baseline was measured on this machine in an
-            # EARLIER kernel (``compute_baselines``, the least cost ever
-            # measured). A Restart & Run All recomputes nothing, so without
-            # this the headline net after a restart was "at least -overhead,
-            # at best <gross>" -- a range straddling zero in the one reading
-            # every tester takes (round 30, r30s3 and r30s5).
-            'total_measured_saved': 0.0,
-            # Cash's OWN added wall-time this session (restore + simulation +
-            # hashing + badge machinery), accumulated per cell. Subtracted from
-            # the gross ``total_time_saved`` to report an honest NET saving so a
-            # session whose overhead outweighs its cache hits reads as a cost,
-            # not a phantom win.
-            'total_overhead': 0.0,
-            # The hit rate over ALL statements is dominated by print/import
-            # trivia that cash deliberately never tried to cache, so it made a
-            # session where every expensive statement hit read as 14.9% —
-            # arithmetically true, practically meaningless. These two
-            # count only statements whose compute cost cleared cash's OWN
-            # caching floor (``min_execution_time_to_cache_seconds``), i.e. the
-            # statements caching was ever on the table for.
-            'statements_cacheable_hit': 0,
-            'statements_cacheable_miss': 0,
+        "cells_executed": 0,
+        "statements_computed": 0,
+        "statements_restored": 0,
+        "statements_skipped": 0,
+        "total_compute_time": 0.0,
+        "total_restored_time": 0.0,
+        # GROSS avoided recompute. Every contribution is a ``saved_time``
+        # copied off cache metadata — i.e. how long the statement took when
+        # it was FIRST computed, on a possibly colder machine. It is an
+        # estimate of a counterfactual, never a measurement of this
+        # session, and it may overstate without bound.
+        "total_time_saved": 0.0,
+        # The subset of ``total_time_saved`` whose baseline this session
+        # measured itself: the statement was COMPUTED here before it was
+        # RESTORED here, so the recompute cost is known under today's
+        # conditions rather than assumed from the cache.
+        "total_verified_saved": 0.0,
+        # The subset whose baseline was measured on this machine in an
+        # EARLIER kernel (``compute_baselines``, the least cost ever
+        # measured). A Restart & Run All recomputes nothing, so without
+        # this the headline net after a restart was "at least -overhead,
+        # at best <gross>" -- a range straddling zero in the one reading
+        # every tester takes (round 30, r30s3 and r30s5).
+        "total_measured_saved": 0.0,
+        # Cash's OWN added wall-time this session (restore + simulation +
+        # hashing + badge machinery), accumulated per cell. Subtracted from
+        # the gross ``total_time_saved`` to report an honest NET saving so a
+        # session whose overhead outweighs its cache hits reads as a cost,
+        # not a phantom win.
+        "total_overhead": 0.0,
+        # The hit rate over ALL statements is dominated by print/import
+        # trivia that cash deliberately never tried to cache, so it made a
+        # session where every expensive statement hit read as 14.9% —
+        # arithmetically true, practically meaningless. These two
+        # count only statements whose compute cost cleared cash's OWN
+        # caching floor (``min_execution_time_to_cache_seconds``), i.e. the
+        # statements caching was ever on the table for.
+        "statements_cacheable_hit": 0,
+        "statements_cacheable_miss": 0,
     }
 
 
@@ -140,8 +140,7 @@ class CashSession:
     independently addressable.
     """
 
-    __slots__ = ('stats', 'provenance', 'audit', 'measured_compute',
-                 'measured_decorator_compute', 'baselines')
+    __slots__ = ("stats", "provenance", "audit", "measured_compute", "measured_decorator_compute", "baselines")
 
     def __init__(self) -> None:
         self.stats: dict[str, Any] = new_session_stats()
@@ -162,9 +161,9 @@ class CashSession:
 
 
 _OP_MAP = {
-    CacheStatus.COMPUTED: 'cache_miss',
-    CacheStatus.RESTORED: 'cache_hit',
-    CacheStatus.SKIPPED: 'cache_skip',
+    CacheStatus.COMPUTED: "cache_miss",
+    CacheStatus.RESTORED: "cache_hit",
+    CacheStatus.SKIPPED: "cache_skip",
 }
 
 
@@ -200,12 +199,12 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # the statement processor reads the same flag from config in its own
         # __init__, so the two start consistent.
         try:
-            self._persist_all = bool(getattr(cash_instance.config, 'persist_all', False))
+            self._persist_all = bool(getattr(cash_instance.config, "persist_all", False))
         except (AttributeError, TypeError):
             self._persist_all = False
 
         # Badge display mode: 'html' (interactive display_id badges), 'print' (text summary), 'off' (no badge)
-        self._badge_mode = 'html'
+        self._badge_mode = "html"
 
         # Execution history tracking for fallback matching
         self._execution_history = []  # List of cell contents executed this session
@@ -213,6 +212,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
 
         # Shared tracking state — single owner of all lineage/dependency dicts
         from .._protocols import TrackingState
+
         self._tracking_state = TrackingState()
 
         self._init_processing_components(shell, cash_instance)
@@ -298,12 +298,12 @@ class CashMagics(CashAdminMagicsMixin, Magics):
 
         # Last cell execution metrics (for %cash_status)
         self._last_cell_metrics: CellMetrics = {
-            'statements': [],
-            'total_time': 0.0,
-            'total_restored_time': 0.0,
-            'total_computed_time': 0.0,
-            'upstream_metrics': [],
-            'status': None,
+            "statements": [],
+            "total_time": 0.0,
+            "total_restored_time": 0.0,
+            "total_computed_time": 0.0,
+            "upstream_metrics": [],
+            "status": None,
         }
 
         # Session-level concerns (statistics, provenance, audit) grouped in one object
@@ -321,22 +321,22 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # already-wrapped run_cell as our "original" (nesting wrappers on every
         # reset) and stack duplicate pre_run_cell handlers. The true-original
         # run_cell and the prior handler are stashed on the shell for this.
-        prior = getattr(shell, '_cash_hooks', None)
+        prior = getattr(shell, "_cash_hooks", None)
         if isinstance(prior, dict):
             try:
-                shell.events.unregister('pre_run_cell', prior['capture_cell_id'])
+                shell.events.unregister("pre_run_cell", prior["capture_cell_id"])
             except (ValueError, KeyError, AttributeError, TypeError):
                 pass
             try:
-                shell.run_cell = prior['original_run_cell']
+                shell.run_cell = prior["original_run_cell"]
             except (KeyError, AttributeError):
                 pass
             # Restore the async entry point too, so a reset_session /
             # second-Cash re-patch captures the true-original run_cell_async
             # rather than nesting our wrapper on every reset.
-            if 'original_run_cell_async' in prior:
+            if "original_run_cell_async" in prior:
                 try:
-                    shell.run_cell_async = prior['original_run_cell_async']
+                    shell.run_cell_async = prior["original_run_cell_async"]
                 except (KeyError, AttributeError):
                     pass
 
@@ -345,23 +345,24 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # and a drain placed after its last phase turned out to run for only
         # one cell in three, missing precisely the cells that do the caching.
         # post_run_cell fires for every cell however it finished.
-        if isinstance(prior, dict) and prior.get('flush_pending_writes') is not None:
+        if isinstance(prior, dict) and prior.get("flush_pending_writes") is not None:
             try:
-                shell.events.unregister('post_run_cell', prior['flush_pending_writes'])
+                shell.events.unregister("post_run_cell", prior["flush_pending_writes"])
             except (ValueError, KeyError, AttributeError, TypeError):
                 pass
         try:
-            shell.events.register('post_run_cell', self._flush_pending_writes)
+            shell.events.register("post_run_cell", self._flush_pending_writes)
         except (AttributeError, TypeError) as e:
             logger.warning(
                 "Could not register post_run_cell handler: %s. Cached results "
                 "will still be written, but a kernel killed (rather than shut "
-                "down) may lose writes that were still queued.", e,
+                "down) may lose writes that were still queued.",
+                e,
             )
 
         # Register event handler to capture cell_id before execution
         try:
-            shell.events.register('pre_run_cell', self._capture_cell_id)
+            shell.events.register("pre_run_cell", self._capture_cell_id)
         except (AttributeError, TypeError) as e:
             logger.warning(
                 "Could not register pre_run_cell event handler: %s. "
@@ -376,6 +377,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # returns False rather than raising when there is no kernel / comm
         # manager to attach to (bare IPython, older ipykernel, MockShell, ...).
         from ..live_cells import install_expiry_hook, register_target
+
         register_target(shell)
         # ...and retire each pushed snapshot when the execution it arrived for
         # ends. The store outlives the frontend that fills it, so without this a
@@ -409,7 +411,8 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # replaced.
         self._original_run_cell = shell.run_cell
         shell.run_cell = self._signature_preserving_proxy(
-            self._original_run_cell, '_execute_cell',
+            self._original_run_cell,
+            "_execute_cell",
         )
 
         # Also intercept run_cell_async: ipykernel dispatches top-level-await
@@ -418,25 +421,30 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # cash's pipeline entirely (no upstream reconstruction, no self-mod
         # reset). Guarded because older IPython lacks run_cell_async.
         self._original_run_cell_async = None
-        if hasattr(shell, 'run_cell_async'):
+        if hasattr(shell, "run_cell_async"):
             self._original_run_cell_async = shell.run_cell_async
             shell.run_cell_async = self._signature_preserving_proxy(
-                self._original_run_cell_async, '_execute_cell_async', is_async=True,
+                self._original_run_cell_async,
+                "_execute_cell_async",
+                is_async=True,
             )
 
         try:
             shell._cash_hooks = {
-                'original_run_cell': self._original_run_cell,
-                'capture_cell_id': self._capture_cell_id,
-                'flush_pending_writes': self._flush_pending_writes,
+                "original_run_cell": self._original_run_cell,
+                "capture_cell_id": self._capture_cell_id,
+                "flush_pending_writes": self._flush_pending_writes,
             }
             if self._original_run_cell_async is not None:
-                shell._cash_hooks['original_run_cell_async'] = self._original_run_cell_async
+                shell._cash_hooks["original_run_cell_async"] = self._original_run_cell_async
         except (AttributeError, TypeError):
             pass
 
     def _signature_preserving_proxy(
-        self, original: Any, handler_name: str, is_async: bool = False,
+        self,
+        original: Any,
+        handler_name: str,
+        is_async: bool = False,
     ) -> Any:
         """Wrap *original* with a proxy that dispatches to ``self.<handler_name>``.
 
@@ -453,10 +461,12 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         still be routed through.
         """
         if is_async:
+
             @functools.wraps(original)
             async def proxy(*args: Any, **kwargs: Any) -> Any:
                 return await getattr(self, handler_name)(*args, **kwargs)
         else:
+
             @functools.wraps(original)
             def proxy(*args: Any, **kwargs: Any) -> Any:
                 return getattr(self, handler_name)(*args, **kwargs)
@@ -477,13 +487,12 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         ttl = None
         arg = strip_inline_comment(line)
         if arg:
-            parts = arg.split('=')
-            if len(parts) == 2 and parts[0].strip() == 'ttl':
+            parts = arg.split("=")
+            if len(parts) == 2 and parts[0].strip() == "ttl":
                 try:
                     ttl = int(parts[1].strip())
                 except ValueError:
-                    print(f"[Error] %cash_on: invalid TTL value: {parts[1].strip()!r}. "
-                          "Caching NOT enabled.")
+                    print(f"[Error] %cash_on: invalid TTL value: {parts[1].strip()!r}. Caching NOT enabled.")
                     return
             else:
                 print(f"[Error] %cash_on: unrecognised argument: {arg!r}. Caching NOT enabled.")
@@ -494,14 +503,16 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # executes notebooks with it set means "run everything, cache nothing".
         # An autoload hook calls this in every kernel, so it must say why it
         # did nothing rather than fail quietly.
-        if getattr(getattr(self._cash_instance, 'config', None), 'disable', False):
-            print("[cash] caching is disabled (disable=True / CASH_DISABLE), so "
-                  "%cash_on did nothing: cells run uncached.")
+        if getattr(getattr(self._cash_instance, "config", None), "disable", False):
+            print(
+                "[cash] caching is disabled (disable=True / CASH_DISABLE), so %cash_on did nothing: cells run uncached."
+            )
             return
 
         # Invalidate notebook path cache so we re-discover the current notebook
         # (fixes Issue 23: switching notebooks within the same kernel session)
         from ..server_discovery import invalidate_notebook_path_cache
+
         invalidate_notebook_path_cache()
 
         # Clear upstream checker's simulation and AST caches to prevent stale
@@ -513,6 +524,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # check would read stale cells from a document this session no longer
         # even has open, exactly the per-notebook staleness reset above.
         from ..live_cells import reset as _reset_live_cells
+
         _reset_live_cells()
 
         self._auto_cache_enabled = True
@@ -546,9 +558,10 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # store cannot distinguish absent from not-yet. See
         # ``_labextension_installed`` for the one topology it answers wrongly
         # (a split install) and why suppressing-by-omission is the safe error.
-        if not getattr(self, '_save_hint_shown', False):
+        if not getattr(self, "_save_hint_shown", False):
             self._save_hint_shown = True
             from ..server_discovery import _in_colab, _labextension_installed
+
             if not _in_colab() and not _labextension_installed():
                 print("[Tip] Cash reads upstream cells from the saved notebook file.")
                 print("   Save (Ctrl+S) after editing a cell you are not about to run:")
@@ -579,30 +592,30 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             %cash_debug file path   - Also log to file in JSON format
         """
         parts = strip_inline_comment(line).lower().split()
-        mode = parts[0] if parts else ''
+        mode = parts[0] if parts else ""
 
-        if mode in ('on', 'true', '1', 'enable'):
+        if mode in ("on", "true", "1", "enable"):
             self._debug = True
             logger.setLevel(logging.DEBUG)
             self._install_debug_console_handler()
             print("Cache debug output enabled.")
-        elif mode in ('off', 'false', '0', 'disable'):
+        elif mode in ("off", "false", "0", "disable"):
             self._debug = False
             logger.setLevel(logging.INFO)
             self._quiet_debug_console_handler()
             print("Cache debug output disabled.")
-        elif mode == 'json':
+        elif mode == "json":
             self._debug = True
             from ...logging import setup_logging
-            self._log_handler = setup_logging(
-                level=logging.DEBUG, json_output=True)
+
+            self._log_handler = setup_logging(level=logging.DEBUG, json_output=True)
             print("Cache debug output enabled (JSON format).")
-        elif mode == 'file' and len(parts) > 1:
+        elif mode == "file" and len(parts) > 1:
             log_path = parts[1]
             self._debug = True
             from ...logging import setup_logging
-            self._log_handler = setup_logging(
-                level=logging.DEBUG, log_file=log_path)
+
+            self._log_handler = setup_logging(level=logging.DEBUG, log_file=log_path)
             print(f"Cache debug output enabled (logging to {log_path}).")
         else:
             # Toggle if no argument
@@ -642,7 +655,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         """
         cash_logger = logging.getLogger("cash")
         for h in cash_logger.handlers:
-            if getattr(h, '_cash_debug_console', False):
+            if getattr(h, "_cash_debug_console", False):
                 h.setLevel(logging.DEBUG)
                 return
         handler = _CurrentStdoutHandler()
@@ -661,7 +674,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         """
         cash_logger = logging.getLogger("cash")
         for h in cash_logger.handlers:
-            if getattr(h, '_cash_debug_console', False):
+            if getattr(h, "_cash_debug_console", False):
                 h.setLevel(logging.WARNING)
 
     @line_magic
@@ -683,27 +696,24 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # get ignored here — it inverts the request. ``%cash_persist on  #
         # comment`` used to turn persistence OFF if it was already on.
         mode = strip_inline_comment(line).lower()
-        if mode in ('on', 'true', '1', 'enable'):
+        if mode in ("on", "true", "1", "enable"):
             self._persist_all = True
-        elif mode in ('off', 'false', '0', 'disable'):
+        elif mode in ("off", "false", "0", "disable"):
             self._persist_all = False
         elif mode:
             print(f"[Error] %cash_persist: unrecognised argument: {mode!r}")
             print("   Valid forms: %cash_persist on | off | (no argument to toggle)")
             return
         else:
-            self._persist_all = not getattr(self, '_persist_all', False)
+            self._persist_all = not getattr(self, "_persist_all", False)
         self._statement_processor.persist_all = self._persist_all
-        print(
-            f"Cash persist-everything mode: "
-            f"{'enabled' if self._persist_all else 'disabled'}."
-        )
+        print(f"Cash persist-everything mode: {'enabled' if self._persist_all else 'disabled'}.")
 
     @line_magic
     def cash_help(self, line: str) -> None:
         """Display a quick-reference card for Cash magic commands."""
         topic = strip_inline_comment(line).lower()
-        if topic in ('badge', 'badges'):
+        if topic in ("badge", "badges"):
             print(
                 "Badge Display\n"
                 "─────────────\n"
@@ -716,7 +726,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 "  [R] RESTORED  — result loaded from cache (cache hit)\n"
                 "  [S] SKIPPED   — unchanged, no work needed"
             )
-        elif topic in ('debug', 'debugging'):
+        elif topic in ("debug", "debugging"):
             print(
                 "Debugging\n"
                 "─────────\n"
@@ -730,7 +740,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 "  %cash_repair --state  Reset tracking (keep cache)\n"
                 "  %cash_repair --full   Clear all cache and state"
             )
-        elif topic in ('collab', 'collaboration', 'sharing'):
+        elif topic in ("collab", "collaboration", "sharing"):
             print(
                 "Collaboration & Sharing\n"
                 "───────────────────────\n"
@@ -741,7 +751,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 "  %cash_diff file        Compare with exported cache\n"
                 "  %cash_diff f --vars    Show variable-level differences"
             )
-        elif topic in ('inspect', 'provenance', 'audit'):
+        elif topic in ("inspect", "provenance", "audit"):
             print(
                 "Inspection & Audit\n"
                 "──────────────────\n"
@@ -819,7 +829,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             %cash_badge off    - No badge output at all
         """
         mode = strip_inline_comment(line).lower()
-        if mode in ('html', 'print', 'off'):
+        if mode in ("html", "print", "off"):
             self._badge_mode = mode
             print(f"Badge mode set to: {mode}")
         else:
@@ -850,29 +860,30 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         """
         import json
 
-        mode = strip_inline_comment(line).lower() or 'print'
+        mode = strip_inline_comment(line).lower() or "print"
 
         # Build comprehensive status
         status = {
-            'last_cell': self._last_cell_metrics.copy(),
-            'lineage': dict(self._tracking_state.variable_lineage),
-            'executed_codes': {k: v[:50] + '...' if len(v) > 50 else v
-                              for k, v in self._tracking_state.executed_cell_codes.items()},
-            'auto_cache_enabled': self._auto_cache_enabled,
-            'debug_enabled': self._debug,
+            "last_cell": self._last_cell_metrics.copy(),
+            "lineage": dict(self._tracking_state.variable_lineage),
+            "executed_codes": {
+                k: v[:50] + "..." if len(v) > 50 else v for k, v in self._tracking_state.executed_cell_codes.items()
+            },
+            "auto_cache_enabled": self._auto_cache_enabled,
+            "debug_enabled": self._debug,
         }
 
         # Add cache entry count if available
         try:
             backend = self._cash_instance.backend
-            status['cache_stats'] = {'keys': len(backend.list_entries())}
+            status["cache_stats"] = {"keys": len(backend.list_entries())}
         except (AttributeError, TypeError, OSError) as exc:
             logger.debug("Failed to retrieve cache stats: %s", exc)
-            status['cache_stats'] = {}
+            status["cache_stats"] = {}
 
-        if mode == 'dict':
+        if mode == "dict":
             return status
-        if mode == 'json':
+        if mode == "json":
             return json.dumps(status, default=str, indent=2)
         # Print formatted output
         print(json.dumps(status, default=str, indent=2))
@@ -884,16 +895,16 @@ class CashMagics(CashAdminMagicsMixin, Magics):
 
         Checks the two locations VS Code and other frontends use.
         """
-        if not hasattr(shell, 'get_parent'):
+        if not hasattr(shell, "get_parent"):
             return None
         parent = shell.get_parent()
         if not parent:
             return None
-        metadata = parent.get('metadata', {})
-        if 'cellId' in metadata:
-            return metadata['cellId']
-        if 'vscode' in metadata and 'cellId' in metadata['vscode']:
-            return metadata['vscode']['cellId']
+        metadata = parent.get("metadata", {})
+        if "cellId" in metadata:
+            return metadata["cellId"]
+        if "vscode" in metadata and "cellId" in metadata["vscode"]:
+            return metadata["vscode"]["cellId"]
         return None
 
     @staticmethod
@@ -902,6 +913,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         if not cell_id:
             return
         from ..server_discovery import extract_notebook_path_from_vscode_cell_id, set_notebook_path
+
         nb_path = extract_notebook_path_from_vscode_cell_id(cell_id)
         if nb_path:
             set_notebook_path(nb_path)
@@ -953,7 +965,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             self._current_cell_id = None
 
             # 1. Try standard info.cell_id (JupyterLab / IPython 8.3+)
-            if hasattr(info, 'cell_id') and info.cell_id:
+            if hasattr(info, "cell_id") and info.cell_id:
                 self._current_cell_id = info.cell_id
 
             # 2. Try to get it from parent header metadata (VS Code / others)
@@ -1011,7 +1023,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         execution loop reads as: ``execute → _maybe_progress_badge(...)`` rather
         than the repeated ``if badge_mode == 'html' and _should_render…`` pattern.
         """
-        if self._badge_mode == 'html' and self._should_render_progress_badge():
+        if self._badge_mode == "html" and self._should_render_progress_badge():
             self._render_interactive_badge(
                 metrics,
                 display_id=display_id,
@@ -1021,8 +1033,9 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 current_code=code,
             )
 
-    def _arm_progress_badge(self, metrics: list[ProcessResult], display_id: str,
-                            step: int, total: int, code: str | None) -> None:
+    def _arm_progress_badge(
+        self, metrics: list[ProcessResult], display_id: str, step: int, total: int, code: str | None
+    ) -> None:
         """Publish a RUNNING badge only if this statement is still running.
 
         Rendering BEFORE the statement published once per statement no matter
@@ -1035,7 +1048,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         nothing; a slower one publishes once, naming itself.
         """
         self._cancel_progress_badge()
-        if self._badge_mode != 'html':
+        if self._badge_mode != "html":
             return
 
         # Resolve the display publisher HERE, on the main thread, while no
@@ -1066,8 +1079,11 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             # concurrent appends raised nothing, and `_build_badge_html`'s own
             # blanket `except Exception` swallows whatever would.
             html = self._build_badge_html(
-                metrics, status="RUNNING", current_step=step,
-                total_steps=total, current_code=code,
+                metrics,
+                status="RUNNING",
+                current_step=step,
+                total_steps=total,
+                current_code=code,
             )
             if not html:
                 return
@@ -1091,8 +1107,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 # `_publish_badge_html` already swallows everything: a
                 # badge must never break a cell, and this runs on a timer
                 # thread where a raise would be lost anyway.
-                self._publish_badge_html(html, display_id=display_id,
-                                         _from_thread=True, publisher=publisher)
+                self._publish_badge_html(html, display_id=display_id, _from_thread=True, publisher=publisher)
 
         try:
             timer = threading.Timer(self._BADGE_MIN_RENDER_INTERVAL, fire)
@@ -1101,6 +1116,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         except Exception as e:  # noqa: BLE001 - a badge must never break a cell; degrade to none
             if self._debug:
                 import traceback
+
                 print(f"[BADGE ARM ERROR] {e}")
                 traceback.print_exc()
             return
@@ -1121,7 +1137,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         """
         with self._progress_lock:
             self._progress_generation += 1
-            timer = getattr(self, '_progress_timer', None)
+            timer = getattr(self, "_progress_timer", None)
             if timer is not None:
                 timer.cancel()
                 self._progress_timer = None
@@ -1165,14 +1181,14 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         land inside the same capture and swallow the badge right back in.
         """
         try:
-            shell = getattr(self, 'shell', None)
-            pub = getattr(shell, 'display_pub', None) if shell is not None else None
+            shell = getattr(self, "shell", None)
+            pub = getattr(shell, "display_pub", None) if shell is not None else None
             if pub is not None and not self._is_capturing_display_pub(pub):
                 self._badge_display_pub = pub
         except Exception as e:  # noqa: BLE001 - a badge must never break a cell
             if self._debug:
                 print(f"[BADGE PUBLISHER ERROR] {e}")
-        return getattr(self, '_badge_display_pub', None)
+        return getattr(self, "_badge_display_pub", None)
 
     def _execute_cell(self, raw_cell: str, *args: Any, **kwargs: Any) -> Any:
         """Proxy for ``interactiveshell.run_cell`` to implement caching when
@@ -1197,20 +1213,22 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         self._execution_history.append(raw_cell)
 
         # Benchmark dispatch (one-shot)
-        benchmark_config = getattr(self, '_benchmark_config', None)
-        if benchmark_config and benchmark_config.get('active'):
-            self._benchmark_config['active'] = False
+        benchmark_config = getattr(self, "_benchmark_config", None)
+        if benchmark_config and benchmark_config.get("active"):
+            self._benchmark_config["active"] = False
             self._run_benchmark(
                 raw_cell,
-                benchmark_config['iterations'],
-                benchmark_config['cold_start'],
-                benchmark_config['compare_mode'],
+                benchmark_config["iterations"],
+                benchmark_config["cold_start"],
+                benchmark_config["compare_mode"],
             )
             return self._original_run_cell("pass", *args, **kwargs)
 
         try:
             result = self._cell_executor.execute_cell(
-                raw_cell, args, kwargs,
+                raw_cell,
+                args,
+                kwargs,
                 original_run_cell=self._original_run_cell,
             )
         except KeyboardInterrupt:
@@ -1224,9 +1242,15 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             return self._original_run_cell(raw_cell, *args, **kwargs)
 
         return self._finalize_cell_execution(
-            raw_cell, result.all_metrics, result.buffered_outputs,
-            result.badge_display_id, result.hook_start, result.timing_breakdown,
-            result.badge_render_time, args, kwargs,
+            raw_cell,
+            result.all_metrics,
+            result.buffered_outputs,
+            result.badge_display_id,
+            result.hook_start,
+            result.timing_breakdown,
+            result.badge_render_time,
+            args,
+            kwargs,
         )
 
     async def _execute_cell_async(self, raw_cell: str, *args: Any, **kwargs: Any) -> Any:
@@ -1280,7 +1304,9 @@ class CashMagics(CashAdminMagicsMixin, Magics):
 
         try:
             result = await self._cell_executor.execute_cell_async(
-                raw_cell, args, kwargs,
+                raw_cell,
+                args,
+                kwargs,
                 original_run_cell=None,
             )
         except KeyboardInterrupt:
@@ -1296,9 +1322,15 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             return await self._original_run_cell_async(raw_cell, *args, **kwargs)
 
         return await self._finalize_cell_execution_async(
-            raw_cell, result.all_metrics, result.buffered_outputs,
-            result.badge_display_id, result.hook_start, result.timing_breakdown,
-            result.badge_render_time, args, kwargs,
+            raw_cell,
+            result.all_metrics,
+            result.buffered_outputs,
+            result.badge_display_id,
+            result.hook_start,
+            result.timing_breakdown,
+            result.badge_render_time,
+            args,
+            kwargs,
         )
 
     @staticmethod
@@ -1315,10 +1347,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         cell we actually pass.  The sync path never hits this because ipykernel
         does not pass ``transformed_cell`` to sync ``run_cell``.
         """
-        return {
-            k: v for k, v in kwargs.items()
-            if k not in ('transformed_cell', 'preprocessing_exc_tuple')
-        }
+        return {k: v for k, v in kwargs.items() if k not in ("transformed_cell", "preprocessing_exc_tuple")}
 
     async def _synthesize_run_cell_raise_async(
         self,
@@ -1333,8 +1362,8 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         (the clean error display was already rendered by the executor's
         ``_finalize_error_badge``).
         """
-        self.shell.user_ns['__cash_exception__'] = e
-        orig_showtb = getattr(self.shell, 'showtraceback', None)
+        self.shell.user_ns["__cash_exception__"] = e
+        orig_showtb = getattr(self.shell, "showtraceback", None)
         try:
             self.shell.showtraceback = lambda *a, **kw: None
         except (AttributeError, TypeError):
@@ -1342,7 +1371,8 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         ipython_error_result = None
         try:
             ipython_error_result = await self._original_run_cell_async(
-                "raise __cash_exception__", *args,
+                "raise __cash_exception__",
+                *args,
                 **self._sanitize_async_delegation_kwargs(kwargs),
             )
         finally:
@@ -1370,8 +1400,8 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         it just lets the exception propagate so IPython's magic-error path
         handles it.
         """
-        self.shell.user_ns['__cash_exception__'] = e
-        orig_showtb = getattr(self.shell, 'showtraceback', None)
+        self.shell.user_ns["__cash_exception__"] = e
+        orig_showtb = getattr(self.shell, "showtraceback", None)
         try:
             self.shell.showtraceback = lambda *a, **kw: None
         except (AttributeError, TypeError):
@@ -1417,8 +1447,13 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         whose own dispatcher already keeps that bookkeeping consistent.
         """
         self._finalize_cell_body(
-            raw_cell, all_metrics, buffered_result_outputs, badge_display_id,
-            hook_start, timing_breakdown, badge_render_time,
+            raw_cell,
+            all_metrics,
+            buffered_result_outputs,
+            badge_display_id,
+            hook_start,
+            timing_breakdown,
+            badge_render_time,
         )
 
         # Delegate to original run_cell with "pass" so IPython keeps its
@@ -1478,15 +1513,15 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         self._record_observability(all_metrics)
 
         if self._debug:
-            print(f"[TIMING_PROXY] PROXY TOTAL: {hook_total*1000:.1f}ms")
-            print(f"[TIMING_PROXY] Badge init: {timing_breakdown.get('badge_init', 0)*1000:.1f}ms")
-            print(f"[TIMING_PROXY] Upstream check: {timing_breakdown.get('upstream_check', 0)*1000:.1f}ms")
-            print(f"[TIMING_PROXY] Badge progress renders: {badge_render_time*1000:.1f}ms")
+            print(f"[TIMING_PROXY] PROXY TOTAL: {hook_total * 1000:.1f}ms")
+            print(f"[TIMING_PROXY] Badge init: {timing_breakdown.get('badge_init', 0) * 1000:.1f}ms")
+            print(f"[TIMING_PROXY] Upstream check: {timing_breakdown.get('upstream_check', 0) * 1000:.1f}ms")
+            print(f"[TIMING_PROXY] Badge progress renders: {badge_render_time * 1000:.1f}ms")
 
         # Now that all debug prints are done, show the Buffered Result (if any)
         for output in buffered_result_outputs:
-            if isinstance(output, dict) and 'data' in output:
-                publish_display_data(data=output['data'], metadata=output.get('metadata', {}))
+            if isinstance(output, dict) and "data" in output:
+                publish_display_data(data=output["data"], metadata=output.get("metadata", {}))
             else:
                 display(output)
 
@@ -1498,9 +1533,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # Writes are asynchronous, so a failure can surface on the cell AFTER
         # the one that caused it. Reporting it late is strictly better than the
         # alternative, which was reporting it at kernel shutdown.
-        row, self._discarded_writes_seen = discarded_writes_notification(
-            getattr(self, '_discarded_writes_seen', 0)
-        )
+        row, self._discarded_writes_seen = discarded_writes_notification(getattr(self, "_discarded_writes_seen", 0))
         if row is not None:
             all_metrics = list(all_metrics) + [row]
 
@@ -1510,9 +1543,11 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # progress timer first so a late fire can never overwrite it with a
         # stale RUNNING badge.
         self._cancel_progress_badge()
-        if self._badge_mode == 'html':
-            self._render_interactive_badge(all_metrics, display_id=badge_display_id, cell_total_time=hook_total, timing_breakdown=timing_breakdown)
-        elif self._badge_mode == 'print':
+        if self._badge_mode == "html":
+            self._render_interactive_badge(
+                all_metrics, display_id=badge_display_id, cell_total_time=hook_total, timing_breakdown=timing_breakdown
+            )
+        elif self._badge_mode == "print":
             self._print_text_badge(all_metrics, cell_total_time=hook_total)
 
     async def _finalize_cell_execution_async(
@@ -1538,46 +1573,55 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         adds no side effects (execute-exactly-once).
         """
         self._finalize_cell_body(
-            raw_cell, all_metrics, buffered_result_outputs, badge_display_id,
-            hook_start, timing_breakdown, badge_render_time,
+            raw_cell,
+            all_metrics,
+            buffered_result_outputs,
+            badge_display_id,
+            hook_start,
+            timing_breakdown,
+            badge_render_time,
         )
         # Strip ``transformed_cell`` so IPython runs our ``"pass"`` and NOT the
         # original user cell again (see _sanitize_async_delegation_kwargs).
         return await self._original_run_cell_async(
-            "pass", *args, **self._sanitize_async_delegation_kwargs(kwargs),
+            "pass",
+            *args,
+            **self._sanitize_async_delegation_kwargs(kwargs),
         )
 
     def _update_last_cell_metrics(self, all_metrics: list[ProcessResult], hook_total: float) -> None:
         """Compute and store ``_last_cell_metrics`` for ``%cash_status``."""
-        statuses = [m.get('status') for m in all_metrics if m.get('status')]
+        statuses = [m.get("status") for m in all_metrics if m.get("status")]
         if all(s == CacheStatus.RESTORED for s in statuses) and statuses:
-            overall_status = 'RESTORED'
+            overall_status = "RESTORED"
         elif all(s == CacheStatus.COMPUTED for s in statuses) and statuses:
-            overall_status = 'COMPUTED'
+            overall_status = "COMPUTED"
         elif all(s == CacheStatus.SKIPPED for s in statuses) and statuses:
-            overall_status = 'SKIPPED'
+            overall_status = "SKIPPED"
         elif statuses:
-            overall_status = 'MIXED'
+            overall_status = "MIXED"
         else:
             overall_status = None
 
         self._last_cell_metrics = {
-            'statements': [
+            "statements": [
                 {
-                    'code': m.get('code', '')[:100],
-                    'status': m.get('status'),
-                    'execution_time': m.get('execution_time', 0.0),
-                    'saved_time': m.get('saved_time', 0.0),
-                    'outputs': m.get('restored_vars', []),
-                    'is_upstream': m.get('is_upstream', False),
+                    "code": m.get("code", "")[:100],
+                    "status": m.get("status"),
+                    "execution_time": m.get("execution_time", 0.0),
+                    "saved_time": m.get("saved_time", 0.0),
+                    "outputs": m.get("restored_vars", []),
+                    "is_upstream": m.get("is_upstream", False),
                 }
                 for m in all_metrics
             ],
-            'total_time': hook_total,
-            'total_restored_time': sum(m.get('saved_time', 0.0) for m in all_metrics),
-            'total_computed_time': sum(m.get('execution_time', 0.0) for m in all_metrics if m.get('status') == CacheStatus.COMPUTED),
-            'upstream_metrics': [m for m in all_metrics if m.get('is_upstream', False)],
-            'status': overall_status,
+            "total_time": hook_total,
+            "total_restored_time": sum(m.get("saved_time", 0.0) for m in all_metrics),
+            "total_computed_time": sum(
+                m.get("execution_time", 0.0) for m in all_metrics if m.get("status") == CacheStatus.COMPUTED
+            ),
+            "upstream_metrics": [m for m in all_metrics if m.get("is_upstream", False)],
+            "status": overall_status,
         }
 
     def _baselines(self):
@@ -1590,10 +1634,9 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         saving, which is the bug this store exists to fix.
         """
         store = self._session.baselines
-        if getattr(store, '_path', None) is None:
-            resolved = compute_baselines.store_for_backend(
-                getattr(self._cash_instance, 'backend', None))
-            if resolved is not None and getattr(resolved, '_path', None) is not None:
+        if getattr(store, "_path", None) is None:
+            resolved = compute_baselines.store_for_backend(getattr(self._cash_instance, "backend", None))
+            if resolved is not None and getattr(resolved, "_path", None) is not None:
                 self._session.baselines = resolved
                 return resolved
         return store
@@ -1627,19 +1670,20 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         stats = self._session.stats
         measured = self._session.measured_compute
         baselines = self._baselines()
-        stats['cells_executed'] += 1
+        stats["cells_executed"] += 1
         cell_compute_time = 0.0
         # Cash's own "too cheap to cache" floor, so the cacheable/trivial split
         # below matches the decision the cache actually made rather than a
         # second opinion invented here.
         floor = _config_float(
-            getattr(self._cash_instance, 'config', None),
-            'min_execution_time_to_cache_seconds', 0.01,
+            getattr(self._cash_instance, "config", None),
+            "min_execution_time_to_cache_seconds",
+            0.01,
         )
         for m in all_metrics:
-            status = m.get('status')
+            status = m.get("status")
             if status == CacheStatus.COMPUTED:
-                stats['statements_computed'] += 1
+                stats["statements_computed"] += 1
                 # What the USER's code cost: the statement's wall time less
                 # cash's own time inside it -- recording file reads, keying and
                 # hashing the arguments of the calls it routes, storing them
@@ -1648,10 +1692,10 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 # of the overhead below, so a paired run measured 370 s of
                 # slowdown where %cash_stats reported 210 s (round 30, r30s4;
                 # two other testers the same shape).
-                exec_time = max(0.0, m.get('execution_time', 0.0) - m.get('cash_tax', 0.0))
-                stats['total_compute_time'] += exec_time
+                exec_time = max(0.0, m.get("execution_time", 0.0) - m.get("cash_tax", 0.0))
+                stats["total_compute_time"] += exec_time
                 cell_compute_time += exec_time
-                code = m.get('code')
+                code = m.get("code")
                 if code:
                     measured[code] = exec_time
                     # Kept on disk too, so tomorrow's kernel can still point at
@@ -1659,35 +1703,35 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                     baselines.record(code, exec_time)
                 # Measured today: a real miss on a statement worth caching.
                 if exec_time >= floor:
-                    stats['statements_cacheable_miss'] += 1
+                    stats["statements_cacheable_miss"] += 1
             elif status == CacheStatus.RESTORED:
-                stats['statements_restored'] += 1
-                saved = m.get('saved_time', 0.0)
-                stats['total_restored_time'] += saved
-                stats['total_time_saved'] += saved
+                stats["statements_restored"] += 1
+                saved = m.get("saved_time", 0.0)
+                stats["total_restored_time"] += saved
+                stats["total_time_saved"] += saved
                 # ``saved`` is the cache's stale baseline, so it is NOT trusted
                 # for time — it is used only to answer "was this the
                 # kind of statement caching was for?". A hit is a fact either
                 # way; only the denominator's membership rests on the baseline.
                 if saved >= floor:
-                    stats['statements_cacheable_hit'] += 1
+                    stats["statements_cacheable_hit"] += 1
                 # Credit a VERIFIED saving only where this session computed the
                 # same statement itself and so knows today's cost. Take the
                 # min: if the cache's baseline is the smaller of the two it is
                 # the one we can defend, and if today's measurement is smaller
                 # the cache's baseline was stale-high and must not be credited.
-                today = measured.get(m.get('code'))
+                today = measured.get(m.get("code"))
                 if today is not None:
-                    stats['total_verified_saved'] += min(saved, today)
+                    stats["total_verified_saved"] += min(saved, today)
                 else:
                     # Nothing recomputed it here -- the usual case right after
                     # a restart. An earlier run on this machine measured it,
                     # and the least it ever cost is what it is credited.
-                    before = baselines.get(m.get('code') or '')
+                    before = baselines.get(m.get("code") or "")
                     if before is not None:
-                        stats['total_measured_saved'] += min(saved, before)
+                        stats["total_measured_saved"] += min(saved, before)
             elif status == CacheStatus.SKIPPED:
-                stats['statements_skipped'] += 1
+                stats["statements_skipped"] += 1
             # A ``@cash.cache`` HIT inside this statement saved real compute that
             # is invisible to the counting above: the value came from the
             # decorator, so the statement itself only did a fast lookup and reads
@@ -1696,19 +1740,21 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             # is only invoked when the statement EXECUTES, so a RESTORED statement
             # (whose ``saved_time`` already covers the whole compute) carries no
             # decorator_calls to add.
-            self._credit_decorator_calls(m.get('decorator_calls'), stats, floor)
+            self._credit_decorator_calls(m.get("decorator_calls"), stats, floor)
         # Overhead = cell wall time minus the user compute that ran this cell.
         # Floor at 0: the wall time always covers the compute it contains, but
         # clamp defensively against clock skew / partial timing.
-        stats['total_overhead'] += max(0.0, cell_total_time - cell_compute_time)
+        stats["total_overhead"] += max(0.0, cell_total_time - cell_compute_time)
         # One small write per cell that measured something new, and none at
         # all for a cell that restored everything. A Restart & Run All kills
         # the kernel, so nothing may be left for an exit hook to write.
         baselines.flush()
 
     def _credit_decorator_calls(
-        self, decorator_calls: 'list[dict[str, Any]] | None',
-        stats: dict[str, Any], floor: float,
+        self,
+        decorator_calls: "list[dict[str, Any]] | None",
+        stats: dict[str, Any],
+        floor: float,
     ) -> None:
         """Fold ``@cash.cache`` call metrics into the session totals.
 
@@ -1732,28 +1778,28 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         measured = self._session.measured_decorator_compute
         baselines = self._baselines()
         for call in decorator_calls:
-            if call.get('ran_plain'):
-                continue        # run without the cache: neither a hit nor a measured miss
-            key = call.get('cache_key')
-            if call.get('cache_hit'):
-                saved = call.get('time_saved', 0.0) or 0.0
-                stats['total_time_saved'] += saved
+            if call.get("ran_plain"):
+                continue  # run without the cache: neither a hit nor a measured miss
+            key = call.get("cache_key")
+            if call.get("cache_hit"):
+                saved = call.get("time_saved", 0.0) or 0.0
+                stats["total_time_saved"] += saved
                 if saved >= floor:
-                    stats['statements_cacheable_hit'] += 1
+                    stats["statements_cacheable_hit"] += 1
                 today = measured.get(key)
                 if today is not None:
-                    stats['total_verified_saved'] += min(saved, today)
+                    stats["total_verified_saved"] += min(saved, today)
                 else:
-                    before = baselines.get(f'call:{key}') if key is not None else None
+                    before = baselines.get(f"call:{key}") if key is not None else None
                     if before is not None:
-                        stats['total_measured_saved'] += min(saved, before)
+                        stats["total_measured_saved"] += min(saved, before)
             else:
                 # A miss's execution_time IS the measured compute for this key.
                 if key is not None:
-                    measured[key] = call.get('execution_time', 0.0) or 0.0
-                    baselines.record(f'call:{key}', call.get('execution_time', 0.0) or 0.0)
-                if (call.get('execution_time', 0.0) or 0.0) >= floor:
-                    stats['statements_cacheable_miss'] += 1
+                    measured[key] = call.get("execution_time", 0.0) or 0.0
+                    baselines.record(f"call:{key}", call.get("execution_time", 0.0) or 0.0)
+                if (call.get("execution_time", 0.0) or 0.0) >= floor:
+                    stats["statements_cacheable_miss"] += 1
 
     def _record_observability(self, all_metrics: list[ProcessResult]) -> None:
         """Record provenance + audit entries for each statement in *all_metrics*.
@@ -1765,18 +1811,18 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         no string-named outputs).
         """
         for m in all_metrics:
-            code = m.get('code', '')
-            status = m.get('status', 'computed')
-            duration_ms = m.get('execution_time', 0.0) * 1000
+            code = m.get("code", "")
+            status = m.get("status", "computed")
+            duration_ms = m.get("execution_time", 0.0) * 1000
             # ``rich_outputs`` holds IPython rich-display objects, NOT variable
             # names — never source variable names from it.
-            outputs = m.get('restored_vars', []) or m.get('evaluated_vars', [])
-            inputs_list = list(m.get('inputs', []))
+            outputs = m.get("restored_vars", []) or m.get("evaluated_vars", [])
+            inputs_list = list(m.get("inputs", []))
             # Outputs may contain rich-display dicts; provenance/audit only
             # care about string variable names.
             var_names = [o for o in (outputs or []) if isinstance(o, str)]
 
-            provenance_status = str(status).lower() if status else 'computed'
+            provenance_status = str(status).lower() if status else "computed"
             for out_var in var_names:
                 self._session.provenance.record(
                     variable=out_var,
@@ -1784,17 +1830,17 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                     inputs=inputs_list,
                     status=provenance_status,
                     duration_ms=duration_ms,
-                    lineage_hash=self._tracking_state.variable_lineage.get(out_var, ''),
+                    lineage_hash=self._tracking_state.variable_lineage.get(out_var, ""),
                     file_deps=list(self._tracking_state.executed_file_deps.get(out_var, [])),
                 )
 
-            audit_op = _OP_MAP.get(status, 'cache_operation')
-            for out_var in (var_names or [code[:30]]):
+            audit_op = _OP_MAP.get(status, "cache_operation")
+            for out_var in var_names or [code[:30]]:
                 self._session.audit.log(
                     operation=audit_op,
                     variable=out_var,
                     code=code,
-                    status='success',
+                    status="success",
                     duration_ms=duration_ms,
                 )
 
@@ -1810,6 +1856,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         except Exception as e:  # noqa: BLE001 — the badge is never worth breaking a cell
             if self._debug:
                 import traceback
+
                 print(f"[BADGE RENDER ERROR] {e}")
                 traceback.print_exc()
 
@@ -1821,8 +1868,8 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         per cell of r24s4. The notebook's source cannot change while the cell
         runs, so the first answer stands until the next cell.
         """
-        count = getattr(self.shell, 'execution_count', None)
-        cached = getattr(self, '_bug_report_context_cache', None)
+        count = getattr(self.shell, "execution_count", None)
+        cached = getattr(self, "_bug_report_context_cache", None)
         if cached is not None and cached[0] == count:
             return cached[1]
         context = self._collect_bug_report_context()
@@ -1834,23 +1881,23 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             from cash import __version__ as _v
         except Exception:
             _v = "unknown"
-        backend = getattr(self._cash_instance, 'backend', None)
-        backend_name = type(backend).__name__ if backend else 'unknown'
+        backend = getattr(self._cash_instance, "backend", None)
+        backend_name = type(backend).__name__ if backend else "unknown"
         python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
 
         # --- Execution history (what IPython actually ran) ---
         # Prefer input_hist_raw (untransformed magics like %cash_on) over
         # input_hist_parsed / In (which transforms magics to get_ipython() calls).
         # input_hist_raw lives on history_manager, not directly on the shell.
-        hm = getattr(self.shell, 'history_manager', None)
-        in_history = getattr(hm, 'input_hist_raw', None) if hm else None
+        hm = getattr(self.shell, "history_manager", None)
+        in_history = getattr(hm, "input_hist_raw", None) if hm else None
         if in_history is None:
-            in_history = getattr(self.shell, 'user_ns', {}).get('In', [])
+            in_history = getattr(self.shell, "user_ns", {}).get("In", [])
         # Filter empty strings and the 'pass' pseudo-cells that cash injects,
         # then deduplicate consecutive identical cells (from re-running).
         filtered: list[str] = []
         for c in in_history:
-            if not c.strip() or c.strip() == 'pass':
+            if not c.strip() or c.strip() == "pass":
                 continue
             if filtered and c == filtered[-1]:
                 continue
@@ -1861,16 +1908,17 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         notebook_cells: list[str] = []
         try:
             from ..server_discovery import get_notebook_cells
+
             notebook_cells = get_notebook_cells() or []
         except Exception:
             pass
 
         return {
-            'version': _v,
-            'python_version': python_version,
-            'backend': backend_name,
-            'notebook_history': exec_history,
-            'notebook_source': notebook_cells,
+            "version": _v,
+            "python_version": python_version,
+            "backend": backend_name,
+            "notebook_history": exec_history,
+            "notebook_source": notebook_cells,
         }
 
     def _configured_tier_labels(self) -> tuple[str, ...]:
@@ -1880,7 +1928,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         mid-session (e.g. swapping in a Redis tier) sees the new layout
         on the next cell run.
         """
-        backend = getattr(self._cash_instance, 'backend', None)
+        backend = getattr(self._cash_instance, "backend", None)
         if backend is None:
             return ()
         try:
@@ -1888,7 +1936,16 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         except Exception:  # noqa: BLE001 — best-effort: never break the badge over a backend quirk
             return ()
 
-    def _build_badge_html(self, metrics_list: list[ProcessResult], status: str = "DONE", current_step: int = 0, total_steps: int = 0, current_code: str | None = None, cell_total_time: float | None = None, timing_breakdown: dict[str, float] | None = None) -> str | None:
+    def _build_badge_html(
+        self,
+        metrics_list: list[ProcessResult],
+        status: str = "DONE",
+        current_step: int = 0,
+        total_steps: int = 0,
+        current_code: str | None = None,
+        cell_total_time: float | None = None,
+        timing_breakdown: dict[str, float] | None = None,
+    ) -> str | None:
         """Build badge HTML without publishing it. The expensive half of a render.
 
         Delegates to :func:`badge_renderer.render_interactive_badge`, which
@@ -1919,11 +1976,19 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         except Exception as e:  # noqa: BLE001 — intentionally broad; see _render_interactive_badge
             if self._debug:
                 import traceback
+
                 print(f"[BADGE RENDER ERROR] {e}")
                 traceback.print_exc()
             return None
 
-    def _publish_badge_html(self, html: str, display_id: str | None = None, update_existing: bool = True, _from_thread: bool = False, publisher: Any = None) -> None:
+    def _publish_badge_html(
+        self,
+        html: str,
+        display_id: str | None = None,
+        update_existing: bool = True,
+        _from_thread: bool = False,
+        publisher: Any = None,
+    ) -> None:
         """Publish already-built badge HTML. The cheap half of a render.
 
         Just an IPython display / publish_display_data call (a ZMQ send) --
@@ -1951,9 +2016,9 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 # threads.
                 if publisher is not None:
                     publisher.publish(
-                        {'text/html': html},
+                        {"text/html": html},
                         metadata={},
-                        transient={'display_id': display_id},
+                        transient={"display_id": display_id},
                         update=True,
                     )
                 # else: publish NOTHING. `_uncaptured_display_pub` returns
@@ -1974,10 +2039,23 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         except Exception as e:  # noqa: BLE001 — intentionally broad; see _render_interactive_badge
             if self._debug:
                 import traceback
+
                 print(f"[BADGE RENDER ERROR] {e}")
                 traceback.print_exc()
 
-    def _render_interactive_badge(self, metrics_list: list[ProcessResult], display_id: str | None = None, status: str = "DONE", current_step: int = 0, total_steps: int = 0, current_code: str | None = None, update_existing: bool = True, cell_total_time: float | None = None, timing_breakdown: dict[str, float] | None = None, _from_thread: bool = False) -> None:
+    def _render_interactive_badge(
+        self,
+        metrics_list: list[ProcessResult],
+        display_id: str | None = None,
+        status: str = "DONE",
+        current_step: int = 0,
+        total_steps: int = 0,
+        current_code: str | None = None,
+        update_existing: bool = True,
+        cell_total_time: float | None = None,
+        timing_breakdown: dict[str, float] | None = None,
+        _from_thread: bool = False,
+    ) -> None:
         """Render a clickable interactive badge with detailed execution history.
 
         Delegates HTML generation to :func:`badge_renderer.render_interactive_badge`
@@ -2001,14 +2079,20 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         exception.
         """
         html = self._build_badge_html(
-            metrics_list, status=status, current_step=current_step,
-            total_steps=total_steps, current_code=current_code,
-            cell_total_time=cell_total_time, timing_breakdown=timing_breakdown,
+            metrics_list,
+            status=status,
+            current_step=current_step,
+            total_steps=total_steps,
+            current_code=current_code,
+            cell_total_time=cell_total_time,
+            timing_breakdown=timing_breakdown,
         )
         if not html:
             return
         self._publish_badge_html(
-            html, display_id=display_id, update_existing=update_existing,
+            html,
+            display_id=display_id,
+            update_existing=update_existing,
             _from_thread=_from_thread,
         )
 
@@ -2017,8 +2101,8 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         """Parse optional TTL value from a %%cash magic line. Returns None if not set."""
         if not line:
             return None
-        parts = line.split('=')
-        if len(parts) == 2 and parts[0].strip() == 'ttl':
+        parts = line.split("=")
+        if len(parts) == 2 and parts[0].strip() == "ttl":
             try:
                 return int(parts[1].strip())
             except ValueError:
@@ -2055,9 +2139,15 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 return
 
             self._finalize_cell_execution(
-                cell, result.all_metrics, result.buffered_outputs,
-                result.badge_display_id, result.hook_start, result.timing_breakdown,
-                result.badge_render_time, (), {},
+                cell,
+                result.all_metrics,
+                result.buffered_outputs,
+                result.badge_display_id,
+                result.hook_start,
+                result.timing_breakdown,
+                result.badge_render_time,
+                (),
+                {},
                 delegate_to_run_cell=False,
             )
         finally:
@@ -2074,5 +2164,3 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         Delegates to :func:`error_display.show_clean_error`.
         """
         _show_clean_error_impl(exc, raw_cell, node, self.shell)
-
-

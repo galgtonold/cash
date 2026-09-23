@@ -1,5 +1,7 @@
 """Batch 45: Weakref & memory patterns — cash caching with weak references and GC."""
+
 import textwrap
+
 import pytest
 
 
@@ -9,9 +11,10 @@ class TestWeakrefBasics:
 
     def test_weakref_to_class_instance(self, nb_runner):
         """Weak reference to class instance across cells."""
-        nb_runner.create_notebook([
-            "import weakref",
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                "import weakref",
+                textwrap.dedent("""\
                 class Node:
                     def __init__(self, value):
                         self.value = value
@@ -22,12 +25,13 @@ class TestWeakrefBasics:
                 ref = weakref.ref(obj)
                 print(f"alive={ref() is not None} val={ref().value}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 # Access through weakref
                 result = ref().value * 2
                 print(f"result={result}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "alive=True val=42" in nb_runner.get_output(2)
@@ -35,9 +39,10 @@ class TestWeakrefBasics:
 
     def test_weakref_set(self, nb_runner):
         """WeakSet caching across cells."""
-        nb_runner.create_notebook([
-            "import weakref",
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                "import weakref",
+                textwrap.dedent("""\
                 class Item:
                     def __init__(self, name):
                         self.name = name
@@ -46,11 +51,12 @@ class TestWeakrefBasics:
                 ws = weakref.WeakSet(items)
                 print(f"count={len(ws)}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 names = sorted([i.name for i in ws])
                 print(f"names={names}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "count=3" in nb_runner.get_output(2)
@@ -58,9 +64,10 @@ class TestWeakrefBasics:
 
     def test_weakvalue_dict(self, nb_runner):
         """WeakValueDictionary pattern."""
-        nb_runner.create_notebook([
-            "import weakref",
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                "import weakref",
+                textwrap.dedent("""\
                 class CacheEntry:
                     def __init__(self, data):
                         self.data = data
@@ -73,11 +80,12 @@ class TestWeakrefBasics:
                     entries.append(e)  # keep strong refs
                 print(f"cache_size={len(cache)}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 values = [cache[k].data for k in sorted(cache.keys())]
                 print(f"values={values}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "cache_size=3" in nb_runner.get_output(2)
@@ -90,8 +98,9 @@ class TestSlotPatterns:
 
     def test_slots_class(self, nb_runner):
         """Class with __slots__ caching."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class Point:
                     __slots__ = ('x', 'y')
                     def __init__(self, x, y):
@@ -103,11 +112,12 @@ class TestSlotPatterns:
                 p = Point(3, 4)
                 print(f"p={p}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 distance = (p.x ** 2 + p.y ** 2) ** 0.5
                 print(f"distance={distance}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "p=Point(3, 4)" in nb_runner.get_output(1)
@@ -115,8 +125,9 @@ class TestSlotPatterns:
 
     def test_slots_inheritance(self, nb_runner):
         """Slots with inheritance."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 class Base:
                     __slots__ = ('x',)
                     def __init__(self, x):
@@ -131,11 +142,12 @@ class TestSlotPatterns:
                 d = Derived(10, 20)
                 print(f"x={d.x} y={d.y}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 total = d.x + d.y
                 print(f"total={total}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "x=10 y=20" in nb_runner.get_output(1)
@@ -148,9 +160,10 @@ class TestFinalizationPatterns:
 
     def test_weakref_finalize(self, nb_runner):
         """weakref.finalize callback registration."""
-        nb_runner.create_notebook([
-            "import weakref",
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                "import weakref",
+                textwrap.dedent("""\
                 cleanup_log = []
 
                 class Resource:
@@ -162,11 +175,12 @@ class TestFinalizationPatterns:
                 r2 = Resource("res2")
                 print(f"resources_created=2 log={cleanup_log}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 # Resources still alive
                 print(f"r1={r1.name} r2={r2.name} log={cleanup_log}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "resources_created=2" in nb_runner.get_output(2)
@@ -174,9 +188,10 @@ class TestFinalizationPatterns:
 
     def test_singleton_via_weakref(self, nb_runner):
         """Singleton-like pattern using weakref."""
-        nb_runner.create_notebook([
-            "import weakref",
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                "import weakref",
+                textwrap.dedent("""\
                 class Singleton:
                     _instances = weakref.WeakValueDictionary()
 
@@ -192,11 +207,12 @@ class TestFinalizationPatterns:
                 b = Singleton("shared")
                 print(f"same={a is b} name={a.name}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 c = Singleton("other")
                 print(f"diff={a is not c} names={a.name},{c.name}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "same=True name=shared" in nb_runner.get_output(2)

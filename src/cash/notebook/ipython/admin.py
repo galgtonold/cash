@@ -30,14 +30,15 @@ __all__ = ["CashAdminMagicsMixin"]
 # Module-level formatting helpers (used by cash_stats)
 # ---------------------------------------------------------------------------
 
+
 def _fmt_time(seconds: float) -> str:
     if seconds < 0.001:
-        return f"{seconds*1000000:.0f}us"
+        return f"{seconds * 1000000:.0f}us"
     if seconds < 1:
-        return f"{seconds*1000:.1f}ms"
+        return f"{seconds * 1000:.1f}ms"
     if seconds < 60:
         return f"{seconds:.1f}s"
-    return f"{seconds/60:.1f}min"
+    return f"{seconds / 60:.1f}min"
 
 
 def _fmt_signed_time(seconds: float) -> str:
@@ -57,15 +58,16 @@ def _fmt_size(bytes_val: int) -> str:
     if bytes_val < 1024:
         return f"{bytes_val}B"
     if bytes_val < 1024**2:
-        return f"{bytes_val/1024:.1f}KB"
+        return f"{bytes_val / 1024:.1f}KB"
     if bytes_val < 1024**3:
-        return f"{bytes_val/1024**2:.1f}MB"
-    return f"{bytes_val/1024**3:.2f}GB"
+        return f"{bytes_val / 1024**2:.1f}MB"
+    return f"{bytes_val / 1024**3:.2f}GB"
 
 
 # ---------------------------------------------------------------------------
 # Module-level I/O helpers (used by cash_diff)
 # ---------------------------------------------------------------------------
+
 
 def _load_cache_file_data(filepath: str) -> dict | None:
     """Try to load a cache file as JSON first, then pickle. Returns None on format failure.
@@ -74,6 +76,7 @@ def _load_cache_file_data(filepath: str) -> dict | None:
     """
     import json
     import pickle as pkl
+
     try:
         with open(filepath) as f:
             return json.load(f)
@@ -82,7 +85,7 @@ def _load_cache_file_data(filepath: str) -> dict | None:
     except OSError:
         raise
     try:
-        with open(filepath, 'rb') as f:
+        with open(filepath, "rb") as f:
             return pkl.load(f)
     except (pickle.UnpicklingError, TypeError, ValueError):
         pass
@@ -110,7 +113,7 @@ class CashAdminMagicsMixin:
             %cash_verify          # Check all cache entries
             %cash_verify --fix    # Check and remove corrupted entries
         """
-        fix_mode = '--fix' in line if line else False
+        fix_mode = "--fix" in line if line else False
         backend = self._cash_instance.backend
 
         print("[Verify] Checking cache integrity...")
@@ -145,7 +148,9 @@ class CashAdminMagicsMixin:
             print("   This is normal if you haven't re-run all cells yet.")
 
     def _verify_backend_entries(
-        self: CashMagics, backend: Any, fix_mode: bool,
+        self: CashMagics,
+        backend: Any,
+        fix_mode: bool,
     ) -> tuple[int, int, int, list[str]]:
         """Check all backend entries and return (total, healthy, corrupted, issues)."""
         entries = backend.list_entries()
@@ -155,7 +160,7 @@ class CashAdminMagicsMixin:
         issues: list[str] = []
 
         for entry in entries:
-            key = entry.get('key', '')
+            key = entry.get("key", "")
             try:
                 value = backend.get(key)
                 if value is not None:
@@ -204,7 +209,7 @@ class CashAdminMagicsMixin:
         # repair: this magic is the documented recovery from a poisoned cache,
         # so quietly running a lesser repair and reporting success turns a
         # recoverable state into a confidently wrong one.
-        mode = parse_mode(line, ('', '--full', '--state'))
+        mode = parse_mode(line, ("", "--full", "--state"))
         if mode is None:
             print(f"[Error] %cash_repair: unrecognised argument: {strip_inline_comment(line)!r}")
             print("   Nothing was repaired. Valid forms:")
@@ -213,7 +218,7 @@ class CashAdminMagicsMixin:
             print("     %cash_repair --full     Clear ALL cache and state")
             return
 
-        if mode == '--full':
+        if mode == "--full":
             print("[Repair] Full repair: clearing all cache and state...")
             try:
                 self._cash_instance.backend.clear()
@@ -238,7 +243,7 @@ class CashAdminMagicsMixin:
             print("   [OK] In-memory state cleared")
             print("\n[OK] Full repair complete. Re-run your cells to rebuild cache.")
 
-        elif mode == '--state':
+        elif mode == "--state":
             print("[Repair] State repair: clearing in-memory tracking state...")
             self._tracking_state.variable_lineage.clear()
             self._tracking_state.executed_cell_codes.clear()
@@ -259,7 +264,7 @@ class CashAdminMagicsMixin:
 
         else:
             print("[Repair] Repairing cache: removing corrupted entries...")
-            self.cash_verify('--fix')
+            self.cash_verify("--fix")
 
             stale_vars = [v for v in self._tracking_state.variable_lineage if v not in self.shell.user_ns]
             for v in stale_vars:
@@ -295,17 +300,18 @@ class CashAdminMagicsMixin:
         # ``reset`` mutates state, so an unrecognised argument must not fall
         # through to "print the stats" — that reports success (stats appear) for
         # a reset that never happened.
-        mode = parse_mode(line, ('', 'json', 'reset'))
+        mode = parse_mode(line, ("", "json", "reset"))
         if mode is None:
             print(f"[Error] %cash_stats: unrecognised argument: {strip_inline_comment(line)!r}")
             print("   Valid forms: %cash_stats | %cash_stats json | %cash_stats reset")
             return
 
-        if mode == 'reset':
+        if mode == "reset":
             # Rebuilt from the same definition a fresh session uses, so a new
             # counter can never be added to the stats and silently survive a
             # reset (it already happened once).
             from .magics import new_session_stats
+
             self._session.stats.update(new_session_stats())
             # The verified-saving baselines are part of the stats, not of the
             # cache: a reset must drop them too or savings would be credited
@@ -322,8 +328,8 @@ class CashAdminMagicsMixin:
             return
 
         stats = self._session.stats
-        total_stmts = stats['statements_computed'] + stats['statements_restored'] + stats['statements_skipped']
-        hit_rate = (stats['statements_restored'] + stats['statements_skipped']) / max(total_stmts, 1) * 100
+        total_stmts = stats["statements_computed"] + stats["statements_restored"] + stats["statements_skipped"]
+        hit_rate = (stats["statements_restored"] + stats["statements_skipped"]) / max(total_stmts, 1) * 100
 
         # The rate over ALL statements answers a question nobody asked: its
         # denominator is dominated by prints, imports and cheap assignments that
@@ -333,8 +339,8 @@ class CashAdminMagicsMixin:
         # an OVERstatement of savings; that is the same failure inverted, so the
         # same rule binds: the number must not imply a conclusion the data does
         # not support, in EITHER direction.
-        cacheable_hit = stats.get('statements_cacheable_hit', 0)
-        cacheable_miss = stats.get('statements_cacheable_miss', 0)
+        cacheable_hit = stats.get("statements_cacheable_hit", 0)
+        cacheable_miss = stats.get("statements_cacheable_miss", 0)
         cacheable_total = cacheable_hit + cacheable_miss
         cacheable_rate = (cacheable_hit / cacheable_total * 100) if cacheable_total else None
 
@@ -354,14 +360,14 @@ class CashAdminMagicsMixin:
         # deliberately UNDERSTATES a session that really did save time but never
         # re-measured a baseline — an understatement is a defensible error here;
         # an overstatement is the bug.
-        gross_saved = stats['total_time_saved']
-        verified_saved = stats.get('total_verified_saved', 0.0)
+        gross_saved = stats["total_time_saved"]
+        verified_saved = stats.get("total_verified_saved", 0.0)
         # Measured on this machine in an earlier kernel, at the least it ever
         # cost. Evidence of the same kind as ``verified``, one run older --
         # and the only kind a Restart & Run All can have, which is where the
         # net used to print as a range straddling zero (round 30).
-        measured_saved = stats.get('total_measured_saved', 0.0)
-        overhead = stats.get('total_overhead', 0.0)
+        measured_saved = stats.get("total_measured_saved", 0.0)
+        overhead = stats.get("total_overhead", 0.0)
         net_saved = verified_saved + measured_saved - overhead
         net_upper = gross_saved - overhead
 
@@ -380,28 +386,28 @@ class CashAdminMagicsMixin:
         # notebook means at kernel death, i.e. never. This is the one place a
         # user asking "is caching working?" can actually be told that it isn't.
         from cash.backends._base import discarded_writes
+
         discarded = discarded_writes()
 
-        if mode == 'json':
+        if mode == "json":
             import json
+
             result = {
                 **stats,
-                'discarded_writes': len(discarded),
-                'net_time_saved': net_saved,
-                'net_time_saved_upper_bound': net_upper,
-                'total_measured_saved': measured_saved,
+                "discarded_writes": len(discarded),
+                "net_time_saved": net_saved,
+                "net_time_saved_upper_bound": net_upper,
+                "total_measured_saved": measured_saved,
                 # False ⇒ the upper bound rests on baselines nobody re-measured,
                 # so its sign is not evidence of anything.
-                'net_sign_verified': net_saved >= 0 or net_upper < 0,
-                'hit_rate_percent': round(hit_rate, 1),
+                "net_sign_verified": net_saved >= 0 or net_upper < 0,
+                "hit_rate_percent": round(hit_rate, 1),
                 # Hits over the statements caching was ever on the table for.
                 # ``None`` (not 0.0) when nothing this session cleared the
                 # floor: a rate with an empty denominator is undefined, and
                 # emitting 0.0 would read as "cash missed everything".
-                'hit_rate_cacheable_percent': (
-                    round(cacheable_rate, 1) if cacheable_rate is not None else None
-                ),
-                'statements_cacheable_total': cacheable_total,
+                "hit_rate_cacheable_percent": (round(cacheable_rate, 1) if cacheable_rate is not None else None),
+                "statements_cacheable_total": cacheable_total,
             }
             print(json.dumps(result, indent=2))
             return
@@ -420,20 +426,21 @@ class CashAdminMagicsMixin:
             # Honest silence. No statement was expensive enough to cache, so
             # there is no hit rate to report -- printing "0%" here would blame
             # cash for correctly declining to cache a notebook of prints.
-            print("  Cache hit rate:      n/a  (no statement was expensive "
-                  "enough to cache)")
+            print("  Cache hit rate:      n/a  (no statement was expensive enough to cache)")
         elif trivial <= 0:
-            print(f"  Cache hit rate:      {cacheable_rate:.1f}%  "
-                  f"({cacheable_hit}/{cacheable_total} statements)")
+            print(f"  Cache hit rate:      {cacheable_rate:.1f}%  ({cacheable_hit}/{cacheable_total} statements)")
         else:
             # Both numbers, with the meaningful one first and each labelled by
             # its own denominator so neither can be read as the other.
-            print(f"  Cache hit rate:      {cacheable_rate:.1f}%  "
-                  f"({cacheable_hit}/{cacheable_total} statements worth caching)")
-            print(f"                       {hit_rate:.1f}% counting all {total_stmts} "
-                  f"statements -- the other {trivial} were too")
-            print("                       cheap to cache, so cash never tried: "
-                  "not misses.")
+            print(
+                f"  Cache hit rate:      {cacheable_rate:.1f}%  "
+                f"({cacheable_hit}/{cacheable_total} statements worth caching)"
+            )
+            print(
+                f"                       {hit_rate:.1f}% counting all {total_stmts} "
+                f"statements -- the other {trivial} were too"
+            )
+            print("                       cheap to cache, so cash never tried: not misses.")
         print()
         print(f"  Compute time:        {_fmt_time(stats['total_compute_time'])}")
         print(f"  Gross time saved:    {_fmt_time(gross_saved)}  (estimated)")
@@ -449,28 +456,28 @@ class CashAdminMagicsMixin:
         elif net_upper < 0:
             # Even the most generous reading of the cache's own baselines is a
             # loss, so the sign is certain without verifying anything.
-            print(f"  Net time saved:      {_fmt_signed_time(net_upper)}"
-                  f"  (cash cost you {_fmt_time(-net_upper)} this session)")
+            print(
+                f"  Net time saved:      {_fmt_signed_time(net_upper)}"
+                f"  (cash cost you {_fmt_time(-net_upper)} this session)"
+            )
         else:
             # The unverified case: gross says win, measurement says nothing.
             # Report the floor, and the ceiling as a claim rather than a fact.
-            print(f"  Net time saved:      at least {_fmt_signed_time(net_saved)}, "
-                  f"at best {_fmt_signed_time(net_upper)}")
-            print(f"    Cash measured only the {_fmt_time(overhead)} it spent. The "
-                  f"{_fmt_time(gross_saved)} it avoided is what these values cost")
-            print("    when first cached; if they would recompute faster today "
-                  "(warm file cache,")
-            print("    warm imports), the real figure is nearer the low end. Time "
-                  "a run with")
+            print(
+                f"  Net time saved:      at least {_fmt_signed_time(net_saved)}, at best {_fmt_signed_time(net_upper)}"
+            )
+            print(
+                f"    Cash measured only the {_fmt_time(overhead)} it spent. The "
+                f"{_fmt_time(gross_saved)} it avoided is what these values cost"
+            )
+            print("    when first cached; if they would recompute faster today (warm file cache,")
+            print("    warm imports), the real figure is nearer the low end. Time a run with")
             print("    caching off to settle it.")
         if discarded:
             print()
-            print(f"  Discarded writes:    {len(discarded)}  "
-                  f"-- these results were NOT cached")
-            print("    A cache write failed, so that work recomputes every run. "
-                  "Nothing raised")
-            print("    at the time, which is why the numbers above can look "
-                  "healthy anyway.")
+            print(f"  Discarded writes:    {len(discarded)}  -- these results were NOT cached")
+            print("    A cache write failed, so that work recomputes every run. Nothing raised")
+            print("    at the time, which is why the numbers above can look healthy anyway.")
             print(f"    First: {discarded[0][1]}")
             if len(discarded) > 1:
                 print(f"    ... and {len(discarded) - 1} more.")
@@ -510,13 +517,13 @@ class CashAdminMagicsMixin:
             return
 
         filepath = parts[0]
-        use_json = '--json' in parts
+        use_json = "--json" in parts
 
         export_vars = None
-        if '--vars' in parts:
-            idx = parts.index('--vars')
+        if "--vars" in parts:
+            idx = parts.index("--vars")
             if idx + 1 < len(parts):
-                export_vars = set(parts[idx + 1].split(','))
+                export_vars = set(parts[idx + 1].split(","))
 
         try:
             if use_json:
@@ -530,19 +537,19 @@ class CashAdminMagicsMixin:
         """Export lineage metadata as JSON."""
         import json
 
-        export_data: dict[str, Any] = {'version': 1, 'lineage': {}, 'cell_codes': {}}
+        export_data: dict[str, Any] = {"version": 1, "lineage": {}, "cell_codes": {}}
 
         if export_vars:
             for var in export_vars:
                 if var in self._tracking_state.variable_lineage:
-                    export_data['lineage'][var] = self._tracking_state.variable_lineage[var]
+                    export_data["lineage"][var] = self._tracking_state.variable_lineage[var]
                 if var in self._tracking_state.executed_cell_codes:
-                    export_data['cell_codes'][var] = self._tracking_state.executed_cell_codes[var]
+                    export_data["cell_codes"][var] = self._tracking_state.executed_cell_codes[var]
         else:
-            export_data['lineage'] = dict(self._tracking_state.variable_lineage)
-            export_data['cell_codes'] = dict(self._tracking_state.executed_cell_codes)
+            export_data["lineage"] = dict(self._tracking_state.variable_lineage)
+            export_data["cell_codes"] = dict(self._tracking_state.executed_cell_codes)
 
-        with open(filepath, 'w') as f:
+        with open(filepath, "w") as f:
             json.dump(export_data, f, indent=2)
 
         print(f"[OK] Exported lineage for {len(export_data['lineage'])} variables to '{filepath}' (JSON)")
@@ -554,32 +561,35 @@ class CashAdminMagicsMixin:
         backend = self._cash_instance.backend
         entries = backend.list_entries()
         export_data: dict[str, Any] = {
-            'version': 1, 'entries': [], 'lineage': {}, 'cell_codes': {},
+            "version": 1,
+            "entries": [],
+            "lineage": {},
+            "cell_codes": {},
         }
 
         exported_count = 0
         for entry in entries:
-            key = entry.get('key', '')
+            key = entry.get("key", "")
             if export_vars:
-                outputs = entry.get('outputs', [])
+                outputs = entry.get("outputs", [])
                 if not any(v in export_vars for v in outputs) and not any(v in key for v in export_vars):
                     continue
             meta, value = backend.get(key)
             if value is not None:
-                export_data['entries'].append({'key': key, 'metadata': meta, 'value': value})
+                export_data["entries"].append({"key": key, "metadata": meta, "value": value})
                 exported_count += 1
 
         if export_vars:
             for var in export_vars:
                 if var in self._tracking_state.variable_lineage:
-                    export_data['lineage'][var] = self._tracking_state.variable_lineage[var]
+                    export_data["lineage"][var] = self._tracking_state.variable_lineage[var]
                 if var in self._tracking_state.executed_cell_codes:
-                    export_data['cell_codes'][var] = self._tracking_state.executed_cell_codes[var]
+                    export_data["cell_codes"][var] = self._tracking_state.executed_cell_codes[var]
         else:
-            export_data['lineage'] = dict(self._tracking_state.variable_lineage)
-            export_data['cell_codes'] = dict(self._tracking_state.executed_cell_codes)
+            export_data["lineage"] = dict(self._tracking_state.variable_lineage)
+            export_data["cell_codes"] = dict(self._tracking_state.executed_cell_codes)
 
-        with open(filepath, 'wb') as f:
+        with open(filepath, "wb") as f:
             pkl.dump(export_data, f)
 
         print(f"[OK] Exported {exported_count} cache entries to '{filepath}'")
@@ -601,17 +611,17 @@ class CashAdminMagicsMixin:
             return
 
         filepath = parts[0]
-        merge_mode = '--merge' in parts
+        merge_mode = "--merge" in parts
         backend = self._cash_instance.backend
 
         try:
-            with open(filepath, 'rb') as f:
+            with open(filepath, "rb") as f:
                 import_data = pkl.load(f)
 
-            if import_data.get('version', 0) != 1:
+            if import_data.get("version", 0) != 1:
                 print(f"[Warning] Unknown export format version: {import_data.get('version', 0)}")
 
-            imported_count, skipped_count = _import_entries(backend, import_data.get('entries', []), merge_mode)
+            imported_count, skipped_count = _import_entries(backend, import_data.get("entries", []), merge_mode)
             self._import_metadata(import_data, merge_mode)
 
             msg = f"[OK] Imported {imported_count} cache entries from '{filepath}'"
@@ -626,10 +636,10 @@ class CashAdminMagicsMixin:
 
     def _import_metadata(self: CashMagics, import_data: dict, merge_mode: bool) -> None:
         """Import lineage and cell-code metadata from an export dict."""
-        for var, lin_hash in import_data.get('lineage', {}).items():
+        for var, lin_hash in import_data.get("lineage", {}).items():
             if not merge_mode or var not in self._tracking_state.variable_lineage:
                 self._tracking_state.variable_lineage[var] = lin_hash
-        for var, code in import_data.get('cell_codes', {}).items():
+        for var, code in import_data.get("cell_codes", {}).items():
             if not merge_mode or var not in self._tracking_state.executed_cell_codes:
                 self._tracking_state.executed_cell_codes[var] = code
 
@@ -648,7 +658,7 @@ class CashAdminMagicsMixin:
             return
 
         filepath = args[0]
-        show_vars = '--vars' in args
+        show_vars = "--vars" in args
 
         try:
             other_data = _load_cache_file_data(filepath)
@@ -656,12 +666,12 @@ class CashAdminMagicsMixin:
                 print(f"[Error] Invalid cache file format: '{filepath}'")
                 return
 
-            other_lineage = other_data.get('lineage', {})
+            other_lineage = other_data.get("lineage", {})
             current_lineage = dict(self._tracking_state.variable_lineage)
             only_current, only_other, changed, identical = _compute_lineage_diff(current_lineage, other_lineage)
 
             print(f"Cache Diff: current session vs '{filepath}'")
-            print(f"{'='*50}")
+            print(f"{'=' * 50}")
             print(f"  Only in current session: {len(only_current)}")
             print(f"  Only in '{filepath}':    {len(only_other)}")
             print(f"  Changed (diff lineage):  {len(changed)}")
@@ -670,7 +680,7 @@ class CashAdminMagicsMixin:
             if show_vars:
                 _print_diff_details(only_current, only_other, changed, identical)
 
-            print(f"{'='*50}")
+            print(f"{'=' * 50}")
 
         except FileNotFoundError:
             print(f"[Error] File not found: '{filepath}'")
@@ -695,22 +705,22 @@ class CashAdminMagicsMixin:
         parts = strip_inline_comment(line).split()
         ft = self._statement_processor.function_tracker
 
-        if not parts or parts[0] == '--list':
+        if not parts or parts[0] == "--list":
             tracked = ft._tracked_modules
             if not tracked:
                 print("No modules tracked. Use: %cash_track module_name")
             else:
                 print("Tracked modules:")
                 for mod in sorted(tracked):
-                    mtime = ft._module_mtimes.get(mod, 'unknown')
+                    mtime = ft._module_mtimes.get(mod, "unknown")
                     print(f"  {mod} (mtime: {mtime})")
             return
 
-        if parts[0] == '--check':
+        if parts[0] == "--check":
             _check_tracked_modules(ft)
             return
 
-        _track_or_import_module(ft, parts[0], '--reload' in parts)
+        _track_or_import_module(ft, parts[0], "--reload" in parts)
 
     # ------------------------------------------------------------------
     # Structured logging
@@ -734,7 +744,7 @@ class CashAdminMagicsMixin:
             print("No log handler active. Use '%cash_debug on' first.")
             return
 
-        if parts and parts[0] == 'clear':
+        if parts and parts[0] == "clear":
             handler.clear()
             print("Log buffer cleared.")
             return
@@ -747,6 +757,7 @@ class CashAdminMagicsMixin:
 
         if as_json:
             import json as _json
+
             print(_json.dumps(events, indent=2, default=str))
         else:
             for evt in events:
@@ -754,9 +765,10 @@ class CashAdminMagicsMixin:
 
     def _find_cash_log_handler(self: CashMagics) -> Any | None:
         """Return the active CashLogHandler, or None if not found."""
-        handler = getattr(self, '_log_handler', None)
+        handler = getattr(self, "_log_handler", None)
         if handler is None:
             from ...logging import CashLogHandler
+
             cash_logger = logging.getLogger("cash")
             for h in cash_logger.handlers:
                 if isinstance(h, CashLogHandler):
@@ -781,7 +793,7 @@ class CashAdminMagicsMixin:
         """
         parts = strip_inline_comment(line).split()
 
-        if not parts or parts[0] == '--all':
+        if not parts or parts[0] == "--all":
             tracked = sorted(self._session.provenance.tracked_variables)
             if not tracked:
                 print("No provenance data recorded yet.")
@@ -790,29 +802,34 @@ class CashAdminMagicsMixin:
                 for var in tracked:
                     latest = self._session.provenance.get_latest(var)
                     status_icon = {"computed": "[C]", "restored": "[R]", "skipped": "[S]"}.get(
-                        latest.status if latest else "", "[?]")
+                        latest.status if latest else "", "[?]"
+                    )
                     history_count = len(self._session.provenance.get_history(var))
                     print(f"  {status_icon} {var} ({history_count} records)")
             return
 
-        if parts[0] == '--clear':
+        if parts[0] == "--clear":
             self._session.provenance.clear()
             print("Provenance data cleared.")
             return
 
         var_name = parts[0]
-        show_graph = '--graph' in parts
-        show_time = '--time' in parts or '--timeline' in parts
-        as_json = '--json' in parts
+        show_graph = "--graph" in parts
+        show_time = "--time" in parts or "--timeline" in parts
+        as_json = "--json" in parts
 
         if as_json:
             print(self._session.provenance.to_json(var_name))
         else:
-            print(safe_text(self._session.provenance.format_provenance(
-                var_name,
-                show_graph=show_graph,
-                show_timeline=show_time,
-            )))
+            print(
+                safe_text(
+                    self._session.provenance.format_provenance(
+                        var_name,
+                        show_graph=show_graph,
+                        show_timeline=show_time,
+                    )
+                )
+            )
 
     # ------------------------------------------------------------------
     # Audit logging
@@ -839,16 +856,16 @@ class CashAdminMagicsMixin:
 
         cmd = parts[0].lower()
 
-        if cmd == 'on':
+        if cmd == "on":
             self._audit_cmd_on(parts)
-        elif cmd == 'off':
+        elif cmd == "off":
             self._session.audit.disable()
             print("Audit logging disabled.")
-        elif cmd == 'show':
+        elif cmd == "show":
             self._audit_cmd_show(parts)
-        elif cmd == 'summary':
+        elif cmd == "summary":
             self._audit_cmd_summary()
-        elif cmd == 'clear':
+        elif cmd == "clear":
             self._session.audit.clear()
             print("Audit entries cleared.")
         else:
@@ -858,8 +875,8 @@ class CashAdminMagicsMixin:
     def _audit_cmd_on(self: CashMagics, parts: list[str]) -> None:
         """Handle '%cash_audit on [--file path]'."""
         file_path = None
-        if '--file' in parts:
-            idx = parts.index('--file')
+        if "--file" in parts:
+            idx = parts.index("--file")
             if idx + 1 < len(parts):
                 file_path = parts[idx + 1]
         self._session.audit.enable(file_path)
@@ -871,9 +888,9 @@ class CashAdminMagicsMixin:
     def _audit_cmd_show(self: CashMagics, parts: list[str]) -> None:
         """Handle '%cash_audit show [operation] [--json]'."""
         operation = None
-        as_json = '--json' in parts
+        as_json = "--json" in parts
         for p in parts[1:]:
-            if not p.startswith('--'):
+            if not p.startswith("--"):
                 operation = p
                 break
         entries = self._session.audit.get_entries(operation=operation, limit=50)
@@ -882,7 +899,7 @@ class CashAdminMagicsMixin:
     def _audit_cmd_summary(self: CashMagics) -> None:
         """Handle '%cash_audit summary'."""
         summary = self._session.audit.get_summary()
-        if summary['total'] == 0:
+        if summary["total"] == 0:
             print("No audit entries recorded.")
             return
         print("Audit Summary:")
@@ -890,7 +907,7 @@ class CashAdminMagicsMixin:
         print(f"  Unique variables: {summary['unique_variables']}")
         print(f"  Time range: {summary['time_range']}")
         print("  Operations:")
-        for op, count in sorted(summary.get('operations', {}).items()):
+        for op, count in sorted(summary.get("operations", {}).items()):
             print(f"    {op}: {count}")
 
     # ------------------------------------------------------------------
@@ -911,8 +928,8 @@ class CashAdminMagicsMixin:
         parts = strip_inline_comment(line).split()
 
         iterations = 3
-        cold_start = '--cold' in parts
-        compare_mode = '--compare' in parts
+        cold_start = "--cold" in parts
+        compare_mode = "--compare" in parts
 
         for p in parts:
             if p.isdigit():
@@ -920,14 +937,16 @@ class CashAdminMagicsMixin:
                 break
 
         self._benchmark_config = {
-            'iterations': iterations,
-            'cold_start': cold_start,
-            'compare_mode': compare_mode,
-            'active': True,
+            "iterations": iterations,
+            "cold_start": cold_start,
+            "compare_mode": compare_mode,
+            "active": True,
         }
-        print(f"[Benchmark] Mode enabled for next cell ({iterations} iterations"
-              f"{', cold start' if cold_start else ''}"
-              f"{', compare mode' if compare_mode else ''})")
+        print(
+            f"[Benchmark] Mode enabled for next cell ({iterations} iterations"
+            f"{', cold start' if cold_start else ''}"
+            f"{', compare mode' if compare_mode else ''})"
+        )
 
     def _run_benchmark(self: CashMagics, cell_code: str, iterations: int, cold_start: bool, compare_mode: bool) -> None:
         """Execute a benchmark run and report results."""
@@ -972,9 +991,9 @@ class CashAdminMagicsMixin:
             self._execute_cell(cell_code)
             cached_times.append(time.perf_counter() - start)
 
-        print(f"\n{'='*50}")
+        print(f"\n{'=' * 50}")
         print(f"Benchmark Results ({iterations} iterations)")
-        print(f"{'='*50}")
+        print(f"{'=' * 50}")
         _print_timing_section("With caching", cached_times, statistics)
         _print_timing_section("Without caching", uncached_times, statistics)
 
@@ -990,11 +1009,11 @@ class CashAdminMagicsMixin:
                 # result is unreliable rather than silently omit the line.
                 print("\n  Speedup: n/a (timings below timer resolution)")
 
-        print(f"{'='*50}")
+        print(f"{'=' * 50}")
 
     def _clear_cache_for_cold_start(self: CashMagics) -> None:
         """Clear cache and lineage state for a cold-start benchmark iteration."""
-        if hasattr(self, '_backend') and self._backend:
+        if hasattr(self, "_backend") and self._backend:
             try:
                 self._backend.clear()
             except (OSError, AttributeError, TypeError):
@@ -1007,14 +1026,15 @@ class CashAdminMagicsMixin:
 # Module-level helpers (used by magic methods above, but stateless)
 # ---------------------------------------------------------------------------
 
+
 def _import_entries(backend: Any, entries: list, merge_mode: bool) -> tuple[int, int]:
     """Store entries into backend, respecting merge_mode. Returns (imported, skipped)."""
     imported = 0
     skipped = 0
     for entry in entries:
-        key = entry['key']
-        meta = entry['metadata']
-        value = entry['value']
+        key = entry["key"]
+        meta = entry["metadata"]
+        value = entry["value"]
         if not merge_mode:
             backend.set(key, value, meta)
             imported += 1
@@ -1029,7 +1049,8 @@ def _import_entries(backend: Any, entries: list, merge_mode: bool) -> tuple[int,
 
 
 def _compute_lineage_diff(
-    current: dict[str, str], other: dict[str, str],
+    current: dict[str, str],
+    other: dict[str, str],
 ) -> tuple[set[str], set[str], set[str], set[str]]:
     """Return (only_current, only_other, changed, identical) sets."""
     current_vars = set(current)
@@ -1043,7 +1064,10 @@ def _compute_lineage_diff(
 
 
 def _print_diff_details(
-    only_current: set[str], only_other: set[str], changed: set[str], identical: set[str],
+    only_current: set[str],
+    only_other: set[str],
+    changed: set[str],
+    identical: set[str],
 ) -> None:
     """Print variable-level diff details."""
     if only_current:
@@ -1081,6 +1105,7 @@ def _track_or_import_module(ft: Any, module_name: str, force_reload: bool) -> No
         return
 
     import importlib
+
     try:
         importlib.import_module(module_name)
         file_path = ft.track_module(module_name)
@@ -1097,7 +1122,7 @@ def _parse_log_args(parts: list[str]) -> tuple[int, bool]:
     limit = 20
     as_json = False
     for p in parts:
-        if p == 'json':
+        if p == "json":
             as_json = True
         elif p.isdigit():
             limit = int(p)
@@ -1106,13 +1131,13 @@ def _parse_log_args(parts: list[str]) -> tuple[int, bool]:
 
 def _format_log_event(evt: dict) -> str:
     """Format a single log event dict as a printable string."""
-    ts = time.strftime('%H:%M:%S', time.localtime(evt['time']))
-    level = evt['level'][:4]
-    msg = evt['msg']
-    extra = ''
-    if 'event' in evt:
+    ts = time.strftime("%H:%M:%S", time.localtime(evt["time"]))
+    level = evt["level"][:4]
+    msg = evt["msg"]
+    extra = ""
+    if "event" in evt:
         extra += f" [{evt['event']}]"
-    if 'duration_ms' in evt:
+    if "duration_ms" in evt:
         extra += f" ({evt['duration_ms']:.1f}ms)"
     return f"  {ts} {level}{extra} {msg}"
 
@@ -1125,9 +1150,9 @@ def _print_timing_section(label: str, times: list[float], statistics: Any) -> No
     if len(times) > 1:
         stdev = statistics.stdev(times)
         print(f"  {label}:")
-        print(f"    Mean:   {mean*1000:.1f}ms")
-        print(f"    Stdev:  {stdev*1000:.1f}ms")
-        print(f"    Min:    {min(times)*1000:.1f}ms")
-        print(f"    Max:    {max(times)*1000:.1f}ms")
+        print(f"    Mean:   {mean * 1000:.1f}ms")
+        print(f"    Stdev:  {stdev * 1000:.1f}ms")
+        print(f"    Min:    {min(times) * 1000:.1f}ms")
+        print(f"    Max:    {max(times) * 1000:.1f}ms")
     else:
-        print(f"  {label}:  {mean*1000:.1f}ms")
+        print(f"  {label}:  {mean * 1000:.1f}ms")

@@ -4,14 +4,16 @@ Pytest configuration and fixtures for test isolation.
 This module provides comprehensive fixtures for testing Cash functionality
 with proper isolation between tests.
 """
-import pytest
+
+import os
 import shutil
+import sys
 import time
+from io import StringIO
 from pathlib import Path
 from unittest.mock import MagicMock
-from io import StringIO
-import sys
-import os
+
+import pytest
 
 # ---------------------------------------------------------------------------
 # Crash visibility (ALL workers): dump a C-level traceback when a worker dies
@@ -114,8 +116,7 @@ class _StallWatchdog:
         if self._started or self.timeout <= 0:
             return
         self._started = True
-        threading.Thread(target=self._run, name="cash-stall-watchdog",
-                         daemon=True).start()
+        threading.Thread(target=self._run, name="cash-stall-watchdog", daemon=True).start()
 
     @property
     def poll_interval(self) -> float:
@@ -168,7 +169,8 @@ class _StallWatchdog:
             import tempfile
 
             path = os.path.join(
-                tempfile.gettempdir(), "cash_faulthandler",
+                tempfile.gettempdir(),
+                "cash_faulthandler",
                 f"stall_{worker}_{os.getpid()}.log",
             )
             os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -209,15 +211,16 @@ def _kill_child_processes() -> None:
 _STALL_WATCHDOG = _StallWatchdog(_STALL_TIMEOUT)
 
 
-from cash import Cash
-from cash.backends import InMemoryBackend, FileBackend
-from cash.notebook.ipython.magics import CashMagics
 from traitlets.config import Configurable
 
+from cash import Cash
+from cash.backends import FileBackend, InMemoryBackend
+from cash.notebook.ipython.magics import CashMagics
 
 # ============================================================================
 # Backend Fixtures
 # ============================================================================
+
 
 @pytest.fixture
 def clean_backend():
@@ -256,6 +259,7 @@ def file_backend(temp_cache_dir):
 # Cash Instance Fixtures
 # ============================================================================
 
+
 @pytest.fixture
 def cash_instance(clean_backend):
     """Provide a fresh Cash instance with InMemoryBackend."""
@@ -276,32 +280,34 @@ def cash_with_file_backend(file_backend):
 # IPython Shell Mock Fixtures
 # ============================================================================
 
+
 class MockShell(Configurable):
     """Mock IPython shell with all required attributes."""
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.user_ns = {}
-        self.user_ns['_ih'] = []  # Input history
+        self.user_ns["_ih"] = []  # Input history
         self.events = MagicMock()
         self.events.register = MagicMock(return_value=None)
         self.ast_transformers = []
         self.input_transformers_cleanup = []
         self.run_cell = MagicMock()
-        self.display_pub = type('MockDisplayPub', (), {'publish': MagicMock()})()
+        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
         self.magics_manager = MagicMock()
-        self.magics_manager.magics = {'cell': {}, 'line': {}}
-        
+        self.magics_manager.magics = {"cell": {}, "line": {}}
+
     def reset(self):
         """Reset shell state."""
         self.user_ns.clear()
-        self.user_ns['_ih'] = []
+        self.user_ns["_ih"] = []
 
 
 @pytest.fixture
 def mock_shell():
     """Provide a mock IPython shell."""
     shell = MockShell()
-    
+
     # Configure run_cell to execute code in user_ns
     def run_cell_impl(cell):
         try:
@@ -314,7 +320,7 @@ def mock_shell():
             result.success = False
             result.error_in_exec = e
             return result
-    
+
     shell.run_cell.side_effect = run_cell_impl
     yield shell
     shell.reset()
@@ -336,6 +342,7 @@ def simple_mock_shell():
 # CashMagics Fixtures
 # ============================================================================
 
+
 @pytest.fixture
 def cash_magics(mock_shell, cash_instance):
     """Provide CashMagics instance with mock shell and clean backend."""
@@ -350,6 +357,7 @@ def cash_magics(mock_shell, cash_instance):
 # Isolation and Cleanup Fixtures
 # ============================================================================
 
+
 @pytest.fixture(autouse=True)
 def isolate_tests(monkeypatch):
     """
@@ -358,14 +366,14 @@ def isolate_tests(monkeypatch):
     """
     # Store original sys.modules to detect imports
     original_modules = set(sys.modules.keys())
-    
+
     yield
-    
+
     # Cleanup: Remove any new modules that were imported during test
     # This prevents module-level state from leaking between tests
     new_modules = set(sys.modules.keys()) - original_modules
     for module in new_modules:
-        if module.startswith('test_') or 'cash' not in module:
+        if module.startswith("test_") or "cash" not in module:
             # Don't remove test modules or non-cash modules
             continue
 
@@ -379,7 +387,8 @@ def disable_auto_magic_registration(monkeypatch):
     Tests that need magics should register them manually or use the cash_magics fixture.
     """
     from cash.core import Cash
-    monkeypatch.setattr(Cash, 'register_magic', lambda self: None)
+
+    monkeypatch.setattr(Cash, "register_magic", lambda self: None)
 
 
 @pytest.fixture
@@ -399,6 +408,7 @@ def isolated_test(monkeypatch, tmp_path):
 # Output Capture Fixtures
 # ============================================================================
 
+
 @pytest.fixture
 def captured_output():
     """Capture stdout and stderr during test execution."""
@@ -406,12 +416,12 @@ def captured_output():
     old_stderr = sys.stderr
     stdout_capture = StringIO()
     stderr_capture = StringIO()
-    
+
     sys.stdout = stdout_capture
     sys.stderr = stderr_capture
-    
+
     yield stdout_capture, stderr_capture
-    
+
     sys.stdout = old_stdout
     sys.stderr = old_stderr
 
@@ -420,16 +430,14 @@ def captured_output():
 # Data Fixtures
 # ============================================================================
 
+
 @pytest.fixture
 def sample_dataframe():
     """Provide a sample pandas DataFrame for testing."""
     try:
         import pandas as pd
-        return pd.DataFrame({
-            'a': [1, 2, 3],
-            'b': [4, 5, 6],
-            'c': [7, 8, 9]
-        })
+
+        return pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6], "c": [7, 8, 9]})
     except ImportError:
         pytest.skip("pandas not installed")
 
@@ -437,29 +445,20 @@ def sample_dataframe():
 @pytest.fixture
 def sample_data():
     """Provide sample data for caching tests."""
-    return {
-        'integers': [1, 2, 3, 4, 5],
-        'strings': ['a', 'b', 'c'],
-        'nested': {'key1': 'value1', 'key2': [1, 2, 3]}
-    }
+    return {"integers": [1, 2, 3, 4, 5], "strings": ["a", "b", "c"], "nested": {"key1": "value1", "key2": [1, 2, 3]}}
 
 
 # ============================================================================
 # Pytest Configuration
 # ============================================================================
 
+
 def pytest_configure(config):
     """Configure pytest with custom markers."""
     _STALL_WATCHDOG.start()
-    config.addinivalue_line(
-        "markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')"
-    )
-    config.addinivalue_line(
-        "markers", "integration: marks tests as integration tests"
-    )
-    config.addinivalue_line(
-        "markers", "requires_ipython: marks tests that require IPython"
-    )
+    config.addinivalue_line("markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')")
+    config.addinivalue_line("markers", "integration: marks tests as integration tests")
+    config.addinivalue_line("markers", "requires_ipython: marks tests that require IPython")
     # CashImpurityWarning fires on the call-counter pattern that
     # virtually every test uses (`n['calls'] += 1` to count invocations
     # — a real scope mutation). Treating it as noise for the broad
@@ -496,6 +495,7 @@ def pytest_collection_modifyitems(config, items):
 # Every hook below runs in BOTH the xdist master (where reports arrive from
 # workers) and each worker (where they arrive locally), so a stall is caught
 # whichever side stops making progress.
+
 
 def pytest_collectreport(report):
     """Per-FILE collection progress.
@@ -565,7 +565,8 @@ def pytest_terminal_summary(terminalreporter):
     tr.write_sep("=", "failures that passed on a retry", yellow=True)
     tr.write_line(
         "These did not fail the run. They are shown because a green retry "
-        "otherwise discards the only evidence a rare failure produces.")
+        "otherwise discards the only evidence a rare failure produces."
+    )
     for nodeid, longrepr in _RERUN_FAILURES:
         tr.write_line("")
         tr.write_line(f"--- {nodeid}", bold=True)
@@ -620,13 +621,14 @@ ABOVE_PERSISTENCE_FLOOR_S = 0.2
 def _discarded_write_count():
     try:
         from cash.backends._base import discarded_writes
-    except Exception:       # noqa: BLE001 - import cycles during collection
+    except Exception:  # noqa: BLE001 - import cycles during collection
         return 0
     return len(discarded_writes())
 
 
 def _discarded_since(n):
     from cash.backends._base import discarded_writes
+
     return discarded_writes()[n:]
 
 
@@ -639,10 +641,11 @@ def _no_silently_discarded_cache_writes(request):
         # Without the drain they land during the NEXT test and get charged to
         # it -- which is exactly what happened to test_label_consistency.
         from cash.backends._base import all_pending_writes, reset_discarded_writes
+
         for queue in all_pending_writes():
             try:
                 queue.wait_all()
-            except Exception:   # noqa: BLE001 - a dying queue is not a finding
+            except Exception:  # noqa: BLE001 - a dying queue is not a finding
                 continue
         reset_discarded_writes(keep=before)
         return
@@ -688,12 +691,12 @@ def pytest_sessionfinish(session, exitstatus):
     """
     try:
         from cash.backends._base import all_pending_writes, discarded_writes
-    except Exception:       # noqa: BLE001
+    except Exception:  # noqa: BLE001
         return
     for queue in all_pending_writes():
         try:
             queue.wait_all()
-        except Exception:   # noqa: BLE001 - a dying queue is not a finding
+        except Exception:  # noqa: BLE001 - a dying queue is not a finding
             continue
 
     leaked = list(discarded_writes())
@@ -705,19 +708,20 @@ def pytest_sessionfinish(session, exitstatus):
         workeroutput["cash_discarded_writes"] = [list(item) for item in leaked]
         return
 
-    leaked = _WORKER_DISCARDED + leaked          # controller, or plain -n0 run
+    leaked = _WORKER_DISCARDED + leaked  # controller, or plain -n0 run
     if not leaked or exitstatus != 0:
         return
     reporter = session.config.pluginmanager.get_plugin("terminalreporter")
     if reporter is not None:
         reporter.write_line("")
         reporter.write_line(
-            f"DISCARDED CACHE WRITES: {len(leaked)} write(s) failed and were "
-            f"thrown away during this session.", red=True,
+            f"DISCARDED CACHE WRITES: {len(leaked)} write(s) failed and were thrown away during this session.",
+            red=True,
         )
         reporter.write_line(
             "The work was recomputed. Nothing raised at the call site, so this "
-            "is a cache doing less than it appears to.", red=True,
+            "is a cache doing less than it appears to.",
+            red=True,
         )
         for key, exc in leaked[:10]:
             reporter.write_line(f"    {key}: {exc}")

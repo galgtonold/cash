@@ -24,12 +24,11 @@ re-delivered, and Restart & Run All.
 The expensive functions sleep past the 0.1 s persistence floor and log their
 calls, so what is cached in the tester's notebook is cached here too.
 """
+
 from __future__ import annotations
 
 import numpy as np
-
-from session_harness import (AddFile, ClearDir, Edit, ReplaceFile, Restart, RestartAndRunAll,
-                             Run, RunAll, Session)
+from session_harness import ClearDir, Edit, ReplaceFile, Restart, RestartAndRunAll, Run, RunAll, Session
 
 SETUP = "import cash\n%cash_on"
 
@@ -38,85 +37,96 @@ SETUP = "import cash\n%cash_on"
 # r24s3 -- machine failure alerts
 # ---------------------------------------------------------------------------
 
+
 def _sensor_file(m: int) -> str:
     rs = np.random.RandomState(100 + m)
     rows = ["hour,temp,vibration"]
     for h in range(24 * 12):
-        drift = 0.02 * max(0, h - 200) if m % 2 == 0 else 0.0     # the even machines degrade
+        drift = 0.02 * max(0, h - 200) if m % 2 == 0 else 0.0  # the even machines degrade
         rows.append(f"{h},{60 + rs.normal(0, 1):.3f},{1 + drift + rs.normal(0, 0.2):.3f}")
     return "\n".join(rows) + "\n"
 
 
 ALERT_FILES = tuple(
     [(f"sensors/M{m:02d}.csv", _sensor_file(m)) for m in range(4)]
-    + [("maintenance.csv", "machine,hour\nM00,40\nM01,90\nM02,150\nM03,60\nM02,230\n"),
-       ("failures.csv", "machine,hour\nM00,270\nM02,260\n")]
+    + [
+        ("maintenance.csv", "machine,hour\nM00,40\nM01,90\nM02,150\nM03,60\nM02,230\n"),
+        ("failures.csv", "machine,hour\nM00,270\nM02,260\n"),
+    ]
 )
 
 ALERTS = (
     ("setup", SETUP),
-    ("imports",
-     "import time\n"
-     "from pathlib import Path\n"
-     "import numpy as np\n"
-     "import pandas as pd\n"),
-    ("load",
-     "hourly = {p.stem: pd.read_csv(p, index_col='hour') for p in sorted(Path('sensors').glob('M*.csv'))}\n"
-     "mlog = pd.read_csv('maintenance.csv')\n"
-     "failures = pd.read_csv('failures.csv')\n"
-     "ids = sorted(hourly)\n"
-     "print('machines', len(ids))\n"),
-    ("clean",
-     "BLANK_AFTER_H = 24\n"
-     "events = mlog.groupby('machine').hour.apply(list).to_dict()\n"
-     "def blank_after(h, times):\n"
-     "    mask = pd.Series(False, index=h.index)\n"
-     "    for t in times:\n"
-     "        mask |= (h.index > t) & (h.index <= t + BLANK_AFTER_H)\n"
-     "    return h.mask(mask)\n"
-     "clean_h = {mid: blank_after(h, events.get(mid, [])) for mid, h in hourly.items()}\n"
-     "print('missing', round(float(np.mean([h.isna().any(axis=1).mean() for h in clean_h.values()])), 4))\n"),
-    ("detector",
-     "def fit_detector(h, w):\n"
-     "    open('calls.log', 'a').write('fit\\n')\n"
-     "    time.sleep(0.12)\n"
-     "    r = h['vibration'].interpolate(limit_direction='both').rolling(w, min_periods=1).mean()\n"
-     "    med = r.median()\n"
-     "    iqr = r.quantile(0.75) - r.quantile(0.25)\n"
-     "    return (r - med) / (iqr if iqr else 1.0)\n"),
-    ("sweep",
-     "WINDOWS = [6, 24]\n"
-     "THRESHOLDS = [2.0, 4.0]\n"
-     "def score_machine(mid, w):\n"
-     "    return fit_detector(clean_h[mid], w)\n"
-     "def episodes(s, thr):\n"
-     "    a = s > thr\n"
-     "    return list(s.index[a & ~a.shift(1, fill_value=False)])\n"
-     "def evaluate(sc, thr):\n"
-     "    eps = {mid: episodes(s, thr) for mid, s in sc.items()}\n"
-     "    n = sum(len(e) for e in eps.values())\n"
-     "    tp = sum(1 for mid, e in eps.items() for x in e\n"
-     "             if ((failures.machine == mid) & (failures.hour > x) & (failures.hour <= x + 72)).any())\n"
-     "    return {'threshold': thr, 'episodes': n, 'precision': tp / n if n else 0.0}\n"
-     "sweep_rows = []\n"
-     "for w in WINDOWS:\n"
-     "    sc = {mid: score_machine(mid, w) for mid in ids}\n"
-     "    for thr in THRESHOLDS:\n"
-     "        sweep_rows.append({'window_h': w, **evaluate(sc, thr)})\n"
-     "sweep = pd.DataFrame(sweep_rows)\n"
-     "print(sweep.round(3).to_string())\n"),
-    ("pick",
-     "best = sweep.sort_values(['precision', 'episodes'], ascending=False).iloc[0]\n"
-     "BEST_W, BEST_THR = int(best.window_h), float(best.threshold)\n"
-     "best_scores = {mid: score_machine(mid, BEST_W) for mid in ids}\n"
-     "print('chosen', BEST_W, BEST_THR)\n"),
-    ("analysis",
-     "rows = []\n"
-     "for mid, s in best_scores.items():\n"
-     "    for e in episodes(s, BEST_THR):\n"
-     "        rows.append({'machine': mid, 'start': e})\n"
-     "ep = pd.DataFrame(rows, columns=['machine', 'start'])\n"
-     "print(len(ep), 'episodes', round(float(sum(s.sum() for s in best_scores.values())), 3))\n"),
+    ("imports", "import time\nfrom pathlib import Path\nimport numpy as np\nimport pandas as pd\n"),
+    (
+        "load",
+        "hourly = {p.stem: pd.read_csv(p, index_col='hour') for p in sorted(Path('sensors').glob('M*.csv'))}\n"
+        "mlog = pd.read_csv('maintenance.csv')\n"
+        "failures = pd.read_csv('failures.csv')\n"
+        "ids = sorted(hourly)\n"
+        "print('machines', len(ids))\n",
+    ),
+    (
+        "clean",
+        "BLANK_AFTER_H = 24\n"
+        "events = mlog.groupby('machine').hour.apply(list).to_dict()\n"
+        "def blank_after(h, times):\n"
+        "    mask = pd.Series(False, index=h.index)\n"
+        "    for t in times:\n"
+        "        mask |= (h.index > t) & (h.index <= t + BLANK_AFTER_H)\n"
+        "    return h.mask(mask)\n"
+        "clean_h = {mid: blank_after(h, events.get(mid, [])) for mid, h in hourly.items()}\n"
+        "print('missing', round(float(np.mean([h.isna().any(axis=1).mean() for h in clean_h.values()])), 4))\n",
+    ),
+    (
+        "detector",
+        "def fit_detector(h, w):\n"
+        "    open('calls.log', 'a').write('fit\\n')\n"
+        "    time.sleep(0.12)\n"
+        "    r = h['vibration'].interpolate(limit_direction='both').rolling(w, min_periods=1).mean()\n"
+        "    med = r.median()\n"
+        "    iqr = r.quantile(0.75) - r.quantile(0.25)\n"
+        "    return (r - med) / (iqr if iqr else 1.0)\n",
+    ),
+    (
+        "sweep",
+        "WINDOWS = [6, 24]\n"
+        "THRESHOLDS = [2.0, 4.0]\n"
+        "def score_machine(mid, w):\n"
+        "    return fit_detector(clean_h[mid], w)\n"
+        "def episodes(s, thr):\n"
+        "    a = s > thr\n"
+        "    return list(s.index[a & ~a.shift(1, fill_value=False)])\n"
+        "def evaluate(sc, thr):\n"
+        "    eps = {mid: episodes(s, thr) for mid, s in sc.items()}\n"
+        "    n = sum(len(e) for e in eps.values())\n"
+        "    tp = sum(1 for mid, e in eps.items() for x in e\n"
+        "             if ((failures.machine == mid) & (failures.hour > x) & (failures.hour <= x + 72)).any())\n"
+        "    return {'threshold': thr, 'episodes': n, 'precision': tp / n if n else 0.0}\n"
+        "sweep_rows = []\n"
+        "for w in WINDOWS:\n"
+        "    sc = {mid: score_machine(mid, w) for mid in ids}\n"
+        "    for thr in THRESHOLDS:\n"
+        "        sweep_rows.append({'window_h': w, **evaluate(sc, thr)})\n"
+        "sweep = pd.DataFrame(sweep_rows)\n"
+        "print(sweep.round(3).to_string())\n",
+    ),
+    (
+        "pick",
+        "best = sweep.sort_values(['precision', 'episodes'], ascending=False).iloc[0]\n"
+        "BEST_W, BEST_THR = int(best.window_h), float(best.threshold)\n"
+        "best_scores = {mid: score_machine(mid, BEST_W) for mid in ids}\n"
+        "print('chosen', BEST_W, BEST_THR)\n",
+    ),
+    (
+        "analysis",
+        "rows = []\n"
+        "for mid, s in best_scores.items():\n"
+        "    for e in episodes(s, BEST_THR):\n"
+        "        rows.append({'machine': mid, 'start': e})\n"
+        "ep = pd.DataFrame(rows, columns=['machine', 'start'])\n"
+        "print(len(ep), 'episodes', round(float(sum(s.sum() for s in best_scores.values())), 3))\n",
+    ),
 )
 
 MACHINE_ALERTS = Session(
@@ -146,6 +156,7 @@ MACHINE_ALERTS = Session(
 # r24s2 -- regional sales pack
 # ---------------------------------------------------------------------------
 
+
 def _sales() -> str:
     rs = np.random.RandomState(24)
     rows = ["week,region,sales,plan"]
@@ -158,40 +169,46 @@ def _sales() -> str:
 
 PACK = (
     ("setup", SETUP),
-    ("imports",
-     "import time\n"
-     "from pathlib import Path\n"
-     "import pandas as pd\n"
-     "import matplotlib\n"
-     "matplotlib.use('Agg')\n"
-     "import matplotlib.pyplot as plt\n"
-     "PACK = Path('pack')\n"
-     "PACK.mkdir(exist_ok=True)\n"),
-    ("style",
-     "plt.rcParams.update({'axes.grid': True, 'grid.color': '#CCCCCC', 'axes.facecolor': '#F4F4F4',\n"
-     "                     'axes.prop_cycle': matplotlib.cycler(color=['#1F4E79', '#C00000'])})\n"),
-    ("load",
-     "sales = pd.read_csv('sales.csv')\n"
-     "print('rows', len(sales))\n"),
-    ("vs_plan",
-     "def vs_plan(df):\n"
-     "    open('calls.log', 'a').write('vs_plan\\n')\n"
-     "    time.sleep(0.12)\n"
-     "    out = df.copy()\n"
-     "    out['gap'] = (out['sales'] - out['plan']).round(2)\n"
-     "    return out\n"
-     "by_region = {r: vs_plan(g) for r, g in sales.groupby('region')}\n"
-     "print({r: round(float(g['gap'].sum()), 2) for r, g in by_region.items()})\n"),
-    ("charts",
-     "for region, g in by_region.items():\n"
-     "    fig, ax = plt.subplots(figsize=(4, 2.5))\n"
-     "    ax.plot(g['week'], g['sales'], label='sales')\n"
-     "    ax.plot(g['week'], g['plan'], label='plan')\n"
-     "    ax.set_title(region)\n"
-     "    ax.legend()\n"
-     "    fig.savefig(PACK / f'{region}.png', dpi=40)\n"
-     "    plt.close(fig)\n"
-     "print(sorted(p.name for p in PACK.glob('*.png')))\n"),
+    (
+        "imports",
+        "import time\n"
+        "from pathlib import Path\n"
+        "import pandas as pd\n"
+        "import matplotlib\n"
+        "matplotlib.use('Agg')\n"
+        "import matplotlib.pyplot as plt\n"
+        "PACK = Path('pack')\n"
+        "PACK.mkdir(exist_ok=True)\n",
+    ),
+    (
+        "style",
+        "plt.rcParams.update({'axes.grid': True, 'grid.color': '#CCCCCC', 'axes.facecolor': '#F4F4F4',\n"
+        "                     'axes.prop_cycle': matplotlib.cycler(color=['#1F4E79', '#C00000'])})\n",
+    ),
+    ("load", "sales = pd.read_csv('sales.csv')\nprint('rows', len(sales))\n"),
+    (
+        "vs_plan",
+        "def vs_plan(df):\n"
+        "    open('calls.log', 'a').write('vs_plan\\n')\n"
+        "    time.sleep(0.12)\n"
+        "    out = df.copy()\n"
+        "    out['gap'] = (out['sales'] - out['plan']).round(2)\n"
+        "    return out\n"
+        "by_region = {r: vs_plan(g) for r, g in sales.groupby('region')}\n"
+        "print({r: round(float(g['gap'].sum()), 2) for r, g in by_region.items()})\n",
+    ),
+    (
+        "charts",
+        "for region, g in by_region.items():\n"
+        "    fig, ax = plt.subplots(figsize=(4, 2.5))\n"
+        "    ax.plot(g['week'], g['sales'], label='sales')\n"
+        "    ax.plot(g['week'], g['plan'], label='plan')\n"
+        "    ax.set_title(region)\n"
+        "    ax.legend()\n"
+        "    fig.savefig(PACK / f'{region}.png', dpi=40)\n"
+        "    plt.close(fig)\n"
+        "print(sorted(p.name for p in PACK.glob('*.png')))\n",
+    ),
 )
 
 REGION_PACK = Session(
@@ -231,29 +248,37 @@ DOC_FILES = tuple((f"docs/doc_{i:02d}.txt", _doc(i)) for i in range(8))
 
 EXPORT = (
     ("setup", SETUP),
-    ("imports",
-     "import time\n"
-     "from collections import Counter\n"
-     "from pathlib import Path\n"
-     "import pandas as pd\n"
-     "OUT = Path('out')\n"
-     "OUT.mkdir(exist_ok=True)\n"),
-    ("load",
-     "SAMPLE = 3\n"
-     "paths = sorted(Path('docs').glob('*.txt'))[:SAMPLE]\n"
-     "texts = {p.stem: p.read_text() for p in paths}\n"
-     "print('docs', len(texts))\n"),
-    ("count",
-     "def count_tokens(text):\n"
-     "    open('calls.log', 'a').write('count\\n')\n"
-     "    time.sleep(0.12)\n"
-     "    return Counter(text.split())\n"
-     "counts = {name: count_tokens(t) for name, t in texts.items()}\n"),
-    ("export",
-     "table = pd.DataFrame(counts).T.fillna(0).astype(int).sort_index(axis=1)\n"
-     "table.to_csv(OUT / 'token_counts.csv')\n"
-     "pd.Series({n: sum(c.values()) for n, c in counts.items()}, name='tokens').to_csv(OUT / 'totals.csv')\n"
-     "print({p.name: p.stat().st_size for p in sorted(OUT.glob('*.csv'))})\n"),
+    (
+        "imports",
+        "import time\n"
+        "from collections import Counter\n"
+        "from pathlib import Path\n"
+        "import pandas as pd\n"
+        "OUT = Path('out')\n"
+        "OUT.mkdir(exist_ok=True)\n",
+    ),
+    (
+        "load",
+        "SAMPLE = 3\n"
+        "paths = sorted(Path('docs').glob('*.txt'))[:SAMPLE]\n"
+        "texts = {p.stem: p.read_text() for p in paths}\n"
+        "print('docs', len(texts))\n",
+    ),
+    (
+        "count",
+        "def count_tokens(text):\n"
+        "    open('calls.log', 'a').write('count\\n')\n"
+        "    time.sleep(0.12)\n"
+        "    return Counter(text.split())\n"
+        "counts = {name: count_tokens(t) for name, t in texts.items()}\n",
+    ),
+    (
+        "export",
+        "table = pd.DataFrame(counts).T.fillna(0).astype(int).sort_index(axis=1)\n"
+        "table.to_csv(OUT / 'token_counts.csv')\n"
+        "pd.Series({n: sum(c.values()) for n, c in counts.items()}, name='tokens').to_csv(OUT / 'totals.csv')\n"
+        "print({p.name: p.stat().st_size for p in sorted(OUT.glob('*.csv'))})\n",
+    ),
 )
 
 DOC_EXPORT = Session(

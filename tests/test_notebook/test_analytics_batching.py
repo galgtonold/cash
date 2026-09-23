@@ -16,6 +16,7 @@ timing anything, so it fails deterministically on the old fsync-per-cell code
 (N committed rows) and passes on the batched code (0 committed rows until a
 flush).
 """
+
 from __future__ import annotations
 
 import sqlite3

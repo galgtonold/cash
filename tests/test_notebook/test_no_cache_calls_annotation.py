@@ -18,7 +18,6 @@ from cash.notebook.annotations import CacheAnnotation, leading_cell_annotation, 
 
 
 class TestNoCacheCallsAnnotation(unittest.TestCase):
-
     def test_no_cache_calls_is_parsed(self):
         ann = parse_annotation_line("# @cash:no-cache-calls")
         self.assertIsNotNone(ann)

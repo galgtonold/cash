@@ -24,6 +24,7 @@ The failure is still recorded. ``_run_task`` appends it to the discarded-writes
 registry as it happens, which is what the badge row and ``%cash_stats`` read,
 so nothing is hidden by declining to re-raise it forever.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -68,7 +69,7 @@ def test_the_key_works_again_once_writes_recover():
 
         done = []
         pw.submit("k", lambda: done.append(1))
-        pw.wait("k")                      # must not raise the OLD failure
+        pw.wait("k")  # must not raise the OLD failure
         assert done == [1], "the recovered write did not run"
     finally:
         pw.shutdown(wait=True)
@@ -126,7 +127,7 @@ def test_the_failure_is_still_recorded_for_reporting():
         _failing(pw)
         with pytest.warns(CashCacheStoreFailedWarning):
             pw.wait("k")
-        pw.wait("k")          # consumed; still no re-raise
+        pw.wait("k")  # consumed; still no re-raise
 
         recorded = _base.discarded_writes()
         assert [k for k, _ in recorded] == ["k"], recorded

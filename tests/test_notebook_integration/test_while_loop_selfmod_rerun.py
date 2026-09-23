@@ -16,6 +16,7 @@ The fix marks a no-lineage self-modifying output of a single-unit (while / with)
 loop broken directly in the classifier instead of collapsing its lineage, so its
 producer restores the cell-entry base and the loop recomputes from scratch.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.upstream]
@@ -31,68 +32,74 @@ def _rerun(nb_runner, setup, cell, expect):
 
 
 def test_while_control_var_plus_accumulator(nb_runner):
-    _rerun(nb_runner, "n = 0\ntotal = 0",
-           "while n < 5:\n    n += 1\n    total += n\nprint(total)", "15")
+    _rerun(nb_runner, "n = 0\ntotal = 0", "while n < 5:\n    n += 1\n    total += n\nprint(total)", "15")
 
 
 def test_while_single_control_var(nb_runner):
-    _rerun(nb_runner, "n = 0",
-           "while n < 5:\n    n += 1\nprint(n)", "5")
+    _rerun(nb_runner, "n = 0", "while n < 5:\n    n += 1\nprint(n)", "5")
 
 
 def test_while_list_accumulator(nb_runner):
-    _rerun(nb_runner, "n = 0\nacc = []",
-           "while n < 3:\n    n += 1\n    acc.append(n)\nprint(acc)", "[1, 2, 3]")
+    _rerun(nb_runner, "n = 0\nacc = []", "while n < 3:\n    n += 1\n    acc.append(n)\nprint(acc)", "[1, 2, 3]")
 
 
 def test_while_set_accumulator(nb_runner):
-    _rerun(nb_runner, "n = 0\nseen = set()",
-           "while n < 3:\n    n += 1\n    seen.add(n)\nprint(sorted(seen))", "[1, 2, 3]")
+    _rerun(
+        nb_runner, "n = 0\nseen = set()", "while n < 3:\n    n += 1\n    seen.add(n)\nprint(sorted(seen))", "[1, 2, 3]"
+    )
 
 
 def test_while_dict_accumulator(nb_runner):
-    _rerun(nb_runner, "n = 0\nd = {}",
-           "while n < 3:\n    n += 1\n    d[n] = n * n\nprint(d)", "{1: 1, 2: 4, 3: 9}")
+    _rerun(nb_runner, "n = 0\nd = {}", "while n < 3:\n    n += 1\n    d[n] = n * n\nprint(d)", "{1: 1, 2: 4, 3: 9}")
 
 
 def test_with_block_self_accumulate(nb_runner):
     # A `with` block also runs as a single unit; a no-lineage self-mod inside it
     # must reset on re-run rather than double.
-    _rerun(nb_runner, "import contextlib\ntotal = 0",
-           "with contextlib.suppress(Exception):\n    total += 5\nprint(total)", "5")
+    _rerun(
+        nb_runner,
+        "import contextlib\ntotal = 0",
+        "with contextlib.suppress(Exception):\n    total += 5\nprint(total)",
+        "5",
+    )
 
 
 def test_while_nested_in_if(nb_runner):
-    _rerun(nb_runner, "n = 0\ntotal = 0",
-           "if True:\n    while n < 4:\n        n += 1\n        total += n\nprint(total)", "10")
+    _rerun(
+        nb_runner,
+        "n = 0\ntotal = 0",
+        "if True:\n    while n < 4:\n        n += 1\n        total += n\nprint(total)",
+        "10",
+    )
 
 
 def test_while_new_var_preserved(nb_runner):
     """CAS-42 guard: a while loop that builds a fresh list (not read at entry)
     is idempotent and must keep producing the right value on re-run."""
-    _rerun(nb_runner, "src = [1, 2, 3]",
-           "out = []\ni = 0\nwhile i < len(src):\n    out.append(src[i] * 2)\n    i += 1\nprint(out)",
-           "[2, 4, 6]")
+    _rerun(
+        nb_runner,
+        "src = [1, 2, 3]",
+        "out = []\ni = 0\nwhile i < len(src):\n    out.append(src[i] * 2)\n    i += 1\nprint(out)",
+        "[2, 4, 6]",
+    )
 
 
 def test_walrus_while_condition_multivar(nb_runner):
     """The control var is assigned by a walrus in the while CONDITION (not the
     body), so `all_mutated_vars` misses it; the static output set catches it."""
-    _rerun(nb_runner, "n = 0\ntotal = 0",
-           "while (n := n + 1) <= 5:\n    total += n\nprint(total)", "15")
+    _rerun(nb_runner, "n = 0\ntotal = 0", "while (n := n + 1) <= 5:\n    total += n\nprint(total)", "15")
 
 
 def test_walrus_while_condition_listaccum(nb_runner):
-    _rerun(nb_runner, "n = 0\nacc = []",
-           "while (n := n + 1) <= 3:\n    acc.append(n)\nprint(acc)", "[1, 2, 3]")
+    _rerun(nb_runner, "n = 0\nacc = []", "while (n := n + 1) <= 3:\n    acc.append(n)\nprint(acc)", "[1, 2, 3]")
 
 
 def test_while_nocache_accumulates(nb_runner):
     """A `# @cash: no-cache` while loop is meant to run fresh and accumulate
     across re-runs (the opt-out), not be reset."""
-    nb_runner.create_notebook([
-        "n = 0\ntotal = 0",
-        "# @cash: no-cache\nwhile n < 2:\n    n += 1\n    total += 100\nprint(total)"])
+    nb_runner.create_notebook(
+        ["n = 0\ntotal = 0", "# @cash: no-cache\nwhile n < 2:\n    n += 1\n    total += 100\nprint(total)"]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "200" in nb_runner.get_output(2), nb_runner.get_output(2)

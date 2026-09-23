@@ -20,6 +20,7 @@ The hasher borrows Cash's registries *by reference*: it reads the same
 dict objects Cash mutates over its lifetime, so a function registered
 after the hasher is constructed is still seen.
 """
+
 from __future__ import annotations
 
 import contextvars
@@ -33,8 +34,7 @@ if TYPE_CHECKING:
     from .graph import DependencyGraph
     from .purity_analyzer import PurityReport
 
-__all__ = ["DependencyStateHasher", "HelperResolver", "SysModulesHelperResolver",
-           "STATE_LEDGER", "ledger_note"]
+__all__ = ["DependencyStateHasher", "HelperResolver", "SysModulesHelperResolver", "STATE_LEDGER", "ledger_note"]
 
 #: What the state segment of the key being built is made of, by name: the
 #: function's own source, each cached function and helper it calls, the
@@ -43,8 +43,7 @@ __all__ = ["DependencyStateHasher", "HelperResolver", "SysModulesHelperResolver"
 #: every round-20 tester got the same unexplained reason. ``None`` whenever no
 #: key is being built. Values are kept raw (the fold's own digests and part
 #: lists); they are only formatted on a miss, never on the hit path.
-STATE_LEDGER: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
-    "_cash_state_ledger", default=None)
+STATE_LEDGER: contextvars.ContextVar[dict | None] = contextvars.ContextVar("_cash_state_ledger", default=None)
 
 
 def ledger_note(label: Any, value: Any) -> None:
@@ -144,9 +143,7 @@ class DependencyStateHasher:
         # Keep the passed dict BY REFERENCE (it is empty at construction and
         # filled by later registrations) - ``or {}`` would swap in a fresh dict
         # because an empty dict is falsy, severing the shared reference.
-        self._declared_dep_snapshots = (
-            declared_dep_snapshots if declared_dep_snapshots is not None else {}
-        )
+        self._declared_dep_snapshots = declared_dep_snapshots if declared_dep_snapshots is not None else {}
         self._declared_dep_resolver = declared_dep_resolver
 
     def compute(
@@ -194,19 +191,17 @@ class DependencyStateHasher:
             # state_token() is the source's change token (mtime / version /
             # digest). It warns if a source mistakenly returns a bool, which
             # can't track changes.
-            token = ds.state_token() if hasattr(ds, "state_token") else (
-                ds._get_mtime() if hasattr(ds, "_get_mtime") else ds.has_changed()
+            token = (
+                ds.state_token()
+                if hasattr(ds, "state_token")
+                else (ds._get_mtime() if hasattr(ds, "_get_mtime") else ds.has_changed())
             )
             hashes.append(str(token))
         elif node in self._declared_dep_snapshots:
             # A declared plain-callable dep: re-resolve its live
             # source hash so a disk edit + reload is seen; fall back to the
             # registration-time snapshot when resolution fails.
-            live = (
-                self._declared_dep_resolver(node)
-                if self._declared_dep_resolver is not None
-                else None
-            )
+            live = self._declared_dep_resolver(node) if self._declared_dep_resolver is not None else None
             hashes.append(live if live is not None else self._declared_dep_snapshots[node])
 
         if note and hashes:

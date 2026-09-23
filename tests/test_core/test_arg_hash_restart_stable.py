@@ -17,6 +17,7 @@ win over ``_cash_lineage_hash``. These tests pin both directions -- a volatile
 lineage attr must NOT move the key, and a real content change MUST move it --
 and are proven fails-without / passes-with by stashing only ``src/cash/core.py``.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -40,6 +41,7 @@ def _set_lineage(obj, value: str) -> None:
 # ---------------------------------------------------------------------------
 # pandas DataFrame (the reported ML case)
 # ---------------------------------------------------------------------------
+
 
 def test_dataframe_arg_hash_ignores_volatile_lineage():
     """A byte-identical DataFrame keys the same even when its lineage attr
@@ -75,6 +77,7 @@ def test_dataframe_arg_hash_still_tracks_content_change():
 # pandas Series (the pipeline's y_train arg)
 # ---------------------------------------------------------------------------
 
+
 def test_series_arg_hash_ignores_volatile_lineage():
     pd = pytest.importorskip("pandas")
     c = _cash()
@@ -103,6 +106,7 @@ def test_series_arg_hash_still_tracks_content_change():
 # end-to-end: a persisted entry restores under a fresh Cash after the arg's
 # lineage attr is re-derived (simulating a kernel restart).
 # ---------------------------------------------------------------------------
+
 
 def test_decorator_restart_survives_relineaged_dataframe(tmp_path):
     pd = pytest.importorskip("pandas")
@@ -141,6 +145,7 @@ def test_decorator_restart_survives_relineaged_dataframe(tmp_path):
 # regression guard: a lineage-only custom object (no content hasher) still
 # short-circuits on lineage (test_lineage_custom_object.py contract).
 # ---------------------------------------------------------------------------
+
 
 def test_custom_object_without_content_hasher_still_uses_lineage():
     c = _cash()

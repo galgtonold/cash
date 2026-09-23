@@ -14,14 +14,16 @@ class TestLongChainEdits:
 
     def test_six_cell_chain_edit_root(self, nb_runner):
         """6-cell chain, edit root."""
-        nb_runner.create_notebook([
-            "a = 1",
-            "b = a + 1",
-            "c = b + 1",
-            "d = c + 1",
-            "e = d + 1",
-            "f = e + 1\nprint(f'f = {f}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 1",
+                "b = a + 1",
+                "c = b + 1",
+                "d = c + 1",
+                "e = d + 1",
+                "f = e + 1\nprint(f'f = {f}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "f = 6" in nb_runner.get_output(6)
@@ -33,14 +35,16 @@ class TestLongChainEdits:
 
     def test_six_cell_chain_edit_middle(self, nb_runner):
         """6-cell chain, edit cell 3 (middle)."""
-        nb_runner.create_notebook([
-            "a = 5",
-            "b = a * 2",
-            "c = b + 1",
-            "d = c * 3",
-            "e = d - 5",
-            "print(f'e = {e}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 5",
+                "b = a * 2",
+                "c = b + 1",
+                "d = c * 3",
+                "e = d - 5",
+                "print(f'e = {e}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         # b=10, c=11, d=33, e=28
@@ -54,14 +58,16 @@ class TestLongChainEdits:
 
     def test_six_cell_chain_edit_near_end(self, nb_runner):
         """6-cell chain, edit second-to-last."""
-        nb_runner.create_notebook([
-            "a = 2",
-            "b = a ** 2",
-            "c = b + 3",
-            "d = c * 2",
-            "e = d + 100",
-            "print(f'e = {e}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 2",
+                "b = a ** 2",
+                "c = b + 3",
+                "d = c * 2",
+                "e = d + 100",
+                "print(f'e = {e}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         # b=4, c=7, d=14, e=114
@@ -79,12 +85,14 @@ class TestBranchingChainEdits:
 
     def test_diamond_dependency_edit_shared_root(self, nb_runner):
         """Diamond: root -> (left, right) -> merge."""
-        nb_runner.create_notebook([
-            "root = 10",
-            "left = root * 2",
-            "right = root + 5",
-            "merged = left + right\nprint(f'merged = {merged}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "root = 10",
+                "left = root * 2",
+                "right = root + 5",
+                "merged = left + right\nprint(f'merged = {merged}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         # left=20, right=15, merged=35
@@ -98,12 +106,14 @@ class TestBranchingChainEdits:
 
     def test_diamond_edit_one_branch(self, nb_runner):
         """Diamond: edit one branch only."""
-        nb_runner.create_notebook([
-            "root = 5",
-            "left = root * 3",
-            "right = root + 1",
-            "merged = left + right\nprint(f'merged = {merged}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "root = 5",
+                "left = root * 3",
+                "right = root + 1",
+                "merged = left + right\nprint(f'merged = {merged}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         # left=15, right=6, merged=21
@@ -117,12 +127,14 @@ class TestBranchingChainEdits:
 
     def test_two_independent_chains_edit_one(self, nb_runner):
         """Two independent chains, edit one and verify other unchanged."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "y = x * 2\nprint(f'y = {y}')",
-            "a = 100",
-            "b = a + 50\nprint(f'b = {b}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "y = x * 2\nprint(f'y = {y}')",
+                "a = 100",
+                "b = a + 50\nprint(f'b = {b}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "y = 20" in nb_runner.get_output(2)
@@ -140,11 +152,13 @@ class TestMultipleEditsInSequence:
 
     def test_three_edits_to_root(self, nb_runner):
         """Edit root three times in sequence."""
-        nb_runner.create_notebook([
-            "x = 1",
-            "y = x * 10",
-            "z = y + 5\nprint(f'z = {z}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 1",
+                "y = x * 10",
+                "z = y + 5\nprint(f'z = {z}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "z = 15" in nb_runner.get_output(3)
@@ -163,11 +177,13 @@ class TestMultipleEditsInSequence:
 
     def test_edit_different_cells_alternating(self, nb_runner):
         """Alternate between editing cell 1 and cell 2."""
-        nb_runner.create_notebook([
-            "a = 10",
-            "b = a + 5",
-            "c = b * 2\nprint(f'c = {c}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 10",
+                "b = a + 5",
+                "c = b * 2\nprint(f'c = {c}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         # c = (10+5)*2 = 30

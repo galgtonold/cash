@@ -25,10 +25,10 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Union
 
-
 # ---------------------------------------------------------------------------
 # Status enum — display-layer concept (broader than ``CacheStatus``).
 # ---------------------------------------------------------------------------
+
 
 class BadgeStatus(str, Enum):
     """Display status for a row, header, or badge.
@@ -46,7 +46,7 @@ class BadgeStatus(str, Enum):
     RESTORED = "restored"
     COMPUTED = "computed"
     SKIPPED = "skipped"
-    MIXED = "mixed"                    # summary header when a cell has both restored + computed
+    MIXED = "mixed"  # summary header when a cell has both restored + computed
     # A header-only state: the cell is still running. Previously "RUNNING" was
     # squeezed into WARNING, which the summary renderer does not read, so a
     # progress badge published without step information fell through to
@@ -77,6 +77,7 @@ class SectionKind(str, Enum):
 # Row nodes
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class StatementRow:
     """A single non-loop, non-control statement row.
@@ -95,13 +96,13 @@ class StatementRow:
     #: iteration, a statement cash rewrote) -- renderers fall back to ``code``.
     display_code: str | None = None
     saved_time_s: float = 0.0
-    storage_tiers: tuple[str, ...] = ()          # e.g. ('RAM',), ('RAM', 'DISK')
-    source: str | None = None                    # restore source, e.g. 'RAM', 'DISK'
-    output_vars: tuple[str, ...] = ()            # what the row produced this time
-    restored_vars: tuple[str, ...] = ()          # vars hydrated from cache (RESTORED rows)
-    uncacheable_reasons: tuple[str, ...] = ()    # populated when status==COMPUTED but not cached
-    skipped_reason: str | None = None            # populated when the row was skipped at cache time
-    guard_cause: str | None = None               # for "unstable key": what kept changing the key
+    storage_tiers: tuple[str, ...] = ()  # e.g. ('RAM',), ('RAM', 'DISK')
+    source: str | None = None  # restore source, e.g. 'RAM', 'DISK'
+    output_vars: tuple[str, ...] = ()  # what the row produced this time
+    restored_vars: tuple[str, ...] = ()  # vars hydrated from cache (RESTORED rows)
+    uncacheable_reasons: tuple[str, ...] = ()  # populated when status==COMPUTED but not cached
+    skipped_reason: str | None = None  # populated when the row was skipped at cache time
+    guard_cause: str | None = None  # for "unstable key": what kept changing the key
     #: What an upstream statement the repair re-ran printed (stdout, stderr).
     #: Kept out of the cell's own output -- it belongs to another cell -- and
     #: shown under the step instead (round 29, r29s3).
@@ -273,7 +274,7 @@ class DecoratorCall:
     """A single ``@cash.cache`` call event."""
 
     func_name: str
-    status: BadgeStatus                          # RESTORED for hit, COMPUTED for miss
+    status: BadgeStatus  # RESTORED for hit, COMPUTED for miss
     time_s: float
 
 
@@ -359,24 +360,24 @@ def build_sub_unit_groups(events: Any) -> list[SubUnitGroup]:
             DecoratorCall(
                 func_name=str(e.get("func_name", "?")),
                 status=BadgeStatus.RESTORED if e.get("cache_hit") else BadgeStatus.COMPUTED,
-                time_s=float(
-                    (e.get("time_saved") if e.get("cache_hit") else e.get("execution_time"))
-                    or 0.0
-                ),
+                time_s=float((e.get("time_saved") if e.get("cache_hit") else e.get("execution_time")) or 0.0),
             )
             for e in evs
         )
-        groups.append(SubUnitGroup(
-            call_source=source,
-            occurrence_index=occ,
-            calls=calls,
-            condensed=len(calls) > _CONDENSE_ABOVE,
-            key_prefix=str(evs[0].get("cache_key") or "")[:13],
-            miss_reason=next((e.get("miss_reason") for e in evs if e.get("miss_reason")), None),
-            ran_plain=sum(1 for e in evs if e.get("ran_plain")),
-            unstored=sum(1 for e in evs if not e.get("cache_hit") and not e.get("ran_plain")
-                         and e.get("stored") is False),
-        ))
+        groups.append(
+            SubUnitGroup(
+                call_source=source,
+                occurrence_index=occ,
+                calls=calls,
+                condensed=len(calls) > _CONDENSE_ABOVE,
+                key_prefix=str(evs[0].get("cache_key") or "")[:13],
+                miss_reason=next((e.get("miss_reason") for e in evs if e.get("miss_reason")), None),
+                ran_plain=sum(1 for e in evs if e.get("ran_plain")),
+                unstored=sum(
+                    1 for e in evs if not e.get("cache_hit") and not e.get("ran_plain") and e.get("stored") is False
+                ),
+            )
+        )
     return groups
 
 

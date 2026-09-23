@@ -16,6 +16,7 @@ about loops that must NOT be trusted.
 Counted, not timed: a tee on ``StatementProcessor.process_statement`` in the
 new kernel records which statements ran.
 """
+
 import ast
 import os
 from pathlib import Path
@@ -28,7 +29,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(600)]
 
 N = 40
 
-_TEE = '''
+_TEE = """
 import cash.notebook.statement.processor as _p
 C = _p.StatementProcessor
 if not hasattr(C, "_test_orig"):
@@ -44,37 +45,38 @@ if not hasattr(C, "_test_orig"):
         return r
     C.process_statement = _tee
 C._test_ran = []
-'''
-_UNTEE = '''
+"""
+_UNTEE = """
 import cash.notebook.statement.processor as _p
 C = _p.StatementProcessor
 if hasattr(C, "_test_orig"):
     C.process_statement = C._test_orig
     del C._test_orig
-'''
+"""
 _RAN = "__import__('cash.notebook.statement.processor', fromlist=['_']).StatementProcessor._test_ran"
 
 
 def _record_expr(loop_src: str) -> str:
     """The persisted record of *loop_src*'s loop, as the kernel's backend holds it."""
     import ast as _ast
-    code = _ast.unparse(_ast.parse(loop_src).body[1])     # body[0] is the accumulator seed
-    return ("__import__('cash')._global_cash.backend.get_metadata("
-            f"__import__('cash.notebook.cache_key', fromlist=['_']).control_outcome_key({code!r}))")
+
+    code = _ast.unparse(_ast.parse(loop_src).body[1])  # body[0] is the accumulator seed
+    return (
+        "__import__('cash')._global_cash.backend.get_metadata("
+        f"__import__('cash.notebook.cache_key', fromlist=['_']).control_outcome_key({code!r}))"
+    )
 
 
-SETUP = ("import glob\nimport os\nimport time\nimport pandas as pd\n"
-         "files = sorted(glob.glob('exports/*.csv'))\n"
-         "def parse(f):\n    d = pd.read_csv(f)\n    d['v'] = clean(d['v'])\n    return d\n"
-         "def slow_summary(t):\n    time.sleep(0.3)\n    return int(t['v'].sum())")
+SETUP = (
+    "import glob\nimport os\nimport time\nimport pandas as pd\n"
+    "files = sorted(glob.glob('exports/*.csv'))\n"
+    "def parse(f):\n    d = pd.read_csv(f)\n    d['v'] = clean(d['v'])\n    return d\n"
+    "def slow_summary(t):\n    time.sleep(0.3)\n    return int(t['v'].sum())"
+)
 #: Defined BELOW ``parse``, which calls it, so no lineage the loop's inputs
 #: carry depends on it: only the record's callee lineages see it change.
 CLEAN = "def clean(v):\n    return v"
-LOOP = ("parts = []\n"
-        "for f in files:\n"
-        "    d = parse(f)\n"
-        "    parts.append(d)\n"
-        "raw = pd.concat(parts, ignore_index=True)")
+LOOP = "parts = []\nfor f in files:\n    d = parse(f)\n    parts.append(d)\nraw = pd.concat(parts, ignore_index=True)"
 SUMMARY = "summary = slow_summary(raw)"
 REPORT = "print('S', summary)"
 READS_PARTS = "print('P', len(parts), len(d))"
@@ -156,16 +158,27 @@ def test_the_loops_own_variables_are_rebuilt_when_a_cell_reads_them(nb_runner, _
     assert "d = parse(f)" in ran
 
 
-@pytest.mark.parametrize("why, loop", [
-    ("writes a file", "parts = []\nfor f in files:\n    d = parse(f)\n"
-                      "    open(f + '.seen', 'w').write('x')\n    parts.append(d)"),
-    ("draws from the global RNG", "parts = []\nfor f in files:\n    d = parse(f)\n"
-                                  "    d['r'] = random.random()\n    parts.append(d)"),
-    ("reads the clock", "parts = []\nfor f in files:\n    d = parse(f)\n"
-                        "    d['t'] = time.time()\n    parts.append(d)"),
-    ("has a helper that mutates a global", "parts = []\nfor f in files:\n    d = parse(f)\n"
-                                           "    note(f)\n    parts.append(d)"),
-])
+@pytest.mark.parametrize(
+    "why, loop",
+    [
+        (
+            "writes a file",
+            "parts = []\nfor f in files:\n    d = parse(f)\n    open(f + '.seen', 'w').write('x')\n    parts.append(d)",
+        ),
+        (
+            "draws from the global RNG",
+            "parts = []\nfor f in files:\n    d = parse(f)\n    d['r'] = random.random()\n    parts.append(d)",
+        ),
+        (
+            "reads the clock",
+            "parts = []\nfor f in files:\n    d = parse(f)\n    d['t'] = time.time()\n    parts.append(d)",
+        ),
+        (
+            "has a helper that mutates a global",
+            "parts = []\nfor f in files:\n    d = parse(f)\n    note(f)\n    parts.append(d)",
+        ),
+    ],
+)
 def test_a_loop_that_did_more_than_build_its_outputs_is_not_recorded(nb_runner, _teed, why, loop):
     setup = SETUP + "\nimport random\nSEEN = []\ndef note(f):\n    SEEN.append(f)"
     _run_all(nb_runner, ["import cash\n%cash_on", setup, CLEAN, loop + "\nraw = pd.concat(parts)", SUMMARY])

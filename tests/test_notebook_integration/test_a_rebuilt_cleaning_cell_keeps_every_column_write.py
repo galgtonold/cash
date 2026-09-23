@@ -13,6 +13,7 @@ This shape did not reach that state here (the tester's 3-million-row data did);
 it guards the rebuild, and ``test_notebook/test_latest_producer_is_scheduled.py``
 pins the planner step.
 """
+
 import pytest
 
 pytest.importorskip("pandas")

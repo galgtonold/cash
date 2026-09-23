@@ -23,8 +23,8 @@ import hashlib
 import logging
 from typing import TYPE_CHECKING
 
-from . import helpers as _helpers
 from ..cache_status import CacheStatus
+from . import helpers as _helpers
 
 if TYPE_CHECKING:
     from ..statement import ProcessResult
@@ -85,11 +85,19 @@ class TryHandler:
             # A directive on the ``try`` header scopes to the whole construct and
             # flows down into every branch within it.
             try_annotation = _helpers.resolve_header_annotation(
-                raw_cell, node, inherited_annotation,
+                raw_cell,
+                node,
+                inherited_annotation,
             )
             try_body_succeeded, caught_exception, c, d = self._execute_try_body_stmts(
-                node, branch_hash, branch_label, ttl, silent, all_metrics,
-                raw_cell, try_annotation,
+                node,
+                branch_hash,
+                branch_label,
+                ttl,
+                silent,
+                all_metrics,
+                raw_cell,
+                try_annotation,
             )
             cached_count += c
             computed_count += d
@@ -103,8 +111,14 @@ class TryHandler:
                     handler_hash = hashlib.sha256(handler_label.encode()).hexdigest()[:16]
                     self._bind_exception_to_handler(matched_handler, caught_exception)
                     c, d = self._execute_simple_branch(
-                        matched_handler.body, handler_hash, handler_label, ttl, silent,
-                        all_metrics, raw_cell, try_annotation,
+                        matched_handler.body,
+                        handler_hash,
+                        handler_label,
+                        ttl,
+                        silent,
+                        all_metrics,
+                        raw_cell,
+                        try_annotation,
                     )
                     cached_count += c
                     computed_count += d
@@ -116,18 +130,30 @@ class TryHandler:
                 else_label = "else"
                 else_hash = hashlib.sha256(else_label.encode()).hexdigest()[:16]
                 c, d = self._execute_simple_branch(
-                    node.orelse, else_hash, else_label, ttl, silent, all_metrics,
-                    raw_cell, try_annotation,
+                    node.orelse,
+                    else_hash,
+                    else_label,
+                    ttl,
+                    silent,
+                    all_metrics,
+                    raw_cell,
+                    try_annotation,
                 )
                 cached_count += c
                 computed_count += d
 
-            if getattr(node, 'finalbody', None):
+            if getattr(node, "finalbody", None):
                 finally_label = "finally"
                 finally_hash = hashlib.sha256(finally_label.encode()).hexdigest()[:16]
                 c, d = self._execute_simple_branch(
-                    node.finalbody, finally_hash, finally_label, ttl, silent, all_metrics,
-                    raw_cell, try_annotation,
+                    node.finalbody,
+                    finally_hash,
+                    finally_label,
+                    ttl,
+                    silent,
+                    all_metrics,
+                    raw_cell,
+                    try_annotation,
                 )
                 cached_count += c
                 computed_count += d
@@ -141,9 +167,9 @@ class TryHandler:
             body_stmts = self._build_try_executed_body_stmts(node, try_body_succeeded, matched_handler)
 
             for m in all_metrics:
-                m['control_type'] = 'try'
-                if 'body_statements' not in m:
-                    m['body_statements'] = body_stmts
+                m["control_type"] = "try"
+                if "body_statements" not in m:
+                    m["body_statements"] = body_stmts
 
             return ControlStructureResult(
                 success=True,
@@ -189,7 +215,12 @@ class TryHandler:
         for body_node in body_nodes:
             if is_control_structure(body_node):
                 result = self.dispatcher.process(
-                    body_node, ttl, silent, None, raw_cell, branch_annotation,
+                    body_node,
+                    ttl,
+                    silent,
+                    None,
+                    raw_cell,
+                    branch_annotation,
                 )
                 _helpers.tag_control_metrics(result, ctx_hash, ctx_label, all_metrics)
                 if not result.success:
@@ -202,21 +233,27 @@ class TryHandler:
                 stmt_code = ast.unparse(body_node)
                 modified_code = f"# control_context: {ctx_hash}\n{stmt_code}"
                 annotation = _helpers.resolve_statement_annotation(
-                    raw_cell, body_node, branch_annotation,
+                    raw_cell,
+                    body_node,
+                    branch_annotation,
                 )
                 # Never the cell's last expression -- see ForLoopHandler.
                 metrics = self.statement_processor.process_statement(
-                    modified_code, ttl, silent, annotation=annotation, is_last=False,
+                    modified_code,
+                    ttl,
+                    silent,
+                    annotation=annotation,
+                    is_last=False,
                 )
-                metrics['control_context'] = ctx_hash
-                metrics['branch_label'] = ctx_label
+                metrics["control_context"] = ctx_hash
+                metrics["branch_label"] = ctx_label
                 _helpers.flush_metrics_output(metrics)
                 all_metrics.append(metrics)
-                if metrics.get('status') == CacheStatus.ERROR:
-                    raise metrics.get('error', RuntimeError(f"Error executing: {stmt_code}"))
-                if metrics.get('status') == CacheStatus.COMPUTED:
+                if metrics.get("status") == CacheStatus.ERROR:
+                    raise metrics.get("error", RuntimeError(f"Error executing: {stmt_code}"))
+                if metrics.get("status") == CacheStatus.COMPUTED:
                     computed += 1
-                elif metrics.get('status') in (CacheStatus.RESTORED, CacheStatus.SKIPPED):
+                elif metrics.get("status") in (CacheStatus.RESTORED, CacheStatus.SKIPPED):
                     cached += 1
         return cached, computed
 
@@ -241,7 +278,12 @@ class TryHandler:
             if is_control_structure(body_node):
                 try:
                     result = self.dispatcher.process(
-                        body_node, ttl, silent, None, raw_cell, branch_annotation,
+                        body_node,
+                        ttl,
+                        silent,
+                        None,
+                        raw_cell,
+                        branch_annotation,
                     )
                     _helpers.tag_control_metrics(result, branch_hash, branch_label, all_metrics)
                     if not result.success:
@@ -260,27 +302,33 @@ class TryHandler:
                 stmt_code = ast.unparse(body_node)
                 modified_code = f"# control_context: {branch_hash}\n{stmt_code}"
                 annotation = _helpers.resolve_statement_annotation(
-                    raw_cell, body_node, branch_annotation,
+                    raw_cell,
+                    body_node,
+                    branch_annotation,
                 )
                 try:
                     metrics = self.statement_processor.process_statement(
-                        modified_code, ttl, silent, annotation=annotation, is_last=False,
+                        modified_code,
+                        ttl,
+                        silent,
+                        annotation=annotation,
+                        is_last=False,
                     )
                 except Exception as e:  # noqa: BLE001 - catching user-raised exceptions from statement execution
                     caught_exception = e
                     try_body_succeeded = False
                     break
-                metrics['control_context'] = branch_hash
-                metrics['branch_label'] = branch_label
+                metrics["control_context"] = branch_hash
+                metrics["branch_label"] = branch_label
                 _helpers.flush_metrics_output(metrics)
                 all_metrics.append(metrics)
-                if metrics.get('status') == CacheStatus.ERROR:
-                    caught_exception = metrics.get('error', RuntimeError(f"Error executing: {stmt_code}"))
+                if metrics.get("status") == CacheStatus.ERROR:
+                    caught_exception = metrics.get("error", RuntimeError(f"Error executing: {stmt_code}"))
                     try_body_succeeded = False
                     break
-                if metrics.get('status') == CacheStatus.COMPUTED:
+                if metrics.get("status") == CacheStatus.COMPUTED:
                     computed += 1
-                elif metrics.get('status') in (CacheStatus.RESTORED, CacheStatus.SKIPPED):
+                elif metrics.get("status") in (CacheStatus.RESTORED, CacheStatus.SKIPPED):
                     cached += 1
         return try_body_succeeded, caught_exception, cached, computed
 
@@ -288,28 +336,26 @@ class TryHandler:
     # Handler matching
     # ------------------------------------------------------------------
 
-    def _bind_exception_to_handler(
-        self, matched_handler: ast.ExceptHandler, caught_exception: Exception
-    ) -> None:
+    def _bind_exception_to_handler(self, matched_handler: ast.ExceptHandler, caught_exception: Exception) -> None:
         """Bind the caught exception to the handler's variable and set its lineage."""
         if not matched_handler.name:
             return
         self.shell.user_ns[matched_handler.name] = caught_exception
         try:
             exc_class_name = type(caught_exception).__name__
-            class_lineage = self.statement_processor.variable_lineage.get(exc_class_name, '')
+            class_lineage = self.statement_processor.variable_lineage.get(exc_class_name, "")
             exc_lineage = hashlib.sha256(
                 f"__exception__:{exc_class_name}:{class_lineage}:{caught_exception!s}:{caught_exception!r}".encode()
             ).hexdigest()
             self.statement_processor.lineage.record(
-                matched_handler.name, exc_lineage, value=caught_exception,
+                matched_handler.name,
+                exc_lineage,
+                value=caught_exception,
             )
         except (ValueError, AttributeError, TypeError) as exc:
             logger.debug("[CONTROL] Failed to compute exception lineage for handler variable: %s", exc)
 
-    def _find_matching_handler(
-        self, handlers: list[ast.ExceptHandler], exc: Exception
-    ) -> ast.ExceptHandler | None:
+    def _find_matching_handler(self, handlers: list[ast.ExceptHandler], exc: Exception) -> ast.ExceptHandler | None:
         """Find the first except handler that matches the given exception.
 
         Returns None if no handler matches.
@@ -372,7 +418,7 @@ class TryHandler:
                 statements.append(f"  {ast.unparse(stmt)}")
 
         # Always show finally
-        if getattr(node, 'finalbody', None):
+        if getattr(node, "finalbody", None):
             statements.append("finally:")
             for stmt in node.finalbody:
                 statements.append(f"  {ast.unparse(stmt)}")

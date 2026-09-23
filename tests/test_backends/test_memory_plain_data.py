@@ -6,6 +6,7 @@ RAM hit). Lists and tuples over primitives are now sized a level at a time and
 copied without the per-element walk -- and a copy must still be one: nothing
 the caller does to what it got back may reach the stored entry.
 """
+
 from __future__ import annotations
 
 import sys
@@ -58,8 +59,7 @@ def test_a_bytearray_leaf_is_not_shared():
 def test_plain_sizes_track_the_recursive_estimate():
     rows = [(i, f"x{i}") for i in range(2000)]
     fast = _plain_data.size_of(rows)
-    recursive = sys.getsizeof(rows) + sum(
-        sys.getsizeof(t) + sum(sys.getsizeof(x) for x in t) for t in rows)
+    recursive = sys.getsizeof(rows) + sum(sys.getsizeof(t) + sum(sys.getsizeof(x) for x in t) for t in rows)
     assert fast == recursive
 
 
@@ -67,10 +67,11 @@ def test_a_big_level_is_sized_from_a_sample_that_lands_close():
     """Above `SIZE_EXACT_UP_TO` items a level is sampled. Rows flatten to a
     repeating int, int, str pattern, which a fixed stride could have landed on
     one column of; texts vary in length."""
-    for value in ([(i, i * 2, "x" * (i % 300)) for i in range(100_000)],
-                  ["y" * ((i * 7919) % 5000) for i in range(100_000)]):
-        exact = sys.getsizeof(value) + sum(
-            sum(map(sys.getsizeof, flat)) for flat, _t in _plain_data._levels(value))
+    for value in (
+        [(i, i * 2, "x" * (i % 300)) for i in range(100_000)],
+        ["y" * ((i * 7919) % 5000) for i in range(100_000)],
+    ):
+        exact = sys.getsizeof(value) + sum(sum(map(sys.getsizeof, flat)) for flat, _t in _plain_data._levels(value))
         estimate = _plain_data.size_of(value)
         assert abs(estimate - exact) / exact < 0.02
         assert _plain_data.size_of(value) == estimate, "one value, two sizes"
@@ -106,5 +107,5 @@ def test_dict_rows_come_back_as_new_dicts_every_time():
     rows[1]["city"] = "the original's"
     assert b.get("d")[1][1]["city"] == "x", "the stored entry shares the original's dicts"
     assert "d" in b._dict_rows
-    b.set("nested", [{"a": [1]}])                  # a mutable value: the old path
+    b.set("nested", [{"a": [1]}])  # a mutable value: the old path
     assert "nested" not in b._dict_rows

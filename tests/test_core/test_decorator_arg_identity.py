@@ -33,6 +33,7 @@ seeing an edit, which would turn every "restored" verdict into a false pass;
 ``test_a_restart_restores_across_a_real_process_boundary[]`` is the
 empty-decorator control for the subprocess pair.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -96,7 +97,8 @@ def test_an_indented_decorator_is_stripped():
     """Methods arrive from ``inspect.getsource`` still indented."""
     indented = "    @_c.cache(assume_safe=True)\n    def work(n):\n        return n + 1\n"
     assert source_identity_digest(indented) == source_identity_digest(
-        "    @_c.cache\n    def work(n):\n        return n + 1\n")
+        "    @_c.cache\n    def work(n):\n        return n + 1\n"
+    )
 
 
 def test_async_functions_follow_the_same_rule():
@@ -191,7 +193,7 @@ def test_the_parameter_whitelist_matches_the_real_signature():
 # Level 2: the end-to-end matrix
 # ---------------------------------------------------------------------------
 
-MODULE = '''\
+MODULE = """\
 def marker(tag):
     def deco(fn):
         return fn
@@ -212,7 +214,7 @@ def sidecar(n):
 {decorators}
 def work(n):
     return helper(n) * {body_const}
-'''
+"""
 
 # Both versions of ``work`` must report the same ``__module__``: the function
 # key is ``module.qualname``, so a differing module name would separate them
@@ -315,8 +317,7 @@ MUST_RESTORE = {
 @pytest.mark.parametrize("label", sorted(MUST_RESTORE))
 def test_matrix_must_restore(arm, label):
     assert _restorable(arm, {}, MUST_RESTORE[label]), (
-        f"{label!r} recomputed a value cash already had; the decorator's "
-        f"arguments are back in the cache key"
+        f"{label!r} recomputed a value cash already had; the decorator's arguments are back in the cache key"
     )
 
 
@@ -332,22 +333,20 @@ MUST_RECOMPUTE = {
     "body edited": {"body_const": 3},
     "helper edited": {"helper_const": 9},
     "depends_on added": {"decorators": ("@_c.cache(depends_on=[sidecar])",)},
-    "third-party decorator argument changed": {
-        "decorators": ("@marker(2)", "@_c.cache")},
+    "third-party decorator argument changed": {"decorators": ("@marker(2)", "@_c.cache")},
 }
 
 
 @pytest.mark.parametrize("label", sorted(MUST_RECOMPUTE))
 def test_matrix_must_recompute(arm, label):
-    first = {"decorators": ("@marker(1)", "@_c.cache")} \
-        if label == "third-party decorator argument changed" else {}
+    first = {"decorators": ("@marker(1)", "@_c.cache")} if label == "third-party decorator argument changed" else {}
     assert not _restorable(arm, first, MUST_RECOMPUTE[label]), (
         f"{label!r} restored a stale value; that change used to move the key "
         f"only because the decorator's text was in the digest"
     )
 
 
-SUBPROCESS = '''\
+SUBPROCESS = """\
 import sys
 import cash
 from cash.backends import FileBackend
@@ -368,7 +367,7 @@ def work(n):
 
 work(21)
 print("RAN" if RAN else "RESTORED")
-'''
+"""
 
 
 @pytest.mark.parametrize("second", ["", "(assume_safe=True)"])
@@ -389,16 +388,16 @@ def test_a_restart_restores_across_a_real_process_boundary(tmp_path, second):
         script.write_text(SUBPROCESS.format(decorator=decorator), encoding="utf-8")
         done = subprocess.run(
             [sys.executable, str(script), str(cache_dir)],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         assert done.returncode == 0, textwrap.indent(done.stderr or "", "    ")
         return done.stdout.strip()
 
     assert run("") == "RAN", "the priming run should have computed"
-    assert run(second) == "RESTORED", (
-        f"a fresh process with @_c.cache{second} recomputed a value already "
-        f"on disk"
-    )
+    assert run(second) == "RESTORED", f"a fresh process with @_c.cache{second} recomputed a value already on disk"
 
 
 def test_file_depends_on_still_invalidates_on_a_file_edit(arm):

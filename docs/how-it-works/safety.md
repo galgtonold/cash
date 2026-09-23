@@ -22,7 +22,7 @@ data = [1, 2, 3]      # cached snapshot: [1, 2, 3]
 data.append(4)        # data is now [1, 2, 3, 4] — but the snapshot still says [1, 2, 3]
 ```
 
-<!-- claim: cash/notebook/cacheability.py:_MutationVisitor @0eefc402, cash/notebook/cacheability.py:StatementAnalysis.skip_reasons @0d07d966 broad="the claim is about the visitor's whole set of visit_* patterns, not one of them" -->
+<!-- claim: cash/notebook/cacheability.py:_MutationVisitor @c41cea02, cash/notebook/cacheability.py:StatementAnalysis.skip_reasons @843e903a broad="the claim is about the visitor's whole set of visit_* patterns, not one of them" -->
 Cash answers two questions about every statement, in that order:
 
 1. **Does it mutate something?** — a pure-AST scan (`analyze_statement`), plus
@@ -36,7 +36,7 @@ captured, the variable's lineage advances, and the statement caches normally. A
 mutation of some *other* variable has nowhere to hang that new version, so the
 statement is refused and re-executes every run.
 
-<!-- claim: cash/notebook/cacheability.py:MUTATING_METHODS @a555babd, cash/notebook/cacheability.py:PANDAS_INPLACE_METHODS @5345187b, cash/notebook/cacheability.py:_MutationVisitor @0eefc402 broad="the table enumerates every pattern the visitor detects; a new visit_* method is a missing row" -->
+<!-- claim: cash/notebook/cacheability.py:MUTATING_METHODS @245ce55b, cash/notebook/cacheability.py:PANDAS_INPLACE_METHODS @92780608, cash/notebook/cacheability.py:_MutationVisitor @c41cea02 broad="the table enumerates every pattern the visitor detects; a new visit_* method is a missing row" -->
 | Pattern | Example | How it's detected | Verdict |
 |---------|---------|-------------------|---------|
 | Augmented assignment | `total += 1` | `ast.AugAssign` node | **Cached** — `total` is the statement's output |
@@ -53,7 +53,7 @@ The split looks arbitrary until you write the two forms side by side.
 statement's outputs; `d.update(o)` is a bare expression with no target at all.
 The first can be re-derived from the statement that made it; the second cannot.
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @1e41cabe, cash/notebook/cacheability.py:selfref_inplace_write_vars @5fcce56c -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @0e6b7d71, cash/notebook/cacheability.py:selfref_inplace_write_vars @f9e28262 -->
 !!! note "…but only when the base was made in the same cell"
     The **Cached** verdicts above are this classifier's per-statement decision.
     A separate rule sits on top, in the upstream checker: a variable the cell
@@ -74,7 +74,7 @@ The first can be re-derived from the statement that made it; the second cannot.
 has no store target to give the receiver a fresh lineage. So Cash classifies
 method-call receivers in tiers, in this order:
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._classify_method_mutations @46130a0d, cash/notebook/cacheability.py:KNOWN_PURE_METHODS @adc93e66, cash/notebook/cacheability.py:standalone_method_call_inner_methods @c952d0cc, cash/notebook/cacheability.py:chain_is_pure @530e6134, cash/notebook/cacheability.py:RECEIVER_READONLY_WRITE_METHODS @d0495812, cash/notebook/statement/processor.py:StatementProcessor._receiver_observable @81f477db -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._classify_method_mutations @08a14a35, cash/notebook/cacheability.py:KNOWN_PURE_METHODS @b44508ae, cash/notebook/cacheability.py:standalone_method_call_inner_methods @4a62a44e, cash/notebook/cacheability.py:chain_is_pure @530e6134, cash/notebook/cacheability.py:RECEIVER_READONLY_WRITE_METHODS @697bbf7a, cash/notebook/statement/processor.py:StatementProcessor._receiver_observable @1cca2d82 -->
 
 - **Excluded outright.** A module receiver is a plain function call, not a
   mutation: `np.foo()`, `time.sleep()`, `plt.title()`. The exception is a
@@ -163,7 +163,7 @@ a draw on a live `Axes`/`Figure` (including one handed to a helper,
 
 ### A bare `model.fit(X, y)`
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._estimator_fit_receivers @496800b3, cash/notebook/annotations.py:CacheAnnotation.cache_fit == False -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._estimator_fit_receivers @7e4d333f, cash/notebook/annotations.py:CacheAnnotation.cache_fit == False -->
 A bare fit is a method-call mutation of its receiver, so it takes the default
 path above: **skip-cache, re-execute every run**. That is net-neutral — a fit
 that would keep missing cannot cost more than it saves — and it avoids the
@@ -190,7 +190,7 @@ Replaying them from cache would skip the action (a file never gets written, a
 request never gets sent). Cash's side-effect analysis flags these statements as
 **uncacheable** so they always run:
 
-<!-- claim: cash/notebook/cacheability.py:_IO_SIDE_EFFECT_FUNCTIONS @7c59797e, cash/notebook/cacheability.py:_SideEffectVisitor @2ad41114 broad="the table enumerates every call shape the visitor flags; a new branch is a missing row" -->
+<!-- claim: cash/notebook/cacheability.py:_IO_SIDE_EFFECT_FUNCTIONS @a2946490, cash/notebook/cacheability.py:_SideEffectVisitor @2923ce80 broad="the table enumerates every call shape the visitor flags; a new branch is a missing row" -->
 | Pattern | Examples | Why it's unsafe to replay |
 |---------|----------|---------------------------|
 | File writes | `open('f', 'w')`, `df.to_csv()`, `df.to_parquet()`, `Path(p).write_text()` | The file wouldn't be written on a cache hit |
@@ -209,7 +209,7 @@ Writing to the console is output, not a file: `os.write(2, ...)`, `sys.stderr.wr
 and `sys.stdout.write(...)` count as a `print` does, so a step marker in a helper does
 not make every statement that calls it a file writer.
 
-<!-- claim: cash/notebook/cacheability.py:_WRITE_METHODS @74b44b0c, cash/notebook/cacheability.py:_WRITE_MODES @44a74dfd, cash/notebook/cacheability.py:_is_open_write_mode @ca4d33fa, cash/notebook/cacheability.py:_IO_SIDE_EFFECT_FUNCTIONS @7c59797e -->
+<!-- claim: cash/notebook/cacheability.py:_WRITE_METHODS @11ba6ecb, cash/notebook/cacheability.py:_WRITE_MODES @07565e83, cash/notebook/cacheability.py:_is_open_write_mode @1acb03f6, cash/notebook/cacheability.py:_IO_SIDE_EFFECT_FUNCTIONS @a2946490 -->
 Detection is by call shape, so it works without importing anything, with two
 consequences worth knowing. A bare `open(...)` counts only when its mode
 argument is **statically** a write mode: `open(p, 'w')` is flagged, and
@@ -223,7 +223,7 @@ colliding: `rename`, `replace` and `touch` are deliberately absent, because
 that has one writes to a filesystem, and an `OUT.mkdir(exist_ok=True)` restored
 instead of run leaves an emptied output folder missing.
 
-<!-- claim: cash/notebook/cacheability.py:statement_write_repeatability @795a3382, cash/notebook/cacheability.py:_REPLACING_WRITE_METHODS @ff293068, cash/notebook/cacheability.py:_is_append_mode_call @3caac057 -->
+<!-- claim: cash/notebook/cacheability.py:statement_write_repeatability @d361c0c9, cash/notebook/cacheability.py:_REPLACING_WRITE_METHODS @b3158e08, cash/notebook/cacheability.py:_is_append_mode_call @d7aef5f5 -->
 Being uncacheable is not the end of the story for a writer. Because a file
 write has no variable edge, nothing in the lineage graph would ever re-run one,
 so Cash separately records which statements wrote which paths and re-fires a
@@ -239,7 +239,7 @@ Random calls are *deterministic only if seeded*. Cash's `RandomnessDetector`
 finds unseeded draws and **warns** — the statement is still cached, and the
 first result is simply frozen:
 
-<!-- claim: cash/notebook/randomness.py:RANDOM_FUNCTIONS @928168d0, cash/notebook/randomness.py:SEED_FUNCTIONS @39b1ffc1 -->
+<!-- claim: cash/notebook/randomness.py:RANDOM_FUNCTIONS @5801a3eb, cash/notebook/randomness.py:SEED_FUNCTIONS @2fe6d536 -->
 | Module | Tracked functions |
 |--------|-------------------|
 | `random` | `random()`, `randint()`, `choice()`, `shuffle()`, `sample()`, `uniform()`, … |
@@ -247,7 +247,7 @@ first result is simply frozen:
 | `torch` | `rand()`, `randn()`, `randint()`, `randperm()`, `normal()`, … |
 | `tensorflow.random` | `uniform()`, `normal()`, `truncated_normal()`, `shuffle()`, … |
 
-<!-- claim: cash/notebook/randomness.py:RandomnessDetector @9108c273 broad="the claim is about the detector having exactly two channels, which is a property of the class", cash/notebook/randomness.py:RandomnessDetector.is_seeded @9ff99734, cash/notebook/randomness.py:RNG_CARRIER_CONSTRUCTORS @3248b870 -->
+<!-- claim: cash/notebook/randomness.py:RandomnessDetector @ac3951cb broad="the claim is about the detector having exactly two channels, which is a property of the class", cash/notebook/randomness.py:RandomnessDetector.is_seeded @9ff99734, cash/notebook/randomness.py:RNG_CARRIER_CONSTRUCTORS @cec10494 -->
 Two channels feed it, because there are two ways to be random. **Module
 globals** (`np.random.rand()`) are reproducible if the *module* was seeded, so
 the detector tracks `seed()` calls across the session: once a module is seeded,
@@ -267,21 +267,21 @@ definitively a replay rather than a fresh draw.
 
 The badge carries the same information as a text pill on the statement row:
 
-<!-- claim: cash/notebook/badge_renderer/renderers/html.py:_rng_pill @7b72eb6c, cash/notebook/statement/processor.py:StatementProcessor._stamp_random_effect @8cd2ee49 -->
+<!-- claim: cash/notebook/badge_renderer/renderers/html.py:_rng_pill @ec2cf983, cash/notebook/statement/processor.py:StatementProcessor._stamp_random_effect @8a4ed59d -->
 | Pill | Meaning |
 |------|---------|
 | `seed` | The statement sets an RNG seed |
 | `random` | The statement draws, from a seeded (reproducible) source |
 | `unseeded` | The statement draws unseeded — the cached value is a frozen replay |
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_unseeded_randomness @adb698f3, cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @0388af0f -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_unseeded_randomness @53ad1220, cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @a4042c14 -->
 To silence the warning deliberately, annotate the statement with
 `@cash:allow-random` (see [Annotations](../annotations.md)). That is *advisory
 only* — it suppresses the message and changes no caching decision. To actually
 redraw on every run, use `@cash:no-cache`, which switches off both the cache and
 the RNG rewind.
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_unseeded_estimator_fit @5c44fa11, cash/notebook/statement/processor.py:StatementProcessor._unseeded_estimator_fits @104fd0be -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_unseeded_estimator_fit @affe2516, cash/notebook/statement/processor.py:StatementProcessor._unseeded_estimator_fits @be0f2fba -->
 One hazard the AST cannot see: an sklearn-style `estimator.fit()` draws its
 randomness inside compiled code, with no Python call to scan. When a fit is
 cached (under `# @cash:cache-fit`) and the estimator has `random_state=None`,
@@ -289,7 +289,7 @@ Cash checks the live estimator and warns through the same channel.
 
 ## From watching to deciding
 
-<!-- claim: cash/notebook/cacheability_decision.py:decide_cacheability @be2e3981 -->
+<!-- claim: cash/notebook/cacheability_decision.py:decide_cacheability @e9c27ac0 -->
 The findings above are merged into a single verdict per statement by
 `decide_cacheability`. It has five reason-sources and the first one that
 triggers wins:
@@ -362,7 +362,7 @@ Cash also exposes these verdicts at runtime: `@cash:no-cache` forces a
 statement to never cache, and the decorator path has matching **purity
 markers** for functions — see [The decorator path](decorator-path.md).
 
-<!-- claim: cash/core.py:Cash._surface_purity @f30def74, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP @67696b30 -->
+<!-- claim: cash/core.py:Cash._surface_purity @a4fc3aae, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP @67696b30 -->
 The decorator takes one verdict further than the notebook path: a `@cash.cache`
 function whose body resolves a dependency from a **runtime value** cash can't
 track — `eval`/`exec`/`compile`, dynamic dispatch via `getattr(obj, name)()`,

@@ -17,9 +17,7 @@ from cash.source_norm import normalize_source_for_hash
 
 
 def _same(a: str, b: str) -> bool:
-    return normalize_source_for_hash(textwrap.dedent(a)) == normalize_source_for_hash(
-        textwrap.dedent(b)
-    )
+    return normalize_source_for_hash(textwrap.dedent(a)) == normalize_source_for_hash(textwrap.dedent(b))
 
 
 BASE = """
@@ -30,6 +28,7 @@ BASE = """
 
 
 # --- edits that must NOT change identity -------------------------------
+
 
 def test_added_comment_keeps_identity():
     edited = """
@@ -63,9 +62,7 @@ def test_blank_lines_keep_identity():
 
 def test_trailing_whitespace_keeps_identity():
     edited = "\ndef f(n):   \n    total = n * 2\t\n    return total  \n"
-    assert normalize_source_for_hash(
-        textwrap.dedent(BASE)
-    ) == normalize_source_for_hash(edited)
+    assert normalize_source_for_hash(textwrap.dedent(BASE)) == normalize_source_for_hash(edited)
 
 
 def test_reindentation_keeps_identity():
@@ -79,11 +76,11 @@ def test_reindentation_keeps_identity():
 
 
 def test_docstring_change_keeps_identity():
-    a = '''
+    a = """
         def f(n):
             "one"
             return n
-        '''
+        """
     b = '''
         def f(n):
             """Two, and at more length.
@@ -120,11 +117,11 @@ def test_class_and_method_docstrings_keep_identity():
                 """How big."""
                 return 3
         '''
-    b = '''
+    b = """
         class Box:
             def size(self):
                 return 3
-        '''
+        """
     assert _same(a, b)
 
 
@@ -141,6 +138,7 @@ def test_a_nested_function_s_docstring_keeps_identity():
 
 # --- edits that MUST change identity -----------------------------------
 
+
 def test_real_code_change_breaks_identity():
     edited = """
         def f(n):
@@ -153,14 +151,14 @@ def test_real_code_change_breaks_identity():
 def test_a_returned_string_still_counts():
     """Only the docstring is prose. A string the function returns is its
     result."""
-    a = '''
+    a = """
         def f(n):
             return "one"
-        '''
-    b = '''
+        """
+    b = """
         def f(n):
             return "two"
-        '''
+        """
     assert not _same(a, b)
 
 
@@ -176,11 +174,11 @@ def test_a_directive_beside_a_docstring_still_counts():
 
 def test_a_bytes_literal_in_the_docstring_slot_still_counts():
     """``ast.get_docstring``'s rule: only a ``str`` is a docstring."""
-    a = '''
+    a = """
         def f(n):
             b"one"
             return n
-        '''
+        """
     assert not _same(a, a.replace('b"one"', 'b"two"'))
 
 
@@ -202,6 +200,7 @@ def test_indentation_that_changes_structure_breaks_identity():
 
 
 # --- cash annotations stay load-bearing --------------------------------
+
 
 @pytest.mark.parametrize(
     "annotation",
@@ -288,12 +287,13 @@ def test_annotation_hashing_does_not_warn():
 
 # --- never raise from inside a hasher ----------------------------------
 
+
 @pytest.mark.parametrize(
     "bad",
     [
-        "def f(:\n    pass",          # syntax error mid-edit
-        "    return 1",               # bare fragment, unexpected indent
-        "",                            # empty
+        "def f(:\n    pass",  # syntax error mid-edit
+        "    return 1",  # bare fragment, unexpected indent
+        "",  # empty
         "def f():\n    return '''un",  # unterminated string
     ],
 )
@@ -311,7 +311,7 @@ def test_unparseable_source_still_distinguishes_content():
 
 # --- end to end, through the real decorated call -----------------------
 
-_MODULE = '''
+_MODULE = """
 class Schema:
     FIELD = "a"
 
@@ -321,7 +321,7 @@ def helper(x):
 @cash_instance.cache
 def compute(n, schema):
     return helper(n) + len(schema.FIELD)
-'''
+"""
 
 
 def _call(tmp_path, c, source):
@@ -391,9 +391,7 @@ def test_comment_in_transitive_helper_hits(cache_env):
     """The surprising half: editing something the cached function CALLS."""
     c, work = cache_env
     _call(work, c, _MODULE)
-    edited = _MODULE.replace(
-        "def helper(x):\n    return", "def helper(x):\n    # a note\n    return"
-    )
+    edited = _MODULE.replace("def helper(x):\n    return", "def helper(x):\n    # a note\n    return")
     assert edited != _MODULE
     assert _call(work, c, edited) is True
 
@@ -401,9 +399,7 @@ def test_comment_in_transitive_helper_hits(cache_env):
 def test_reformatting_hits(cache_env):
     c, work = cache_env
     _call(work, c, _MODULE)
-    edited = _MODULE.replace(
-        "def compute(n, schema):\n    return", "def compute(n, schema):\n\n    return"
-    )
+    edited = _MODULE.replace("def compute(n, schema):\n    return", "def compute(n, schema):\n\n    return")
     assert edited != _MODULE
     assert _call(work, c, edited) is True
 
@@ -430,11 +426,12 @@ def test_docstring_edits_everywhere_hit(cache_env):
     the module around them: rewording any docstring leaves the key alone."""
     c, work = cache_env
     assert _call(work, c, _DOCUMENTED) is False
-    edited = (_DOCUMENTED
-              .replace("A module docstring.", "The module, described anew.")
-              .replace("What the result looks like.", "The shape of a result.")
-              .replace("Double x.", "Return twice x.")
-              .replace("Compute the thing.", "Compute the thing.\n\n    At length."))
+    edited = (
+        _DOCUMENTED.replace("A module docstring.", "The module, described anew.")
+        .replace("What the result looks like.", "The shape of a result.")
+        .replace("Double x.", "Return twice x.")
+        .replace("Compute the thing.", "Compute the thing.\n\n    At length.")
+    )
     assert _call(work, c, edited) is True
 
 

@@ -215,6 +215,7 @@ class MissGuard:
         tmp_path = f"{self._path}.{os.getpid()}.tmp"
         try:
             from cash.backends.file_backend import recreate_cache_dir
+
             recreate_cache_dir(os.path.dirname(self._path))
             with open(tmp_path, "w", encoding="utf-8") as fh:
                 json.dump(doc, fh)
@@ -228,8 +229,7 @@ class MissGuard:
 
     # -- the state machine ----------------------------------------------
 
-    def observe(self, source_hash: str, cache_key: str, hit: bool,
-                components: dict | None = None) -> None:
+    def observe(self, source_hash: str, cache_key: str, hit: bool, components: dict | None = None) -> None:
         """Record one lookup outcome for *source_hash*.
 
         Call once per run of a statement that actually performed a lookup.
@@ -244,9 +244,12 @@ class MissGuard:
             # ever counted against a key we have already seen.
             self._records[source_hash] = _Record(last_key=cache_key, last_components=components)
             return
-        if not hit and cache_key != rec.last_key and components is not None                 and rec.last_components is not None:
-            moved = [name for name in set(components) | set(rec.last_components)
-                     if components.get(name) != rec.last_components.get(name)]
+        if not hit and cache_key != rec.last_key and components is not None and rec.last_components is not None:
+            moved = [
+                name
+                for name in set(components) | set(rec.last_components)
+                if components.get(name) != rec.last_components.get(name)
+            ]
             if moved:
                 rec.changed = rec.changed or {}
                 for name in moved:
@@ -316,8 +319,7 @@ class MissGuard:
             names = " and ".join(f"`{name}`" for name, _n in top)
             return f"{names} changed each run"
         if rec.churned_without_a_change:
-            return ("something outside its inputs changed each run (a file it reads, "
-                    "or the code of a function it calls)")
+            return "something outside its inputs changed each run (a file it reads, or the code of a function it calls)"
         return None
 
     def is_guarded(self, source_hash: str) -> bool:

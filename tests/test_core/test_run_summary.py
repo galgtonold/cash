@@ -13,6 +13,7 @@ text summary instead" fallback sat behind ``except (ImportError, RuntimeError)``
 while the dashboard *printed* "ipywidgets is required" and returned normally,
 so the fallback was unreachable and the documented behaviour never happened.
 """
+
 from __future__ import annotations
 
 import os
@@ -33,8 +34,8 @@ def _exercise(c):
         return n + 1
 
     work(1)
-    work(1)      # hit
-    work(2)      # miss
+    work(1)  # hit
+    work(2)  # miss
     return work
 
 
@@ -82,9 +83,9 @@ def test_functions_are_ranked_by_time_saved(tmp_path):
 
     cheap(1)
     dear(1)
-    c._function_stats["__main__.dear" if "__main__.dear" in c._function_stats
-                      else next(k for k in c._function_stats if "dear" in k)
-                      ]["total_time_saved"] = 99.0
+    c._function_stats[
+        "__main__.dear" if "__main__.dear" in c._function_stats else next(k for k in c._function_stats if "dear" in k)
+    ]["total_time_saved"] = 99.0
     text = c.run_summary()
     assert text.index("dear") < text.index("cheap")
 
@@ -117,7 +118,8 @@ def test_the_env_var_switches_it_on_with_no_code_change(tmp_path):
     TOML key, because the config layer maps every field to all four.
     """
     script = tmp_path / "s.py"
-    script.write_text(textwrap.dedent("""
+    script.write_text(
+        textwrap.dedent("""
         import cash
         c = cash.Cash(cache_dir="cache")
 
@@ -127,16 +129,24 @@ def test_the_env_var_switches_it_on_with_no_code_change(tmp_path):
 
         work(1)
         work(1)
-    """), encoding="utf-8")
+    """),
+        encoding="utf-8",
+    )
 
     def run(env_value):
         env = dict(os.environ)
         env.pop("CASH_SUMMARY", None)
         if env_value is not None:
             env["CASH_SUMMARY"] = env_value
-        return subprocess.run([sys.executable, str(script)], capture_output=True,
-                              text=True, cwd=str(tmp_path), env=env,
-                              encoding="utf-8", errors="replace")
+        return subprocess.run(
+            [sys.executable, str(script)],
+            capture_output=True,
+            text=True,
+            cwd=str(tmp_path),
+            env=env,
+            encoding="utf-8",
+            errors="replace",
+        )
 
     assert "calls restored" not in run(None).stderr, "printed without being asked"
     shown = run("1")
@@ -149,9 +159,8 @@ def test_the_summary_never_breaks_a_finished_run(tmp_path, monkeypatch):
     """It runs during interpreter shutdown; a traceback there helps nobody."""
     c = _cash(tmp_path)
     _exercise(c)
-    monkeypatch.setattr(type(c), "run_summary",
-                        lambda self: (_ for _ in ()).throw(RuntimeError("boom")))
-    c._print_run_summary()      # must not raise
+    monkeypatch.setattr(type(c), "run_summary", lambda self: (_ for _ in ()).throw(RuntimeError("boom")))
+    c._print_run_summary()  # must not raise
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +190,7 @@ def test_show_stats_says_so_when_there_is_nothing_yet(tmp_path, capsys):
 # ---------------------------------------------------------------------------
 # Which cache it ran against
 # ---------------------------------------------------------------------------
+
 
 def test_the_summary_names_the_cache_directory(tmp_path):
     """The one line that answers "why is nothing cached".

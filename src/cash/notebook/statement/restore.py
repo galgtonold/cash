@@ -63,7 +63,7 @@ logger = logging.getLogger(__name__)
 
 
 def _get_statement_code_and_hash(
-    metadata: 'StatementCacheMetadata | None',
+    metadata: "StatementCacheMetadata | None",
 ) -> tuple[str | None, str | None]:
     """Return stored statement code and hash from cache metadata."""
     if not metadata:
@@ -84,8 +84,8 @@ class StatementRestorer:
 
     def __init__(
         self,
-        shell: 'ShellProtocol',
-        file_deps: 'StatementFileDeps',
+        shell: "ShellProtocol",
+        file_deps: "StatementFileDeps",
         compute_hash: Callable[[Any], str] | None = None,
         debug: bool = False,
         rng_seed_epochs: dict[str, str] | None = None,
@@ -118,7 +118,7 @@ class StatementRestorer:
         epochs, and are replayed as before -- their regime is unknown, and the
         pre-existing behaviour is the safer default for them.
         """
-        written = payload.get('rng_epochs')
+        written = payload.get("rng_epochs")
         if not written:
             return True
         for module, epoch in written.items():
@@ -133,7 +133,9 @@ class StatementRestorer:
 
     @staticmethod
     def persist_metadata_only(
-        backend: Any, cache_key: str, metadata: dict[str, Any],
+        backend: Any,
+        cache_key: str,
+        metadata: dict[str, Any],
     ) -> None:
         """Persist only metadata (no data payload) to disk for badge display after restart.
 
@@ -141,17 +143,17 @@ class StatementRestorer:
         writes (e.g. FileBackend).  Ensures timing info survives kernel
         restarts even when the actual data was too large / too cheap to cache.
         """
-        if hasattr(backend, 'set_metadata_only'):
+        if hasattr(backend, "set_metadata_only"):
             backend.set_metadata_only(cache_key, metadata)
 
     def restore_from_cache(
         self,
-        tracking_state: 'TrackingState',
+        tracking_state: "TrackingState",
         cached_data: Any,
-        metadata: 'StatementCacheMetadata | None',
+        metadata: "StatementCacheMetadata | None",
         silent: bool,
         process_start: float,
-        inplace_restore: 'set[str] | frozenset[str] | None' = None,
+        inplace_restore: "set[str] | frozenset[str] | None" = None,
     ) -> None:
         """Restore a cached statement's outputs into ``user_ns`` and replay display.
 
@@ -164,19 +166,19 @@ class StatementRestorer:
 
         try:
             payload = cached_data
-            if isinstance(payload, dict) and 'variables' in payload:
-                restored_vars = payload['variables']
-                stdout = payload.get('stdout', '')
-                stderr = payload.get('stderr', '')
-                rich_outputs = payload.get('rich_outputs', [])
-                rng_state = payload.get('rng_state')
+            if isinstance(payload, dict) and "variables" in payload:
+                restored_vars = payload["variables"]
+                stdout = payload.get("stdout", "")
+                stderr = payload.get("stderr", "")
+                rich_outputs = payload.get("rich_outputs", [])
+                rng_state = payload.get("rng_state")
                 if rng_state and self._rng_replay_is_current(payload):
                     if self.debug:
                         logger.debug("[CACHE DEBUG] Restoring RNG state")
                     restore_rng_state(rng_state)
                 # Absent on older entries — restore_object_rng_states
                 # treats None/{} as a no-op, so old cache entries load unchanged.
-                object_rng_states = payload.get('rng_object_states')
+                object_rng_states = payload.get("rng_object_states")
             else:
                 restored_vars = payload
                 stdout = stderr = ""
@@ -198,7 +200,7 @@ class StatementRestorer:
                 if self.debug:
                     logger.debug(
                         "[CACHE DEBUG] Restoring object RNG state for %s",
-                        ', '.join(sorted(object_rng_states)),
+                        ", ".join(sorted(object_rng_states)),
                     )
                 restore_object_rng_states(object_rng_states, self.shell.user_ns)
 
@@ -213,8 +215,10 @@ class StatementRestorer:
             total_time = time.time() - process_start
 
             if self.debug:
-                logger.debug("[TIMING] Var restore: %.1fms | Output: %.1fms", var_restore_time*1000, output_replay_time*1000)
-                logger.debug("[TIMING] Total restore: %.1fms | OVERALL: %.1fms", restore_time*1000, total_time*1000)
+                logger.debug(
+                    "[TIMING] Var restore: %.1fms | Output: %.1fms", var_restore_time * 1000, output_replay_time * 1000
+                )
+                logger.debug("[TIMING] Total restore: %.1fms | OVERALL: %.1fms", restore_time * 1000, total_time * 1000)
                 logger.debug("[CACHE DEBUG] ✓ Restored from cache")
 
         except (KeyError, TypeError, ValueError, AttributeError, OSError) as e:
@@ -228,19 +232,19 @@ class StatementRestorer:
 
     def _restore_one_var(
         self,
-        tracking_state: 'TrackingState',
+        tracking_state: "TrackingState",
         var_name: str,
         value: Any,
-        metadata: 'StatementCacheMetadata | None',
-        inplace_restore: 'set[str] | frozenset[str]' = frozenset(),
+        metadata: "StatementCacheMetadata | None",
+        inplace_restore: "set[str] | frozenset[str]" = frozenset(),
     ) -> None:
         """Write one restored variable into the shell namespace and update tracking state.
 
-        For a var in *inplace_restore* (a bare ``estimator.fit(...)`` receiver,
-) the fitted state is transferred ONTO the existing object rather
-        than rebinding the name, so every alias of the receiver (``backup = clf``)
-        observes the fit -- mirroring what an in-place ``.fit()`` does at runtime.
-        A rebind would leave aliases pointing at the stale, unfitted object.
+                For a var in *inplace_restore* (a bare ``estimator.fit(...)`` receiver,
+        ) the fitted state is transferred ONTO the existing object rather
+                than rebinding the name, so every alias of the receiver (``backup = clf``)
+                observes the fit -- mirroring what an in-place ``.fit()`` does at runtime.
+                A rebind would leave aliases pointing at the stale, unfitted object.
         """
         self._write_restored_value(var_name, value, inplace_restore)
 
@@ -276,7 +280,7 @@ class StatementRestorer:
         self,
         var_name: str,
         value: Any,
-        inplace_restore: 'set[str] | frozenset[str]',
+        inplace_restore: "set[str] | frozenset[str]",
     ) -> None:
         """Land a restored *value* into ``user_ns`` -- in place for an
         estimator-fit receiver, else a plain rebind.
@@ -298,7 +302,8 @@ class StatementRestorer:
                     if self.debug:
                         logger.debug(
                             "[CACHE DEBUG] In-place restore of '%s' failed (%s); rebinding",
-                            var_name, e,
+                            var_name,
+                            e,
                         )
         self.shell.user_ns[var_name] = value
 
@@ -312,8 +317,8 @@ class StatementRestorer:
         ``__dict__`` swap for a plain object (whose ``object.__setstate__`` is
         absent). Raises on failure; the caller catches and rebinds.
         """
-        getstate = getattr(value, '__getstate__', None)
-        setstate = getattr(existing, '__setstate__', None)
+        getstate = getattr(value, "__getstate__", None)
+        setstate = getattr(existing, "__setstate__", None)
         if callable(getstate) and callable(setstate):
             state = getstate()
             if state is not None:
@@ -324,14 +329,14 @@ class StatementRestorer:
 
     def _record_restored_var_hash(
         self,
-        tracking_state: 'TrackingState',
+        tracking_state: "TrackingState",
         var_name: str,
         value: Any,
-        metadata: 'StatementCacheMetadata | None',
+        metadata: "StatementCacheMetadata | None",
     ) -> None:
         """Update variable_hashes / current_session_hashes for a single restored variable."""
         type_name = type(value).__name__
-        if type_name in ('DataFrame', 'Series', 'ndarray'):
+        if type_name in ("DataFrame", "Series", "ndarray"):
             lineage_hash = ((metadata.output_lineages or {}) if metadata else {}).get(var_name)
             if lineage_hash:
                 tracking_state.variable_hashes.setdefault(var_name, set()).add(lineage_hash)
@@ -357,9 +362,9 @@ class StatementRestorer:
         """
         t_output = time.time()
         if stdout:
-            print(stdout, end='')
+            print(stdout, end="")
         if stderr:
-            print(stderr, end='', file=sys.stderr)
+            print(stderr, end="", file=sys.stderr)
 
         if rich_outputs:
             # Imported lazily so `import cash` works without IPython, which is
@@ -372,8 +377,8 @@ class StatementRestorer:
             from IPython.display import display, publish_display_data
 
             for output in rich_outputs:
-                if isinstance(output, dict) and 'data' in output:
-                    publish_display_data(data=output['data'], metadata=output.get('metadata', {}))
+                if isinstance(output, dict) and "data" in output:
+                    publish_display_data(data=output["data"], metadata=output.get("metadata", {}))
                 else:
                     display(output)
         return time.time() - t_output

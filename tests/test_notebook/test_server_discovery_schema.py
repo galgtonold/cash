@@ -16,6 +16,7 @@ which reported a schema mismatch as "Failed to query sessions".
 The fast suite could never see it — it drives NotebookClient, not a real server.
 So these tests pin the schema contract directly.
 """
+
 from __future__ import annotations
 
 import json
@@ -30,9 +31,17 @@ KERNEL_ID = "36d5c23f-5334-488e-b294-e7e8fb66159c"
 
 # Exactly as `jupyter_server.serverapp.list_running_servers()` yields it.
 MODERN_SERVER = {
-    "base_url": "/", "hostname": "127.0.0.1", "password": False, "pid": 1234,
-    "port": 8901, "root_dir": os.path.join("C:", "work"), "secure": False,
-    "sock": "", "token": "tok", "url": "http://127.0.0.1:8901/", "version": "2.14.0",
+    "base_url": "/",
+    "hostname": "127.0.0.1",
+    "password": False,
+    "pid": 1234,
+    "port": 8901,
+    "root_dir": os.path.join("C:", "work"),
+    "secure": False,
+    "sock": "",
+    "token": "tok",
+    "url": "http://127.0.0.1:8901/",
+    "version": "2.14.0",
 }
 
 # The classic notebook server's descriptor, which is what the code assumed.
@@ -99,8 +108,7 @@ def test_non_matching_kernel_returns_none(monkeypatch):
 
 def test_pathless_session_does_not_raise(monkeypatch):
     """A session carrying neither key must be skipped, not crash the lookup."""
-    with _serving(monkeypatch, MODERN_SERVER,
-                  [_session(with_notebook_key=False, with_path=False)]):
+    with _serving(monkeypatch, MODERN_SERVER, [_session(with_notebook_key=False, with_path=False)]):
         assert sd._search_servers_for_notebook(KERNEL_ID) is None
 
 
@@ -108,7 +116,7 @@ def test_schema_mismatch_is_not_reported_as_a_query_failure(monkeypatch, caplog)
     """The old log line blamed the network for a parse error and sent two
     testers hunting proxies and tokens. A missing key must say so."""
     broken = {"url": "http://127.0.0.1:8901/", "token": "tok"}  # no dir key at all
-    session = {"id": "s1", "name": "work.ipynb"}                # no 'kernel' key
+    session = {"id": "s1", "name": "work.ipynb"}  # no 'kernel' key
     with _serving(monkeypatch, broken, [session]):
         with caplog.at_level("DEBUG"):
             assert sd._search_servers_for_notebook(KERNEL_ID) is None

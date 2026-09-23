@@ -34,6 +34,7 @@ derivation test. Two properties are load-bearing:
    the simulator has no clock. Timing jitter would otherwise move the split
    between runs, changing the tail's source and so its key.
 """
+
 from __future__ import annotations
 
 import ast
@@ -69,9 +70,7 @@ def is_split_half(node: ast.AST) -> bool:
     rather than a marker attribute, because the simulator re-parses source
     and would lose any attribute set on the runtime's node.
     """
-    return (isinstance(node, ast.For)
-            and isinstance(node.iter, ast.Subscript)
-            and isinstance(node.iter.slice, ast.Slice))
+    return isinstance(node, ast.For) and isinstance(node.iter, ast.Subscript) and isinstance(node.iter.slice, ast.Slice)
 
 
 def split_nodes(node: ast.For, k: int) -> tuple[ast.For, ast.For]:
@@ -178,6 +177,7 @@ class LoopSplitStore:
         tmp_path = f"{self._path}.{os.getpid()}.tmp"
         try:
             from cash.backends.file_backend import recreate_cache_dir
+
             recreate_cache_dir(os.path.dirname(self._path))
             with open(tmp_path, "w", encoding="utf-8") as fh:
                 json.dump(doc, fh)
@@ -225,6 +225,7 @@ def store_for_backend(backend) -> LoopSplitStore | None:
     """
     try:
         from .statement.miss_guard import resolve_cache_dir
+
         return get_store(resolve_cache_dir(backend))
     except Exception:  # noqa: BLE001 - splitting is an optimisation
         logger.debug("[LOOP_SPLIT] could not resolve a store", exc_info=True)

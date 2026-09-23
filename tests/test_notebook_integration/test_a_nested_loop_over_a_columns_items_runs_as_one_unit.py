@@ -13,7 +13,6 @@ iteration count -- which was only read for ``.items()`` on a plain name, not
 on ``a.var["symbol"]``, so it read as unknown, and an unknown count never
 switches.
 """
-import time
 
 import pytest
 

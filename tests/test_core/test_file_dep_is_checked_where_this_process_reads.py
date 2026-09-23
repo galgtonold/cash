@@ -18,11 +18,11 @@ the path the process that WROTE the entry had resolved.
 Every step runs in a FRESH process against one shared cache, because that is
 the shape the testers hit and the one a cache exists for.
 """
+
 from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import sys
 import textwrap
@@ -52,8 +52,9 @@ def _run(script, *argv, cache, cwd, extra_path=None):
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     if extra_path:
         env["PYTHONPATH"] = str(extra_path)
-    out = subprocess.run([sys.executable, str(script), *map(str, argv)],
-                         cwd=str(cwd), capture_output=True, text=True, env=env)
+    out = subprocess.run(
+        [sys.executable, str(script), *map(str, argv)], cwd=str(cwd), capture_output=True, text=True, env=env
+    )
     return out
 
 
@@ -61,12 +62,11 @@ def _point(link, target):
     """Create or re-point *link* at *target*: a junction on Windows."""
     if os.path.lexists(link):
         if os.name == "nt":
-            os.rmdir(link)                    # removes the junction, not the target
+            os.rmdir(link)  # removes the junction, not the target
         else:
             os.unlink(link)
     if os.name == "nt":
-        made = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)],
-                              capture_output=True, text=True)
+        made = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)], capture_output=True, text=True)
         if made.returncode != 0:
             pytest.skip(f"cannot create a junction here: {made.stdout}{made.stderr}")
     else:
@@ -91,8 +91,8 @@ def _release(root, name, values, mtime_ns=1_000_000_000_000_000_000):
 def test_a_switched_junction_is_seen(tmp_path):
     """THE BUG: switch `current`, get the previous target's answer."""
     (tmp_path / "reader.py").write_text(_READER, encoding="utf-8")
-    rel_a = _release(tmp_path, "relA", [10, 20, 30])        # 60
-    rel_b = _release(tmp_path, "relB", [40, 20, 30])        # 90
+    rel_a = _release(tmp_path, "relA", [10, 20, 30])  # 60
+    rel_b = _release(tmp_path, "relB", [40, 20, 30])  # 90
     # different content, SAME size, SAME mtime -- nothing timestamp-based can tell
     assert (rel_a / "ref.txt").stat().st_size == (rel_b / "ref.txt").stat().st_size
     current = tmp_path / "current"
@@ -106,17 +106,15 @@ def test_a_switched_junction_is_seen(tmp_path):
     _point(current, rel_b)
     second = _run(tmp_path / "reader.py", target, cache=cache, cwd=tmp_path)
 
-    assert json.loads(second.stdout) == 90, (
-        "a re-pointed junction served the previous target's answer"
-    )
+    assert json.loads(second.stdout) == 90, "a re-pointed junction served the previous target's answer"
     assert "RAN" in second.stderr
 
 
 def test_a_rollback_gets_the_older_answer(tmp_path):
     """A -> B -> A must return A's answer the third time, not B's."""
     (tmp_path / "reader.py").write_text(_READER, encoding="utf-8")
-    rel_a = _release(tmp_path, "relA", [1, 2, 3])            # 6
-    rel_b = _release(tmp_path, "relB", [7, 8, 9])            # 24
+    rel_a = _release(tmp_path, "relA", [1, 2, 3])  # 6
+    rel_b = _release(tmp_path, "relB", [7, 8, 9])  # 24
     current = tmp_path / "current"
     cache = tmp_path / "cache"
     target = current / "ref.txt"

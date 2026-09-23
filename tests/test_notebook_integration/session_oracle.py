@@ -10,6 +10,7 @@ files it wrote (path -> sha256), plus every file at the end.
 A separate process on purpose: nothing cash imported or patched can leak into
 the answer it is checked against.
 """
+
 import ast
 import contextlib
 import hashlib
@@ -30,8 +31,7 @@ def snapshot(work: Path) -> dict:
         if not p.is_file() or SKIP_PARTS & set(rel.parts) or p.name == CALLS_LOG:
             continue
         st = p.stat()
-        snap[rel.as_posix()] = (st.st_mtime_ns, st.st_size,
-                                hashlib.sha256(p.read_bytes()).hexdigest())
+        snap[rel.as_posix()] = (st.st_mtime_ns, st.st_size, hashlib.sha256(p.read_bytes()).hexdigest())
     return snap
 
 
@@ -59,12 +59,23 @@ def main() -> None:
             else:
                 exec(compile(tree, "<cell>", "exec"), ns)
         after = snapshot(work)
-        cells.append({"stdout": buf.getvalue(), "displays": displays,
-                      "written": {rel: v[2] for rel, v in after.items() if before.get(rel) != v}})
+        cells.append(
+            {
+                "stdout": buf.getvalue(),
+                "displays": displays,
+                "written": {rel: v[2] for rel, v in after.items() if before.get(rel) != v},
+            }
+        )
         before = after
-    Path(sys.argv[2]).write_text(json.dumps({
-        "cells": cells, "final": {rel: v[2] for rel, v in before.items()},
-    }), encoding="utf-8")
+    Path(sys.argv[2]).write_text(
+        json.dumps(
+            {
+                "cells": cells,
+                "final": {rel: v[2] for rel, v in before.items()},
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 if __name__ == "__main__":

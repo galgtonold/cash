@@ -7,6 +7,7 @@ nothing grows, each pass stores a different result. The guard summed every
 stored size per statement, so ``N x size`` passed its ratio for any loop of
 more than four passes.
 """
+
 import pytest
 
 pytest.importorskip("numpy")
@@ -33,13 +34,14 @@ SETUP = (
 
 
 def test_a_loop_that_rebinds_a_same_sized_value_does_not_warn(nb_runner):
-    nb_runner.create_notebook([
-        "import cash\n%cash_on",
-        SETUP,
-        "for w in range(7):\n"
-        "    sc = slow(np.random.default_rng(w).random(2_000_000))",
-        "print('SUM', round(float(sc.sum()), 3))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import cash\n%cash_on",
+            SETUP,
+            "for w in range(7):\n    sc = slow(np.random.default_rng(w).random(2_000_000))",
+            "print('SUM', round(float(sc.sum()), 3))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "SUM" in nb_runner.get_output(4)
@@ -47,14 +49,16 @@ def test_a_loop_that_rebinds_a_same_sized_value_does_not_warn(nb_runner):
 
 
 def test_the_advice_for_an_unannotated_loop_does_not_mention_the_annotation(nb_runner):
-    nb_runner.create_notebook([
-        "import cash\n%cash_on",
-        SETUP,
-        "acc = np.zeros(0)\n"
-        "for i in range(12):\n"
-        "    acc = slow(np.concatenate([acc, np.full(1_000_000, float(i))]))",
-        "print('LEN', len(acc))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import cash\n%cash_on",
+            SETUP,
+            "acc = np.zeros(0)\n"
+            "for i in range(12):\n"
+            "    acc = slow(np.concatenate([acc, np.full(1_000_000, float(i))]))",
+            "print('LEN', len(acc))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     raw = nb_runner.get_raw_output(3)

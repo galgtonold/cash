@@ -15,6 +15,7 @@ and `(7/6)` on the last statement, a step past the end of the cell.
 These tests drive the real statement loop with the execution stubbed out, so
 they gate the arithmetic rather than the timing.
 """
+
 from __future__ import annotations
 
 import ast
@@ -61,9 +62,10 @@ def executor():
     ex._magics = _RecordingMagics()
     ex._debug = False
 
-    def _stub_process(stmt_code, annotation, occ, is_last, all_metrics,
-                      buffered_result_outputs, display_code=None, exec_source=None):
-        all_metrics.append({'code': stmt_code, 'status': 'COMPUTED'})
+    def _stub_process(
+        stmt_code, annotation, occ, is_last, all_metrics, buffered_result_outputs, display_code=None, exec_source=None
+    ):
+        all_metrics.append({"code": stmt_code, "status": "COMPUTED"})
         return buffered_result_outputs
 
     ex._process_regular_stmt = _stub_process  # type: ignore[assignment]
@@ -72,14 +74,18 @@ def executor():
 
 def _run(executor, cell: str = CELL):
     executor._execute_cell_statements(
-        cell, ast.parse(cell), [], "display-1", 0.0, {},
+        cell,
+        ast.parse(cell),
+        [],
+        "display-1",
+        0.0,
+        {},
     )
     return executor._magics
 
 
 def test_the_counter_never_runs_past_the_end_of_the_cell(executor):
     magics = _run(executor)
-    total = len(ast.parse(CELL).body)
     assert magics.reported, "the post-statement render never fired"
     overshoot = [(s, t) for s, t in magics.reported if s > t]
     assert not overshoot, f"progress badge reported a step past the total: {overshoot}"

@@ -30,6 +30,7 @@ statement whose printed state is stale, and CAS-260 removed that shape by
 skip-caching exactly those statements. Worth knowing before trusting this file
 to catch a rewrite of the evaluation path.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration]
@@ -60,12 +61,8 @@ def test_get_output_is_a_recording_and_peek_is_live(nb_runner):
 
     nb_runner.restart()
 
-    assert "V 1" in nb_runner.get_output(2), (
-        "precondition: the notebook should still hold the recorded output"
-    )
-    assert nb_runner.peek("v") == "None", (
-        "peek read the recorded output instead of the live (empty) kernel"
-    )
+    assert "V 1" in nb_runner.get_output(2), "precondition: the notebook should still hold the recorded output"
+    assert nb_runner.peek("v") == "None", "peek read the recorded output instead of the live (empty) kernel"
 
 
 def test_peek_reports_an_undefined_name_as_none(nb_runner):
@@ -81,10 +78,12 @@ def test_peek_reports_an_undefined_name_as_none(nb_runner):
 def test_peek_finds_its_marker_when_other_output_shares_the_channel(nb_runner):
     """The text badge writes to stdout too. Matching the joined text rather
     than scanning lines reads the badge as "no value"."""
-    nb_runner.create_notebook([
-        "import cash\n%cash_on\n%cash_badge print\n",
-        "value = 41 + 1\n",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import cash\n%cash_on\n%cash_badge print\n",
+            "value = 41 + 1\n",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -117,9 +116,7 @@ def test_peek_leaves_the_notebook_untouched(nb_runner):
         nb_runner.peek("a")
 
     assert len(nb_runner.nb.cells) == before_cells, "peek added a cell"
-    assert [c.get("execution_count") for c in nb_runner.nb.cells] == before_counts, (
-        "peek advanced an execution count"
-    )
+    assert [c.get("execution_count") for c in nb_runner.nb.cells] == before_counts, "peek advanced an execution count"
     assert nb_runner.get_output(2) == before_output, "peek changed a cell's output"
 
 

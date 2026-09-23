@@ -9,6 +9,7 @@ were right; the directive was not.
 Counted with ``os.write``: a second repair over values the first one saw runs
 every call again when the directive held, and none when the repair cached them.
 """
+
 from pathlib import Path
 
 import pytest
@@ -40,7 +41,7 @@ def test_no_cache_calls_holds_when_the_statement_is_repaired(nb_runner):
     assert "SUM 2470" in nb_runner.get_output(5), nb_runner.get_output(5)
 
     nb_runner.set_cell_source(2, "N = 21")
-    nb_runner.run_cell(5)                       # cell 4 re-runs as an upstream repair
+    nb_runner.run_cell(5)  # cell 4 re-runs as an upstream repair
     assert "SUM 2870" in nb_runner.get_output(5), nb_runner.get_output(5)
 
     # A second repair over values the first one saw: had it cached the calls,

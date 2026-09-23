@@ -25,6 +25,7 @@ broken when it is correct.
 The fences are read out of the page rather than copied, so the code under test
 cannot drift from what a reader sees.
 """
+
 from __future__ import annotations
 
 import pathlib
@@ -60,12 +61,12 @@ def script_output(tmp_path) -> str:
     script.write_text(setup + "\n" + edit, encoding="utf-8")
     proc = subprocess.run(
         [sys.executable, script.name],
-        cwd=tmp_path,                 # sandboxes the default relative .cash dir
-        capture_output=True, text=True, timeout=180,
+        cwd=tmp_path,  # sandboxes the default relative .cash dir
+        capture_output=True,
+        text=True,
+        timeout=180,
     )
-    assert proc.returncode == 0, (
-        f"the page's example does not run:\n{proc.stdout}\n{proc.stderr}"
-    )
+    assert proc.returncode == 0, f"the page's example does not run:\n{proc.stdout}\n{proc.stderr}"
     return proc.stdout
 
 
@@ -73,9 +74,7 @@ def test_the_example_caches_at_all(script_output):
     """Non-vacuity. Cheap string functions can sit below the cost model's
     floor and never be stored, in which case a later miss would prove nothing
     about invalidation."""
-    assert "'hits': 1" in script_output, (
-        f"the second identical call was not a cache hit:\n{script_output}"
-    )
+    assert "'hits': 1" in script_output, f"the second identical call was not a cache hit:\n{script_output}"
 
 
 def test_editing_a_helper_two_levels_down_invalidates(script_output):
@@ -86,6 +85,5 @@ def test_editing_a_helper_two_levels_down_invalidates(script_output):
         f"`clean` prints 4; got {printed}\n{script_output}"
     )
     assert "'misses': 2" in script_output, (
-        "misses did not rise after the helper edit, so the edit did NOT "
-        f"invalidate:\n{script_output}"
+        f"misses did not rise after the helper edit, so the edit did NOT invalidate:\n{script_output}"
     )

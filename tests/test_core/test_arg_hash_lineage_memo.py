@@ -7,6 +7,7 @@ mutation signal it already trusts to cache notebook statements — so the second
 call reuses the hash instead of recomputing it. The stored cache key is
 unchanged (still the content hash), so this is a pure within-session speedup.
 """
+
 from __future__ import annotations
 
 import pandas as pd
@@ -85,7 +86,7 @@ def test_no_lineage_still_content_hashes_every_call(monkeypatch):
     monkeypatch.setattr("cash.core._COW_PANDAS", False)
     c = _cash()
     calls = _count_hashes(c)
-    df = _df(range(100))                   # no lineage attribute
+    df = _df(range(100))  # no lineage attribute
     c._serialize_args("f", (df,), {})
     c._serialize_args("f", (df,), {})
     assert calls["n"] == 2, "objects without lineage must not be memoised"
@@ -97,7 +98,7 @@ def test_two_objects_sharing_a_lineage_string_still_track_content():
     The memo keys on id(), so distinct live objects never share a memo slot."""
     c = _cash()
     df_a = _df([1, 2, 3], lineage="same")
-    df_b = _df([1, 2, 99], lineage="same")   # different content, same lineage str
+    df_b = _df([1, 2, 99], lineage="same")  # different content, same lineage str
     k_a = c._serialize_args("f", (df_a,), {})
     k_b = c._serialize_args("f", (df_b,), {})
     assert k_a != k_b

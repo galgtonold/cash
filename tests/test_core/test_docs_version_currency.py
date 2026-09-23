@@ -21,6 +21,7 @@ So this test does not ask "is the number right?"; it asks "is there a number
 here at all, and if so does it match?". A release that bumps `__version__`
 without touching these files fails here instead of shipping.
 """
+
 from __future__ import annotations
 
 import re
@@ -52,7 +53,7 @@ _VERSION = re.compile(r"v?(\d+\.\d+\.\d+)")
 # Numbers that are legitimately not cash's own version. Each needs a reason --
 # an unexplained entry here is how a real drift gets waved through.
 ALLOWED = {
-    "3.10.0",   # Python version floors
+    "3.10.0",  # Python version floors
     "3.11.0",
     "3.12.0",
     "3.13.0",
@@ -92,11 +93,7 @@ def test_the_readme_does_not_restate_the_version_in_prose() -> None:
     sentence does not need to agree with it, it needs to not compete with it.
     """
     text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    offenders = [
-        line.strip()
-        for line in text.splitlines()
-        if _VERSION.search(line) and "img.shields.io" not in line
-    ]
+    offenders = [line.strip() for line in text.splitlines() if _VERSION.search(line) and "img.shields.io" not in line]
     assert not offenders, (
         "README prose names a version literal; let the PyPI badge be the single "
         "place a reader learns the current version:\n  " + "\n  ".join(offenders)

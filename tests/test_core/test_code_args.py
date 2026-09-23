@@ -6,21 +6,29 @@ from cash import Cash as CashCls
 
 def test_mark_opaque_records_the_type():
     c = CashCls()
-    class Marker: pass
+
+    class Marker:
+        pass
+
     c.mark_opaque(Marker)
     assert c._is_opaque(Marker) is True
 
 
 def test_an_unmarked_type_is_not_opaque():
     c = CashCls()
-    class Other: pass
+
+    class Other:
+        pass
+
     assert c._is_opaque(Other) is False
 
 
 def test_the_opaque_decorator_marks_and_returns_the_class():
     @cash.opaque
-    class Decorated: pass
-    assert Decorated.__name__ == "Decorated"      # returns the class, not a wrapper
+    class Decorated:
+        pass
+
+    assert Decorated.__name__ == "Decorated"  # returns the class, not a wrapper
     assert cash.Cash()._is_opaque(Decorated) is True
 
 
@@ -32,7 +40,10 @@ def test_the_opaque_decorator_does_not_replace_the_class_object():
     feature exists), so pin object identity directly rather than a proxy
     for it.
     """
-    class Plain: pass
+
+    class Plain:
+        pass
+
     original = Plain
     result = cash.opaque(Plain)
     assert result is original
@@ -55,14 +66,17 @@ def test_a_subclass_of_an_opaque_class_does_not_inherit_opacity():
     assertion (False) would pass for the wrong reason -- e.g. a broken
     ``_is_opaque`` that simply always returns False.
     """
-    @cash.opaque
-    class Base: pass
 
-    class Derived(Base): pass
+    @cash.opaque
+    class Base:
+        pass
+
+    class Derived(Base):
+        pass
 
     c = cash.Cash()
-    assert c._is_opaque(Base) is True       # control: the decorated class itself
-    assert c._is_opaque(Derived) is False   # the actual claim: no inheritance
+    assert c._is_opaque(Base) is True  # control: the decorated class itself
+    assert c._is_opaque(Derived) is False  # the actual claim: no inheritance
 
 
 def test_mark_opaque_does_not_cover_a_subclass():
@@ -75,10 +89,15 @@ def test_mark_opaque_does_not_cover_a_subclass():
     other as a set.
     """
     c = CashCls()
-    class Marker: pass
-    class SubMarker(Marker): pass
+
+    class Marker:
+        pass
+
+    class SubMarker(Marker):
+        pass
+
     c.mark_opaque(Marker)
-    assert c._is_opaque(Marker) is True     # control: the registered type itself
+    assert c._is_opaque(Marker) is True  # control: the registered type itself
     assert c._is_opaque(SubMarker) is False  # the actual claim: no inheritance
 
 
@@ -94,11 +113,13 @@ def test_is_opaque_never_raises_on_an_unhashable_class():
     a class unhashable, this test would fail loudly on its own setup rather
     than silently stop testing anything.
     """
+
     class WeirdMeta(type):
         def __eq__(cls, other):
             return NotImplemented
 
-    class Foo(metaclass=WeirdMeta): pass
+    class Foo(metaclass=WeirdMeta):
+        pass
 
     with pytest.raises(TypeError):
         {Foo}  # confirms Foo really is unhashable before trusting the rest
@@ -117,15 +138,21 @@ def test_an_instance_of_a_registered_type_is_opaque():
     branch in the Task 4 plan).
     """
     c = CashCls()
-    class Marker: pass
+
+    class Marker:
+        pass
+
     c.mark_opaque(Marker)
     assert c._is_opaque(Marker()) is True
 
 
 def test_an_instance_of_a_decorated_class_is_opaque():
     """Same gap, for the ``@cash.opaque`` spelling."""
+
     @cash.opaque
-    class Decorated: pass
+    class Decorated:
+        pass
+
     assert cash.Cash()._is_opaque(Decorated()) is True
 
 
@@ -134,8 +161,8 @@ def test_an_instance_of_a_decorated_class_is_opaque():
 # ---------------------------------------------------------------------------
 
 import functools
-import pickle
 import itertools
+import pickle
 import sys
 import types
 import warnings
@@ -175,9 +202,9 @@ def _code_advisories(records):
     filtering on the category alone would count an unrelated warning as this
     one -- measured: it did."""
     return [
-        str(w.message) for w in records
-        if issubclass(w.category, CashImpurityWarning)
-        and "its code could not be hashed" in str(w.message)
+        str(w.message)
+        for w in records
+        if issubclass(w.category, CashImpurityWarning) and "its code could not be hashed" in str(w.message)
     ]
 
 
@@ -352,6 +379,7 @@ def test_a_third_party_class_does_not_participate(c):
     """Pins the gate in the other direction, so a future widening that folds
     library code shows up as a failure rather than as a slow cache."""
     import json.encoder
+
     takes, calls = _counting(c)
     takes(json.encoder.JSONEncoder)
     takes(json.encoder.JSONEncoder)
@@ -365,6 +393,7 @@ def test_the_third_party_gate_is_measurable_not_merely_stable(c):
     UNHASHABLE, never one that keys on it. Measure the gate itself, with a user
     class as the control that must move the hash."""
     import json.encoder
+
     base = "0" * 64
     assert c._fold_code_args((json.encoder.JSONEncoder,), {}, base) == base
     nb = _nb_module()
@@ -448,9 +477,9 @@ def test_explain_agrees_with_a_real_call_for_a_code_argument(c):
     takes, _calls = _counting(c)
     nb = _nb_module()
     v1 = _define(nb, _V1)
-    assert takes.explain(v1).would_hit is False      # control: cold
+    assert takes.explain(v1).would_hit is False  # control: cold
     takes(v1)
-    assert takes.explain(v1).would_hit is True       # the claim: same key both ways
+    assert takes.explain(v1).would_hit is True  # the claim: same key both ways
     assert takes.explain(_define(nb, _V2)).would_hit is False
 
 
@@ -570,8 +599,11 @@ def test_a_str_subclass_argument_folds_its_class(c):
     reaches the fold -- a missed invalidation on exactly the bug class this
     feature exists for. The exact-type test is what makes this pass."""
     _assert_edit_invalidates(
-        c, "class StrSub(str):\n    def r(self): return {v!r}\n",
-        lambda mod: mod.StrSub("fixed"), name="StrSub", func_name="strsub_takes",
+        c,
+        "class StrSub(str):\n    def r(self): return {v!r}\n",
+        lambda mod: mod.StrSub("fixed"),
+        name="StrSub",
+        func_name="strsub_takes",
     )
 
 
@@ -581,9 +613,10 @@ def test_an_int_enum_member_folds_its_enum(c):
     not carry the method body at all, so `args_hash` cannot see this edit."""
     _assert_edit_invalidates(
         c,
-        "import enum\n"
-        "class Col(enum.IntEnum):\n    A = 1\n    def label(self): return {v!r}\n",
-        lambda mod: mod.Col.A, name="Col", func_name="enum_takes",
+        "import enum\nclass Col(enum.IntEnum):\n    A = 1\n    def label(self): return {v!r}\n",
+        lambda mod: mod.Col.A,
+        name="Col",
+        func_name="enum_takes",
     )
 
 
@@ -591,14 +624,18 @@ def test_a_slots_instance_folds_its_class(c):
     """`__slots__` gives instances no `__dict__`, which says nothing about
     whether the user edits the class. Gating the instance branch on
     `hasattr(value, "__dict__")` dropped every one of them."""
+
     def build(mod):
         obj = mod.Slotted()
         obj.a = 1
         return obj
 
     _assert_edit_invalidates(
-        c, "class Slotted:\n    __slots__ = ('a',)\n    def r(self): return {v!r}\n",
-        build, name="Slotted", func_name="slots_takes",
+        c,
+        "class Slotted:\n    __slots__ = ('a',)\n    def r(self): return {v!r}\n",
+        build,
+        name="Slotted",
+        func_name="slots_takes",
     )
 
 
@@ -606,8 +643,11 @@ def test_a_dict_subclass_instance_folds_its_class(c):
     """A `dict` subclass is BOTH a container to walk and a user object whose
     class carries code. Walking only the contents made the class invisible."""
     _assert_edit_invalidates(
-        c, "class Opts(dict):\n    def r(self): return {v!r}\n",
-        lambda mod: mod.Opts(a=1), name="Opts", func_name="dictsub_takes",
+        c,
+        "class Opts(dict):\n    def r(self): return {v!r}\n",
+        lambda mod: mod.Opts(a=1),
+        name="Opts",
+        func_name="dictsub_takes",
     )
 
 
@@ -615,8 +655,11 @@ def test_a_list_subclass_instance_folds_its_class(c):
     """Same hole on the sequence branch, pinned independently: the dict and
     sequence branches are separate code paths."""
     _assert_edit_invalidates(
-        c, "class Seq(list):\n    def r(self): return {v!r}\n",
-        lambda mod: mod.Seq([1, 2]), name="Seq", func_name="listsub_takes",
+        c,
+        "class Seq(list):\n    def r(self): return {v!r}\n",
+        lambda mod: mod.Seq([1, 2]),
+        name="Seq",
+        func_name="listsub_takes",
     )
 
 
@@ -687,6 +730,7 @@ def _defaulted(c, schema, calls, name):
     is the only thing left that can see the difference -- which is what makes
     these two tests measure the fix rather than some other channel.
     """
+
     def build(schema=schema):
         calls.append(1)
         return schema().r()
@@ -774,7 +818,8 @@ def test_a_nested_class_attribute_folds_the_nested_class_body(c):
     non-callable branch would have folded content -- editing `Inner.f` left
     `Outer`'s digest unchanged."""
     before, after = _holder_digests(
-        c, _HOLDER_PRELUDE,
+        c,
+        _HOLDER_PRELUDE,
         "class Inner:\n    def f(self): return 'V1'\nclass Holder:\n    inner = Inner\n",
         "class Inner:\n    def f(self): return 'V2'\nclass Holder:\n    inner = Inner\n",
     )
@@ -785,7 +830,8 @@ def test_a_partial_class_attribute_folds_its_bound_arguments(c):
     """`ident` is reached by unwrapping `.func`, so `partial(scale, 3)` and
     `partial(scale, 4)` both resolved to `scale` and collided."""
     before, after = _holder_digests(
-        c, _HOLDER_PRELUDE,
+        c,
+        _HOLDER_PRELUDE,
         "class Holder:\n    op = functools.partial(scale, 3)\n",
         "class Holder:\n    op = functools.partial(scale, 4)\n",
     )
@@ -797,7 +843,8 @@ def test_a_callable_instance_attribute_folds_state_and_class_code(c):
     vs `Op(3)`), and the class code behind its `__call__`. Before the fix a
     callable instance attribute contributed neither."""
     state_before, state_after = _holder_digests(
-        c, _HOLDER_PRELUDE,
+        c,
+        _HOLDER_PRELUDE,
         "class Holder:\n    op = Op(2)\n",
         "class Holder:\n    op = Op(3)\n",
     )
@@ -816,7 +863,8 @@ def test_an_unchanged_holder_still_collides(c):
     """The control for the three tests above: re-executing the SAME body must
     produce the SAME digest, or 'differs after an edit' proves nothing."""
     before, after = _holder_digests(
-        c, _HOLDER_PRELUDE,
+        c,
+        _HOLDER_PRELUDE,
         "class Holder:\n    op = Op(2)\n",
         "class Holder:\n    op = Op(2)\n",
     )
@@ -832,14 +880,15 @@ def test_an_opaque_base_does_not_move_its_subclass_digest(c, opaque_registry):
     move the digest; and marked, the subclass's OWN edit must still move it --
     otherwise this could pass by making the digest constant.
     """
-    body = ("class VendorBase:\n    def helper(self): return {v!r}\n"
-            "class Derived(VendorBase):\n    def mine(self): return {m}\n")
+    body = (
+        "class VendorBase:\n    def helper(self): return {v!r}\n"
+        "class Derived(VendorBase):\n    def mine(self): return {m}\n"
+    )
     nb = _nb_module()
     _define(nb, body.format(v="V1", m=1), name="Derived")
     unmarked_before = c._code_surface_hash(nb.Derived)
     _define(nb, body.format(v="V2", m=1), name="Derived")
-    assert unmarked_before != c._code_surface_hash(nb.Derived), \
-        "control: an unmarked base edit must move the digest"
+    assert unmarked_before != c._code_surface_hash(nb.Derived), "control: an unmarked base edit must move the digest"
 
     nb2 = _nb_module()
     _define(nb2, body.format(v="V1", m=1), name="Derived")
@@ -847,13 +896,13 @@ def test_an_opaque_base_does_not_move_its_subclass_digest(c, opaque_registry):
     marked_before = c._code_surface_hash(nb2.Derived)
     _define(nb2, body.format(v="V2", m=1), name="Derived")
     CashCls.mark_opaque(nb2.VendorBase)
-    assert marked_before == c._code_surface_hash(nb2.Derived), \
-        "an opaque base must not move its subclass's digest"
+    assert marked_before == c._code_surface_hash(nb2.Derived), "an opaque base must not move its subclass's digest"
 
     _define(nb2, body.format(v="V2", m=2), name="Derived")
     CashCls.mark_opaque(nb2.VendorBase)
-    assert marked_before != c._code_surface_hash(nb2.Derived), \
+    assert marked_before != c._code_surface_hash(nb2.Derived), (
         "control: the subclass's OWN edit must still move the digest"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -865,7 +914,7 @@ _VALUE_REPR_BODY = (
     "class Config:\n"
     "    def __init__(self, n):\n"
     "        self.n = n\n"
-    "        self.lock = threading.Lock()\n"      # <- unpicklable
+    "        self.lock = threading.Lock()\n"  # <- unpicklable
     "    def __repr__(self):\n"
     "        return f'Config(n={{self.n}})'\n"
     "class Renderer:\n"
@@ -896,8 +945,8 @@ def test_a_value_based_repr_on_an_unpicklable_default_still_invalidates(c):
 
     default = nb.Renderer.render.__defaults__[0]
     with pytest.raises((TypeError, pickle.PicklingError)):
-        pickle.dumps(default)          # premise: really unpicklable
-    assert repr(default) == "Config(n=1)"   # premise: really value-based
+        pickle.dumps(default)  # premise: really unpicklable
+    assert repr(default) == "Config(n=1)"  # premise: really value-based
 
     takes(nb.Renderer)
     takes(nb.Renderer)

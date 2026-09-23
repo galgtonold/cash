@@ -1,5 +1,7 @@
 """Batch 77: Complex data transformations — cash caching with multi-step reshaping."""
+
 import textwrap
+
 import pytest
 
 
@@ -9,8 +11,9 @@ class TestDictTransforms:
 
     def test_nested_dict_flatten(self, nb_runner):
         """Flatten nested dict across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 def flatten_dict(d, parent_key='', sep='.'):
                     items = []
                     for k, v in d.items():
@@ -29,13 +32,14 @@ class TestDictTransforms:
                 flat = flatten_dict(nested)
                 print(f"flat={flat}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 keys = sorted(flat.keys())
                 print(f"keys={keys}")
                 total = sum(flat.values())
                 print(f"total={total}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out1 = nb_runner.get_output(1)
@@ -45,8 +49,9 @@ class TestDictTransforms:
 
     def test_dict_merge_deep(self, nb_runner):
         """Deep merge dictionaries across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 def deep_merge(base, override):
                     result = dict(base)
                     for k, v in override.items():
@@ -61,12 +66,13 @@ class TestDictTransforms:
                 config = deep_merge(defaults, overrides)
                 print(f"config={config}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 print(f"host={config['db']['host']}")
                 print(f"port={config['db']['port']}")
                 print(f"debug={config['debug']}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out2 = nb_runner.get_output(2)
@@ -81,8 +87,9 @@ class TestListTransforms:
 
     def test_group_by(self, nb_runner):
         """Group-by operation across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 from collections import defaultdict
 
                 records = [
@@ -98,13 +105,14 @@ class TestListTransforms:
                 for dept, name, salary in records:
                     grouped[dept].append((name, salary))
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 for dept in sorted(grouped.keys()):
                     members = grouped[dept]
                     avg_salary = sum(s for _, s in members) / len(members)
                     print(f"{dept}: {len(members)} employees, avg=${avg_salary:,.0f}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -114,8 +122,9 @@ class TestListTransforms:
 
     def test_transpose_list_of_dicts(self, nb_runner):
         """Transpose list of dicts to dict of lists across cells."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 rows = [
                     {'name': 'A', 'x': 1, 'y': 10},
                     {'name': 'B', 'x': 2, 'y': 20},
@@ -128,12 +137,13 @@ class TestListTransforms:
                         columns.setdefault(k, []).append(v)
                 print(f"cols={sorted(columns.keys())}")
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 print(f"names={columns['name']}")
                 print(f"x_sum={sum(columns['x'])}")
                 print(f"y_sum={sum(columns['y'])}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out2 = nb_runner.get_output(2)
@@ -143,23 +153,28 @@ class TestListTransforms:
 
     def test_transform_propagation(self, nb_runner):
         """Transform propagates when input changes."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
                 raw = [1, 2, 3, 4, 5]
                 step1 = [x * 2 for x in raw]
             """),
-            textwrap.dedent("""\
+                textwrap.dedent("""\
                 step2 = [x + 10 for x in step1]
                 print(f"result={step2}")
             """),
-        ])
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result=[12, 14, 16, 18, 20]" in nb_runner.get_output(2)
 
-        nb_runner.set_cell_source(1, textwrap.dedent("""\
+        nb_runner.set_cell_source(
+            1,
+            textwrap.dedent("""\
             raw = [10, 20, 30]
             step1 = [x * 2 for x in raw]
-        """))
+        """),
+        )
         nb_runner.run_cells([1, 2])
         assert "result=[30, 50, 70]" in nb_runner.get_output(2)

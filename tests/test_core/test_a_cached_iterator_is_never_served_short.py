@@ -8,6 +8,7 @@ no error -- a sum over the stream was simply wrong. The class's own docstring
 and the thread-safety guide both say a truncated answer is worse than a slow
 one.
 """
+
 from __future__ import annotations
 
 import pytest

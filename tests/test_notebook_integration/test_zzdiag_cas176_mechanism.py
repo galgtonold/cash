@@ -39,6 +39,7 @@ counter keyed by statement source, and dump it after each ``run_all``. That
 observes which statements the reconstruction replays without adding anything to
 the user's cell.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(900)]
@@ -52,9 +53,7 @@ def _setup(counters):
     lines = ["import cash", "%cash_on", "import json, os, time"]
     for k, c in counters.items():
         p = str(c).replace("\\", "/")
-        lines.append(
-            f"_fd_{k} = os.open(r'{p}', os.O_WRONLY | os.O_CREAT | os.O_APPEND)"
-        )
+        lines.append(f"_fd_{k} = os.open(r'{p}', os.O_WRONLY | os.O_CREAT | os.O_APPEND)")
     return "\n".join(lines)
 
 
@@ -71,8 +70,7 @@ def _cell_rmw(key, path):
     """The ticket's shape: read and write the SAME path via builtins.open."""
     p = str(path).replace("\\", "/")
     return (
-        _tick(key)
-        + f"st_{key} = json.load(open(r'{p}'))\n"
+        _tick(key) + f"st_{key} = json.load(open(r'{p}'))\n"
         "time.sleep(0.05)\n"
         f"st_{key}['{key}'] = st_{key}.get('{key}', 0) + 1\n"
         f"with open(r'{p}', 'w') as f_{key}:\n"
@@ -85,8 +83,7 @@ def _cell_read_only(key, path):
     """Reads a file, never writes one."""
     p = str(path).replace("\\", "/")
     return (
-        _tick(key)
-        + f"st_{key} = json.load(open(r'{p}'))\n"
+        _tick(key) + f"st_{key} = json.load(open(r'{p}'))\n"
         "time.sleep(0.05)\n"
         f"v_{key} = st_{key}.get('seed', 0) + {len(key)}"
     )
@@ -96,8 +93,7 @@ def _cell_write_only(key, dst):
     """Writes a file, never reads one."""
     d = str(dst).replace("\\", "/")
     return (
-        _tick(key)
-        + "time.sleep(0.05)\n"
+        _tick(key) + "time.sleep(0.05)\n"
         f"st_{key} = {{'{key}': 1}}\n"
         f"with open(r'{d}', 'w') as f_{key}:\n"
         f"    json.dump(st_{key}, f_{key})\n"
@@ -119,8 +115,7 @@ def _measure(nb_runner, cells, counters, label):
     print(f"\n=== CAS-176 mechanism: {label} ===")
     for n in range(1, RUNS + 1):
         nb_runner.run_all()
-        print(f"  after run_all #{n}: "
-              f"{ {k: _count(c) for k, c in counters.items()} }")
+        print(f"  after run_all #{n}: { {k: _count(c) for k, c in counters.items()} }")
 
     per_run = {k: _count(c) / RUNS for k, c in counters.items()}
     print(f"  executions per run_all: {per_run}")
@@ -140,7 +135,9 @@ def test_pure_compute_does_not_amplify(nb_runner, counters):
     """CONTROL. Also validates the witness: if os.write were tracked, this
     would amplify and every other result in this file would be meaningless."""
     per_run = _measure(
-        nb_runner, [_cell_pure(k) for k in KEYS], counters,
+        nb_runner,
+        [_cell_pure(k) for k in KEYS],
+        counters,
         "pure compute, no file I/O",
     )
     assert per_run == FLAT, per_run
@@ -163,7 +160,9 @@ def test_read_write_same_path_amplifies(nb_runner, tmp_path, counters):
     for p in state.values():
         p.write_text("{}")
     per_run = _measure(
-        nb_runner, [_cell_rmw(k, state[k]) for k in KEYS], counters,
+        nb_runner,
+        [_cell_rmw(k, state[k]) for k in KEYS],
+        counters,
         "read X / write X (ticket shape)",
     )
     assert per_run == FLAT, per_run  # suppressed by the witness — see docstring
@@ -175,7 +174,9 @@ def test_read_only_does_not_amplify(nb_runner, tmp_path, counters):
     for p in src.values():
         p.write_text('{"seed": 1}')
     per_run = _measure(
-        nb_runner, [_cell_read_only(k, src[k]) for k in KEYS], counters,
+        nb_runner,
+        [_cell_read_only(k, src[k]) for k in KEYS],
+        counters,
         "read only, no write",
     )
     assert per_run == FLAT, per_run
@@ -185,7 +186,9 @@ def test_write_only(nb_runner, tmp_path, counters):
     """Does WRITING alone amplify, with no file dependency to invalidate?"""
     dst = {k: tmp_path / f"w_{k}.json" for k in KEYS}
     per_run = _measure(
-        nb_runner, [_cell_write_only(k, dst[k]) for k in KEYS], counters,
+        nb_runner,
+        [_cell_write_only(k, dst[k]) for k in KEYS],
+        counters,
         "write only, no read",
     )
     assert per_run == FLAT, per_run
@@ -211,7 +214,8 @@ def test_persist_on_a_file_writer_amplifies(nb_runner, tmp_path, counters):
     per_run = _measure(
         nb_runner,
         ["# @cash:persist\n" + _cell_rmw(k, state[k]) for k in KEYS],
-        counters, "read X / write X WITH @cash:persist",
+        counters,
+        "read X / write X WITH @cash:persist",
     )
     assert per_run == FLAT, per_run
 
@@ -221,7 +225,8 @@ def test_persist_on_pure_compute(nb_runner, counters):
     per_run = _measure(
         nb_runner,
         ["# @cash:persist\n" + _cell_pure(k) for k in KEYS],
-        counters, "pure compute WITH @cash:persist",
+        counters,
+        "pure compute WITH @cash:persist",
     )
     assert per_run == FLAT, per_run
 
@@ -245,17 +250,12 @@ def test_per_statement_execution_profile(nb_runner, tmp_path):
     how many times each statement position executed per run_all.
     """
     POSITIONS = ("load", "sleep", "incr", "write", "tail")
-    fds = {
-        (k, pos): tmp_path / f"c_{k}_{pos}.log"
-        for k in KEYS for pos in POSITIONS
-    }
+    fds = {(k, pos): tmp_path / f"c_{k}_{pos}.log" for k in KEYS for pos in POSITIONS}
 
     setup_lines = ["import cash", "%cash_on", "import json, os, time"]
     for (k, pos), p in fds.items():
         s = str(p).replace("\\", "/")
-        setup_lines.append(
-            f"_fd_{k}_{pos} = os.open(r'{s}', os.O_WRONLY|os.O_CREAT|os.O_APPEND)"
-        )
+        setup_lines.append(f"_fd_{k}_{pos} = os.open(r'{s}', os.O_WRONLY|os.O_CREAT|os.O_APPEND)")
 
     state = {k: tmp_path / f"st_{k}.json" for k in KEYS}
     for p in state.values():
@@ -286,12 +286,9 @@ def test_per_statement_execution_profile(nb_runner, tmp_path):
     print("\n=== CAS-176 per-statement execution profile (per run_all) ===")
     print(f"  {'cell':<6}" + "".join(f"{p:>9}" for p in POSITIONS))
     for k in KEYS:
-        row = "".join(
-            f"{_count(fds[(k, pos)]) / RUNS:>9.2f}" for pos in POSITIONS
-        )
+        row = "".join(f"{_count(fds[(k, pos)]) / RUNS:>9.2f}" for pos in POSITIONS)
         print(f"  {k:<6}{row}")
-    print(f"  state file totals: "
-          f"{ {k: __import__('json').load(open(p)).get(k, 0) / RUNS for k, p in state.items()} }")
+    print(f"  state file totals: { {k: __import__('json').load(open(p)).get(k, 0) / RUNS for k, p in state.items()} }")
 
 
 def test_fused_witness_execution_profile(nb_runner, tmp_path):
@@ -310,9 +307,7 @@ def test_fused_witness_execution_profile(nb_runner, tmp_path):
     setup = ["import cash", "%cash_on", "import json, os, time"]
     for (k, p), path in fds.items():
         s = str(path).replace("\\", "/")
-        setup.append(
-            f"_fd_{k}_{p} = os.open(r'{s}', os.O_WRONLY|os.O_CREAT|os.O_APPEND)"
-        )
+        setup.append(f"_fd_{k}_{p} = os.open(r'{s}', os.O_WRONLY|os.O_CREAT|os.O_APPEND)")
     setup += [
         "def _bump(d, key, fd):",
         "    os.write(fd, b'X')",
@@ -347,9 +342,10 @@ def test_fused_witness_execution_profile(nb_runner, tmp_path):
     print("\n=== CAS-176 FUSED-witness profile (executions per run_all) ===")
     print(f"  {'cell':<6}{'incr':>9}{'write':>9}{'file':>9}")
     import json as _json
+
     for k in KEYS:
-        incr = _count(fds[(k, 'incr')]) / RUNS
-        write = _count(fds[(k, 'write')]) / RUNS
+        incr = _count(fds[(k, "incr")]) / RUNS
+        write = _count(fds[(k, "write")]) / RUNS
         val = _json.load(open(state[k])).get(k, 0) / RUNS
         print(f"  {k:<6}{incr:>9.2f}{write:>9.2f}{val:>9.2f}")
 
@@ -363,6 +359,7 @@ def test_inplace_vs_rebind_with_identical_file_write(nb_runner, tmp_path):
     charged once per downstream cell.
     """
     import json as _json
+
     results = {}
     for label, incr in (
         ("in-place  st[k] = ...", "st_{k}['{k}'] = st_{k}.get('{k}', 0) + 1"),
@@ -377,21 +374,17 @@ def test_inplace_vs_rebind_with_identical_file_write(nb_runner, tmp_path):
             return (
                 "# @cash:persist\n"
                 f"st_{k} = json.load(open(r'{s}'))\n"
-                "time.sleep(0.05)\n"
-                + incr.format(k=k) + "\n"
+                "time.sleep(0.05)\n" + incr.format(k=k) + "\n"
                 f"with open(r'{s}', 'w') as f_{k}:\n"
                 f"    json.dump(st_{k}, f_{k})\n"
                 f"v_{k} = st_{k}['{k}']"
             )
 
-        nb_runner.create_notebook(
-            ["import cash\n%cash_on\nimport json, os, time"]
-            + [cell(k) for k in KEYS])
+        nb_runner.create_notebook(["import cash\n%cash_on\nimport json, os, time"] + [cell(k) for k in KEYS])
         nb_runner.start_kernel()
         for _ in range(RUNS):
             nb_runner.run_all()
-        results[label] = {
-            k: _json.load(open(p)).get(k, 0) / RUNS for k, p in state.items()}
+        results[label] = {k: _json.load(open(p)).get(k, 0) / RUNS for k, p in state.items()}
 
     print("\n=== CAS-176 in-place vs rebind (identical file write) ===")
     for label, per_run in results.items():

@@ -6,6 +6,7 @@ restore-cost check at all -- the statement path has one -- and nothing
 compared a hit's real cost with what it saved. Measured on the hit now:
 a loss drops the entry and the site runs plain for the rest of the session.
 """
+
 import time
 
 from cash.notebook.call_interception import CallSite
@@ -30,7 +31,7 @@ def test_a_hit_slower_than_its_compute_is_dropped(call_unit_harness, monkeypatch
     real_get = backend.get
 
     def slow_get(key, *a, **k):
-        time.sleep(0.3)              # a hit that costs far more than 20 ms
+        time.sleep(0.3)  # a hit that costs far more than 20 ms
         return real_get(key, *a, **k)
 
     monkeypatch.setattr(backend, "get", slow_get)

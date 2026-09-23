@@ -25,8 +25,8 @@ Only for a binding that cannot have read anything (constants, literals,
 changed file left the cells below on the old text. It passes without the fix
 and failed with that draft.
 """
-import pytest
 
+import pytest
 from conftest import shows_cached
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
@@ -36,8 +36,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 # marked -- a wrong value is never a load artifact.
 LOAD_SENSITIVE = pytest.mark.flaky(reruns=2, reruns_delay=5, only_rerun=["re-ran"])
 
-HEAD = ("import cash\n%cash_on\n%cash_persist on\n%cash_badge print\n"
-        "from pathlib import Path")
+HEAD = "import cash\n%cash_on\n%cash_persist on\n%cash_badge print\nfrom pathlib import Path"
 
 #: Worth caching, or the cost floor refuses it for an unrelated reason.
 WORK = "sum(i * i for i in range(2_000_000))"
@@ -65,10 +64,7 @@ def test_the_first_reader_is_cached_and_restores(nb_runner, tmp_path):
     nb_runner.run_all()
 
     first = nb_runner.get_raw_output(2)
-    assert "missing lineage" not in first, (
-        "the statement reading DATA and N was refused on the first run:\n"
-        + first
-    )
+    assert "missing lineage" not in first, "the statement reading DATA and N was refused on the first run:\n" + first
 
     nb_runner.restart()
     nb_runner.run_cell(1)
@@ -94,8 +90,7 @@ def test_editing_the_cash_on_cell_still_recomputes(nb_runner, tmp_path):
     nb_runner.run_cell(1)
     nb_runner.run_cell(3)
     assert "R len=26" in nb_runner.get_output(3), (
-        "N changed in the %cash_on cell and the load kept its old value:\n"
-        + nb_runner.get_raw_output(3)
+        "N changed in the %cash_on cell and the load kept its old value:\n" + nb_runner.get_raw_output(3)
     )
 
 
@@ -109,13 +104,11 @@ def test_editing_the_file_still_recomputes(nb_runner, tmp_path):
     data.write_text("abcdefgh", encoding="utf-8")
     nb_runner.run_cell(3)
     assert "R len=25" in nb_runner.get_output(3), (
-        "the file DATA names changed and the load kept its old value:\n"
-        + nb_runner.get_raw_output(3)
+        "the file DATA names changed and the load kept its old value:\n" + nb_runner.get_raw_output(3)
     )
 
 
-def test_a_value_read_in_the_cash_on_cell_still_follows_its_file(
-        nb_runner, tmp_path):
+def test_a_value_read_in_the_cash_on_cell_still_follows_its_file(nb_runner, tmp_path):
     """A lineage adopted for a value READ from a file must not pin it.
 
     The adoption gives ``RAW`` the simulation's lineage without anything
@@ -135,8 +128,7 @@ def test_a_value_read_in_the_cash_on_cell_still_follows_its_file(
     data.write_text("abcdefgh", encoding="utf-8")
     nb_runner.run_cell(3)
     assert "R size=8" in nb_runner.get_output(3), (
-        "the file RAW was read from changed and the cells below kept the "
-        "old text:\n" + nb_runner.get_raw_output(3)
+        "the file RAW was read from changed and the cells below kept the old text:\n" + nb_runner.get_raw_output(3)
     )
 
 
@@ -166,16 +158,12 @@ def test_a_value_loaded_in_the_cash_on_cell_is_cached_below(nb_runner, tmp_path)
     nb_runner.run_cell(1)
     nb_runner.run_cell(2)
     after = nb_runner.get_raw_output(2)
-    assert shows_cached(after), (
-        "after a restart the statement reading RAW re-ran instead of "
-        "restoring:\n" + after
-    )
+    assert shows_cached(after), "after a restart the statement reading RAW re-ran instead of restoring:\n" + after
     nb_runner.run_cell(3)
     assert "R size=5" in nb_runner.get_output(3), nb_runner.get_raw_output(3)
 
 
-def test_a_value_loaded_in_the_cash_on_cell_follows_its_file_when_re_run_alone(
-        nb_runner, tmp_path):
+def test_a_value_loaded_in_the_cash_on_cell_follows_its_file_when_re_run_alone(nb_runner, tmp_path):
     """Only the reader's own cell is re-run -- no cell below to repair it."""
     data = _data(tmp_path)
     nb_runner.create_notebook([_setup(data, 3) + LOAD_SETUP_EXTRA, SIZE, SHOW_SIZE])
@@ -187,5 +175,6 @@ def test_a_value_loaded_in_the_cash_on_cell_follows_its_file_when_re_run_alone(
     nb_runner.run_cell(3)
     assert "R size=8" in nb_runner.get_output(3), (
         "the file RAW was read from changed and SIZE kept the old text:\n"
-        + nb_runner.get_raw_output(2) + nb_runner.get_raw_output(3)
+        + nb_runner.get_raw_output(2)
+        + nb_runner.get_raw_output(3)
     )

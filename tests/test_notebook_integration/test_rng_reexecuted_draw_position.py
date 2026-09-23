@@ -12,6 +12,7 @@ seed (and any draws ahead of the re-executed one) so the draw lands correctly.
 
 Oracle = the notebook's current sources run top-to-bottom with no cash.
 """
+
 import re
 
 import pytest
@@ -37,12 +38,11 @@ def test_deterministic_edit_in_seeded_draw_cell(nb_runner):
     nb_runner.run_cell(3)  # data cell NOT re-run
 
     import numpy as np
+
     np.random.seed(42)
     oracle = float((np.random.rand(3) * 200.0).sum())
     got = _num(nb_runner, 3, "TOTAL")
-    assert got == pytest.approx(oracle, abs=1e-6), (
-        f"re-executed draw ignored its seed: cash={got} oracle={oracle}"
-    )
+    assert got == pytest.approx(oracle, abs=1e-6), f"re-executed draw ignored its seed: cash={got} oracle={oracle}"
 
 
 @pytest.mark.timeout(180)
@@ -52,8 +52,8 @@ def test_unchanged_draw_before_a_reexecuted_draw(nb_runner):
     data = (
         "import numpy as np\nnp.random.seed(0)\n"
         "SCALE = 10.0\n"
-        "x = np.random.rand(2)\n"          # unchanged draw, ahead of y
-        "y = np.random.rand(2) * SCALE"    # re-executes when SCALE changes
+        "x = np.random.rand(2)\n"  # unchanged draw, ahead of y
+        "y = np.random.rand(2) * SCALE"  # re-executes when SCALE changes
     )
     nb_runner.create_notebook([C_ON, data, "print('SX', round(float(x.sum()), 6), 'SY', round(float(y.sum()), 6))"])
     nb_runner.start_kernel()
@@ -62,13 +62,13 @@ def test_unchanged_draw_before_a_reexecuted_draw(nb_runner):
     nb_runner.run_cell(3)
 
     import numpy as np
+
     np.random.seed(0)
     ox = float(np.random.rand(2).sum())
     oy = float((np.random.rand(2) * 20.0).sum())
     assert _num(nb_runner, 3, "SX") == pytest.approx(ox, abs=1e-6)
     assert _num(nb_runner, 3, "SY") == pytest.approx(oy, abs=1e-6), (
-        "re-executed draw was reset to position 0 instead of continuing after the "
-        "earlier unchanged draw"
+        "re-executed draw was reset to position 0 instead of continuing after the earlier unchanged draw"
     )
 
 
@@ -79,8 +79,8 @@ def test_later_draw_position_preserved(nb_runner):
     data = (
         "import numpy as np\nnp.random.seed(7)\n"
         "K = 3.0\n"
-        "a = np.random.rand(4) * K\n"       # re-executes when K changes (draw count unchanged)
-        "b = np.random.rand(4)"             # later draw, position unaffected
+        "a = np.random.rand(4) * K\n"  # re-executes when K changes (draw count unchanged)
+        "b = np.random.rand(4)"  # later draw, position unaffected
     )
     nb_runner.create_notebook([C_ON, data, "print('SA', round(float(a.sum()), 6), 'SB', round(float(b.sum()), 6))"])
     nb_runner.start_kernel()
@@ -89,6 +89,7 @@ def test_later_draw_position_preserved(nb_runner):
     nb_runner.run_cell(3)
 
     import numpy as np
+
     np.random.seed(7)
     oa = float((np.random.rand(4) * 5.0).sum())
     ob = float(np.random.rand(4).sum())
@@ -106,6 +107,7 @@ def test_warm_rerun_is_untouched(nb_runner):
     first = _num(nb_runner, 3, "SV")
     nb_runner.run_cell(3)
     import numpy as np
+
     np.random.seed(1)
     oracle = float(np.random.rand(3).sum())
     assert _num(nb_runner, 3, "SV") == pytest.approx(first, abs=1e-9) == pytest.approx(oracle, abs=1e-6)

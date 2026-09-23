@@ -46,6 +46,7 @@ code that was never run, which is a different and complementary guarantee.
   code. The static pass already flags the ordinary ``Thread(target=...)``
   shape.
 """
+
 from __future__ import annotations
 
 import contextvars
@@ -60,8 +61,8 @@ logger = logging.getLogger(__name__)
 #: The observer whose block is currently executing, per thread and per
 #: asyncio Task. Mirrors ``file_tracker._active_tracker`` on purpose: same
 #: install-once-dispatch-dynamically shape, same isolation properties.
-_active_observer: contextvars.ContextVar["EffectObserver | None"] = (
-    contextvars.ContextVar("_cash_active_observer", default=None)
+_active_observer: contextvars.ContextVar["EffectObserver | None"] = contextvars.ContextVar(
+    "_cash_active_observer", default=None
 )
 
 #: Patches are installed at most once per process and never removed. With no
@@ -98,6 +99,7 @@ def _is_library_file(filename: str) -> bool:
                 from pathlib import Path
 
                 from .config import _is_installed_path
+
                 answer = _is_installed_path(Path(path).resolve())
         except (OSError, ValueError):
             answer = True
@@ -108,6 +110,7 @@ def _is_library_file(filename: str) -> bool:
 def _line_waived(filename: str, lineno: int) -> bool:
     """Does ``# @cash:assume-safe`` cover *lineno* -- on it, or alone above it?"""
     from .purity_analyzer import _ASSUME_SAFE_RE
+
     if _ASSUME_SAFE_RE.search(linecache.getline(filename, lineno)):
         return True
     above = linecache.getline(filename, lineno - 1)
@@ -134,7 +137,7 @@ def _install_patches() -> None:
     def _tracked_connect(self, *a, **kw):
         try:
             _record("network", f"socket connect to {_describe_address(a[0] if a else None)}")
-        except Exception:                                    # noqa: BLE001
+        except Exception:  # noqa: BLE001
             pass
         return original_connect(self, *a, **kw)
 
@@ -143,7 +146,7 @@ def _install_patches() -> None:
     def _tracked_popen_init(self, *a, **kw):
         try:
             _record("subprocess", f"spawned {_describe_argv(a[0] if a else kw.get('args'))}")
-        except Exception:                                    # noqa: BLE001
+        except Exception:  # noqa: BLE001
             pass
         return original_popen_init(self, *a, **kw)
 
@@ -152,8 +155,8 @@ def _install_patches() -> None:
         (subprocess.Popen, "__init__", _tracked_popen_init, original_popen_init),
     ):
         try:
-            wrapper._cash_effect_patch = True          # type: ignore[attr-defined]
-            wrapper._original_func = original          # type: ignore[attr-defined]
+            wrapper._cash_effect_patch = True  # type: ignore[attr-defined]
+            wrapper._original_func = original  # type: ignore[attr-defined]
             setattr(owner, name, wrapper)
         except (AttributeError, TypeError) as exc:
             # A hardened runtime may refuse to patch a builtin type. Degrading
@@ -205,8 +208,8 @@ def _hook_mock_calls() -> None:
         _mock_calls += 1
         return real(self, *args, **kwargs)
 
-    counted._cash_effect_patch = True          # type: ignore[attr-defined]
-    counted._original_func = real              # type: ignore[attr-defined]
+    counted._cash_effect_patch = True  # type: ignore[attr-defined]
+    counted._original_func = real  # type: ignore[attr-defined]
     module.CallableMixin._increment_mock_call = counted
     _mock_hooked = True
 
@@ -251,7 +254,7 @@ class EffectObserver:
         if self._tokens:
             _active_observer.reset(self._tokens.pop())
         if self._outer:
-            self._outer.pop()           # a frame must not outlive its call
+            self._outer.pop()  # a frame must not outlive its call
         if self._mock_calls_at and self._mock_calls_at.pop() != _mock_calls:
             self.mock_called = True
         return False
@@ -265,7 +268,7 @@ class EffectObserver:
 
     # -- recording ---------------------------------------------------------
     def record(self, kind: str, detail: str) -> None:
-        if len(self.effects) >= 8:      # a summary, not a log
+        if len(self.effects) >= 8:  # a summary, not a log
             return
         self.effects.append((kind, detail))
 

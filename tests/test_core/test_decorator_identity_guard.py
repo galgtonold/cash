@@ -25,6 +25,7 @@ holds whether or not the guard fired — an identity-only assertion passes
 against a completely disabled guard.  Every test here asserts on an external
 observable instead: the bytes pyplot writes, or an execution counter.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -170,8 +171,7 @@ def test_the_refusal_warns_once(tmp_path):
         cached(1)
         cached(1)
 
-    ours = [w for w in caught if issubclass(w.category, CashCacheIneffectiveWarning)
-            and "not cached" in str(w.message)]
+    ours = [w for w in caught if issubclass(w.category, CashCacheIneffectiveWarning) and "not cached" in str(w.message)]
     assert len(ours) == 1, f"expected exactly one refusal warning, got {len(ours)}"
     assert "matplotlib Figure" in str(ours[0].message)
 

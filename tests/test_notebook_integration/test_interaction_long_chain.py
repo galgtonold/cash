@@ -13,14 +13,16 @@ class TestLongChainPropagation:
 
     def test_six_cell_chain(self, nb_runner):
         """Edit cell 1 in 6-cell chain, cell 6 reflects."""
-        nb_runner.create_notebook([
-            "base = 10",
-            "step1 = base + 5",
-            "step2 = step1 * 2",
-            "step3 = step2 - 3",
-            "step4 = step3 // 4",
-            "result = step4\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "base = 10",
+                "step1 = base + 5",
+                "step2 = step1 * 2",
+                "step3 = step2 - 3",
+                "step4 = step3 // 4",
+                "result = step4\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         # 10+5=15, 15*2=30, 30-3=27, 27//4=6
@@ -33,13 +35,15 @@ class TestLongChainPropagation:
 
     def test_edit_middle_of_long_chain(self, nb_runner):
         """Edit middle cell (3 of 5), tail updates."""
-        nb_runner.create_notebook([
-            "x = 2",
-            "y = x * 3",
-            "z = y + 10",
-            "w = z ** 2",
-            "final = w - 1\nprint(f'final = {final}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "x = 2",
+                "y = x * 3",
+                "z = y + 10",
+                "w = z ** 2",
+                "final = w - 1\nprint(f'final = {final}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         # x=2, y=6, z=16, w=256, final=255
@@ -52,13 +56,15 @@ class TestLongChainPropagation:
 
     def test_branching_chain(self, nb_runner):
         """Two branches merge in final cell."""
-        nb_runner.create_notebook([
-            "a = 10",
-            "b = 20",
-            "left = a * 2",
-            "right = b * 3",
-            "combined = left + right\nprint(f'combined = {combined}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "a = 10",
+                "b = 20",
+                "left = a * 2",
+                "right = b * 3",
+                "combined = left + right\nprint(f'combined = {combined}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         # 10*2 + 20*3 = 20 + 60 = 80

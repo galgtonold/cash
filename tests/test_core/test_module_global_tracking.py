@@ -6,9 +6,9 @@ global changed. These assert the read globals fold into the cache key — while 
 global the function WRITES (an accumulator) stays excluded so it doesn't cause a
 miss on every call.
 """
+
 import os
 import sys
-import tempfile
 
 from cash import Cash
 
@@ -24,16 +24,16 @@ class TestModuleGlobalTracking:
     def test_data_global_change_invalidates(self, tmp_path):
         sys.path.insert(0, str(tmp_path))
         try:
-            _write(str(tmp_path), "cas107t1",
-                   "CONST = 5\ndef times_const(x):\n    return x * CONST\n")
+            _write(str(tmp_path), "cas107t1", "CONST = 5\ndef times_const(x):\n    return x * CONST\n")
             import importlib
+
             mod = importlib.import_module("cas107t1")
             c = Cash()
             f = c.cache(mod.times_const)
             assert f(2) == 10
             assert f.explain(2).reason == "hit"
             mod.CONST = 7
-            assert f.explain(2).reason != "hit"     # config change seen
+            assert f.explain(2).reason != "hit"  # config change seen
         finally:
             sys.path.remove(str(tmp_path))
             sys.modules.pop("cas107t1", None)
@@ -41,17 +41,20 @@ class TestModuleGlobalTracking:
     def test_dict_dispatch_swap_invalidates(self, tmp_path):
         sys.path.insert(0, str(tmp_path))
         try:
-            _write(str(tmp_path), "cas107t2",
-                   "OPS = {'double': (lambda x: x * 2)}\n"
-                   "def apply_op(x):\n    return OPS['double'](x)\n")
+            _write(
+                str(tmp_path),
+                "cas107t2",
+                "OPS = {'double': (lambda x: x * 2)}\ndef apply_op(x):\n    return OPS['double'](x)\n",
+            )
             import importlib
+
             mod = importlib.import_module("cas107t2")
             c = Cash()
             f = c.cache(mod.apply_op)
             assert f(3) == 6
             assert f.explain(3).reason == "hit"
             mod.OPS["double"] = lambda x: x * 5
-            assert f.explain(3).reason != "hit"     # dispatch swap seen
+            assert f.explain(3).reason != "hit"  # dispatch swap seen
         finally:
             sys.path.remove(str(tmp_path))
             sys.modules.pop("cas107t2", None)
@@ -60,7 +63,7 @@ class TestModuleGlobalTracking:
         # A function that REBINDS a module global (STORE_GLOBAL counter) must NOT
         # fold it, or every call would miss. The CAS-104 lesson for globals.
         assert _rebind_counter(1) == 1
-        assert _rebind_counter.explain(1).reason == "hit"   # same arg -> hit
+        assert _rebind_counter.explain(1).reason == "hit"  # same arg -> hit
 
     def test_inplace_mutated_global_still_caches(self):
         # A function that mutates a global container IN PLACE (no STORE_GLOBAL)
@@ -88,11 +91,11 @@ _C = Cash()
 @_C.cache
 def _rebind_counter(x):
     global _n
-    _n += 1             # STORE_GLOBAL -> excluded from folding
+    _n += 1  # STORE_GLOBAL -> excluded from folding
     return x
 
 
 @_C.cache
 def _inplace_counter(x):
-    _runs["n"] += 1     # in-place mutation of a global -> excluded from folding
+    _runs["n"] += 1  # in-place mutation of a global -> excluded from folding
     return x

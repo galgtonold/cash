@@ -80,7 +80,7 @@ the latency trade-offs of each — see
 This is the part that decides whether a shared backend actually pays off, and
 it differs between the two caching paths:
 
-<!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @c901abf7, cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @bab80523 -->
+<!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @892e39d5, cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @3b5f9ef9 -->
 <!-- claim: cash/remote_source.py:RemoteFileDataSource @4f8286f8 broad="the portability claim is a property of the whole source type" -->
 
 | What you cached | Hits on another machine? |
@@ -94,7 +94,7 @@ it differs between the two caching paths:
 The last row is the one to plan around, and no backend can fix it: the two runs
 compute *different keys*, so they never look at the same entry.
 
-<!-- claim: cash/notebook/file_dep_snapshot.py:file_content_hash @35a8fc69, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456 -->
+<!-- claim: cash/notebook/file_dep_snapshot.py:file_content_hash @1f14c1fa, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456 -->
 !!! note "Large files carry an extra condition"
     Files over 256 MiB are hash-**sampled** rather than read end to end, so their
     freshness check also consults the mtime. A fresh clone of a big parquet

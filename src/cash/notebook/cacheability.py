@@ -81,11 +81,24 @@ __all__ = [
 # Methods that mutate their receiver object in-place
 MUTATING_METHODS = {
     # list methods
-    'append', 'extend', 'insert', 'pop', 'remove', 'sort', 'reverse', 'clear',
+    "append",
+    "extend",
+    "insert",
+    "pop",
+    "remove",
+    "sort",
+    "reverse",
+    "clear",
     # dict methods
-    'update', 'popitem', 'setdefault',
+    "update",
+    "popitem",
+    "setdefault",
     # set methods
-    'add', 'discard', 'intersection_update', 'difference_update', 'symmetric_difference_update',
+    "add",
+    "discard",
+    "intersection_update",
+    "difference_update",
+    "symmetric_difference_update",
 }
 
 # The subset of MUTATING_METHODS that GROW a collection element-by-element — the
@@ -95,13 +108,26 @@ MUTATING_METHODS = {
 # comprehension form (``out = [f(e) for e in it]``) that assigns its result and
 # therefore caches. Other in-place mutations (``pop``/``sort``/``df['x'] = …``)
 # have no such rewrite and must NOT get the hint (part b).
-ACCUMULATOR_METHODS = frozenset({'append', 'extend', 'add', 'update'})
+ACCUMULATOR_METHODS = frozenset({"append", "extend", "add", "update"})
 
 # Pandas methods that accept inplace=True
 PANDAS_INPLACE_METHODS = {
-    'fillna', 'dropna', 'drop', 'rename', 'reset_index', 'set_index',
-    'sort_values', 'sort_index', 'replace', 'clip', 'where', 'mask',
-    'drop_duplicates', 'eval', 'query', 'astype',
+    "fillna",
+    "dropna",
+    "drop",
+    "rename",
+    "reset_index",
+    "set_index",
+    "sort_values",
+    "sort_index",
+    "replace",
+    "clip",
+    "where",
+    "mask",
+    "drop_duplicates",
+    "eval",
+    "query",
+    "astype",
 }
 
 # Read-only inspection / display methods that never mutate their receiver.
@@ -119,17 +145,52 @@ PANDAS_INPLACE_METHODS = {
 # A chain is pure when nothing inside it is known to mutate
 # (:func:`chain_is_pure`): ``df.sort_values('x').head()`` leaves ``df``
 # alone, ``df.pop('b').round(2)`` does not.
-KNOWN_PURE_METHODS = frozenset({
-    # pandas / numpy inspection & summary (return a new object, never mutate)
-    'head', 'tail', 'describe', 'info', 'sample', 'value_counts', 'nunique',
-    'unique', 'corr', 'cov', 'memory_usage', 'count', 'isna', 'isnull',
-    'notna', 'notnull', 'nlargest', 'nsmallest', 'idxmax', 'idxmin',
-    # pandas / numpy arithmetic summaries (an ``out=`` target is tier-1 on its own)
-    'round', 'abs', 'sum', 'mean', 'median', 'min', 'max', 'std', 'var',
-    'quantile', 'groupby', 'agg', 'aggregate', 'pivot_table', 'copy',
-    # display / plotting
-    'plot', 'hist', 'boxplot', 'show',
-})
+KNOWN_PURE_METHODS = frozenset(
+    {
+        # pandas / numpy inspection & summary (return a new object, never mutate)
+        "head",
+        "tail",
+        "describe",
+        "info",
+        "sample",
+        "value_counts",
+        "nunique",
+        "unique",
+        "corr",
+        "cov",
+        "memory_usage",
+        "count",
+        "isna",
+        "isnull",
+        "notna",
+        "notnull",
+        "nlargest",
+        "nsmallest",
+        "idxmax",
+        "idxmin",
+        # pandas / numpy arithmetic summaries (an ``out=`` target is tier-1 on its own)
+        "round",
+        "abs",
+        "sum",
+        "mean",
+        "median",
+        "min",
+        "max",
+        "std",
+        "var",
+        "quantile",
+        "groupby",
+        "agg",
+        "aggregate",
+        "pivot_table",
+        "copy",
+        # display / plotting
+        "plot",
+        "hist",
+        "boxplot",
+        "show",
+    }
+)
 
 # pandas ``to_*`` writers: they READ the DataFrame/Series and write it out to a
 # file / external sink.  They do NOT mutate the receiver, so they must never bump
@@ -157,11 +218,24 @@ KNOWN_PURE_METHODS = frozenset({
 # excluded: they collide with methods on other receiver types (a custom
 # ``obj.save()`` may well mutate), and those receivers stay on the observe/assume
 # path where a real mutation is still caught.
-RECEIVER_READONLY_WRITE_METHODS = frozenset({
-    'to_csv', 'to_parquet', 'to_pickle', 'to_json', 'to_feather',
-    'to_excel', 'to_hdf', 'to_stata', 'to_sql', 'to_gbq',
-    'to_clipboard', 'to_html', 'to_markdown', 'to_latex',
-})
+RECEIVER_READONLY_WRITE_METHODS = frozenset(
+    {
+        "to_csv",
+        "to_parquet",
+        "to_pickle",
+        "to_json",
+        "to_feather",
+        "to_excel",
+        "to_hdf",
+        "to_stata",
+        "to_sql",
+        "to_gbq",
+        "to_clipboard",
+        "to_html",
+        "to_markdown",
+        "to_latex",
+    }
+)
 
 
 @dataclass
@@ -263,19 +337,25 @@ class _MutationVisitor(ast.NodeVisitor):
         if not base:
             return
         if method_name in MUTATING_METHODS:
-            self.mutations.append(MutationInfo(
-                variable=base, method=method_name,
-                kind='method_call', line=lineno,
-            ))
+            self.mutations.append(
+                MutationInfo(
+                    variable=base,
+                    method=method_name,
+                    kind="method_call",
+                    line=lineno,
+                )
+            )
         elif method_name in PANDAS_INPLACE_METHODS:
             for kw in call.keywords:
-                if (kw.arg == 'inplace'
-                        and isinstance(kw.value, ast.Constant)
-                        and kw.value.value is True):
-                    self.mutations.append(MutationInfo(
-                        variable=base, method=method_name,
-                        kind='inplace_kwarg', line=lineno,
-                    ))
+                if kw.arg == "inplace" and isinstance(kw.value, ast.Constant) and kw.value.value is True:
+                    self.mutations.append(
+                        MutationInfo(
+                            variable=base,
+                            method=method_name,
+                            kind="inplace_kwarg",
+                            line=lineno,
+                        )
+                    )
                     break
 
     def visit_Call(self, node: ast.Call) -> None:
@@ -286,20 +366,20 @@ class _MutationVisitor(ast.NodeVisitor):
         tuple: ``out=(q, r)``."""
         self._record_method_mutation(node, node.lineno)
         for kw in node.keywords:
-            if kw.arg != 'out':
+            if kw.arg != "out":
                 continue
-            targets = (
-                kw.value.elts
-                if isinstance(kw.value, (ast.Tuple, ast.List))
-                else [kw.value]
-            )
+            targets = kw.value.elts if isinstance(kw.value, (ast.Tuple, ast.List)) else [kw.value]
             for tgt in targets:
                 base = _extract_base_name(tgt)
                 if base:
-                    self.mutations.append(MutationInfo(
-                        variable=base, method='out=',
-                        kind='out_kwarg', line=node.lineno,
-                    ))
+                    self.mutations.append(
+                        MutationInfo(
+                            variable=base,
+                            method="out=",
+                            kind="out_kwarg",
+                            line=node.lineno,
+                        )
+                    )
         self.generic_visit(node)
 
     def visit_AugAssign(self, node: ast.AugAssign) -> None:
@@ -307,10 +387,14 @@ class _MutationVisitor(ast.NodeVisitor):
         base = _extract_base_name(node.target)
         if base:
             op_name = type(node.op).__name__
-            self.mutations.append(MutationInfo(
-                variable=base, method=f'__i{op_name.lower()}__',
-                kind='augmented_assign', line=node.lineno,
-            ))
+            self.mutations.append(
+                MutationInfo(
+                    variable=base,
+                    method=f"__i{op_name.lower()}__",
+                    kind="augmented_assign",
+                    line=node.lineno,
+                )
+            )
         self.generic_visit(node)
 
     def visit_Assign(self, node: ast.Assign) -> None:
@@ -321,17 +405,25 @@ class _MutationVisitor(ast.NodeVisitor):
                 if isinstance(store, ast.Subscript):
                     base = _extract_base_name(store.value)
                     if base:
-                        self.mutations.append(MutationInfo(
-                            variable=base, method='__setitem__',
-                            kind='subscript_assign', line=node.lineno,
-                        ))
+                        self.mutations.append(
+                            MutationInfo(
+                                variable=base,
+                                method="__setitem__",
+                                kind="subscript_assign",
+                                line=node.lineno,
+                            )
+                        )
                 elif isinstance(store, ast.Attribute):
                     base = _extract_base_name(store.value)
                     if base:
-                        self.mutations.append(MutationInfo(
-                            variable=base, method=f'__setattr__({store.attr})',
-                            kind='attribute_assign', line=node.lineno,
-                        ))
+                        self.mutations.append(
+                            MutationInfo(
+                                variable=base,
+                                method=f"__setattr__({store.attr})",
+                                kind="attribute_assign",
+                                line=node.lineno,
+                            )
+                        )
         self.generic_visit(node)
 
     def visit_Delete(self, node: ast.Delete) -> None:
@@ -340,16 +432,21 @@ class _MutationVisitor(ast.NodeVisitor):
             if isinstance(target, ast.Subscript):
                 base = _extract_base_name(target.value)
                 if base:
-                    self.mutations.append(MutationInfo(
-                        variable=base, method='__delitem__',
-                        kind='subscript_delete', line=node.lineno,
-                    ))
+                    self.mutations.append(
+                        MutationInfo(
+                            variable=base,
+                            method="__delitem__",
+                            kind="subscript_delete",
+                            line=node.lineno,
+                        )
+                    )
         self.generic_visit(node)
 
 
 # ---------------------------------------------------------------------------
 # Side-effect detection — moved from side_effects.py
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class SideEffectInfo:
@@ -364,47 +461,47 @@ class SideEffectInfo:
 # Format: (module_or_empty_string, function_name) -> side_effect_kind
 _IO_SIDE_EFFECT_FUNCTIONS: dict[tuple[str, str], str] = {
     # File writing
-    ('', 'open'): 'file_write',  # open() with write modes detected separately
+    ("", "open"): "file_write",  # open() with write modes detected separately
     # os module
-    ('os', 'remove'): 'file_write',
-    ('os', 'unlink'): 'file_write',
-    ('os', 'rmdir'): 'file_write',
-    ('os', 'mkdir'): 'file_write',
-    ('os', 'makedirs'): 'file_write',
-    ('os', 'rename'): 'file_write',
-    ('os', 'replace'): 'file_write',
-    ('os', 'symlink'): 'file_write',
-    ('os', 'system'): 'system',
+    ("os", "remove"): "file_write",
+    ("os", "unlink"): "file_write",
+    ("os", "rmdir"): "file_write",
+    ("os", "mkdir"): "file_write",
+    ("os", "makedirs"): "file_write",
+    ("os", "rename"): "file_write",
+    ("os", "replace"): "file_write",
+    ("os", "symlink"): "file_write",
+    ("os", "system"): "system",
     # shutil
-    ('shutil', 'copy'): 'file_write',
-    ('shutil', 'copy2'): 'file_write',
-    ('shutil', 'copytree'): 'file_write',
-    ('shutil', 'rmtree'): 'file_write',
-    ('shutil', 'move'): 'file_write',
+    ("shutil", "copy"): "file_write",
+    ("shutil", "copy2"): "file_write",
+    ("shutil", "copytree"): "file_write",
+    ("shutil", "rmtree"): "file_write",
+    ("shutil", "move"): "file_write",
     # subprocess
-    ('subprocess', 'run'): 'system',
-    ('subprocess', 'call'): 'system',
-    ('subprocess', 'Popen'): 'system',
-    ('subprocess', 'check_call'): 'system',
-    ('subprocess', 'check_output'): 'system',
+    ("subprocess", "run"): "system",
+    ("subprocess", "call"): "system",
+    ("subprocess", "Popen"): "system",
+    ("subprocess", "check_call"): "system",
+    ("subprocess", "check_output"): "system",
     # pandas write operations
-    ('', 'to_csv'): 'file_write',
-    ('', 'to_excel'): 'file_write',
-    ('', 'to_parquet'): 'file_write',
-    ('', 'to_json'): 'file_write',
-    ('', 'to_pickle'): 'file_write',
-    ('', 'to_hdf'): 'file_write',
-    ('', 'to_feather'): 'file_write',
-    ('', 'to_sql'): 'file_write',
+    ("", "to_csv"): "file_write",
+    ("", "to_excel"): "file_write",
+    ("", "to_parquet"): "file_write",
+    ("", "to_json"): "file_write",
+    ("", "to_pickle"): "file_write",
+    ("", "to_hdf"): "file_write",
+    ("", "to_feather"): "file_write",
+    ("", "to_sql"): "file_write",
     # json/pickle/csv module
-    ('json', 'dump'): 'file_write',
-    ('pickle', 'dump'): 'file_write',
-    ('csv', 'writer'): 'file_write',
+    ("json", "dump"): "file_write",
+    ("pickle", "dump"): "file_write",
+    ("csv", "writer"): "file_write",
     # requests/urllib
-    ('requests', 'post'): 'network',
-    ('requests', 'put'): 'network',
-    ('requests', 'delete'): 'network',
-    ('requests', 'patch'): 'network',
+    ("requests", "post"): "network",
+    ("requests", "put"): "network",
+    ("requests", "delete"): "network",
+    ("requests", "patch"): "network",
 }
 
 # matplotlib.pyplot module aliases. EVERY module-level ``plt.*`` call operates on
@@ -418,50 +515,79 @@ _IO_SIDE_EFFECT_FUNCTIONS: dict[tuple[str, str], str] = {
 # display side-effect: always re-execute, never cache. ``plt.savefig`` is the one
 # exception — it is a file write (handled via ``_WRITE_METHODS`` below), not a
 # display.
-_PYPLOT_MODULE_ALIASES: frozenset[str] = frozenset({'plt', 'pyplot', 'matplotlib.pyplot'})
+_PYPLOT_MODULE_ALIASES: frozenset[str] = frozenset({"plt", "pyplot", "matplotlib.pyplot"})
 
 # pyplot calls that CREATE or FETCH a Figure/Axes rather than draw on / style the
 # current one. They return identity-coupled objects already refused (and
 # explained: "Identity-coupled figure") by the live-alias / figure-identity
 # path, so leave them to it rather than relabel them a generic display effect.
-_PYPLOT_FIGURE_ACCESSORS: frozenset[str] = frozenset({
-    'figure', 'subplots', 'subplot', 'subplot_mosaic', 'subplot2grid',
-    'axes', 'gca', 'gcf', 'get_current_fig_manager',
-})
+_PYPLOT_FIGURE_ACCESSORS: frozenset[str] = frozenset(
+    {
+        "figure",
+        "subplots",
+        "subplot",
+        "subplot_mosaic",
+        "subplot2grid",
+        "axes",
+        "gca",
+        "gcf",
+        "get_current_fig_manager",
+    }
+)
 
 # Method names that indicate writing (when called on any object)
-_WRITE_METHODS: frozenset[str] = frozenset({
-    'to_csv', 'to_excel', 'to_parquet', 'to_json', 'to_pickle',
-    'to_hdf', 'to_feather', 'to_sql', 'to_stata', 'to_latex',
-    'to_html', 'to_clipboard', 'to_gbq', 'to_markdown',
-    'savefig',   # matplotlib
-    'save',      # numpy, PIL, torch
-    'write',     # file objects
-    'writelines',
-    # pathlib.Path writes. Only the unambiguous names: generic
-    # Path mutators like `rename`/`replace`/`touch` collide with common
-    # methods on other types (str.replace!) and would over-flag.
-    'write_text',
-    'write_bytes',
-    # `OUT.mkdir(exist_ok=True)`: restored instead of run, it left an output
-    # folder the user had emptied missing, and the first savefig into it
-    # raised (round 22, with every result persisted). A write on every type
-    # that has it (Path, ZipFile, SFTP clients). Its repeatability stays
-    # unknown, like os.mkdir's: without exist_ok a second run raises.
-    'mkdir',
-})
+_WRITE_METHODS: frozenset[str] = frozenset(
+    {
+        "to_csv",
+        "to_excel",
+        "to_parquet",
+        "to_json",
+        "to_pickle",
+        "to_hdf",
+        "to_feather",
+        "to_sql",
+        "to_stata",
+        "to_latex",
+        "to_html",
+        "to_clipboard",
+        "to_gbq",
+        "to_markdown",
+        "savefig",  # matplotlib
+        "save",  # numpy, PIL, torch
+        "write",  # file objects
+        "writelines",
+        # pathlib.Path writes. Only the unambiguous names: generic
+        # Path mutators like `rename`/`replace`/`touch` collide with common
+        # methods on other types (str.replace!) and would over-flag.
+        "write_text",
+        "write_bytes",
+        # `OUT.mkdir(exist_ok=True)`: restored instead of run, it left an output
+        # folder the user had emptied missing, and the first savefig into it
+        # raised (round 22, with every result persisted). A write on every type
+        # that has it (Path, ZipFile, SFTP clients). Its repeatability stays
+        # unknown, like os.mkdir's: without exist_ok a second run raises.
+        "mkdir",
+    }
+)
 
 # File open modes that indicate writing
-_WRITE_MODES: frozenset[str] = frozenset({'w', 'wb', 'a', 'ab', 'w+', 'wb+', 'a+', 'ab+', 'x', 'xb'})
+_WRITE_MODES: frozenset[str] = frozenset({"w", "wb", "a", "ab", "w+", "wb+", "a+", "ab+", "x", "xb"})
 
 # Cheap textual pre-filter for statement_writes_files: superset of the names
 # in the write-detection tables above, checked before any AST work.
 _WRITE_TEXT_MARKERS: tuple[str, ...] = (
-    'open(', 'write', 'to_', 'save', 'dump', 'os.', 'shutil.', 'mkdir',
+    "open(",
+    "write",
+    "to_",
+    "save",
+    "dump",
+    "os.",
+    "shutil.",
+    "mkdir",
 )
 
 
-def statement_writes_files(code: str, tree: 'ast.Module | None' = None) -> bool:
+def statement_writes_files(code: str, tree: "ast.Module | None" = None) -> bool:
     """True when *code* contains a file-WRITE side effect.
 
     Used by the upstream simulation to give file-writing statements a trace
@@ -475,11 +601,13 @@ def statement_writes_files(code: str, tree: 'ast.Module | None' = None) -> bool:
         analysis = analyze_statement(code, tree)
     except (SyntaxError, ValueError, TypeError):
         return False
-    return any(e.kind == 'file_write' for e in analysis.side_effects)
+    return any(e.kind == "file_write" for e in analysis.side_effects)
 
 
 def statement_calls_user_writer(
-    code: str, namespace: 'Mapping[str, Any] | None', tree: 'ast.Module | None' = None,
+    code: str,
+    namespace: "Mapping[str, Any] | None",
+    tree: "ast.Module | None" = None,
 ) -> str | None:
     """The user function that writes files when *code* runs, or None.
 
@@ -504,7 +632,7 @@ def statement_calls_user_writer(
     instance is therefore still not seen; that is a narrower gap, and closing
     it needs a way to look up the attribute without evaluating it.
     """
-    if not namespace or '(' not in code:
+    if not namespace or "(" not in code:
         return None
     if tree is None:
         try:
@@ -520,7 +648,7 @@ def statement_calls_user_writer(
     return None
 
 
-def _resolve_callee(func: 'ast.expr', namespace: 'Mapping[str, Any]') -> Any:
+def _resolve_callee(func: "ast.expr", namespace: "Mapping[str, Any]") -> Any:
     """The object a call's callee expression names, or None.
 
     ``ast.Name`` resolves in *namespace*; ``ast.Attribute`` resolves its base
@@ -578,15 +706,16 @@ def user_callee_writing_files(func: Any, _depth: int = 0) -> str | None:
     key = (code_obj.co_filename, code_obj.co_firstlineno, source)
     if key in _callee_write_cache:
         return _callee_write_cache[key]
-    _callee_write_cache[key] = None          # a recursive call finds "no"
+    _callee_write_cache[key] = None  # a recursive call finds "no"
     try:
         tree = ast.parse(source)
     except SyntaxError:
         return None
     handles = frozenset(_locally_opened_handles(tree))
-    replaces = any(isinstance(node, ast.Call)
-                   and _call_repeatability(node, handles) == REPEATABILITY_REPLACING
-                   for node in ast.walk(tree))
+    replaces = any(
+        isinstance(node, ast.Call) and _call_repeatability(node, handles) == REPEATABILITY_REPLACING
+        for node in ast.walk(tree)
+    )
     found = func.__name__ if replaces else None
     if found is None:
         for node in ast.walk(tree):
@@ -609,16 +738,18 @@ def _is_append_mode_call(call: ast.Call) -> bool:
     ``mode=`` keyword (``open(p, mode='a')``, ``df.to_csv(p, mode='a')``). A
     non-literal mode (``open(p, m)``) is NOT provable and returns False.
     """
-    if isinstance(call.func, ast.Name) and call.func.id == 'open' and len(call.args) >= 2:
+    if isinstance(call.func, ast.Name) and call.func.id == "open" and len(call.args) >= 2:
         mode_arg = call.args[1]
         if isinstance(mode_arg, ast.Constant) and isinstance(mode_arg.value, str):
-            if 'a' in mode_arg.value:
+            if "a" in mode_arg.value:
                 return True
     for kw in call.keywords:
-        if (kw.arg == 'mode'
-                and isinstance(kw.value, ast.Constant)
-                and isinstance(kw.value.value, str)
-                and 'a' in kw.value.value):
+        if (
+            kw.arg == "mode"
+            and isinstance(kw.value, ast.Constant)
+            and isinstance(kw.value.value, str)
+            and "a" in kw.value.value
+        ):
             return True
     return False
 
@@ -626,33 +757,46 @@ def _is_append_mode_call(call: ast.Call) -> bool:
 # Write calls that REPLACE their target wholesale, so re-running one lands the
 # same bytes. ``to_hdf`` is deliberately ABSENT: pandas defaults it to
 # ``mode='a'``, making it accumulating despite its truncating siblings.
-_REPLACING_WRITE_METHODS: frozenset[str] = frozenset({
-    'to_csv', 'to_excel', 'to_parquet', 'to_json', 'to_pickle', 'to_feather',
-    'to_stata', 'to_latex', 'to_html', 'to_markdown',
-    'savefig',      # matplotlib truncates the PNG
-    'save',         # numpy / PIL / torch all truncate
-    'write_text',   # pathlib truncates
-    'write_bytes',
-})
+_REPLACING_WRITE_METHODS: frozenset[str] = frozenset(
+    {
+        "to_csv",
+        "to_excel",
+        "to_parquet",
+        "to_json",
+        "to_pickle",
+        "to_feather",
+        "to_stata",
+        "to_latex",
+        "to_html",
+        "to_markdown",
+        "savefig",  # matplotlib truncates the PNG
+        "save",  # numpy / PIL / torch all truncate
+        "write_text",  # pathlib truncates
+        "write_bytes",
+    }
+)
 
 # Module-level writers that land the same result when repeated. Everything else
 # in _IO_SIDE_EFFECT_FUNCTIONS (remove/rename/move/mkdir/rmtree...) is NOT
 # repeatable -- a second run raises or acts on a target that is already gone.
-_REPLACING_IO_FUNCTIONS: frozenset[tuple[str, str]] = frozenset({
-    ('shutil', 'copy'), ('shutil', 'copy2'),
-})
+_REPLACING_IO_FUNCTIONS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("shutil", "copy"),
+        ("shutil", "copy2"),
+    }
+)
 
-REPEATABILITY_REPLACING = 'replacing'
-REPEATABILITY_ACCUMULATING = 'accumulating'
-REPEATABILITY_UNKNOWN = 'unknown'
+REPEATABILITY_REPLACING = "replacing"
+REPEATABILITY_ACCUMULATING = "accumulating"
+REPEATABILITY_UNKNOWN = "unknown"
 
 
 # Module writers that take an already-open FILE HANDLE rather than a path, so
 # their repeatability is decided by whatever opened it -- never by the call
 # itself. Maps (module, func) -> positional index of the handle argument.
 _HANDLE_WRITE_FUNCTIONS: dict[tuple[str, str], int] = {
-    ('json', 'dump'): 1,
-    ('pickle', 'dump'): 1,
+    ("json", "dump"): 1,
+    ("pickle", "dump"): 1,
 }
 
 
@@ -665,7 +809,7 @@ def _defers_to_open(node: ast.expr | None, local_handles: frozenset[str]) -> boo
     (``with open(p, 'wb') as f: pickle.dump(obj, f)``) is misread as unsafe to
     repeat.
     """
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'open':
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "open":
         return True
     return isinstance(node, ast.Name) and node.id in local_handles
 
@@ -675,7 +819,7 @@ def _open_mode_node(call: ast.Call) -> ast.expr | None:
     if len(call.args) >= 2:
         return call.args[1]
     for kw in call.keywords:
-        if kw.arg == 'mode':
+        if kw.arg == "mode":
             return kw.value
     return None
 
@@ -691,8 +835,7 @@ def _locally_opened_handles(tree: ast.AST) -> set[str]:
     handles: set[str] = set()
 
     def _is_open(node) -> bool:
-        return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                and node.func.id == 'open')
+        return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "open"
 
     for node in ast.walk(tree):
         if isinstance(node, (ast.With, ast.AsyncWith)):
@@ -717,14 +860,18 @@ def _writes_to_console(call: ast.Call) -> bool:
     r24s1).
     """
     func = call.func
-    if not (isinstance(func, ast.Attribute) and func.attr in ('write', 'writelines')):
+    if not (isinstance(func, ast.Attribute) and func.attr in ("write", "writelines")):
         return False
     base = func.value
-    if isinstance(base, ast.Name) and base.id == 'os' and func.attr == 'write':
+    if isinstance(base, ast.Name) and base.id == "os" and func.attr == "write":
         fd = call.args[0] if call.args else None
         return isinstance(fd, ast.Constant) and fd.value in (1, 2)
-    return (isinstance(base, ast.Attribute) and base.attr in ('stdout', 'stderr', '__stdout__', '__stderr__')
-            and isinstance(base.value, ast.Name) and base.value.id == 'sys')
+    return (
+        isinstance(base, ast.Attribute)
+        and base.attr in ("stdout", "stderr", "__stdout__", "__stderr__")
+        and isinstance(base.value, ast.Name)
+        and base.value.id == "sys"
+    )
 
 
 def _call_repeatability(call: ast.Call, local_handles: frozenset[str] = frozenset()) -> str | None:
@@ -732,7 +879,7 @@ def _call_repeatability(call: ast.Call, local_handles: frozenset[str] = frozense
     func = call.func
     if _writes_to_console(call):
         return None
-    if isinstance(func, ast.Name) and func.id == 'open':
+    if isinstance(func, ast.Name) and func.id == "open":
         mode = _open_mode_node(call)
         if mode is None:
             return None  # no mode argument -> defaults to 'r', a read
@@ -744,8 +891,7 @@ def _call_repeatability(call: ast.Call, local_handles: frozenset[str] = frozense
             return REPEATABILITY_UNKNOWN
         if not _is_open_write_mode(call):
             return None  # provably a read mode
-        return (REPEATABILITY_ACCUMULATING if 'a' in mode.value
-                else REPEATABILITY_REPLACING)
+        return REPEATABILITY_ACCUMULATING if "a" in mode.value else REPEATABILITY_REPLACING
     if isinstance(func, ast.Attribute):
         method = func.attr
         if method not in _WRITE_METHODS:
@@ -767,7 +913,7 @@ def _call_repeatability(call: ast.Call, local_handles: frozenset[str] = frozense
     return None
 
 
-def statement_write_repeatability(code: str, tree: 'ast.Module | None' = None) -> str:
+def statement_write_repeatability(code: str, tree: "ast.Module | None" = None) -> str:
     """How safe is it to re-run *code*'s file writes?
 
     The question the write-detection helpers above do not answer:
@@ -804,7 +950,7 @@ def statement_write_repeatability(code: str, tree: 'ast.Module | None' = None) -
         if not name or not module:
             continue
         key = (module, name)
-        if _IO_SIDE_EFFECT_FUNCTIONS.get(key) != 'file_write':
+        if _IO_SIDE_EFFECT_FUNCTIONS.get(key) != "file_write":
             continue
         if key in _REPLACING_IO_FUNCTIONS:
             continue
@@ -827,20 +973,41 @@ def statement_write_repeatability(code: str, tree: 'ast.Module | None' = None) -
 # ``write`` / ``writelines`` (the path lives on the ``open()`` that made the
 # handle), and ``json``/``pickle`` ``dump`` (path on the nested ``open()``);
 # those are recovered from the ``open()`` call in the same statement instead.
-_PATH_ARG0_WRITE_METHODS: frozenset[str] = frozenset({
-    'to_csv', 'to_parquet', 'to_pickle', 'to_json', 'to_feather',
-    'to_excel', 'to_hdf', 'to_stata', 'savefig',
-})
+_PATH_ARG0_WRITE_METHODS: frozenset[str] = frozenset(
+    {
+        "to_csv",
+        "to_parquet",
+        "to_pickle",
+        "to_json",
+        "to_feather",
+        "to_excel",
+        "to_hdf",
+        "to_stata",
+        "savefig",
+    }
+)
 
 # ``os.<f>(PATH)`` / ``shutil.<f>(PATH)`` calls that make or remove a folder.
-_FOLDER_FUNCTIONS: frozenset[str] = frozenset({
-    'mkdir', 'makedirs', 'rmdir', 'removedirs', 'rmtree',
-})
+_FOLDER_FUNCTIONS: frozenset[str] = frozenset(
+    {
+        "mkdir",
+        "makedirs",
+        "rmdir",
+        "removedirs",
+        "rmtree",
+    }
+)
 
 # Keyword names that carry the output path across the recognised write calls.
-_PATH_KWARG_NAMES: frozenset[str] = frozenset({
-    'path', 'path_or_buf', 'fname', 'excel_writer', 'file',
-})
+_PATH_KWARG_NAMES: frozenset[str] = frozenset(
+    {
+        "path",
+        "path_or_buf",
+        "fname",
+        "excel_writer",
+        "file",
+    }
+)
 
 
 def _resolve_literal_path(node: ast.AST, namespace: dict[str, Any] | None) -> str | None:
@@ -878,8 +1045,12 @@ def _resolve_literal_path(node: ast.AST, namespace: dict[str, Any] | None) -> st
         if left is not None and right is not None:
             return os.path.join(left, right)
         return None
-    if isinstance(node, ast.Call) and not node.keywords and node.args and (
-            _is_path_constructor(node.func) or _is_os_path_join(node.func)):
+    if (
+        isinstance(node, ast.Call)
+        and not node.keywords
+        and node.args
+        and (_is_path_constructor(node.func) or _is_os_path_join(node.func))
+    ):
         parts = [_resolve_literal_path(a, namespace) for a in node.args]
         if all(p is not None for p in parts):
             return os.path.join(*parts)
@@ -890,8 +1061,12 @@ def _resolve_literal_path(node: ast.AST, namespace: dict[str, Any] | None) -> st
             if isinstance(value, ast.Constant) and isinstance(value.value, str):
                 pieces.append(value.value)
                 continue
-            if (isinstance(value, ast.FormattedValue) and value.conversion == -1
-                    and value.format_spec is None and isinstance(value.value, ast.Name)):
+            if (
+                isinstance(value, ast.FormattedValue)
+                and value.conversion == -1
+                and value.format_spec is None
+                and isinstance(value.value, ast.Name)
+            ):
                 val = namespace.get(value.value.id, _UNBOUND)
                 if isinstance(val, (str, int, os.PathLike)) and not isinstance(val, bool):
                     pieces.append(os.fspath(val) if isinstance(val, os.PathLike) else str(val))
@@ -906,16 +1081,20 @@ _UNBOUND = object()
 
 def _is_os_path_join(func: ast.AST) -> bool:
     """``os.path.join`` / ``path.join`` (``from os import path``)."""
-    return (isinstance(func, ast.Attribute) and func.attr == 'join'
-            and isinstance(func.value, ast.Attribute) and func.value.attr == 'path')
+    return (
+        isinstance(func, ast.Attribute)
+        and func.attr == "join"
+        and isinstance(func.value, ast.Attribute)
+        and func.value.attr == "path"
+    )
 
 
 def _is_path_constructor(func: ast.AST) -> bool:
     """True for a ``Path(...)`` / ``pathlib.Path(...)`` constructor call func."""
     if isinstance(func, ast.Name):
-        return func.id == 'Path'
+        return func.id == "Path"
     if isinstance(func, ast.Attribute):
-        return func.attr == 'Path'
+        return func.attr == "Path"
     return False
 
 
@@ -935,7 +1114,8 @@ def _call_path_argument(
 
 
 def _write_call_path(
-    call: ast.Call, namespace: dict[str, Any] | None,
+    call: ast.Call,
+    namespace: dict[str, Any] | None,
 ) -> tuple[str | None, bool]:
     """Return ``(resolved_path_or_None, is_path_bearing)`` for one call node.
 
@@ -946,7 +1126,7 @@ def _write_call_path(
     """
     func = call.func
     # open(PATH, 'w'|'a'|...) — only a write mode counts.
-    if isinstance(func, ast.Name) and func.id == 'open':
+    if isinstance(func, ast.Name) and func.id == "open":
         if _is_open_write_mode(call):
             return _call_path_argument(call, 0, namespace, _PATH_KWARG_NAMES), True
         return None, False
@@ -957,12 +1137,12 @@ def _write_call_path(
         # ``rmtree`` + ``mkdir`` a report cell starts with could never be ruled
         # out as unread, and a cell below it re-ran the whole report after a
         # restart (round 23, r23s2).
-        if method in ('mkdir', 'rmdir') and not call.args:
+        if method in ("mkdir", "rmdir") and not call.args:
             return _resolve_literal_path(func.value, namespace), True
-        if _get_base_name(func.value) in ('os', 'shutil') and method in _FOLDER_FUNCTIONS:
+        if _get_base_name(func.value) in ("os", "shutil") and method in _FOLDER_FUNCTIONS:
             return _call_path_argument(call, 0, namespace, _PATH_KWARG_NAMES), True
         # Path(PATH).write_text(...) / Path(PATH).write_bytes(...)
-        if method in ('write_text', 'write_bytes'):
+        if method in ("write_text", "write_bytes"):
             recv = func.value
             if isinstance(recv, ast.Call) and _is_path_constructor(recv.func):
                 return _call_path_argument(recv, 0, namespace), True
@@ -970,9 +1150,9 @@ def _write_call_path(
         # np.save(PATH, arr) — the path is arg0, but ONLY for a numpy receiver;
         # torch.save(obj, PATH) puts the path second and PIL ``img.save(PATH)``
         # is ambiguous, so a non-numpy ``save`` stays conservative.
-        if method == 'save':
+        if method == "save":
             base = _get_base_name(func.value)
-            if base in ('np', 'numpy'):
+            if base in ("np", "numpy"):
                 return _call_path_argument(call, 0, namespace), True
             return None, True
         if method in _PATH_ARG0_WRITE_METHODS:
@@ -982,7 +1162,7 @@ def _write_call_path(
 
 def statement_written_paths(
     code: str,
-    tree: 'ast.Module | None' = None,
+    tree: "ast.Module | None" = None,
     namespace: dict[str, Any] | None = None,
 ) -> set[str] | None:
     """Resolvable output path(s) a file-writing statement writes, or ``None``.
@@ -1028,11 +1208,12 @@ def statement_written_paths(
 
 
 # Cheap textual pre-filter for statement_read_paths.
-_READ_TEXT_MARKERS: tuple[str, ...] = ('open(', 'read', 'load')
+_READ_TEXT_MARKERS: tuple[str, ...] = ("open(", "read", "load")
 
 
 def _read_call_path(
-    call: ast.Call, namespace: dict[str, Any] | None,
+    call: ast.Call,
+    namespace: dict[str, Any] | None,
 ) -> tuple[str | None, bool]:
     """Return ``(resolved_path_or_None, is_path_bearing)`` for one READ call node.
 
@@ -1046,37 +1227,37 @@ def _read_call_path(
     """
     func = call.func
     # open(PATH) / open(PATH, 'r'|'rb'|...) -- only a NON-write mode counts.
-    if isinstance(func, ast.Name) and func.id == 'open':
+    if isinstance(func, ast.Name) and func.id == "open":
         if _is_open_write_mode(call):
             return None, False
         return _call_path_argument(call, 0, namespace, _PATH_KWARG_NAMES), True
     if isinstance(func, ast.Attribute):
         method = func.attr
         # Path(PATH).read_text(...) / Path(PATH).read_bytes(...)
-        if method in ('read_text', 'read_bytes'):
+        if method in ("read_text", "read_bytes"):
             recv = func.value
             if isinstance(recv, ast.Call) and _is_path_constructor(recv.func):
                 return _call_path_argument(recv, 0, namespace), True
             return None, True
         # np.load / numpy.load / joblib.load(PATH); pickle/json.load(open(PATH)).
-        if method == 'load':
+        if method == "load":
             base = _get_base_name(func.value)
             if call.args and isinstance(call.args[0], ast.Call):
                 inner = call.args[0]
-                if isinstance(inner.func, ast.Name) and inner.func.id == 'open':
+                if isinstance(inner.func, ast.Name) and inner.func.id == "open":
                     return _call_path_argument(inner, 0, namespace, _PATH_KWARG_NAMES), True
-            if base in ('np', 'numpy', 'joblib'):
+            if base in ("np", "numpy", "joblib"):
                 return _call_path_argument(call, 0, namespace), True
             return None, False
         # pandas / polars readers: any ``.read_<fmt>(PATH)`` takes the path arg0.
-        if method.startswith('read_'):
+        if method.startswith("read_"):
             return _call_path_argument(call, 0, namespace, _PATH_KWARG_NAMES), True
     return None, False
 
 
 def statement_read_paths(
     code: str,
-    tree: 'ast.Module | None' = None,
+    tree: "ast.Module | None" = None,
     namespace: dict[str, Any] | None = None,
 ) -> set[str] | None:
     """Resolvable input path(s) a statement READS, or ``None`` when uncertain.
@@ -1148,8 +1329,12 @@ def resolve_path_list(node: ast.AST, namespace: dict[str, Any] | None) -> list[s
             else:
                 return None
         return out
-    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-            and node.func.id in ('sorted', 'list', 'tuple') and len(node.args) == 1):
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in ("sorted", "list", "tuple")
+        and len(node.args) == 1
+    ):
         return resolve_path_list(node.args[0], namespace)
     return None
 
@@ -1187,15 +1372,15 @@ def _receiver_is_pyplot_module(recv: ast.AST, namespace: dict[str, Any] | None) 
     """
     # ``matplotlib.pyplot.savefig(...)`` -- an attribute chain ending in .pyplot.
     if isinstance(recv, ast.Attribute):
-        return recv.attr == 'pyplot'
+        return recv.attr == "pyplot"
     if isinstance(recv, ast.Name):
         if namespace is not None and recv.id in namespace:
             mod = namespace[recv.id]
             # A Figure/Axes has no ``__name__``; the pyplot module's is exact.
-            return getattr(mod, '__name__', '') == 'matplotlib.pyplot'
+            return getattr(mod, "__name__", "") == "matplotlib.pyplot"
         # Namespace unavailable / name not bound: accept the conventional alias
         # as a conservative fallback (everyone imports pyplot as ``plt``).
-        return recv.id in ('plt', 'pyplot')
+        return recv.id in ("plt", "pyplot")
     return False
 
 
@@ -1219,7 +1404,7 @@ def statement_saves_current_pyplot_figure(
     namespace-aware where possible and falls back to the conventional ``plt`` /
     ``pyplot`` alias. Failure-tolerant: any parse/analysis error returns False.
     """
-    if 'savefig' not in code:
+    if "savefig" not in code:
         return False
     try:
         tree = ast.parse(textwrap.dedent(code))
@@ -1229,7 +1414,7 @@ def statement_saves_current_pyplot_figure(
         if not isinstance(node, ast.Call):
             continue
         func = node.func
-        if isinstance(func, ast.Attribute) and func.attr == 'savefig':
+        if isinstance(func, ast.Attribute) and func.attr == "savefig":
             if _receiver_is_pyplot_module(func.value, namespace):
                 return True
     return False
@@ -1258,7 +1443,7 @@ def _get_call_module(func_node: ast.AST) -> str | None:
                 node = node.value
             if isinstance(node, ast.Name):
                 parts.append(node.id)
-            return '.'.join(reversed(parts))
+            return ".".join(reversed(parts))
     return None
 
 
@@ -1281,11 +1466,11 @@ def _is_open_write_mode(call_node: ast.Call) -> bool:
     if len(call_node.args) >= 2:
         mode_arg = call_node.args[1]
         if isinstance(mode_arg, ast.Constant) and isinstance(mode_arg.value, str):
-            return mode_arg.value in _WRITE_MODES or any(c in mode_arg.value for c in 'wax')
+            return mode_arg.value in _WRITE_MODES or any(c in mode_arg.value for c in "wax")
     # Check keyword argument mode=...
     for kw in call_node.keywords:
-        if kw.arg == 'mode' and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
-            return kw.value.value in _WRITE_MODES or any(c in kw.value.value for c in 'wax')
+        if kw.arg == "mode" and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+            return kw.value.value in _WRITE_MODES or any(c in kw.value.value for c in "wax")
     return False
 
 
@@ -1301,34 +1486,42 @@ class _SideEffectVisitor(ast.NodeVisitor):
         module_name = _get_call_module(node.func)
 
         if func_name:
-            key = (module_name or '', func_name)
+            key = (module_name or "", func_name)
             named = key in _IO_SIDE_EFFECT_FUNCTIONS
             if named:
                 kind = _IO_SIDE_EFFECT_FUNCTIONS[key]
-                if func_name == 'open' and not module_name:
+                if func_name == "open" and not module_name:
                     if _is_open_write_mode(node):
-                        self.effects.append(SideEffectInfo(
-                            kind='file_write',
-                            description="open() with write mode",
-                            line=getattr(node, 'lineno', 0),
-                        ))
+                        self.effects.append(
+                            SideEffectInfo(
+                                kind="file_write",
+                                description="open() with write mode",
+                                line=getattr(node, "lineno", 0),
+                            )
+                        )
                 else:
-                    self.effects.append(SideEffectInfo(
-                        kind=kind,
-                        description=f"{module_name + '.' if module_name else ''}{func_name}()",
-                        line=getattr(node, 'lineno', 0),
-                    ))
-            elif (module_name in _PYPLOT_MODULE_ALIASES
-                  and func_name not in _WRITE_METHODS
-                  and func_name not in _PYPLOT_FIGURE_ACCESSORS):
+                    self.effects.append(
+                        SideEffectInfo(
+                            kind=kind,
+                            description=f"{module_name + '.' if module_name else ''}{func_name}()",
+                            line=getattr(node, "lineno", 0),
+                        )
+                    )
+            elif (
+                module_name in _PYPLOT_MODULE_ALIASES
+                and func_name not in _WRITE_METHODS
+                and func_name not in _PYPLOT_FIGURE_ACCESSORS
+            ):
                 # A pyplot module-level call (draw/style/show) mutating the global
                 # figure — uncacheable. savefig is a file_write (below); figure
                 # creation/access is left to the identity-coupling path.
-                self.effects.append(SideEffectInfo(
-                    kind='display',
-                    description=f"{module_name}.{func_name}()",
-                    line=getattr(node, 'lineno', 0),
-                ))
+                self.effects.append(
+                    SideEffectInfo(
+                        kind="display",
+                        description=f"{module_name}.{func_name}()",
+                        line=getattr(node, "lineno", 0),
+                    )
+                )
 
             # Not when the name lookup above already recorded it:
             # ``pd.Series(d).to_csv(...)`` has no module name, so ``('', 'to_csv')``
@@ -1338,11 +1531,13 @@ class _SideEffectVisitor(ast.NodeVisitor):
                 method = node.func.attr
                 if method in _WRITE_METHODS and not _writes_to_console(node):
                     base = _get_base_name(node.func.value)
-                    self.effects.append(SideEffectInfo(
-                        kind='file_write',
-                        description=f"{base + '.' if base else ''}{method}()",
-                        line=getattr(node, 'lineno', 0),
-                    ))
+                    self.effects.append(
+                        SideEffectInfo(
+                            kind="file_write",
+                            description=f"{base + '.' if base else ''}{method}()",
+                            line=getattr(node, "lineno", 0),
+                        )
+                    )
 
         self.generic_visit(node)
 
@@ -1350,6 +1545,7 @@ class _SideEffectVisitor(ast.NodeVisitor):
 # ---------------------------------------------------------------------------
 # Top-level API
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class StatementAnalysis:
@@ -1406,7 +1602,7 @@ class StatementAnalysis:
         # ``b is a`` identity Python guarantees. Reported first — it is
         # a property of the statement's shape, not of its effects.
         if self.alias_targets:
-            names = ', '.join(sorted(self.alias_targets))
+            names = ", ".join(sorted(self.alias_targets))
             reasons.append(
                 f"Alias assignment: {names} names the same object as the "
                 "right-hand side; restoring a copy would break identity "
@@ -1423,8 +1619,7 @@ class StatementAnalysis:
             # statement stays uncacheable (the reason above already fired).
             if pure_mutations & self.accumulator_mutated_vars:
                 reasons.append(
-                    "tip: assign the result to cache it — e.g. "
-                    "`out = [f(e) for e in it]` instead of a for-append loop"
+                    "tip: assign the result to cache it — e.g. `out = [f(e) for e in it]` instead of a for-append loop"
                 )
         for e in self.side_effects:
             reasons.append(f"Side effect: {e.description} ({e.kind})")
@@ -1434,11 +1629,7 @@ class StatementAnalysis:
 def _expr_call_inplace_true(call: ast.Call) -> bool:
     """Return True if *call* passes ``inplace=True`` as a keyword."""
     for kw in call.keywords:
-        if (
-            kw.arg == 'inplace'
-            and isinstance(kw.value, ast.Constant)
-            and kw.value.value is True
-        ):
+        if kw.arg == "inplace" and isinstance(kw.value, ast.Constant) and kw.value.value is True:
             return True
     return False
 
@@ -1452,13 +1643,9 @@ def _out_kwarg_target_bases(call: ast.Call) -> list[str]:
     """
     bases: list[str] = []
     for kw in call.keywords:
-        if kw.arg != 'out':
+        if kw.arg != "out":
             continue
-        targets = (
-            kw.value.elts
-            if isinstance(kw.value, (ast.Tuple, ast.List))
-            else [kw.value]
-        )
+        targets = kw.value.elts if isinstance(kw.value, (ast.Tuple, ast.List)) else [kw.value]
         for tgt in targets:
             base = _extract_base_name(tgt)
             if base:
@@ -1492,9 +1679,9 @@ def _rhs_reads_target(rhs: ast.expr, target: ast.expr) -> bool:
 
 
 # Accessor attributes that index by POSITION (no recoverable column name).
-_POSITIONAL_ACCESSORS = frozenset({'iloc', 'iat'})
+_POSITIONAL_ACCESSORS = frozenset({"iloc", "iat"})
 # Accessor attributes that index by LABEL; the column is the last slice element.
-_LABEL_ACCESSORS = frozenset({'loc', 'at'})
+_LABEL_ACCESSORS = frozenset({"loc", "at"})
 
 
 def _key_literals(col: ast.expr) -> frozenset[str] | None:
@@ -1577,11 +1764,11 @@ def _module_level_stmts(body: list[ast.stmt]):
         if isinstance(node, _DEFERRED_SCOPES):
             continue
         yield node
-        for field in ('body', 'orelse', 'finalbody'):
+        for field in ("body", "orelse", "finalbody"):
             nested = getattr(node, field, None)
             if nested:
                 yield from _module_level_stmts(nested)
-        for handler in getattr(node, 'handlers', []):  # try/except handler bodies
+        for handler in getattr(node, "handlers", []):  # try/except handler bodies
             yield from _module_level_stmts(handler.body)
 
 
@@ -1597,12 +1784,14 @@ def _target_key_grows_receiver(target: ast.expr, base: str) -> bool:
     if not isinstance(target, ast.Subscript):
         return False
     for sub in ast.walk(target.slice):
-        if (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name)
-                and sub.func.id == 'len'
-                and any(_extract_base_name(a) == base for a in sub.args)):
+        if (
+            isinstance(sub, ast.Call)
+            and isinstance(sub.func, ast.Name)
+            and sub.func.id == "len"
+            and any(_extract_base_name(a) == base for a in sub.args)
+        ):
             return True
-        if (isinstance(sub, ast.Attribute) and sub.attr in ('shape', 'size')
-                and _extract_base_name(sub.value) == base):
+        if isinstance(sub, ast.Attribute) and sub.attr in ("shape", "size") and _extract_base_name(sub.value) == base:
             return True
     return False
 
@@ -1669,11 +1858,7 @@ def selfref_inplace_write_vars(tree: ast.Module | None) -> frozenset[str]:
                 # Tuple/list unpacking: test each element against the whole RHS, so
                 # a swap (df['a'], df['b'] = df['b'], df['a']) flags df while new
                 # columns (df['c'], df['d'] = df['a'], df['b']) stay excluded.
-                elts = (
-                    target.elts
-                    if isinstance(target, (ast.Tuple, ast.List))
-                    else [target]
-                )
+                elts = target.elts if isinstance(target, (ast.Tuple, ast.List)) else [target]
                 for elt in elts:
                     if isinstance(elt, ast.Starred):
                         elt = elt.value
@@ -1733,19 +1918,15 @@ def _params_mutated_via_nested_calls(
         callee = _resolve_function_def(callee_name, resolve_source)
         if callee is None:
             continue
-        callee_muts = params_mutated_in_function(
-            callee, resolve_source, seen | {callee_name}
-        )
+        callee_muts = params_mutated_in_function(callee, resolve_source, seen | {callee_name})
         if not callee_muts:
             continue
         pos_params = _positional_param_names(callee)
         for i, arg in enumerate(node.args):
-            if (isinstance(arg, ast.Name) and arg.id in params
-                    and i < len(pos_params) and pos_params[i] in callee_muts):
+            if isinstance(arg, ast.Name) and arg.id in params and i < len(pos_params) and pos_params[i] in callee_muts:
                 out.add(arg.id)
         for kw in node.keywords:
-            if (kw.arg and isinstance(kw.value, ast.Name)
-                    and kw.value.id in params and kw.arg in callee_muts):
+            if kw.arg and isinstance(kw.value, ast.Name) and kw.value.id in params and kw.arg in callee_muts:
                 out.add(kw.value.id)
     return out
 
@@ -1761,9 +1942,7 @@ def _resolve_function_def(name, resolve_source):
         parsed = ast.parse(textwrap.dedent(source))
     except (SyntaxError, ValueError):
         return None
-    if parsed.body and isinstance(
-        parsed.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)
-    ):
+    if parsed.body and isinstance(parsed.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)):
         return parsed.body[0]
     return None
 
@@ -1775,22 +1954,22 @@ def params_mutated_in_function(
 ) -> frozenset[str]:
     """Parameter names a function body mutates IN PLACE.
 
-    A parameter counts as mutated when the body performs an in-place mutation on
-    it — subscript/attribute assignment, augmented assignment, a mutating method
-    call, ``out=`` kwarg, or ``del`` — i.e. the same signals as
-    :attr:`StatementAnalysis.all_mutated_vars`. Plain reassignment (``x = ...``)
-    rebinds a local and does NOT mutate the caller's object, so it does not count.
+     A parameter counts as mutated when the body performs an in-place mutation on
+     it — subscript/attribute assignment, augmented assignment, a mutating method
+     call, ``out=`` kwarg, or ``del`` — i.e. the same signals as
+     :attr:`StatementAnalysis.all_mutated_vars`. Plain reassignment (``x = ...``)
+     rebinds a local and does NOT mutate the caller's object, so it does not count.
 
-    Used (with :func:`function_arg_mutations`) to attribute an argument mutation
-    back to the caller's variable: ``def f(x): x.append(1)`` plus ``f(data)``
-    means ``data`` is mutated in place, so it must reset on isolated re-run.
+     Used (with :func:`function_arg_mutations`) to attribute an argument mutation
+     back to the caller's variable: ``def f(x): x.append(1)`` plus ``f(data)``
+     means ``data`` is mutated in place, so it must reset on isolated re-run.
 
-    When *resolve_source* is given (a ``name -> source`` lookup), the analysis is
-    interprocedural: a parameter mutated only via a further resolvable call
-    (``def outer(y): inner(y)`` where ``inner`` mutates its arg) is also detected
-   . *seen* guards against mutual / self recursion. Without
-    *resolve_source* the analysis is one level deep (the original
-    behaviour).
+     When *resolve_source* is given (a ``name -> source`` lookup), the analysis is
+     interprocedural: a parameter mutated only via a further resolvable call
+     (``def outer(y): inner(y)`` where ``inner`` mutates its arg) is also detected
+    . *seen* guards against mutual / self recursion. Without
+     *resolve_source* the analysis is one level deep (the original
+     behaviour).
     """
     params = _all_param_names(func)
     if not params:
@@ -1800,9 +1979,7 @@ def params_mutated_in_function(
         visitor.visit(stmt)
     mutated = {m.variable for m in visitor.mutations} & params
     if resolve_source is not None:
-        mutated |= _params_mutated_via_nested_calls(
-            func, params, resolve_source, seen
-        )
+        mutated |= _params_mutated_via_nested_calls(func, params, resolve_source, seen)
     return frozenset(mutated)
 
 
@@ -1833,13 +2010,9 @@ def standalone_call_arg_targets(
         call = node.value
         if not isinstance(call.func, ast.Name):
             continue
-        positional = tuple(
-            a.id if isinstance(a, ast.Name) else None for a in call.args
-        )
+        positional = tuple(a.id if isinstance(a, ast.Name) else None for a in call.args)
         keywords = tuple(
-            (kw.arg, kw.value.id)
-            for kw in call.keywords
-            if kw.arg is not None and isinstance(kw.value, ast.Name)
+            (kw.arg, kw.value.id) for kw in call.keywords if kw.arg is not None and isinstance(kw.value, ast.Name)
         )
         out.add((call.func.id, positional, keywords))
     return frozenset(out)
@@ -1864,9 +2037,7 @@ def function_arg_mutations(tree: ast.Module | None, resolve_source) -> frozenset
         fdef = _resolve_function_def(func_name, resolve_source)
         if fdef is None:
             continue
-        mutated_params = params_mutated_in_function(
-            fdef, resolve_source, frozenset({func_name})
-        )
+        mutated_params = params_mutated_in_function(fdef, resolve_source, frozenset({func_name}))
         if not mutated_params:
             continue
         pos_params = _positional_param_names(fdef)
@@ -1933,7 +2104,9 @@ def function_global_mutations(tree: ast.Module | None, resolve_source) -> frozen
 
 
 def called_function_global_mutations(
-    tree, resolve_source, include_control_bodies: bool = False,
+    tree,
+    resolve_source,
+    include_control_bodies: bool = False,
 ) -> frozenset[str]:
     """Module globals mutated in place by ANY function called in *tree*
     (CAS-260) — the capture-and-restore watch list.
@@ -1999,8 +2172,7 @@ def called_function_global_mutations(
     # including through a loop. The statement path asks without it -- it acts
     # per STATEMENT, and a body statement claiming the whole accumulator was
     # measured wrong (CAS-265).
-    names = (_called_function_names(tree) if include_control_bodies
-             else _cell_level_called_function_names(tree))
+    names = _called_function_names(tree) if include_control_bodies else _cell_level_called_function_names(tree)
     for name in names:
         fdef = _resolve_function_def(name, resolve_source)
         if fdef is not None:
@@ -2040,7 +2212,13 @@ def callee_source_global_mutations(source: str) -> frozenset[str]:
 #: statement path. Mirrors what ``statement/processor.py`` marks with
 #: ``# __iteration_context__:`` / ``# control_context:``.
 _CONTROL_STATEMENTS = (
-    ast.For, ast.AsyncFor, ast.While, ast.If, ast.With, ast.AsyncWith, ast.Try,
+    ast.For,
+    ast.AsyncFor,
+    ast.While,
+    ast.If,
+    ast.With,
+    ast.AsyncWith,
+    ast.Try,
 )
 
 
@@ -2061,9 +2239,9 @@ def _cell_level_called_function_names(tree) -> frozenset[str]:
                 # The header (`iter`, `test`, `items`) still belongs to the
                 # cell; only the bodies are the control structure's.
                 for field, value in ast.iter_fields(child):
-                    if field in ('body', 'orelse', 'finalbody', 'handlers'):
+                    if field in ("body", "orelse", "finalbody", "handlers"):
                         continue
-                    for sub in (value if isinstance(value, list) else [value]):
+                    for sub in value if isinstance(value, list) else [value]:
                         if isinstance(sub, ast.AST):
                             if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name):
                                 out.add(sub.func.id)
@@ -2077,18 +2255,22 @@ def _cell_level_called_function_names(tree) -> frozenset[str]:
     return frozenset(out)
 
 
-_MUTABLE_LITERAL_CALLS = frozenset({'list', 'dict', 'set'})
+_MUTABLE_LITERAL_CALLS = frozenset({"list", "dict", "set"})
 
 
 def _is_mutable_default(node: ast.expr) -> bool:
     """True if *node* is a mutable literal default (``[]``, ``{}``, ``set()``)."""
     if isinstance(node, (ast.List, ast.Dict, ast.Set)):
         return True
-    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-            and node.func.id in _MUTABLE_LITERAL_CALLS and not node.args)
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in _MUTABLE_LITERAL_CALLS
+        and not node.args
+    )
 
 
-_MEMOIZER_DECORATORS = frozenset({'lru_cache', 'cache'})
+_MEMOIZER_DECORATORS = frozenset({"lru_cache", "cache"})
 
 
 def _is_memoizer_decorator(dec: ast.expr) -> bool:
@@ -2124,11 +2306,9 @@ def _function_mutates_own_object(func: ast.FunctionDef | ast.AsyncFunctionDef) -
         target = node.target if isinstance(node, ast.AugAssign) else None
         if isinstance(node, ast.Assign):
             for t in node.targets:
-                if (isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name)
-                        and t.value.id == fname):
+                if isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name) and t.value.id == fname:
                     return True
-        elif (isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name)
-                and target.value.id == fname):
+        elif isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name) and target.value.id == fname:
             return True
 
     mutated = params_mutated_in_function(func)
@@ -2136,7 +2316,7 @@ def _function_mutates_own_object(func: ast.FunctionDef | ast.AsyncFunctionDef) -
         pos = list(func.args.posonlyargs) + list(func.args.args)
         defs = func.args.defaults
         if defs:
-            for param, default in zip(pos[-len(defs):], defs):
+            for param, default in zip(pos[-len(defs) :], defs):
                 if param.arg in mutated and _is_mutable_default(default):
                     return True
         for kw, default in zip(func.args.kwonlyargs, func.args.kw_defaults):
@@ -2147,10 +2327,7 @@ def _function_mutates_own_object(func: ast.FunctionDef | ast.AsyncFunctionDef) -
 
 def _called_function_names(tree: ast.Module) -> frozenset[str]:
     """Names called as ``name(...)`` anywhere in the cell (bare OR captured)."""
-    return frozenset(
-        n.func.id for n in ast.walk(tree)
-        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-    )
+    return frozenset(n.func.id for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name))
 
 
 def stateful_self_functions(tree: ast.Module | None, resolve_source) -> frozenset[str]:
@@ -2185,9 +2362,12 @@ def subscript_view_bindings(tree: ast.Module | None) -> dict[str, str]:
         return {}
     out: dict[str, str] = {}
     for node in _module_level_stmts(tree.body):
-        if (isinstance(node, ast.Assign) and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)
-                and isinstance(node.value, ast.Subscript)):
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Subscript)
+        ):
             base = _extract_base_name(node.value.value)
             if base:
                 out[node.targets[0].id] = base
@@ -2267,8 +2447,9 @@ def reduce_free_mutations(tree: ast.Module | None, resolve_source) -> frozenset[
         if not isinstance(node, ast.Call):
             continue
         fn = node.func
-        is_reduce = ((isinstance(fn, ast.Name) and fn.id == 'reduce')
-                     or (isinstance(fn, ast.Attribute) and fn.attr == 'reduce'))
+        is_reduce = (isinstance(fn, ast.Name) and fn.id == "reduce") or (
+            isinstance(fn, ast.Attribute) and fn.attr == "reduce"
+        )
         if is_reduce and node.args and isinstance(node.args[0], ast.Name):
             fdef = _resolve_function_def(node.args[0].id, resolve_source)
             if fdef is not None:
@@ -2301,8 +2482,7 @@ def _factory_returns_stateful_closure(factory: ast.FunctionDef | ast.AsyncFuncti
     """
     factory_scope = _factory_body_scope(factory)
     for node in ast.walk(factory):
-        if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and node is not factory):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node is not factory:
             if _free_vars_mutated_in_function(node) & factory_scope:
                 return True
     return False
@@ -2407,9 +2587,7 @@ def _class_bases(classdef: ast.ClassDef) -> list[str]:
     return [b.id for b in classdef.bases if isinstance(b, ast.Name)]
 
 
-def _iter_class_hierarchy(
-    classdef: ast.ClassDef | None, resolve_class_source, _seen: set[str] | None = None
-):
+def _iter_class_hierarchy(classdef: ast.ClassDef | None, resolve_class_source, _seen: set[str] | None = None):
     """Yield *classdef* and its resolvable base classes, depth-first.
 
     Follows each ``Name`` base via *resolve_class_source*, so an inherited method
@@ -2439,8 +2617,7 @@ def _class_method(
     first match walking the hierarchy)."""
     for cls in _iter_class_hierarchy(classdef, resolve_class_source):
         for node in cls.body:
-            if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                    and node.name == method_name):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == method_name:
                 return node
     return None
 
@@ -2488,9 +2665,11 @@ def _instance_attr_names(classdef: ast.ClassDef, resolve_class_source=None) -> f
                     continue
                 for tgt in node.targets:
                     for leaf in _iter_store_targets(tgt):
-                        if (isinstance(leaf, ast.Attribute)
-                                and isinstance(leaf.value, ast.Name)
-                                and leaf.value.id == recv):
+                        if (
+                            isinstance(leaf, ast.Attribute)
+                            and isinstance(leaf.value, ast.Name)
+                            and leaf.value.id == recv
+                        ):
                             out.add(leaf.attr)
     return frozenset(out)
 
@@ -2517,32 +2696,35 @@ def _property_accessor(
     whichever comes first, so the accessors are matched by their decorator."""
     for cls in _iter_class_hierarchy(classdef, resolve_class_source):
         for node in cls.body:
-            if not (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                    and node.name == attr):
+            if not (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == attr):
                 continue
-            if kind == 'getter' and _has_named_decorator(node, 'property'):
+            if kind == "getter" and _has_named_decorator(node, "property"):
                 return node
-            if kind == 'setter':
+            if kind == "setter":
                 for dec in node.decorator_list:
-                    if (isinstance(dec, ast.Attribute) and dec.attr == 'setter'
-                            and isinstance(dec.value, ast.Name) and dec.value.id == attr):
+                    if (
+                        isinstance(dec, ast.Attribute)
+                        and dec.attr == "setter"
+                        and isinstance(dec.value, ast.Name)
+                        and dec.value.id == attr
+                    ):
                         return node
     return None
 
 
-def _descriptor_class(
-    classdef: ast.ClassDef, attr: str, resolve_class_source
-) -> ast.ClassDef | None:
+def _descriptor_class(classdef: ast.ClassDef, attr: str, resolve_class_source) -> ast.ClassDef | None:
     """The ClassDef of the data descriptor bound to class attribute *attr*
     (``field = Tracked()`` → ``Tracked``'s ClassDef), or None. Accessing
     ``obj.field`` / assigning ``obj.field = v`` dispatches to that class's
     ``__get__`` / ``__set__``."""
     for cls in _iter_class_hierarchy(classdef, resolve_class_source):
         for node in cls.body:
-            if (isinstance(node, ast.Assign)
-                    and any(isinstance(t, ast.Name) and t.id == attr for t in node.targets)
-                    and isinstance(node.value, ast.Call)
-                    and isinstance(node.value.func, ast.Name)):
+            if (
+                isinstance(node, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == attr for t in node.targets)
+                and isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Name)
+            ):
                 return _resolve_class_def(node.value.func.id, resolve_class_source)
     return None
 
@@ -2590,8 +2772,7 @@ def _iter_inplace_mutation_chains(method: ast.FunctionDef | ast.AsyncFunctionDef
                 yield node.func.value
             elif attr in PANDAS_INPLACE_METHODS:
                 for kw in node.keywords:
-                    if (kw.arg == 'inplace' and isinstance(kw.value, ast.Constant)
-                            and kw.value.value is True):
+                    if kw.arg == "inplace" and isinstance(kw.value, ast.Constant) and kw.value.value is True:
                         yield node.func.value
                         break
         elif isinstance(node, ast.AugAssign):
@@ -2613,10 +2794,13 @@ def _super_called_methods(method: ast.FunctionDef | ast.AsyncFunctionDef) -> fro
     (``super.__init__`` running ``Base.__init__``)."""
     out: set[str] = set()
     for node in _iter_method_body_nodes(method):
-        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                and isinstance(node.func.value, ast.Call)
-                and isinstance(node.func.value.func, ast.Name)
-                and node.func.value.func.id == 'super'):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Call)
+            and isinstance(node.func.value.func, ast.Name)
+            and node.func.value.func.id == "super"
+        ):
             out.add(node.func.attr)
     return frozenset(out)
 
@@ -2662,8 +2846,8 @@ def _classify_method_mutations(
     class_attrs = _class_level_attr_names(cdef, resolve_class_source)
     instance_attrs = _instance_attr_names(cdef, resolve_class_source)
     recv = _first_param_name(method)
-    is_classmethod = _has_named_decorator(method, 'classmethod')
-    is_staticmethod = _has_named_decorator(method, 'staticmethod')
+    is_classmethod = _has_named_decorator(method, "classmethod")
+    is_staticmethod = _has_named_decorator(method, "staticmethod")
     params = _all_param_names(method)
     global_decls: set[str] = set()
     local_assigned: set[str] = set()
@@ -2716,11 +2900,14 @@ def _classify_method_mutations(
     for m_name in _super_called_methods(method):
         for base_name in _class_bases(_current):
             base_cdef = _resolve_class_def(base_name, resolve_class_source)
-            base_m = (_class_method(base_cdef, m_name, resolve_class_source)
-                      if base_cdef is not None else None)
+            base_m = _class_method(base_cdef, m_name, resolve_class_source) if base_cdef is not None else None
             if base_m is not None:
                 s2, c2, f2 = _classify_method_mutations(
-                    base_m, recv_class_name, cdef, resolve_class_source, _seen,
+                    base_m,
+                    recv_class_name,
+                    cdef,
+                    resolve_class_source,
+                    _seen,
                     base_cdef,
                 )
                 mutates_self = mutates_self or s2
@@ -2735,16 +2922,15 @@ def _decorator_free_var_mutations(
     decorator_def: ast.FunctionDef | ast.AsyncFunctionDef,
 ) -> frozenset[str]:
     """Module/free variables mutated by the wrapper a decorator returns
-   . ``def logged(f): def wrap(*a): calls.append('x'); ...; return
-    wrap`` — calling a ``@logged``-decorated function runs ``wrap``, which
-    appends to the module list ``calls``. Collect the free vars each inner
-    function mutates that are NOT local to the decorator (those are the
-    closure case)."""
+    . ``def logged(f): def wrap(*a): calls.append('x'); ...; return
+     wrap`` — calling a ``@logged``-decorated function runs ``wrap``, which
+     appends to the module list ``calls``. Collect the free vars each inner
+     function mutates that are NOT local to the decorator (those are the
+     closure case)."""
     scope = _factory_body_scope(decorator_def)
     out: set[str] = set()
     for node in ast.walk(decorator_def):
-        if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and node is not decorator_def):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node is not decorator_def:
             out |= _free_vars_mutated_in_function(node) - scope
     return frozenset(out)
 
@@ -2766,19 +2952,19 @@ def _decorator_names(func: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
 # binary form when the in-place one is absent (``obj = obj.__add__(x)``). Maps the
 # AST op node name to ``(inplace_dunder, fallback_dunder)``.
 _AUGOP_DUNDERS: dict[str, tuple[str, str]] = {
-    'Add': ('__iadd__', '__add__'),
-    'Sub': ('__isub__', '__sub__'),
-    'Mult': ('__imul__', '__mul__'),
-    'Div': ('__itruediv__', '__truediv__'),
-    'FloorDiv': ('__ifloordiv__', '__floordiv__'),
-    'Mod': ('__imod__', '__mod__'),
-    'Pow': ('__ipow__', '__pow__'),
-    'MatMult': ('__imatmul__', '__matmul__'),
-    'BitOr': ('__ior__', '__or__'),
-    'BitAnd': ('__iand__', '__and__'),
-    'BitXor': ('__ixor__', '__xor__'),
-    'LShift': ('__ilshift__', '__lshift__'),
-    'RShift': ('__irshift__', '__rshift__'),
+    "Add": ("__iadd__", "__add__"),
+    "Sub": ("__isub__", "__sub__"),
+    "Mult": ("__imul__", "__mul__"),
+    "Div": ("__itruediv__", "__truediv__"),
+    "FloorDiv": ("__ifloordiv__", "__floordiv__"),
+    "Mod": ("__imod__", "__mod__"),
+    "Pow": ("__ipow__", "__pow__"),
+    "MatMult": ("__imatmul__", "__matmul__"),
+    "BitOr": ("__ior__", "__or__"),
+    "BitAnd": ("__iand__", "__and__"),
+    "BitXor": ("__ixor__", "__xor__"),
+    "LShift": ("__ilshift__", "__lshift__"),
+    "RShift": ("__irshift__", "__rshift__"),
 }
 
 
@@ -2815,6 +3001,7 @@ def object_protocol_mutations(
     receivers: set[str] = set()
     class_defs: set[str] = set()
     if decorated_class is None:
+
         def decorated_class(_var):
             return None
 
@@ -2827,7 +3014,10 @@ def object_protocol_mutations(
 
     def _apply_method(cdef, class_name, method, recv_var, *, allow_self):
         si, class_targets, fv = _classify_method_mutations(
-            method, class_name, cdef, resolve_class_source,
+            method,
+            class_name,
+            cdef,
+            resolve_class_source,
         )
         if fv:
             free_vars.update(fv)
@@ -2838,7 +3028,7 @@ def object_protocol_mutations(
             # also reset the receiver's class so its instances re-derive against
             # the fresh base — a subclass method mutating an inherited class var
             # via ``self`` needs both, since the reset cascade is one level deep
-            #. For a non-inherited var the owner IS the receiver's class,
+            # . For a non-inherited var the owner IS the receiver's class,
             # so this adds nothing.
             class_defs.update(class_targets)
             class_defs.add(class_name)
@@ -2849,7 +3039,7 @@ def object_protocol_mutations(
         """A construction ``X()`` — the fresh instance's self-init is discarded, so
         only class-var / free-var mutations in ``__init__`` (or a dataclass
         ``__post_init__``) persist."""
-        for ctor in ('__init__', '__post_init__'):
+        for ctor in ("__init__", "__post_init__"):
             method = _class_method(cdef, ctor, resolve_class_source)
             if method is not None:
                 _apply_method(cdef, class_name, method, None, allow_self=False)
@@ -2870,18 +3060,17 @@ def object_protocol_mutations(
         cdef = _classdef(cls) if cls else None
         if cdef is None:
             return
-        for dunder in ('__enter__', '__exit__'):
+        for dunder in ("__enter__", "__exit__"):
             method = _class_method(cdef, dunder, resolve_class_source)
             if method is not None:
                 _apply_method(cdef, cls, method, recv_var, allow_self=True)
 
     def _return_class(fdef):
         """The ``(name, ClassDef)`` of a notebook class a factory function
-        RETURNS (``def cm(): return Mgr()`` → ``Mgr``), or ``(None, None)``
-       . Used for ``with cm() as x:`` where ``cm`` is a plain factory."""
+         RETURNS (``def cm(): return Mgr()`` → ``Mgr``), or ``(None, None)``
+        . Used for ``with cm() as x:`` where ``cm`` is a plain factory."""
         for sub in ast.walk(fdef):
-            if (isinstance(sub, ast.Return) and isinstance(sub.value, ast.Call)
-                    and isinstance(sub.value.func, ast.Name)):
+            if isinstance(sub, ast.Return) and isinstance(sub.value, ast.Call) and isinstance(sub.value.func, ast.Name):
                 rcdef = _classdef(sub.value.func.id)
                 if rcdef is not None:
                     return sub.value.func.id, rcdef
@@ -2906,11 +3095,11 @@ def object_protocol_mutations(
         cdef = _classdef(cls) if cls else None
         if cdef is None:
             return
-        setter = _property_accessor(cdef, attr, 'setter', resolve_class_source)
+        setter = _property_accessor(cdef, attr, "setter", resolve_class_source)
         if setter is not None:
             _apply_method(cdef, cls, setter, recv_var, allow_self=True)
         else:
-            _dispatch_descriptor(cdef, attr, '__set__')
+            _dispatch_descriptor(cdef, attr, "__set__")
 
     def _dispatch_attr_get(recv_var, attr):
         """``recv.attr`` (load) dispatching to a ``@property`` getter or a data
@@ -2919,11 +3108,11 @@ def object_protocol_mutations(
         cdef = _classdef(cls) if cls else None
         if cdef is None:
             return
-        getter = _property_accessor(cdef, attr, 'getter', resolve_class_source)
+        getter = _property_accessor(cdef, attr, "getter", resolve_class_source)
         if getter is not None:
             _apply_method(cdef, cls, getter, recv_var, allow_self=True)
         else:
-            _dispatch_descriptor(cdef, attr, '__get__')
+            _dispatch_descriptor(cdef, attr, "__get__")
 
     if tree is None:
         return ObjectProtocolResets(frozenset(), frozenset(), frozenset())
@@ -2943,7 +3132,7 @@ def object_protocol_mutations(
                     if cdef is not None:
                         # ``with SomeCM():`` — anonymous instance, no receiver to
                         # reset; only class-var / free-var mutations persist.
-                        for dunder in ('__enter__', '__exit__'):
+                        for dunder in ("__enter__", "__exit__"):
                             method = _class_method(cdef, dunder, resolve_class_source)
                             if method is not None:
                                 _apply_method(cdef, nm, method, None, allow_self=False)
@@ -2958,7 +3147,7 @@ def object_protocol_mutations(
                             # mutations persist.
                             ret_name, ret_cdef = _return_class(fdef)
                             if ret_cdef is not None:
-                                for dunder in ('__enter__', '__exit__'):
+                                for dunder in ("__enter__", "__exit__"):
                                     method = _class_method(ret_cdef, dunder, resolve_class_source)
                                     if method is not None:
                                         _apply_method(ret_cdef, ret_name, method, None, allow_self=False)
@@ -2967,13 +3156,13 @@ def object_protocol_mutations(
             for tgt in node.targets:
                 for leaf in _iter_store_targets(tgt):
                     if isinstance(leaf, ast.Subscript) and isinstance(leaf.value, ast.Name):
-                        _dispatch_dunder(leaf.value.id, '__setitem__')
+                        _dispatch_dunder(leaf.value.id, "__setitem__")
                     elif isinstance(leaf, ast.Attribute) and isinstance(leaf.value, ast.Name):
                         _dispatch_attr_set(leaf.value.id, leaf.attr)
         elif isinstance(node, ast.Delete):
             for tgt in node.targets:
                 if isinstance(tgt, ast.Subscript) and isinstance(tgt.value, ast.Name):
-                    _dispatch_dunder(tgt.value.id, '__delitem__')
+                    _dispatch_dunder(tgt.value.id, "__delitem__")
         # --- ``obj <op>= x`` dispatching to an in-place operator dunder ---------
         elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
             cls = instance_class(node.target.id)
@@ -2992,12 +3181,10 @@ def object_protocol_mutations(
                     method = _class_method(cdef, fallback_dunder, resolve_class_source)
                     if method is not None:
                         _apply_method(cdef, cls, method, node.target.id, allow_self=False)
-        elif (isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load)
-              and isinstance(node.value, ast.Name)):
-            _dispatch_dunder(node.value.id, '__getitem__')
+        elif isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load) and isinstance(node.value, ast.Name):
+            _dispatch_dunder(node.value.id, "__getitem__")
         # --- ``recv.attr`` load dispatching to a property getter / __get__ -----
-        elif (isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load)
-              and isinstance(node.value, ast.Name)):
+        elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load) and isinstance(node.value, ast.Name):
             _dispatch_attr_get(node.value.id, node.attr)
         # --- calls: constructor / instance __call__ / decorated fn / method ----
         elif isinstance(node, ast.Call):
@@ -3005,8 +3192,8 @@ def object_protocol_mutations(
             if isinstance(func, ast.Name):
                 nm = func.id
                 # ``next(it)`` advances the iterator via ``It.__next__``.
-                if nm == 'next' and node.args and isinstance(node.args[0], ast.Name):
-                    _dispatch_dunder(node.args[0].id, '__next__')
+                if nm == "next" and node.args and isinstance(node.args[0], ast.Name):
+                    _dispatch_dunder(node.args[0].id, "__next__")
                     continue
                 cdef = _classdef(nm)
                 if cdef is not None:
@@ -3021,10 +3208,13 @@ def object_protocol_mutations(
                 deco_cls = decorated_class(nm)
                 dcdef = _classdef(deco_cls) if deco_cls else None
                 if dcdef is not None:
-                    call_m = _class_method(dcdef, '__call__', resolve_class_source)
+                    call_m = _class_method(dcdef, "__call__", resolve_class_source)
                     if call_m is not None:
                         si, ct, fv = _classify_method_mutations(
-                            call_m, deco_cls, dcdef, resolve_class_source,
+                            call_m,
+                            deco_cls,
+                            dcdef,
+                            resolve_class_source,
                         )
                         free_vars.update(fv)
                         class_defs.update(ct)
@@ -3035,7 +3225,7 @@ def object_protocol_mutations(
                 cls = instance_class(nm)
                 icdef = _classdef(cls) if cls else None
                 if icdef is not None:
-                    call_m = _class_method(icdef, '__call__', resolve_class_source)
+                    call_m = _class_method(icdef, "__call__", resolve_class_source)
                     if call_m is not None:
                         _apply_method(icdef, cls, call_m, nm, allow_self=True)
                 # A decorated function whose wrapper mutates a free var, or a
@@ -3055,7 +3245,7 @@ def object_protocol_mutations(
                 # ``stack.enter_context(cm)`` runs ``cm.__enter__`` / ``__exit__``
                 # regardless of what ``stack`` is (an ExitStack), so dispatch to
                 # the ARGUMENT's context manager.
-                if method_name == 'enter_context' and node.args and isinstance(node.args[0], ast.Name):
+                if method_name == "enter_context" and node.args and isinstance(node.args[0], ast.Name):
                     _dispatch_context(node.args[0].id)
                     continue
                 own_class = _classdef(recv)
@@ -3093,17 +3283,22 @@ def object_protocol_mutations(
             base_cdef = _classdef(base_name)
             if base_cdef is None:
                 continue
-            hook = _class_method(base_cdef, '__init_subclass__', resolve_class_source)
+            hook = _class_method(base_cdef, "__init_subclass__", resolve_class_source)
             if hook is not None:
                 _, class_targets, fv = _classify_method_mutations(
-                    hook, base_name, base_cdef, resolve_class_source,
+                    hook,
+                    base_name,
+                    base_cdef,
+                    resolve_class_source,
                 )
                 class_defs.update(class_targets)
                 init_subclass_free.update(fv)
                 break
 
     return ObjectProtocolResets(
-        frozenset(free_vars), frozenset(receivers), frozenset(class_defs),
+        frozenset(free_vars),
+        frozenset(receivers),
+        frozenset(class_defs),
         frozenset(init_subclass_free),
     )
 
@@ -3141,14 +3336,19 @@ def crossref_reassigned_vars(tree: ast.Module | None) -> frozenset[str]:
         if not isinstance(node, ast.Assign):
             continue
         for tgt in node.targets:
-            if not (isinstance(tgt, (ast.Tuple, ast.List))
-                    and isinstance(node.value, (ast.Tuple, ast.List))
-                    and len(tgt.elts) == len(node.value.elts)):
+            if not (
+                isinstance(tgt, (ast.Tuple, ast.List))
+                and isinstance(node.value, (ast.Tuple, ast.List))
+                and len(tgt.elts) == len(node.value.elts)
+            ):
                 continue
             rhs_names = {n.id for n in ast.walk(node.value) if isinstance(n, ast.Name)}
             for te, ve in zip(tgt.elts, node.value.elts):
-                if (isinstance(te, ast.Name) and te.id in rhs_names
-                        and not (isinstance(ve, ast.Name) and ve.id == te.id)):
+                if (
+                    isinstance(te, ast.Name)
+                    and te.id in rhs_names
+                    and not (isinstance(ve, ast.Name) and ve.id == te.id)
+                ):
                     flagged.add(te.id)
 
     # (B) a name READ in an earlier statement and later REASSIGNED from a value
@@ -3162,8 +3362,7 @@ def crossref_reassigned_vars(tree: ast.Module | None) -> frozenset[str]:
             rhs_names = {n.id for n in ast.walk(node.value) if isinstance(n, ast.Name)}
             for tgt in node.targets:
                 for t in _iter_store_targets(tgt):
-                    if (isinstance(t, ast.Name) and t.id in read_before
-                            and t.id not in rhs_names):
+                    if isinstance(t, ast.Name) and t.id in read_before and t.id not in rhs_names:
                         flagged.add(t.id)
         for n in ast.walk(node):
             if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load):
@@ -3179,23 +3378,50 @@ def crossref_reassigned_vars(tree: ast.Module | None) -> frozenset[str]:
 # Builtins that merely *inspect* a name without advancing it. Everything else
 # that receives the name as an argument is assumed to consume it — see
 # ``consumed_input_names``.
-_NON_CONSUMING_FUNCS = frozenset({
-    'type', 'id', 'repr', 'isinstance', 'issubclass', 'hasattr', 'getattr',
-    'setattr', 'delattr', 'callable', 'hash', 'dir', 'vars', 'print',
-    'len', 'format',
-})
+_NON_CONSUMING_FUNCS = frozenset(
+    {
+        "type",
+        "id",
+        "repr",
+        "isinstance",
+        "issubclass",
+        "hasattr",
+        "getattr",
+        "setattr",
+        "delattr",
+        "callable",
+        "hash",
+        "dir",
+        "vars",
+        "print",
+        "len",
+        "format",
+    }
+)
 
 # Methods that report on a consumable without drawing from it. Being wrong here
 # means a genuine consumption goes undetected (the producer is not re-run and
 # the stale-value bug survives), so the set stays small and unambiguous.
-_NON_CONSUMING_METHODS = frozenset({
-    # queue.Queue / SimpleQueue introspection
-    'qsize', 'empty', 'full', 'task_done', 'join',
-    # file-handle introspection (``seek``/``tell`` do not read bytes; ``seek``
-    # in particular REWINDS, but the divergence probe compares positions and a
-    # rewound handle legitimately reads from the new offset)
-    'tell', 'fileno', 'seekable', 'readable', 'writable', 'flush', 'isatty',
-})
+_NON_CONSUMING_METHODS = frozenset(
+    {
+        # queue.Queue / SimpleQueue introspection
+        "qsize",
+        "empty",
+        "full",
+        "task_done",
+        "join",
+        # file-handle introspection (``seek``/``tell`` do not read bytes; ``seek``
+        # in particular REWINDS, but the divergence probe compares positions and a
+        # rewound handle legitimately reads from the new offset)
+        "tell",
+        "fileno",
+        "seekable",
+        "readable",
+        "writable",
+        "flush",
+        "isatty",
+    }
+)
 
 
 def consumed_input_names(tree: ast.Module | None) -> frozenset[str]:
@@ -3229,15 +3455,17 @@ def consumed_input_names(tree: ast.Module | None) -> frozenset[str]:
         if parent is None:
             return True
         # ``type(g)`` / ``print(g)`` — inspected, not drawn from.
-        if (isinstance(parent, ast.Call) and isinstance(parent.func, ast.Name)
-                and parent.func.id in _NON_CONSUMING_FUNCS
-                and name_node is not parent.func):
+        if (
+            isinstance(parent, ast.Call)
+            and isinstance(parent.func, ast.Name)
+            and parent.func.id in _NON_CONSUMING_FUNCS
+            and name_node is not parent.func
+        ):
             return False
         if isinstance(parent, ast.Attribute):
             grand = parents.get(parent)
             # ``q.qsize()`` / ``fh.tell()`` — receiver of a reporting method.
-            if (isinstance(grand, ast.Call) and grand.func is parent
-                    and parent.attr in _NON_CONSUMING_METHODS):
+            if isinstance(grand, ast.Call) and grand.func is parent and parent.attr in _NON_CONSUMING_METHODS:
                 return False
             # A bare attribute read (``g.gi_frame``, ``q.maxsize``) never draws.
             if not isinstance(grand, ast.Call):
@@ -3257,32 +3485,33 @@ def consumed_input_names(tree: ast.Module | None) -> frozenset[str]:
 def _cell_alias_map(tree: ast.Module) -> dict[str, str]:
     """Map each alias name in the cell to its direct source name (shared object).
 
-    Recognises every binding form that makes the target share the RHS object,
-    not just ``y = x``:
+     Recognises every binding form that makes the target share the RHS object,
+     not just ``y = x``:
 
-    * simple / chained ``Name`` assignment — ``y = x``, ``a = b = x`` (each
-      target aliases x);
-    * 1:1 tuple / list unpack of a literal — ``(y,) = (x,)``, ``a, b = c, d``
-      (element-wise, only ``Name``-to-``Name`` pairs);
-    * walrus binding — ``(y := x).append(..)``.
+     * simple / chained ``Name`` assignment — ``y = x``, ``a = b = x`` (each
+       target aliases x);
+     * 1:1 tuple / list unpack of a literal — ``(y,) = (x,)``, ``a, b = c, d``
+       (element-wise, only ``Name``-to-``Name`` pairs);
+     * walrus binding — ``(y := x).append(..)``.
 
-    Bindings inside control-flow bodies (if / for / while / with / try) are
-    scanned too — an alias formed in a loop body still shares the object
-   . Deferred scopes (def / class) are not descended into. Only a bare
-    ``Name`` RHS counts as aliasing; ``y = x.copy()`` / ``y = x[:]`` are copies
-    and excluded. Self-binds (``x = x``) are skipped. A ternary
-    (``y = x if c else z``) is intentionally not handled here (flow-sensitive,
-    two possible sources) — tracked separately.
+     Bindings inside control-flow bodies (if / for / while / with / try) are
+     scanned too — an alias formed in a loop body still shares the object
+    . Deferred scopes (def / class) are not descended into. Only a bare
+     ``Name`` RHS counts as aliasing; ``y = x.copy()`` / ``y = x[:]`` are copies
+     and excluded. Self-binds (``x = x``) are skipped. A ternary
+     (``y = x if c else z``) is intentionally not handled here (flow-sensitive,
+     two possible sources) — tracked separately.
     """
     alias_map: dict[str, str] = {}
 
     def _bind(target: ast.AST, value: ast.AST) -> None:
-        if (isinstance(target, ast.Name) and isinstance(value, ast.Name)
-                and target.id != value.id):
+        if isinstance(target, ast.Name) and isinstance(value, ast.Name) and target.id != value.id:
             alias_map[target.id] = value.id
-        elif (isinstance(target, (ast.Tuple, ast.List))
-                and isinstance(value, (ast.Tuple, ast.List))
-                and len(target.elts) == len(value.elts)):
+        elif (
+            isinstance(target, (ast.Tuple, ast.List))
+            and isinstance(value, (ast.Tuple, ast.List))
+            and len(target.elts) == len(value.elts)
+        ):
             # NESTED 1:1 literal unpack -- ``(p, (q,)) = (x, (y,))``. Nesting
             # changes the shape of the unpack, not the aliasing: every leaf still
             # shares its partner's object. Binding only the outer level left
@@ -3306,9 +3535,11 @@ def _cell_alias_map(tree: ast.Module) -> dict[str, str]:
                 _bind(tgt, node.value)
         # 1:1 literal unpack: ``(y,) = (x,)`` / ``a, b = c, d`` (Name pairs only).
         for tgt in node.targets:
-            if (isinstance(tgt, (ast.Tuple, ast.List))
-                    and isinstance(node.value, (ast.Tuple, ast.List))
-                    and len(tgt.elts) == len(node.value.elts)):
+            if (
+                isinstance(tgt, (ast.Tuple, ast.List))
+                and isinstance(node.value, (ast.Tuple, ast.List))
+                and len(tgt.elts) == len(node.value.elts)
+            ):
                 for te, ve in zip(tgt.elts, node.value.elts):
                     _bind(te, ve)
     return alias_map
@@ -3391,10 +3622,7 @@ def bare_alias_targets(tree: ast.Module | None) -> frozenset[str]:
         # ``b = a`` / ``b = c = a``: each target names the very same object.
         if isinstance(value, ast.Name):
             if all(isinstance(t, ast.Name) for t in node.targets):
-                out.update(
-                    t.id for t in node.targets
-                    if isinstance(t, ast.Name) and t.id != value.id
-                )
+                out.update(t.id for t in node.targets if isinstance(t, ast.Name) and t.id != value.id)
             continue
         # ``b, c = a, d``: the RHS tuple is built and unpacked element-wise, so
         # every binding is its own pointer copy. Requires equal arity and bare
@@ -3426,9 +3654,11 @@ def _literal_unpack_aliases(target: ast.expr, value: ast.expr) -> set[str] | Non
     """
     if isinstance(target, ast.Name) and isinstance(value, ast.Name):
         return {target.id} if target.id != value.id else set()
-    if (isinstance(target, (ast.Tuple, ast.List))
-            and isinstance(value, (ast.Tuple, ast.List))
-            and len(target.elts) == len(value.elts)):
+    if (
+        isinstance(target, (ast.Tuple, ast.List))
+        and isinstance(value, (ast.Tuple, ast.List))
+        and len(target.elts) == len(value.elts)
+    ):
         found: set[str] = set()
         for elt_target, elt_value in zip(target.elts, value.elts):
             nested = _literal_unpack_aliases(elt_target, elt_value)
@@ -3482,10 +3712,9 @@ def _is_free_reference_expr(node: ast.expr) -> bool:
             return False
         return _is_free_reference_expr(node.value)
     if isinstance(node, ast.IfExp):
-        return (_is_free_reference_expr(node.body)
-                and _is_free_reference_expr(node.orelse))
+        return _is_free_reference_expr(node.body) and _is_free_reference_expr(node.orelse)
     if isinstance(node, ast.Constant):
-        return True   # the ``else None`` arm of a ternary
+        return True  # the ``else None`` arm of a ternary
     return False
 
 
@@ -3616,9 +3845,7 @@ def standalone_method_mutation_receivers(tree: ast.Module | None) -> frozenset[s
         base = _extract_receiver_base_name(call.func.value)
         if not base:
             continue
-        if method_name in MUTATING_METHODS or (
-            method_name in PANDAS_INPLACE_METHODS and _expr_call_inplace_true(call)
-        ):
+        if method_name in MUTATING_METHODS or (method_name in PANDAS_INPLACE_METHODS and _expr_call_inplace_true(call)):
             receivers.add(base)
     return frozenset(receivers)
 
@@ -3645,7 +3872,7 @@ def standalone_method_call_receivers(tree: ast.Module | None) -> frozenset[tuple
         # numpy ``out=`` target is a candidate receiver (method label ``out=``);
         # it is tier-1 (known-mutating) so the runtime/sim route it directly.
         for out_base in _out_kwarg_target_bases(call):
-            calls.add((out_base, 'out='))
+            calls.add((out_base, "out="))
         if not isinstance(call.func, ast.Attribute):
             continue
         base = _extract_receiver_base_name(call.func.value)
@@ -3653,8 +3880,8 @@ def standalone_method_call_receivers(tree: ast.Module | None) -> frozenset[tuple
             method = call.func.attr
             # ``df.plot.bar(...)``: label it by the accessor, so the classifiers
             # can tell pandas' plotting from a method named ``bar``.
-            if isinstance(call.func.value, ast.Attribute) and call.func.value.attr == 'plot':
-                method = f'plot.{method}'
+            if isinstance(call.func.value, ast.Attribute) and call.func.value.attr == "plot":
+                method = f"plot.{method}"
             calls.add((base, method))
     return frozenset(calls)
 
@@ -3693,8 +3920,8 @@ def standalone_method_call_inner_methods(
             else:
                 break
         method = func.attr
-        if isinstance(func.value, ast.Attribute) and func.value.attr == 'plot':
-            method = f'plot.{method}'
+        if isinstance(func.value, ast.Attribute) and func.value.attr == "plot":
+            method = f"plot.{method}"
         inner[(base, method)] = inner.get((base, method), frozenset()) | methods
     return inner
 
@@ -3702,10 +3929,18 @@ def standalone_method_call_inner_methods(
 #: Module functions that change a setting the module keeps: ``pd.set_option``,
 #: ``plt.style.use``, ``np.seterr``, ``warnings.filterwarnings``. Matched with
 #: :func:`module_setting_receivers`, which also takes ``set`` and any ``set_*``.
-MODULE_SETTING_FUNCTIONS = frozenset({
-    'use', 'rc', 'seterr', 'filterwarnings', 'simplefilter', 'resetwarnings',
-    'basicConfig', 'reset_option',
-})
+MODULE_SETTING_FUNCTIONS = frozenset(
+    {
+        "use",
+        "rc",
+        "seterr",
+        "filterwarnings",
+        "simplefilter",
+        "resetwarnings",
+        "basicConfig",
+        "reset_option",
+    }
+)
 
 
 def module_setting_receivers(tree: ast.Module | None) -> frozenset[str]:
@@ -3737,9 +3972,12 @@ def module_setting_receivers(tree: ast.Module | None) -> frozenset[str]:
             continue
         method = func.attr
         on_attribute = isinstance(func.value, ast.Attribute)
-        if ((on_attribute and method in MUTATING_METHODS)
-                or method == 'set' or method.startswith('set_')
-                or method in MODULE_SETTING_FUNCTIONS):
+        if (
+            (on_attribute and method in MUTATING_METHODS)
+            or method == "set"
+            or method.startswith("set_")
+            or method in MODULE_SETTING_FUNCTIONS
+        ):
             names.add(base)
     return frozenset(names)
 
@@ -3797,8 +4035,7 @@ def top_level_call_argument_bases(tree: ast.Module | None) -> frozenset[str]:
 
 
 #: Types a call cannot change in place.
-_IMMUTABLE_ARGUMENT_TYPES = (int, float, complex, str, bytes, bool, type(None),
-                             frozenset, tuple, range)
+_IMMUTABLE_ARGUMENT_TYPES = (int, float, complex, str, bytes, bool, type(None), frozenset, tuple, range)
 
 
 def bare_call_argument_names(tree: ast.Module | None) -> frozenset[str]:
@@ -3810,8 +4047,9 @@ def bare_call_argument_names(tree: ast.Module | None) -> frozenset[str]:
     for node in tree.body:
         if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
             call = node.value
-            names.update(arg.id for arg in [*call.args, *(kw.value for kw in call.keywords)]
-                         if isinstance(arg, ast.Name))
+            names.update(
+                arg.id for arg in [*call.args, *(kw.value for kw in call.keywords)] if isinstance(arg, ast.Name)
+            )
     return frozenset(names)
 
 
@@ -3847,7 +4085,7 @@ def bare_call_arguments(tree: ast.Module | None, user_ns: dict) -> frozenset[str
     return frozenset(out)
 
 
-_PANDAS_PLOT_METHODS = frozenset({'plot', 'hist', 'boxplot'})
+_PANDAS_PLOT_METHODS = frozenset({"plot", "hist", "boxplot"})
 
 
 def is_pandas_plot_call(method: str, receiver: object) -> bool:
@@ -3862,13 +4100,13 @@ def is_pandas_plot_call(method: str, receiver: object) -> bool:
     changes, and the carrier-history pass follows it through ``ax=``.
     Shared by the runtime and the simulation, which must decide identically.
     """
-    if not (method in _PANDAS_PLOT_METHODS or method.startswith('plot.')):
+    if not (method in _PANDAS_PLOT_METHODS or method.startswith("plot.")):
         return False
-    return (type(receiver).__module__ or '').startswith('pandas')
+    return (type(receiver).__module__ or "").startswith("pandas")
 
 
 #: Methods that fit their receiver in place, whatever they return.
-FITTING_METHODS = frozenset({'fit', 'partial_fit', 'fit_transform', 'fit_predict', 'fit_resample'})
+FITTING_METHODS = frozenset({"fit", "partial_fit", "fit_transform", "fit_predict", "fit_resample"})
 
 
 def fits_its_receiver(method: str, receiver: object) -> bool:
@@ -3883,7 +4121,7 @@ def fits_its_receiver(method: str, receiver: object) -> bool:
     """
     if method not in FITTING_METHODS or isinstance(receiver, types.ModuleType):
         return False
-    return callable(getattr(receiver, 'fit', None)) and callable(getattr(receiver, 'get_params', None))
+    return callable(getattr(receiver, "fit", None)) and callable(getattr(receiver, "get_params", None))
 
 
 def assigned_method_call_receivers(tree: ast.Module | None) -> frozenset[tuple[str, str]]:
@@ -3961,18 +4199,10 @@ def selfref_reassignment_targets(node: ast.AST) -> frozenset[str]:
     """
     if isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
         return frozenset({node.target.id})
-    if (
-        isinstance(node, ast.Assign)
-        and len(node.targets) == 1
-        and isinstance(node.targets[0], ast.Name)
-    ):
+    if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
         target_name = node.targets[0].id
         for sub in ast.walk(node.value):
-            if (
-                isinstance(sub, ast.Name)
-                and sub.id == target_name
-                and isinstance(sub.ctx, ast.Load)
-            ):
+            if isinstance(sub, ast.Name) and sub.id == target_name and isinstance(sub.ctx, ast.Load):
                 return frozenset({target_name})
     return frozenset()
 
@@ -4003,10 +4233,10 @@ def selfref_reassignment_targets(node: ast.AST) -> frozenset[str]:
 # ``append``/``extend`` grow a list; ``add`` grows a set; ``update`` grows a
 # dict OR a set (both define ``update``), so it accepts either seed.
 _ACCUMULATOR_SEED_KINDS: dict[str, frozenset[str]] = {
-    'append': frozenset({'list'}),
-    'extend': frozenset({'list'}),
-    'add': frozenset({'set'}),
-    'update': frozenset({'dict', 'set'}),
+    "append": frozenset({"list"}),
+    "extend": frozenset({"list"}),
+    "add": frozenset({"set"}),
+    "update": frozenset({"dict", "set"}),
 }
 
 
@@ -4019,12 +4249,11 @@ def _empty_seed_kind(node: ast.expr) -> str | None:
     ``None`` so a pre-seeded accumulator is never matched.
     """
     if isinstance(node, ast.List) and not node.elts:
-        return 'list'
+        return "list"
     if isinstance(node, ast.Dict) and not node.keys:
-        return 'dict'
-    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-            and not node.args and not node.keywords):
-        return {'list': 'list', 'dict': 'dict', 'set': 'set'}.get(node.func.id)
+        return "dict"
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and not node.args and not node.keywords:
+        return {"list": "list", "dict": "dict", "set": "set"}.get(node.func.id)
     return None
 
 
@@ -4105,8 +4334,7 @@ def accumulator_loop_body_shape(
     if not (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)):
         return None
     call = stmt.value
-    if not (isinstance(call.func, ast.Attribute)
-            and isinstance(call.func.value, ast.Name)):
+    if not (isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name)):
         return None
     acc = call.func.value.id
     if call.func.attr not in _ACCUMULATOR_SEED_KINDS:
@@ -4124,7 +4352,8 @@ def accumulator_loop_body_shape(
 
 
 def cacheable_accumulator_loop(
-    for_node: ast.For, prev_node: ast.stmt | None,
+    for_node: ast.For,
+    prev_node: ast.stmt | None,
 ) -> tuple[str, tuple[str, ...], ast.expr, ast.Call] | None:
     """Detect the NARROW cacheable accumulator-loop shape.
 
@@ -4153,8 +4382,9 @@ def cacheable_accumulator_loop(
     """
     # (2) The preceding sibling must be ``acc = <empty seed>`` — a single bare
     # Name target bound to a fresh-empty container.
-    if not (isinstance(prev_node, ast.Assign) and len(prev_node.targets) == 1
-            and isinstance(prev_node.targets[0], ast.Name)):
+    if not (
+        isinstance(prev_node, ast.Assign) and len(prev_node.targets) == 1 and isinstance(prev_node.targets[0], ast.Name)
+    ):
         return None
     acc = prev_node.targets[0].id
     seed_kind = _empty_seed_kind(prev_node.value)
@@ -4169,9 +4399,9 @@ def cacheable_accumulator_loop(
     if not (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)):
         return None
     call = stmt.value
-    if not (isinstance(call.func, ast.Attribute)
-            and isinstance(call.func.value, ast.Name)
-            and call.func.value.id == acc):
+    if not (
+        isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name) and call.func.value.id == acc
+    ):
         return None
     meth = call.func.attr
     seeds_for_method = _ACCUMULATOR_SEED_KINDS.get(meth)
@@ -4196,7 +4426,6 @@ def cacheable_accumulator_loop(
             return None
 
     return acc, tuple(loop_vars), for_node.iter, call
-
 
 
 #: ``source text -> globals that function's body mutates in place``.
@@ -4251,7 +4480,6 @@ def _called_name_scopes(tree) -> tuple[frozenset[str], frozenset[str]]:
     return frozenset(all_names), frozenset(top_names)
 
 
-
 def callee_mutated_globals_for_tree(tree, resolve_source, user_ns=None) -> frozenset[str]:
     """Globals mutated in place by any function called anywhere in *tree*.
 
@@ -4285,10 +4513,8 @@ def callee_mutated_globals_for_tree(tree, resolve_source, user_ns=None) -> froze
     # run and `final` came out 55 where 40 is correct. A module is excluded for
     # the same reason it is everywhere else: never a value to serialise.
     import types as _types
-    return frozenset(
-        n for n in names
-        if n in user_ns and not isinstance(user_ns[n], _types.ModuleType)
-    )
+
+    return frozenset(n for n in names if n in user_ns and not isinstance(user_ns[n], _types.ModuleType))
 
 
 #: ``(code, the identifiers in it that name a module) -> StatementAnalysis``.
@@ -4319,8 +4545,7 @@ def analyze_statement(
         return _analyze_statement(code, tree, user_ns, resolve_source)
     modules = frozenset()
     if user_ns is not None:
-        modules = frozenset(n for n in set(_IDENTIFIER.findall(code))
-                            if isinstance(user_ns.get(n), types.ModuleType))
+        modules = frozenset(n for n in set(_IDENTIFIER.findall(code)) if isinstance(user_ns.get(n), types.ModuleType))
     key = (code, modules)
     found = _ANALYSIS_MEMO.get(key)
     if found is None:
@@ -4398,15 +4623,12 @@ def _analyze_statement(
     if resolve_source is not None:
         all_called, top_called = _called_name_scopes(tree)
         all_mutated = all_mutated | _globals_mutated_by_callees(all_called, resolve_source)
-        top_level_mutated = top_level_mutated | _globals_mutated_by_callees(
-            top_called, resolve_source)
+        top_level_mutated = top_level_mutated | _globals_mutated_by_callees(top_called, resolve_source)
 
     # Top-level vars grown by an accumulator method (append/extend/add/update) —
     # the only mutations that earn the comprehension guidance hint (b).
     accumulator_mutated = frozenset(
-        m.variable
-        for m in top_level_visitor.mutations
-        if m.kind == 'method_call' and m.method in ACCUMULATOR_METHODS
+        m.variable for m in top_level_visitor.mutations if m.kind == "method_call" and m.method in ACCUMULATOR_METHODS
     )
 
     # --- Side effects ---

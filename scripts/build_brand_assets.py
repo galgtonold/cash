@@ -33,6 +33,7 @@ never touch playwright.
 
 Usage:  python scripts/build_brand_assets.py [--check]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -52,9 +53,9 @@ BRAND_DIR = REPO_ROOT / "docs" / "_brand"
 #: 2560x1280 at 822KB -- inside the stated limit, but it would not take. Match
 #: the documented size exactly rather than argue with the uploader.
 ASSETS = [
-    ("social-card",   "social-card",         1280, 640, 1, "light"),
+    ("social-card", "social-card", 1280, 640, 1, "light"),
     ("readme-header", "readme-header-light", 1280, 280, 2, "light"),
-    ("readme-header", "readme-header-dark",  1280, 280, 2, "dark"),
+    ("readme-header", "readme-header-dark", 1280, 280, 2, "dark"),
 ]
 
 
@@ -106,11 +107,12 @@ def render() -> int:
                 page.close()
                 # The stamp names the SOURCE, so a variant rendered from a
                 # shared html is held to that html.
-                (BRAND_DIR / f"{out_stem}.png.stamp").write_text(
-                    stamp(html), encoding="utf-8")
-                print(f"wrote {out.name} ({out.stat().st_size:,} bytes) "
-                      f"{width * scale}x{height * scale} "
-                      f"({width}x{height}@{scale}x, {scheme})")
+                (BRAND_DIR / f"{out_stem}.png.stamp").write_text(stamp(html), encoding="utf-8")
+                print(
+                    f"wrote {out.name} ({out.stat().st_size:,} bytes) "
+                    f"{width * scale}x{height * scale} "
+                    f"({width}x{height}@{scale}x, {scheme})"
+                )
         finally:
             browser.close()
     return 0
@@ -141,8 +143,7 @@ def check() -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--check", action="store_true",
-                    help="verify the committed PNGs are current; no playwright needed")
+    ap.add_argument("--check", action="store_true", help="verify the committed PNGs are current; no playwright needed")
     args = ap.parse_args()
     return check() if args.check else render()
 

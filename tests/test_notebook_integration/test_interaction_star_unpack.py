@@ -13,10 +13,12 @@ class TestStarUnpacking:
 
     def test_star_rest_edit(self, nb_runner):
         """Edit list, star unpack head/*rest changes."""
-        nb_runner.create_notebook([
-            "data = [10, 20, 30, 40, 50]",
-            "head, *rest = data\nprint(f'head = {head}, rest = {rest}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "data = [10, 20, 30, 40, 50]",
+                "head, *rest = data\nprint(f'head = {head}, rest = {rest}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
@@ -31,11 +33,13 @@ class TestStarUnpacking:
 
     def test_dict_merge_unpack_edit(self, nb_runner):
         """Edit dict, merge with ** changes."""
-        nb_runner.create_notebook([
-            "base = {'a': 1, 'b': 2}",
-            "extra = {'c': 3}",
-            "merged = {**base, **extra}\nprint(f'merged = {merged}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "base = {'a': 1, 'b': 2}",
+                "extra = {'c': 3}",
+                "merged = {**base, **extra}\nprint(f'merged = {merged}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "'a': 1" in nb_runner.get_output(3)
@@ -48,10 +52,12 @@ class TestStarUnpacking:
 
     def test_function_args_kwargs_edit(self, nb_runner):
         """Edit function with *args/**kwargs."""
-        nb_runner.create_notebook([
-            "def combine(*args, **kwargs):\n    return list(args) + list(kwargs.values())",
-            "result = combine(1, 2, x=10, y=20)\nprint(f'result = {result}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def combine(*args, **kwargs):\n    return list(args) + list(kwargs.values())",
+                "result = combine(1, 2, x=10, y=20)\nprint(f'result = {result}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = [1, 2, 10, 20]" in nb_runner.get_output(2)

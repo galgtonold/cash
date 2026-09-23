@@ -1,12 +1,11 @@
 import json
-from pathlib import Path
 
 from benchmarks._overhead_results import (
     CellTiming,
     RunResult,
     StatementMetric,
-    write_results,
     read_results,
+    write_results,
 )
 
 
@@ -49,8 +48,14 @@ def test_run_result_round_trip(tmp_path):
 def test_write_results_creates_parent_dir(tmp_path):
     out = tmp_path / "nested" / "dir" / "result.json"
     result = RunResult(
-        notebook="x.ipynb", mode="off", repeat=0, python_version="3.12",
-        cash_version="", platform="", cells=[], total_wall_seconds=0.0,
+        notebook="x.ipynb",
+        mode="off",
+        repeat=0,
+        python_version="3.12",
+        cash_version="",
+        platform="",
+        cells=[],
+        total_wall_seconds=0.0,
         cache_dir_bytes=0,
     )
     write_results(out, result)
@@ -60,8 +65,14 @@ def test_write_results_creates_parent_dir(tmp_path):
 def test_run_result_json_is_human_readable(tmp_path):
     out = tmp_path / "r.json"
     result = RunResult(
-        notebook="x.ipynb", mode="off", repeat=0, python_version="3.12",
-        cash_version="", platform="", cells=[], total_wall_seconds=0.0,
+        notebook="x.ipynb",
+        mode="off",
+        repeat=0,
+        python_version="3.12",
+        cash_version="",
+        platform="",
+        cells=[],
+        total_wall_seconds=0.0,
         cache_dir_bytes=0,
     )
     write_results(out, result)

@@ -40,7 +40,7 @@ def highlight_python(src: str) -> str:
     last = 0
     for m in _TOKEN_RE.finditer(src):
         if m.start() > last:
-            parts.append(_esc(src[last:m.start()]))
+            parts.append(_esc(src[last : m.start()]))
         if m.group(1):
             parts.append(f'<span class="c3-com">{_esc(m.group(1))}</span>')
         elif m.group(2):

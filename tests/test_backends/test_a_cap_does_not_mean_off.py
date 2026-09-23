@@ -19,6 +19,7 @@ cache directory that a SECOND instance can read -- because that is what
 "caching is on" means to the person who set the variable. The unit-level arms
 live beside the old threshold in ``test_cache_cap_safety.py``.
 """
+
 from __future__ import annotations
 
 import time
@@ -33,20 +34,22 @@ from cash.config import CashConfig
 
 def _instance(tmp_path, cap):
     """A tiered RAM+disk stack over one directory, with an explicit cap."""
-    backend = build_backend_from_config(
-        CashConfig(cache_dir=str(tmp_path / "cache"), max_cache_size=cap)
-    )
+    backend = build_backend_from_config(CashConfig(cache_dir=str(tmp_path / "cache"), max_cache_size=cap))
     return Cash(backend=backend, register_magic=False)
 
 
 PAYLOAD_BYTES = 400_000
 
 
-@pytest.mark.parametrize("cap,should_persist", [
-    (PAYLOAD_BYTES * 4, True),      # comfortable: caching must work
-    (PAYLOAD_BYTES * 3 // 2, True), # over half the cap -- the reported case
-    (PAYLOAD_BYTES // 2, False),    # genuinely too big to fit: refused
-], ids=["roomy", "over-half", "over-cap"])
+@pytest.mark.parametrize(
+    "cap,should_persist",
+    [
+        (PAYLOAD_BYTES * 4, True),  # comfortable: caching must work
+        (PAYLOAD_BYTES * 3 // 2, True),  # over half the cap -- the reported case
+        (PAYLOAD_BYTES // 2, False),  # genuinely too big to fit: refused
+    ],
+    ids=["roomy", "over-half", "over-cap"],
+)
 def test_a_capped_cache_still_serves_a_second_instance(tmp_path, cap, should_persist):
     """A fresh instance over the same directory is the honest test of "cached".
 
@@ -74,7 +77,7 @@ def test_a_capped_cache_still_serves_a_second_instance(tmp_path, cap, should_per
         reader = _instance(tmp_path, cap)
 
         @reader.cache(assume_safe=True)
-        def build(n):                                  # noqa: F811 - same body
+        def build(n):  # noqa: F811 - same body
             runs.append(n)
             time.sleep(0.2)
             return "x" * PAYLOAD_BYTES
@@ -84,8 +87,7 @@ def test_a_capped_cache_still_serves_a_second_instance(tmp_path, cap, should_per
 
     if should_persist:
         assert len(runs) == 1, (
-            f"a {cap}-byte cap did not store a {PAYLOAD_BYTES}-byte entry, so "
-            f"capping the cache switched it off"
+            f"a {cap}-byte cap did not store a {PAYLOAD_BYTES}-byte entry, so capping the cache switched it off"
         )
     else:
         assert len(runs) == 2, "an entry larger than the whole cap cannot be stored"
@@ -111,15 +113,15 @@ def test_the_cap_is_compared_against_the_size_it_governs(tmp_path):
     value = [f"string-number-{i}" for i in range(40_000)]
     in_memory = InMemoryBackend()._get_object_size(value)
     serialized = len(pickle.dumps(value))
-    assert serialized < in_memory / 2, (
-        "the fixture must actually reproduce the gap between the two sizes"
-    )
+    assert serialized < in_memory / 2, "the fixture must actually reproduce the gap between the two sizes"
 
     from cash.backends.file_backend import FileBackend
-    cap = (in_memory + serialized) // 2      # fits on disk, "too big" in RAM
+
+    cap = (in_memory + serialized) // 2  # fits on disk, "too big" in RAM
     disk = FileBackend(str(tmp_path / "c"), max_size_bytes=cap, flush_interval=0)
     tiered = TieredBackend(
-        [InMemoryBackend(), disk], promotion_policy=lambda exec_t, size: True,
+        [InMemoryBackend(), disk],
+        promotion_policy=lambda exec_t, size: True,
     )
 
     meta = {"execution_time": 2.0, "size": in_memory}

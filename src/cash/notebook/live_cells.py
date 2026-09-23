@@ -19,6 +19,7 @@ a variable, including the ``silent=True`` gap in that guarantee.
 Everything here tolerates nonsense: the payload crosses a process boundary from
 JavaScript, and a malformed one must cost the fallback, never an exception.
 """
+
 from __future__ import annotations
 
 import logging
@@ -66,9 +67,7 @@ def handle_message(data) -> None:
     # would compare as 0/1 and wedge the store.
     if not isinstance(seq, int) or isinstance(seq, bool):
         return
-    if not isinstance(cells, list) or not all(
-        isinstance(c, dict) and _cell_shape_ok(c) for c in cells
-    ):
+    if not isinstance(cells, list) or not all(isinstance(c, dict) and _cell_shape_ok(c) for c in cells):
         return
     # Never move backwards: a retry or duplicate must not replace a newer
     # snapshot with an older one.
@@ -184,7 +183,8 @@ def install_expiry_hook(shell) -> bool:
             "%s. A snapshot pushed by cash's JupyterLab extension would then "
             "be served for the rest of the kernel's life instead of expiring "
             "with the execution it arrived for, and cash's own \"cannot see "
-            "unsaved edits\" notice would stay suppressed along with it.", e,
+            'unsaved edits" notice would stay suppressed along with it.',
+            e,
         )
         return False
 
@@ -196,6 +196,7 @@ def register_target(shell) -> bool:
     return value rather than an exception.
     """
     try:
+
         def _on_open(comm, msg):
             # A comm_open is a NEW frontend connection superseding any previous
             # one, so the high-water mark from the old one must not outlive it.

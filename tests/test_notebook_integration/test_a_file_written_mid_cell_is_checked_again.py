@@ -7,6 +7,7 @@ changes the file. Here the first and last statements recorded the same state
 of ``data.csv``; the statement between them rewrites it through a helper, only
 on the second run.
 """
+
 import pytest
 
 pytest.importorskip("pandas")
@@ -21,15 +22,17 @@ HELPERS = {
 
 @pytest.mark.parametrize("helper", list(HELPERS), ids=list(HELPERS))
 def test_the_statement_after_the_write_reads_the_new_file(nb_runner, helper):
-    nb_runner.create_notebook([
-        "import cash\n%cash_on",
-        "import time\nimport pandas as pd\nopen('data.csv', 'w').write('v\\n1\\n')\n" + HELPERS[helper],
-        "FLAG = False",
-        "time.sleep(0.02)\nbefore = int(pd.read_csv('data.csv')['v'].sum())\n"
-        "done = maybe_write(FLAG)\n"
-        "after = int(pd.read_csv('data.csv')['v'].sum())\n"
-        "print('BEFORE', before, 'AFTER', after)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import cash\n%cash_on",
+            "import time\nimport pandas as pd\nopen('data.csv', 'w').write('v\\n1\\n')\n" + HELPERS[helper],
+            "FLAG = False",
+            "time.sleep(0.02)\nbefore = int(pd.read_csv('data.csv')['v'].sum())\n"
+            "done = maybe_write(FLAG)\n"
+            "after = int(pd.read_csv('data.csv')['v'].sum())\n"
+            "print('BEFORE', before, 'AFTER', after)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_cell(1)
     nb_runner.run_cell(2)

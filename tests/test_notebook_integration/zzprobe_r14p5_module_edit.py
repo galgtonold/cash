@@ -24,6 +24,7 @@ outside the kernel. Run:
 
     python tests/test_notebook_integration/zzprobe_r14p5_module_edit.py
 """
+
 from __future__ import annotations
 
 import shutil
@@ -34,7 +35,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tests.test_notebook_integration.conftest import NotebookTestRunner  # noqa: E402
 
-N_ITEMS = 23          # P5's small-list arm was 23 items
+N_ITEMS = 23  # P5's small-list arm was 23 items
 # Body cost is a real discriminator, not a detail: below ~0.1s an entry stays
 # in RAM, above it reaches disk. P5's mocked API slept 0.9s. Override from the
 # command line to test that axis: `python <this> 0.9`.
@@ -59,29 +60,30 @@ def n_calls(counter: Path) -> int:
 def run_arm(label: str, import_line: str, call_expr: str) -> bool:
     work = Path(tempfile.mkdtemp(prefix="r14p5_"))
     mod, counter = work / "helper_mod.py", work / "calls.log"
-    mod.write_text(
-        MOD_TMPL.format(counter=counter, body=BODY_S, offset=0), encoding="utf-8")
+    mod.write_text(MOD_TMPL.format(counter=counter, body=BODY_S, offset=0), encoding="utf-8")
 
     runner = NotebookTestRunner(str(work))
-    runner.create_notebook([
-        "import cash\n%cash_on",
-        f"import sys\nsys.path.insert(0, r'{work}')\n{import_line}",
-        f"items = list(range({N_ITEMS}))",
-        f"out = []\nfor e in items:\n    out.append({call_expr})\nprint('OUT', out[:3])",
-    ])
+    runner.create_notebook(
+        [
+            "import cash\n%cash_on",
+            f"import sys\nsys.path.insert(0, r'{work}')\n{import_line}",
+            f"items = list(range({N_ITEMS}))",
+            f"out = []\nfor e in items:\n    out.append({call_expr})\nprint('OUT', out[:3])",
+        ]
+    )
     runner.start_kernel()
     try:
         runner.run_all()
         cold = n_calls(counter)
 
-        runner.run_cell(4)                       # unchanged re-run (1-based)
+        runner.run_cell(4)  # unchanged re-run (1-based)
         warm_delta = n_calls(counter) - cold
 
-        mod.write_text(                          # edit the module ON DISK
-            MOD_TMPL.format(counter=counter, body=BODY_S, offset=1000),
-            encoding="utf-8")
+        mod.write_text(  # edit the module ON DISK
+            MOD_TMPL.format(counter=counter, body=BODY_S, offset=1000), encoding="utf-8"
+        )
         before_edit = n_calls(counter)
-        runner.run_cell(4)                       # re-run ONLY the caller
+        runner.run_cell(4)  # re-run ONLY the caller
         after = runner.peek("out")
         edit_delta = n_calls(counter) - before_edit
     finally:
@@ -99,25 +101,26 @@ def run_arm(label: str, import_line: str, call_expr: str) -> bool:
 
     print(f"  {label}")
     print(f"     cold calls          : {cold} (expect {N_ITEMS})")
-    print(f"     unchanged re-run    : +{warm_delta} "
-          f"{'<- caching ACTIVE' if caching_active else '*** NOT CACHED: probe is VACUOUS ***'}")
-    print(f"     after module edit   : +{edit_delta} calls, "
-          f"value {'CORRECT' if value_ok else '*** STALE ***'}")
+    print(
+        f"     unchanged re-run    : +{warm_delta} "
+        f"{'<- caching ACTIVE' if caching_active else '*** NOT CACHED: probe is VACUOUS ***'}"
+    )
+    print(f"     after module edit   : +{edit_delta} calls, value {'CORRECT' if value_ok else '*** STALE ***'}")
     if not value_ok:
         print(f"       got      {after}")
         print(f"       expected {expected}")
     return caching_active and value_ok
 
 
-print(f"{N_ITEMS} items, {BODY_S}s body. After the module edit the values must "
-      f"all gain +1000.\n")
+print(f"{N_ITEMS} items, {BODY_S}s body. After the module edit the values must all gain +1000.\n")
 a = run_arm("A  module attribute   helper_mod.f(e)", "import helper_mod", "helper_mod.f(e)")
 b = run_arm("B  bare name          f(e)", "from helper_mod import f", "f(e)")
 
 print()
 if a and b:
-    print("NOT REPRODUCED in either spelling, and caching was verified active "
-          "in both -- so this is a real negative, not a vacuous pass.")
+    print(
+        "NOT REPRODUCED in either spelling, and caching was verified active "
+        "in both -- so this is a real negative, not a vacuous pass."
+    )
 else:
-    print("Look at the per-arm lines above: a VACUOUS arm proves nothing, a "
-          "STALE arm reproduces P5's WRONG #2.")
+    print("Look at the per-arm lines above: a VACUOUS arm proves nothing, a STALE arm reproduces P5's WRONG #2.")

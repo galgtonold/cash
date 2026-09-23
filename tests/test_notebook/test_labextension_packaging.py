@@ -25,6 +25,7 @@ None of this needs Node: the built output is committed precisely so that
 building the wheel, and running this suite, never require a JavaScript
 toolchain.
 """
+
 from __future__ import annotations
 
 import json
@@ -153,9 +154,7 @@ def test_the_shipped_bundle_forces_the_comm_onto_the_main_shell():
 def test_the_source_rebuilds_a_comm_the_kernel_closed():
     _skip_without_checkout()
     text = INDEX_TS.read_text(encoding="utf-8")
-    assert REBUILDS_A_CLOSED_COMM.search(text), (
-        f"{INDEX_TS} installs no onClose handler." + _WHY_REOPEN
-    )
+    assert REBUILDS_A_CLOSED_COMM.search(text), f"{INDEX_TS} installs no onClose handler." + _WHY_REOPEN
     assert CATCH_DROPS_THE_COMM.search(text), (
         f"{INDEX_TS}'s catch swallows the error without dropping the comm, so a "
         f"disposed handler ('Cannot send') is latched on to forever." + _WHY_REOPEN
@@ -187,8 +186,7 @@ def test_only_the_execution_flush_may_open_a_comm():
     _skip_without_checkout()
     text = INDEX_TS.read_text(encoding="utf-8")
     assert re.search(r"if\s*\(\s*!allowOpen\s*\)", text), (
-        "the open is no longer gated on allowOpen; every debounced keystroke "
-        "would now try to open a comm"
+        "the open is no longer gated on allowOpen; every debounced keystroke would now try to open a comm"
     )
     assert re.search(r"executionScheduled[\s\S]{0,400}?send\(\s*panel\s*,\s*true\s*\)", text), (
         "the execution flush must pass allowOpen=true -- it is the only route "
@@ -252,8 +250,7 @@ def test_the_source_encodes_all_four_payload_fields():
         f"other test still green."
     )
     assert SEQ_AND_CELLS_SENT.search(text), (
-        f"{INDEX_TS} no longer sends {{seq, cells}} -- "
-        f"live_cells.handle_message decodes exactly these two names."
+        f"{INDEX_TS} no longer sends {{seq, cells}} -- live_cells.handle_message decodes exactly these two names."
     )
 
 
@@ -291,11 +288,8 @@ def test_the_kernel_side_decodes_all_four_payload_fields():
     )
 
     discovery_src = SERVER_DISCOVERY_PY.read_text(encoding="utf-8")
-    assert re.search(
-        r"""cell\.get\(\s*["']cell_type["']\s*\)\s*==\s*["']code["']""", discovery_src
-    ), (
-        f"{SERVER_DISCOVERY_PY} no longer filters cells on "
-        f"cell['cell_type'] == 'code'"
+    assert re.search(r"""cell\.get\(\s*["']cell_type["']\s*\)\s*==\s*["']code["']""", discovery_src), (
+        f"{SERVER_DISCOVERY_PY} no longer filters cells on cell['cell_type'] == 'code'"
     )
     assert re.search(r"""cell\.get\(\s*["']id["']""", discovery_src), (
         f"{SERVER_DISCOVERY_PY}'s _extract_cell_entry no longer reads cell['id']"
@@ -371,18 +365,15 @@ def test_the_plugin_id_is_namespaced_by_the_package_name():
         f"{EXT_NAME!r}; found {source_ids!r}.{_WHY_PLUGIN_ID}"
     )
 
-    shipped = [text for path in _built_js()
-               for text in [path.read_text(encoding="utf-8", errors="replace")]]
+    shipped = [text for path in _built_js() for text in [path.read_text(encoding="utf-8", errors="replace")]]
     assert any(f"{EXT_NAME}:plugin" in text for text in shipped), (
         f"no bundle under {BUILT} carries the plugin id {EXT_NAME}:plugin -- "
         f"the committed build is stale, rebuild it with "
         f"`cd labextension && npm run build`.{_WHY_PLUGIN_ID}"
     )
-    orphan = f"{EXT_NAME.split('-')[0]}:"      # the old, unmatchable `cash:` prefix
-    assert not any(f"'{orphan}live-cells'" in text or f'"{orphan}live-cells"' in text
-                   for text in shipped), (
-        f"a bundle still registers the old {orphan}live-cells id."
-        f"{_WHY_PLUGIN_ID}"
+    orphan = f"{EXT_NAME.split('-')[0]}:"  # the old, unmatchable `cash:` prefix
+    assert not any(f"'{orphan}live-cells'" in text or f'"{orphan}live-cells"' in text for text in shipped), (
+        f"a bundle still registers the old {orphan}live-cells id.{_WHY_PLUGIN_ID}"
     )
 
 
@@ -408,6 +399,7 @@ def test_every_place_that_names_the_extension_agrees():
     # catching one -- and a probe pointed at the wrong directory degrades to
     # always-False silently, restoring the Ctrl+S advice this branch made false.
     from cash.notebook.server_discovery import _LABEXT_RELPATH
+
     assert _LABEXT_RELPATH == ("share", "jupyter", "labextensions", EXT_NAME)
 
     paths = cash._jupyter_labextension_paths()
@@ -435,8 +427,8 @@ def test_the_sdist_can_rebuild_the_extension():
     _skip_without_checkout()
     include = _pyproject()["tool"]["hatch"]["build"]["targets"]["sdist"]["include"]
     for needed in (
-        "/src/cash",                    # carries the committed build output
-        "/labextension/install.json",   # named by path in the shared-data mapping
+        "/src/cash",  # carries the committed build output
+        "/labextension/install.json",  # named by path in the shared-data mapping
         "/labextension/package.json",
         "/labextension/src",
     ):

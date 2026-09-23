@@ -9,6 +9,7 @@ propagate through the ordinary input-lineage machinery.
 
 Oracle = the current cell sources run top-to-bottom with no cash.
 """
+
 import re
 
 import pytest
@@ -26,6 +27,7 @@ def _num(runner, n, tag):
 
 def _oracle_sum(seed, transform):
     import numpy as np
+
     np.random.seed(seed)
     a = np.random.rand(4000)
     return float(transform(a))
@@ -34,28 +36,32 @@ def _oracle_sum(seed, transform):
 @pytest.mark.timeout(180)
 def test_seed_edit_propagates_downstream_on_run_all(nb_runner):
     """Edit the seed; a cached downstream consumer must refresh on Run-All."""
-    nb_runner.create_notebook([
-        C_ON, DATA,
-        "# @cash:persist\nroll = float(np.convolve(a, np.ones(20) / 20, 'valid').sum())\nprint('ROLL', round(roll, 6))",
-    ])
+    nb_runner.create_notebook(
+        [
+            C_ON,
+            DATA,
+            "# @cash:persist\nroll = float(np.convolve(a, np.ones(20) / 20, 'valid').sum())\nprint('ROLL', round(roll, 6))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     nb_runner.set_cell_source(2, DATA.replace("np.random.seed(7)", "np.random.seed(123)"))
     nb_runner.run_all()
     got = _num(nb_runner, 3, "ROLL")
     want = _oracle_sum(123, lambda a: __import__("numpy").convolve(a, __import__("numpy").ones(20) / 20, "valid").sum())
-    assert got == pytest.approx(want, rel=1e-9), (
-        f"downstream consumer stale after seed edit: cash={got} oracle={want}"
-    )
+    assert got == pytest.approx(want, rel=1e-9), f"downstream consumer stale after seed edit: cash={got} oracle={want}"
 
 
 @pytest.mark.timeout(180)
 def test_seed_edit_propagates_on_isolated_downstream_rerun(nb_runner):
     """Edit the seed, re-run ONLY the downstream consumer (exercises the simulator)."""
-    nb_runner.create_notebook([
-        C_ON, DATA,
-        "# @cash:persist\ns = float(a.sum())\nprint('S', round(s, 6))",
-    ])
+    nb_runner.create_notebook(
+        [
+            C_ON,
+            DATA,
+            "# @cash:persist\ns = float(a.sum())\nprint('S', round(s, 6))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     nb_runner.set_cell_source(2, DATA.replace("np.random.seed(7)", "np.random.seed(123)"))
@@ -70,31 +76,39 @@ def test_seed_edit_propagates_on_isolated_downstream_rerun(nb_runner):
 @pytest.mark.timeout(180)
 def test_seed_edit_propagates_two_hops(nb_runner):
     """The seed dependency must reach a transitive (two-hop) consumer."""
-    nb_runner.create_notebook([
-        C_ON, DATA,
-        "# @cash:persist\nb = a * 2.0",
-        "# @cash:persist\nc = float(b.sum())\nprint('C', round(c, 6))",
-    ])
+    nb_runner.create_notebook(
+        [
+            C_ON,
+            DATA,
+            "# @cash:persist\nb = a * 2.0",
+            "# @cash:persist\nc = float(b.sum())\nprint('C', round(c, 6))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     nb_runner.set_cell_source(2, DATA.replace("np.random.seed(7)", "np.random.seed(123)"))
     nb_runner.run_all()
     got = _num(nb_runner, 4, "C")
     want = _oracle_sum(123, lambda a: (a * 2.0).sum())
-    assert got == pytest.approx(want, rel=1e-9), (
-        f"two-hop consumer stale after seed edit: cash={got} oracle={want}"
-    )
+    assert got == pytest.approx(want, rel=1e-9), f"two-hop consumer stale after seed edit: cash={got} oracle={want}"
 
 
 @pytest.mark.timeout(180)
 def test_no_seed_edit_still_hits(nb_runner):
     """Sanity: with no edit, the downstream consumer still restores (no over-invalidation)."""
-    nb_runner.create_notebook([
-        C_ON, DATA,
-        "# @cash:persist\ns = float(a.sum())\nprint('S', round(s, 6))",
-    ])
+    nb_runner.create_notebook(
+        [
+            C_ON,
+            DATA,
+            "# @cash:persist\ns = float(a.sum())\nprint('S', round(s, 6))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     first = _num(nb_runner, 3, "S")
     nb_runner.run_cell(3)
-    assert _num(nb_runner, 3, "S") == pytest.approx(first, abs=1e-9) == pytest.approx(_oracle_sum(7, lambda a: a.sum()), rel=1e-9)
+    assert (
+        _num(nb_runner, 3, "S")
+        == pytest.approx(first, abs=1e-9)
+        == pytest.approx(_oracle_sum(7, lambda a: a.sum()), rel=1e-9)
+    )

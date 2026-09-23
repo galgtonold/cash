@@ -14,10 +14,12 @@ class TestDynamicClassEdits:
 
     def test_edit_type_creation(self, nb_runner):
         """Edit dynamic class created with type()."""
-        nb_runner.create_notebook([
-            "MyClass = type('MyClass', (), {'value': 42, 'describe': lambda self: f'val={self.value}'})",
-            "obj = MyClass()\nprint(f'result = {obj.describe()}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "MyClass = type('MyClass', (), {'value': 42, 'describe': lambda self: f'val={self.value}'})",
+                "obj = MyClass()\nprint(f'result = {obj.describe()}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = val=42" in nb_runner.get_output(2)
@@ -32,10 +34,12 @@ class TestDynamicClassEdits:
 
     def test_edit_class_factory(self, nb_runner):
         """Edit a class factory function."""
-        nb_runner.create_notebook([
-            "def make_class(prefix):\n    class Cls:\n        def greet(self):\n            return f'{prefix} World'\n    return Cls",
-            "Hello = make_class('Hello')\nobj = Hello()\nprint(f'result = {obj.greet()}')",
-        ])
+        nb_runner.create_notebook(
+            [
+                "def make_class(prefix):\n    class Cls:\n        def greet(self):\n            return f'{prefix} World'\n    return Cls",
+                "Hello = make_class('Hello')\nobj = Hello()\nprint(f'result = {obj.greet()}')",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "result = Hello World" in nb_runner.get_output(2)
@@ -54,10 +58,12 @@ class TestMixinEdits:
 
     def test_edit_mixin_combined(self, nb_runner):
         """Edit a class method that determines output."""
-        nb_runner.create_notebook([
-            "class Greeter:\n    def greet(self, name):\n        return 'Hello ' + name",
-            "g = Greeter()\nprint(g.greet('alice'))",
-        ])
+        nb_runner.create_notebook(
+            [
+                "class Greeter:\n    def greet(self, name):\n        return 'Hello ' + name",
+                "g = Greeter()\nprint(g.greet('alice'))",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out1 = nb_runner.get_output(2)

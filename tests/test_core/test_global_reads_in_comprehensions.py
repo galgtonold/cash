@@ -16,6 +16,7 @@ generator expressions and lambdas get their own scope on every version. The
 comprehension cases below are kept as regression cover regardless of which
 side of that inlining the interpreter falls.
 """
+
 import importlib
 import os
 import sys
@@ -81,9 +82,7 @@ class TestGlobalReadInNestedScope:
             ),
             (
                 "lambda",
-                "def f(v):\n"
-                "    is_big = lambda x: x > THRESHOLD\n"
-                "    return sum(map(is_big, v))\n",
+                "def f(v):\n    is_big = lambda x: x > THRESHOLD\n    return sum(map(is_big, v))\n",
                 (1, 5, 20, 30),
             ),
         ],
@@ -106,9 +105,7 @@ class TestGlobalReadInNestedScope:
         # object, reachable only by recursing through the outer one.
         mod = make_module(
             "cas128_nested",
-            "THRESHOLD = 10\n"
-            "def f(rows):\n"
-            "    return sum(sum(y > THRESHOLD for y in row) for row in rows)\n",
+            "THRESHOLD = 10\ndef f(rows):\n    return sum(sum(y > THRESHOLD for y in row) for row in rows)\n",
         )
         c = Cash()
         f = c.cache(mod.f)
@@ -125,9 +122,7 @@ class TestGlobalReadInNestedScope:
         # that owns its own scope.
         mod = make_module(
             "cas128_mixed",
-            "THRESHOLD = 10\n"
-            "def f(rows):\n"
-            "    return [sum(y > THRESHOLD for y in row) for row in rows]\n",
+            "THRESHOLD = 10\ndef f(rows):\n    return [sum(y > THRESHOLD for y in row) for row in rows]\n",
         )
         c = Cash()
         f = c.cache(mod.f)
@@ -149,9 +144,7 @@ class TestNoOverInvalidation:
         # exclusion already sees comprehension bodies; assert it still does.
         mod = make_module(
             "cas128_mutacc",
-            "ACC = []\n"
-            "def f(v):\n"
-            "    return len(list(ACC.append(x) for x in v))\n",
+            "ACC = []\ndef f(v):\n    return len(list(ACC.append(x) for x in v))\n",
         )
         c = Cash()
         f = c.cache(mod.f)
@@ -168,10 +161,7 @@ class TestNoOverInvalidation:
         # the two channels together.
         mod = make_module(
             "cas128_walrus",
-            "COUNTER = 0\n"
-            "def f(v):\n"
-            "    global COUNTER\n"
-            "    return len(list((COUNTER := COUNTER + x) for x in v))\n",
+            "COUNTER = 0\ndef f(v):\n    global COUNTER\n    return len(list((COUNTER := COUNTER + x) for x in v))\n",
         )
         c = Cash()
         f = c.cache(mod.f)
@@ -179,9 +169,7 @@ class TestNoOverInvalidation:
         f((1, 2))
         assert f.explain((1, 2)).reason == "hit"
         f((1, 2))
-        assert f.explain((1, 2)).reason == "hit", (
-            "walrus-rebound global folded -> permanent miss"
-        )
+        assert f.explain((1, 2)).reason == "hit", "walrus-rebound global folded -> permanent miss"
 
     def test_function_reading_no_globals_has_stable_key(self, make_module):
         # No key churn: a genexp that touches no global must produce a
@@ -207,10 +195,7 @@ class TestReadGlobalNamesDetection:
     def test_nested_scope_names_are_collected(self, make_module):
         mod = make_module(
             "cas128_detect",
-            "THRESHOLD = 10\n"
-            "OTHER = 3\n"
-            "def f(v):\n"
-            "    return sum(x > THRESHOLD for x in v) + OTHER\n",
+            "THRESHOLD = 10\nOTHER = 3\ndef f(v):\n    return sum(x > THRESHOLD for x in v) + OTHER\n",
         )
         c = Cash()
         assert c._read_global_data_names(mod.f) == ("OTHER", "THRESHOLD")

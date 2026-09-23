@@ -7,17 +7,20 @@ Object-hashing helpers (`compute_hash`, `calculate_memory_size`,
 `_recursive_getsizeof`) moved to `cash.notebook.object_hashing`;
 their tests live in `test_object_hashing.py`.
 """
-import pytest
+
 from unittest.mock import MagicMock
 
-from cash.notebook.ipython.magics import CashMagics
-from cash.core import Cash
-from cash.backends import InMemoryBackend
+import pytest
 from traitlets.config.configurable import Configurable
+
+from cash.backends import InMemoryBackend
+from cash.core import Cash
+from cash.notebook.ipython.magics import CashMagics
 
 
 class MockShell(Configurable):
     """Mock IPython shell for testing."""
+
     def __init__(self):
         super().__init__()
         self.user_ns = {}
@@ -55,10 +58,8 @@ class TestSaveHintLiveReaderAware:
 
     @staticmethod
     def _gates(monkeypatch, *, colab: bool, labext: bool) -> None:
-        monkeypatch.setattr("cash.notebook.server_discovery._in_colab",
-                            lambda: colab)
-        monkeypatch.setattr("cash.notebook.server_discovery._labextension_installed",
-                            lambda: labext)
+        monkeypatch.setattr("cash.notebook.server_discovery._in_colab", lambda: colab)
+        monkeypatch.setattr("cash.notebook.server_discovery._labextension_installed", lambda: labext)
 
     def test_hint_shown_when_no_live_reader(self, magics_fixture, capsys, monkeypatch):
         magics, _shell, _backend = magics_fixture
@@ -75,12 +76,11 @@ class TestSaveHintLiveReaderAware:
         magics._save_hint_shown = False
         magics.cash_on("")
         out = capsys.readouterr().out
-        assert "Cash enabled" in out        # cash_on still ran normally
-        assert "Save (Ctrl+S)" not in out   # but the save hint is suppressed
+        assert "Cash enabled" in out  # cash_on still ran normally
+        assert "Save (Ctrl+S)" not in out  # but the save hint is suppressed
         assert "saved notebook file" not in out
 
-    def test_hint_suppressed_when_the_labextension_is_installed(
-            self, magics_fixture, capsys, monkeypatch):
+    def test_hint_suppressed_when_the_labextension_is_installed(self, magics_fixture, capsys, monkeypatch):
         """CAS-274 Finding B: the extension makes the save advice false."""
         magics, _shell, _backend = magics_fixture
         self._gates(monkeypatch, colab=False, labext=True)
@@ -91,10 +91,10 @@ class TestSaveHintLiveReaderAware:
         assert "Save (Ctrl+S)" not in out
         assert "saved notebook file" not in out
 
-    def test_a_broken_probe_keeps_the_hint_rather_than_withdrawing_it(
-            self, magics_fixture, capsys, monkeypatch):
+    def test_a_broken_probe_keeps_the_hint_rather_than_withdrawing_it(self, magics_fixture, capsys, monkeypatch):
         """The probe must never raise, and its failure must not silence advice
         that is correct for everyone without the extension."""
+
         def _boom():
             raise RuntimeError("no filesystem for you")
 
@@ -102,7 +102,7 @@ class TestSaveHintLiveReaderAware:
         monkeypatch.setattr("cash.notebook.server_discovery._in_colab", lambda: False)
         monkeypatch.setattr("os.path.isdir", lambda *_a, **_k: _boom())
         magics._save_hint_shown = False
-        magics.cash_on("")                  # must not raise
+        magics.cash_on("")  # must not raise
         out = capsys.readouterr().out
         assert "Save (Ctrl+S)" in out
 
@@ -110,6 +110,7 @@ class TestSaveHintLiveReaderAware:
 # ============================================================================
 # cash_badge magic
 # ============================================================================
+
 
 class TestCashBadge:
     """Test %cash_badge magic command."""
@@ -155,6 +156,7 @@ class TestCashBadge:
 # cash_status magic
 # ============================================================================
 
+
 class TestCashStatus:
     """Test %cash_status magic command."""
 
@@ -162,9 +164,9 @@ class TestCashStatus:
         magics, _, _ = magics_fixture
         result = magics.cash_status("")
         assert isinstance(result, dict)
-        assert 'lineage' in result
-        assert 'auto_cache_enabled' in result
-        assert 'debug_enabled' in result
+        assert "lineage" in result
+        assert "auto_cache_enabled" in result
+        assert "debug_enabled" in result
         captured = capsys.readouterr()
         assert captured.out.strip()  # Should print something
 
@@ -172,17 +174,18 @@ class TestCashStatus:
         magics, _, _ = magics_fixture
         result = magics.cash_status("dict")
         assert isinstance(result, dict)
-        assert 'last_cell' in result
-        assert 'lineage' in result
-        assert 'cache_stats' in result
+        assert "last_cell" in result
+        assert "lineage" in result
+        assert "cache_stats" in result
 
     def test_status_json_mode(self, magics_fixture):
         magics, _, _ = magics_fixture
         result = magics.cash_status("json")
         assert isinstance(result, str)
         import json
+
         parsed = json.loads(result)
-        assert 'lineage' in parsed
+        assert "lineage" in parsed
 
     def test_status_reflects_execution(self, magics_fixture):
         """After executing a statement, status should reflect it."""
@@ -190,19 +193,20 @@ class TestCashStatus:
         processor = magics._statement_processor
         processor.process_statement("x = 42")
         result = magics.cash_status("dict")
-        assert 'x' in result['executed_codes']
+        assert "x" in result["executed_codes"]
 
     def test_last_cell_metrics_empty_status_is_none(self, magics_fixture):
         """A cell that produced no statement metrics yields overall status None (magics.py 778)."""
         magics, _, _ = magics_fixture
         magics._update_last_cell_metrics([], 0.0)
-        assert magics._last_cell_metrics['status'] is None
-        assert magics._last_cell_metrics['statements'] == []
+        assert magics._last_cell_metrics["status"] is None
+        assert magics._last_cell_metrics["statements"] == []
 
 
 # ============================================================================
 # _capture_cell_id
 # ============================================================================
+
 
 class TestCaptureCellId:
     """Test _capture_cell_id method."""
@@ -218,20 +222,14 @@ class TestCaptureCellId:
         magics, shell, _ = magics_fixture
         info = MagicMock(spec=[])  # No cell_id attribute
         # Simulate VS Code parent header
-        shell.get_parent = MagicMock(return_value={
-            'metadata': {
-                'vscode': {'cellId': 'vscode-cell-456'}
-            }
-        })
+        shell.get_parent = MagicMock(return_value={"metadata": {"vscode": {"cellId": "vscode-cell-456"}}})
         magics._capture_cell_id(info)
         assert magics._current_cell_id == "vscode-cell-456"
 
     def test_capture_from_parent_metadata_cellId(self, magics_fixture):
         magics, shell, _ = magics_fixture
         info = MagicMock(spec=[])
-        shell.get_parent = MagicMock(return_value={
-            'metadata': {'cellId': 'parent-cell-789'}
-        })
+        shell.get_parent = MagicMock(return_value={"metadata": {"cellId": "parent-cell-789"}})
         magics._capture_cell_id(info)
         assert magics._current_cell_id == "parent-cell-789"
 
@@ -255,6 +253,7 @@ class TestCaptureCellId:
     def test_capture_debug_output(self, magics_fixture, caplog):
         """cell_id capture emits a DEBUG log record, not a raw stdout print."""
         import logging
+
         magics, _, _ = magics_fixture
         magics._debug = True
         info = MagicMock()
@@ -287,8 +286,7 @@ import logging
 
 
 def _cash_debug_handlers():
-    return [h for h in logging.getLogger("cash").handlers
-            if getattr(h, '_cash_debug_console', False)]
+    return [h for h in logging.getLogger("cash").handlers if getattr(h, "_cash_debug_console", False)]
 
 
 class TestCashDebugConsoleHandler:
@@ -340,6 +338,7 @@ class TestCashDebugConsoleHandler:
         """The handler resolves sys.stdout lazily (per cell), not at install."""
         import io
         import sys
+
         magics, _, _ = magics_fixture
         magics.cash_debug("on")
         handler = _cash_debug_handlers()[0]

@@ -25,6 +25,7 @@ Read the numbers as:
 ``wasted`` should be zero. Every non-zero row is an open effectiveness
 bug with a reproduction attached.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -83,18 +84,23 @@ def _run_pair(
 
     run_notebook(
         build_cells(cells, scenario, edited=False),
-        cash_enabled=True, cache_dir=cache_dir, session=session,
+        cash_enabled=True,
+        cache_dir=cache_dir,
+        session=session,
     )
     measured = run_notebook(
         build_cells(cells, scenario, edited=True),
-        cash_enabled=True, cache_dir=cache_dir,
+        cash_enabled=True,
+        cache_dir=cache_dir,
         session=session if session_mode == "live" else None,
     )
     return _metrics_by_cell(measured)
 
 
 def _control_pair(
-    cells: list[CodeCell], cache_dir: Path, session_mode: str,
+    cells: list[CodeCell],
+    cache_dir: Path,
+    session_mode: str,
 ) -> dict[int, list]:
     """The no-edit baseline: the same prime-then-measure protocol with no
     edit applied. Anything that restores here is what cash *can* save on
@@ -111,8 +117,7 @@ def _restorable_by_cell(control: dict[int, list]) -> tuple[dict, dict]:
     for cell_index, metrics in control.items():
         for m in metrics:
             if m.status == "RESTORED":
-                seconds[cell_index] = seconds.get(cell_index, 0.0) + (
-                    m.execution_time or 0.0)
+                seconds[cell_index] = seconds.get(cell_index, 0.0) + (m.execution_time or 0.0)
                 counts[cell_index] = counts.get(cell_index, 0) + 1
     return seconds, counts
 
@@ -132,29 +137,23 @@ def run_notebook_edit_benchmark(
     control = _control_pair(cells, work_dir / "control", session_mode)
     seconds_by_cell, counts_by_cell = _restorable_by_cell(control)
     total_restorable = sum(counts_by_cell.values())
-    log(f"    {total_restorable} statement(s) restore with no edit, "
-        f"{sum(seconds_by_cell.values()):.2f}s of compute")
+    log(f"    {total_restorable} statement(s) restore with no edit, {sum(seconds_by_cell.values()):.2f}s of compute")
 
-    scenarios = plan_scenarios(cells, seconds_by_cell, counts_by_cell,
-                               max_sites=max_sites)
+    scenarios = plan_scenarios(cells, seconds_by_cell, counts_by_cell, max_sites=max_sites)
     if not scenarios:
         log("    nothing restorable below any cell -- no scenarios to run")
 
     results: list[ScenarioResult] = []
     for scenario in scenarios:
         log(f"  {scenario.label}...")
-        edited = _run_pair(cells, scenario,
-                           work_dir / scenario.label.replace("@", "_"),
-                           session_mode)
+        edited = _run_pair(cells, scenario, work_dir / scenario.label.replace("@", "_"), session_mode)
         result = attribute_waste(scenario, control, edited)
         results.append(result)
         if scenario.kind == "linked":
-            verdict = ("OK" if result.control_sink_recomputed
-                       else "BROKEN -- harness cannot see a real dependency")
+            verdict = "OK" if result.control_sink_recomputed else "BROKEN -- harness cannot see a real dependency"
             log(f"    positive control: {verdict}")
         else:
-            log(f"    wasted {result.wasted_count}/{result.restorable_count} "
-                f"statements, {result.wasted_seconds:.2f}s")
+            log(f"    wasted {result.wasted_count}/{result.restorable_count} statements, {result.wasted_seconds:.2f}s")
 
     return {
         "notebook": str(notebook_path),
@@ -171,30 +170,29 @@ def run_notebook_edit_benchmark(
 def _print_table(report: dict) -> None:
     name = Path(report["notebook"]).name
     print()
-    print(f"{name}  ({report['session_mode']}, "
-          f"{report['restorable_count']} restorable statements)")
+    print(f"{name}  ({report['session_mode']}, {report['restorable_count']} restorable statements)")
     print(f"  {'scenario':28s} {'wasted':>14s} {'of restorable':>14s}")
     for s in report["scenarios"]:
         if s["kind"] == "linked":
             verdict = "OK" if s["control_sink_recomputed"] else "BROKEN"
             print(f"  {s['label']:28s} {'positive control':>14s} {verdict:>14s}")
             continue
-        share = (f"{s['wasted_count']}/{s['restorable_count']}"
-                 if s["restorable_count"] else "-")
+        share = f"{s['wasted_count']}/{s['restorable_count']}" if s["restorable_count"] else "-"
         print(f"  {s['label']:28s} {s['wasted_seconds']:11.2f}s  {share:>14s}")
 
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Notebook edit benchmark")
     p.add_argument("notebook", type=Path)
-    p.add_argument("--results-dir", type=Path,
-                   default=Path("benchmarks/results_edit"))
-    p.add_argument("--max-sites", type=int, default=3,
-                   help="how many distinct cells to edit (default: 3)")
-    p.add_argument("--session", dest="session_mode", default="restart",
-                   choices=["restart", "live"],
-                   help="'restart' measures the disk tier only (default); "
-                        "'live' keeps the RAM tier across the edit")
+    p.add_argument("--results-dir", type=Path, default=Path("benchmarks/results_edit"))
+    p.add_argument("--max-sites", type=int, default=3, help="how many distinct cells to edit (default: 3)")
+    p.add_argument(
+        "--session",
+        dest="session_mode",
+        default="restart",
+        choices=["restart", "live"],
+        help="'restart' measures the disk tier only (default); 'live' keeps the RAM tier across the edit",
+    )
     p.add_argument("--quiet", action="store_true")
     args = p.parse_args(argv)
 
@@ -205,8 +203,8 @@ def main(argv: list[str] | None = None) -> int:
 
     log(f"{args.notebook}")
     report = run_notebook_edit_benchmark(
-        args.notebook, work_dir,
-        max_sites=args.max_sites, session_mode=args.session_mode, log=log)
+        args.notebook, work_dir, max_sites=args.max_sites, session_mode=args.session_mode, log=log
+    )
 
     out = results_dir / f"{args.notebook.stem}-edit-{args.session_mode}.json"
     out.write_text(json.dumps(report, indent=1), encoding="utf-8")

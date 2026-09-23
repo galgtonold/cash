@@ -1,4 +1,5 @@
 """FileAccessTracker must be isolated across asyncio tasks and threads."""
+
 from __future__ import annotations
 
 import asyncio
@@ -9,8 +10,10 @@ from cash.notebook.file_tracker import FileAccessTracker
 
 def test_two_threads_isolated(tmp_path):
     """Tracker installed in one thread does not capture file reads in another."""
-    p_a = tmp_path / "a.txt"; p_a.write_text("a")
-    p_b = tmp_path / "b.txt"; p_b.write_text("b")
+    p_a = tmp_path / "a.txt"
+    p_a.write_text("a")
+    p_b = tmp_path / "b.txt"
+    p_b.write_text("b")
 
     result = {}
     barrier = threading.Barrier(2)
@@ -32,8 +35,10 @@ def test_two_threads_isolated(tmp_path):
 
     t1 = threading.Thread(target=thread_with_tracker)
     t2 = threading.Thread(target=thread_without_tracker)
-    t1.start(); t2.start()
-    t1.join(); t2.join()
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
 
     # The tracker only saw its own thread's read.
     assert any(str(p_a) in r or r.endswith("a.txt") for r in result["with_tracker"])
@@ -42,8 +47,10 @@ def test_two_threads_isolated(tmp_path):
 
 async def test_two_async_tasks_isolated(tmp_path):
     """asyncio.gather: each task's tracker only sees its own file reads."""
-    p_a = tmp_path / "a.txt"; p_a.write_text("a")
-    p_b = tmp_path / "b.txt"; p_b.write_text("b")
+    p_a = tmp_path / "a.txt"
+    p_a.write_text("a")
+    p_b = tmp_path / "b.txt"
+    p_b.write_text("b")
 
     async def reader(path):
         t = FileAccessTracker()
@@ -65,9 +72,12 @@ async def test_two_async_tasks_isolated(tmp_path):
 def test_nested_with_blocks(tmp_path):
     """Nested tracker contexts: inner block sees only its own reads;
     outer block resumes capturing after inner exits."""
-    p_a = tmp_path / "a.txt"; p_a.write_text("a")
-    p_b = tmp_path / "b.txt"; p_b.write_text("b")
-    p_c = tmp_path / "c.txt"; p_c.write_text("c")
+    p_a = tmp_path / "a.txt"
+    p_a.write_text("a")
+    p_b = tmp_path / "b.txt"
+    p_b.write_text("b")
+    p_c = tmp_path / "c.txt"
+    p_c.write_text("c")
 
     outer = FileAccessTracker()
     with outer:
@@ -95,7 +105,8 @@ def test_reentry_same_instance_via_stack(tmp_path):
     The token stack restores the previous ContextVar state on the inner exit."""
     from cash.notebook.file_tracker import _active_tracker
 
-    p_a = tmp_path / "a.txt"; p_a.write_text("a")
+    p_a = tmp_path / "a.txt"
+    p_a.write_text("a")
     t = FileAccessTracker()
 
     assert _active_tracker.get() is None

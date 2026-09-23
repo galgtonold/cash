@@ -14,6 +14,7 @@ Two defects, found together in round 27:
   returns a list, so the first evaluation drained ``g`` and the loop then ran
   zero times. Silent, first run, no cache involved.
 """
+
 import ast
 import types
 
@@ -41,12 +42,20 @@ class TestTooStrict:
         ns = {"frame": list(range(3131)), "STEP": 5}
         assert _safe("range(0, len(frame), STEP)", ns), (
             "len() cannot drain or mutate anything; refusing this header is "
-            "what decomposed 627 iterations one statement at a time")
+            "what decomposed 627 iterations one statement at a time"
+        )
 
-    @pytest.mark.parametrize("header", [
-        "range(min(n, 100))", "range(max(n, 1))", "range(int(n / 2))",
-        "range(abs(n))", "range(round(n / 3))", "range(int(float(n)))",
-    ])
+    @pytest.mark.parametrize(
+        "header",
+        [
+            "range(min(n, 100))",
+            "range(max(n, 1))",
+            "range(int(n / 2))",
+            "range(abs(n))",
+            "range(round(n / 3))",
+            "range(int(float(n)))",
+        ],
+    )
     def test_the_other_builtins_a_bound_is_computed_with(self, header):
         assert _safe(header, {"n": 300})
 
@@ -54,13 +63,12 @@ class TestTooStrict:
 class TestTooLoose:
     """Headers that were allowed and must not be."""
 
-    @pytest.mark.parametrize("header", ["sorted(g)", "list(g)", "tuple(g)",
-                                        "set(g)", "range(len(list(g)))"])
+    @pytest.mark.parametrize("header", ["sorted(g)", "list(g)", "tuple(g)", "set(g)", "range(len(list(g)))"])
     def test_a_generator_inside_a_container_call(self, header):
         ns = {"g": (i for i in range(400))}
         assert not _safe(header, ns), (
-            "the first evaluation drains g, so the second -- the one that "
-            "runs the loop -- iterates nothing")
+            "the first evaluation drains g, so the second -- the one that runs the loop -- iterates nothing"
+        )
 
     def test_a_file_object_read_through_a_method(self, tmp_path):
         path = tmp_path / "rows.txt"
@@ -82,12 +90,15 @@ class TestTooLoose:
 class TestUnchanged:
     """What was already right must stay right."""
 
-    @pytest.mark.parametrize("header,ns", [
-        ("range(n)", {"n": 300}),
-        ("sorted(d.items())", {"d": {i: i for i in range(300)}}),
-        ("list(rows)", {"rows": list(range(300))}),
-        ("zip(a, b)", {"a": [1], "b": [2]}),
-    ])
+    @pytest.mark.parametrize(
+        "header,ns",
+        [
+            ("range(n)", {"n": 300}),
+            ("sorted(d.items())", {"d": {i: i for i in range(300)}}),
+            ("list(rows)", {"rows": list(range(300))}),
+            ("zip(a, b)", {"a": [1], "b": [2]}),
+        ],
+    )
     def test_re_iterable_headers_stay_on_the_fast_path(self, header, ns):
         # zip() returns a self-iterator, and was refused on that RESULT. But the
         # header CALLS zip, so evaluating it again builds a fresh zip over the

@@ -11,6 +11,7 @@ Round 23's profile (2026-09-14):
   metadata read: the base class's ``get()`` deep-copied the value to throw it
   away -- 5.3 s of one r23s1 cell's 6 s.
 """
+
 from __future__ import annotations
 
 import copy
@@ -63,8 +64,9 @@ def test_an_rng_state_is_sized_without_a_call_per_int(monkeypatch):
     b = InMemoryBackend()
     calls = []
     real = InMemoryBackend._get_object_size
-    monkeypatch.setattr(InMemoryBackend, "_get_object_size",
-                        lambda self, obj, seen=None: calls.append(1) or real(self, obj, seen))
+    monkeypatch.setattr(
+        InMemoryBackend, "_get_object_size", lambda self, obj, seen=None: calls.append(1) or real(self, obj, seen)
+    )
     b.set("k", _entry())
     assert len(calls) < 50, f"{len(calls)} sizing calls for one entry"
     assert b._store["k"][0]["size"] > 625 * 28, "the ints still count toward the size"
@@ -78,6 +80,7 @@ def _deepcopy_calls(fn) -> int:
     def profile(frame, event, _arg):
         if event == "call" and frame.f_code is code:
             n[0] += 1
+
     sys.setprofile(profile)
     try:
         fn()
@@ -97,8 +100,7 @@ def test_an_rng_state_is_stored_without_a_copy_per_int():
 def test_the_stored_entry_is_still_a_copy():
     b = InMemoryBackend()
     shared = [1, 2]
-    entry = {"variables": {"a": shared, "b": shared, "t": (1, (2, 3))},
-             "rng_state": {"random": random.getstate()}}
+    entry = {"variables": {"a": shared, "b": shared, "t": (1, (2, 3))}, "rng_state": {"random": random.getstate()}}
     b.set("k", entry)
     shared.append("the original's")
     got = b.get("k")[1]

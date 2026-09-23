@@ -1,8 +1,7 @@
 """Tests for storage column display in badges and TieredBackend storage propagation."""
 
-import pytest
-from cash.backends.memory_backend import InMemoryBackend
 from cash.backends.file_backend import FileBackend
+from cash.backends.memory_backend import InMemoryBackend
 from cash.backends.tiered_backend import TieredBackend
 from cash.notebook.badge_renderer.renderers.html import render_html
 from cash.notebook.badge_renderer.view_builder import build_interactive_badge
@@ -21,7 +20,7 @@ def _storage_html_for(metric_extras: dict, configured_tiers: tuple[str, ...] = (
     Defaults to ``()`` so legacy tests fall back to the per-row
     ``storage_tiers`` behaviour.
     """
-    metric = {'code': 'x = 1', 'status': str(CacheStatus.COMPUTED), 'total_time': 0.05}
+    metric = {"code": "x = 1", "status": str(CacheStatus.COMPUTED), "total_time": 0.05}
     metric.update(metric_extras)
     return render_html(build_interactive_badge([metric], configured_tiers=configured_tiers))
 
@@ -32,48 +31,48 @@ class TestTieredBackendStoragePropagation:
     def test_storage_propagated_to_original_metadata(self, tmp_path):
         """The caller's original metadata dict should have storage set after .set()."""
         backend = TieredBackend([InMemoryBackend()])
-        metadata = {'execution_time': 1.0}
-        backend.set('key1', {'data': 'value'}, metadata)
-        assert 'storage' in metadata
-        assert 'RAM' in metadata['storage']
+        metadata = {"execution_time": 1.0}
+        backend.set("key1", {"data": "value"}, metadata)
+        assert "storage" in metadata
+        assert "RAM" in metadata["storage"]
 
     def test_storage_propagated_tiered_ram_disk(self, tmp_path):
         """With RAM+DISK tiers and no promotion policy, both should appear."""
         l1 = InMemoryBackend()
-        l2 = FileBackend(str(tmp_path / 'cache'))
+        l2 = FileBackend(str(tmp_path / "cache"))
         backend = TieredBackend([l1, l2])  # default policy: always promote
-        metadata = {'execution_time': 1.0}
-        backend.set('key2', {'data': 'value'}, metadata)
-        assert 'storage' in metadata
-        assert 'RAM' in metadata['storage']
-        assert 'DISK' in metadata['storage']
+        metadata = {"execution_time": 1.0}
+        backend.set("key2", {"data": "value"}, metadata)
+        assert "storage" in metadata
+        assert "RAM" in metadata["storage"]
+        assert "DISK" in metadata["storage"]
 
     def test_storage_ram_only_when_not_promoted(self, tmp_path):
         """With a promotion policy that rejects, only RAM should appear."""
         l1 = InMemoryBackend()
-        l2 = FileBackend(str(tmp_path / 'cache'))
+        l2 = FileBackend(str(tmp_path / "cache"))
         backend = TieredBackend([l1, l2], promotion_policy=lambda t, s: False)
-        metadata = {'execution_time': 0.001}
-        backend.set('key3', {'data': 'value'}, metadata)
-        assert metadata['storage'] == ['RAM']
+        metadata = {"execution_time": 0.001}
+        backend.set("key3", {"data": "value"}, metadata)
+        assert metadata["storage"] == ["RAM"]
 
     def test_storage_propagated_when_metadata_is_none(self):
         """When metadata is None, the backend should still work without error."""
         backend = TieredBackend([InMemoryBackend()])
         # Should not raise
-        backend.set('key4', {'data': 'value'}, None)
+        backend.set("key4", {"data": "value"}, None)
 
     def test_original_metadata_not_mutated_beyond_storage(self, tmp_path):
         """The copy should prevent sub-backends from polluting the original metadata
         with anything other than 'storage'."""
         l1 = InMemoryBackend()
         backend = TieredBackend([l1])
-        original = {'execution_time': 1.0}
+        original = {"execution_time": 1.0}
         original_keys_before = set(original.keys())
-        backend.set('key5', {'data': 'value'}, original)
+        backend.set("key5", {"data": "value"}, original)
         # Only 'storage' should be added to the original
         new_keys = set(original.keys()) - original_keys_before
-        assert new_keys == {'storage'}
+        assert new_keys == {"storage"}
 
 
 class TestComputedStorageDisplay:
@@ -84,33 +83,33 @@ class TestComputedStorageDisplay:
     """
 
     def test_uncacheable_reasons_renders_blocked_dots(self):
-        html = _storage_html_for({'uncacheable_reasons': ['Side effect: print() (io)']})
-        assert 'c3-dot-blocked' in html
-        assert 'c3-dots-warn' in html
-        assert 'Side effect: print()' in html  # tooltip text
+        html = _storage_html_for({"uncacheable_reasons": ["Side effect: print() (io)"]})
+        assert "c3-dot-blocked" in html
+        assert "c3-dots-warn" in html
+        assert "Side effect: print()" in html  # tooltip text
 
     def test_skipped_reason_does_not_block_dots_but_carries_reason(self):
         # In v3, skipped_reason is surfaced via the tooltip on the empty dots cell;
         # the row itself remains a regular computed row.
-        html = _storage_html_for({'skipped_reason': 'Object too large (500MB)'})
+        html = _storage_html_for({"skipped_reason": "Object too large (500MB)"})
         # The empty/empty pair appears for a COMPUTED row with no storage tiers.
-        assert 'c3-dot-empty' in html
+        assert "c3-dot-empty" in html
 
     def test_storage_ram_renders_solid_ram_dot_only(self):
-        html = _storage_html_for({'storage': ['RAM']})
+        html = _storage_html_for({"storage": ["RAM"]})
         # Solid RAM dot, empty disk dot.
-        assert 'c3-dot-solid' in html
-        assert 'c3-dot-empty' in html
-        assert 'RAM' in html  # tooltip mentions it
+        assert "c3-dot-solid" in html
+        assert "c3-dot-empty" in html
+        assert "RAM" in html  # tooltip mentions it
 
     def test_storage_ram_disk_renders_two_solid_dots(self):
-        html = _storage_html_for({'storage': ['RAM', 'DISK']})
+        html = _storage_html_for({"storage": ["RAM", "DISK"]})
         # Both dots solid.
-        assert html.count('c3-dot-solid') >= 2
+        assert html.count("c3-dot-solid") >= 2
 
     def test_priority_uncacheable_over_storage(self):
         """uncacheable_reasons should take priority over storage values."""
-        html = _storage_html_for({'uncacheable_reasons': ['mutation'], 'storage': ['RAM']})
+        html = _storage_html_for({"uncacheable_reasons": ["mutation"], "storage": ["RAM"]})
         # The dots span itself wears the warn variant, not cached.
         # (Bare substring search hits CSS rule names; check the actual element.)
         assert 'class="c3-dots c3-dots-warn"' in html
@@ -123,61 +122,62 @@ class TestNTierDots:
     def _dot_states(self, html: str) -> list[str]:
         """Extract the dot state list from the FIRST .c3-dots block."""
         import re
+
         m = re.search(r'<span class="c3-dots[^"]*"[^>]*>(.*?)</span>\s*</span>', html, re.DOTALL)
         assert m, "no .c3-dots block found"
-        return re.findall(r'c3-dot c3-dot-(\w+)', m.group(1))
+        return re.findall(r"c3-dot c3-dot-(\w+)", m.group(1))
 
     def test_three_tier_compute_all_three_solid(self):
         html = _storage_html_for(
-            {'storage': ['RAM', 'REDIS', 'DISK']},
-            configured_tiers=('RAM', 'REDIS', 'DISK'),
+            {"storage": ["RAM", "REDIS", "DISK"]},
+            configured_tiers=("RAM", "REDIS", "DISK"),
         )
-        assert self._dot_states(html) == ['solid', 'solid', 'solid']
+        assert self._dot_states(html) == ["solid", "solid", "solid"]
 
     def test_three_tier_redis_only_renders_three_dots_middle_solid(self):
         """Cached only to Redis (no RAM, no DISK) — middle dot solid, others empty."""
         html = _storage_html_for(
-            {'storage': ['REDIS']},
-            configured_tiers=('RAM', 'REDIS', 'DISK'),
+            {"storage": ["REDIS"]},
+            configured_tiers=("RAM", "REDIS", "DISK"),
         )
-        assert self._dot_states(html) == ['empty', 'solid', 'empty']
+        assert self._dot_states(html) == ["empty", "solid", "empty"]
 
     def test_three_tier_partial_promotion_third_empty(self):
         """Cached to RAM+REDIS but NOT promoted to DISK — third dot empty."""
         html = _storage_html_for(
-            {'storage': ['RAM', 'REDIS']},
-            configured_tiers=('RAM', 'REDIS', 'DISK'),
+            {"storage": ["RAM", "REDIS"]},
+            configured_tiers=("RAM", "REDIS", "DISK"),
         )
-        assert self._dot_states(html) == ['solid', 'solid', 'empty']
+        assert self._dot_states(html) == ["solid", "solid", "empty"]
 
     def test_restored_from_middle_tier_rings_correct_dot(self):
         """RESTORED from REDIS with three configured tiers — ring on the REDIS slot only."""
         html = _storage_html_for(
-            {'status': str(CacheStatus.RESTORED), 'source': 'REDIS', 'storage': ['REDIS']},
-            configured_tiers=('RAM', 'REDIS', 'DISK'),
+            {"status": str(CacheStatus.RESTORED), "source": "REDIS", "storage": ["REDIS"]},
+            configured_tiers=("RAM", "REDIS", "DISK"),
         )
-        assert self._dot_states(html) == ['empty', 'ring', 'empty']
+        assert self._dot_states(html) == ["empty", "ring", "empty"]
 
     def test_restored_from_first_tier_rings_first_dot(self):
         html = _storage_html_for(
-            {'status': str(CacheStatus.RESTORED), 'source': 'RAM', 'storage': ['RAM']},
-            configured_tiers=('RAM', 'REDIS', 'DISK'),
+            {"status": str(CacheStatus.RESTORED), "source": "RAM", "storage": ["RAM"]},
+            configured_tiers=("RAM", "REDIS", "DISK"),
         )
-        assert self._dot_states(html) == ['ring', 'empty', 'empty']
+        assert self._dot_states(html) == ["ring", "empty", "empty"]
 
     def test_redis_only_backend_renders_single_dot(self):
         """User wires up just RedisBackend (no tiering) — one dot, solid."""
         html = _storage_html_for(
-            {'storage': ['REDIS']},
-            configured_tiers=('REDIS',),
+            {"storage": ["REDIS"]},
+            configured_tiers=("REDIS",),
         )
-        assert self._dot_states(html) == ['solid']
+        assert self._dot_states(html) == ["solid"]
 
     def test_per_dot_title_identifies_tier(self):
         """Each dot's title attribute names its tier (so hover identifies which is which)."""
         html = _storage_html_for(
-            {'storage': ['RAM', 'REDIS']},
-            configured_tiers=('RAM', 'REDIS', 'DISK'),
+            {"storage": ["RAM", "REDIS"]},
+            configured_tiers=("RAM", "REDIS", "DISK"),
         )
         # Each tier name appears in a per-dot title.
         assert 'title="RAM' in html
@@ -187,14 +187,14 @@ class TestNTierDots:
     def test_case_insensitive_tier_matching(self):
         """A legacy stored 'Redis' label (mixed case) still matches a 'REDIS' configured tier."""
         html = _storage_html_for(
-            {'storage': ['Redis']},  # legacy lowercase form
-            configured_tiers=('RAM', 'REDIS'),
+            {"storage": ["Redis"]},  # legacy lowercase form
+            configured_tiers=("RAM", "REDIS"),
         )
         # Second dot (REDIS) should still register as solid.
-        assert self._dot_states(html) == ['empty', 'solid']
+        assert self._dot_states(html) == ["empty", "solid"]
 
     def test_configured_tiers_absent_falls_back_to_storage(self):
         """Without configured_tiers, the renderer falls back to per-row storage."""
-        html = _storage_html_for({'storage': ['RAM', 'DISK']})
+        html = _storage_html_for({"storage": ["RAM", "DISK"]})
         # Backwards-compat path — same as before this work.
-        assert self._dot_states(html).count('solid') >= 2
+        assert self._dot_states(html).count("solid") >= 2

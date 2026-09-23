@@ -6,10 +6,10 @@ match the backend's own ``source_label``. Without this, a configured-
 tier list of ``['REDIS', ...]`` would never match a metric whose
 ``storage`` is ``['Redis']``.
 """
+
 from __future__ import annotations
 
-import pickle
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -23,6 +23,7 @@ pytestmark = pytest.mark.expects_failed_writes
 
 # Build a list of bare backend factories. Each yields a (label, backend)
 # pair, where the backend is fully constructed and ready for set/get.
+
 
 def _bare_backends(tmp_path):
     from cash.backends.file_backend import FileBackend
@@ -42,6 +43,7 @@ def _bare_backends(tmp_path):
     else:
         with patch.object(_redis, "Redis", fakeredis.FakeStrictRedis):
             from cash.backends.redis_backend import RedisBackend
+
             yield "REDIS", RedisBackend(prefix="cash:t:")
 
     # S3 with moto's in-memory implementation
@@ -53,6 +55,7 @@ def _bare_backends(tmp_path):
     with mock_aws():
         boto3.client("s3", region_name="us-east-1").create_bucket(Bucket="cash-test")
         from cash.backends.s3_backend import S3Backend
+
         yield "S3", S3Backend(bucket="cash-test", region_name="us-east-1")
 
 

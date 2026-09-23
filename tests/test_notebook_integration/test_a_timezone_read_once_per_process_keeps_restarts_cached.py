@@ -11,6 +11,7 @@ The reader is the standard library (``zoneinfo``) and the file belongs to
 another installed package (``tzdata``), so "a library reading its own package"
 did not cover it.
 """
+
 import pytest
 
 pytest.importorskip("tzdata")
@@ -27,8 +28,7 @@ def _cells(folder, n):
         "    tz = zoneinfo.ZoneInfo('Europe/Vienna')\n"
         "    return [(open(f).read(), str(tz)) for f in fs]\n"
         "raw = load_days(files)",
-        "def slow(r):\n    time.sleep(1.5)\n    return len(r)\n"
-        "out = slow(raw)",
+        "def slow(r):\n    time.sleep(1.5)\n    return len(r)\nout = slow(raw)",
         "print('OUT', out)",
     ]
 
@@ -54,5 +54,4 @@ def test_the_slow_step_restores_after_an_edit_and_a_restart(nb_runner, tmp_path)
     nb_runner.run_all()
     raw = nb_runner.get_raw_output(5)
     assert "OUT 4" in nb_runner.get_output(6), nb_runner.get_raw_output(6)
-    assert "EXECUTED: out = slow" not in raw, (
-        "the first restart after the edit re-ran the slow step:\n" + raw)
+    assert "EXECUTED: out = slow" not in raw, "the first restart after the edit re-ran the slow step:\n" + raw

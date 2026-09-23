@@ -4,6 +4,7 @@ It is a ``text`` fence, so nothing executes it, and a claim anchor only says
 that *something* in the function changed. This compares what the reader is
 told -- every parameter, in order, with its default -- against ``inspect``.
 """
+
 from __future__ import annotations
 
 import ast
@@ -27,8 +28,10 @@ def _documented() -> dict[str, list[tuple[str, str]]]:
     out = {}
     for name, body in re.findall(r"^([\w.]+)\((.*?)\)\s*$", fence, re.S | re.M):
         call = ast.parse(f"f({body.replace('*, ', '')})", mode="eval").body
-        params = [("**" + k.value.id, "") if k.arg is None else
-                  (k.arg, repr(ast.literal_eval(k.value))) for k in call.keywords]
+        params = [
+            ("**" + k.value.id, "") if k.arg is None else (k.arg, repr(ast.literal_eval(k.value)))
+            for k in call.keywords
+        ]
         out[name] = [p for p in params if p[0]]
     return out
 
@@ -45,10 +48,13 @@ def _actual(fn) -> list[tuple[str, str]]:
     return out
 
 
-@pytest.mark.parametrize("name, fn", [
-    ("Cash", cash.Cash.__init__),
-    ("Cash.cache", cash.Cash.cache),
-])
+@pytest.mark.parametrize(
+    "name, fn",
+    [
+        ("Cash", cash.Cash.__init__),
+        ("Cash.cache", cash.Cash.cache),
+    ],
+)
 def test_documented_signature_matches(name, fn):
     documented = _documented()
     assert name in documented, f"{name} is missing from the summary"

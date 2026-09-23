@@ -25,6 +25,7 @@ covered by the same record -- which is why this is done on the dependency side
 rather than by folding the cwd into the key, where the first-run-in-B ordering
 would still have been wrong.
 """
+
 from __future__ import annotations
 
 import os
@@ -62,7 +63,7 @@ def test_a_file_that_appears_invalidates_the_entry(cash_instance, tmp_path, monk
     runs: list[int] = []
     scaled = _optional_config_reader(cash_instance, runs)
 
-    assert scaled(1000) == 1000            # no cfg.txt: the defaults branch
+    assert scaled(1000) == 1000  # no cfg.txt: the defaults branch
     (work / "cfg.txt").write_text("7", encoding="utf-8")
 
     assert scaled(1000) == 7000, "the entry computed without the file was served"
@@ -193,14 +194,13 @@ def test_the_reported_sequence_across_processes(tmp_path):
     env = dict(os.environ, CASH_CACHE_DIR=str(tmp_path / "cache"))
 
     def run(cwd):
-        proc = subprocess.run([sys.executable, str(script)], cwd=str(cwd), env=env,
-                              capture_output=True, text=True, timeout=300)
+        proc = subprocess.run(
+            [sys.executable, str(script)], cwd=str(cwd), env=env, capture_output=True, text=True, timeout=300
+        )
         assert proc.returncode == 0, proc.stderr[-2000:]
         return proc.stdout.strip(), proc.stderr.count("RAN")
 
     assert run(dir_a) == ("RESULT 7000", 1)
     assert run(dir_a) == ("RESULT 7000", 0), "control: the second run must HIT"
     assert run(dir_b) == ("RESULT 1000", 1)
-    assert run(dir_a) == ("RESULT 7000", 1), (
-        "directory B's answer was served in directory A"
-    )
+    assert run(dir_a) == ("RESULT 7000", 1), "directory B's answer was served in directory A"

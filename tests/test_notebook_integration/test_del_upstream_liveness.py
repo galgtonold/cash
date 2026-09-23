@@ -23,11 +23,13 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
 
 def test_del_upstream_then_isolated_rerun_consumer(nb_runner):
     """Main case: del BELOW an x-consumer; isolated re-run rebuilds x=7."""
-    nb_runner.create_notebook([
-        "x = 7",
-        "y = x * 3\nprint('y', y)",
-        "del x",
-    ])
+    nb_runner.create_notebook(
+        [
+            "x = 7",
+            "y = x * 3\nprint('y', y)",
+            "del x",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "y 21" in nb_runner.get_output(2), nb_runner.get_output(2)
@@ -42,12 +44,14 @@ def test_del_upstream_then_isolated_rerun_consumer(nb_runner):
 
 def test_del_then_redefine_above_consumer_restores_new_value(nb_runner):
     """(a) del then a NEW binding above the consumer -> reconstruct the NEW value."""
-    nb_runner.create_notebook([
-        "x = 7",
-        "del x",
-        "x = 99",
-        "y = x * 3\nprint('y', y)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "x = 7",
+            "del x",
+            "x = 99",
+            "y = x * 3\nprint('y', y)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "y 297" in nb_runner.get_output(4), nb_runner.get_output(4)
@@ -70,11 +74,13 @@ def test_consumer_below_del_stays_dead(nb_runner):
     (matching the CAS-62 sibling's assertion style, which does not rely on
     error text being captured into the cell's structured outputs).
     """
-    nb_runner.create_notebook([
-        "x = 7",
-        "del x",
-        "print(x)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "x = 7",
+            "del x",
+            "print(x)",
+        ]
+    )
     nb_runner.start_kernel()
 
     # run_all: cell 3 reads a genuinely-deleted x -> NameError, no phantom value.
@@ -90,10 +96,12 @@ def test_consumer_below_del_stays_dead(nb_runner):
 
 def test_del_in_same_cell_as_consumer_unchanged(nb_runner):
     """(c) del in the SAME cell as the consumer -> behaviour unchanged."""
-    nb_runner.create_notebook([
-        "x = 7",
-        "y = x * 3\nprint('y', y)\ndel x",
-    ])
+    nb_runner.create_notebook(
+        [
+            "x = 7",
+            "y = x * 3\nprint('y', y)\ndel x",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "y 21" in nb_runner.get_output(2), nb_runner.get_output(2)

@@ -1,12 +1,11 @@
 """Tests for backend classes - CascadingBackend, InMemoryBackend, FileBackend."""
-import hashlib
+
 import os
 import time
-from cash.backends import (
-    InMemoryBackend, FileBackend, CascadingBackend
-)
-from cash.backends.serialization import PickleSerializer, CloudPickleSerializer, get_serializer
-from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry, read_entry
+
+from cash.backends import CascadingBackend, FileBackend, InMemoryBackend
+from cash.backends.entry_format import read_entry
+from cash.backends.serialization import CloudPickleSerializer, PickleSerializer, get_serializer
 
 
 class TestInMemoryBackendAdvanced:
@@ -48,9 +47,7 @@ class TestInMemoryBackendAdvanced:
         b.set("old", "v1", {"key": "old", "timestamp": 1000})
         b.set("new", "v2", {"key": "new", "timestamp": time.time()})
 
-        removed = b.cleanup_expired(
-            lambda m: m.get('timestamp', 0) < 2000
-        )
+        removed = b.cleanup_expired(lambda m: m.get("timestamp", 0) < 2000)
         assert removed == 1
         _, val = b.get("old")
         assert val is None
@@ -77,7 +74,7 @@ class TestInMemoryBackendAdvanced:
         b.get("k1")
         entries = b.list_entries()
         # Should have incremented access count
-        assert entries[0].get('access_count', 0) >= 2
+        assert entries[0].get("access_count", 0) >= 2
 
     def test_lock(self):
         """Lock context manager works."""
@@ -167,7 +164,7 @@ class TestFileBackendAdvanced:
         b = FileBackend(str(tmp_path / "cache"))
         b.set("old", "v1", {"key": "old", "timestamp": 1000})
         b._flush_metadata()
-        removed = b.cleanup_expired(lambda m: m.get('timestamp', 0) < 2000)
+        removed = b.cleanup_expired(lambda m: m.get("timestamp", 0) < 2000)
         assert removed == 1
         b.shutdown()
 
@@ -214,7 +211,7 @@ class TestFileBackendAdvanced:
         b._writes.wait_all()
         with open(b._get_path("key1"), "wb") as f:
             f.write(b"corrupted data")
-        if hasattr(b, '_metadata_cache'):
+        if hasattr(b, "_metadata_cache"):
             b._metadata_cache.clear()
         meta, data = b.get("key1")
         assert data is None or meta is None
@@ -322,7 +319,7 @@ class TestCascadingBackend:
 
         b1.set("old", "v1", {"key": "old", "timestamp": 1000})
         b2.set("old", "v1", {"key": "old", "timestamp": 1000})
-        total = cb.cleanup_expired(lambda m: m.get('timestamp', 0) < 2000)
+        total = cb.cleanup_expired(lambda m: m.get("timestamp", 0) < 2000)
         # Returns count of unique keys deleted (1 key deleted from both backends)
         assert total == 1
         # Verify key is gone from both backends
@@ -344,8 +341,6 @@ class TestCascadingBackend:
         meta, val = cb.get("missing")
         assert meta is None
         assert val is None
-
-
 
 
 class TestSerializers:

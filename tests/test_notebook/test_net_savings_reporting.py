@@ -11,6 +11,7 @@ the honest accounting:
   hidden — when a session of cheap cells paid overhead for no real saving; and
 * accumulating the overhead is a float add, never a per-cell fsync (CAS-149).
 """
+
 from __future__ import annotations
 
 import json
@@ -92,8 +93,7 @@ class TestNetPositive:
             cell_total_time=7.1,
         )
         magics._update_session_stats(
-            [{"status": CacheStatus.RESTORED, "saved_time": 7.0,
-              "execution_time": 0.0, "code": "m = fit()"}],
+            [{"status": CacheStatus.RESTORED, "saved_time": 7.0, "execution_time": 0.0, "code": "m = fit()"}],
             cell_total_time=0.4,
         )
         capsys.readouterr()
@@ -168,13 +168,15 @@ class TestDiscriminatesGrossOverstatement:
         # Drive the stats dict directly so this runs identically on the baseline,
         # whose %cash_stats never derives a net. Mirrors the real report: a 7.4s
         # gross saving with 3.0s of cash overhead → 4.4s net.
-        magics._session.stats.update({
-            "statements_restored": 1,
-            "total_restored_time": 7.4,
-            "total_time_saved": 7.4,
-            "total_verified_saved": 7.4,
-            "total_overhead": 3.0,
-        })
+        magics._session.stats.update(
+            {
+                "statements_restored": 1,
+                "total_restored_time": 7.4,
+                "total_time_saved": 7.4,
+                "total_verified_saved": 7.4,
+                "total_overhead": 3.0,
+            }
+        )
         data = _stats_json(magics, capsys)
         # On the baseline there is no such key → KeyError → test fails (intended).
         assert "net_time_saved" in data

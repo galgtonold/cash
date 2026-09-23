@@ -8,6 +8,7 @@ that ``(None, None)`` is the only "key absent" signal — a ``None`` data
 value alongside a non-None metadata dict means "we cached None for you,
 hand it back".
 """
+
 from __future__ import annotations
 
 from unittest.mock import patch
@@ -31,6 +32,7 @@ def _all_simple_backends(tmp_path):
         return
     with patch.object(_redis, "Redis", fakeredis.FakeStrictRedis):
         from cash.backends.redis_backend import RedisBackend
+
         yield "redis", RedisBackend(prefix="cash:nrt:")
 
 
@@ -58,6 +60,7 @@ class TestNoneReturnValueCaches:
         """Tiered: a stored None must propagate through TieredBackend.get."""
         from cash.backends.file_backend import FileBackend
         from cash.backends.tiered_backend import TieredBackend
+
         b = TieredBackend(
             [InMemoryBackend(), FileBackend(str(tmp_path / "fb"), flush_interval=0)],
             promotion_policy=lambda exec_t, size: True,
@@ -72,6 +75,7 @@ class TestNoneReturnValueCaches:
         _redis = pytest.importorskip("redis")
         with patch.object(_redis, "Redis", fakeredis.FakeStrictRedis):
             from cash.backends.redis_backend import RedisBackend
+
             b = RedisBackend(prefix="cash:nrt:")
             try:
                 self._roundtrip(b)
@@ -90,9 +94,7 @@ class TestNoneReturnValueCaches:
 
         assert f(1) is None
         assert f(1) is None
-        assert calls[0] == 1, (
-            f"expected one compute, got {calls[0]} — None return value treated as miss"
-        )
+        assert calls[0] == 1, f"expected one compute, got {calls[0]} — None return value treated as miss"
 
         # Verify the metadata is actually populated (not a phantom hit).
         # The second call's args_hash matches the first; if the backend

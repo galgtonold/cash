@@ -12,6 +12,7 @@ self-protecting CAS-68A reset channel.
 Each subclass def registers ONCE, so the correct registry is identical on the
 first run and every re-run.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
@@ -28,36 +29,36 @@ _BASE = (
 def test_init_subclass_registry_rerun_idempotent(nb_runner):
     """Main repro: isolated re-run of the subclass cell then the print cell must
     not double-register."""
-    nb_runner.create_notebook([
-        "registry = []",
-        _BASE,
-        "class AlphaPlugin(PluginBase):\n    pass",
-        "print('plugins=', registry)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "registry = []",
+            _BASE,
+            "class AlphaPlugin(PluginBase):\n    pass",
+            "print('plugins=', registry)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
-    assert "plugins= ['AlphaPlugin']" in nb_runner.get_output(4), (
-        f"run_all: {nb_runner.get_output(4)!r}"
-    )
+    assert "plugins= ['AlphaPlugin']" in nb_runner.get_output(4), f"run_all: {nb_runner.get_output(4)!r}"
 
     # Isolated re-run of the subclass cell, then the consumer.
     nb_runner.run_cell(3)
     nb_runner.run_cell(4)
     out = nb_runner.get_output(4)
-    assert "plugins= ['AlphaPlugin']" in out, (
-        f"__init_subclass__ registry accumulated on isolated re-run: {out!r}"
-    )
+    assert "plugins= ['AlphaPlugin']" in out, f"__init_subclass__ registry accumulated on isolated re-run: {out!r}"
 
 
 def test_run_all_registers_exactly_once(nb_runner):
     """CONTROL (a): a plain run_all must yield exactly one entry — the reset must
     not over-fire and DROP the legitimate registration."""
-    nb_runner.create_notebook([
-        "registry = []",
-        _BASE,
-        "class AlphaPlugin(PluginBase):\n    pass",
-        "print('plugins=', registry)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "registry = []",
+            _BASE,
+            "class AlphaPlugin(PluginBase):\n    pass",
+            "print('plugins=', registry)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "plugins= ['AlphaPlugin']" in nb_runner.get_output(4), (
@@ -68,19 +69,19 @@ def test_run_all_registers_exactly_once(nb_runner):
 def test_second_distinct_subclass_still_registers(nb_runner):
     """CONTROL (b): a SECOND distinct subclass in another cell still registers —
     run_all must yield both names."""
-    nb_runner.create_notebook([
-        "registry = []",
-        _BASE,
-        "class AlphaPlugin(PluginBase):\n    pass",
-        "class BetaPlugin(PluginBase):\n    pass",
-        "print('plugins=', registry)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "registry = []",
+            _BASE,
+            "class AlphaPlugin(PluginBase):\n    pass",
+            "class BetaPlugin(PluginBase):\n    pass",
+            "print('plugins=', registry)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     out = nb_runner.get_output(5)
-    assert "AlphaPlugin" in out and "BetaPlugin" in out, (
-        f"a distinct second subclass failed to register: {out!r}"
-    )
+    assert "AlphaPlugin" in out and "BetaPlugin" in out, f"a distinct second subclass failed to register: {out!r}"
 
 
 def test_cross_cell_class_var_accumulator_not_corrupted(nb_runner):
@@ -92,11 +93,13 @@ def test_cross_cell_class_var_accumulator_not_corrupted(nb_runner):
     Modeled on tests/test_notebook_integration/test_class_state_rerun.py
     ::test_init_increments_class_counter.
     """
-    nb_runner.create_notebook([
-        "class Widget:\n    count = 0\n    def __init__(self):\n        Widget.count += 1",
-        "w0 = Widget()",
-        "w = Widget()\nprint('count', Widget.count)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "class Widget:\n    count = 0\n    def __init__(self):\n        Widget.count += 1",
+            "w0 = Widget()",
+            "w = Widget()\nprint('count', Widget.count)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     # Plain-kernel value after two constructions across two cells.

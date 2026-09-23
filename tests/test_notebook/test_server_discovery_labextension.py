@@ -19,6 +19,7 @@ result cannot depend on the real filesystem, on this machine's actual
 ``sys.prefix``, or on whether the developer happens to have the extension
 installed -- the same answer on a contributor's machine and on CI.
 """
+
 from __future__ import annotations
 
 import site

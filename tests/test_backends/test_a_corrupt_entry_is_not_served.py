@@ -9,6 +9,7 @@ pickle structurally valid was not.
 A crc32 of the payload costs 4.6 ms per 64 MB -- next to writing or reading the
 same bytes, nothing -- and turns "silently wrong" into "recomputed".
 """
+
 from __future__ import annotations
 
 import pytest
@@ -74,14 +75,19 @@ def test_a_metadata_rewrite_keeps_the_check(tmp_path):
 def test_an_entry_written_before_the_check_still_reads(tmp_path):
     """Older entries carry no checksum; they are read, not refused."""
     import pickle
-    import struct
 
     from cash.backends.entry_format import HEADER, MAGIC, META_SLACK
 
     meta = pickle.dumps({"key": "k"})
     path = tmp_path / "old.entry"
-    path.write_bytes(b"".join((
-        HEADER.pack(MAGIC, len(meta), len(meta) + META_SLACK),
-        meta, bytes(META_SLACK), b"payload",
-    )))
+    path.write_bytes(
+        b"".join(
+            (
+                HEADER.pack(MAGIC, len(meta), len(meta) + META_SLACK),
+                meta,
+                bytes(META_SLACK),
+                b"payload",
+            )
+        )
+    )
     assert read_entry(str(path), with_payload=True)[1] == b"payload"

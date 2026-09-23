@@ -21,6 +21,7 @@ The draw is deliberately hidden behind a helper (no ``np.random`` appears in
 the consuming statement) because that is what makes it invisible to static
 analysis -- the same shape as an sklearn ``fit()`` with no ``random_state``.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.restore, pytest.mark.upstream]
@@ -63,9 +64,7 @@ def test_seed_edit_after_restart_does_not_serve_the_old_seeds_value(nb_runner):
     # -- exactly the state in which the epoch-free key used to be rebuilt.
     nb_runner.restart()
     nb_runner.run_all()
-    assert _value(nb_runner) == pytest.approx(under_12345), (
-        "same seed after a restart should reproduce the same value"
-    )
+    assert _value(nb_runner) == pytest.approx(under_12345), "same seed after a restart should reproduce the same value"
 
     # Now the user changes the seed and re-runs.
     nb_runner.set_cell_source(3, SEED_CELL.replace("SEED = 12345", "SEED = 999"))
@@ -74,13 +73,11 @@ def test_seed_edit_after_restart_does_not_serve_the_old_seeds_value(nb_runner):
     under_999 = _value(nb_runner)
 
     assert under_999 != pytest.approx(under_12345), (
-        "the seed changed but cash served the value computed under the previous "
-        "seed -- silently, with a RESTORED badge"
+        "the seed changed but cash served the value computed under the previous seed -- silently, with a RESTORED badge"
     )
 
     # And it must be what seed 999 genuinely produces.
     expected = float(__import__("numpy").random.RandomState(999).rand(200).sum())
     assert under_999 == pytest.approx(expected), (
-        f"recomputed, but not on seed 999's stream: got {under_999!r}, "
-        f"expected {expected!r}"
+        f"recomputed, but not on seed 999's stream: got {under_999!r}, expected {expected!r}"
     )

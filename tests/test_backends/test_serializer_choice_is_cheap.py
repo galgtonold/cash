@@ -27,7 +27,8 @@ def _run(body: str) -> str:
     """
     proc = subprocess.run(
         [sys.executable, "-c", textwrap.dedent(body)],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     assert proc.returncode == 0, f"probe failed:\n{proc.stdout}\n{proc.stderr}"
     return proc.stdout.strip()

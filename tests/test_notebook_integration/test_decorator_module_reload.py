@@ -8,8 +8,10 @@ Scenarios:
 - After changing dep() source code, decorator should cache-miss
   both for dep() and for fun() (transitive invalidation)
 """
-import pytest
+
 import time
+
+import pytest
 
 
 @pytest.mark.integration
@@ -32,7 +34,7 @@ class TestDecoratorModuleReloadSameCell:
         mod_dir = tmp_path / "mymod"
         mod_dir.mkdir()
         mod_file = mod_dir / "calc.py"
-        mod_file.write_text('''
+        mod_file.write_text("""
 import cash
 
 @cash.cache
@@ -42,16 +44,18 @@ def dep(a):
 @cash.cache
 def fun(a, b):
     return a + b + dep(a)
-''')
+""")
 
-        mod_dir_str = str(mod_dir).replace('\\', '/')
+        mod_dir_str = str(mod_dir).replace("\\", "/")
 
-        nb_runner.create_notebook([
-            # Cell 1: Setup path
-            f"import sys; sys.path.insert(0, '{mod_dir_str}')",
-            # Cell 2: Import + call in SAME cell (user's pattern)
-            "import calc\nresult = calc.fun(5, 1)\nprint('result=' + str(result))",
-        ])
+        nb_runner.create_notebook(
+            [
+                # Cell 1: Setup path
+                f"import sys; sys.path.insert(0, '{mod_dir_str}')",
+                # Cell 2: Import + call in SAME cell (user's pattern)
+                "import calc\nresult = calc.fun(5, 1)\nprint('result=' + str(result))",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -61,7 +65,7 @@ def fun(a, b):
 
         # Change dep() in the module
         time.sleep(0.5)
-        mod_file.write_text('''
+        mod_file.write_text("""
 import cash
 
 @cash.cache
@@ -71,7 +75,7 @@ def dep(a):
 @cash.cache
 def fun(a, b):
     return a + b + dep(a)
-''')
+""")
 
         # Re-run ONLY cell 2 (same cell has import + call)
         nb_runner.run_cell(2)
@@ -88,7 +92,7 @@ def fun(a, b):
         mod_dir = tmp_path / "mymod2"
         mod_dir.mkdir()
         mod_file = mod_dir / "calc2.py"
-        mod_file.write_text('''
+        mod_file.write_text("""
 import cash
 
 @cash.cache
@@ -98,15 +102,17 @@ def dep(a):
 @cash.cache
 def fun(a, b):
     return a + b + dep(a)
-''')
+""")
 
-        mod_dir_str = str(mod_dir).replace('\\', '/')
+        mod_dir_str = str(mod_dir).replace("\\", "/")
 
-        nb_runner.create_notebook([
-            f"import sys; sys.path.insert(0, '{mod_dir_str}')",
-            # Cell 2: import + multiple calls in same cell
-            "import calc2\nresults = [calc2.fun(5, i % 3) for i in range(10)]\nprint('sum=' + str(sum(results)))",
-        ])
+        nb_runner.create_notebook(
+            [
+                f"import sys; sys.path.insert(0, '{mod_dir_str}')",
+                # Cell 2: import + multiple calls in same cell
+                "import calc2\nresults = [calc2.fun(5, i % 3) for i in range(10)]\nprint('sum=' + str(sum(results)))",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -117,7 +123,7 @@ def fun(a, b):
 
         # Change dep
         time.sleep(0.5)
-        mod_file.write_text('''
+        mod_file.write_text("""
 import cash
 
 @cash.cache
@@ -127,16 +133,14 @@ def dep(a):
 @cash.cache
 def fun(a, b):
     return a + b + dep(a)
-''')
+""")
 
         # Re-run ONLY cell 2
         nb_runner.run_cell(2)
         output2 = nb_runner.get_output(2)
         # dep(5)=105, fun(5,0)=5+0+105=110, fun(5,1)=111, fun(5,2)=112
         # Pattern: 110,111,112,110,111,112,110,111,112,110 → sum = 110*4+111*3+112*3 = 440+333+336 = 1109
-        assert "sum=1109" in output2, (
-            f"Expected sum=1109 after dep change, got: {output2}"
-        )
+        assert "sum=1109" in output2, f"Expected sum=1109 after dep change, got: {output2}"
 
     def test_same_cell_dep_and_import_already_imported(self, nb_runner, tmp_path):
         """
@@ -147,7 +151,7 @@ def fun(a, b):
         mod_dir = tmp_path / "mymod3"
         mod_dir.mkdir()
         mod_file = mod_dir / "calc3.py"
-        mod_file.write_text('''
+        mod_file.write_text("""
 import cash
 
 @cash.cache
@@ -157,18 +161,20 @@ def dep(a):
 @cash.cache
 def fun(a, b):
     return a + b + dep(a)
-''')
+""")
 
-        mod_dir_str = str(mod_dir).replace('\\', '/')
+        mod_dir_str = str(mod_dir).replace("\\", "/")
 
-        nb_runner.create_notebook([
-            # Cell 1: sys.path + first import
-            f"import sys; sys.path.insert(0, '{mod_dir_str}')\nimport calc3",
-            # Cell 2: Some other code using the module
-            "first_result = calc3.dep(5)\nprint('dep=' + str(first_result))",
-            # Cell 3: Re-import + call in same cell (user's cell 35 pattern)
-            "import calc3\nresult = calc3.fun(5, 1)\nprint('result=' + str(result))",
-        ])
+        nb_runner.create_notebook(
+            [
+                # Cell 1: sys.path + first import
+                f"import sys; sys.path.insert(0, '{mod_dir_str}')\nimport calc3",
+                # Cell 2: Some other code using the module
+                "first_result = calc3.dep(5)\nprint('dep=' + str(first_result))",
+                # Cell 3: Re-import + call in same cell (user's cell 35 pattern)
+                "import calc3\nresult = calc3.fun(5, 1)\nprint('result=' + str(result))",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -178,7 +184,7 @@ def fun(a, b):
 
         # Change dep() in the module
         time.sleep(0.5)
-        mod_file.write_text('''
+        mod_file.write_text("""
 import cash
 
 @cash.cache
@@ -188,7 +194,7 @@ def dep(a):
 @cash.cache
 def fun(a, b):
     return a + b + dep(a)
-''')
+""")
 
         # Re-run ONLY cell 3 (the one with import + call)
         nb_runner.run_cell(3)
@@ -211,7 +217,7 @@ def fun(a, b):
         mod_dir = tmp_path / "mymod_collision"
         mod_dir.mkdir()
         mod_file = mod_dir / "calc_col.py"
-        mod_file.write_text('''
+        mod_file.write_text("""
 import cash
 
 @cash.cache
@@ -221,20 +227,22 @@ def dep(a):
 @cash.cache
 def fun(a, b):
     return a + b + dep(a)
-''')
+""")
 
-        mod_dir_str = str(mod_dir).replace('\\', '/')
+        mod_dir_str = str(mod_dir).replace("\\", "/")
 
-        nb_runner.create_notebook([
-            # Cell 1: sys.path setup
-            f"import sys; sys.path.insert(0, '{mod_dir_str}')",
-            # Cell 2: Notebook defines its OWN dep() and fun() with same names
-            "import cash\n@cash.cache\ndef dep(a):\n    return a + 1\n\n@cash.cache\ndef fun(a, b):\n    return a + b + dep(a)",
-            # Cell 3: Call notebook's fun to warm its cache
-            "nb_result = fun(5, 1)\nprint('nb_result=' + str(nb_result))",
-            # Cell 4: Import module + call module's fun (same cell)
-            "import calc_col\nresult = calc_col.fun(5, 1)\nprint('mod_result=' + str(result))",
-        ])
+        nb_runner.create_notebook(
+            [
+                # Cell 1: sys.path setup
+                f"import sys; sys.path.insert(0, '{mod_dir_str}')",
+                # Cell 2: Notebook defines its OWN dep() and fun() with same names
+                "import cash\n@cash.cache\ndef dep(a):\n    return a + 1\n\n@cash.cache\ndef fun(a, b):\n    return a + b + dep(a)",
+                # Cell 3: Call notebook's fun to warm its cache
+                "nb_result = fun(5, 1)\nprint('nb_result=' + str(nb_result))",
+                # Cell 4: Import module + call module's fun (same cell)
+                "import calc_col\nresult = calc_col.fun(5, 1)\nprint('mod_result=' + str(result))",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -244,7 +252,7 @@ def fun(a, b):
 
         # Now change ONLY the module's dep() — the notebook's dep() is unchanged
         time.sleep(0.5)
-        mod_file.write_text('''
+        mod_file.write_text("""
 import cash
 
 @cash.cache
@@ -254,12 +262,12 @@ def dep(a):
 @cash.cache
 def fun(a, b):
     return a + b + dep(a)
-''')
+""")
 
         # Re-run cell 4 (import + module call)
         nb_runner.run_cell(4)
         output4 = nb_runner.get_output(4)
-        
+
         # Module's dep(5) should now return 105, so module's fun(5,1) = 5+1+105 = 111
         assert "mod_result=111" in output4, (
             f"Expected mod_result=111 after module dep change, "
@@ -272,7 +280,6 @@ def fun(a, b):
 @pytest.mark.integration
 @pytest.mark.modules
 class TestDecoratorModuleReloadInvalidation:
-
     def test_decorator_cache_invalidates_on_dep_change(self, nb_runner, tmp_path):
         """
         When dep() changes in a module, fun() which calls dep() should
@@ -282,7 +289,7 @@ class TestDecoratorModuleReloadInvalidation:
         mod_dir = tmp_path / "mymod"
         mod_dir.mkdir()
         mod_file = mod_dir / "calc.py"
-        mod_file.write_text('''
+        mod_file.write_text("""
 import cash
 
 @cash.cache
@@ -292,18 +299,20 @@ def dep(a):
 @cash.cache
 def fun(a, b):
     return a + b + dep(a)
-''')
+""")
 
-        mod_dir_str = str(mod_dir).replace('\\', '/')
+        mod_dir_str = str(mod_dir).replace("\\", "/")
 
-        nb_runner.create_notebook([
-            # Cell 1: Setup path
-            f"import sys; sys.path.insert(0, '{mod_dir_str}')",
-            # Cell 2: Import module
-            "import calc",
-            # Cell 3: Call fun and print result
-            "result = calc.fun(5, 1)\nprint('result=' + str(result))",
-        ])
+        nb_runner.create_notebook(
+            [
+                # Cell 1: Setup path
+                f"import sys; sys.path.insert(0, '{mod_dir_str}')",
+                # Cell 2: Import module
+                "import calc",
+                # Cell 3: Call fun and print result
+                "result = calc.fun(5, 1)\nprint('result=' + str(result))",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -313,7 +322,7 @@ def fun(a, b):
 
         # Change dep() in the module
         time.sleep(0.5)
-        mod_file.write_text('''
+        mod_file.write_text("""
 import cash
 
 @cash.cache
@@ -323,14 +332,12 @@ def dep(a):
 @cash.cache
 def fun(a, b):
     return a + b + dep(a)
-''')
+""")
 
         # Re-run: dep(5) should now = 105, fun(5,1) = 5+1+105 = 111
         nb_runner.run_cells([1, 2, 3])
         out3 = nb_runner.get_output(3)
-        assert "result=111" in out3, (
-            f"Expected result=111 after dep change (transitive invalidation), got: {out3}"
-        )
+        assert "result=111" in out3, f"Expected result=111 after dep change (transitive invalidation), got: {out3}"
 
     def test_decorator_cache_dep_direct_call_invalidates(self, nb_runner, tmp_path):
         """
@@ -339,21 +346,23 @@ def fun(a, b):
         mod_dir = tmp_path / "mymod2"
         mod_dir.mkdir()
         mod_file = mod_dir / "calc2.py"
-        mod_file.write_text('''
+        mod_file.write_text("""
 import cash
 
 @cash.cache
 def dep(a):
     return a + 1
-''')
+""")
 
-        mod_dir_str = str(mod_dir).replace('\\', '/')
+        mod_dir_str = str(mod_dir).replace("\\", "/")
 
-        nb_runner.create_notebook([
-            f"import sys; sys.path.insert(0, '{mod_dir_str}')",
-            "import calc2",
-            "result = calc2.dep(5)\nprint('result=' + str(result))",
-        ])
+        nb_runner.create_notebook(
+            [
+                f"import sys; sys.path.insert(0, '{mod_dir_str}')",
+                "import calc2",
+                "result = calc2.dep(5)\nprint('result=' + str(result))",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -362,19 +371,17 @@ def dep(a):
 
         # Change dep
         time.sleep(0.1)
-        mod_file.write_text('''
+        mod_file.write_text("""
 import cash
 
 @cash.cache
 def dep(a):
     return a + 100
-''')
+""")
 
         nb_runner.run_cells([2, 3])
         output2 = nb_runner.get_output(3)
-        assert "result=105" in output2, (
-            f"Expected result=105 after dep change, got: {output2}"
-        )
+        assert "result=105" in output2, f"Expected result=105 after dep change, got: {output2}"
 
     def test_decorator_unchanged_fun_preserved_granular(self, nb_runner, tmp_path):
         """
@@ -385,7 +392,7 @@ def dep(a):
         mod_dir = tmp_path / "mymod3"
         mod_dir.mkdir()
         mod_file = mod_dir / "calc3.py"
-        mod_file.write_text('''
+        mod_file.write_text("""
 import cash
 
 @cash.cache
@@ -395,15 +402,17 @@ def helper(a):
 @cash.cache
 def independent(a):
     return a * 2
-''')
+""")
 
-        mod_dir_str = str(mod_dir).replace('\\', '/')
+        mod_dir_str = str(mod_dir).replace("\\", "/")
 
-        nb_runner.create_notebook([
-            f"import sys; sys.path.insert(0, '{mod_dir_str}')",
-            "import calc3",
-            "r1 = calc3.helper(5)\nr2 = calc3.independent(5)\nprint('helper=' + str(r1) + ',independent=' + str(r2))",
-        ])
+        nb_runner.create_notebook(
+            [
+                f"import sys; sys.path.insert(0, '{mod_dir_str}')",
+                "import calc3",
+                "r1 = calc3.helper(5)\nr2 = calc3.independent(5)\nprint('helper=' + str(r1) + ',independent=' + str(r2))",
+            ]
+        )
         nb_runner.start_kernel()
         nb_runner.run_all()
 
@@ -413,7 +422,7 @@ def independent(a):
 
         # Change only helper — independent should be preserved
         time.sleep(0.1)
-        mod_file.write_text('''
+        mod_file.write_text("""
 import cash
 
 @cash.cache
@@ -423,7 +432,7 @@ def helper(a):
 @cash.cache
 def independent(a):
     return a * 2  # UNCHANGED
-''')
+""")
 
         nb_runner.run_cells([1, 2, 3])
         output2 = nb_runner.get_output(3)

@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 # Module-level AST visitors
 # ---------------------------------------------------------------------------
 
+
 class _CallVisitor(ast.NodeVisitor):
     """Collect all function-call names from an AST for find_called_functions.
 
@@ -316,9 +317,7 @@ class _FlowVisitor(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
         if isinstance(node.func, ast.Attribute):
             for keyword in node.keywords:
-                if (keyword.arg == 'inplace'
-                        and isinstance(keyword.value, ast.Constant)
-                        and keyword.value.value is True):
+                if keyword.arg == "inplace" and isinstance(keyword.value, ast.Constant) and keyword.value.value is True:
                     parent_name = self._extract_base_name(node.func.value)
                     if parent_name:
                         if not self.is_defined(parent_name):
@@ -331,7 +330,7 @@ class _FlowVisitor(ast.NodeVisitor):
 
     def visit_Import(self, node: ast.Import) -> None:  # noqa: N802
         for alias in node.names:
-            name = alias.asname or alias.name.split('.')[0]
+            name = alias.asname or alias.name.split(".")[0]
             self.define_variable(name)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:  # noqa: N802
@@ -398,8 +397,12 @@ class _ForbiddenVisitor(ast.NodeVisitor):
         args = node.args
         for default in list(args.defaults) + [d for d in args.kw_defaults if d is not None]:
             self.visit(default)
-        for arg in (list(args.posonlyargs) + list(args.args) + list(args.kwonlyargs)
-                    + [a for a in (args.vararg, args.kwarg) if a is not None]):
+        for arg in (
+            list(args.posonlyargs)
+            + list(args.args)
+            + list(args.kwonlyargs)
+            + [a for a in (args.vararg, args.kwarg) if a is not None]
+        ):
             if arg.annotation is not None:
                 self.visit(arg.annotation)
         if node.returns is not None:
@@ -409,14 +412,13 @@ class _ForbiddenVisitor(ast.NodeVisitor):
 
     def visit_Lambda(self, node: ast.Lambda) -> None:  # noqa: N802
         """Its body runs when it is called, like a function's."""
-        for default in list(node.args.defaults) + [d for d in node.args.kw_defaults
-                                                   if d is not None]:
+        for default in list(node.args.defaults) + [d for d in node.args.kw_defaults if d is not None]:
             self.visit(default)
 
     def visit_Import(self, node: ast.Import) -> None:  # noqa: N802
         for alias in node.names:
-            base_name = alias.name.split('.')[0]
-            if base_name in ('time', 'datetime', 'uuid'):
+            base_name = alias.name.split(".")[0]
+            if base_name in ("time", "datetime", "uuid"):
                 try:
                     mod = __import__(base_name)
                     store_name = alias.asname or base_name
@@ -428,7 +430,7 @@ class _ForbiddenVisitor(ast.NodeVisitor):
                     pass  # Expected: module may not be importable in analysis context
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:  # noqa: N802
-        if node.module and any(node.module.startswith(m) for m in ('time', 'datetime', 'uuid')):
+        if node.module and any(node.module.startswith(m) for m in ("time", "datetime", "uuid")):
             try:
                 mod = __import__(node.module, fromlist=[n.name for n in node.names])
                 for alias in node.names:
@@ -442,6 +444,7 @@ class _ForbiddenVisitor(ast.NodeVisitor):
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 class CodeAnalyzer:
     """Analyzes function code to determine dependencies and compute hashes."""
@@ -463,16 +466,13 @@ class CodeAnalyzer:
         # before round 26). What it wraps is stable; what it binds reaches the
         # key through the arguments and the function's own namespace name.
         import functools as _functools
+
         depth = 0
         while isinstance(func, _functools.partial) and depth < 8:
             func = func.func
             depth += 1
-        module = getattr(func, '__module__', None) or '?'
-        qualname = (
-            getattr(func, '__qualname__', None)
-            or getattr(func, '__name__', None)
-            or repr(func)
-        )
+        module = getattr(func, "__module__", None) or "?"
+        qualname = getattr(func, "__qualname__", None) or getattr(func, "__name__", None) or repr(func)
         return f"{module}.{qualname}"
 
     @staticmethod
@@ -493,8 +493,8 @@ class CodeAnalyzer:
             return source_identity_digest(source)
         except SOURCE_RETRIEVAL_ERRORS:
             pass  # Expected: source unavailable for builtins/C extensions, or a
-                  # co_filename that doesn't tokenize as Python; fall through to
-                  # the bytecode hash.
+            # co_filename that doesn't tokenize as Python; fall through to
+            # the bytecode hash.
 
         # ``bytecode_identity`` rather than ``str(co_consts)``: a nested code
         # object's repr embeds a memory ADDRESS, so the old spelling handed
@@ -502,7 +502,7 @@ class CodeAnalyzer:
         # containing a nested def or lambda -- a permanent miss, not a stale
         # hit, but just as much a broken cache.
         target = func
-        if getattr(func, '__code__', None) is None and hasattr(func, '__wrapped__'):
+        if getattr(func, "__code__", None) is None and hasattr(func, "__wrapped__"):
             target = func.__wrapped__
         digest = bytecode_identity(target)
         if digest is not None:
@@ -511,11 +511,12 @@ class CodeAnalyzer:
         # Opaque callable (builtin / C-extension / ufunc / partial): key on a
         # stable identity rather than crashing.
         identity = CodeAnalyzer.opaque_identity(func)
-        return hashlib.sha256(f"__cash_opaque__:{identity}".encode('utf-8')).hexdigest()
+        return hashlib.sha256(f"__cash_opaque__:{identity}".encode("utf-8")).hexdigest()
 
     @staticmethod
-    def find_called_functions(func: Callable, known_functions: dict[str, Callable] | None = None,
-                              *, include_references: bool = False) -> set[str]:
+    def find_called_functions(
+        func: Callable, known_functions: dict[str, Callable] | None = None, *, include_references: bool = False
+    ) -> set[str]:
         """
         Parse the function AST and find calls to other functions.
         Resolves names using the function's globals to handle imports and aliases.
@@ -529,6 +530,7 @@ class CodeAnalyzer:
         result after ``inner``'s helper changed -- only a CALL made an edge.
         """
         import textwrap
+
         try:
             source = textwrap.dedent(inspect.getsource(func))
             tree = ast.parse(source)
@@ -541,13 +543,13 @@ class CodeAnalyzer:
         # An opaque callable (builtin / C-extension / ufunc / partial) may have
         # source available via ``__wrapped__`` yet lack ``__globals__``; without
         # it, names can't be resolved, so skip dependency analysis.
-        globals_dict = getattr(func, '__globals__', None)
+        globals_dict = getattr(func, "__globals__", None)
         if globals_dict is None:
             return set()
         resolved_qualnames: set[str] = set()
 
         for name in visitor.names_to_resolve:
-            parts = name.split('.')
+            parts = name.split(".")
             obj = globals_dict.get(parts[0])
 
             if obj is None and hasattr(builtins, parts[0]):
@@ -565,8 +567,8 @@ class CodeAnalyzer:
                         if not isinstance(obj, functools.partial):
                             break
                         obj = obj.func
-                    if hasattr(obj, '__qualname__'):
-                        module = getattr(obj, '__module__', None) or '__unknown__'
+                    if hasattr(obj, "__qualname__"):
+                        module = getattr(obj, "__module__", None) or "__unknown__"
                         fqn = f"{module}.{obj.__qualname__}"
                         if known_functions is None or fqn in known_functions:
                             resolved_qualnames.add(fqn)
@@ -591,7 +593,7 @@ class CodeAnalyzer:
         Resolved through modules and classes only: an instance's attribute can
         be a property, and analysis must not run user code to find a name.
         """
-        parts = name.split('.')
+        parts = name.split(".")
         obj = globals_dict.get(parts[0])
         try:
             for part in parts[1:]:
@@ -604,7 +606,7 @@ class CodeAnalyzer:
                 obj = obj.func
             if not callable(obj) or isinstance(obj, type):
                 return None
-            qualname = getattr(obj, '__qualname__', None)
+            qualname = getattr(obj, "__qualname__", None)
             if not isinstance(qualname, str):
                 return None
             return f"{getattr(obj, '__module__', None) or '__unknown__'}.{qualname}"
@@ -625,25 +627,25 @@ class CodeAnalyzer:
         statement (``print("...%.4f"\\n      % (a, b))``) — the latter is
         ordinary Python and must not be deleted.
         """
-        lines = code.split('\n')
+        lines = code.split("\n")
         flags: list[bool] = []
-        depth = 0            # open bracket/paren/brace nesting (outside strings)
-        in_str: str | None = None   # open triple-quote delimiter, or None
+        depth = 0  # open bracket/paren/brace nesting (outside strings)
+        in_str: str | None = None  # open triple-quote delimiter, or None
         prev_backslash = False
         for line in lines:
-            is_start = (depth == 0 and in_str is None and not prev_backslash)
+            is_start = depth == 0 and in_str is None and not prev_backslash
             flags.append(is_start)
             # A dropped magic is a self-contained logical line; do not let its
             # characters perturb the scanner state for following lines.
-            if is_start and line.strip().startswith(('%', '!')):
+            if is_start and line.strip().startswith(("%", "!")):
                 prev_backslash = False
                 continue
             i, n = 0, len(line)
             backslash = False
             while i < n:
                 c = line[i]
-                if in_str is not None:                 # inside a triple string
-                    if c == '\\':
+                if in_str is not None:  # inside a triple string
+                    if c == "\\":
                         i += 2
                         continue
                     if line.startswith(in_str, i):
@@ -652,26 +654,26 @@ class CodeAnalyzer:
                         continue
                     i += 1
                     continue
-                if c == '#':                           # comment to end of line
+                if c == "#":  # comment to end of line
                     break
-                if c == '\\' and i == n - 1:           # explicit continuation
+                if c == "\\" and i == n - 1:  # explicit continuation
                     backslash = True
                     i += 1
                     continue
-                if c in '([{':
+                if c in "([{":
                     depth += 1
                     i += 1
                     continue
-                if c in ')]}':
+                if c in ")]}":
                     depth = max(0, depth - 1)
                     i += 1
                     continue
                 if c in ('"', "'"):
-                    if line.startswith(c * 3, i):      # triple-quoted string
+                    if line.startswith(c * 3, i):  # triple-quoted string
                         delim = c * 3
                         j, closed = i + 3, False
                         while j < n:
-                            if line[j] == '\\':
+                            if line[j] == "\\":
                                 j += 2
                                 continue
                             if line.startswith(delim, j):
@@ -682,12 +684,12 @@ class CodeAnalyzer:
                         if closed:
                             i = j
                             continue
-                        in_str = delim                 # spills onto next line
+                        in_str = delim  # spills onto next line
                         i = n
                         continue
-                    j = i + 1                          # single-line string
+                    j = i + 1  # single-line string
                     while j < n:
-                        if line[j] == '\\':
+                        if line[j] == "\\":
                             j += 2
                             continue
                         if line[j] == c:
@@ -727,9 +729,9 @@ class CodeAnalyzer:
             pass
         starts = CodeAnalyzer._logical_line_start_flags(code)
         out: list[str] = []
-        for line, is_start in zip(code.split('\n'), starts):
-            if is_start and line.strip().startswith(('%', '!')):
-                indent = line[:len(line) - len(line.lstrip())]
+        for line, is_start in zip(code.split("\n"), starts):
+            if is_start and line.strip().startswith(("%", "!")):
+                indent = line[: len(line) - len(line.lstrip())]
                 if indent:
                     # An indented magic is the leading (often sole) statement of
                     # a block — ``if colab:``, ``for``, ``def`` … Deleting it
@@ -739,12 +741,12 @@ class CodeAnalyzer:
                     # dependency-tracking it. Neutralise it in place with
                     # ``pass`` so the block keeps a body (a magic contributes no
                     # variable dependencies, so this loses nothing for analysis).
-                    out.append(indent + 'pass')
+                    out.append(indent + "pass")
                 # A top-level magic is dropped entirely: removing a module-level
                 # statement never empties a block.
                 continue
             out.append(line)
-        return '\n'.join(out)
+        return "\n".join(out)
 
     @staticmethod
     def _parse_cell(code: str) -> ast.Module:
@@ -759,7 +761,9 @@ class CodeAnalyzer:
         unchanged.
         """
         return compile(
-            code, '<cash-cell>', 'exec',
+            code,
+            "<cash-cell>",
+            "exec",
             ast.PyCF_ONLY_AST | ast.PyCF_ALLOW_TOP_LEVEL_AWAIT,
         )
 
@@ -816,8 +820,8 @@ class CodeAnalyzer:
         if resolve_source is not None:
             try:
                 from .cacheability import callee_mutated_globals_for_tree
-                extra = callee_mutated_globals_for_tree(
-                    tree, resolve_source, user_ns)
+
+                extra = callee_mutated_globals_for_tree(tree, resolve_source, user_ns)
             except Exception:  # noqa: BLE001 - analysis must never break a cell
                 extra = frozenset()
             if extra:
@@ -830,13 +834,13 @@ class CodeAnalyzer:
             # so every statement reading `sc` missed (round 28, r28s4). What the
             # call really changes, `adata`, is observed at runtime instead. Module
             # SETTINGS (`plt.rcParams.update(...)`) are routed separately.
-            bound = {n.id for n in ast.walk(tree)
-                     if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del))}
+            bound = {
+                n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del))
+            }
             for node in ast.walk(tree):
                 if isinstance(node, (ast.Import, ast.ImportFrom)):
-                    bound.update((a.asname or a.name).split('.')[0] for a in node.names)
-            outputs = {o for o in outputs
-                       if o in bound or not isinstance(user_ns.get(o), types.ModuleType)}
+                    bound.update((a.asname or a.name).split(".")[0] for a in node.names)
+            outputs = {o for o in outputs if o in bound or not isinstance(user_ns.get(o), types.ModuleType)}
         return inputs, outputs
 
     @staticmethod
@@ -916,7 +920,7 @@ class CodeAnalyzer:
         """
         forbidden_objs: dict = {}
 
-        for name in ['time', 'monotonic', 'perf_counter', 'process_time', 'time_ns', 'localtime', 'gmtime']:
+        for name in ["time", "monotonic", "perf_counter", "process_time", "time_ns", "localtime", "gmtime"]:
             if hasattr(time, name):
                 forbidden_objs[getattr(time, name)] = f"time.{name}"
 
@@ -924,7 +928,7 @@ class CodeAnalyzer:
         forbidden_objs[datetime.datetime.utcnow] = "datetime.utcnow"
         forbidden_objs[datetime.date.today] = "date.today"
 
-        for name in ['uuid1', 'uuid4']:
+        for name in ["uuid1", "uuid4"]:
             if hasattr(uuid, name):
                 forbidden_objs[getattr(uuid, name)] = f"uuid.{name}"
 

@@ -12,11 +12,13 @@ pytestmark = [pytest.mark.timeout(120), pytest.mark.upstream]
 
 
 def _setup(nb_runner):
-    nb_runner.create_notebook([
-        "x = 10",
-        "y = x * 2",
-        "print('y=' + str(y))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "x = 10",
+            "y = x * 2",
+            "print('y=' + str(y))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "y=20" in nb_runner.get_output(3)
@@ -30,12 +32,8 @@ def test_failing_upstream_edit_fails_the_cell(nb_runner):
     with pytest.raises(CellExecutionError) as excinfo:
         nb_runner.run_cell(3)
     text = str(excinfo.value)
-    assert "UpstreamStateError" in text, (
-        f"expected the upstream failure to surface in the cell, got: {text[:400]}"
-    )
-    assert "undefined_name_xyz" in text, (
-        f"error should name the failing upstream statement: {text[:400]}"
-    )
+    assert "UpstreamStateError" in text, f"expected the upstream failure to surface in the cell, got: {text[:400]}"
+    assert "undefined_name_xyz" in text, f"error should name the failing upstream statement: {text[:400]}"
 
 
 def test_fixing_upstream_recovers(nb_runner):

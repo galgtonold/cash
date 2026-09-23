@@ -9,6 +9,7 @@ or writes ``v`` re-runs, ``v`` holds the state right after it -- unless every
 later statement that also writes ``v`` re-runs too. The backward completion
 only asks for the producer BEFORE a reader, and ``results = {}`` is one.
 """
+
 from __future__ import annotations
 
 import types
@@ -26,19 +27,23 @@ def _entry(stmt, outputs=(), inputs=()):
 
 
 TRACE = [
-    _entry("families = ['logreg', 'forest']", ("families",)),                                      # 0
-    _entry("results = {}", ("results",)),                                                           # 1
-    _entry("for name in families:\n    results[name] = evaluate(name)", ("results", "name"),
-           ("families", "results", "evaluate")),                                                    # 2
-    _entry("comparison = summarize(results)", ("comparison",), ("results", "summarize")),          # 3
-    _entry("def draw_best():\n    return max(results)", ("draw_best",), ("results",)),             # 4
-    _entry("report = draw_best()", ("report",), ("draw_best",)),                                    # 5
+    _entry("families = ['logreg', 'forest']", ("families",)),  # 0
+    _entry("results = {}", ("results",)),  # 1
+    _entry(
+        "for name in families:\n    results[name] = evaluate(name)",
+        ("results", "name"),
+        ("families", "results", "evaluate"),
+    ),  # 2
+    _entry("comparison = summarize(results)", ("comparison",), ("results", "summarize")),  # 3
+    _entry("def draw_best():\n    return max(results)", ("draw_best",), ("results",)),  # 4
+    _entry("report = draw_best()", ("report",), ("draw_best",)),  # 5
 ]
 
 
 def test_rerunning_an_accumulator_init_reruns_the_loop_that_fills_it():
-    planner = _planner({"families": [], "results": {}, "evaluate": len, "summarize": len,
-                        "draw_best": len, "comparison": 0})
+    planner = _planner(
+        {"families": [], "results": {}, "evaluate": len, "summarize": len, "draw_best": len, "comparison": 0}
+    )
     scheduled = planner._complete_later_producers([1, 4, 5], TRACE)
     assert 2 in scheduled, "results = {} was re-run without the loop that fills it"
     assert 3 not in scheduled, "a reader that is not a producer was dragged in"
@@ -59,16 +64,18 @@ import re  # noqa: E402
 
 from cash.notebook.upstream.virtual_lineage import VirtualLineage  # noqa: E402
 
-_CTX = re.compile(r'# __iteration_context__: ([a-f0-9]+)')
+_CTX = re.compile(r"# __iteration_context__: ([a-f0-9]+)")
 
 
 def test_a_function_reading_an_accumulator_is_not_a_rerun_of_its_loop():
     trace = [
         _entry("results = {}", ("results",)),
-        _entry("for name in families:\n    results[name] = evaluate(name)", ("results", "name"),
-               ("families", "results")),
-        _entry("def draw_roc(ax):\n    for name, r in results.items():\n        ax.plot(r)",
-               ("draw_roc",), ("results",)),
+        _entry(
+            "for name in families:\n    results[name] = evaluate(name)", ("results", "name"), ("families", "results")
+        ),
+        _entry(
+            "def draw_roc(ax):\n    for name, r in results.items():\n        ax.plot(r)", ("draw_roc",), ("results",)
+        ),
     ]
     fully = VirtualLineage._loop_vars_fully_rescheduled(None, [2], trace, {"results"}, _CTX)
     assert fully == set(), "reading results.items() was taken for re-running the loop"

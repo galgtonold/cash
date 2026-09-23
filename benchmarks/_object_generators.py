@@ -6,6 +6,7 @@ in general (pandas/numpy memory layout is not linear in element count
 for all dtypes), but we get within a small constant factor — good enough
 to span the 1 KB → 100 MB range.
 """
+
 from __future__ import annotations
 
 import os
@@ -26,6 +27,7 @@ FAMILIES = [
 def _dataframe_numeric(target_bytes: int) -> Any:
     import numpy as np
     import pandas as pd
+
     # 8 float64 cols × 8 bytes per element = 64 B/row. Add a small header.
     rows = max(1, target_bytes // 64)
     return pd.DataFrame(np.random.rand(rows, 8))
@@ -34,12 +36,14 @@ def _dataframe_numeric(target_bytes: int) -> Any:
 def _series_numeric(target_bytes: int) -> Any:
     import numpy as np
     import pandas as pd
+
     n = max(1, target_bytes // 8)
     return pd.Series(np.random.rand(n))
 
 
 def _ndarray_dense(target_bytes: int) -> Any:
     import numpy as np
+
     n = max(1, target_bytes // 8)
     return np.random.rand(n)
 
@@ -121,7 +125,5 @@ def estimate_in_memory_size(obj: Any) -> int:
     if isinstance(obj, (list, tuple)):
         return sys.getsizeof(obj) + sum(sys.getsizeof(x) for x in obj)
     if isinstance(obj, dict):
-        return sys.getsizeof(obj) + sum(
-            sys.getsizeof(k) + sys.getsizeof(v) for k, v in obj.items()
-        )
+        return sys.getsizeof(obj) + sum(sys.getsizeof(k) + sys.getsizeof(v) for k, v in obj.items())
     return sys.getsizeof(obj)

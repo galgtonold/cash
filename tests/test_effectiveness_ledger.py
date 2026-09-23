@@ -5,6 +5,7 @@ that mattered is filtered too. So the controls here matter more than the
 positive case: most of these tests assert SILENCE, and each pins a distinct
 way a naive implementation would produce a confident, wrong diagnosis.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -20,8 +21,7 @@ def _drive(ledger, *, overhead, body, calls, hit=True, name="f"):
     """
     first = None
     for _ in range(calls):
-        msg = ledger.record(name, overhead_seconds=overhead,
-                            body_seconds=body, was_hit=hit)
+        msg = ledger.record(name, overhead_seconds=overhead, body_seconds=body, was_hit=hit)
         if msg and first is None:
             first = msg
     return first
@@ -45,12 +45,12 @@ def test_one_slow_store_does_not_clear_the_key_of_blame():
     is the key" -- the test that pins the wiring flaked on exactly that."""
     ledger = EffectivenessLedger(waste_threshold_seconds=0.01)
     culprit = ("payload", "Payload", 0.005, None, False)
-    ledger.record("f", overhead_seconds=0.120, body_seconds=0.0001, was_hit=False,
-                  culprit=culprit)
+    ledger.record("f", overhead_seconds=0.120, body_seconds=0.0001, was_hit=False, culprit=culprit)
     verdict = None
     for _ in range(4):
         verdict = verdict or ledger.record(
-            "f", overhead_seconds=0.006, body_seconds=0.0001, was_hit=True, culprit=culprit)
+            "f", overhead_seconds=0.006, body_seconds=0.0001, was_hit=True, culprit=culprit
+        )
     assert verdict is not None
     assert "register_hasher" in verdict[1], verdict
 
@@ -63,8 +63,7 @@ def test_one_slow_first_miss_does_not_convict_cheap_hits():
     ledger = EffectivenessLedger(waste_threshold_seconds=0.01)
     verdict = ledger.record("f", overhead_seconds=0.5, body_seconds=0.103, was_hit=False)
     for _ in range(2):
-        verdict = verdict or ledger.record(
-            "f", overhead_seconds=0.012, body_seconds=0.103, was_hit=True)
+        verdict = verdict or ledger.record("f", overhead_seconds=0.012, body_seconds=0.103, was_hit=True)
     assert verdict is None, verdict
     assert ledger.final_verdicts() == []
 
@@ -75,8 +74,7 @@ def test_a_slow_restore_still_is_not_blamed_on_the_key():
     culprit = ("path", "str", 0.0001, None, False)
     verdict = None
     for hit in (False, True, True, True):
-        verdict = verdict or ledger.record(
-            "f", overhead_seconds=0.2, body_seconds=0.01, was_hit=hit, culprit=culprit)
+        verdict = verdict or ledger.record("f", overhead_seconds=0.2, body_seconds=0.01, was_hit=hit, culprit=culprit)
     assert verdict is not None
     assert "loading the stored result" in verdict[0], verdict
 
@@ -104,8 +102,7 @@ def test_a_function_with_an_expensive_tail_is_not_flagged():
     ledger = EffectivenessLedger()
     for i in range(30):
         body = 30.0 if i == 7 else 0.005
-        msg = ledger.record("occasionally_slow", overhead_seconds=0.100,
-                            body_seconds=body, was_hit=True)
+        msg = ledger.record("occasionally_slow", overhead_seconds=0.100, body_seconds=body, was_hit=True)
         assert msg is None, f"flagged a function with a 30s tail on call {i}: {msg}"
 
 
@@ -118,9 +115,7 @@ def test_it_stays_quiet_when_caching_genuinely_wins():
 def test_it_warns_once_and_then_shuts_up():
     ledger = EffectivenessLedger()
     name = "noisy"
-    messages = [ledger.record(name, overhead_seconds=0.390,
-                              body_seconds=0.011, was_hit=True)
-                for _ in range(200)]
+    messages = [ledger.record(name, overhead_seconds=0.390, body_seconds=0.011, was_hit=True) for _ in range(200)]
     assert len([m for m in messages if m]) == 1, "warned more than once"
 
 
@@ -132,8 +127,7 @@ def test_a_call_with_unknown_body_time_is_ignored_entirely():
     """
     ledger = EffectivenessLedger()
     for _ in range(50):
-        msg = ledger.record("legacy", overhead_seconds=0.500,
-                            body_seconds=None, was_hit=True)
+        msg = ledger.record("legacy", overhead_seconds=0.500, body_seconds=None, was_hit=True)
         assert msg is None, msg
 
 
@@ -192,11 +186,14 @@ def test_the_threshold_is_the_knob_that_decides(threshold):
     """Waste just under the bar is silent; just over it speaks."""
     ledger = EffectivenessLedger(waste_threshold_seconds=threshold)
     per_call, calls = 0.100, 8
-    quiet = _drive(ledger, overhead=per_call, body=0.001,
-                   calls=int(threshold / per_call) - 1, name="under")
+    quiet = _drive(ledger, overhead=per_call, body=0.001, calls=int(threshold / per_call) - 1, name="under")
     assert quiet is None, quiet
 
-    loud = _drive(EffectivenessLedger(waste_threshold_seconds=threshold),
-                  overhead=per_call, body=0.001,
-                  calls=int(threshold / per_call) + calls, name="over")
+    loud = _drive(
+        EffectivenessLedger(waste_threshold_seconds=threshold),
+        overhead=per_call,
+        body=0.001,
+        calls=int(threshold / per_call) + calls,
+        name="over",
+    )
     assert loud is not None

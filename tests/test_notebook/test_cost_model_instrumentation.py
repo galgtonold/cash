@@ -5,32 +5,35 @@ cost_model_restore_seconds, cost_model_type_name, cost_model_family) are
 present on ProcessResult when the budget check runs and absent when the
 10 ms floor short-circuits before it.
 """
-import pytest
-import numpy as np
+
 from unittest.mock import MagicMock
+
+import numpy as np
+import pytest
 from traitlets.config.configurable import Configurable
 
-from cash.core import Cash
 from cash.backends import InMemoryBackend
+from cash.core import Cash
 from cash.notebook.statement import StatementProcessor
 
 _COST_MODEL_KEYS = (
-    'cost_model_size_bytes',
-    'cost_model_restore_seconds',
-    'cost_model_type_name',
-    'cost_model_family',
+    "cost_model_size_bytes",
+    "cost_model_restore_seconds",
+    "cost_model_type_name",
+    "cost_model_family",
 )
 
 
 class MockShell(Configurable):
     """Minimal IPython shell mock for StatementProcessor."""
+
     def __init__(self):
         super().__init__()
         self.user_ns: dict = {}
         self.input_transformers_cleanup: list = []
         self.ast_transformers: list = []
         self.user_global_ns = self.user_ns
-        self.display_pub = type('MockDisplayPub', (), {'publish': MagicMock()})()
+        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
 
 
 @pytest.fixture
@@ -70,17 +73,15 @@ class TestCostModelFieldsPopulated:
         result = processor.process_statement("arr = [i for i in range(100000)]")
 
         for key in _COST_MODEL_KEYS:
-            assert key in result, (
-                f"Expected cost-model field '{key}' in ProcessResult, got keys: {list(result.keys())}"
-            )
+            assert key in result, f"Expected cost-model field '{key}' in ProcessResult, got keys: {list(result.keys())}"
 
-        assert isinstance(result['cost_model_size_bytes'], int)
-        assert result['cost_model_size_bytes'] > 0
-        assert isinstance(result['cost_model_restore_seconds'], float)
-        assert isinstance(result['cost_model_type_name'], str)
-        assert result['cost_model_type_name'] == 'list'
-        assert isinstance(result['cost_model_family'], str)
-        assert result['cost_model_family'] != ''
+        assert isinstance(result["cost_model_size_bytes"], int)
+        assert result["cost_model_size_bytes"] > 0
+        assert isinstance(result["cost_model_restore_seconds"], float)
+        assert isinstance(result["cost_model_type_name"], str)
+        assert result["cost_model_type_name"] == "list"
+        assert isinstance(result["cost_model_family"], str)
+        assert result["cost_model_family"] != ""
 
     def test_cost_model_fields_on_large_ndarray(self, processor):
         """A numpy array statement should also surface cost-model fields with correct type."""
@@ -91,16 +92,13 @@ class TestCostModelFieldsPopulated:
         processor.cash_instance.config = config
 
         # Inject the array directly into the namespace to avoid import overhead
-        import numpy as np  # noqa: PLC0415
-        processor.shell.user_ns['np'] = np
+        processor.shell.user_ns["np"] = np
         result = processor.process_statement("arr = np.zeros(5_000_000)")
 
         for key in _COST_MODEL_KEYS:
-            assert key in result, (
-                f"Expected cost-model field '{key}' in ProcessResult; got: {list(result.keys())}"
-            )
-        assert result['cost_model_type_name'] == 'ndarray'
-        assert result['cost_model_family'] == 'ndarray_dense'
+            assert key in result, f"Expected cost-model field '{key}' in ProcessResult; got: {list(result.keys())}"
+        assert result["cost_model_type_name"] == "ndarray"
+        assert result["cost_model_family"] == "ndarray_dense"
 
 
 class TestCostModelFieldsAbsentOnFloorExit:

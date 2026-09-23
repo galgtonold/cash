@@ -14,6 +14,7 @@
 
 Cross-run cases are fresh processes on one cache, reading `CASH_SUMMARY`.
 """
+
 from __future__ import annotations
 
 import io
@@ -27,7 +28,7 @@ import pytest
 
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
 
-JOB = textwrap.dedent('''
+JOB = textwrap.dedent("""
     import sys, time
     from concurrent.futures import ThreadPoolExecutor
     import cash
@@ -47,7 +48,7 @@ JOB = textwrap.dedent('''
     else:
         for a in args:
             f(a)
-''')
+""")
 
 RANK_HERE = "def _rank(x):\n    return x + 1\n"
 RANK_MOVED = "from helpers import _rank\n"
@@ -56,16 +57,20 @@ RANK_MOVED = "from helpers import _rank\n"
 def _write(proj, *, top_k=3, rounds=60, moved=False):
     (proj / "helpers.py").write_text(RANK_HERE, encoding="utf-8")
     rank_def = RANK_MOVED if moved else RANK_HERE
-    (proj / "job.py").write_text(
-        JOB.format(rank_def=rank_def, top_k=top_k, rounds=rounds), encoding="utf-8")
+    (proj / "job.py").write_text(JOB.format(rank_def=rank_def, top_k=top_k, rounds=rounds), encoding="utf-8")
 
 
 def _run(proj, mode, args):
     env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    env.update(PYTHONDONTWRITEBYTECODE="1", CASH_CACHE_DIR=str(proj / ".cash"),
-               CASH_SUMMARY="1")
-    p = subprocess.run([sys.executable, "job.py", mode, *map(str, args)],
-                       cwd=str(proj), env=env, capture_output=True, text=True, timeout=180)
+    env.update(PYTHONDONTWRITEBYTECODE="1", CASH_CACHE_DIR=str(proj / ".cash"), CASH_SUMMARY="1")
+    p = subprocess.run(
+        [sys.executable, "job.py", mode, *map(str, args)],
+        cwd=str(proj),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
     assert p.returncode == 0, p.stderr[-2000:]
     return p.stderr
 
@@ -118,20 +123,26 @@ def test_new_arguments_under_unchanged_code_stay_new_arguments(tmp_path):
 
 # -- in-process ---------------------------------------------------------------
 
+
 def _stored(path, cap):
     from cash.notebook.file_dep_snapshot import file_content_hash
+
     st = os.stat(path)
-    rec = {"mtime": st.st_mtime, "size": st.st_size, "mtime_ns": st.st_mtime_ns,
-           "hash": file_content_hash(str(path), st.st_size, cap)}
+    rec = {
+        "mtime": st.st_mtime,
+        "size": st.st_size,
+        "mtime_ns": st.st_mtime_ns,
+        "hash": file_content_hash(str(path), st.st_size, cap),
+    }
     if st.st_size > cap:
         rec.update(ctime=st.st_ctime, ctime_ns=st.st_ctime_ns)
     return rec
 
 
 @pytest.mark.parametrize("recorded_cap, checked_cap", [(1000, 10**6), (10**6, 1000)])
-def test_a_changed_hashing_threshold_is_not_called_a_content_change(
-        tmp_path, recorded_cap, checked_cap):
+def test_a_changed_hashing_threshold_is_not_called_a_content_change(tmp_path, recorded_cap, checked_cap):
     from cash.notebook.file_dep_snapshot import file_dep_is_fresh
+
     data = tmp_path / "data.bin"
     data.write_bytes(b"x" * 2000)
     stored = _stored(data, recorded_cap)
@@ -140,6 +151,7 @@ def test_a_changed_hashing_threshold_is_not_called_a_content_change(
 
 def test_a_real_edit_in_one_regime_is_still_a_content_change(tmp_path):
     from cash.notebook.file_dep_snapshot import file_dep_is_fresh
+
     data = tmp_path / "data.bin"
     data.write_bytes(b"x" * 2000)
     stored = _stored(data, 10**6)
@@ -149,17 +161,25 @@ def test_a_real_edit_in_one_regime_is_still_a_content_change(tmp_path):
 
 def test_a_sampled_fingerprint_is_labelled_and_a_hit_says_it_trusts_timestamps():
     from cash.core import Cash, _describe_file_deps
-    shown = _describe_file_deps({"big.npy": {"size": 3 << 28, "hash": "ab" * 32,
-                                             "ctime_ns": 1, "ctime": 1.0}})
+
+    shown = _describe_file_deps({"big.npy": {"size": 3 << 28, "hash": "ab" * 32, "ctime_ns": 1, "ctime": 1.0}})
     assert "sampled hash" in shown["big.npy"], shown
-    line = Cash._describe_call({"func_name": "m.f", "cache_hit": True, "cache_key": "k",
-                                "time_saved": 1.0, "execution_time": 0.001,
-                                "sampled_files": ("C:/data/big.npy",)})
+    line = Cash._describe_call(
+        {
+            "func_name": "m.f",
+            "cache_hit": True,
+            "cache_key": "k",
+            "time_saved": 1.0,
+            "execution_time": 0.001,
+            "sampled_files": ("C:/data/big.npy",),
+        }
+    )
     assert "trusts the timestamps of big.npy" in line, line
 
 
 def test_an_untaggable_result_is_not_logged_on_every_call(tmp_path, caplog):
     from cash import Cash
+
     c = Cash(cache_dir=str(tmp_path / "c"))
 
     @c.cache
@@ -176,6 +196,7 @@ def test_an_untaggable_result_is_not_logged_on_every_call(tmp_path, caplog):
 
 def test_the_summary_goes_through_the_applications_handler_at_any_level(tmp_path, capsys):
     from cash import Cash
+
     c = Cash(cache_dir=str(tmp_path / "c"))
 
     @c.cache

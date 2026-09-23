@@ -7,30 +7,33 @@ body statements are individually passed through and that the iteration
 context marker is present.
 """
 
-import unittest
-from cash.notebook.control_structures import ControlStructureProcessor
 import ast
+import unittest
 from unittest.mock import MagicMock
+
 from cash.notebook.cache_status import CacheStatus
+from cash.notebook.control_structures import ControlStructureProcessor
 
 
 class TestLoopCodeCapture(unittest.TestCase):
     def test_loop_passes_body_statements_per_iteration(self):
         """Loop body statements should be passed individually per iteration."""
         shell = MagicMock()
-        shell.user_ns = {'range': range}
+        shell.user_ns = {"range": range}
 
         sp = MagicMock()
-        sp.process_statement = MagicMock(return_value={
-            'status': CacheStatus.COMPUTED,
-            'execution_time': 0.01,
-            'stdout': '',
-            'stderr': '',
-            'outputs': []
-        })
+        sp.process_statement = MagicMock(
+            return_value={
+                "status": CacheStatus.COMPUTED,
+                "execution_time": 0.01,
+                "stdout": "",
+                "stderr": "",
+                "outputs": [],
+            }
+        )
         sp.variable_lineage = {}
         sp.vars_with_mutation_lineage = set()
-        sp.compute_hash = MagicMock(return_value='fakehash')
+        sp.compute_hash = MagicMock(return_value="fakehash")
 
         csp = ControlStructureProcessor(shell, sp)
 
@@ -48,15 +51,15 @@ for i in range(3):
         # Each call should have iteration context and body statement code
         for call in sp.process_statement.call_args_list:
             passed_code = call[0][0]
-            self.assertIn('# __iteration_context__:', passed_code)
+            self.assertIn("# __iteration_context__:", passed_code)
 
         # Check that both body statements are covered
         all_codes = [call[0][0] for call in sp.process_statement.call_args_list]
-        has_x = any('x = i * 10' in c for c in all_codes)
+        has_x = any("x = i * 10" in c for c in all_codes)
         has_y = any("y = {'a': x}" in c for c in all_codes)
         self.assertTrue(has_x, "Body statement 'x = i * 10' not found")
         self.assertTrue(has_y, "Body statement \"y = {'a': x}\" not found")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

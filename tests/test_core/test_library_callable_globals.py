@@ -11,6 +11,7 @@ Each form is its own cached function in one job, so three processes cover all
 of them: cold, warm (must hit -- a key that moves every run would pass the
 edit check too), and after the edit.
 """
+
 from __future__ import annotations
 
 import os
@@ -23,7 +24,7 @@ np = pytest.importorskip("numpy")
 
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
 
-CFG = '''\
+CFG = """\
 from functools import partial
 import numpy as np
 
@@ -42,9 +43,9 @@ def _scale(x, k):
 
 
 VEC = np.vectorize(partial(_scale, k=K), otypes=[float])   # a library wrapper over a partial
-'''
+"""
 
-JOB = '''\
+JOB = """\
 import sys, time
 from functools import partial
 import numpy as np
@@ -111,20 +112,26 @@ def by_vectorize(x):
 print(by_from_import(3.14159), by_module_attr(3.14159), by_poly(2.0),
       by_lookup("a"), by_same_module(3.14159), by_itemgetter([10, 20, 30, 40]),
       by_methodcaller("a"), by_vectorize(2.0))
-'''
+"""
 
-FORMS = {"from-import", "module-attr", "poly1d", "bound-method", "same-module",
-         "itemgetter", "methodcaller", "vectorize"}
+FORMS = {
+    "from-import",
+    "module-attr",
+    "poly1d",
+    "bound-method",
+    "same-module",
+    "itemgetter",
+    "methodcaller",
+    "vectorize",
+}
 
 
 def _run(proj):
     env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
     env.update(PYTHONDONTWRITEBYTECODE="1", CASH_CACHE_DIR=str(proj / ".cash"))
-    p = subprocess.run([sys.executable, "job.py"], cwd=str(proj), env=env,
-                       capture_output=True, text=True, timeout=120)
+    p = subprocess.run([sys.executable, "job.py"], cwd=str(proj), env=env, capture_output=True, text=True, timeout=120)
     assert p.returncode == 0, p.stderr[-2000:]
-    ran = {line.split(maxsplit=1)[1] for line in p.stderr.splitlines()
-           if line.startswith("[RUN] ")}
+    ran = {line.split(maxsplit=1)[1] for line in p.stderr.splitlines() if line.startswith("[RUN] ")}
     return p.stdout.strip(), ran
 
 
@@ -140,7 +147,7 @@ def test_editing_what_a_library_callable_global_was_built_with_invalidates(tmp_p
     assert ran == FORMS
 
 
-STATEFUL_JOB = '''\
+STATEFUL_JOB = """\
 import sys, time
 import numpy as np
 import cash
@@ -164,7 +171,7 @@ def wave(x):
 
 
 print(noisy(3), noisy(3), noisy(3), wave([0.5, 1.0]), wave([0.5, 1.0]), wave([0.5, 1.0]))
-'''
+"""
 
 
 def test_a_callable_that_changes_when_called_does_not_miss_forever(tmp_path):

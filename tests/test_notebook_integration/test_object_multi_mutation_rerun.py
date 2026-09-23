@@ -11,12 +11,12 @@ Scoped to method receivers, so subscript/attribute in-place writes
 (``df['col']=..``) keep their per-statement cache (the CAS-42 design) — covered
 by ``test_df_subscript_self_scale_not_over_reset`` below and the voladj suite.
 """
+
 import pytest
 
 pytestmark = pytest.mark.upstream
 
-BOX = ("class Box:\n    def __init__(self, n):\n        self.items = []\n"
-       "        self.n = n\nb = Box(0)")
+BOX = "class Box:\n    def __init__(self, n):\n        self.items = []\n        self.n = n\nb = Box(0)"
 
 
 def _rerun(nb_runner, cells, expect):
@@ -36,11 +36,15 @@ def test_method_mutation_plus_attr_increment(nb_runner):
 
 def test_results_append_and_counter(nb_runner):
     """Common real pattern: accumulate a list and a counter on one object."""
-    _rerun(nb_runner, [
-        "class S:\n    def __init__(self):\n        self.rows = []\n        self.total = 0\ns = S()",
-        "s.rows.append(10)\ns.total += 10",
-        "print(s.rows, s.total)",
-    ], "[10] 10")
+    _rerun(
+        nb_runner,
+        [
+            "class S:\n    def __init__(self):\n        self.rows = []\n        self.total = 0\ns = S()",
+            "s.rows.append(10)\ns.total += 10",
+            "print(s.rows, s.total)",
+        ],
+        "[10] 10",
+    )
 
 
 def test_single_attr_increment_still_ok(nb_runner):
@@ -54,8 +58,12 @@ def test_single_method_append_still_ok(nb_runner):
 def test_df_subscript_self_scale_not_over_reset(nb_runner):
     """CAS-42 guard: a subscript in-place write is NOT a method receiver, so it
     keeps its per-statement cache and still re-runs idempotently (not doubled)."""
-    _rerun(nb_runner, [
-        "import pandas as pd\ndf = pd.DataFrame({'a': list(range(1, 9))})",
-        "df['a'] = df['a'] * 2",
-        "print(df['a'].tolist())",
-    ], "[2, 4, 6, 8, 10, 12, 14, 16]")
+    _rerun(
+        nb_runner,
+        [
+            "import pandas as pd\ndf = pd.DataFrame({'a': list(range(1, 9))})",
+            "df['a'] = df['a'] * 2",
+            "print(df['a'].tolist())",
+        ],
+        "[2, 4, 6, 8, 10, 12, 14, 16]",
+    )

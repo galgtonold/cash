@@ -13,6 +13,7 @@ Measured 2026-09-13:
   [flush]    oversized: 0/20 kept, big not kept.  Control: 20/20, big kept.
   [pressure] host 95%:  0/20 kept.                Control (50%): 20/20.
 """
+
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -26,16 +27,17 @@ MB = 1_000_000
 
 
 def oversized_write():
-    for label, big in (("oversized (0.95 x cap)", int(0.95 * 100 * MB)),
-                       ("control   (0.30 x cap)", int(0.30 * 100 * MB))):
+    for label, big in (
+        ("oversized (0.95 x cap)", int(0.95 * 100 * MB)),
+        ("control   (0.30 x cap)", int(0.30 * 100 * MB)),
+    ):
         b = InMemoryBackend(max_size_bytes=100 * MB)
         for i in range(20):
             b.set(f"small-{i}", bytes(1 * MB), {"execution_time": 5.0})
             b.get(f"small-{i}")  # hot
         b.set("big", bytes(big), {"execution_time": 0.2})
         kept = sum(b.get(f"small-{i}")[0] is not None for i in range(20))
-        print(f"[flush] {label}: hot 1MB entries kept {kept:2d}/20, "
-              f"big kept={b.get('big')[0] is not None}")
+        print(f"[flush] {label}: hot 1MB entries kept {kept:2d}/20, big kept={b.get('big')[0] is not None}")
 
 
 def host_pressure():

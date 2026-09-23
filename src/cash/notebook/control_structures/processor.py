@@ -46,14 +46,25 @@ if TYPE_CHECKING:
     from ..annotations import CacheAnnotation
     from ..statement import ProcessResult
 
-__all__ = ["ControlStructureResult", "ControlStructureProcessor", "is_control_structure", "get_control_structure_type", "contains_break_or_continue", "contains_top_level_await", "extract_target_names", "bind_target_values", "build_iteration_context", "compute_context_hash"]
+__all__ = [
+    "ControlStructureResult",
+    "ControlStructureProcessor",
+    "is_control_structure",
+    "get_control_structure_type",
+    "contains_break_or_continue",
+    "contains_top_level_await",
+    "extract_target_names",
+    "bind_target_values",
+    "build_iteration_context",
+    "compute_context_hash",
+]
 
 logger = logging.getLogger(__name__)
 
 
 def _global_rng_fingerprint() -> tuple:
     """The state of ``random``'s and numpy's global generators, comparable with ``==``."""
-    np = sys.modules.get('numpy')
+    np = sys.modules.get("numpy")
     numpy_state: tuple | None = None
     if np is not None:
         try:
@@ -65,7 +76,7 @@ def _global_rng_fingerprint() -> tuple:
 
 
 def _status(metric: Any) -> Any:
-    status = metric.get('status') if isinstance(metric, dict) else getattr(metric, 'status', None)
+    status = metric.get("status") if isinstance(metric, dict) else getattr(metric, "status", None)
     return CacheStatus(status) if isinstance(status, str) and status in CacheStatus.__members__ else status
 
 
@@ -122,13 +133,14 @@ def _holds_rng_state(value: Any) -> bool:
     """A generator object: drawing from it inside a loop changes it in place."""
     if isinstance(value, random.Random):
         return True
-    module = type(value).__module__ or ''
-    return module.startswith('numpy.random') and type(value).__name__ in (
-        'Generator', 'RandomState')
+    module = type(value).__module__ or ""
+    return module.startswith("numpy.random") and type(value).__name__ in ("Generator", "RandomState")
+
 
 @dataclass
 class ControlStructureResult:
     """Result from executing a control structure."""
+
     success: bool
     metrics: list[ProcessResult]  # Metrics for each processed statement
     error: Exception | None = None
@@ -136,23 +148,26 @@ class ControlStructureResult:
     cached_iterations: int = 0
     computed_iterations: int = 0
 
+
 def is_control_structure(node: ast.AST) -> bool:
     """Check if an AST node is a control structure that should be processed."""
     return isinstance(node, (ast.For, ast.While, ast.If, ast.With, ast.Try))
 
+
 def get_control_structure_type(node: ast.AST) -> str | None:
     """Get the type of control structure for an AST node."""
     if isinstance(node, ast.For):
-        return 'for'
+        return "for"
     if isinstance(node, ast.While):
-        return 'while'
+        return "while"
     if isinstance(node, ast.If):
-        return 'if'
+        return "if"
     if isinstance(node, ast.With):
-        return 'with'
+        return "with"
     if isinstance(node, ast.Try):
-        return 'try'
+        return "try"
     return None
+
 
 def contains_break_or_continue(nodes: list[ast.AST]) -> bool:
     """
@@ -167,6 +182,7 @@ def contains_break_or_continue(nodes: list[ast.AST]) -> bool:
             if isinstance(child, (ast.Break, ast.Continue)):
                 return True
     return False
+
 
 def contains_top_level_await(node: ast.AST) -> bool:
     """True if *node* holds an ``await`` / ``async for`` / ``async with`` that
@@ -188,7 +204,9 @@ def contains_top_level_await(node: ast.AST) -> bool:
             return True
     return False
 
+
 # --- Helper Functions (Module Level) ---
+
 
 def extract_target_names(target: ast.AST) -> list[str]:
     """Extract variable names from a for loop target."""
@@ -200,6 +218,7 @@ def extract_target_names(target: ast.AST) -> list[str]:
             names.extend(extract_target_names(elt))
         return names
     return []
+
 
 def bind_target_values(target: ast.AST, value, user_ns: dict[str, Any]) -> dict[str, Any]:
     """
@@ -226,6 +245,7 @@ def bind_target_values(target: ast.AST, value, user_ns: dict[str, Any]) -> dict[
             user_ns[target.value.id] = value
             bindings[target.value.id] = value
     return bindings
+
 
 def build_iteration_context(
     target_names: list[str],
@@ -274,15 +294,18 @@ def build_iteration_context(
                     context[name] = cached
                     continue
                 from cash.notebook.object_hashing import compute_hash_full
+
                 context[name] = compute_hash_full(value)
 
     return context
+
 
 def compute_context_hash(context: dict[str, Any]) -> str:
     """Compute a hash of the iteration context."""
     items = sorted(context.items())
     context_str = str(items)
-    return hashlib.sha256(context_str.encode('utf-8')).hexdigest()[:16]
+    return hashlib.sha256(context_str.encode("utf-8")).hexdigest()[:16]
+
 
 class ControlStructureProcessor:
     """
@@ -308,7 +331,7 @@ class ControlStructureProcessor:
         self,
         shell,
         statement_processor,  # The StatementProcessor instance
-        debug: bool = False
+        debug: bool = False,
     ):
         self.shell = shell
         self.statement_processor = statement_processor
@@ -318,6 +341,7 @@ class ControlStructureProcessor:
         from .for_handler import ForLoopHandler
         from .if_handler import IfHandler
         from .try_handler import TryHandler
+
         self._for_handler = ForLoopHandler(shell, statement_processor, debug, dispatcher=self)
         self._if_handler = IfHandler(shell, statement_processor, debug, dispatcher=self)
         self._try_handler = TryHandler(shell, statement_processor, debug, dispatcher=self)
@@ -329,7 +353,7 @@ class ControlStructureProcessor:
         silent: bool = False,
         parent_context: dict[str, Any] | None = None,
         raw_cell: str | None = None,
-        inherited_annotation: 'CacheAnnotation | None' = None,
+        inherited_annotation: "CacheAnnotation | None" = None,
         prev_node: ast.stmt | None = None,
     ) -> ControlStructureResult:
         """
@@ -363,39 +387,41 @@ class ControlStructureProcessor:
         Returns:
             ControlStructureResult with metrics
         """
-        state = getattr(self.statement_processor, '_tracking_state', None)
-        outcomes = getattr(state, 'control_outcomes', None)
+        state = getattr(self.statement_processor, "_tracking_state", None)
+        outcomes = getattr(state, "control_outcomes", None)
         if parent_context is not None or not isinstance(outcomes, dict):
-            return self._dispatch(node, ttl, silent, parent_context, raw_cell,
-                                  inherited_annotation, prev_node)
+            return self._dispatch(node, ttl, silent, parent_context, raw_cell, inherited_annotation, prev_node)
         # Record what this structure left behind, for the simulation -- see
         # TrackingState.control_outcomes.
         lineage = state.variable_lineage
         code = ast.unparse(node)
         try:
             from ..analysis import CodeAnalyzer
+
             reads, writes = CodeAnalyzer.analyze_code_block(code)
         except (SyntaxError, ValueError, TypeError):
             reads, writes = set(), set()
-        entry = _entry_lineages(reads, lineage,
-                                getattr(state, 'simulated_lineage', None))
+        entry = _entry_lineages(reads, lineage, getattr(state, "simulated_lineage", None))
         before = dict(lineage)
         reads_before = dict(state.statement_file_reads)
         rng_before = _global_rng_fingerprint() if isinstance(node, ast.For) else None
         from ..write_observer import observe_writes
+
         sp = self.statement_processor
-        begin_cost = getattr(sp, 'begin_structure_cost', None)
+        begin_cost = getattr(sp, "begin_structure_cost", None)
         if begin_cost is not None:
             begin_cost()
         result = None
         try:
             with observe_writes() as written:
-                result = self._dispatch(node, ttl, silent, parent_context, raw_cell,
-                                        inherited_annotation, prev_node)
+                result = self._dispatch(node, ttl, silent, parent_context, raw_cell, inherited_annotation, prev_node)
         finally:
             if begin_cost is not None:
-                changed = ({v for v, h in lineage.items() if before.get(v) != h} | set(writes)
-                           if result is not None and result.success else set())
+                changed = (
+                    {v for v, h in lineage.items() if before.get(v) != h} | set(writes)
+                    if result is not None and result.success
+                    else set()
+                )
                 sp.end_structure_cost(reads, changed, result is not None and result.success)
         if result.success:
             self._record_writes(code, reads, written)
@@ -409,8 +435,9 @@ class ControlStructureProcessor:
                 if reads_before.get(key, (None,))[0] is not local:
                     files.update(local)
             from ..statement.file_deps import compute_file_hash_component
+
             outcome = (entry, left, frozenset(files), compute_file_hash_component(files))
-            outcomes[hashlib.sha256(code.encode('utf-8')).hexdigest()] = outcome
+            outcomes[hashlib.sha256(code.encode("utf-8")).hexdigest()] = outcome
             # Judged only on a run that restored nothing: a restored statement
             # puts back the RNG state it was stored with, so a loop that draws
             # nothing still moves the generators when it hits in a new kernel.
@@ -462,13 +489,14 @@ class ControlStructureProcessor:
         always was.
         """
         from ..cache_key import control_outcome_key
+
         sp = self.statement_processor
-        backend = getattr(getattr(sp, 'cash_instance', None), 'backend', None)
-        restorer = getattr(sp, '_stmt_restorer', None)
+        backend = getattr(getattr(sp, "cash_instance", None), "backend", None)
+        restorer = getattr(sp, "_stmt_restorer", None)
         if backend is None or restorer is None:
             return
         key = control_outcome_key(code)
-        written = self.__dict__.setdefault('_outcomes_written', {})
+        written = self.__dict__.setdefault("_outcomes_written", {})
         try:
             callees = self._persistable_callees(node, code, reads, before, rng_before)
             if callees is None:
@@ -477,12 +505,16 @@ class ControlStructureProcessor:
                     written[key] = None
                 return
             entry, left, files, file_component = outcome
-            record = {'entry': entry, 'callees': callees, 'left': left,
-                      'files': sorted(files), 'file_component': file_component}
+            record = {
+                "entry": entry,
+                "callees": callees,
+                "left": left,
+                "files": sorted(files),
+                "file_component": file_component,
+            }
             if written.get(key) == record:
                 return
-            restorer.persist_metadata_only(
-                backend, key, {'control_outcome': True, 'code': code, 'ttl': None, **record})
+            restorer.persist_metadata_only(backend, key, {"control_outcome": True, "code": code, "ttl": None, **record})
             written[key] = record
         except Exception:  # noqa: BLE001 - never let bookkeeping break the user's loop
             logger.debug("[CONTROL] control-outcome persistence failed", exc_info=True)
@@ -517,16 +549,17 @@ class ControlStructureProcessor:
             statement_calls_user_writer,
             statement_writes_files,
         )
+
         user_ns = self.shell.user_ns
         if statement_writes_files(code) or statement_calls_user_writer(code, user_ns):
             return None
         if any(_holds_rng_state(user_ns.get(name)) for name in reads):
             return None
         callee_names = called_function_globals(reads, user_ns)
-        resolve = getattr(self.statement_processor, '_resolve_live_function_source', None)
+        resolve = getattr(self.statement_processor, "_resolve_live_function_source", None)
         if resolve is None:
             return None
-        for name in (set(reads) | callee_names):
+        for name in set(reads) | callee_names:
             if not isinstance(user_ns.get(name), types.FunctionType):
                 continue
             source = resolve(name)
@@ -536,7 +569,7 @@ class ControlStructureProcessor:
             return None
         if called_function_global_mutations(ast.parse(code), resolve, include_control_bodies=True):
             return None
-        return {name: before.get(name, 'ABSENT') for name in sorted(callee_names)}
+        return {name: before.get(name, "ABSENT") for name in sorted(callee_names)}
 
     def _dispatch(
         self,
@@ -545,7 +578,7 @@ class ControlStructureProcessor:
         silent: bool,
         parent_context: dict[str, Any] | None,
         raw_cell: str | None,
-        inherited_annotation: 'CacheAnnotation | None',
+        inherited_annotation: "CacheAnnotation | None",
         prev_node: ast.stmt | None,
     ) -> ControlStructureResult:
         if isinstance(node, ast.For):
@@ -554,22 +587,43 @@ class ControlStructureProcessor:
                 if self.debug:
                     logger.debug("[CONTROL] Loop contains break/continue, executing as single unit")
                 return self._execute_as_single_unit(
-                    node, ttl, silent, raw_cell, inherited_annotation,
+                    node,
+                    ttl,
+                    silent,
+                    raw_cell,
+                    inherited_annotation,
                 )
             return self._for_handler.process(
-                node, ttl, silent, parent_context, raw_cell, inherited_annotation,
+                node,
+                ttl,
+                silent,
+                parent_context,
+                raw_cell,
+                inherited_annotation,
                 prev_node,
             )
         if isinstance(node, ast.If):
             return self._if_handler.process(
-                node, ttl, silent, raw_cell, inherited_annotation,
+                node,
+                ttl,
+                silent,
+                raw_cell,
+                inherited_annotation,
             )
         if isinstance(node, ast.Try):
             return self._try_handler.process(
-                node, ttl, silent, raw_cell, inherited_annotation,
+                node,
+                ttl,
+                silent,
+                raw_cell,
+                inherited_annotation,
             )
         return self._execute_as_single_unit(
-            node, ttl, silent, raw_cell, inherited_annotation,
+            node,
+            ttl,
+            silent,
+            raw_cell,
+            inherited_annotation,
         )
 
     # ------------------------------------------------------------------
@@ -582,7 +636,7 @@ class ControlStructureProcessor:
         ttl: int | None,
         silent: bool,
         raw_cell: str | None = None,
-        inherited_annotation: 'CacheAnnotation | None' = None,
+        inherited_annotation: "CacheAnnotation | None" = None,
         force_outputs: set[str] | None = None,
     ) -> ControlStructureResult:
         """
@@ -611,10 +665,16 @@ class ControlStructureProcessor:
                 logger.debug("[CONTROL] Processing %s as single unit: %s...", cs_type, code[:80])
 
             annotation = _helpers.resolve_unit_annotation(
-                raw_cell, node, inherited_annotation,
+                raw_cell,
+                node,
+                inherited_annotation,
             )
             metrics = self.statement_processor.process_statement(
-                code, ttl, silent, annotation=annotation, stream_output=True,
+                code,
+                ttl,
+                silent,
+                annotation=annotation,
+                stream_output=True,
                 force_outputs=force_outputs,
             )
             return self._finalize_single_unit(node, code, metrics)
@@ -622,11 +682,7 @@ class ControlStructureProcessor:
             # Handed back to the cell, which raises it: logged at ERROR it printed
             # the traceback a second time, through cash (round 25, r25s2/r25s3).
             logger.debug("[CONTROL] Error executing control structure as single unit: %s", e, exc_info=True)
-            return ControlStructureResult(
-                success=False,
-                metrics=[],
-                error=e
-            )
+            return ControlStructureResult(success=False, metrics=[], error=e)
 
     async def process_await_unit(
         self,
@@ -634,7 +690,7 @@ class ControlStructureProcessor:
         ttl: int | None = None,
         silent: bool = False,
         raw_cell: str | None = None,
-        inherited_annotation: 'CacheAnnotation | None' = None,
+        inherited_annotation: "CacheAnnotation | None" = None,
     ) -> ControlStructureResult:
         """Run a control structure whose body contains a top-level ``await`` as
         ONE awaited unit.
@@ -659,24 +715,29 @@ class ControlStructureProcessor:
                 logger.debug("[CONTROL] Processing %s as awaited single unit: %s...", cs_type, code[:80])
 
             annotation = _helpers.resolve_unit_annotation(
-                raw_cell, node, inherited_annotation,
+                raw_cell,
+                node,
+                inherited_annotation,
             )
             metrics = await self.statement_processor.process_statement_async(
-                code, ttl, silent, annotation=annotation, stream_output=True,
+                code,
+                ttl,
+                silent,
+                annotation=annotation,
+                stream_output=True,
             )
             return self._finalize_single_unit(node, code, metrics)
         except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user code executed as a unit
             # Handed back to the cell, which raises it: logged at ERROR it printed
             # the traceback a second time, through cash (round 25, r25s2/r25s3).
             logger.debug("[CONTROL] Error executing awaited control structure as single unit: %s", e, exc_info=True)
-            return ControlStructureResult(
-                success=False,
-                metrics=[],
-                error=e
-            )
+            return ControlStructureResult(success=False, metrics=[], error=e)
 
     def _finalize_single_unit(
-        self, node: ast.AST, code: str, metrics: 'ProcessResult',
+        self,
+        node: ast.AST,
+        code: str,
+        metrics: "ProcessResult",
     ) -> ControlStructureResult:
         """Shared post-execution bookkeeping for a single-unit control structure.
 
@@ -686,42 +747,45 @@ class ControlStructureProcessor:
         between a flagged and an unflagged compile path is exactly what produced it.
         """
         # After execution, update lineage for mutated variables
-        if metrics.get('status') in (CacheStatus.COMPUTED, CacheStatus.RESTORED):
+        if metrics.get("status") in (CacheStatus.COMPUTED, CacheStatus.RESTORED):
             _helpers.update_lineage_after_execution(
-                self.shell, self.statement_processor, node, code, debug=self.debug,
+                self.shell,
+                self.statement_processor,
+                node,
+                code,
+                debug=self.debug,
             )
 
         # Annotate metrics with control structure body statements
         # so the badge can show individual statements instead of the
         # entire block as one opaque line.
         cs_type = get_control_structure_type(node)
-        metrics['control_type'] = cs_type
+        metrics["control_type"] = cs_type
         body_stmts = _helpers.extract_body_statements(node)
         if body_stmts:
-            metrics['body_statements'] = body_stmts
+            metrics["body_statements"] = body_stmts
 
         # Extract error and annotate with line info for clean traceback.
         # For single-unit control structures, the <cash> frame has a line
         # number relative to the unparsed code.  We need to offset it by
         # the node's starting line in the cell so _show_clean_error points
         # to the correct cell line.
-        error = metrics.get('error') if metrics.get('status') == CacheStatus.ERROR else None
+        error = metrics.get("error") if metrics.get("status") == CacheStatus.ERROR else None
         if error is not None:
             # Try to extract the actual error line from the <cash> traceback
             cash_lineno = _helpers.extract_cash_frame_lineno(error)
             if cash_lineno is not None:
                 # ast.unparse produces code starting at line 1;
                 # the node in the cell starts at node.lineno.
-                cell_lineno = getattr(node, 'lineno', 1) + cash_lineno - 1
+                cell_lineno = getattr(node, "lineno", 1) + cash_lineno - 1
                 with contextlib.suppress(AttributeError, TypeError):
                     error._cash_error_lineno = cell_lineno
 
         return ControlStructureResult(
-            success=metrics.get('status') != CacheStatus.ERROR,
+            success=metrics.get("status") != CacheStatus.ERROR,
             metrics=[metrics],
             error=error,
             total_iterations=1,
-            cached_iterations=1 if metrics.get('status') == CacheStatus.RESTORED else 0,
-            computed_iterations=1 if metrics.get('status') == CacheStatus.COMPUTED else 0
+            cached_iterations=1 if metrics.get("status") == CacheStatus.RESTORED else 0,
+            computed_iterations=1 if metrics.get("status") == CacheStatus.COMPUTED else 0,
         )
-

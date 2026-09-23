@@ -12,6 +12,7 @@ Every function here gives up (returns None or False) on anything else -- a
 dict, a set, an object, a subclass, a cycle, too many levels -- and the caller
 falls back to its general walk.
 """
+
 from __future__ import annotations
 
 import copyreg
@@ -30,8 +31,7 @@ from typing import Any
 #: date left the fast path and cost 16x their body per call to key (round 20).
 #: ``bytearray`` is a leaf for keying (it pickles by value) but is mutable, so
 #: a value holding one is not `profile`'s immutable.
-_VALUE_TYPES = (datetime.date, datetime.datetime, datetime.time, datetime.timedelta,
-                decimal.Decimal)
+_VALUE_TYPES = (datetime.date, datetime.datetime, datetime.time, datetime.timedelta, decimal.Decimal)
 LEAF_TYPES = (str, int, float, bool, type(None), bytes, complex, bytearray, *_VALUE_TYPES)
 IMMUTABLE_LEAF_TYPES = (str, int, float, bool, type(None), bytes, complex, *_VALUE_TYPES)
 SEQS = (list, tuple)
@@ -107,9 +107,8 @@ def _levels(value: Any):
         yield flat, types
         if all(t in leaves for t in types):
             return
-        level = flat if all(t in SEQS for t in types) else [
-            x for x in flat if type(x) in SEQS]
-    raise _NotPlain                     # deeper than MAX_LEVELS, or a cycle
+        level = flat if all(t in SEQS for t in types) else [x for x in flat if type(x) in SEQS]
+    raise _NotPlain  # deeper than MAX_LEVELS, or a cycle
 
 
 class _NotPlain(Exception):
@@ -123,7 +122,7 @@ def is_plain(value: Any) -> bool:
     try:
         for _level in _levels(value):
             pass
-    except (_NotPlain, TypeError):      # TypeError: an unhashable type among them
+    except (_NotPlain, TypeError):  # TypeError: an unhashable type among them
         return False
     return True
 
@@ -146,7 +145,7 @@ def dict_rows(value: Any) -> tuple[tuple, list] | None:
         if len({frozenset(o) for o in orders}) != 1:
             return None
         keys = tuple(sorted(next(iter(orders))))
-    except TypeError:                   # keys that do not sort together
+    except TypeError:  # keys that do not sort together
         return None
     if not keys or not all(type(k) in (str, int) for k in keys):
         return None
@@ -168,7 +167,7 @@ def dict_rows_profile(value: Any) -> int | None:
         for depth, (flat, types) in enumerate(_levels(found[1])):
             if not all(t in IMMUTABLE_LEAF_TYPES or t is tuple for t in types):
                 return None
-            if depth:                   # the values; level 0 is the temporary tuples
+            if depth:  # the values; level 0 is the temporary tuples
                 total += _level_size(flat)
     except (_NotPlain, TypeError):
         return None
@@ -212,8 +211,7 @@ def identity_changed(value: Any, snapshot: list[tuple | None]) -> bool:
     if levels is None or len(levels) != len(snapshot):
         return True
     for (flat, _types), before in zip(levels, snapshot):
-        if before is not None and (len(flat) != len(before)
-                                   or not all(map(operator.is_, flat, before))):
+        if before is not None and (len(flat) != len(before) or not all(map(operator.is_, flat, before))):
             return True
     return False
 
@@ -310,8 +308,7 @@ def level_types(value: Any) -> list[set] | None:
         return None
 
 
-def copy_plain(value: Any, immutable: bool | None = None,
-               levels: list[set] | None = None) -> tuple[bool, Any]:
+def copy_plain(value: Any, immutable: bool | None = None, levels: list[set] | None = None) -> tuple[bool, Any]:
     """``(True, copy)`` for plain data, ``(False, None)`` for anything else.
 
     Tuples of immutables all the way down need a new top list at most. Rows
@@ -330,10 +327,12 @@ def copy_plain(value: Any, immutable: bool | None = None,
         return True, (list(value) if type(value) is list else value)
     if levels is None:
         levels = level_types(value)
-    if (levels is not None and len(levels) == 2
-            and all(t in IMMUTABLE_LEAF_TYPES for t in levels[1])
-            and all(t in SEQS or t in IMMUTABLE_LEAF_TYPES for t in levels[0])):
-        rows = (list(map(list, value)) if levels[0] == {list}
-                else [list(x) if type(x) is list else x for x in value])
+    if (
+        levels is not None
+        and len(levels) == 2
+        and all(t in IMMUTABLE_LEAF_TYPES for t in levels[1])
+        and all(t in SEQS or t in IMMUTABLE_LEAF_TYPES for t in levels[0])
+    ):
+        rows = list(map(list, value)) if levels[0] == {list} else [list(x) if type(x) is list else x for x in value]
         return True, (tuple(rows) if type(value) is tuple else rows)
     return True, pickle.loads(pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL))

@@ -18,6 +18,7 @@ to hash. Without ``loop_vars``, all three iterations mint the identical key,
 and the second and third iterations serve the first iteration's value --
 wrong on the very first run, no pre-existing cache required.
 """
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.loops]
@@ -77,9 +78,7 @@ def test_hidden_state_call_is_correct_on_the_first_run(nb_runner, tmp_path):
 
     output = nb_runner.get_output(2)
     assert "RESULTS [(1, 1), (2, 2), (3, 3)]" in output, output
-    assert _n(log) == 3, (
-        f"expected exactly 3 real fetch_next() executions on the first run, got {_n(log)}"
-    )
+    assert _n(log) == 3, f"expected exactly 3 real fetch_next() executions on the first run, got {_n(log)}"
 
 
 def test_hidden_state_call_hits_cache_on_rerun(nb_runner, tmp_path):
@@ -157,12 +156,7 @@ def _sampling_defs(log):
 # (small ints hash trivially, no sampling involved) and mask the exact bug
 # under test.
 _SAMPLING_SEED = "results = []\n"
-_SAMPLING_LOOP = (
-    "# @cash:cache-calls\n"
-    "for t in [A, B]:\n"
-    "    results.append(fetch_next(conn))\n"
-    "print('OUT', results)\n"
-)
+_SAMPLING_LOOP = "# @cash:cache-calls\nfor t in [A, B]:\n    results.append(fetch_next(conn))\nprint('OUT', results)\n"
 
 
 def test_sampled_equal_loop_var_values_still_get_distinct_keys(nb_runner, tmp_path):
@@ -182,9 +176,7 @@ def test_sampled_equal_loop_var_values_still_get_distinct_keys(nb_runner, tmp_pa
 
     output = nb_runner.get_output(3)
     assert "OUT [1, 2]" in output, output
-    assert _n(log) == 2, (
-        f"expected exactly 2 real fetch_next() executions, got {_n(log)}"
-    )
+    assert _n(log) == 2, f"expected exactly 2 real fetch_next() executions, got {_n(log)}"
 
 
 def test_sampled_equal_loop_var_values_match_the_no_cash_oracle(nb_runner, tmp_path):
@@ -272,9 +264,7 @@ def test_nested_loop_reusing_the_target_name_gets_correct_values(nb_runner, tmp_
 
     output = nb_runner.get_output(2)
     assert "OUT [1, 2]" in output, output
-    assert _n(log) == 2, (
-        f"expected exactly 2 real fetch_next() executions, got {_n(log)}"
-    )
+    assert _n(log) == 2, f"expected exactly 2 real fetch_next() executions, got {_n(log)}"
 
 
 def test_nested_loop_reusing_the_target_name_matches_the_no_cash_oracle(nb_runner, tmp_path):
@@ -314,9 +304,7 @@ def test_sibling_loops_reusing_the_target_name_get_correct_values(nb_runner, tmp
 
     output = nb_runner.get_output(2)
     assert "OUT [1, 2]" in output, output
-    assert _n(log) == 2, (
-        f"expected exactly 2 real fetch_next() executions, got {_n(log)}"
-    )
+    assert _n(log) == 2, f"expected exactly 2 real fetch_next() executions, got {_n(log)}"
 
 
 def test_sibling_loops_reusing_the_target_name_match_the_no_cash_oracle(nb_runner, tmp_path):
@@ -418,25 +406,31 @@ def test_sampled_cash_lineage_hash_on_loop_var_still_gets_distinct_keys(nb_runne
     run with no pre-existing cache.
     """
     log = tmp_path / "calls.log"
-    nb_runner.create_notebook([
-        _sampled_lineage_defs(log), _MUTATE_BOTH_DATAFRAMES, _SAMPLED_LINEAGE_LOOP,
-    ])
+    nb_runner.create_notebook(
+        [
+            _sampled_lineage_defs(log),
+            _MUTATE_BOTH_DATAFRAMES,
+            _SAMPLED_LINEAGE_LOOP,
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
     output = nb_runner.get_output(3)
     assert "SL2 [1, 2]" in output, output
-    assert _n(log) == 2, (
-        f"expected exactly 2 real fetch_next() executions, got {_n(log)}"
-    )
+    assert _n(log) == 2, f"expected exactly 2 real fetch_next() executions, got {_n(log)}"
 
 
 def test_sampled_cash_lineage_hash_on_loop_var_matches_the_no_cash_oracle(nb_runner, tmp_path):
     """Independent confirmation that ``[1, 2]`` is correct -- cash off entirely."""
     log = tmp_path / "calls.log"
-    nb_runner.create_notebook([
-        _sampled_lineage_defs(log), _MUTATE_BOTH_DATAFRAMES, _SAMPLED_LINEAGE_LOOP,
-    ])
+    nb_runner.create_notebook(
+        [
+            _sampled_lineage_defs(log),
+            _MUTATE_BOTH_DATAFRAMES,
+            _SAMPLED_LINEAGE_LOOP,
+        ]
+    )
     nb_runner.start_kernel(with_cash=False)
     nb_runner.run_all()
 
@@ -488,9 +482,7 @@ def test_call_inside_a_name_reusing_inner_loop_gets_correct_values(nb_runner, tm
 
     output = nb_runner.get_output(2)
     assert "INSIDE [1, 2, 3, 4]" in output, output
-    assert _n(log) == 4, (
-        f"expected exactly 4 real fetch_next() executions, got {_n(log)}"
-    )
+    assert _n(log) == 4, f"expected exactly 4 real fetch_next() executions, got {_n(log)}"
 
 
 def test_call_inside_a_name_reusing_inner_loop_matches_the_no_cash_oracle(nb_runner, tmp_path):

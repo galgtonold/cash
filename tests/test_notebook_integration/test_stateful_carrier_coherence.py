@@ -27,6 +27,7 @@ a redraw from an unrelated cell would contradict that scoping directly, and the
 contradiction is not academic -- lifting the gate duplicates a line in a
 ``mode='a'`` audit log, corrupting a file rather than staling one.
 """
+
 import hashlib
 
 import pytest
@@ -37,6 +38,7 @@ pytestmark = [pytest.mark.upstream, pytest.mark.timeout(120)]
 # ----------------------------------------------------------------------
 # CAS-178 -- seeded RNG redrawn from an already-advanced generator
 # ----------------------------------------------------------------------
+
 
 def test_seeded_rng_redraw_after_upstream_edit_matches_truth(nb_runner):
     """Editing an upstream param must NOT redraw from an advanced generator.
@@ -56,16 +58,18 @@ def test_seeded_rng_redraw_after_upstream_edit_matches_truth(nb_runner):
 
     truth = float(np.random.default_rng(7).standard_normal(6).sum())
     _spent = np.random.default_rng(7)
-    _spent.standard_normal(5)                       # the first run's draw
+    _spent.standard_normal(5)  # the first run's draw
     advanced = float(_spent.standard_normal(6).sum())
-    assert truth != advanced                        # the probe itself is sound
+    assert truth != advanced  # the probe itself is sound
 
-    nb_runner.create_notebook([
-        "import numpy as np\nimport cash\n%cash_on\n%cash_badge print",     # 1
-        "n = 5",                                                            # 2
-        "rng = np.random.default_rng(7)\nsteps = rng.standard_normal(n)",   # 3
-        "# @cash:no-cache\nprint('RESULT', repr(float(steps.sum())))",      # 4
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np\nimport cash\n%cash_on\n%cash_badge print",  # 1
+            "n = 5",  # 2
+            "rng = np.random.default_rng(7)\nsteps = rng.standard_normal(n)",  # 3
+            "# @cash:no-cache\nprint('RESULT', repr(float(steps.sum())))",  # 4
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "RESULT" in nb_runner.get_output(4)
@@ -96,12 +100,14 @@ def test_seeded_rng_unedited_notebook_is_not_disturbed(nb_runner):
     np = pytest.importorskip("numpy")
     truth = float(np.random.default_rng(7).standard_normal(5).sum())
 
-    nb_runner.create_notebook([
-        "import numpy as np\nimport cash\n%cash_on\n%cash_badge print",
-        "n = 5",
-        "rng = np.random.default_rng(7)\nsteps = rng.standard_normal(n)",
-        "# @cash:no-cache\nprint('RESULT', repr(float(steps.sum())))",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import numpy as np\nimport cash\n%cash_on\n%cash_badge print",
+            "n = 5",
+            "rng = np.random.default_rng(7)\nsteps = rng.standard_normal(n)",
+            "# @cash:no-cache\nprint('RESULT', repr(float(steps.sum())))",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     out = nb_runner.get_output(4)
@@ -112,9 +118,11 @@ def test_seeded_rng_unedited_notebook_is_not_disturbed(nb_runner):
 # CAS-175 -- builder rebuilt + re-saved without the statements that fill it
 # ----------------------------------------------------------------------
 
+
 def _render_truth(path, totals, with_bars=True):
     """Render the reference chart directly, outside cash, in this process."""
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
@@ -149,14 +157,16 @@ def test_builder_chart_on_disk_survives_an_unrelated_cell(nb_runner, tmp_path):
     truth_blank = _render_truth(tmp_path / "truth_blank.png", [3, 5, 2], with_bars=False)
     assert truth_bars != truth_blank
 
-    nb_runner.create_notebook([
-        "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt\n"
-        "import cash\n%cash_on\n%cash_badge print",                     # 1
-        "names = ['a', 'b', 'c']\ntotals = [3, 5, 2]",                  # 2
-        f"fig, ax = plt.subplots()\nax.bar(names, totals)\n"            # 3
-        f"ax.set_title('Totals')\nfig.savefig(r'{chart.as_posix()}')",
-        "grand_total = sum(totals)",                                    # 4 (unrelated)
-    ])
+    nb_runner.create_notebook(
+        [
+            "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt\n"
+            "import cash\n%cash_on\n%cash_badge print",  # 1
+            "names = ['a', 'b', 'c']\ntotals = [3, 5, 2]",  # 2
+            f"fig, ax = plt.subplots()\nax.bar(names, totals)\n"  # 3
+            f"ax.set_title('Totals')\nfig.savefig(r'{chart.as_posix()}')",
+            "grand_total = sum(totals)",  # 4 (unrelated)
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
@@ -171,12 +181,9 @@ def test_builder_chart_on_disk_survives_an_unrelated_cell(nb_runner, tmp_path):
     nb_runner.run_cell(4)
     after_unrelated = hashlib.md5(chart.read_bytes()).hexdigest()
     assert after_unrelated != truth_blank, (
-        "running an UNRELATED cell silently overwrote the chart with a blank "
-        "image (CAS-175)"
+        "running an UNRELATED cell silently overwrote the chart with a blank image (CAS-175)"
     )
-    assert after_unrelated == after_runall, (
-        "running an unrelated cell changed the chart on disk"
-    )
+    assert after_unrelated == after_runall, "running an unrelated cell changed the chart on disk"
 
 
 def test_builder_edit_redraws_coherently_when_the_chart_is_consumed(nb_runner, tmp_path):
@@ -205,17 +212,18 @@ def test_builder_edit_redraws_coherently_when_the_chart_is_consumed(nb_runner, t
     truth_blank = _render_truth(tmp_path / "truth_blank.png", [3, 5, 2], with_bars=False)
     assert truth_new != truth_old != truth_blank
 
-    nb_runner.create_notebook([
-        "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt\n"
-        "import cash\n%cash_on\n%cash_badge print",
-        "names = ['a', 'b', 'c']\ntotals = [3, 5, 2]",
-        f"fig, ax = plt.subplots()\nax.bar(names, totals)\n"
-        f"ax.set_title('Totals')\nfig.savefig(r'{chart.as_posix()}')",
-        # A report cell that quotes the total AND embeds the chart, so the
-        # savefig's output is read by a consumer this reconstruction needs.
-        f"grand_total = sum(totals)\n"
-        f"chart_size = len(open(r'{chart.as_posix()}', 'rb').read())",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt\n"
+            "import cash\n%cash_on\n%cash_badge print",
+            "names = ['a', 'b', 'c']\ntotals = [3, 5, 2]",
+            f"fig, ax = plt.subplots()\nax.bar(names, totals)\n"
+            f"ax.set_title('Totals')\nfig.savefig(r'{chart.as_posix()}')",
+            # A report cell that quotes the total AND embeds the chart, so the
+            # savefig's output is read by a consumer this reconstruction needs.
+            f"grand_total = sum(totals)\nchart_size = len(open(r'{chart.as_posix()}', 'rb').read())",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert hashlib.md5(chart.read_bytes()).hexdigest() == truth_old
@@ -228,8 +236,7 @@ def test_builder_edit_redraws_coherently_when_the_chart_is_consumed(nb_runner, t
         "ax.bar/ax.set_title that fill the figure (CAS-175)"
     )
     assert redrawn == truth_new, (
-        "the re-derived chart does not reflect the edited data -- the carrier's "
-        "history was re-executed incoherently"
+        "the re-derived chart does not reflect the edited data -- the carrier's history was re-executed incoherently"
     )
 
 
@@ -250,14 +257,16 @@ def test_unrelated_cell_leaves_the_chart_alone_even_after_an_edit(nb_runner, tmp
     pytest.importorskip("matplotlib")
 
     chart = tmp_path / "chart.png"
-    nb_runner.create_notebook([
-        "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt\n"
-        "import cash\n%cash_on\n%cash_badge print",
-        "names = ['a', 'b', 'c']\ntotals = [3, 5, 2]",
-        f"fig, ax = plt.subplots()\nax.bar(names, totals)\n"
-        f"ax.set_title('Totals')\nfig.savefig(r'{chart.as_posix()}')",
-        "# @cash:no-cache\ngrand_total = sum(totals)\nprint('TOTAL', grand_total)",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt\n"
+            "import cash\n%cash_on\n%cash_badge print",
+            "names = ['a', 'b', 'c']\ntotals = [3, 5, 2]",
+            f"fig, ax = plt.subplots()\nax.bar(names, totals)\n"
+            f"ax.set_title('Totals')\nfig.savefig(r'{chart.as_posix()}')",
+            "# @cash:no-cache\ngrand_total = sum(totals)\nprint('TOTAL', grand_total)",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     before = chart.read_bytes()
@@ -274,6 +283,5 @@ def test_unrelated_cell_leaves_the_chart_alone_even_after_an_edit(nb_runner, tmp
     # Suppressing the out-of-scope WRITE must not suppress the value the cell
     # genuinely depends on: the edit still has to reach grand_total.
     assert "TOTAL 17" in nb_runner.get_output(4), (
-        "the upstream edit did not reach the cell that consumes it: "
-        f"{nb_runner.get_output(4)!r}"
+        f"the upstream edit did not reach the cell that consumes it: {nb_runner.get_output(4)!r}"
     )

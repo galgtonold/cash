@@ -10,6 +10,7 @@ renders RTD's unstyled 404 page inside each badge frame.
 to the current page so it resolves regardless of the base path the site is
 mounted at.  These tests pin that behaviour at every nav depth.
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -36,9 +37,9 @@ _IFRAME = '<iframe class="cash-badge" src="{src}" loading="lazy"></iframe>'
 @pytest.mark.parametrize(
     "page_url,expected_prefix",
     [
-        ("", ""),                                   # home: /en/latest/
-        ("badges/", "../"),                         # /en/latest/badges/
-        ("cost-model/", "../"),                     # /en/latest/cost-model/
+        ("", ""),  # home: /en/latest/
+        ("badges/", "../"),  # /en/latest/badges/
+        ("cost-model/", "../"),  # /en/latest/cost-model/
         ("getting-started/quickstart/", "../../"),  # two levels deep
         ("tutorials/use-cases/data-science/", "../../../"),  # three levels deep
     ],
@@ -53,9 +54,7 @@ def test_absolute_badge_src_becomes_page_relative(page_url, expected_prefix):
 
 def test_multiple_iframes_all_rewritten():
     html = (
-        _IFRAME.format(src="/_badges/status_computed.html")
-        + "\n"
-        + _IFRAME.format(src="/_badges/status_restored.html")
+        _IFRAME.format(src="/_badges/status_computed.html") + "\n" + _IFRAME.format(src="/_badges/status_restored.html")
     )
     out = rewrite(html, "badges/")
     assert 'src="../_badges/status_computed.html"' in out

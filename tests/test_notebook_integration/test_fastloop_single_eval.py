@@ -19,6 +19,7 @@ Companion to CAS-120 (``test_reassign_accumulator_loop_trust.py``), which fixed
 the *separate* downstream-read re-drain.  This file covers the *within-first-run*
 double evaluation.
 """
+
 import time
 
 import pytest
@@ -32,24 +33,20 @@ pytestmark = [pytest.mark.loops, pytest.mark.mutations]
 #    evaluated EXACTLY ONCE on the first run.
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.timeout(90)
 def test_draining_call_list_first_run_single_eval(nb_runner):
     """``drain()`` returns a 60-element list (has ``__len__`` -> hits the
     single-unit heuristic).  A second evaluation empties ``q`` before the body
     runs, so the double-eval bug yields ``total=0``."""
-    nb_runner.create_notebook([
-        "q = list(range(60))",
-        "def drain():\n"
-        "    global q\n"
-        "    out, q = q, []\n"
-        "    return out",
-        "total = 0\n"
-        "for item in drain():\n"
-        "    a = item + 1\n"
-        "    b = a * 2\n"
-        "    total = total + b",
-        "print(f'total={total}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            "q = list(range(60))",
+            "def drain():\n    global q\n    out, q = q, []\n    return out",
+            "total = 0\nfor item in drain():\n    a = item + 1\n    b = a * 2\n    total = total + b",
+            "print(f'total={total}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     # sum((i+1)*2 for i in range(60)) == 3660
@@ -60,19 +57,14 @@ def test_draining_call_list_first_run_single_eval(nb_runner):
 def test_draining_call_tuple_first_run_single_eval(nb_runner):
     """Same as above but the consumable is a *tuple* (also re-iterable-by-type,
     also ``__len__`` -> single-unit) produced by a side-effecting call."""
-    nb_runner.create_notebook([
-        "q = list(range(60))",
-        "def drain():\n"
-        "    global q\n"
-        "    out, q = tuple(q), []\n"
-        "    return out",
-        "total = 0\n"
-        "for item in drain():\n"
-        "    a = item + 1\n"
-        "    b = a * 2\n"
-        "    total = total + b",
-        "print(f'total={total}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            "q = list(range(60))",
+            "def drain():\n    global q\n    out, q = tuple(q), []\n    return out",
+            "total = 0\nfor item in drain():\n    a = item + 1\n    b = a * 2\n    total = total + b",
+            "print(f'total={total}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "total=3660" in nb_runner.get_output(4), nb_runner.get_output(4)
@@ -86,14 +78,17 @@ def test_draining_call_tuple_first_run_single_eval(nb_runner):
 #    must equal plain Python.
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.timeout(90)
 def test_generator_header_first_run_single_eval(nb_runner):
-    nb_runner.create_notebook([
-        "q = list(range(6))",
-        "def gdrain():\n    global q\n    d, q = q, []\n    return (i for i in d)",
-        "total = 0\nfor v in gdrain():\n    total = total + v",
-        "print(f'total={total}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            "q = list(range(6))",
+            "def gdrain():\n    global q\n    d, q = q, []\n    return (i for i in d)",
+            "total = 0\nfor v in gdrain():\n    total = total + v",
+            "print(f'total={total}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "total=15" in nb_runner.get_output(4), nb_runner.get_output(4)
@@ -101,12 +96,14 @@ def test_generator_header_first_run_single_eval(nb_runner):
 
 @pytest.mark.timeout(90)
 def test_map_header_first_run_single_eval(nb_runner):
-    nb_runner.create_notebook([
-        "q = list(range(6))",
-        "def mdrain():\n    global q\n    d, q = q, []\n    return map(lambda i: i * 2, d)",
-        "total = 0\nfor v in mdrain():\n    total = total + v",
-        "print(f'total={total}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            "q = list(range(6))",
+            "def mdrain():\n    global q\n    d, q = q, []\n    return map(lambda i: i * 2, d)",
+            "total = 0\nfor v in mdrain():\n    total = total + v",
+            "print(f'total={total}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     # sum(i*2 for i in range(6)) == 30
@@ -115,12 +112,14 @@ def test_map_header_first_run_single_eval(nb_runner):
 
 @pytest.mark.timeout(90)
 def test_zip_header_first_run_single_eval(nb_runner):
-    nb_runner.create_notebook([
-        "q = list(range(6))",
-        "def zdrain():\n    global q\n    d, q = q, []\n    return zip(d, d)",
-        "total = 0\nfor a, b in zdrain():\n    total = total + a + b",
-        "print(f'total={total}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            "q = list(range(6))",
+            "def zdrain():\n    global q\n    d, q = q, []\n    return zip(d, d)",
+            "total = 0\nfor a, b in zdrain():\n    total = total + a + b",
+            "print(f'total={total}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     # sum(i+i for i in range(6)) == 30
@@ -131,11 +130,13 @@ def test_zip_header_first_run_single_eval(nb_runner):
 def test_iter_list_header_first_run_single_eval(nb_runner):
     """``iter([...])`` is a self-iterator (``iter(x) is x``); stored and then
     looped, a re-evaluation would restart from an exhausted iterator."""
-    nb_runner.create_notebook([
-        "src = iter([1, 2, 3, 4, 5])",
-        "total = 0\nfor v in src:\n    total = total + v",
-        "print(f'total={total}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            "src = iter([1, 2, 3, 4, 5])",
+            "total = 0\nfor v in src:\n    total = total + v",
+            "print(f'total={total}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "total=15" in nb_runner.get_output(3), nb_runner.get_output(3)
@@ -147,28 +148,31 @@ def test_iter_list_header_first_run_single_eval(nb_runner):
 #    identical 2nd run (restore is observably faster than the first compute).
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.timeout(90)
 def test_reiterable_list_still_single_unit_and_caches(nb_runner):
     """A bare-name list header (side-effect-free, re-iterable) stays on the
     single-unit fast path: correct result, and the expensive first run is
     restored from cache on the identical 2nd run."""
-    nb_runner.create_notebook([
-        "import time\ndata = list(range(60))",
-        "acc = 0\n"
-        "for x in data:\n"
-        # 60 x 50ms = ~3s of real work. The ratio asserted below is
-        # overhead / (work + overhead), so what matters is that the work
-        # DWARFS the fixed per-run orchestration. At the original 10ms the
-        # work was ~0.6s against ~0.4s of contended overhead -- a ratio of
-        # ~0.45 against a 0.5 bound, which is why this failed under load.
-        # At 50ms the same overhead yields ~0.14, roughly 3.5x of headroom.
-        # Still far above _SPLIT_MAX_ITER_SEC, so the loop stays on the
-        # single-unit path this test is about.
-        "    time.sleep(0.05)\n"
-        "    t = x + 1\n"
-        "    acc = acc + t",
-        "print(f'acc={acc}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            "import time\ndata = list(range(60))",
+            "acc = 0\n"
+            "for x in data:\n"
+            # 60 x 50ms = ~3s of real work. The ratio asserted below is
+            # overhead / (work + overhead), so what matters is that the work
+            # DWARFS the fixed per-run orchestration. At the original 10ms the
+            # work was ~0.6s against ~0.4s of contended overhead -- a ratio of
+            # ~0.45 against a 0.5 bound, which is why this failed under load.
+            # At 50ms the same overhead yields ~0.14, roughly 3.5x of headroom.
+            # Still far above _SPLIT_MAX_ITER_SEC, so the loop stays on the
+            # single-unit path this test is about.
+            "    time.sleep(0.05)\n"
+            "    t = x + 1\n"
+            "    acc = acc + t",
+            "print(f'acc={acc}')",
+        ]
+    )
     nb_runner.start_kernel()
 
     t0 = time.time()
@@ -197,14 +201,12 @@ def test_reiterable_list_still_single_unit_and_caches(nb_runner):
 def test_reiterable_range_still_correct_both_runs(nb_runner):
     """``range(...)`` (a pure builtin producer) stays on the fast path and is
     correct + idempotent across two runs."""
-    nb_runner.create_notebook([
-        "acc = 0\n"
-        "for i in range(60):\n"
-        "    a = i * 2\n"
-        "    b = a + 1\n"
-        "    acc = acc + b",
-        "print(f'acc={acc}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            "acc = 0\nfor i in range(60):\n    a = i * 2\n    b = a + 1\n    acc = acc + b",
+            "print(f'acc={acc}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     # sum(i*2+1 for i in range(60)) == 3600
@@ -221,21 +223,17 @@ def test_reiterable_range_still_correct_both_runs(nb_runner):
 #    not re-drained).
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.timeout(90)
 def test_consumable_accumulator_first_run_and_plain_rerun(nb_runner):
-    nb_runner.create_notebook([
-        "q = list(range(60))",
-        "def drain():\n"
-        "    global q\n"
-        "    out, q = q, []\n"
-        "    return out",
-        "total = 0\n"
-        "for item in drain():\n"
-        "    a = item + 1\n"
-        "    b = a * 2\n"
-        "    total = total + b",
-        "print(f'total={total}')",
-    ])
+    nb_runner.create_notebook(
+        [
+            "q = list(range(60))",
+            "def drain():\n    global q\n    out, q = q, []\n    return out",
+            "total = 0\nfor item in drain():\n    a = item + 1\n    b = a * 2\n    total = total + b",
+            "print(f'total={total}')",
+        ]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "total=3660" in nb_runner.get_output(4), nb_runner.get_output(4)

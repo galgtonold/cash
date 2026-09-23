@@ -1,21 +1,23 @@
 """Tests for cash CLI (__main__.py)."""
-import pytest
-import pickle
+
 import time
 from types import SimpleNamespace
 from unittest.mock import patch
+
+import pytest
+
 from cash.__main__ import (
-    main,
-    cmd_version,
-    cmd_info,
-    cmd_inspect,
-    cmd_clear,
-    cmd_autoload,
-    _format_bytes,
     HOOK_FILENAME,
     HOOK_MARKER,
+    _format_bytes,
+    cmd_autoload,
+    cmd_clear,
+    cmd_info,
+    cmd_inspect,
+    cmd_version,
+    main,
 )
-from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry, read_entry
+from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry
 
 
 def _autoload_on(*, mode="active", profile="default", force=False):
@@ -47,7 +49,9 @@ class TestCLIVersion:
 
     def test_version_outputs(self, capsys):
         from types import SimpleNamespace
+
         import cash
+
         cmd_version(SimpleNamespace())
         captured = capsys.readouterr()
         assert "cash" in captured.out
@@ -59,6 +63,7 @@ class TestCLIInfo:
 
     def test_info_shows_config(self, capsys):
         from types import SimpleNamespace
+
         cmd_info(SimpleNamespace())
         captured = capsys.readouterr()
         assert "Backend" in captured.out
@@ -68,6 +73,7 @@ class TestCLIInfo:
         """Round 25: `cash info` named the cache dir but not how big it is --
         the number a user asks for when deciding whether to clear it."""
         from cash.config import get_config
+
         cache_dir = tmp_path / ".cash"
         cache_dir.mkdir()
         for i in range(3):
@@ -91,10 +97,11 @@ class TestCLIInspect:
         cache_dir.mkdir()
 
         # Create some fake cache files
-        meta = {'key': 'test_key', 'created_at': time.time(), 'outputs': ['x', 'y']}
+        meta = {"key": "test_key", "created_at": time.time(), "outputs": ["x", "y"]}
         (cache_dir / f"abc123{ENTRY_SUFFIX}").write_bytes(pack_entry(meta, b"fake data"))
 
         from types import SimpleNamespace
+
         cmd_inspect(SimpleNamespace(path=str(cache_dir)))
         captured = capsys.readouterr()
         assert "Total size:" in captured.out
@@ -110,6 +117,7 @@ class TestCLIInspect:
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("CASH_CACHE_DIR", str(tmp_path / "no-such-cache"))
         from types import SimpleNamespace
+
         with pytest.raises(SystemExit):
             cmd_inspect(SimpleNamespace(path=None))
 
@@ -130,6 +138,7 @@ class TestCLIClear:
         (cache_dir / "file.data").write_bytes(b"data")
 
         from types import SimpleNamespace
+
         cmd_clear(SimpleNamespace(path=str(cache_dir), all=False))
         assert not cache_dir.exists()
         captured = capsys.readouterr()
@@ -145,12 +154,14 @@ class TestCLIClear:
         monkeypatch.setenv("CASH_CACHE_DIR", str(cache_dir))
 
         from types import SimpleNamespace
+
         cmd_clear(SimpleNamespace(path=None, all=True))
         assert not cache_dir.exists()
 
     def test_clear_no_args(self, capsys):
         """Clear without args should fail."""
         from types import SimpleNamespace
+
         with pytest.raises(SystemExit):
             cmd_clear(SimpleNamespace(path=None, all=False))
 
@@ -164,6 +175,7 @@ class TestCLIClear:
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("CASH_CACHE_DIR", str(tmp_path / ".cash"))
         from types import SimpleNamespace
+
         cmd_clear(SimpleNamespace(path=None, all=True))
         captured = capsys.readouterr()
         assert "Nothing cleared: no cache at" in captured.out
@@ -174,6 +186,7 @@ class TestCLIClear:
     def test_clear_nonexistent_path(self, capsys):
         """Clear nonexistent path should fail."""
         from types import SimpleNamespace
+
         with pytest.raises(SystemExit):
             cmd_clear(SimpleNamespace(path="/nonexistent/path", all=False))
 
@@ -188,6 +201,7 @@ class TestCLIClear:
         (cache_dir / "data.meta").write_bytes(b"data")
 
         from types import SimpleNamespace
+
         cmd_clear(SimpleNamespace(path=str(nb_path), all=False))
         assert not cache_dir.exists()
         captured = capsys.readouterr()
@@ -199,6 +213,7 @@ class TestCLIClear:
         nb_path.write_text('{"cells":[]}')
 
         from types import SimpleNamespace
+
         cmd_clear(SimpleNamespace(path=str(nb_path), all=False))
         captured = capsys.readouterr()
         assert "No cache found" in captured.out
@@ -209,14 +224,14 @@ class TestCLIMain:
 
     def test_no_args_shows_help(self, capsys):
         """Running with no args should show help."""
-        with patch('sys.argv', ['cash']):
+        with patch("sys.argv", ["cash"]):
             with pytest.raises(SystemExit) as exc_info:
                 main()
             assert exc_info.value.code == 0
 
     def test_version_subcommand(self, capsys):
         """Running 'version' subcommand."""
-        with patch('sys.argv', ['cash', 'version']):
+        with patch("sys.argv", ["cash", "version"]):
             main()
         captured = capsys.readouterr()
         assert "cash" in captured.out
@@ -225,7 +240,7 @@ class TestCLIMain:
         """Running 'inspect' with a directory."""
         cache_dir = tmp_path / "cache"
         cache_dir.mkdir()
-        with patch('sys.argv', ['cash', 'inspect', str(cache_dir)]):
+        with patch("sys.argv", ["cash", "inspect", str(cache_dir)]):
             main()
         captured = capsys.readouterr()
         assert "Cache directory:" in captured.out
@@ -245,12 +260,14 @@ class TestCLIInspectNotebook:
             ],
             "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}},
             "nbformat": 4,
-            "nbformat_minor": 5
+            "nbformat_minor": 5,
         }
         import json
+
         nb_path.write_text(json.dumps(nb_content))
 
         from cash.__main__ import _inspect_notebook
+
         _inspect_notebook(str(nb_path))
         captured = capsys.readouterr()
         assert "Code cells: 2" in captured.out
@@ -266,12 +283,14 @@ class TestCLIInspectNotebook:
             ],
             "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}},
             "nbformat": 4,
-            "nbformat_minor": 5
+            "nbformat_minor": 5,
         }
         import json
+
         nb_path.write_text(json.dumps(nb_content))
 
         from cash.__main__ import _inspect_notebook
+
         _inspect_notebook(str(nb_path))
         captured = capsys.readouterr()
         assert "Uses cash: No" in captured.out
@@ -284,9 +303,10 @@ class TestCLIInspectNotebook:
             "cells": [{"cell_type": "code", "source": "x = 1", "metadata": {}, "outputs": []}],
             "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}},
             "nbformat": 4,
-            "nbformat_minor": 5
+            "nbformat_minor": 5,
         }
         import json
+
         nb_path.write_text(json.dumps(nb_content))
 
         cache_dir = tmp_path / ".cash"
@@ -294,6 +314,7 @@ class TestCLIInspectNotebook:
         (cache_dir / "data.meta").write_bytes(b"data")
 
         from cash.__main__ import _inspect_notebook
+
         _inspect_notebook(str(nb_path))
         captured = capsys.readouterr()
         assert "Cache directory:" in captured.out
@@ -304,6 +325,7 @@ class TestCLIInspectNotebook:
         nb_path.write_text("not valid json for notebook")
 
         from cash.__main__ import _inspect_notebook
+
         _inspect_notebook(str(nb_path))
         captured = capsys.readouterr()
         assert "Error reading notebook" in captured.out
@@ -313,14 +335,11 @@ class TestCLIInspectNotebook:
         cache_dir = tmp_path / "cache"
         cache_dir.mkdir()
 
-        meta = {
-            'key': 'stmt:abc123def456',
-            'created_at': 1700000000.0,
-            'outputs': ['result', 'df']
-        }
+        meta = {"key": "stmt:abc123def456", "created_at": 1700000000.0, "outputs": ["result", "df"]}
         (cache_dir / f"entry1{ENTRY_SUFFIX}").write_bytes(pack_entry(meta, b""))
 
         from cash.__main__ import _inspect_cache_dir
+
         _inspect_cache_dir(str(cache_dir))
         captured = capsys.readouterr()
         assert "Entries: 1" in captured.out
@@ -334,6 +353,7 @@ class TestCLIInspectNotebook:
         cache_dir.mkdir()
 
         from cash.__main__ import _inspect_cache_dir
+
         _inspect_cache_dir(str(cache_dir))
         captured = capsys.readouterr()
         assert "Entries: 0" in captured.out
@@ -346,6 +366,7 @@ class TestCLIInspectNotebook:
         (cache_dir / "bad.meta").write_bytes(b"not a pickle")
 
         from cash.__main__ import _inspect_cache_dir
+
         _inspect_cache_dir(str(cache_dir))
         captured = capsys.readouterr()
         # One corrupt file must not cost the report for everything else;
@@ -515,14 +536,18 @@ class TestTheCliSeesASqliteCache:
     @staticmethod
     def _db(tmp_path):
         import sqlite3
+
         cache = tmp_path / ".cash"
         cache.mkdir()
         conn = sqlite3.connect(cache / "cache.db")
-        conn.execute("CREATE TABLE cache_entries (key TEXT PRIMARY KEY, data BLOB, "
-                     "metadata BLOB, created_at REAL, ttl REAL, access_count INTEGER)")
+        conn.execute(
+            "CREATE TABLE cache_entries (key TEXT PRIMARY KEY, data BLOB, "
+            "metadata BLOB, created_at REAL, ttl REAL, access_count INTEGER)"
+        )
         for i in range(3):
-            conn.execute("INSERT INTO cache_entries VALUES (?, ?, ?, ?, ?, ?)",
-                         (f"k{i}", b"x" * 1024, b"{}", 0.0, None, 0))
+            conn.execute(
+                "INSERT INTO cache_entries VALUES (?, ?, ?, ?, ?, ?)", (f"k{i}", b"x" * 1024, b"{}", 0.0, None, 0)
+            )
         conn.commit()
         conn.close()
         return cache
@@ -532,8 +557,7 @@ class TestTheCliSeesASqliteCache:
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("CASH_CACHE_DIR", str(cache))
         cmd_info(SimpleNamespace())
-        line = next(l for l in capsys.readouterr().out.splitlines()
-                    if l.strip().startswith("Holds:"))
+        line = next(l for l in capsys.readouterr().out.splitlines() if l.strip().startswith("Holds:"))
         assert "3 entries" in line, line
 
     def test_inspect_reports_the_database(self, tmp_path, monkeypatch, capsys):
