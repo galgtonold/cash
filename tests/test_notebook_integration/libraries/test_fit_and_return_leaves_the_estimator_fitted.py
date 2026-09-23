@@ -11,7 +11,11 @@ import pytest
 
 pytest.importorskip("sklearn")
 
-pytestmark = [pytest.mark.integration]
+# Each test fits, re-runs and restarts: about 5 s and 10 s alone on four cores,
+# and KMeans' worker threads compete with every other kernel on a loaded
+# machine, which took the loop test past the default 30 s. How long it takes is
+# not what it checks.
+pytestmark = [pytest.mark.integration, pytest.mark.timeout(180)]
 
 TEXTS = (
     "from sklearn.feature_extraction.text import TfidfVectorizer\n"
