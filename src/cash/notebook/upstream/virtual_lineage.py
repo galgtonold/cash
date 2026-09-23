@@ -895,7 +895,7 @@ class VirtualLineage:
                 if "storage" in metadata:
                     entry["storage"] = metadata["storage"]
                 return entry
-            logger.debug("[UPSTREAM] Skipped stmt [%d] miss cache. Key: %s", i, cache_key)
+            logger.debug("[UPSTREAM] Skipped stmt [%d] miss cache: %s. Key: %s", i, stmt_code[:60], cache_key)
             return {
                 "code": stmt_code,
                 "status": CacheStatus.SKIPPED,
