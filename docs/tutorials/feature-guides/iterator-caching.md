@@ -117,7 +117,7 @@ What is **not** supported:
 
 ## Replay semantics
 
-<!-- claim: cash/core.py:Cash._wrap_iterator_hit @34991d55, cash/core.py:_StreamingCachedIterator @690edb56 broad="the claim is about the whole replay wrapper", cash/core.py:_ChunkedCachedIterator @db978956 broad="the claim is about the whole replay wrapper" -->
+<!-- claim: cash/core.py:Cash._wrap_iterator_hit @34991d55, cash/core.py:_StreamingCachedIterator @6667d0ba broad="the claim is about the whole replay wrapper", cash/core.py:_ChunkedCachedIterator @db978956 broad="the claim is about the whole replay wrapper" -->
 On a cache hit, the dispatch at `Cash._wrap_iterator_hit` reads `metadata['iterator_storage']` and returns a **fresh** `_ChunkedCachedIterator(cash, cache_key, n_chunks)` — a lazy iterator that fetches one chunk at a time. That is *every* iterator hit, single-chunk included: a one-chunk result is still stored as a manifest plus one chunk entry, so it replays through the same path.
 
 `_StreamingCachedIterator` is the other half, and it belongs to the **first** call rather than to a hit. It wraps `_stream_and_store`, so a miss hands you the producer's own items at the producer's own pace while the chunks fill behind you — there is nothing to read back out of the backend, because the result does not exist yet:

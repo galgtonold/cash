@@ -1,7 +1,8 @@
 """Main Cash class - decorator-based caching with automatic dependency tracking.
 
 Provides the `Cash` entry point for ``@cash.cache`` function-level
-caching and the `Cash.notebook` bridge for Jupyter integration.
+caching. The notebook path lives in `cash.notebook`; it reads the decorator's
+per-call events through `Cash.drain_decorator_calls`.
 """
 
 from __future__ import annotations
@@ -108,8 +109,6 @@ _UNHASHABLE_GLOBAL_FIX = (
 )
 
 
-#: A logger's methods, bound into a global (`log = logger.info`): output sinks,
-#: never keyed as what the callable carries (`Cash._carried_global_hash`).
 def _reduced_state(value: Any) -> Any:
     """What ``__reduce_ex__`` says *value* was built with, or None.
 
@@ -785,8 +784,8 @@ class _StreamingCachedIterator:
     after the full latency. Measured on a token stream -- 494ms to first item
     uncached, 2444ms cached, the entire completion in one go.
 
-    Same surface as the replay iterator, deliberately: no `send`/`throw`,
-    because a cached generator cannot support them on the hit either.
+    Same surface as the replay iterator, deliberately: `send` and `throw`
+    raise, because a cached generator cannot support them on the hit either.
     """
 
     __slots__ = ("_gen",)
@@ -1690,6 +1689,11 @@ class Cash:
         debug: Enable debug logging output.
         use_locking: Enable double-checked locking for thread-safe caching.
         config_path: Path to custom config TOML file.
+        verbose: Log one line per cached call -- hit or miss, and why -- to
+            stderr. ``debug`` does too, and adds cash's DEBUG output.
+        **config_overrides: Any `CashConfig` field by name, e.g.
+            ``Cash(max_cache_size=2 * 1024**3)``; wins over every config file
+            and environment variable.
 
     Example:
 
@@ -2083,8 +2087,9 @@ class Cash:
         ``__main__`` is resolved to the name the module would have when
         imported — see `_main_module_name`.
 
-        Opaque callables such as ``functools.partial`` lack both ``__qualname__``
-        and ``__name__``; fall back to ``repr`` so keying them never crashes.
+        A ``functools.partial`` is named after the function it wraps plus a
+        digest of what it binds. Any other callable without ``__qualname__``
+        or ``__name__`` falls back to ``repr`` so keying it never crashes.
         """
         if isinstance(func, functools.partial):
             # `repr(partial)` holds the wrapped function's ADDRESS, so every
@@ -3325,15 +3330,17 @@ class Cash:
         kwargs: dict,
         call_start: float,
     ) -> Any:
-        """Compute and return (cache_key, current_state_hash, args_hash) or call func directly on failure.
+        """Build the key for this call, or run the call uncached when there is none.
 
-        Returns a 3-tuple on success, or a callable-result sentinel tuple
-        ``(_CACHE_MISS, None, None)`` when args cannot be hashed, or raises
-        nothing (logs and returns func result wrapped in a tuple) on key error.
-        Actually returns either:
-          - (cache_key_str, state_hash_str, args_hash_str)  - normal
-          - (_CACHE_MISS, result, 'unhashable')             - unhashable args
-          - (_CACHE_MISS, result, 'error')                  - key generation error
+        Returns one of:
+          - ``(cache_key, state_hash, args_hash)`` - the key was built
+          - ``(_CACHE_MISS, result, 'unkeyable')`` - a mocked helper, no code to key
+          - ``(_CACHE_MISS, result, 'unhashable')`` - an argument or default could not be hashed
+          - ``(_CACHE_MISS, result, 'error')`` - building the key raised
+
+        In the last three, *result* is what ``func(*args, **kwargs)`` returned:
+        the call already ran, uncached, and was logged. The body's own
+        exceptions propagate.
         """
         # Outside the try below, which catches TypeError/ValueError from key
         # building: an exception from the user's own body must not be caught
