@@ -263,7 +263,9 @@ class StatementLineageBuilder:
                 lineage = tracking_state.variable_lineage[input_var]
                 input_lineage_hashes.append(lineage)
                 input_lineage_map[input_var] = lineage
-            elif input_var in user_ns:
+            elif user_ns.get(input_var) is not None:
+                # A value of None with no lineage contributes nothing, as in
+                # the cache key and the simulation.
                 val = user_ns[input_var]
                 if is_cash_instrumentation(val):
                     # cash's own I/O shim (e.g. the patched ``open``). Its
