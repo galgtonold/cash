@@ -86,8 +86,8 @@ This directory contains polished examples demonstrating cash's caching features 
 - Conditional caching (branching logic)
 - Nested loop caching
 
-**Prerequisites:**
-- Run `python generate_financial_data.py` first to create `large_financial_data.csv`
+The first cell writes its dataset, `large_financial_data.csv` (about 20,000
+rows, from a fixed seed), next to the notebook if it is not there yet.
 
 **What to try:**
 1. Run the full pipeline — first run computes everything
