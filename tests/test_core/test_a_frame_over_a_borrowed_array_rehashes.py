@@ -17,6 +17,7 @@ pd = pytest.importorskip("pandas")
 
 from cash import Cash
 from cash.backends import InMemoryBackend
+from cash.decorator.arg_hashing import ArgHashingMixin
 
 
 @pytest.fixture
@@ -51,3 +52,18 @@ def test_an_ordinary_frame_still_uses_the_memo(total):
     assert total(frame) == 10.0
     assert total(frame) == 10.0
     assert total(pd.DataFrame({"a": [1.0, 2.0], "b": [3.0, 4.0]})) == 10.0
+
+
+def test_a_check_that_cannot_run_rehashes(total, monkeypatch):
+    """If the borrowed-data check itself fails (a pandas internals change),
+    the frame is re-hashed. Keeping the memo then served the stale 10.0."""
+
+    def broken(block):
+        raise AttributeError("pandas moved its internals")
+
+    monkeypatch.setattr(ArgHashingMixin, "_block_refcount", staticmethod(broken))
+    arr = np.array([[1.0, 2.0], [3.0, 4.0]])
+    frame = pd.DataFrame(arr, copy=False)
+    assert total(frame) == 10.0
+    arr[0, 0] = 100.0
+    assert total(frame) == 109.0
