@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import types
 
+from cash.notebook.upstream._types import TraceEntry
 from cash.notebook.upstream.reexecution_planner import ReexecutionPlanner
 
 
@@ -26,7 +27,7 @@ def _planner(user_ns: dict) -> ReexecutionPlanner:
 
 
 def _entry(stmt, outputs=(), inputs=()):
-    return (stmt, set(outputs), list(inputs), {}, {}, None)
+    return TraceEntry(stmt, set(outputs), set(inputs), {}, {}, False)
 
 
 CLEANING = [
@@ -58,7 +59,7 @@ def test_a_live_input_still_needs_no_producer():
 # UpstreamStateError: 'f1'. Live is not enough when the live value is not what
 # the latest producer made: the sweep's table, not the one with f1.
 def _lineaged(stmt, outputs=(), inputs=(), produced=None):
-    return (stmt, set(outputs), list(inputs), {}, dict(produced or {}), None)
+    return TraceEntry(stmt, set(outputs), set(inputs), {}, dict(produced or {}), False)
 
 
 SWEEP_THEN_PICK = [

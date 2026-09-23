@@ -115,12 +115,12 @@ def _literal_path_bindings(simulation_trace: list | None) -> dict[str, str]:
 
     bound: dict[str, str | None] = {}
     for entry in simulation_trace or ():
-        outputs = entry[1]
+        outputs = entry.outputs
         if not outputs:
             continue
         value = None
         try:
-            node = ast.parse(entry[0]).body
+            node = ast.parse(entry.stmt_code).body
         except (SyntaxError, ValueError, TypeError):
             node = []
         if (
@@ -194,9 +194,9 @@ def _fills_carrier(entry, sibling_names: set[str]) -> bool:
     guard that refuses a write whose history is incomplete -- when they
     disagreed, the guard let a blank chart through that the pass never saw.
     """
-    code = entry[0]
+    code = entry.stmt_code
     return bool(
-        set(entry[1]) & sibling_names
+        set(entry.outputs) & sibling_names
         or _control_body_touches(code, sibling_names)
         or _passes_carrier_to_a_call(code, sibling_names)
     )
@@ -262,7 +262,7 @@ class ReexecutionPlanner:
         25, r25s5 and r25s1). Done once here, by code as the per-pass filters
         do, so no pass can leave one behind.
         """
-        scheduled = {simulation_trace[i][0] for i in stmts_to_run_indices}
+        scheduled = {simulation_trace[i].stmt_code for i in stmts_to_run_indices}
         if not scheduled:
             return restored
         return [info for info in restored if info.get("code") not in scheduled]
@@ -290,8 +290,8 @@ class ReexecutionPlanner:
         """
         if self.debug:
             logger.debug("[UPSTREAM_DEBUG] Simulation trace contents:")
-            for i, (stmt, outputs, _, _, _, _) in enumerate(simulation_trace):
-                logger.debug("[UPSTREAM_DEBUG]   [%s] outputs=%s: %s...", i, outputs, stmt[:60])
+            for i, entry in enumerate(simulation_trace):
+                logger.debug("[UPSTREAM_DEBUG]   [%s] outputs=%s: %s...", i, entry.outputs, entry.stmt_code[:60])
 
         self.stale_exports = []
         loop_derived_trust_overridden = self.virtual_lineage.check_loop_derived_trust_override(
@@ -421,7 +421,7 @@ class ReexecutionPlanner:
 
         statements_to_reexecute: list[str] = []
         for idx in stmts_to_run_indices:
-            stmt_code = simulation_trace[idx][0]
+            stmt_code = simulation_trace[idx].stmt_code
             statements_to_reexecute.append(stmt_code)
             trace_event("schedule_reexec", stmt=stmt_code[:80])
             if self.debug:
@@ -464,10 +464,10 @@ class ReexecutionPlanner:
             if m.get("position") not in stale or str(m.get("status")) != str(CacheStatus.SKIPPED)
         ]
         for i, paths in sorted(stale.items()):
-            trace_event("stale_export", stmt=simulation_trace[i][0][:80], paths=paths)
+            trace_event("stale_export", stmt=simulation_trace[i].stmt_code[:80], paths=paths)
             kept.append(
                 {
-                    "code": simulation_trace[i][0],
+                    "code": simulation_trace[i].stmt_code,
                     "status": CacheStatus.SKIPPED,
                     "saved_time": 0.0,
                     "is_upstream": True,
@@ -521,7 +521,7 @@ class ReexecutionPlanner:
             return stmts_to_run_indices
         scheduled = set(stmts_to_run_indices)
         for i, entry in enumerate(simulation_trace):
-            stmt_code, _outputs, inputs = entry[0], entry[1], entry[2]
+            stmt_code, _outputs, inputs = entry.stmt_code, entry.outputs, entry.inputs
             touched = consumable_broken_vars & set(inputs or ())
             if not touched or i in scheduled:
                 continue
@@ -570,7 +570,7 @@ class ReexecutionPlanner:
         """
         producers: dict[str, list[int]] = {}
         for i, entry in enumerate(simulation_trace):
-            for v in entry[1]:  # outputs
+            for v in entry.outputs:
                 producers.setdefault(v, []).append(i)
         shadowed = {v for v, idxs in producers.items() if len(idxs) > 1}
         if not shadowed:
@@ -582,14 +582,14 @@ class ReexecutionPlanner:
             changed = False
             for i in list(scheduled):
                 entry = simulation_trace[i]
-                if _is_definition(entry[0]):
+                if _is_definition(entry.stmt_code):
                     # A def or class reads its body's globals when called, at
                     # whatever version they then are: defining it consumes
                     # none. Taken as a consumer, `def plot_region` re-ran the
                     # whole back-test cell the summary cell had just rebuilt
                     # (round 25, r25s5).
                     continue
-                inputs, input_hashes = entry[2], (entry[3] or {})
+                inputs, input_hashes = entry.inputs, (entry.input_hashes or {})
                 for v in inputs:
                     if v not in shadowed:
                         continue
@@ -601,7 +601,7 @@ class ReexecutionPlanner:
                     for p in producers[v]:
                         if p in scheduled:
                             continue
-                        produced = (simulation_trace[p][4] or {}).get(v)
+                        produced = (simulation_trace[p].produced_lineages or {}).get(v)
                         if produced in wanted:
                             scheduled.add(p)
                             changed = True
@@ -657,7 +657,7 @@ class ReexecutionPlanner:
         def _top_level(idx: int) -> set[str]:
             if idx not in top_level_cache:
                 try:
-                    top_level_cache[idx] = CodeAnalyzer.top_level_assigned_names(simulation_trace[idx][0])
+                    top_level_cache[idx] = CodeAnalyzer.top_level_assigned_names(simulation_trace[idx].stmt_code)
                 except (SyntaxError, ValueError):
                     top_level_cache[idx] = set()
             return top_level_cache[idx]
@@ -667,17 +667,17 @@ class ReexecutionPlanner:
 
         for i in list(scheduled):
             entry = simulation_trace[i]
-            outputs = entry[1]
+            outputs = entry.outputs
             cond_only_vars = {v for v in outputs if v in broken_vars and v not in _top_level(i)}
             if not cond_only_vars:
                 continue
             for v in cond_only_vars:
                 # Already covered by an earlier unconditional producer in the plan?
-                if any(p < i and v in simulation_trace[p][1] and v in _top_level(p) for p in scheduled):
+                if any(p < i and v in simulation_trace[p].outputs and v in _top_level(p) for p in scheduled):
                     continue
                 # Find the NEAREST earlier guaranteed init of v.
                 for p in range(i - 1, -1, -1):
-                    if v in simulation_trace[p][1] and v in _top_level(p):
+                    if v in simulation_trace[p].outputs and v in _top_level(p):
                         additions.add(p)
                         if self.debug:
                             logger.debug(
@@ -721,7 +721,7 @@ class ReexecutionPlanner:
         pending = sorted(scheduled)
         while pending:
             i = pending.pop(0)
-            inputs = set(simulation_trace[i][2] or ())
+            inputs = set(simulation_trace[i].inputs or ())
             if virtual_lineage is not None:
                 inputs |= self.virtual_lineage.absent_callee_globals(inputs, virtual_lineage, virtual_modules or set())
             for v in sorted(inputs):
@@ -741,9 +741,9 @@ class ReexecutionPlanner:
                     pending.append(p)
                     trace_event(
                         "input_producer_completion",
-                        stmt=simulation_trace[p][0][:80],
+                        stmt=simulation_trace[p].stmt_code[:80],
                         var=v,
-                        consumer=simulation_trace[i][0][:80],
+                        consumer=simulation_trace[i].stmt_code[:80],
                     )
         return sorted(scheduled)
 
@@ -765,10 +765,14 @@ class ReexecutionPlanner:
         live = live_lineage.get(var)
         if p is None or live is None:
             return False
-        produced = (simulation_trace[p][4] or {}).get(var)
+        produced = (simulation_trace[p].produced_lineages or {}).get(var)
         if produced is None or produced == live:
             return False
-        return any((simulation_trace[q][4] or {}).get(var) == live for q in range(p) if var in simulation_trace[q][1])
+        return any(
+            (simulation_trace[q].produced_lineages or {}).get(var) == live
+            for q in range(p)
+            if var in simulation_trace[q].outputs
+        )
 
     def complete_later_producers(self, stmts_to_run_indices: list[int], simulation_trace: list) -> list[int]:
         """Every statement after a re-run producer of a variable that also
@@ -792,17 +796,17 @@ class ReexecutionPlanner:
         pending = sorted(scheduled)
         while pending:
             i = pending.pop(0)
-            for v in simulation_trace[i][1]:
+            for v in simulation_trace[i].outputs:
                 for p in range(i + 1, len(simulation_trace)):
-                    if p in scheduled or v not in simulation_trace[p][1] or v not in simulation_trace[p][2]:
+                    if p in scheduled or v not in simulation_trace[p].outputs or v not in simulation_trace[p].inputs:
                         continue
                     scheduled.add(p)
                     pending.append(p)
                     trace_event(
                         "later_producer_completion",
-                        stmt=simulation_trace[p][0][:80],
+                        stmt=simulation_trace[p].stmt_code[:80],
                         var=v,
-                        after=simulation_trace[i][0][:80],
+                        after=simulation_trace[i].stmt_code[:80],
                     )
         return sorted(scheduled)
 
@@ -821,14 +825,14 @@ class ReexecutionPlanner:
         scheduled = set(stmts_to_run_indices)
         added: set[int] = set()
         for i in sorted(scheduled):
-            code = simulation_trace[i][0]
+            code = simulation_trace[i].stmt_code
             if not import_only(code) or all(m in sys.modules for m in _imported_roots(code)):
                 continue
             for j in range(i):
                 if j in scheduled or j in added:
                     continue
-                entry_code = simulation_trace[j][0]
-                if "sys" in simulation_trace[j][1] and "path" in entry_code:
+                entry_code = simulation_trace[j].stmt_code
+                if "sys" in simulation_trace[j].outputs and "path" in entry_code:
                     added.add(j)
                     trace_event("import_path_setup", stmt=entry_code[:80], before=code[:80])
         return sorted(scheduled | added)
@@ -836,7 +840,7 @@ class ReexecutionPlanner:
     def latest_producer(self, simulation_trace: list, var: str, before: int) -> int | None:
         """Index of the LAST statement before *before* that outputs *var*."""
         for p in range(before - 1, -1, -1):
-            if var in simulation_trace[p][1]:
+            if var in simulation_trace[p].outputs:
                 return p
         return None
 
@@ -898,7 +902,7 @@ class ReexecutionPlanner:
         while changed:
             changed = False
             for i in sorted(scheduled):
-                for v in simulation_trace[i][2]:  # inputs
+                for v in simulation_trace[i].inputs:
                     try:
                         kind = stateful_carrier_kind(user_ns.get(v))
                     except (TypeError, ValueError, AttributeError, RecursionError):
@@ -907,13 +911,13 @@ class ReexecutionPlanner:
                     if kind is None and v not in user_ns and p is not None:
                         # No live object after a restart: recognise the carrier
                         # by the code that makes it.
-                        kind = carrier_kind_from_producer(simulation_trace[p][0])
+                        kind = carrier_kind_from_producer(simulation_trace[p].stmt_code)
                     if kind is None or p is None:
                         continue
                     pending = set()
                     if p not in scheduled:
                         pending.add(p)
-                    sibling_names = set(simulation_trace[p][1])
+                    sibling_names = set(simulation_trace[p].outputs)
                     for j in range(p + 1, i):
                         if j in scheduled or j in pending:
                             continue
@@ -927,7 +931,7 @@ class ReexecutionPlanner:
                             continue
                         # A second savefig is not a fill; the write gates decide
                         # whether it re-fires.
-                        if set(entry[1]) & sibling_names or not statement_writes_files(entry[0]):
+                        if set(entry.outputs) & sibling_names or not statement_writes_files(entry.stmt_code):
                             pending.add(j)
                     if not pending:
                         continue
@@ -967,7 +971,7 @@ class ReexecutionPlanner:
                             var=v,
                             kind=kind,
                             consumer=i,
-                            stmt=simulation_trace[idx][0][:80],
+                            stmt=simulation_trace[idx].stmt_code[:80],
                         )
                     scheduled |= pending
                     added |= pending
@@ -977,7 +981,7 @@ class ReexecutionPlanner:
             # A statement promoted to re-execution must not ALSO appear as
             # restored: its plan-time restore was decided against the carrier's
             # stale state, and re-execution in trace order supersedes it.
-            added_codes = {simulation_trace[i][0] for i in added}
+            added_codes = {simulation_trace[i].stmt_code for i in added}
             restored_statements_info = [
                 info for info in restored_statements_info if info.get("code") not in added_codes
             ]
@@ -1017,8 +1021,8 @@ class ReexecutionPlanner:
         frontier = list(pending)
         while frontier:
             j = frontier.pop()
-            expected = simulation_trace[j][3] or {}  # input lineages at j
-            for name in simulation_trace[j][2]:  # inputs
+            expected = simulation_trace[j].input_hashes or {}  # input lineages at j
+            for name in simulation_trace[j].inputs:
                 # A value that is live and still what this statement read needs
                 # no producer: the fill can run as it is. Without this, the
                 # wider fill rule pulled `imp.plot.barh(..., ax=ax)` in and then
@@ -1031,7 +1035,7 @@ class ReexecutionPlanner:
                     continue
                 if producer in scheduled or producer in pending or producer in extra:
                     continue
-                if statement_writes_files(simulation_trace[producer][0]):
+                if statement_writes_files(simulation_trace[producer].stmt_code):
                     if self.debug:
                         logger.debug(
                             "[UPSTREAM] Not scheduling file-writing producer [%s] "
@@ -1060,7 +1064,7 @@ class ReexecutionPlanner:
         """
         for p in range(before - 1, -1, -1):
             if user_ns is not None:
-                for out in simulation_trace[p][1]:  # outputs
+                for out in simulation_trace[p].outputs:
                     try:
                         if stateful_carrier_kind(user_ns.get(out)) in (
                             "matplotlib Figure",
@@ -1069,7 +1073,7 @@ class ReexecutionPlanner:
                             return p
                     except (TypeError, ValueError, AttributeError, RecursionError):
                         pass
-            if _PYPLOT_FIGURE_MAKER.search(simulation_trace[p][0]):
+            if _PYPLOT_FIGURE_MAKER.search(simulation_trace[p].stmt_code):
                 return p
         return None
 
@@ -1111,7 +1115,7 @@ class ReexecutionPlanner:
         refused: set[int] = set()
 
         for w in sorted(scheduled):
-            code = simulation_trace[w][0]
+            code = simulation_trace[w].stmt_code
             if not statement_saves_current_pyplot_figure(code, user_ns):
                 continue
             producer = self._latest_current_figure_producer(simulation_trace, w, user_ns)
@@ -1126,7 +1130,7 @@ class ReexecutionPlanner:
         remaining = [i for i in stmts_to_run_indices if i not in refused]
         # A refused write must not linger in the restored set either -- it is not
         # being run at all this pass.
-        refused_codes = {simulation_trace[i][0] for i in refused}
+        refused_codes = {simulation_trace[i].stmt_code for i in refused}
         restored_statements_info = [info for info in restored_statements_info if info.get("code") not in refused_codes]
         return remaining, restored_statements_info
 
@@ -1199,7 +1203,7 @@ class ReexecutionPlanner:
         refused: set[int] = set()
 
         for w in sorted(scheduled):
-            code = simulation_trace[w][0]
+            code = simulation_trace[w].stmt_code
             receiver = self._receiver_bound_figure_write(code)
             if receiver is None:
                 continue
@@ -1220,13 +1224,14 @@ class ReexecutionPlanner:
             producer = self.latest_producer(simulation_trace, receiver, w)
             if producer is None or producer not in scheduled:
                 continue  # the figure is not being rebuilt here
-            sibling_names = set(simulation_trace[producer][1])
+            sibling_names = set(simulation_trace[producer].outputs)
             fills = [
                 j
                 for j in range(producer + 1, w)
                 if _fills_carrier(simulation_trace[j], sibling_names)
                 and not (
-                    statement_writes_files(simulation_trace[j][0]) and not set(simulation_trace[j][1]) & sibling_names
+                    statement_writes_files(simulation_trace[j].stmt_code)
+                    and not set(simulation_trace[j].outputs) & sibling_names
                 )
             ]
             if all(j in scheduled for j in fills):
@@ -1238,7 +1243,7 @@ class ReexecutionPlanner:
             return stmts_to_run_indices, restored_statements_info
 
         remaining = [i for i in stmts_to_run_indices if i not in refused]
-        refused_codes = {simulation_trace[i][0] for i in refused}
+        refused_codes = {simulation_trace[i].stmt_code for i in refused}
         restored_statements_info = [info for info in restored_statements_info if info.get("code") not in refused_codes]
         return remaining, restored_statements_info
 
@@ -1302,11 +1307,11 @@ class ReexecutionPlanner:
         defs: dict = {}
         self.__dict__["_trace_defs_memo"] = (memo_key, defs)
         for entry in simulation_trace or ():
-            code = entry[0].lstrip()
+            code = entry.stmt_code.lstrip()
             if not code.startswith(("def ", "async def ", "@")):
                 continue
             try:
-                node = ast.parse(entry[0]).body[0]
+                node = ast.parse(entry.stmt_code).body[0]
             except (SyntaxError, IndexError):
                 continue
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -1339,7 +1344,7 @@ class ReexecutionPlanner:
         pending = self._unbound_helpers(self._called_names(stmt_code), defs)
         while pending:
             entry = pending.pop()
-            code = entry[0]
+            code = entry.stmt_code
             if code in seen:
                 continue
             seen.add(code)
@@ -1362,10 +1367,10 @@ class ReexecutionPlanner:
         seen: set[str] = set()
         while pending:
             entry = pending.pop()
-            if entry[0] in seen:
+            if entry.stmt_code in seen:
                 continue
-            seen.add(entry[0])
-            new = set(entry[2]) - names
+            seen.add(entry.stmt_code)
+            new = set(entry.inputs) - names
             names |= new
             pending.extend(self._unbound_helpers(new, defs))
         return names
@@ -1406,7 +1411,7 @@ class ReexecutionPlanner:
         scheduled = set(stmts_to_run_indices)
         scheduled_outputs: set[str] = set()
         for idx in scheduled:
-            scheduled_outputs.update(simulation_trace[idx][1])
+            scheduled_outputs.update(simulation_trace[idx].outputs)
         # A writer whose input is BROKEN is also stale, even when nothing in
         # the variable plan demands that input (the write may be the only
         # consumer — e.g. an edited payload that exists just to be dumped).
@@ -1458,7 +1463,7 @@ class ReexecutionPlanner:
 
         def _rebound_after(name: str, w: int) -> int | None:
             for j in range(len(simulation_trace) - 1, w, -1):
-                if name in simulation_trace[j][1]:
+                if name in simulation_trace[j].outputs:
                     return j
             return None
 
@@ -1474,12 +1479,12 @@ class ReexecutionPlanner:
         pending = list(writer_indices)
         while pending:
             w = pending.pop()
-            for v in self._writer_inputs(simulation_trace[w][2], simulation_trace):
+            for v in self._writer_inputs(simulation_trace[w].inputs, simulation_trace):
                 later = _rebound_after(v, w)
                 if later is None and not _input_changed(v):
                     continue
                 for prod in range(w - 1, -1, -1):
-                    if v in simulation_trace[prod][1]:
+                    if v in simulation_trace[prod].outputs:
                         if prod not in scheduled:
                             scheduled.add(prod)
                             pending.append(prod)
@@ -1527,7 +1532,7 @@ class ReexecutionPlanner:
         for i in range(first_writer + 1, len(simulation_trace)):
             if i in scheduled:
                 continue
-            outputs, inputs = simulation_trace[i][1], simulation_trace[i][2]
+            outputs, inputs = simulation_trace[i].outputs, simulation_trace[i].inputs
             # ...and, in trace order, whatever consumes a re-read value.
             if _reads_written(outputs) or (written_forms is not None and set(inputs) & promoted_outputs):
                 scheduled.add(i)
@@ -1538,11 +1543,11 @@ class ReexecutionPlanner:
                         "[UPSTREAM] Promoting file-reader [%s] to re-exec (writer scheduled at [%s]): %s",
                         i,
                         first_writer,
-                        simulation_trace[i][0][:40],
+                        simulation_trace[i].stmt_code[:40],
                     )
 
         if promoted:
-            promoted_codes = {simulation_trace[i][0] for i in promoted}
+            promoted_codes = {simulation_trace[i].stmt_code for i in promoted}
             restored_statements_info = [
                 info for info in restored_statements_info if info.get("code") not in promoted_codes
             ]
@@ -1569,28 +1574,28 @@ class ReexecutionPlanner:
         stays behind and the next write finds no folder.
         """
 
-        cells = {getattr(simulation_trace[w], "cell", -1) for w in writer_indices} - {-1}
+        cells = {simulation_trace[w].cell for w in writer_indices} - {-1}
         if not cells:
             return list(writer_indices)
         # Cells whose replay already re-fires a write that is not provably
         # replacing (``rmtree``, ``mkdir``): the rest of their writes follow it.
         destructive = {
-            getattr(simulation_trace[w], "cell", -1)
+            simulation_trace[w].cell
             for w in writer_indices
-            if statement_write_repeatability(simulation_trace[w][0]) != REPEATABILITY_REPLACING
+            if statement_write_repeatability(simulation_trace[w].stmt_code) != REPEATABILITY_REPLACING
         }
         extra = []
         chosen = set(writer_indices)
         for j, entry in enumerate(simulation_trace):
-            if j in chosen or j in scheduled or getattr(entry, "cell", -1) not in cells:
+            if j in chosen or j in scheduled or entry.cell not in cells:
                 continue
-            code = entry[0]
+            code = entry.stmt_code
             if not self._is_file_writer(code, simulation_trace):
                 continue
             verdict = statement_write_repeatability(code)
             if verdict == REPEATABILITY_ACCUMULATING:
                 continue
-            if verdict != REPEATABILITY_REPLACING and getattr(entry, "cell", -1) not in destructive:
+            if verdict != REPEATABILITY_REPLACING and entry.cell not in destructive:
                 continue
             extra.append(j)
             if self.debug:
@@ -1656,7 +1661,7 @@ class ReexecutionPlanner:
         for i, entry in enumerate(simulation_trace):
             if i in skip:
                 continue
-            stmt_code, _outputs, inputs = entry[0], entry[1], entry[2]
+            stmt_code, _outputs, inputs = entry.stmt_code, entry.outputs, entry.inputs
             if not self._is_file_writer(stmt_code, simulation_trace):
                 continue
             inputs = self._writer_inputs(inputs, simulation_trace)
@@ -1804,7 +1809,7 @@ class ReexecutionPlanner:
         writer's output does not resolve."""
         forms: set[str] = set()
         for w in writer_indices:
-            written = self._writer_paths(simulation_trace[w][0], simulation_trace)
+            written = self._writer_paths(simulation_trace[w].stmt_code, simulation_trace)
             if not written:
                 return None
             for p in written:
@@ -2037,7 +2042,11 @@ class ReexecutionPlanner:
             current = None
             if entry is not None:
                 # After the writer ran: what the runtime recorded.
-                current = entry[4].get(var) if var in entry[1] else key_lineages(entry[3]).get(var)
+                current = (
+                    entry.produced_lineages.get(var)
+                    if var in entry.outputs
+                    else key_lineages(entry.input_hashes).get(var)
+                )
             if current is None:
                 current = (virtual_lineage or {}).get(var)
             if current is None:
@@ -2051,14 +2060,14 @@ class ReexecutionPlanner:
         """The history fingerprint of figure *carrier* at the writer at *index*,
         from the statements of the writer's cell that come before it -- the same
         span the runtime took (``StatementProcessor._carrier_histories``)."""
-        cell = getattr(simulation_trace[index], "cell", -1)
+        cell = simulation_trace[index].cell
         if cell == -1:
             return None
         first = index
-        while first > 0 and getattr(simulation_trace[first - 1], "cell", -1) == cell:
+        while first > 0 and simulation_trace[first - 1].cell == cell:
             first -= 1
         return carrier_history_fingerprint(
-            [(entry[0], key_lineages(entry[3])) for entry in simulation_trace[first:index]],
+            [(entry.stmt_code, key_lineages(entry.input_hashes)) for entry in simulation_trace[first:index]],
             carrier,
         )
 
@@ -2083,7 +2092,7 @@ class ReexecutionPlanner:
     ) -> bool:
         """Return True if *stmt* is a loop-var assignment for a scheduled iteration context."""
         for j in range(i + 1, min(i + 4, len(simulation_trace))):
-            next_stmt = simulation_trace[j][0]
+            next_stmt = simulation_trace[j].stmt_code
             digest = iteration_digest(next_stmt)
             if digest is not None and digest in scheduled_contexts:
                 if len(outputs) == 1:
@@ -2108,7 +2117,7 @@ class ReexecutionPlanner:
 
         scheduled_contexts: set[str] = set()
         for idx in stmts_to_run_indices:
-            digest = iteration_digest(simulation_trace[idx][0])
+            digest = iteration_digest(simulation_trace[idx].stmt_code)
             if digest is not None:
                 scheduled_contexts.add(digest)
 
@@ -2116,7 +2125,8 @@ class ReexecutionPlanner:
             return stmts_to_run_indices
 
         additional_indices: list[int] = []
-        for i, (stmt_code, outputs, _inputs, _, _, _) in enumerate(simulation_trace):
+        for i, entry in enumerate(simulation_trace):
+            stmt_code, outputs = entry.stmt_code, entry.outputs
             if i in stmts_set or iteration_digest(stmt_code) is not None:
                 continue
             if self._is_loop_var_assignment_for_context(

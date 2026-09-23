@@ -48,25 +48,30 @@ class SimulationCacheEntry(NamedTuple):
     simulated (``statement_environment_component``): empty when it reads none."""
 
 
-class _TraceFields(NamedTuple):
+@dataclass(slots=True)
+class TraceEntry:
+    """One statement of the simulation trace, in notebook order."""
+
     stmt_code: str
-    outputs: set
-    inputs: set
-    input_hashes: list
-    produced_lineages: dict
+    """The statement as the runtime keys it."""
+
+    outputs: set[str]
+    """Names the statement binds or changes."""
+
+    inputs: set[str]
+    """Names the statement reads."""
+
+    input_hashes: dict[str, str]
+    """The simulated lineage of each input at this statement."""
+
+    produced_lineages: dict[str, str]
+    """The simulated lineage each output leaves with."""
+
     files_stale: bool
-
-
-class TraceEntry(_TraceFields):
-    """A single entry in the simulation trace.
-
-    ``cell`` -- the notebook cell the statement belongs to, -1 when unknown --
-    is an attribute rather than a field: the trace is unpacked as a 6-tuple in
-    many places. It lets the re-execution planner re-run a cell's file writes
-    together.
-    """
+    """Whether a file the statement read changed since it last ran."""
 
     cell: int = -1
+    """The notebook cell the statement belongs to; -1 when unknown."""
 
 
 class IncrementalStartResult(NamedTuple):

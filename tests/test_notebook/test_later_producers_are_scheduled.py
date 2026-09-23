@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import types
 
+from cash.notebook.upstream._types import TraceEntry
 from cash.notebook.upstream.reexecution_planner import ReexecutionPlanner
 
 
@@ -23,7 +24,7 @@ def _planner(user_ns: dict) -> ReexecutionPlanner:
 
 
 def _entry(stmt, outputs=(), inputs=()):
-    return (stmt, set(outputs), list(inputs), {}, {}, None)
+    return TraceEntry(stmt, set(outputs), set(inputs), {}, {}, False)
 
 
 TRACE = [

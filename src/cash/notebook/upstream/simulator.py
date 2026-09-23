@@ -44,7 +44,7 @@ from ..consumables import consumable_state, has_diverged, is_consumable_unrestor
 from ._types import SimulationCacheEntry, apply_collected_mutations
 from .mismatch_classifier import MismatchClassifier
 from .reexecution_planner import ReexecutionPlanner
-from .virtual_lineage import VirtualLineage
+from .virtual_lineage import VirtualLineage, loop_derived_vars
 
 __all__ = ["NotebookSimulator"]
 
@@ -252,8 +252,8 @@ class NotebookSimulator:
         restores = self.virtual_lineage.restores
         binder: dict[str, str] = {}
         for entry in simulation_trace or ():
-            for out in entry[1] or ():
-                binder[out] = entry[0]
+            for out in entry.outputs or ():
+                binder[out] = entry.stmt_code
         adopted = []
         untracked = self.tracking_state.rerun_bindings
         untracked.clear()
@@ -840,7 +840,7 @@ class NotebookSimulator:
         needed = set(required_inputs)
         relevant: set[int] = set()
         for i in range(len(simulation_trace) - 1, -1, -1):
-            outputs, inputs = simulation_trace[i][1], simulation_trace[i][2]
+            outputs, inputs = simulation_trace[i].outputs, simulation_trace[i].inputs
             if outputs & needed:
                 relevant.add(i)
                 needed |= set(inputs)
@@ -862,7 +862,7 @@ class NotebookSimulator:
         """
         defs: dict[int, str] = {}
         for i in relevant:
-            code = simulation_trace[i][0]
+            code = simulation_trace[i].stmt_code
             if not code.lstrip().startswith(("def ", "async def ", "@")):
                 continue
             try:
@@ -873,10 +873,10 @@ class NotebookSimulator:
                 defs[i] = body[0].name
 
         def recorded(i: int) -> bool:
-            outputs = simulation_trace[i][1]
+            outputs = simulation_trace[i].outputs
             if outputs and all(efd.get(o) for o in outputs):
                 return True
-            return self._persisted_reads(simulation_trace[i][0]) is not None
+            return self._persisted_reads(simulation_trace[i].stmt_code) is not None
 
         covered: set[int] = set()
         changed = True
@@ -885,7 +885,7 @@ class NotebookSimulator:
             for i, name in defs.items():
                 if i in covered:
                     continue
-                callers = [j for j in relevant if j > i and name in simulation_trace[j][2]]
+                callers = [j for j in relevant if j > i and name in simulation_trace[j].inputs]
                 if callers and all((j in covered) if j in defs else recorded(j) for j in callers):
                     covered.add(i)
                     changed = True
@@ -970,14 +970,14 @@ class NotebookSimulator:
         for i, entry in enumerate(simulation_trace):
             if i not in relevant:
                 continue
-            code = entry[0]
+            code = entry.stmt_code
             if i not in covered_defs and ("read" in code or "open(" in code or "load" in code):
-                _collect(code, entry[1])
+                _collect(code, entry.outputs)
             # What the tracker recorded behind this statement's outputs counts
             # too, whatever the code looks like: a reader static analysis does
             # not recognise (``PIL.Image.open(p)``) must not make its file look
             # unread now that more write paths resolve.
-            for o in entry[1]:
+            for o in entry.outputs:
                 dep = efd.get(o)
                 if dep:
                     paths.update(dep.keys() if hasattr(dep, "keys") else dep)
@@ -1104,9 +1104,7 @@ class NotebookSimulator:
                     externally_tainted,
                 )
 
-        vars_derived_from_loops = self.virtual_lineage.propagate_loop_derived_vars(
-            vars_mutated_by_loops, simulation_trace
-        )
+        vars_derived_from_loops = loop_derived_vars(vars_mutated_by_loops, simulation_trace)
 
         # A loop whose data changed underneath it (a new file, not a code
         # edit) loses the trust, and so does everything built from it.
@@ -1117,7 +1115,7 @@ class NotebookSimulator:
             vars_derived_from_loops,
         )
         if changed_loops:
-            untrusted = self.virtual_lineage.propagate_loop_derived_vars(changed_loops, simulation_trace)
+            untrusted = loop_derived_vars(changed_loops, simulation_trace)
             vars_mutated_by_loops = vars_mutated_by_loops - untrusted
             vars_derived_from_loops = vars_derived_from_loops - untrusted
             trace_event("loop_trust_dropped", vars=untrusted)

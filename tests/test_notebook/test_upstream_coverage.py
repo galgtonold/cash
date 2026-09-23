@@ -24,6 +24,7 @@ import pytest
 
 from cash.notebook._protocols import TrackingState
 from cash.notebook.upstream import UpstreamChecker
+from cash.notebook.upstream._types import TraceEntry
 from cash.notebook.upstream.virtual_lineage import VirtualLineage
 from cash.tracking.file_dep_snapshot import snapshot_file_deps
 
@@ -118,7 +119,7 @@ class TestHandleLineageMismatch:
     def test_with_simulation_trace(self):
         """Should search simulation trace for the variable's last statement."""
         checker = _make_checker()
-        trace = [("x = 1", {"x"}, {}, {}, {}, {})]
+        trace = [TraceEntry("x = 1", {"x"}, set(), {}, {}, False)]
         self._call_mismatch(checker, var_name="x", simulation_trace=trace)
 
 

@@ -837,9 +837,9 @@ class MismatchClassifier:
             return
 
         last_stmt_for_var = None
-        for stmt, outputs, _, _, _, _ in reversed(simulation_trace):
-            if var_name in outputs:
-                last_stmt_for_var = stmt
+        for entry in reversed(simulation_trace):
+            if var_name in entry.outputs:
+                last_stmt_for_var = entry.stmt_code
                 break
 
         if self._handle_mismatch_code_matches(
@@ -1288,12 +1288,13 @@ class MismatchClassifier:
         restored_statements_info: list[dict] = []
 
         stmt_positions: dict[str, int] = {}
-        for i, (stmt_code, _, _, _, _, _) in enumerate(simulation_trace):
-            stmt_positions[stmt_code] = i
+        for i, entry in enumerate(simulation_trace):
+            stmt_positions[entry.stmt_code] = i
         total_restore_time = 0.0
 
         for i in range(len(simulation_trace) - 1, -1, -1):
-            stmt_code, outputs, inputs, input_hashes, produced_lineages, _ = simulation_trace[i]
+            entry = simulation_trace[i]
+            stmt_code, outputs = entry.stmt_code, entry.outputs
 
             is_needed = any(out in needed_vars for out in outputs)
             if not is_needed:
@@ -1330,10 +1331,10 @@ class MismatchClassifier:
                 restored_vars, restore_time, saved_time = self.virtual_lineage.try_virtual_restore(
                     stmt_code,
                     outputs,
-                    inputs,
-                    input_hashes,
+                    entry.inputs,
+                    entry.input_hashes,
                     virtual_modules,
-                    expected_lineages=produced_lineages,
+                    expected_lineages=entry.produced_lineages,
                 )
                 # Drain so subsequent iterations of this reverse-trace loop see
                 # the lineage / file-dep writes buffered by the restore — next
@@ -1442,8 +1443,8 @@ class MismatchClassifier:
             return
         producers: dict[str, list[set[str]]] = {}
         for entry in simulation_trace or ():
-            for out in entry[1] or ():
-                producers.setdefault(out, []).append(set(entry[2] or ()))
+            for out in entry.outputs or ():
+                producers.setdefault(out, []).append(set(entry.inputs or ()))
         utility_vars = {"ip", "cash_magics", "get_ipython", "__builtins__", "In", "Out"}
         seen: set[str] = set()
         todo = list(required_inputs)

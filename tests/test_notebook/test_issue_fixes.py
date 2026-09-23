@@ -13,7 +13,8 @@ import time
 from unittest.mock import patch
 
 from cash.analysis.code_analyzer import CodeAnalyzer
-from cash.notebook.upstream._types import SimulationCacheEntry
+from cash.notebook.upstream._types import SimulationCacheEntry, TraceEntry
+from cash.notebook.upstream.virtual_lineage import loop_derived_vars
 from tests._cell_driver import run_cash_cell
 
 # ===========================================================================
@@ -462,16 +463,12 @@ class TestTransitiveLoopMutation:
 
         vars_mutated_by_loops = {"events"}
         simulation_trace = [
-            ("events = []", {"events"}, set(), {}, {}, False),
-            ("df = pd.DataFrame(events, columns=['a'])", {"df"}, {"events", "pd"}, {}, {}, False),
-            ("top = df.head()", {"top"}, {"df"}, {}, {}, False),
+            TraceEntry("events = []", {"events"}, set(), {}, {}, False),
+            TraceEntry("df = pd.DataFrame(events, columns=['a'])", {"df"}, {"events", "pd"}, {}, {}, False),
+            TraceEntry("top = df.head()", {"top"}, {"df"}, {}, {}, False),
         ]
 
-        # Compute transitive derived vars (same algorithm as in upstream.py)
-        vars_derived = set(vars_mutated_by_loops)
-        for _stmt_code, outputs, inputs, _, _, _ in simulation_trace:
-            if inputs & vars_derived:
-                vars_derived.update(outputs)
+        vars_derived = loop_derived_vars(vars_mutated_by_loops, simulation_trace)
 
         assert "events" in vars_derived, "Directly mutated var should be in derived set"
         assert "df" in vars_derived, "df depends on events → should be derived"

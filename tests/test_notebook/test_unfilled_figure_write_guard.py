@@ -34,6 +34,7 @@ import warnings
 import pytest
 
 from cash.exceptions import CashWarning
+from cash.notebook.upstream._types import TraceEntry
 from cash.notebook.upstream.reexecution_planner import ReexecutionPlanner
 
 
@@ -43,8 +44,7 @@ def _planner(user_ns: dict) -> ReexecutionPlanner:
 
 
 def _entry(stmt, outputs=(), inputs=()):
-    # (stmt_code, outputs, inputs, input_hashes, output_hashes, extra)
-    return (stmt, set(outputs), list(inputs), {}, {}, None)
+    return TraceEntry(stmt, set(outputs), set(inputs), {}, {}, False)
 
 
 def _plot_trace(chart="electronics.png"):
@@ -104,7 +104,7 @@ class TestPostRestart:
     def test_a_refused_write_is_dropped_from_the_restored_set_too(self):
         planner = _planner({})
         trace = _plot_trace()
-        restored = [{"code": trace[3][0], "status": "CACHED"}]
+        restored = [{"code": trace[3].stmt_code, "status": "CACHED"}]
         with pytest.warns(CashWarning):
             _, remaining = planner._guard_unfilled_figure_writes([0, 3], trace, restored)
         assert remaining == [], "a refused write must not linger as restored"

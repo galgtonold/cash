@@ -34,6 +34,7 @@ import types
 
 import pytest
 
+from cash.notebook.upstream._types import TraceEntry
 from cash.notebook.upstream.reexecution_planner import ReexecutionPlanner
 
 
@@ -43,8 +44,7 @@ def _planner(user_ns: dict) -> ReexecutionPlanner:
 
 
 def _entry(stmt, outputs=(), inputs=()):
-    # (stmt_code, outputs, inputs, input_hashes, output_hashes, extra)
-    return (stmt, set(outputs), list(inputs), {}, {}, None)
+    return TraceEntry(stmt, set(outputs), set(inputs), {}, {}, False)
 
 
 def _trace():

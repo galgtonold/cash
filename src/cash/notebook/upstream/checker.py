@@ -1128,12 +1128,12 @@ class UpstreamChecker:
                 )
                 if len(trace) != before + 1:
                     return None
-            if any(entry[5] for entry in trace):
+            if any(entry.files_stale for entry in trace):
                 return None  # a file it reads changed: run it
             final: dict[str, str] = {}
             for entry in trace:
-                final.update(entry[4])
-            if set(final) != set().union(*(entry[1] for entry in trace)):
+                final.update(entry.produced_lineages)
+            if set(final) != set().union(*(entry.outputs for entry in trace)):
                 return None
             broken = {
                 name
@@ -1152,7 +1152,7 @@ class UpstreamChecker:
                     set(),
                     False,
                     False,
-                    {entry[0] for entry in trace},
+                    {entry.stmt_code for entry in trace},
                     lookup_times,
                 )
                 while True:
@@ -1167,7 +1167,7 @@ class UpstreamChecker:
                         | {
                             p
                             for i in run
-                            for v in (trace[i][2] or ())
+                            for v in (trace[i].inputs or ())
                             if (p := planner.latest_producer(trace, v, before=i)) is not None
                         }
                     )
@@ -1185,7 +1185,7 @@ class UpstreamChecker:
                 if i in run_set:
                     continue
                 planned[i] = restored_by_index.get(i) or {
-                    "code": entry[0],
+                    "code": entry.stmt_code,
                     "status": CacheStatus.SKIPPED,
                     "is_upstream": False,
                     "saved_time": 0.0,
@@ -1257,15 +1257,13 @@ class UpstreamChecker:
                 continue
             cell_trace = entry.trace_segment
             for trace_entry in cell_trace:
-                # trace_entry format: (stmt_code, outputs, inputs, input_hashes, produced_lineages, files_stale)
-                if len(trace_entry) >= 1:
-                    cumulative_stmt_codes.add(trace_entry[0])  # stmt_code
+                cumulative_stmt_codes.add(trace_entry.stmt_code)
                 # A statement below a synced one read the value it now names.
                 # Left behind, a loop there compared its recorded inputs with
                 # the old lineage and read as reading changed data on every run
                 # after a repair: ``results = {}`` and everything built on it
                 # re-ran each time (round 25, r25s1).
-                input_hashes = trace_entry[3] if len(trace_entry) >= 4 else None
+                input_hashes = trace_entry.input_hashes
                 if moved and isinstance(input_hashes, dict):
                     for var_name, (old, new) in moved.items():
                         if input_hashes.get(var_name) == old:

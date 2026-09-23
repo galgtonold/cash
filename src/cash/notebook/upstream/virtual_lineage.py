@@ -211,6 +211,19 @@ def _stats_this_run(paths: Iterable[str]) -> dict[str, tuple[str | None, Any]]:
     return {p: stats[p] for p in paths}
 
 
+def loop_derived_vars(vars_mutated_by_loops: set[str], simulation_trace: list[TraceEntry]) -> set[str]:
+    """*vars_mutated_by_loops* plus every variable built from one, walking the
+    trace forward. These are trusted in memory rather than replaced with stale
+    cached values."""
+    if not vars_mutated_by_loops:
+        return set()
+    vars_derived = set(vars_mutated_by_loops)
+    for entry in simulation_trace:
+        if entry.inputs & vars_derived:
+            vars_derived.update(entry.outputs)
+    return vars_derived
+
+
 class VirtualLineage:
     """Phase 1 of NotebookSimulator: forward simulation + cache probing.
 
@@ -415,7 +428,7 @@ class VirtualLineage:
             return
         for entry in self.simulation_cache:
             for trace_entry in entry.trace_segment:
-                for var in set(trace_entry[1]) & rerecorded:
+                for var in set(trace_entry.outputs) & rerecorded:
                     for path in self.executed_file_deps.get(var, ()):
                         if path in entry.cell_file_deps:
                             continue
@@ -695,8 +708,8 @@ class VirtualLineage:
                 mem_code = self.executed_cell_codes[var_name]
 
                 is_in_trace = False
-                for stmt, _, _, _, _, _ in simulation_trace:
-                    if stmt.strip() == mem_code.strip():
+                for entry in simulation_trace:
+                    if entry.stmt_code.strip() == mem_code.strip():
                         is_in_trace = True
                         break
 
@@ -756,7 +769,7 @@ class VirtualLineage:
         tainted: set[str] = set()
         for acc in vars_mutated_by_loops:
             for entry in simulation_trace:
-                stmt_code, outputs, inputs = entry[0], entry[1], entry[2]
+                stmt_code, outputs, inputs = entry.stmt_code, entry.outputs, entry.inputs
                 if acc not in outputs or acc in inputs:
                     continue  # not a producer, or self-referential (loop body)
                 if stmt_code.lstrip().startswith(self._CTRL_PREFIXES):
@@ -800,7 +813,12 @@ class VirtualLineage:
         changed: set[str] = set()
         outcomes = self.tracking_state.control_outcomes
         for entry in simulation_trace:
-            stmt_code, outputs, inputs, input_hashes = entry[0], entry[1], entry[2], entry[3] or {}
+            stmt_code, outputs, inputs, input_hashes = (
+                entry.stmt_code,
+                entry.outputs,
+                entry.inputs,
+                entry.input_hashes or {},
+            )
             accs = outputs & vars_mutated_by_loops
             if not accs or not stmt_code.lstrip().startswith(self._CTRL_PREFIXES):
                 continue
@@ -822,30 +840,6 @@ class VirtualLineage:
                     changed |= accs
                     break
         return changed
-
-    def propagate_loop_derived_vars(
-        self,
-        vars_mutated_by_loops: set[str],
-        simulation_trace: list,
-    ) -> set[str]:
-        """Walk forward from loop-mutated vars to include transitive dependents.
-
-        Returns the full set of variables derived from loop mutations (including
-        the original loop-mutated vars). These are trusted in memory rather than
-        replaced with stale cached values.
-        """
-        if not vars_mutated_by_loops:
-            return set()
-        vars_derived = set(vars_mutated_by_loops)
-        for _stmt_code, outputs, inputs, _, _, _ in simulation_trace:
-            if inputs & vars_derived:
-                vars_derived.update(outputs)
-        if self.debug and vars_derived - vars_mutated_by_loops:
-            logger.debug(
-                "[UPSTREAM_DEBUG] Variables transitively derived from loop mutations: %s",
-                vars_derived - vars_mutated_by_loops,
-            )
-        return vars_derived
 
     def _skipped_stmt_metric(
         self,
@@ -940,18 +934,20 @@ class VirtualLineage:
         if restored_outputs:
             needed = set(restored_outputs)
             for i in range(len(simulation_trace) - 1, -1, -1):
-                _stmt_code, outputs, inputs, _ih, _pl, _ = simulation_trace[i]
-                if outputs & needed:
+                entry = simulation_trace[i]
+                if entry.outputs & needed:
                     dependency_chain.add(i)
-                    needed.update(inputs)
+                    needed.update(entry.inputs)
 
         skipped_metrics: list[dict] = []
-        for i, (stmt_code, outputs, inputs, input_hashes, _produced_lineages, _) in enumerate(simulation_trace):
+        for i, entry in enumerate(simulation_trace):
             if i in executed_indices or i in restored_indices or i not in dependency_chain:
                 continue
-            entry = self._skipped_stmt_metric(i, stmt_code, outputs, inputs, input_hashes, virtual_modules)
-            if entry is not None:
-                skipped_metrics.append(entry)
+            metric = self._skipped_stmt_metric(
+                i, entry.stmt_code, entry.outputs, entry.inputs, entry.input_hashes, virtual_modules
+            )
+            if metric is not None:
+                skipped_metrics.append(metric)
         return skipped_metrics
 
     def _is_reinit_to_skip(
@@ -967,7 +963,7 @@ class VirtualLineage:
         Skips when the statement initialises to an empty container (e.g. ``x = {}``)
         but the accumulator already has data in memory, to avoid wiping state.
         """
-        stmt_code, outputs, _inputs, _, _, _ = simulation_trace[idx]
+        stmt_code, outputs = simulation_trace[idx].stmt_code, simulation_trace[idx].outputs
         if iteration_digest(stmt_code) is not None:
             return False
         if len(outputs) != 1:
@@ -1019,7 +1015,7 @@ class VirtualLineage:
         }
         fully_rerun_mutated: set[str] = set()
         for idx in stmts_to_run_indices:
-            stmt_code, outputs = simulation_trace[idx][0], simulation_trace[idx][1]
+            stmt_code, outputs = simulation_trace[idx].stmt_code, simulation_trace[idx].outputs
             if iteration_digest(stmt_code) is not None:
                 continue
             for mv, pat in patterns.items():
@@ -1046,7 +1042,7 @@ class VirtualLineage:
         """
         scheduled_iteration_outputs: dict[str, list] = {}
         for idx in stmts_to_run_indices:
-            stmt_code, outputs, *_ = simulation_trace[idx]
+            stmt_code, outputs = simulation_trace[idx].stmt_code, simulation_trace[idx].outputs
             if iteration_digest(stmt_code) is not None:
                 for out in outputs:
                     scheduled_iteration_outputs.setdefault(out, []).append(idx)
@@ -1110,7 +1106,7 @@ class VirtualLineage:
         for idx, entry in enumerate(simulation_trace):
             if idx in scheduled:
                 continue
-            stmt_code, outputs = entry[0], entry[1]
+            stmt_code, outputs = entry.stmt_code, entry.outputs
             if len(outputs) != 1:
                 continue
             out_var = next(iter(outputs))
@@ -1168,11 +1164,11 @@ class VirtualLineage:
         producing code is unchanged on disk.
         """
         loop_var_input_lineages: dict[str, dict[str, str]] = {}
-        for _stmt_code, outputs, inputs, _input_hashes, _produced_lineages, _ in simulation_trace:
-            for out in outputs:
+        for entry in simulation_trace:
+            for out in entry.outputs:
                 if out in vars_derived_from_loops:
                     data_input_lineages: dict[str, str] = {}
-                    for inp in inputs:
+                    for inp in entry.inputs:
                         if inp in virtual_modules:
                             continue
                         if inp in virtual_lineage:
@@ -1188,8 +1184,8 @@ class VirtualLineage:
         the whole for-loop) are matched correctly.
         """
         simulation_trace_codes: set[str] = set()
-        for stmt_code, _, _, _, _, _ in simulation_trace:
-            normalized = strip_markers(stmt_code).strip()
+        for entry in simulation_trace:
+            normalized = strip_markers(entry.stmt_code).strip()
             simulation_trace_codes.add(normalized)
             try:
                 tree = self.get_cached_ast(normalized)
@@ -1436,8 +1432,7 @@ class VirtualLineage:
             raise
 
         for entry in simulation_trace[trace_start:]:
-            if isinstance(entry, TraceEntry):
-                entry.cell = i
+            entry.cell = i
         cell_trace_segment = simulation_trace[trace_start:]
         new_cache_entries.append(
             SimulationCacheEntry(
@@ -3145,11 +3140,10 @@ class VirtualLineage:
         # backward scan handles them with proper unsaved-edit trust logic.
         vars_tainted: set[str] = set()
         propagation_sources = set(directly_mismatched_vars)
-        for _stmt_code_t, outputs_t, inputs_t, _, _, _ in simulation_trace:
-            if inputs_t & propagation_sources:
-                new_tainted = outputs_t - directly_mismatched_vars
-                vars_tainted.update(new_tainted)
-                propagation_sources.update(outputs_t)
+        for entry in simulation_trace:
+            if entry.inputs & propagation_sources:
+                vars_tainted.update(entry.outputs - directly_mismatched_vars)
+                propagation_sources.update(entry.outputs)
 
         if self.debug and vars_tainted:
             logger.debug(

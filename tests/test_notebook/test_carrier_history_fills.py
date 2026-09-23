@@ -8,13 +8,14 @@ classify, so the carrier has to be recognised by the code that made it.
 """
 
 from cash.notebook.stateful_carriers import carrier_kind_from_producer
+from cash.notebook.upstream._types import TraceEntry
 from cash.notebook.upstream.reexecution_planner import _fills_carrier, _passes_carrier_to_a_call
 
 SIBLINGS = {"fig", "axes"}
 
 
 def _entry(code, outputs=()):
-    return (code, set(outputs), set())
+    return TraceEntry(code, set(outputs), set(), {}, {}, False)
 
 
 def test_a_call_handed_the_axes_is_a_fill():
