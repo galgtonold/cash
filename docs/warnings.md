@@ -1,6 +1,6 @@
 # Warnings
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @b975d18b -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @171ee026 -->
 Every warning in the `CashWarning` hierarchy carries a code in square brackets
 and a link to its section here. To look one up, search this page for the code.
 
@@ -24,7 +24,8 @@ Handlers can branch on the code rather than the wording, which is free to change
 Every code is on `.code`, including the notebook warnings that point at a
 line of a cell rather than at a frame ([`RANDOM-REPLAYED`](#random-replayed),
 [`RANDOM-UNSEEDED`](#random-unseeded),
-[`NOTEBOOK-CELL-SYNTAX`](#notebook-cell-syntax)). The rendered text also
+[`NOTEBOOK-CELL-SYNTAX`](#notebook-cell-syntax),
+[`ANNOT-UNKNOWN-DIRECTIVE`](#annot-unknown-directive)). The rendered text also
 always starts `[CODE] `.
 
 If a warning scrolled past, most of what the decorator raises about a function
@@ -37,7 +38,7 @@ For the class hierarchy, see [Exceptions & warnings](api/exceptions.md).
 
 ## ANNOT-TTL-INVALID {#annot-ttl-invalid}
 
-<!-- claim: cash/notebook/annotations.py:parse_annotation_line @c743e92c -->
+<!-- claim: cash/notebook/annotations.py:parse_annotation_line @341dca2e -->
 **What happened.** You put `# @cash:ttl=` on a statement in a notebook and the
 value after the `=` is not a whole number of seconds, so Cash ignored that
 annotation entirely and the statement keeps whatever caching it would have had
@@ -45,8 +46,7 @@ without it. There is no unit suffix, no decimal point and no negative: five
 minutes is `ttl=300`, not `ttl=5m`, not `ttl=300.0` and not `ttl=-5`. Only ASCII
 digits count, so a superscript or a full-width digit pasted in from elsewhere
 looks right in the cell and is still rejected. `# @cash:ttl` with no `=` at all
-is a different case: it is not a TTL Cash rejected, it is a directive it does
-not recognise, and those drop silently with no warning of any kind.
+warns the same way.
 
 **Why it matters.** The statement is still cached, and unless something else is
 setting a TTL it now has no expiry. If you set one because the value goes out of
@@ -58,7 +58,7 @@ works. Two things can still expire it, and neither is what you wrote: a
 session-wide TTL from `%cash_on ttl=N`, and a `default_ttl` set on a backend
 tier, which stamps every entry that arrives without one of its own.
 
-<!-- claim: cash/notebook/annotations.py:ANNOTATION_PATTERN @412c3ce1, cash/notebook/annotations.py:parse_annotation_line @c743e92c -->
+<!-- claim: cash/notebook/annotations.py:ANNOTATION_PATTERN @412c3ce1, cash/notebook/annotations.py:parse_annotation_line @341dca2e -->
 **What to do.** Rewrite the value as a bare count of seconds: `# @cash:ttl=300`
 for five minutes, `3600` for an hour, `86400` for a day. Annotations on *other*
 lines were parsed normally and still apply — a `# @cash:persist` above the
@@ -74,6 +74,37 @@ changes, which is what you wanted, and losing the timer costs nothing. It is not
 safe to ignore when the TTL was the *only* thing that would ever have
 invalidated the statement — there the clock is the whole mechanism, and it is
 switched off.
+
+## ANNOT-UNKNOWN-DIRECTIVE {#annot-unknown-directive}
+
+<!-- claim: cash/notebook/annotations.py:KNOWN_DIRECTIVES @91e03db7, cash/notebook/annotations.py:_warn_unknown_directive @24d9ef6e -->
+**What happened.** A comment in a notebook cell or a cached function starts
+`# @cash:` but the word after the colon is not a directive Cash knows, so Cash
+ignored the comment. The known directives are `no-cache`, `persist`, `ttl=N`, `allow-random`,
+`cache-fit`, `no-cache-calls` and `assume-safe`. When the name you wrote matches
+one of them once hyphens and underscores are dropped, the warning names it:
+`# @cash:nocache` asks whether you meant `no-cache`. The warning appears once
+per session for each unknown name, however many cells repeat it.
+
+**Why it matters.** The statement is cached as if the comment were not there.
+For a directive that was meant to stop caching, that is the opposite of what
+you asked for: a cell marked `# @cash:nocache` because it reads the clock or
+writes a file is served from the cache on the next run, and the comment in the
+cell still looks as if it is doing its job. Older versions of Cash accepted the
+run-together spellings (`nocache`, `allowrandom`, `cachefit`, `nocachecalls`)
+and an opt-in `cache-calls`; notebooks written for them now hit this warning.
+
+**What to do.** Fix the spelling, using the suggestion if the warning gives
+one. `cache-calls` has no replacement: calls inside a statement are cached by
+default now, and `# @cash:no-cache-calls` turns that off. Then re-run the cell;
+the badge shows whether the directive took effect. See
+[Annotations](annotations.md).
+
+**When it is safe to ignore.** When the comment was never meant as a directive,
+for example prose that happens to start `# @cash:` — reword it so it no longer
+does. A misspelled `persist`, `cache-fit` or `allow-random` costs only speed or
+an extra warning, but a misspelled `no-cache`, `no-cache-calls` or `ttl` can
+serve a value you meant to recompute, so fix those.
 
 ## CACHE-ASYNC-GENERATOR {#cache-async-generator}
 
@@ -1573,7 +1604,7 @@ split, another bootstrap sample, a second fit from a different initialisation �
 you will get the same number every time, and it is easy to read that as
 stability. A correct cache producing a wrong conclusion.
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._opts_out_of_rng_rewind @ad08f32d -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._opts_out_of_rng_rewind @bb37e3c0 -->
 **What to do.** Decide what you wanted from that statement.
 
 - Genuinely fresh every run: `# @cash:no-cache` on a comment line of its own
@@ -1617,7 +1648,7 @@ waiting to be fixed. Keying the downstream values on the fresh entropy would
 make them recompute on every run, and then they never converge: each re-run
 mints another answer instead of agreeing with the last.
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._opts_out_of_rng_rewind @ad08f32d -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._opts_out_of_rng_rewind @bb37e3c0 -->
 **What to do.** Pick one of the two things `seed(None)` sits between.
 
 - If those values must reflect the new stream, mark them `# @cash:no-cache` on
@@ -1693,7 +1724,7 @@ cached" in [Annotations](annotations.md).
   `@cash.cache(allow_random=True)`. Both silence the warning and change nothing
   else — the value was frozen before and stays frozen.
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._opts_out_of_rng_rewind @ad08f32d -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._opts_out_of_rng_rewind @bb37e3c0 -->
 !!! warning "Write `# @cash:no-cache` on a line of its own"
 
     For the rewind — and only for the rewind — the placement is load-bearing,

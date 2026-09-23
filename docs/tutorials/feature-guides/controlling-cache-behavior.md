@@ -32,7 +32,7 @@ model = train_xgb(X, y)         # 12 min to fit — force to disk
 noise = np.random.rand(1000)    # we know it's unseeded; don't warn us
 ```
 
-<!-- claim: cash/notebook/annotations.py:parse_annotation_line @c743e92c, cash/notebook/annotations.py:ANNOTATION_PATTERN @412c3ce1 -->
+<!-- claim: cash/notebook/annotations.py:parse_annotation_line @341dca2e, cash/notebook/annotations.py:ANNOTATION_PATTERN @412c3ce1 -->
 That's the everyday language — six directives in total, counting the two specialised ones above. Stack annotations on consecutive lines above a statement (Cash walks backwards through comment lines until it hits a blank or a non-comment).
 
 ## The four annotations

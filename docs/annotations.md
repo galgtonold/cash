@@ -45,7 +45,7 @@ ANNOTATION_PATTERN = re.compile(r'#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\S*))?')
 
 It's applied with `re.search` (not `re.match`), so the directive can appear **anywhere on the line** — including trailing on a normal code line.
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._opts_out_of_rng_rewind @ad08f32d -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._opts_out_of_rng_rewind @bb37e3c0 -->
 !!! warning "One consumer reads own-line comments only"
     That is true of the *parser*. It is not true of everything downstream of it.
     `UpstreamChecker._opts_out_of_rng_rewind` — the check that decides whether
@@ -69,12 +69,12 @@ name. A `\d+` group would simply not match the bad part — `ttl=5m` would captu
 
 A few details that bite people:
 
-<!-- claim: cash/notebook/annotations.py:ANNOTATION_PATTERN @412c3ce1, cash/notebook/annotations.py:parse_annotation_line @c743e92c -->
+<!-- claim: cash/notebook/annotations.py:ANNOTATION_PATTERN @412c3ce1, cash/notebook/annotations.py:parse_annotation_line @341dca2e -->
 - **`@cash:` is case-sensitive.** `# @Cash:persist` is silently ignored. Only the directive *name* after the colon is lower-cased ([`annotations.py` — `ANNOTATION_PATTERN`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)), so `# @cash:PERSIST` works.
 - **A space after the colon is fine.** `# @cash: persist` and `# @cash:persist` both match (the pattern allows `\s*` after the colon), as does spacing around `=` — `# @cash:ttl = 60` works.
 - **Whitespace before `@cash:` is fine.** `#@cash:persist`, `# @cash:persist`, and `#   @cash:persist` all match.
-- **`=N` only accepts digits.** `# @cash:ttl=60` works. `# @cash:ttl=`, `# @cash:ttl=abc`, `# @cash:ttl=-5` and `# @cash:ttl=5m` do not set a TTL — but they are **not** silent: each warns and names the directive it could not read. The suffix case is why: `ttl=5m` used to parse as *five seconds*, a 60× error whose only symptom was a cache that kept missing.
-- **Unknown directives silently drop.** `# @cash:typo` produces no warning and no log line. Spell-check your directives.
+- **`=N` only accepts digits.** `# @cash:ttl=60` works. `# @cash:ttl`, `# @cash:ttl=`, `# @cash:ttl=abc`, `# @cash:ttl=-5` and `# @cash:ttl=5m` do not set a TTL — but they are **not** silent: each warns and names the directive it could not read. The suffix case is why: `ttl=5m` used to parse as *five seconds*, a 60× error whose only symptom was a cache that kept missing.
+- **Unknown directives are ignored, with a warning.** `# @cash:typo` does nothing, and says so once per session per name with [`ANNOT-UNKNOWN-DIRECTIVE`](warnings.md#annot-unknown-directive). A name that matches a real directive once hyphens and underscores are dropped gets a suggestion: `# @cash:nocache` asks whether you meant `no-cache`.
 
 ## Directives
 
@@ -91,7 +91,7 @@ Forces a statement to be cached on disk even when the cost model would normally 
 cheap_constant = compute_constants()    # would normally be skipped; now forced
 ```
 
-<!-- claim: cash/notebook/annotations.py:parse_annotation_line @c743e92c, cash/notebook/statement/processor.py:StatementProcessor._parse_annotation @70e15ddd -->
+<!-- claim: cash/notebook/annotations.py:parse_annotation_line @341dca2e, cash/notebook/statement/processor.py:StatementProcessor._parse_annotation @70e15ddd -->
 Behind the scenes: the parser sets `CacheAnnotation(persist=True)` ([`annotations.py` — `parse_annotation_line`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)), and `_parse_annotation` in the statement processor turns that into `force_persist=True` ([`statement/processor.py` — `StatementProcessor._parse_annotation`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py)), which bypasses the cost-model skip logic downstream.
 
 If both `persist` and `no-cache` apply to the same statement, **`no-cache` wins** (see [Merging](#merging-multiple-annotations)).
@@ -135,7 +135,7 @@ Notes:
 - If multiple `ttl=` annotations apply to the same statement, **the last one wins** (see [Merging](#merging-multiple-annotations)).
 - TTL only governs *cache freshness*. A statement with `no-cache` won't be cached at all, so its `ttl=` is irrelevant.
 
-<!-- claim: cash/notebook/annotations.py:parse_annotation_line @c743e92c -->
+<!-- claim: cash/notebook/annotations.py:parse_annotation_line @341dca2e -->
 Behind the scenes: the annotation sets `CacheAnnotation.ttl` ([`annotations.py` — `parse_annotation_line`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)), which `_parse_annotation` reads and uses as `effective_ttl` ([`statement/processor.py` — `StatementProcessor._parse_annotation`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py)).
 
 ### `# @cash:allow-random`
@@ -569,7 +569,7 @@ generator instead.
 
 ## Lookback and scoping
 
-<!-- claim: cash/notebook/annotations.py:parse_annotations_in_range @d13a2128 -->
+<!-- claim: cash/notebook/annotations.py:parse_annotations_in_range @27219e63 -->
 Cash needs to associate each annotation with a specific statement. It does this in [`parse_annotations_in_range`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py) which walks two directions from a top-level AST node:
 
 ### Backward walk
@@ -704,10 +704,10 @@ model = train()                  # no_cache wins; never cached
 
 ## Common mistakes
 
-These are the failure modes where the annotation just doesn't take effect. Most
-are silent — the directive is simply not recognised, and nothing tells you.
-The exception is a malformed `ttl=`, which warns and names itself; that case is
-called out below.
+These are the failure modes where the annotation just doesn't take effect. A
+wrong-case `@Cash:` or a misplaced comment is silent: the parser never sees a
+directive, and nothing tells you. A misspelled directive name and a malformed
+`ttl=` do warn and name themselves; both are called out below.
 
 ### Space after the colon — *not* a mistake
 
@@ -750,11 +750,16 @@ Each of these warns rather than passing silently:
 ### Typo'd directive name
 
 ```python
-# @cash:perist             # WRONG — typo, silently ignored
+# @cash:perist             # WRONG — typo, ignored with a warning
+# @cash:nocache            # WRONG — the hyphen is required
 model = train()
 ```
 
-Unknown directives produce no error. Watch your spelling, especially `persist` and `no-cache`.
+An unknown directive is ignored, so the statement caches as if the comment were
+not there, and Cash warns once per session for each unknown name
+([`ANNOT-UNKNOWN-DIRECTIVE`](warnings.md#annot-unknown-directive)). When the name
+matches a real directive with its hyphens and underscores removed, as `nocache`
+does, the warning suggests the right spelling.
 
 ### Annotation *below* the statement
 

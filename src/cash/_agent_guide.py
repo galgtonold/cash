@@ -125,8 +125,9 @@ differ each run.
 - **Unhashable argument** (a lock, socket, open file, or a bare `self`) → caching
   silently does nothing. `f.explain(...)` shows the key couldn't be built; fix with
   `cash.register_hasher(SomeType, lambda x: ...)` or pass a hashable identifier.
-- **Annotation typo, wrong case, or a blank line above the statement** → the
-  directive silently no-ops. Confirm the badge actually changed.
+- **Wrong case or a blank line above the statement** → the directive silently
+  no-ops (a misspelled name warns `ANNOT-UNKNOWN-DIRECTIVE`). Confirm the badge
+  actually changed.
 - **Write cache-safe cells:** rebind, don't mutate an object from an *earlier* cell
   (`df = df.assign(c=...)`, not `df['c'] = ...`); seed RNG in the same cell as the
   draw; pass state in and out of functions instead of mutating globals. Full list:

@@ -12,6 +12,7 @@ from ..exceptions import CashCacheIneffectiveWarning
 __all__ = [
     "CacheAnnotation",
     "ANNOTATION_PATTERN",
+    "KNOWN_DIRECTIVES",
     "leading_cell_annotation",
     "parse_annotation_line",
     "parse_annotations_in_range",
@@ -69,10 +70,67 @@ class CacheAnnotation:
 # and reject it out loud.
 ANNOTATION_PATTERN = re.compile(r"#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\S*))?")
 
+#: Every directive name Cash acts on. ``assume-safe`` is read by the purity
+#: analyser rather than here, but it is a real directive, so it must not be
+#: reported as unknown.
+KNOWN_DIRECTIVES: tuple[str, ...] = (
+    "no-cache",
+    "persist",
+    "ttl",
+    "allow-random",
+    "cache-fit",
+    "no-cache-calls",
+    "assume-safe",
+)
 
-def parse_annotation_line(line: str) -> CacheAnnotation | None:
+#: Unknown directive names already warned about in this process, so a typo in a
+#: cell that is parsed on every run (and by the upstream checker for every cell
+#: below it) is reported once, not every time.
+_warned_unknown_directives: set[str] = set()
+
+
+def _squash(name: str) -> str:
+    return name.replace("-", "").replace("_", "")
+
+
+def _warn_unknown_directive(directive: str, lineno: int | None) -> None:
+    """Say, once per name per session, that ``# @cash:<directive>`` does nothing.
+
+    An unknown directive used to drop silently, which is how an old
+    ``# @cash:nocache`` (the run-together spelling, since removed) went on
+    caching the statement it was written to stop.
+
+    With *lineno* (the line in the cell) the warning is blamed on ``<cash>``
+    at that line, like the other notebook warnings: the nearest frame outside
+    Cash while a cell runs is ipykernel's, which tells the reader nothing.
+    """
+    if directive in _warned_unknown_directives:
+        return
+    _warned_unknown_directives.add(directive)
+    suggestion = next((known for known in KNOWN_DIRECTIVES if _squash(known) == _squash(directive)), None)
+    if suggestion is not None:
+        what = (
+            f"`# @cash:{directive}` is not a directive Cash knows (did you mean "
+            f"`# @cash:{suggestion}`?), so it was IGNORED and the statement is "
+            f"cached as if the comment were not there."
+        )
+        fix = f"write it as `# @cash:{suggestion}`."
+    else:
+        what = (
+            f"`# @cash:{directive}` is not a directive Cash knows, so it was "
+            f"IGNORED and the statement is cached as if the comment were not there."
+        )
+        fix = "use one of: " + ", ".join(f"`{d}`" for d in KNOWN_DIRECTIVES) + "."
+    location = None if lineno is None else ("<cash>", lineno)
+    warn_diagnostic(CashCacheIneffectiveWarning, "ANNOT-UNKNOWN-DIRECTIVE", what, fix, location=location)
+
+
+def parse_annotation_line(line: str, lineno: int | None = None) -> CacheAnnotation | None:
     """
     Parse a single line for cache annotations.
+
+    *lineno* is the line's 1-based number in its cell, if known; an unknown
+    directive's warning points there.
 
     Returns CacheAnnotation if found, None otherwise.
     """
@@ -93,22 +151,25 @@ def parse_annotation_line(line: str) -> CacheAnnotation | None:
         return CacheAnnotation(cache_fit=True)
     if directive == "no-cache-calls":
         return CacheAnnotation(no_cache_calls=True)
-    if directive == "ttl" and value is not None:
+    if directive == "ttl":
         # ``isascii`` as well as ``isdigit``: the latter is True for characters
         # like the superscript two, which ``int()`` then refuses.
-        if value.isascii() and value.isdigit():
+        if value is not None and value.isascii() and value.isdigit():
             return CacheAnnotation(ttl=int(value))
+        if value is None:
+            problem = "`# @cash:ttl` gives no number of seconds"
+        else:
+            problem = f"`# @cash:ttl={value}` is not a whole number of seconds"
         warn_diagnostic(
             CashCacheIneffectiveWarning,
             "ANNOT-TTL-INVALID",
-            f"`# @cash:ttl={value}` is not a whole number of seconds, so the "
-            f"annotation was IGNORED and this statement keeps its normal "
-            f"caching with no expiry.",
+            f"{problem}, so the annotation was IGNORED and this statement keeps its normal caching with no expiry.",
             "rewrite the value as a bare count of seconds -- `ttl=300` for five "
             "minutes -- with no unit suffix and no decimal point.",
         )
         return None
-
+    if directive not in KNOWN_DIRECTIVES:
+        _warn_unknown_directive(directive, lineno)
     return None
 
 
@@ -135,7 +196,7 @@ def parse_annotations_in_range(source_lines: list[str], start_line: int, end_lin
             break
 
         # Try to parse annotation from this line
-        ann = parse_annotation_line(line)
+        ann = parse_annotation_line(line, check_line + 1)
         if ann:
             result = result.merge(ann)
 
@@ -147,7 +208,7 @@ def parse_annotations_in_range(source_lines: list[str], start_line: int, end_lin
 
     # Check all lines within the statement
     for i in range(start_line - 1, min(end_line, len(source_lines))):
-        ann = parse_annotation_line(source_lines[i])
+        ann = parse_annotation_line(source_lines[i], i + 1)
         if ann:
             result = result.merge(ann)
 
@@ -185,13 +246,13 @@ def leading_cell_annotation(source_lines: list[str]) -> CacheAnnotation:
     keeps working.
     """
     header = CacheAnnotation()
-    for line in source_lines:
+    for lineno, line in enumerate(source_lines, 1):
         stripped = line.strip()
         if not stripped:
             continue  # blank lines don't close the header
         if not stripped.startswith("#"):
             break  # first real code closes the header
-        ann = parse_annotation_line(line)
+        ann = parse_annotation_line(line, lineno)
         if ann:
             header = header.merge(ann)
     # Propagate the safety opt-outs only.

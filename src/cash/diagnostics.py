@@ -139,6 +139,7 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
     {
         # -- ANNOT: a ``# @cash:`` annotation Cash could not honour -------------
         "ANNOT-TTL-INVALID",  # `# @cash:ttl=` is not whole seconds; ignored
+        "ANNOT-UNKNOWN-DIRECTIVE",  # `# @cash:<name>` is not a directive; ignored
         # -- CACHE: caching happened, or refused to, and it is worth saying -----
         "CACHE-ASYNC-GENERATOR",  # async generators are returned unwrapped
         "CACHE-IDENTITY-COUPLED",  # result is a live Figure/Axes; storing it would

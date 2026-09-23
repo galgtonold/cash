@@ -2125,10 +2125,10 @@ class UpstreamChecker:
         statement dutifully re-executes, redraws the identical value, and the
         one escape hatch users are told to reach for silently does nothing.
         """
-        for line in cell_code.splitlines():
+        for lineno, line in enumerate(cell_code.splitlines(), 1):
             if not line.strip().startswith("#"):
                 continue
-            ann = parse_annotation_line(line)
+            ann = parse_annotation_line(line, lineno)
             if ann is not None and ann.no_cache:
                 return True
         return False
