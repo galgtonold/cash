@@ -36,13 +36,13 @@ ROOT = HERE.parent.parent
 
 # Always in the core set: the files that exercise the headline features.
 ALWAYS = [
-    "tests/test_notebook_integration/test_basic_flow.py",
-    "tests/test_notebook_integration/test_disk_restore_after_restart.py",
-    "tests/test_notebook_integration/test_file_invalidation_real.py",
-    "tests/test_notebook_integration/test_decorator_bridge_integration.py",
-    "tests/test_notebook_integration/test_badge_integration.py",
-    "tests/test_notebook_integration/test_forward_probe_upstream_skip.py",
-    "tests/test_notebook_integration/test_file_dep_path_fallback.py",
+    "tests/test_notebook_integration/basics/test_basic_flow.py",
+    "tests/test_notebook_integration/restart/test_disk_restore_after_restart.py",
+    "tests/test_notebook_integration/files/test_file_invalidation_real.py",
+    "tests/test_notebook_integration/decorator/test_decorator_bridge.py",
+    "tests/test_notebook_integration/badges/test_badge_integration.py",
+    "tests/test_notebook_integration/upstream/test_forward_probe_upstream_skip.py",
+    "tests/test_notebook_integration/files/test_file_dep_path_fallback.py",
 ]
 
 # cash module path (relative to the package, "/"-separated, no .py) prefix -> feature.

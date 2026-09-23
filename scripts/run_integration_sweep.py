@@ -75,7 +75,7 @@ def main() -> int:
     ap.add_argument("--stress", type=int, default=0, help="repeat the alias/mutation scenarios N times each")
     args = ap.parse_args()
 
-    files = sorted(p.as_posix() for p in SUITE.glob("test_*.py") if args.only in p.name)
+    files = sorted(p.as_posix() for p in SUITE.rglob("test_*.py") if args.only in p.name)
     if not files:
         print(f"no test files matched {args.only!r} in {SUITE}")
         return 1

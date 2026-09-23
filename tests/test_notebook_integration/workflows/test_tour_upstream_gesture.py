@@ -31,7 +31,7 @@ from tests._nbharness.runner import CASH_TEST_PIN_THRESHOLDS
 
 pytestmark = pytest.mark.timeout(600)
 
-TOUR = Path(__file__).resolve().parents[2] / "examples" / "try_cash_binder.ipynb"
+TOUR = Path(__file__).resolve().parents[3] / "examples" / "try_cash_binder.ipynb"
 
 
 def _tour_cells():

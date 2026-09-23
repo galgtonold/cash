@@ -24,7 +24,7 @@ import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.loops]
 
-REPO = pathlib.Path(__file__).resolve().parents[2]
+REPO = pathlib.Path(__file__).resolve().parents[3]
 NB = REPO / "examples" / "cache_calls_demo.ipynb"
 
 
