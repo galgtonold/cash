@@ -26,10 +26,16 @@ spread over <!-- docnum:test_files -->~1,530<!-- /docnum --> files:
 | Notebook integration | <!-- docnum:tests_integration -->~4,530<!-- /docnum --> | Real kernels executing real notebooks, cell by cell |
 | Docs | <!-- docnum:tests_docs -->~380<!-- /docnum --> | The documentation itself — see [below](#the-docs-are-tested-too) |
 
-Every one runs on **<!-- docnum:platforms -->15<!-- /docnum --> platform combinations** — Python
+The unit suite runs on **<!-- docnum:platforms -->15<!-- /docnum --> platform combinations** — Python
 3.10 through 3.14, on Linux, Windows and macOS — on every push. The matrix is deliberately kept in
 lockstep with the versions advertised on PyPI, because a version we claim to
 support but never run is a support claim backed by nothing.
+
+The integration suite takes over two hours of test time, so every push runs its
+core set instead: a few hundred tests, picked to cover every line, feature and
+step sequence the whole suite covers, on Linux for every Python version. The
+whole integration suite runs every night, split into parallel shards. The docs
+suite runs on every push, on Linux.
 
 ## The suite is a regression corpus, not a coverage target
 

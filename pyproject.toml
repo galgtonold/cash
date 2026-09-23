@@ -119,7 +119,8 @@ docs-test = [
     "boto3>=1.28",
 ]
 dev = [
-    "pytest>=8.0",
+    # 8.2 reads arguments from a file: `pytest @tools/test_selection/core_set.txt`.
+    "pytest>=8.2",
     "pytest-timeout",
     "pytest-xdist",
     "pytest-rerunfailures",

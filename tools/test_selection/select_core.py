@@ -13,8 +13,8 @@ any of four kinds of element:
   partial rerun), so "restart while file deps are live" is its own element.
 
 Selection is greedy weighted set cover: repeatedly take the passing test with
-the most new elements per second of runtime. Tests in CI's smoke list are
-always taken first. Failed, errored and skipped tests are never picked.
+the most new elements per second of runtime. The headline-feature files in
+``ALWAYS`` are taken first. Failed, errored and skipped tests are never picked.
 
 Usage::
 
@@ -34,7 +34,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 
-# Always in the core set: today's CI smoke subset.
+# Always in the core set: the files that exercise the headline features.
 ALWAYS = [
     "tests/test_notebook_integration/test_basic_flow.py",
     "tests/test_notebook_integration/test_disk_restore_after_restart.py",

@@ -1,0 +1,46 @@
+name: Nightly integration
+
+# The whole notebook integration suite. It takes over two hours of test time,
+# too long for every push (ci.yml runs the core set there), so it runs every
+# night and by hand from the Actions tab, split into shards that run in
+# parallel. tools/test_selection/shard.py assigns each test to one shard by a
+# stable hash of its node id, so the shards never overlap and together run
+# every test.
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+jobs:
+  integration:
+    name: Integration shard ${{ matrix.shard }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      # N in --shard=I/N is the number of jobs, so the matrix must hold nothing
+      # but the shard numbers 1..N (tests/test_ci_covers_the_suite.py checks).
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      # `python -m` puts the repo root on sys.path, which `-p` needs to import
+      # the plugin by its module name.
+      - name: Run integration shard
+        run: >-
+          python -m pytest tests/test_notebook_integration
+          -p tools.test_selection.shard
+          --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+          -n auto --tb=short -q

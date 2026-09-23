@@ -32,7 +32,7 @@ jobs:
       # Run tests/ by exclusion, never by listing files, so a new test file runs
       # without anyone adding it here (tests/test_ci_covers_the_suite.py checks).
       # Excluded: test_notebook_integration/ starts real kernels and is too slow
-      # per push (the smoke subset below covers the headline features);
+      # per push (the integration-core job runs its core set);
       # test_wheel_gate/ belongs to the release gate; docs/ has its own job.
       # `perf` tests assert wall-clock thresholds and run in benchmarks.yml.
       # -n auto replaces pyproject's -n 16, which oversubscribes 3-4 vCPU runners.
@@ -47,23 +47,37 @@ jobs:
         # Windows defaults to pwsh, where `\` does not continue a line.
         shell: bash
 
-      # Headline features of the notebook integration suite. Run the full suite
-      # locally; see .github/copilot-instructions.md for choosing a subset.
-      - name: Run notebook integration smoke subset
-        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+  # The integration core set: the tests picked (tools/test_selection/) to cover
+  # every line, feature and step sequence the whole integration suite covers,
+  # in about a tenth of its time. The whole suite runs nightly (nightly.yml).
+  # About 340 tests: 1.5 min on 4 workers locally, so roughly 5 min on a 4-vCPU
+  # runner. Cheap enough for every Python version, where cash's source and
+  # bytecode hashing can differ; Linux only, as kernels start slowest and least
+  # reliably on the Windows and macOS runners.
+  integration-core:
+    name: Integration core set (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
         run: |
-          pytest \
-            tests/test_notebook_integration/test_basic_flow.py \
-            tests/test_notebook_integration/test_disk_restore_after_restart.py \
-            tests/test_notebook_integration/test_file_invalidation_real.py \
-            tests/test_notebook_integration/test_decorator_bridge_integration.py \
-            tests/test_notebook_integration/test_badge_integration.py \
-            tests/test_notebook_integration/test_forward_probe_upstream_skip.py \
-            tests/test_notebook_integration/test_file_dep_path_fallback.py \
-            tests/test_notebook_integration/test_toplevel_await_caching.py \
-            -n auto --tb=short -q
-        shell: bash
-        timeout-minutes: 10
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run the integration core set
+        run: python -m pytest @tools/test_selection/core_set.txt -n auto --tb=short -q
 
   lint:
     runs-on: ubuntu-latest

@@ -12,6 +12,12 @@ run rather than a test that fails. These tests pin the inverted default: CI
 targets ``tests/`` wholesale, and every exclusion must be spelled out where a
 reviewer can see it.
 
+The notebook integration suite is too slow for every push, so it is covered in
+two ways instead: every push runs the core set (``tools/test_selection/``,
+picked to cover every line, feature and step sequence the whole suite covers),
+and a nightly workflow runs the whole folder in shards. The tests at the end
+pin both.
+
 This file is deliberately dependency-free — it parses the workflow as text
 rather than importing a YAML library, so it cannot itself be skipped in an
 environment that is missing something.
@@ -26,6 +32,9 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CI_YML = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+NIGHTLY_YML = REPO_ROOT / ".github" / "workflows" / "nightly.yml"
+CORE_SET = REPO_ROOT / "tools" / "test_selection" / "core_set.txt"
+INTEGRATION = "tests/test_notebook_integration"
 TESTS_DIR = REPO_ROOT / "tests"
 
 # Directories under tests/ that the unit job legitimately does not run, each
@@ -33,7 +42,7 @@ TESTS_DIR = REPO_ROOT / "tests"
 # entry here is a deliberate act that shows up in review; forgetting to add one
 # makes test_every_test_directory_is_accounted_for fail.
 EXPECTED_EXCLUSIONS = {
-    "test_notebook_integration",  # starts real kernels; the smoke subset covers the headlines
+    "test_notebook_integration",  # starts real kernels; the core set and the nightly shards run it
     "test_wheel_gate",  # builds a wheel + real Jupyter server; release gate
     "docs",  # dedicated docs-parity job (needs docs-test extras)
 }
@@ -148,3 +157,56 @@ class TestExclusionsAreHonest:
         # Sanity: the directories we expect to be covered really are.
         for name in ("test_core", "test_backends", "test_ui", "test_notebook"):
             assert name in unaccounted, f"tests/{name} is not being run by CI — it is excluded or gone."
+
+
+def _step_run(text: str, name: str) -> str:
+    """The ``run:`` body of the step called *name*, up to the next step."""
+    start = text.index(f"- name: {name}")
+    nxt = text.find("- name:", start + 1)
+    step = text[start:] if nxt == -1 else text[start:nxt]
+    assert "run:" in step, f"step {name!r} has no run:"
+    return step.split("run:", 1)[1]
+
+
+class TestTheIntegrationSuiteRuns:
+    def test_every_push_runs_the_core_set(self):
+        run = _step_run(CI_YML.read_text(encoding="utf-8"), "Run the integration core set")
+        assert re.search(r"pytest\s+@tools/test_selection/core_set\.txt", run), run
+
+    def test_ci_names_no_integration_file_by_hand(self):
+        """The core set is the list; a hand-picked one beside it goes stale."""
+        named = re.findall(INTEGRATION + r"/[\w\-/]*\.py", CI_YML.read_text(encoding="utf-8"))
+        assert not named, f"ci.yml names integration test files by hand: {named}"
+
+    def test_every_core_set_entry_is_an_integration_test_that_exists(self):
+        """A renamed or deleted test must not leave a dead node id behind."""
+        entries = [line.strip() for line in CORE_SET.read_text(encoding="utf-8").splitlines() if line.strip()]
+        assert entries, f"{CORE_SET} is empty"
+        missing = [e for e in entries if not (REPO_ROOT / e.split("::")[0]).is_file()]
+        outside = [e for e in entries if not e.startswith(INTEGRATION + "/")]
+        assert not missing, "core_set.txt names test files that do not exist:\n" + "\n".join(missing)
+        assert not outside, "core_set.txt names tests outside the integration suite:\n" + "\n".join(outside)
+
+    def test_the_nightly_workflow_is_scheduled_and_can_be_run_by_hand(self):
+        text = NIGHTLY_YML.read_text(encoding="utf-8")
+        assert re.search(r"^\s*schedule:\s*\n\s*- cron: \"[^\"]+\"", text, re.MULTILINE), text
+        assert re.search(r"^\s*workflow_dispatch:", text, re.MULTILINE), text
+
+    def test_the_nightly_workflow_runs_the_whole_folder_in_shards(self):
+        run = _step_run(NIGHTLY_YML.read_text(encoding="utf-8"), "Run integration shard")
+        assert re.search(r"pytest\s+" + INTEGRATION + r"\s", run), run
+        assert "-p tools.test_selection.shard" in run
+        assert "--shard=${{ matrix.shard }}/${{ strategy.job-total }}" in run
+        pytest_args = run.split("pytest", 1)[1]
+        for narrowing in ("--ignore", "--deselect", " -k ", " -m ", "::"):
+            assert narrowing not in pytest_args, f"the nightly run is narrowed by {narrowing.strip()!r}: {run}"
+
+    def test_the_nightly_matrix_is_the_shard_numbers_one_to_n(self):
+        """N is the job count, so any other matrix axis would skip shards."""
+        text = NIGHTLY_YML.read_text(encoding="utf-8")
+        m = re.search(r"^(?P<indent>\s*)matrix:\s*\n(?P<body>(?:(?P=indent)\s+.*\n)+)", text, re.MULTILINE)
+        assert m, "no matrix in nightly.yml"
+        keys = re.findall(r"^\s*([\w-]+):", m.group("body"), re.MULTILINE)
+        assert keys == ["shard"], f"the nightly matrix must hold only `shard`, found {keys}"
+        values = [int(v) for v in re.search(r"shard:\s*\[([^\]]+)\]", m.group("body")).group(1).split(",")]
+        assert values == list(range(1, len(values) + 1)), values

@@ -131,17 +131,29 @@ statement's occurrence index in the cell.
 
 Never run the whole integration suite while iterating; it takes a long time.
 Run the files whose names match what you changed, at most about ten. For a
-broader check, use the core set from `tools/test_selection/`:
+broader check, run the core set, the same one CI runs on every push:
+
+```bash
+pytest @tools/test_selection/core_set.txt
+```
+
+The core set is the few hundred integration tests that together cover every
+line, feature, feature pair and step sequence the whole suite covers. The whole
+suite runs nightly in shards (`.github/workflows/nightly.yml`); to run one
+shard locally, add `-p tools.test_selection.shard --shard=2/6` to
+`python -m pytest tests/test_notebook_integration`.
+
+To re-pick the core set after the suite has changed a lot:
 
 ```bash
 python tools/test_selection/run_baseline.py   # the whole suite once, with per-test coverage (slow)
 python tools/test_selection/select_core.py    # re-pick from an existing baseline
-pytest $(cat .testsel/core_set.txt)
 ```
 
 `select_core.py` greedily picks the passing tests that add new covered lines,
-features, feature pairs or step sequences per second of runtime, starting from
-CI's smoke list, and writes `.testsel/core_set.txt` plus a report.
+features, feature pairs or step sequences per second of runtime, and writes
+`.testsel/core_set.txt` plus a report. Copy both over the committed ones in
+`tools/test_selection/`.
 
 ### Before reporting work as done
 
