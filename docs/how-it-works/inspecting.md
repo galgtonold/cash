@@ -80,7 +80,7 @@ its inputs, and how long it took. Ask for the dependency graph of any variable:
     └─ other (external)
 ```
 
-<!-- claim: cash/notebook/provenance.py:ProvenanceTracker._format_graph_section @32fb8fba -->
+<!-- claim: cash/notebook/provenance.py:ProvenanceTracker._format_graph_section @8089ee0d -->
 The graph follows inputs recursively (to a depth of 5), walking the *union* of
 inputs across every history record rather than only the latest — so a `df`
 created in one cell and mutated in three others still shows its creation chain.

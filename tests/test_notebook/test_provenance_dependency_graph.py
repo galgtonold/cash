@@ -82,7 +82,7 @@ def test_provenance_dependency_graph_is_populated(magics_fixture):
     # Compute c from a and b, then drain into provenance via the magic flow.
     metrics = magics._statement_processor.process_statement("c = a + b")
     magics._record_observability([metrics])
-    deps = magics._session.provenance.get_dependencies("c")
+    deps = set(magics._session.provenance.get_latest("c").inputs)
     assert "a" in deps, f"expected 'a' in dependencies of c, got {deps}"
     assert "b" in deps, f"expected 'b' in dependencies of c, got {deps}"
 

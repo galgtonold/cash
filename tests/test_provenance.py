@@ -72,46 +72,24 @@ class TestProvenanceTracker:
         assert len(tracker.get_history("y")) == 1
         assert tracker.get_latest("y").inputs == ["x"]
 
-    def test_get_dependencies(self):
+    def test_graph_shows_transitive_dependencies(self):
         tracker = ProvenanceTracker()
         tracker.record("a", "a = 1", [])
         tracker.record("b", "b = a + 1", ["a"])
         tracker.record("c", "c = b * 2", ["b"])
 
-        deps = tracker.get_dependencies("c")
-        assert "b" in deps
-        assert "a" in deps
+        output = tracker.format_provenance("c", show_graph=True)
+        assert "b ← b = a + 1" in output
+        assert "a ← a = 1" in output
 
-    def test_get_dependents(self):
+    def test_graph_lists_dependents(self):
         tracker = ProvenanceTracker()
         tracker.record("a", "a = 1", [])
         tracker.record("b", "b = a + 1", ["a"])
         tracker.record("c", "c = a * 2", ["a"])
 
-        dependents = tracker.get_dependents("a")
-        assert "b" in dependents
-        assert "c" in dependents
-
-    def test_get_timeline(self):
-        tracker = ProvenanceTracker()
-        tracker.record("x", "x = 1", [])
-        tracker.record("y", "y = 2", [])
-        tracker.record("z", "z = 3", [])
-
-        timeline = tracker.get_timeline()
-        assert len(timeline) == 3
-        assert timeline[0].variable == "x"
-        assert timeline[2].variable == "z"
-
-    def test_timeline_filter(self):
-        tracker = ProvenanceTracker()
-        tracker.record("x", "x = 1", [])
-        tracker.record("y", "y = 2", [])
-        tracker.record("x", "x = 3", [])
-
-        timeline = tracker.get_timeline(variable="x")
-        assert len(timeline) == 2
-        assert all(r.variable == "x" for r in timeline)
+        output = tracker.format_provenance("a", show_graph=True)
+        assert "Dependents: b, c" in output
 
     def test_max_history_per_var(self):
         tracker = ProvenanceTracker()
@@ -119,13 +97,6 @@ class TestProvenanceTracker:
         for i in range(10):
             tracker.record("x", f"x = {i}", [])
         assert len(tracker.get_history("x")) == 5
-
-    def test_max_timeline(self):
-        tracker = ProvenanceTracker()
-        tracker.max_timeline = 10
-        for i in range(20):
-            tracker.record(f"v{i}", f"v{i} = {i}", [])
-        assert len(tracker.get_timeline(limit=100)) == 10
 
     def test_format_provenance(self):
         tracker = ProvenanceTracker()
@@ -164,19 +135,12 @@ class TestProvenanceTracker:
         assert len(result) == 1
         assert result[0]["variable"] == "x"
 
-    def test_to_json_all(self):
-        tracker = ProvenanceTracker()
-        tracker.record("x", "x = 1", [])
-        tracker.record("y", "y = 2", [])
-        result = json.loads(tracker.to_json())
-        assert len(result) == 2
-
     def test_clear(self):
         tracker = ProvenanceTracker()
         tracker.record("x", "x = 1", [])
         tracker.clear()
         assert len(tracker.tracked_variables) == 0
-        assert len(tracker.get_timeline()) == 0
+        assert tracker.get_history("x") == []
 
     def test_tracked_variables(self):
         tracker = ProvenanceTracker()
@@ -185,13 +149,12 @@ class TestProvenanceTracker:
         assert tracker.tracked_variables == {"x", "y"}
 
     def test_circular_dependency_safe(self):
-        """get_dependencies should not infinite loop on circular refs."""
+        """The graph walk must not loop forever on circular refs."""
         tracker = ProvenanceTracker()
         tracker.record("a", "a = b + 1", ["b"])
         tracker.record("b", "b = a + 1", ["a"])
-        # This should not hang
-        deps = tracker.get_dependencies("a")
-        assert "b" in deps
+        output = tracker.format_provenance("a", show_graph=True)
+        assert "b ← b = a + 1" in output
 
     def test_file_deps_tracked(self):
         tracker = ProvenanceTracker()
