@@ -126,7 +126,7 @@ def new_session_stats() -> dict[str, Any]:
         # measured). A Restart & Run All recomputes nothing, so without
         # this the headline net after a restart was "at least -overhead,
         # at best <gross>" -- a range straddling zero in the one reading
-        # every tester takes (round 30, r30s3 and r30s5).
+        # every tester takes.
         "total_measured_saved": 0.0,
         # Cash's OWN added wall-time this session (restore + simulation +
         # hashing + badge machinery), accumulated per cell. Subtracted from
@@ -367,7 +367,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 e,
             )
 
-        # JupyterLab live-cell push (CAS-274 Tier 2): register the comm target
+        # JupyterLab live-cell push: register the comm target
         # that receives cell sources pushed by cash's frontend extension, when
         # one is present. A silent no-op everywhere else — register_target()
         # returns False rather than raising when there is no kernel / comm
@@ -531,7 +531,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         print("   Run %cash_help for available commands.")
         # Report existing cache state if available. Counted, not listed: a
         # listing reads every entry's metadata, and every %cash_on paid that --
-        # re-running r23s2's first cell took 22.7 s.
+        # re-running a notebook's first cell took 22.7 s.
         try:
             count = self._cash_instance.backend.entry_count()
             if count:
@@ -1300,8 +1300,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 # (``cash_tax``, the same measurement ``CallRouting.statement_cost``
                 # uses). Counting that as the user's compute cancelled it out
                 # of the overhead below, so a paired run measured 370 s of
-                # slowdown where %cash_stats reported 210 s (round 30, r30s4;
-                # two other testers the same shape).
+                # slowdown where %cash_stats reported 210 s.
                 exec_time = max(0.0, m.get("execution_time", 0.0) - m.get("cash_tax", 0.0))
                 stats["total_compute_time"] += exec_time
                 cell_compute_time += exec_time

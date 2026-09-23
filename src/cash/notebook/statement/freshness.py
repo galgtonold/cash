@@ -77,7 +77,7 @@ class CacheFreshnessChecker:
         One answer per (path, snapshot) holds for as long as nothing could
         have changed a file: until a statement executes, or the next cell. A
         cell's statements reading the same 10,000 documents re-checked every
-        one of them per statement; on r24s4 that was 120,000 checks, 1.1 s,
+        one of them per statement: 120,000 checks, 1.1 s,
         for a cell served entirely from the cache.
 
         Only inside a real cell (an ``int`` execution count) and for at most
@@ -147,7 +147,7 @@ class CacheFreshnessChecker:
         A loop body over a frame read from 5,000 files: every statement of
         every iteration carries the same 5,000 dependencies, and building a
         memo key per file per lookup was a million calls, 2.4 s of a 1.1 s
-        cell (round 25, r25s4). Comparing the whole set runs in C.
+        cell. Comparing the whole set runs in C.
         """
         return len(deps) >= _SET_MEMO_MIN and any(
             len(known) == len(deps) and known == deps for known in self._fresh_sets
@@ -207,7 +207,7 @@ class CacheFreshnessChecker:
         ``get()`` once per file, it deep-copied the producer's cached VALUE --
         for a frame read from 1,200 files, 1,200 copies of the whole frame on
         every lookup of every statement that read it: a 0.4 s cell took 42 s
-        when served from the cache (round 23, r23s2).
+        when served from the cache.
         """
         source_cache_key = tracking_state.variable_sources.get(input_var)
         if not source_cache_key:

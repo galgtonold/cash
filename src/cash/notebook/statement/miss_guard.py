@@ -19,8 +19,8 @@ once, on the run that matters. Net-negative-in-session is that statement's
 normal, healthy state. The discriminator is key CHURN, not cost.
 
 Churn alone over-reaches in one direction, though: five upstream edits in a
-row churn a key too, and that is an ordinary morning of model tuning (r23s1
-lost its cross-validation to the guard and re-ran it after a restart). So the
+row churn a key too, and that is an ordinary morning of model tuning.
+So the
 processor applies the verdict only to a statement whose write is not cheap
 next to its compute (``StatementStore.write_is_cheap``): a small, slow
 value keeps being written, since its wasted writes cost next to nothing.
@@ -132,7 +132,7 @@ class _Record:
     probe_now: bool = False
     #: The statement's inputs and their lineages at the last lookup, and how
     #: often each changed from one churning run to the next: what the badge
-    #: names as the cause (round 29, r29s1: "unstable key" said nothing more).
+    #: names as the cause.
     last_components: dict | None = None
     changed: dict | None = None
     churned_without_a_change: int = 0

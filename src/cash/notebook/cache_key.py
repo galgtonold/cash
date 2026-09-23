@@ -77,9 +77,7 @@ def read_provenance_key(code: str) -> str:
     session's record of what each statement read is gone, and a reader static
     analysis cannot resolve (``pd.read_csv(f)`` over a glob result) made the
     whole read set unknown -- so the reconstruction scope gate re-fired every
-    writer, dragging in the expensive producers of their payloads (round 21,
-    replay corpus: a backtest and a forecast recomputed for a cell that needed
-    neither).
+    writer, dragging in the expensive producers of their payloads.
     """
     return "readprov:" + hashlib.sha256(code.encode("utf-8")).hexdigest()
 
@@ -92,7 +90,7 @@ def import_bindings_key(code: str) -> str:
     not loaded: it took the name for a module, and had no source digest for
     the class -- which the runtime folds into the lineage of every statement
     that reads it, a ``def`` included. The def's lineage disagreed, and so did
-    every statement calling it (round 23, r23s2: a 45 s forecast re-ran).
+    every statement calling it.
     """
     return "impbind:" + hashlib.sha256(code.encode("utf-8")).hexdigest()
 
@@ -105,7 +103,7 @@ def mutation_verdict_key(source_hash: str) -> str:
     restart it was gone, the simulation fell back to "an unknown method
     mutates its receiver", and ``PACK.mkdir(exist_ok=True)`` bumped ``PACK``'s
     lineage where the runtime never had -- so nothing built from ``PACK``
-    restored (round 23, r23s2).
+    restored.
     """
     return "mutverdict:" + source_hash
 
@@ -117,8 +115,8 @@ def control_outcome_key(code: str) -> str:
     a loop left, which the runtime derives from the VALUES it built and the
     simulation cannot derive from code. After a restart that record was
     gone, the simulation's loop lineages disagreed with the entries the
-    runtime wrote, and nothing downstream of a loop restored (round 23,
-    r23s2: every per-file read of a 1,312-file folder, again). Written only
+    runtime wrote, and nothing downstream of a loop restored.
+    Written only
     for a loop that cannot have done anything else (see
     ``ControlStructureProcessor._persistable_callees``).
     """
@@ -308,7 +306,7 @@ def called_function_dependencies(
     # global, so it keeps the constant it always contributed -- even when a
     # notebook variable shares it. ``forecast = run_forecast(...)`` keyed
     # ``forecast:ABSENT`` before its first run and ``forecast:<lineage>``
-    # after, so the simulation never found the entry and re-ran it (round 21).
+    # after, so the simulation never found the entry and re-ran it.
     attribute_only -= {ref for name in seen for ref in _global_names(code_of(name))}
     if used_virtual:
 
@@ -383,8 +381,7 @@ _ATTRIBUTE_OPS = frozenset(
 
 #: code object -> its global names. A code object never changes, and a call
 #: made per element of a comprehension disassembled its callee every time:
-#: 1,470 walks for 355 calls, a quarter of what caching them cost (round 25,
-#: r25s5).
+#: 1,470 walks for 355 calls, a quarter of what caching them cost.
 _GLOBAL_NAMES_MEMO: dict[Any, frozenset[str]] = {}
 
 

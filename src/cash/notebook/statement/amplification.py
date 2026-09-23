@@ -160,7 +160,7 @@ class AmplificationGuard:
             return
         # Growth only: a loop that REBINDS a same-sized value each pass stores a
         # different result every time, and nothing in it grows. Summing those
-        # warned about a sweep's per-window dict (round 25, r25s3).
+        # warned about a sweep's per-window dict.
         last = self._last_size_by_stmt.get(stmt_id)
         self._last_size_by_stmt[stmt_id] = size
         if last is not None and size <= last:
@@ -193,7 +193,7 @@ class AmplificationGuard:
             f"that is currently only {human_bytes(size)} -- caching a growing "
             f"object every iteration costs the SUM of every intermediate size, "
             f"not the final one. Further iterations are not being stored.",
-            # The annotation advice only for a statement that carries it: r25s3
+            # The annotation advice only for a statement that carries it: a user
             # was told to move a `# @cash:persist` they never wrote.
             (
                 "move `# @cash:persist` off the loop and onto a statement that "

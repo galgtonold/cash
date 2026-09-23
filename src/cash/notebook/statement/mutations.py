@@ -98,7 +98,7 @@ class MutationClassifier:
         # An Axes handed to a plain function (``draw(ax, df)``) is drawn on
         # too -- the same ``drawn_args`` rule `classify`
         # applies outside a loop. In a loop body it was missed, and a re-run
-        # saved every chart blank (round 23, a plotting helper per model).
+        # saved every chart blank.
         return receivers | drawn_on_arguments(tree, self.shell.user_ns)
 
     def fitted_receivers(self, tree: ast.Module | None) -> set[str]:
@@ -107,8 +107,8 @@ class MutationClassifier:
         The control-body companion of the ``fits_its_receiver`` routing in
         :meth:`classify`: a loop body skips that
         classification, so ``labels_k = km.fit_predict(Z)`` was served from the
-        cache and ``models[k] = km`` kept an unfitted estimator (round 23,
-        r23s4). Cache-skip only, like :meth:`identity_coupled_call_receivers`.
+        cache and ``models[k] = km`` kept an unfitted estimator.
+        Cache-skip only, like :meth:`identity_coupled_call_receivers`.
         """
         if tree is None:
             return set()

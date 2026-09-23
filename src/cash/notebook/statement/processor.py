@@ -256,9 +256,7 @@ class StatementProcessor:
         An upstream input changing is the most common reason a notebook
         statement re-runs, and it was the one reason the badge could not name:
         the row rendered EXECUTED with no attribution. A user with a
-        reproducible slow re-run had nowhere to look but cash's source. (Round-1
-        tester P5 built two minimal repros, disproved both of their own
-        hypotheses, and still could not find out why.)
+        reproducible slow re-run had nowhere to look but cash's source.
 
         Cheap by construction, and it must stay that way. ``TrackingState``
         already records, per output variable, the input lineages the statement
@@ -1019,7 +1017,7 @@ class StatementProcessor:
                 outputs = outputs | newly_mutated
                 # The caller's ``outputs`` is its own set: without this the
                 # badge row said "Produced -" for ``sc.pp.normalize_total(adata)``
-                # on its first run (round 28, r28s4).
+                # on its first run.
                 produced = metrics.setdefault("evaluated_vars", [])
                 produced.extend(n for n in sorted(newly_mutated) if n not in produced)
                 skip_observed = newly_mutated - est_fit
@@ -1128,7 +1126,7 @@ class StatementProcessor:
                 # tell an already-on-disk writer effect (skip it) from a stale
                 # one (re-fire it) — ``executed_write_stmt_codes`` is empty after
                 # a restart, which used to force every writer to re-fire and
-                # re-run its non-idempotent side effect (round-3). Not for a
+                # re-run its non-idempotent side effect. Not for a
                 # loop body statement: the simulation sees the loop, which
                 # records its own (ControlStructureProcessor).
                 if not is_control_body(code):
@@ -1193,7 +1191,7 @@ class StatementProcessor:
         if saved_metadata and saved_metadata.skipped_reason is not None:
             metrics["skipped_reason"] = saved_metadata.skipped_reason
             if saved_metadata.skipped_reason == GUARD_SKIP_REASON:
-                # What kept changing the key (round 29, r29s1).
+                # What kept changing the key.
                 cause = self._miss_guard.cause(source_hash)
                 if cause:
                     metrics["guard_cause"] = cause
@@ -1263,8 +1261,7 @@ class StatementProcessor:
                 # a restart imports the module anyway to unpickle what it
                 # binds -- while a stored import hands back the objects it
                 # bound THEN: `from helper import summary` restored after an
-                # edit to helper.py put the pre-edit function back (round 29
-                # prep; see `import_only` in the upstream classifier).
+                # edit to helper.py put the pre-edit function back.
                 run.skip_cache = True
                 return None
             if all_present:
@@ -1295,7 +1292,7 @@ class StatementProcessor:
         says it writes (its own text, or a user function it calls -- which
         covers writes made in C, like pyarrow's), or it failed part-way.
 
-        Every executed statement dropped them at first, and r24s4's label loop
+        Every executed statement dropped them at first, and a label loop
         (``ax.annotate`` per topic, reading a frame built from 10,000
         documents) re-checked all of them 52 times in one cell.
         """

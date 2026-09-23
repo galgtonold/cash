@@ -141,7 +141,7 @@ class CashAdminMagicsMixin:
         # Measured on this machine in an earlier kernel, at the least it ever
         # cost. Evidence of the same kind as ``verified``, one run older --
         # and the only kind a Restart & Run All can have, which is where the
-        # net used to print as a range straddling zero (round 30).
+        # net used to print as a range straddling zero.
         measured_saved = stats.get("total_measured_saved", 0.0)
         overhead = stats.get("total_overhead", 0.0)
         net_saved = verified_saved + measured_saved - overhead
@@ -185,7 +185,7 @@ class CashAdminMagicsMixin:
             return
 
         print("Cash Session Statistics")
-        # Round 25: these reset on a kernel restart and were read as the
+        # These reset on a kernel restart and were read as the
         # project's totals. Name the scope up front.
         print("  (since this kernel started; a restart resets them)")
         print("-" * 40)
@@ -263,7 +263,7 @@ class CashAdminMagicsMixin:
         # to a UsageError is worse than saying nothing, and inspecting the
         # backend is exactly what they came here to do.
         # `cash inspect` named too: it is the view that answers "is my cache
-        # worth what it costs", and two round-27 testers found it only by
+        # worth what it costs", and users found it only by
         # hunting through docs/cli.md.
         print("  The cache on disk outlives this kernel. In a terminal, `cash info`")
         print("  gives its size and `cash inspect` lists its entries, the time each")

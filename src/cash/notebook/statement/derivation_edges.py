@@ -138,7 +138,7 @@ def _detect_matplotlib_figure_edge(
     drawing on it draws on the figure, so a mutation of ``out`` bumps it.
 
     ``ax.bar(names, totals)`` changes what ``fig.savefig`` writes, with no
-    value edge from ``totals`` to ``fig``. Until round 21 a chart re-drew after
+    value edge from ``totals`` to ``fig``. At first a chart re-drew after
     an upstream edit only because ``fig`` ALSO drifted for no reason (it had
     recorded matplotlib's fonts, and its own PNG, as file dependencies); with
     that gone, this edge is the dependency.

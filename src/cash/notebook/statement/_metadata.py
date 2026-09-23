@@ -47,7 +47,7 @@ class StatementCacheMetadata:
     #: answer before: the classifier reads that from
     #: ``executed_input_lineages``, written on execution alone, so every
     #: restored value had an empty record and the check silently passed. That
-    #: is how round 26 exported a model table built before an upstream fix.
+    #: is how a model table built before an upstream fix got exported.
     input_lineages: dict[str, str] | None = None
     storage: list[str] | None = None
     source: str | None = None

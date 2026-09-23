@@ -6,7 +6,7 @@ is already on disk, instead of re-firing it and rebuilding everything it
 needs. Reading the paths from the code covers ``df.to_csv(OUT / 'a.csv')``;
 it does not cover ``save_chart(kind)``, whose ``fig.savefig(OUT /
 f'{kind}.png')`` sits in a helper, nor a loop over kinds. Those were re-fired
-after every restart, and r23s3's chart loop re-ran a 263 s sweep to redraw
+after every restart, and a chart loop re-ran a 263 s sweep to redraw
 charts nobody had asked for.
 
 So watch the writes instead, through cash's one audit hook

@@ -107,7 +107,7 @@ class StatementRecords:
         Its body's statements log themselves per iteration, and a figure drawn
         through ``for ax in axes`` then had a history the simulation could never
         reproduce -- a chart drawn in a loop was never known to be current, nor
-        known to be stale (round 29, r29s4). Pass the result to `end_control_log`."""
+        known to be stale. Pass the result to `end_control_log`."""
         try:
             inputs, _outputs = CodeAnalyzer.analyze_code_block(
                 code, resolve_source=self._resolve_source, user_ns=self.shell.user_ns

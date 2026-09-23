@@ -408,7 +408,7 @@ def _statement_source(raw_cell: str, node: ast.stmt) -> str | None:
     ``if stmt_display is not None: return stmt_display``, so the moment this
     function stops returning ``None`` for a def/class, EVERY def/class in
     EVERY notebook cell would execute from its original text unconditionally
-    -- directed or not -- which is exactly the cross-path CAS-243 regression
+    -- directed or not -- which is exactly the cross-path call-cache regression
     ``_exec_source_for_node``'s own gate exists to prevent (see that
     function's docstring in full). Widening what this function returns for a
     def/class means also revisiting whether ``_exec_source_for_node`` can
@@ -560,7 +560,7 @@ def _exec_source_for_node(
     unparsed form). Before this function existed, EVERY path compiled a
     function from the same canonical ``ast.unparse`` text, so a function's
     identity hash (``FunctionTracker.get_function_source_hash``, which feeds
-    the CAS-243 call-cache key -- "editing the callee re-keys the call")
+    the call-cache key -- "editing the callee re-keys the call")
     was stable regardless of which path (re)created it. Recovering the
     original text unconditionally broke that: the FIRST definition (via the
     normal split loop) got the original text, but a LATER same-session
@@ -780,8 +780,8 @@ def _builtin_trap(shell: Any):
     duration. cash runs a cell's statements itself, outside IPython's run, so
     they ran without it: pandas imported in a cached cell asked ``get_ipython()``,
     got NameError, decided it was in a terminal and set ``display.max_columns``
-    to 0 instead of 20 -- tables printed differently with cash on (round 25,
-    r25s1). Anything else that detects a notebook that way was fooled too. The
+    to 0 instead of 20 -- tables printed differently with cash on.
+    Anything else that detects a notebook that way was fooled too. The
     trap nests, so IPython's own run inside it is unaffected.
     """
     trap = getattr(shell, "builtin_trap", None)
@@ -805,7 +805,7 @@ def _written_later_in_cell(body: list[ast.stmt]) -> list[frozenset[str]]:
     an intermediate: the cell leaves a later version, and the end-of-cell pass
     writes that one to disk when restoring beats rebuilding
     (``TieredBackend.persist_from_memory``). Writing each intermediate to disk
-    as it was made cost r24s2's cleaning cell 3.8 s of pickling on a cold run,
+    as it was made cost a cleaning cell 3.8 s of pickling on a cold run,
     for ~500 MB versions of ``sales`` that nothing restores.
     """
     outputs: list[set[str]] = []
@@ -1273,7 +1273,7 @@ class CellExecutor:
                 notification: ProcessResult = {
                     "status": "MODULE_RELOADED",
                     # No glyph: this text reaches `%cash_badge print`, whose readers are
-                    # often cp1252 consoles (r28s1's crashed). The label says it already.
+                    # often cp1252 consoles. The label says it already.
                     "code": f"Module{'s' if len(changed_modules) > 1 else ''} reloaded: {mod_names}",
                     "is_upstream": True,
                     "total_time": 0.0,
@@ -1668,7 +1668,7 @@ class CellExecutor:
         Only proof is reported. A once-per-session "cash cannot see unsaved
         edits here" row used to join it whenever cash read the saved file; it
         fired on every fresh kernel of every headless run, where nothing can be
-        unsaved, and no round-25 tester could act on it. Where edits CAN be
+        unsaved, and no user could act on it. Where edits CAN be
         unsaved -- JupyterLab with the extension, VS Code, Colab -- cash reads
         the live cells. Guarded
         like `_make_function_change_metrics` / `_make_opaque_warning_metrics`

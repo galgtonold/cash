@@ -90,7 +90,7 @@ def _mtime(path: str | None) -> float | None:
 def _to_ascii(text: str) -> str:
     """Guarantee true ASCII by replacing non-encodable characters.
 
-    Task 3 embeds hint() in a badge code field. The downstream consumer reads
+    hint() is embedded in a badge code field. The downstream consumer reads
     the badge via a different process on a console whose codepage cash cannot
     know at write time -- cp1252, cp437, cp850, or anything else. ASCII is the
     only encoding safely assumed to be a subset of all of them: sanitising to

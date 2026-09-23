@@ -334,9 +334,8 @@ class StatementLineageBuilder:
         """The lineage *var_name* would get if *code* ran again now: the same
         formula and ingredients as :meth:`capture_and_track_variables`, without
         running anything. For an import after its module was reloaded, so the
-        name gets what a fresh kernel's import gives it (round 29, r29s1/r29s3:
-        keyed with the reload's own hash, what the session computed after an
-        edit was never restored the next morning)."""
+        name gets what a fresh kernel's import gives it.
+        """
 
         user_ns = self.shell.user_ns
         inputs, _outputs = CodeAnalyzer.analyze_code_block(code, user_ns=user_ns)

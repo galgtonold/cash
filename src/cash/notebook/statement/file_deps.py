@@ -64,7 +64,7 @@ def compute_file_hash_component(
 
     Remote URLs are deliberately kept out of ``executed_file_deps``: that set is
     ``stat``-ed and ``getmtime``-d by its consumers, so a URL there contributes
-    nothing at best. The key component alone is sufficient. See CAS-237.
+    nothing at best. The key component alone is sufficient.
     """
     notebook_dir = None
     try:
@@ -81,7 +81,7 @@ def compute_file_hash_component(
         try:
             # Through the directory, with the lstat that shows the file is not
             # a link as its stat: a statement over a frame read from 5,000
-            # files resolved every path again per lineage (round 25, r25s4).
+            # files resolved every path again per lineage.
             resolved, stat = realpath_of_read_this_run(f)
             canonical_path = normalize_path(resolved)
             if stat is None:
@@ -111,8 +111,7 @@ def compute_file_hash_component(
         # display_path/mtime/size are for a local file. Both are facts about the
         # object rather than about this machine, so unlike the local component
         # this one is identical on every machine -- a statement reading object
-        # storage keys the same for a teammate (CAS-233's portability problem,
-        # which for remote data simply does not arise).
+        # storage keys the same for a teammate.
         file_components.append(f"{url}:{RemoteFileDataSource(url).state_token()}")
 
     if file_components:
@@ -179,8 +178,8 @@ class StatementFileDeps:
         also one of the statement's inputs): the files the OLD value came from
         are forgotten. Merged instead, ``for f in files: d = pd.read_csv(f)``
         left ``d`` depending on every file read so far, and each iteration's
-        save snapshotted all of them -- quadratic in the files (round 23, r23s2:
-        865,265 hashes in one cell). An in-place change keeps what it had.
+        save snapshotted all of them -- quadratic in the files.
+        An in-place change keeps what it had.
 
         Two sources of file deps are handled here so that the logic is not
         duplicated:

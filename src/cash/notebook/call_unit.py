@@ -144,16 +144,16 @@ def call_site_is_cacheable(
 
 
 def _is_dunder_loop_var(name: str) -> bool:
-    """True if *name*'s own bare portion is dunder-prefixed (CAS-257).
+    """True if *name*'s own bare portion is dunder-prefixed.
 
     Handles both shapes `loop_vars` can arrive in: a bare name (`"x"` --
-    every direct caller/test that predates CAS-257's depth-keying, e.g.
+    every direct caller/test that predates depth-keying, e.g.
     `test_call_unit_key.py`'s hand-built dicts) and a depth-prefixed one
     (`"0:x"` -- the production path,
     `CallRouting.current_loop_vars_for_call_key`). A depth-prefixed
     dunder (`"0:__iterable_lineage__"`) no longer starts with `"__"` itself
     once the prefix is on -- checking the combined string, as this used to,
-    would silently stop catching it and turn the enforced CAS-242 guard back
+    would silently stop catching it and turn the enforced reorder guard back
     into a merely documented one. Splitting off the depth at the first colon
     before checking is what keeps the guard live for both shapes.
     """
@@ -333,7 +333,7 @@ def call_cache_key(
     would risk a collapsed, wrong one — so this refuses (returns ``None``)
     rather than guess. A caching optimisation must never be why user code
     fails: an uncached call is merely slow, a wrong cached value is silently
-    incorrect. Task 5's thunk must treat ``None`` as "run uncached".
+    incorrect. The caller must treat ``None`` as "run uncached".
 
     **loop_vars** are the non-dunder entries of the enclosing iteration
     context (``for_handler.py:278``) — the loop variable's *value*, empty
@@ -343,17 +343,17 @@ def call_cache_key(
     enforced HERE, not merely documented and trusted to the caller: any
     dunder-prefixed entry in *loop_vars* is filtered out before hashing.
     ``for_handler``'s iteration context carries a dunder half too
-    (``__iterable_lineage__``, the whole iterable's lineage — the CAS-242
+    (``__iterable_lineage__``, the whole iterable's lineage — the reorder
     culprit) alongside the loop variable's value, and if a caller ever passed
     that whole context through unfiltered it would be hashed in like any
-    other entry and CAS-242 would be back. Three properties, and all three
+    other entry and a reorder would re-run every iteration again. Three properties, and all three
     are needed:
 
     * they discriminate iterations, which is what the omitted iteration
       context used to do;
     * they are order-independent — item ``5``'s value is ``5`` whatever
       position it occupies — unlike ``__iterable_lineage__``, which changes
-      for every iteration on a reorder and is the whole of CAS-242;
+      for every iteration on a reorder and is the whole of the reorder bug;
     * they are stable across runs, so restoring the earlier iterations and
       re-running only the tail keys correctly. A per-run execution counter
       was specified in an earlier draft (``repeat_index``) and fails exactly
@@ -366,7 +366,7 @@ def call_cache_key(
     path already collapses them: ``compute_context_hash`` yields one hash for
     three identical iteration contexts, so this matches shipped behaviour.
 
-    **Entry names carry an optional depth prefix (CAS-257 defect 1).** In
+    **Entry names carry an optional depth prefix.** In
     production, ``loop_vars``/``loop_var_digests`` arrive from
     ``CallRouting.current_loop_vars_for_call_key`` /
     ``current_loop_var_digests_for_call_key``, whose entries are keyed
@@ -381,19 +381,19 @@ def call_cache_key(
     below (``_is_dunder_loop_var``): a depth-prefixed dunder
     (``"0:__iterable_lineage__"``) no longer starts with ``"__"`` itself, so
     that filter has to look past the prefix rather than at the whole string,
-    or the CAS-242 guard it enforces would silently stop firing for the
+    or the reorder guard it enforces would silently stop firing for the
     production shape.
 
     **What is deliberately NOT here: the iteration context.** ``for_handler``
     prepends ``# __iteration_context__: <hash>`` to each body statement, and
     that context carries ``__iterable_lineage__`` — so reordering a loop's
     iterable changes the source hash of *every* iteration and re-runs the
-    whole tail. That is CAS-242. A call keyed on its own source, its own free
+    whole tail. A call keyed on its own source, its own free
     variables, and the loop variable's *value* (not the iterable's lineage)
     has no such comment to inherit, which is precisely why this fixes it.
     **Do not "fix" a cache miss by adding the iteration context here.**
 
-    **stmt_identity (CAS-256).** The base key above is built from the call's
+    **stmt_identity.** The base key above is built from the call's
     OWN source and free names alone, which is silent about which *statement*
     the call sits in. Two different statements whose call text and free names
     happen to agree collapse onto the same base key::
@@ -433,13 +433,13 @@ def call_cache_key(
     always CORRECT, only slower — every entry falls through to a fresh
     ``compute_hash_full(value)`` call, same as before this parameter existed.
 
-    **global_digests (CAS-260)** pins the PRE-call state of every global the
+    **global_digests** pins the PRE-call state of every global the
     callee writes, ``{name: full_hash}``. Without it the entry's restored
     post-state would be served over a prefix that never produced it: two calls
     that agree on arguments but enter with a different accumulator get the same
     key, and the second is handed the first's absolute end state. That is the
     partial-accumulator hazard ``mutations.cacheable_accumulator_loop``'s
-    requirement (2) refuses outright, and that CAS-261's split tail had to
+    requirement (2) refuses outright, and that the split tail had to
     satisfy by keying on the accumulator's post-head lineage.
 
     ``None``/empty is the shape for every call whose callee writes no globals,
@@ -459,20 +459,20 @@ def call_cache_key(
     making the same call on the same values get the same result.
     ``fit_score(make_features(cleaned[mid], W))`` was keyed on the lineage of
     all of ``cleaned``, so fixing 35 of 200 machines re-fitted every one --
-    495 of 600 on identical features (r23s3) -- and renaming the variable the
+    495 of 600 on identical features -- and renaming the variable the
     sweep assigns to re-fitted all 180.
 
     Only the caller can say it is safe, and :class:`CallUnit` says so only
     when nothing the call reads can change without its key changing: every
     argument, loop variable and global the callee reaches is plain data or
     code. ``fetch_next(conn)`` reads a connection whose state moves under a
-    fixed lineage -- CAS-256's two statements must keep their own entries.
+    fixed lineage -- two statements calling it must keep their own entries.
 
     **name_digests** (content keying only) are full hashes of arguments passed
     as a bare name, ``{name: digest}``: those names leave the base too. A
     setting passed by name (``fit_series(g, PARAMS, cutoff)``) was keyed on
     its lineage, and ``cutoff = work['date'].max() - 28d`` is rebuilt from
-    the frame, so fixing one store re-fitted all 360 (r24s5). The caller
+    the frame, so fixing one store re-fitted all 360. The caller
     leaves a large value out, keeping its lineage: hashing a big frame on
     every call would cost more than the dict lookup it replaces.
     """
@@ -507,10 +507,11 @@ def call_cache_key(
     # dunder half is `__iterable_lineage__` -- the whole iterable's lineage,
     # which changes for every iteration on a reorder. If it ever reached this
     # function unfiltered it would be hashed in like any other entry and
-    # CAS-242 would be back. Enforce the contract rather than documenting it.
+    # a reorder would re-run every iteration. Enforce the contract rather than
+    # documenting it.
     #
     # `_is_dunder_loop_var`, not a bare `name.startswith("__")` -- a
-    # depth-prefixed key (`"0:__iterable_lineage__"`, CAS-257's production
+    # depth-prefixed key (`"0:__iterable_lineage__"`, the production
     # shape) no longer starts with `"__"` itself, so a bare check here would
     # silently stop enforcing this exact guard for the only caller that
     # actually reaches it today.
@@ -533,11 +534,11 @@ def call_cache_key(
         f"{name}={_loop_var_digest(name, value, resolved_digests)}"
         for name, value in sorted(filtered_loop_vars.items())
     )
-    # The enclosing statement's identity (CAS-256, see this function's own
-    # docstring section above and `CallSite.stmt_identity`). Hashed rather
+    # The enclosing statement's identity.
+    # Hashed rather
     # than appended raw so an unbounded statement source cannot itself defeat
     # the `|`-delimiting the other parts already rely on.
-    # The PRE-call state of the globals this callee writes (CAS-260). Prefixed
+    # The PRE-call state of the globals this callee writes. Prefixed
     # `g:` so a global named like a loop variable cannot occupy the same slot
     # as that loop var's component under the shared `|`-join.
     if global_digests:
@@ -802,7 +803,7 @@ def _plain_or_code(value, seen: set[int], budget: list[int]) -> bool:
             # state is no more in a lineage key than in a content key, and
             # walking it refused: sklearn's `normalize` is a validating
             # wrapper whose globals hold non-plain state, so `fit_vectors`
-            # re-fitted on byte-identical text (round 25, r25s4).
+            # re-fitted on byte-identical text.
             return True
         return _callee_state_is_plain(value, seen, budget)
     if isinstance(value, (_ModuleType, type, _types.BuiltinFunctionType)):
@@ -870,7 +871,7 @@ def _warnings_at_the_caller():
     ``warnings.warn(..., stacklevel=2)`` names the frame that called the
     function -- which, under interception, is cash's wrapper. A pandas warning
     quoted ``result = fn(*args, **kwargs)`` from ``call_unit.py`` where the
-    user's own line belonged (round 25, r25s5). Recorded, then re-emitted with
+    user's own line belonged. Recorded, then re-emitted with
     a cash frame replaced by the first user frame above it, de-duplicated per
     location as the default filter would. A filter that turns warnings into
     errors is left to act as it would: recording would swallow the exception.
@@ -953,8 +954,8 @@ def _loop_vars_the_call_can_read(
     variable passed in (`make_features(cleaned[mid], win)`) is already there,
     and one the call never reads cannot change its result. Kept anyway, it
     made the sweep's keys differ from the same call outside a loop: scoring
-    with the chosen window re-fitted all 200 machines the sweep had just fitted
-    (round 25, r25s3). Kept: a loop variable the callee, or a function it
+    with the chosen window re-fitted all 200 machines the sweep had just fitted.
+    Kept: a loop variable the callee, or a function it
     calls, reads as a global; and one named in the call itself but not hashed
     by value (an argument too big to hash per call). Only a variable the
     arguments carry is dropped: one the call does not mention stays, since
@@ -1020,7 +1021,7 @@ class CallUnit:
     ):
         self._cash = cash_instance
         self._ctx_provider = ctx_provider
-        # The TTL in force for the statement this call sits in (CAS-268).
+        # The TTL in force for the statement this call sits in.
         # Read at INVOKE time, like `loop_vars_provider`, because one
         # `CallCache` serves every statement and each brings its own
         # annotation. `None` -- the default, and what every direct
@@ -1028,7 +1029,7 @@ class CallUnit:
         # is the behaviour this class had when it ignored TTL entirely.
         self._ttl_provider = ttl_provider or (lambda: None)
         # `# @cash:persist` / `%cash_persist` for the statement this call sits
-        # in (CAS-269). Read at STORE time for the same reason `ttl` is read at
+        # in. Read at STORE time for the same reason `ttl` is read at
         # invoke time: one `CallCache` serves every statement. `False` -- the
         # default, and what every construction predating this parameter gets --
         # leaves the decision to the cost model, which is what this class did
@@ -1125,7 +1126,7 @@ class CallUnit:
         A call in a comprehension is made once per element, and caching one
         costs a key, a lookup, a store and a file tracker of its own: ~14 ms a
         call around a function reading one small file, 5,030 of them in
-        r23s4's ``[read_doc(p) for p in paths]`` -- 8.4 s became 71.6 s. A
+        ``[read_doc(p) for p in paths]`` -- 8.4 s became 71.6 s. A
         ``for`` loop has ``for_handler._should_execute_loop_as_single_unit``
         for exactly this; a comprehension is one statement, so it is decided
         here, by measurement, with the loop's own numbers: past
@@ -1140,7 +1141,7 @@ class CallUnit:
         def _log_plain(elapsed: float) -> None:
             # Logged as run plain: left out, the badge's count of a site's
             # calls came up short by every call the guard ran without the
-            # cache -- 5220/5225 for a folder of 5,225 files (round 25, r25s4).
+            # cache -- 5220/5225 for a folder of 5,225 files.
             if not names:
                 names.append(self._func_name(fn))
             self._record(names[0], site, None, cache_hit=False, elapsed=elapsed, ran_plain=True)
@@ -1154,7 +1155,7 @@ class CallUnit:
         def _guarded(*args, **kwargs):
             # IPython leaves a frame with this set out of the traceback it
             # prints: a user's KeyError showed three of cash's wrapper frames
-            # between their cell and their function (round 25, r25s3).
+            # between their cell and their function.
             __tracebackhide__ = True  # noqa: F841
             run = self._site_runs.get(site)
             if run is None:
@@ -1177,8 +1178,7 @@ class CallUnit:
                     plain = run.plain_s / run.plain_n
                     keyed = run.key_s / run.calls
                     # Too dear to cache, or a hit could not save a quarter of
-                    # the call: a hit pays the key and lookup, then the restore
-                    # (round 25, r25s5: 4.4 ms calls, ~4 ms to key).
+                    # the call: a hit pays the key and lookup, then the restore.
                     run.plain = cached > (1 + _OVERHEAD_FACTOR) * plain or keyed >= _HIT_MUST_SAVE * plain
                     run.decided = True
                     trace_event(
@@ -1234,7 +1234,7 @@ class CallUnit:
 
         def _invoke(*args, **kwargs):
             __tracebackhide__ = True  # noqa: F841 - see _entry_for
-            # CAS-260: globals this callee writes. Resolved per call rather
+            # Globals this callee writes. Resolved per call rather
             # than once per `wrap`, because the underlying source analysis is
             # memoised (`callee_mutated_globals`) while the "is it bound, is it
             # a module" filter genuinely depends on the live namespace. Empty
@@ -1314,8 +1314,7 @@ class CallUnit:
             #
             # File deps and stdout/stderr are recorded around the call so a
             # LATER hit can replay them (above). RNG is deliberately not
-            # recorded here -- Task 6b already refuses any call that consumed
-            # it (CAS-254 tracks a proper fix).
+            # recorded here -- a call that consumed it is already refused.
             #
             # A NESTED tracker, not a before/after diff against the ambient
             # (statement-wide) one -- ``core.py:1870`` is what this task was
@@ -1352,13 +1351,13 @@ class CallUnit:
                 # POSITION, not membership. A hit leaves the global stream
                 # where it was, so every downstream draw would diverge from
                 # the uncached oracle. Replaying it properly needs a
-                # sub-statement position anchor that does not exist yet
-                # (CAS-254); v1 refuses instead of guessing.
+                # sub-statement position anchor that does not exist yet;
+                # v1 refuses instead of guessing.
                 self._refused.add(key)
             elif self._hash_args(args, kwargs) != arg_hashes_before:
                 # The callee mutated a live argument in place and returned
                 # something else (`df.dropna(inplace=True); return len(df)`).
-                # Task 6's identity check only catches `return arg` -- this
+                # The identity check only catches `return arg` -- this
                 # catches "mutated but returned a *different* object", which
                 # a hit would silently skip.
                 self._refused.add(key)
@@ -1367,7 +1366,7 @@ class CallUnit:
                 and self._storable(result, args, kwargs)
                 and self._restore_pays(result, elapsed)
             ):
-                # CAS-260: the callee's writes to its own globals, captured as
+                # The callee's writes to its own globals, captured as
                 # an END STATE. Snapshotting the final value needs no ordering
                 # and no idempotence, which is why this is tractable where
                 # replaying the individual mutations is not.
@@ -1438,8 +1437,8 @@ class CallUnit:
         them registered because its own cached value transitively depends on
         the same files. Without this, a statement that only reaches a file
         through a now-cached sub-call would lose that dependency the moment
-        the sub-call started hitting -- exactly the CAS-243 regression this
-        task exists to close.
+        the sub-call started hitting -- exactly the regression this
+        closes.
         """
         snap = metadata.get("auto_file_deps")
         if not snap:
@@ -1618,8 +1617,8 @@ class CallUnit:
             rerun    cell 3 hits, restores N -> [2]   (not [1])
 
         which then re-keyed cell 5's call against a pre-state that had never
-        existed, so it missed forever -- and the two spellings diverged
-        (CAS-246's guard caught it). A copy failure is treated like any other
+        existed, so it missed forever -- and the two spellings diverged.
+        A copy failure is treated like any other
         "cannot capture this soundly": refuse.
         """
         if not names:
@@ -1692,8 +1691,7 @@ class CallUnit:
             # flattened `(*args, *kwargs.values())` length: `compute(*pair())`
             # has one static position but the pair unpacks to two live
             # arguments, and indexing only position 0 would hash the first
-            # element and silently ignore the rest (CAS-243 review C2 --
-            # reproduced as a second, DIFFERENT pair() result being served the
+            # element and silently ignore the rest (reproduced as a second, DIFFERENT pair() result being served the
             # first call's cached value). Refuse the whole site rather than
             # mint a key that looks discriminated but isn't; an uncached call
             # is merely slow.
@@ -1727,9 +1725,9 @@ class CallUnit:
     def _build_unpacked_key(self, site: CallSite, args: tuple, kwargs: dict, fn) -> str | None:
         """The key of a call with ``*``/``**`` unpacking, keyed on what it received.
 
-        ``fit_series(g, **TUNED.get(dept, {}))`` in a comprehension ran uncached
-        (r25s5): positions written in the source say nothing about the values
-        that arrive, so the site was refused (CAS-243: ``compute(*pair())``
+        ``fit_series(g, **TUNED.get(dept, {}))`` in a comprehension ran uncached:
+        positions written in the source say nothing about the values
+        that arrive, so the site was refused (``compute(*pair())``
         had keyed the first of two values). What did arrive is in hand here:
         every positional value, and every keyword with its name, hashed in
         full. Only when the call may be keyed on content at all
@@ -1848,8 +1846,8 @@ class CallUnit:
 
         The statement path has refused a value whose predicted restore exceeds
         80% of its compute since the cost model was fitted; the call cache,
-        which holds the biggest values in a notebook (round 28, r28s5: 406 MiB
-        `net_returns` results), never asked. Predicted for disk -- where it
+        which holds the biggest values in a notebook,
+        never asked. Predicted for disk -- where it
         comes back from after a restart, the case a cache is for.
         """
         try:
@@ -1863,7 +1861,7 @@ class CallUnit:
         """A hit that took longer than the compute it saved is a loss: stop.
 
         Measured, not predicted -- a prediction can be wrong for a type it was
-        not fitted on, and r28s5's hits were ~10 s against ~4 s of compute,
+        not fitted on, and one sweep's hits were ~10 s against ~4 s of compute,
         reported as "4/4 hit". The entry is dropped and the site runs plain
         for the rest of the session (`_refused`, the same bench the argument-
         mutation and RNG refusals use), so the next run computes rather than
@@ -1890,7 +1888,7 @@ class CallUnit:
            return d`` -- a hit would hand back a deserialised copy, so
            ``a = f(d)`` gives ``a is not d`` where Python guarantees identity.
            The statement path's alias rule only reaches a bare bind
-           (``b = a``); CAS-170 records the computed-RHS version as
+           (``b = a``); the computed-RHS version is
            structurally unfixable per-statement. At the call node the live
            arguments are in hand, so it is one ``is`` check.
 
@@ -1991,7 +1989,7 @@ class CallUnit:
 
         Before this, ``call_unit.py`` contained no reference to ``ttl`` at all,
         so call entries never expired. Once call interception became the
-        default (CAS-243) that quietly hollowed out the annotation: the
+        default that quietly hollowed out the annotation: the
         STATEMENT would expire and re-execute while the expensive call inside
         it was still served from an entry with no expiry. Measured on
         ``# @cash:ttl=0`` -- the spelling the docs give for data that must
@@ -2058,9 +2056,9 @@ class CallUnit:
         metadata: dict[str, Any] = {"execution_time": elapsed, "timestamp": _time.time(), "referenced": True}
         if function:
             # What `cash inspect` names the entry by: a call key is `call:<sha>`,
-            # so every intercepted call used to be listed as "call" (r28s1).
+            # so every intercepted call used to be listed as "call".
             metadata["function"] = function
-        # CAS-269. `TieredBackend` reads exactly this key to bypass the ~0.1s
+        # `TieredBackend` reads exactly this key to bypass the ~0.1s
         # persistence floor, so threading the statement's resolved annotation
         # here is the whole fix -- the statement path writes the same field
         # from the same `force_persist` (`StatementStore.save`).
@@ -2086,14 +2084,14 @@ class CallUnit:
         # and not for one carrying captured globals, whose value is wrapped.
         #
         # Nor pickled whole when its size already refuses it: pickling
-        # r28s5's 1.7 GiB result to learn that took 2.7 s after 2.8 s of
+        # a 1.7 GiB result to learn that took 2.7 s after 2.8 s of
         # compute. It gets a one-off token for a digest and its estimated size
         # (`ESTIMATED_FIELD`): judged for disk on its own, and referred to only
         # by the statement it is the plain result of.
         #
         # Nor for the call a statement is nothing but (``a, b = build()``,
         # `plain_value`): that statement's reference is trusted without a
-        # digest, so a token serves -- r28s5's 402 MiB result was worth
+        # digest, so a token serves -- a 402 MiB result was worth
         # keeping, and pickling it for a digest took 2.6 s of 3.7.
         if elapsed >= _REF_MIN_COMPUTE_S and not callee_globals:
             estimate = self._too_big_to_digest(value, elapsed, plain_value)
@@ -2107,7 +2105,7 @@ class CallUnit:
             metadata["stdout"] = stdout
         if stderr:
             metadata["stderr"] = stderr
-        # CAS-260. Omitted when empty, like every other optional channel here,
+        # Omitted when empty, like every other optional channel here,
         # so an ordinary cached call keeps writing the same sparse entry.
         #
         # The payload rides on the VALUE; metadata gets only a plain bool.
@@ -2194,7 +2192,7 @@ class CallUnit:
     def _why_missed(self, site: CallSite) -> str | None:
         """Which named part of this call's key moved since it was last keyed.
 
-        Round 30, r30s4: a sweep re-ran and the badge said only "0/6 hit", so
+        A sweep re-ran and the badge said only "0/6 hit", so
         the tester had to guess why -- and guessed wrong, then reported the
         re-run as a suspected bug.
         """

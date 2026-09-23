@@ -112,14 +112,14 @@ class RebuildCostLedger:
         ``is_refund = sales["qty"] < 0`` takes a millisecond, over a ``sales``
         that took seconds and is not on disk. With no entry, the end-of-cell
         pass had nothing to persist, and after a restart the cell rebuilt
-        ``sales`` to get ``is_refund`` back (round 25, r25s2). An intermediate
+        ``sales`` to get ``is_refund`` back. An intermediate
         -- a name the cell writes again (*written_later*) -- still gets none.
         """
         try:
             if in_loop:
                 # Inside a loop iteration nothing is final: the next iteration
                 # overwrites it, and the inputs' unsaved cost only grows as the
-                # loop runs, so EVERY iteration qualified. r28s3's 631-iteration
+                # loop runs, so EVERY iteration qualified. A 631-iteration
                 # loop wrote an entry per iteration for a ~0.1 ms statement --
                 # each a full snapshot of the 2.4 MB frame it changes, 1.5 GiB
                 # in all -- and a re-run copied every one back: 0.05 s plain,
@@ -137,9 +137,8 @@ class RebuildCostLedger:
 
         A statement is persisted by its own compute time, so a cheap statement
         over a costly input stays in RAM, and after a restart the next cell that
-        needs it rebuilds the whole chain behind it (round 23, r23s2: 49
-        statements and a 1,200-file folder re-read to restore a table cell's
-        inputs). Here each variable's final value, as the cell leaves it, is
+        needs it rebuilds the whole chain behind it.
+        Here each variable's final value, as the cell leaves it, is
         judged by what rebuilding it would cost -- the entries not on disk it
         came through -- by the same cost-model rule. The final value only: the
         ten versions ``sales`` goes through in one cell are not worth ten copies.
@@ -147,7 +146,7 @@ class RebuildCostLedger:
         Every final value, not only one a cell below reads: running this cell
         again after a restart restores its last versions rather than rebuilding
         them (``UpstreamChecker.plan_cell_run``), and ``is_refund`` beside the
-        final ``sales`` is one of them (round 25, r25s2). Still only in a
+        final ``sales`` is one of them. Still only in a
         notebook, where a restart re-runs cells by their source.
         """
         backend = getattr(self.cash_instance, "backend", None) if self.cash_instance else None

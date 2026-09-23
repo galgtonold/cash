@@ -209,7 +209,7 @@ class CallRouting:
             self._loop_var_digests.pop()
 
     def current_call_ttl(self) -> int | None:
-        """The TTL in force for the statement being processed (CAS-268).
+        """The TTL in force for the statement being processed.
 
         Handed to `CallCache` as its `ttl_provider` as a BOUND METHOD, not a
         lambda over a snapshot: one `CallCache` serves every statement, and
@@ -221,9 +221,9 @@ class CallRouting:
         """Whether the statement being processed asked for disk persistence.
 
         The twin of :meth:`current_call_ttl`, and handed over the same way, for
-        the same reason (CAS-269).  `persist` forces an entry past the ~0.1s
-        persistence floor; it reached the STATEMENT entry only.  In the CAS-260
-        shape -- the callee writes a global, so the statement is skip-cached and
+        the same reason.  `persist` forces an entry past the ~0.1s
+        persistence floor; it reached the STATEMENT entry only.  In the
+        global-writing shape -- the callee writes a global, so the statement is skip-cached and
         the call entry is the ONLY thing cached -- that left the annotation
         acting on nothing, and cheap-ish work re-ran after every restart.
         """
@@ -231,7 +231,7 @@ class CallRouting:
 
     def _depth_keyed_loop_scope(self) -> tuple[dict[str, Any], dict[str, str]]:
         """``(values, digests)`` for the call-unit key build, each entry keyed
-        by ``"{depth}:{name}"`` rather than bare ``name`` (CAS-257 defect 1).
+        by ``"{depth}:{name}"`` rather than bare ``name``.
 
         **The bug this exists to fix.** Reading only the TOP of
         ``_loop_vars`` (or merging the stack by bare name) is
@@ -329,7 +329,7 @@ class CallRouting:
         return digests
 
     def drain_call_unit_events(self) -> list:
-        """CallUnit's own call log, merged into ``decorator_calls`` (CAS-243).
+        """CallUnit's own call log, merged into ``decorator_calls``.
 
         ``CallCache.resolve`` routes an intercepted call's caching through
         ``CallUnit`` rather than ``Cash``'s decorator-call log, so
@@ -363,7 +363,7 @@ class CallRouting:
     ) -> tuple[str, ast.Module | None]:
         """The ``(code, tree)`` to execute, with eligible calls routed via cache.
 
-        Interception is the DEFAULT (CAS-243): each eligible call has its
+        Interception is the DEFAULT: each eligible call has its
         callee wrapped so it resolves to a cached counterpart at call time —
         ``compute(x)`` becomes ``__cash_call__(compute, 0)(x)``, where ``0`` is
         the index of this call's :class:`CallSite`. That fixes the two
@@ -405,12 +405,12 @@ class CallRouting:
         # under that floor with no call HIT inside it has nothing worth routing
         # through the call cache, and rewriting it is pure overhead: a copy of
         # its tree, an unparse and a gate per call, on every loop iteration --
-        # 1.7 of a 631-iteration loop's 9.5 s (round 28, r28s3). Learned in
+        # 1.7 of a 631-iteration loop's 9.5 s. Learned in
         # `learn_call_wrapping`; a hit or a slow run clears it again.
         if strip_markers(code) in self._calls_not_worth_wrapping:
             return code, tree
         try:
-            # The object-level half of the gate (CAS-243 Task 4/5): a call that
+            # The object-level half of the gate: a call that
             # is structurally eligible (its free variables don't read the
             # statement's own target) can still be uncacheable for every reason
             # a statement can be -- a forbidden call, an untracked input, a
@@ -428,7 +428,7 @@ class CallRouting:
                 # an unparse, so it only catches (SyntaxError, ValueError,
                 # TypeError, AttributeError); anything else escaping THIS
                 # function would surface as the user's own traceback on their
-                # statement (CAS-243 review I1). Fail closed instead: an
+                # statement. Fail closed instead: an
                 # exception here means "don't wrap", exactly like a `False`
                 # verdict, never "crash the cell".
                 try:
@@ -441,8 +441,7 @@ class CallRouting:
                         # `call_site_is_cacheable`'s docstring justifies
                         # omission for) -- passing it lets the missing-lineage
                         # reason source apply here too, tightening the gate to
-                        # the same standard the statement itself is judged by
-                        # (CAS-243 review I2).
+                        # the same standard the statement itself is judged by.
                         variable_lineage=self.tracking_state.variable_lineage,
                         is_stateful_call=self._is_stateful_call,
                         scan_forbidden=CodeAnalyzer.scan_for_forbidden_functions,
@@ -492,7 +491,7 @@ class CallRouting:
                     # by `_call_cache_owner` above), but the loop this call
                     # sits in pushes/pops its vars fresh on every iteration.
                     #
-                    # Depth-and-name-keyed (CAS-257 defect 1): a call INSIDE a
+                    # Depth-and-name-keyed: a call INSIDE a
                     # loop that reuses an ancestor's target name needs BOTH
                     # scopes' entries to survive at once -- see
                     # `_depth_keyed_loop_scope`'s docstring.
@@ -527,7 +526,7 @@ class CallRouting:
         storing (:meth:`statement_cost`) and to report it as OVERHEAD rather
         than as the user's compute. Counting it as compute cancelled it out of
         `%cash_stats`, which reported 210 s of overhead for a run a pairing
-        measured 370 s slower (round 30, r30s4).
+        measured 370 s slower.
         """
 
         tracking0, unit0, overhead0, saved0 = marks
@@ -545,10 +544,10 @@ class CallRouting:
 
         The wall time under cash, less cash's own time inside it -- recording
         file reads, keying and storing the calls it routed -- plus what the calls
-        it served from the cache would have cost. Round 25: "saved 16.50s" for a
-        folder read that takes 1.8 s without cash (r25s4), and "saved 6.55s" for
+        it served from the cache would have cost. The badge once said "saved 16.50s" for a
+        folder read that takes 1.8 s without cash, and "saved 6.55s" for
         a dict of fits that takes 50-100 s, built from calls served from the
-        cache (r25s5). The badge's run time stays the wall time.
+        cache. The badge's run time stays the wall time.
         """
         try:
             tax, saved = self._statement_tax(marks)

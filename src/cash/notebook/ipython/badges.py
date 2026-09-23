@@ -474,7 +474,7 @@ class BadgePresenter:
 
         Once per cell run. Every badge render asked, progress renders
         included, and each read the whole notebook again: 20 reads, 0.9-1.9 s,
-        per cell of r24s4. The notebook's source cannot change while the cell
+        per cell. The notebook's source cannot change while the cell
         runs, so the first answer stands until the next cell.
         """
         count = getattr(self.shell, "execution_count", None)

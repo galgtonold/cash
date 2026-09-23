@@ -174,7 +174,7 @@ class StatementStore:
         The guard exists for values whose every write is wasted money -- a
         bare fit re-serialising a large model, -25 s a session. Five upstream
         edits in a row also churn a key, and that is an ordinary morning of
-        model tuning: r23s1's cross-validation, seconds to compute and a few
+        model tuning: a cross-validation, seconds to compute and a few
         numbers to store, stopped being saved and the next restart ran every
         CV again. Estimated with the cost model the size-aware skip uses.
         """
@@ -213,7 +213,7 @@ class StatementStore:
         # An inherited file is recorded as the input's PRODUCER recorded it --
         # the state the value was built from -- rather than read and hashed
         # again here. Re-snapshotted per statement, every statement derived from
-        # a frame read out of 5,222 files re-read all 5,222 (round 23, r23s4).
+        # a frame read out of 5,222 files re-read all 5,222.
         # A later lookup still checks the real file against it.
         direct = all_file_deps.copy()
         for input_var in run.inputs:
@@ -558,7 +558,7 @@ class StatementStore:
                     # Nothing to report for a ``def``: it always re-runs at no
                     # cost. The reason is for ``f = make_fn()``. A def reading
                     # file-loaded data got here past the too-cheap floor and
-                    # its badge row said NOT CACHED (round 25, r25s1).
+                    # its badge row said NOT CACHED.
                     skip_reason = None
         # Perpetual-miss guard. Placed LAST so it can override the
         # exemptions above: ``has_file_dependencies`` waives the whole size-aware
@@ -697,7 +697,7 @@ class StatementStore:
         # The metadata-only record keeps a RAM-only value's lineage across a
         # restart. A value written to a persistent tier carries its metadata
         # already, and asking for the record made the disk tier wait for that
-        # write (``FileBackend.set_metadata_only``) only to skip it: r24s2's
+        # write (``FileBackend.set_metadata_only``) only to skip it: a
         # cleaning cell spent 5.8 s of its cold run there, on ~500 MB frames
         # whose write was meant to happen in the background.
         persisted = any(d != "RAM" for d in (wire.get("storage") or ()))

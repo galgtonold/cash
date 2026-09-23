@@ -1,4 +1,4 @@
-"""Sub-expression caching: selecting call nodes to cache independently (CAS-243).
+"""Sub-expression caching: selecting call nodes to cache independently.
 
 **The problem.** The unit of caching is the statement. When a statement is a
 cheap wrapper around an expensive call, that unit is wrong in both directions::
@@ -91,7 +91,7 @@ class CallSite:
     #: NOT a bare ``ast.Name``. Those are the ones whose *evaluated value* must
     #: be hashed into the key, because their value is not a function of any
     #: name's lineage -- ``compute(next(it))`` being the case that makes this
-    #: a correctness requirement rather than a tuning knob. See Task 3.
+    #: a correctness requirement rather than a tuning knob.
     computed_arg_positions: tuple[int, ...] = ()
     #: True when the call uses ``*args``/``**kwargs`` unpacking. The runtime
     #: half (``CallUnit``) must refuse to key such a call at all: the live
@@ -99,11 +99,10 @@ class CallSite:
     #: actually called with) can differ from ``len(computed_arg_positions)``,
     #: which is a STATIC count from the AST -- hashing only the positions that
     #: count predicts would silently ignore any unpacked elements beyond it.
-    #: See CAS-243 review C2.
     has_unpacking: bool = False
     #: ``ast.unparse`` of the statement that CONTAINS this call -- computed
-    #: once per enclosing statement, before any call inside it is rewritten
-    #: (CAS-256). ``call_cache_key``'s base key is built from the call's OWN
+    #: once per enclosing statement, before any call inside it is rewritten.
+    #:``call_cache_key``'s base key is built from the call's OWN
     #: source and free names, which says nothing about which statement the
     #: call sits in: two different statements whose call text and free names
     #: happen to agree (``vals[step] = fetch_next(conn)`` in one loop,
@@ -117,7 +116,7 @@ class CallSite:
     #: ``# __iteration_context__: <hash>`` comment PREPENDED to its source
     #: text (``for_handler.py``), and that context hash is derived in part
     #: from ``__iterable_lineage__`` -- the whole iterable's lineage, which
-    #: changes for every iteration on a reorder (CAS-242). If that raw text
+    #: changes for every iteration on a reorder. If that raw text
     #: reached this field, reordering a loop's items would change every
     #: iteration's statement identity and re-run the whole tail -- the exact
     #: bug ``loop_vars`` (not the iteration-context comment) exists to fix
@@ -143,13 +142,13 @@ class CallSite:
     #: d.items()}``. Such a name is local to the comprehension: resolving it by
     #: name, the key found either nothing or an unrelated global of the same
     #: name, so every element got ONE key and the second call was served the
-    #: first's result -- on the first run with a global ``v`` around (round 22,
-    #: a grid search per model handed the SVM the logistic regression). These
+    #: first's result -- on the first run with a global ``v`` around.
+    #: These
     #: are also in ``computed_arg_positions``, and are hashed in full, never
     #: sampled, for the reason a loop variable is (see
     #: ``call_unit._loop_var_digest``): the argument's value is then all that
     #: tells the elements apart. That holds for an argument computed from the
-    #: name too -- ``fit_score(make_features(cleaned[mid], W))`` (r23s3): a
+    #: name too -- ``fit_score(make_features(cleaned[mid], W))``: a
     #: frame's sample is its shape, dtypes and first five rows, and rolling
     #: features all begin with the same empty rows.
     local_arg_positions: tuple[int, ...] = ()
@@ -171,8 +170,8 @@ class CallSite:
     #: keying that argument's value is in the key, so how it was spelled is
     #: not: the sweep's ``make_features(cleaned[mid], W)`` and the pick's
     #: ``make_features(cleaned[mid], BEST_W)`` hand ``fit_score`` the same
-    #: features, and keyed on the text the pick re-fitted all of them
-    #: (round 25, r25s3). Under unpacking, the callee alone: the key then
+    #: features, and keyed on the text the pick re-fitted all of them.
+    #:Under unpacking, the callee alone: the key then
     #: holds every value received, with its keyword.
     content_source: str = ""
     #: Inside a loop cached as one unit (see ``_eligible_calls_in_loop``): no
@@ -193,7 +192,7 @@ def interceptable(fn) -> bool:
     the entry the first had just written. Nor cash's own instrumentation:
     ``file_tracker`` replaces ``open``, ``pd.read_csv`` and friends with
     tracking wrappers, which are plain functions; wrapping one means trying to
-    cache a file handle (CAS-246). Nor IPython's ``open``: the kernel binds
+    cache a file handle. Nor IPython's ``open``: the kernel binds
     ``user_ns['open']`` to a plain-function wrapper of ``io.open``, so a bare
     ``open(p)`` in a cell was intercepted like a user function. Its 3 ms cost
     floor kept it uncached on an idle machine; under load the call crossed it,
@@ -303,7 +302,7 @@ class CallCache:
         # every statement. Keying on the index let editing a cell reuse the
         # PREVIOUS statement's wrapper -- same fn, index 0 -- serving its
         # source/free_names/computed_arg_positions after the callee's own
-        # argument expression had changed (CAS-243 review C1; reproduced as
+        # argument expression had changed (reproduced as
         # `out.append(compute(a + 100))` silently returning `out.append(compute(a))`'s
         # cached value). `CallSite` is a frozen, hashable dataclass of
         # `(source, free_names, occurrence_index, computed_arg_positions,
@@ -318,7 +317,7 @@ class CallCache:
         # collection, so the original is pinned alongside the wrapper in the
         # value tuple to keep it alive and detect a recycled id.
         #
-        # `stmt_identity` (CAS-256) joining this tuple is deliberate, not
+        # `stmt_identity` joining this tuple is deliberate, not
         # incidental: two statements that previously built an EQUAL CallSite
         # (same call text, same free names, same occurrence index) now build
         # DIFFERENT ones, so each statement gets its own wrapper instead of
@@ -348,10 +347,10 @@ class CallCache:
             loop_vars_provider or self._default_loop_vars,
             loop_var_digests_provider or self._default_loop_var_digests,
             # No fallback: absent a live processor there is no annotation in
-            # force, and `None` is precisely "no TTL" (CAS-268).
+            # force, and `None` is precisely "no TTL".
             ttl_provider,
             # Same reasoning for `persist`: no processor means no annotation,
-            # and `None` degrades to "don't force it" (CAS-269).
+            # and `None` degrades to "don't force it".
             persist_provider,
         )
 
@@ -443,7 +442,7 @@ class CallCache:
 
         try:
             if site is not None:
-                # The real path (CAS-243 Task 5): key and store through the
+                # The real path: key and store through the
                 # statement backend via the call's own CallSite.
                 wrapper = self._call_unit.wrap(fn, site)
             else:
@@ -503,7 +502,7 @@ def wrap_eligible_calls(
     instead. ``rows.append(dict(k=k, err=score(df, k)))`` accepted the
     ``dict(...)`` as the outermost call; at runtime it is a class and was not
     wrapped, and ``score(df, k)`` inside it was never considered -- a
-    backtest was recomputed in full on an unchanged re-run (round 22).
+    backtest was recomputed in full on an unchanged re-run.
 
     A gate with a ``local`` parameter is also handed the names an enclosing
     comprehension or lambda binds around the call: they have no lineage, and
@@ -584,7 +583,7 @@ def _call_has_unpacking(call: ast.Call) -> bool:
     on this case, since it cannot compute reliable positions past an
     unpacking) and :class:`CallSite` construction (whose ``has_unpacking``
     flag tells the runtime half to refuse the site outright rather than trust
-    that static, possibly-wrong count -- see CAS-243 review C2).
+    that static, possibly-wrong count).
     """
     return any(isinstance(a, ast.Starred) for a in call.args) or any(kw.arg is None for kw in call.keywords)
 
@@ -696,7 +695,7 @@ def eligible_call_nodes(stmt: ast.stmt) -> list[ast.Call]:
     Outermost-first, in source order. Once a call is accepted its CALLEE
     expression is not searched again -- that is the site's own. Its arguments
     are, because they run whether the outer call hits or not, so an expensive
-    call nested there is work no outer entry ever saves (round 30, r30s3).
+    call nested there is work no outer entry ever saves.
 
     **Only simple statements are searched, and that is a safety rule rather
     than a simplification.** (A loop run as one unit is searched per body
@@ -749,7 +748,7 @@ def _eligible_calls_in_loop(
 
     A long loop runs as a single statement (``for_handler.
     _should_execute_loop_as_single_unit``), and calls inside it never reached
-    the interceptor: fixing one store's data in r25s5's 360-iteration fit loop
+    the interceptor: fixing one store's data in a 360-iteration fit loop
     re-fitted all 720 models. The free-variable rule stays per statement, as
     per-iteration decomposition applies it: each body statement is searched
     against its own targets, and an expression statement's own call is still
@@ -892,7 +891,7 @@ def _collect(
         # there may be taken again. Its ARGUMENTS are a different matter:
         # wrapping a call replaces the callee only, so an argument runs
         # whether the outer call hits or not, and an expensive one nested
-        # there was never reused (round 30, r30s3: nine fits re-ran, 19 s).
+        # there was never reused.
         for child in node.args + [kw.value for kw in node.keywords]:
             _collect(child, targets, found, local, skip)
         return
