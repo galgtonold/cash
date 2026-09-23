@@ -4,7 +4,9 @@ from __future__ import annotations
 
 __all__ = ["CacheExplorer"]
 
+import html
 import logging
+import math
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -95,25 +97,21 @@ class CacheExplorer:
         return count
 
     def get_preview(self, key: str) -> str:
+        """A short string preview of the cached value stored under *key*.
+
+        A DataFrame or Series shows its ``head()``; anything else its ``str``,
+        cut to 1000 characters.
         """
-        Get a string preview of the cached value.
-        """
-        _metadata, value_bytes = self.app.backend.get(key)
-        if value_bytes is None:
+        # The backend hands back the value itself, already deserialized.
+        # Presence is the metadata: a stored None is still an entry.
+        metadata, value = self.app.backend.get(key)
+        if metadata is None:
             return "Value not found in cache."
-
         try:
-            from ..backends.serialization import PickleSerializer
-
-            # Preview always assumes the default Pickle serializer; the stored
-            # serializer_cls is not yet honored here.
-            serializer = PickleSerializer()
-            value = serializer.deserialize(value_bytes)
-
             if hasattr(value, "head"):  # DataFrame/Series
                 return str(value.head())
             return str(value)[:1000]
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - a preview must not raise out of the widget
             return f"Error previewing data: {e}"
 
     def to_dataframe(self) -> pd.DataFrame:
@@ -149,27 +147,7 @@ class CacheExplorer:
             logger.warning("IPython is required for the widget.")
             return None
 
-        entries = self.list_entries()
-
-        # Process entries into hierarchy: Module -> Function -> Entries
-        hierarchy = {}
-        for entry in entries:
-            func_name = entry.get("func_name", "Unknown")
-            # Heuristic to extract module: assume func_name is "module.submodule.function"
-            parts = func_name.rsplit(".", 1)
-            if len(parts) == 2:
-                module, func = parts
-            else:
-                module = "Global"
-                func = func_name
-
-            if module not in hierarchy:
-                hierarchy[module] = {}
-            if func not in hierarchy[module]:
-                hierarchy[module][func] = {"entries": [], "total_size": 0}
-
-            hierarchy[module][func]["entries"].append(entry)
-            hierarchy[module][func]["total_size"] += entry.get("size", 0)
+        hierarchy = self._build_hierarchy(self.list_entries())
 
         # Convert to list for JSON
         tree_data = []
@@ -413,8 +391,6 @@ class CacheExplorer:
              entries_selector, delete_entry_btn, entry_details,
              preview_output, app_layout)
         """
-        from IPython.display import clear_output  # noqa: F401
-
         func_selector = widgets.Select(
             options=sorted(func_options), description="Functions:", layout=widgets.Layout(width="100%", height="100%")
         )
@@ -423,28 +399,22 @@ class CacheExplorer:
         overview_output = widgets.Output()
         clear_func_btn = widgets.Button(description="Clear Function Cache", button_style="danger", icon="trash")
 
-        # Tab 2: Entries
+        # Tab 2: Entries, with the selected entry's details and value preview
         entries_selector = widgets.Select(
             options=[], description="Entries:", layout=widgets.Layout(width="100%", height="150px")
         )
         delete_entry_btn = widgets.Button(description="Delete Entry", button_style="warning", icon="times")
         entry_details = widgets.HTML()
-
-        # Tab 3: Preview (Placeholder)
         preview_output = widgets.Output()
-        with preview_output:
-            print("Select an entry to preview data (Coming Soon)")
 
         tabs = widgets.Tab(
             children=[
                 widgets.VBox([overview_output, clear_func_btn]),
-                widgets.VBox([entries_selector, delete_entry_btn, entry_details]),
-                preview_output,
+                widgets.VBox([entries_selector, delete_entry_btn, entry_details, preview_output]),
             ]
         )
         tabs.set_title(0, "Overview")
         tabs.set_title(1, "Entries")
-        tabs.set_title(2, "Preview")
 
         main_view = widgets.VBox([tabs], layout=widgets.Layout(width="70%", padding="10px"))
         sidebar = widgets.VBox([func_selector], layout=widgets.Layout(width="30%"))
@@ -505,21 +475,18 @@ class CacheExplorer:
             entry = next((e for e in self._entries if e["key"] == key), None)
             if entry:
                 details_html = f"""
-                <b>Key:</b> {entry["key"]}<br>
-                <b>Timestamp:</b> {entry.get("timestamp_human")}<br>
+                <b>Key:</b> {html.escape(str(entry["key"]))}<br>
+                <b>Timestamp:</b> {html.escape(str(entry.get("timestamp_human")))}<br>
                 <b>Size:</b> {self._format_bytes(entry.get("size", 0))}<br>
-                <b>TTL:</b> {entry.get("ttl")}<br>
+                <b>TTL:</b> {html.escape(str(entry.get("ttl")))}<br>
                 <hr>
                 <b>Source Code:</b><br>
-                <pre style="background-color: #f4f4f4; padding: 5px;">{entry.get("source_code", "N/A")}</pre>
+                <pre style="background-color: #f4f4f4; padding: 5px;">{html.escape(str(entry.get("source_code", "N/A")))}</pre>
                 """
                 entry_details.value = details_html
                 with preview_output:
                     clear_output()
-                    print(f"Loading preview for {key}...")
-                    preview_text = self.get_preview(key)
-                    clear_output()
-                    print(preview_text)
+                    print(self.get_preview(key))
 
         return on_entry_select
 
@@ -552,11 +519,7 @@ class CacheExplorer:
             if not key:
                 return
             self.app.backend.delete(key)
-            # Refresh
             self._refresh_data()
-            # Try to keep func selection
-            # on_func_select will trigger if value is set?
-            # self._refresh_data re-sets options, which might clear value.
 
         return on_delete_entry
 
@@ -591,14 +554,8 @@ class CacheExplorer:
         except ImportError:
             return self._widget_html()
 
-        # State
         self._entries = self.list_entries()
         self._hierarchy = self._build_hierarchy(self._entries)
-
-        func_options = []
-        for module, funcs in self._hierarchy.items():
-            for func in funcs:
-                func_options.append(f"{module}.{func}")
 
         (
             func_selector,
@@ -609,7 +566,8 @@ class CacheExplorer:
             entry_details,
             preview_output,
             app_layout,
-        ) = self._build_widget_layout(widgets, func_options)
+        ) = self._build_widget_layout(widgets, self._func_options())
+        self._func_selector = func_selector
 
         self._wire_widget_events(
             func_selector,
@@ -620,19 +578,36 @@ class CacheExplorer:
             entry_details,
             preview_output,
         )
+        # The selector starts on its first function without a change event,
+        # so the overview and entry list would stay empty until another one
+        # was picked. Select it again now that the handlers are listening.
+        first = func_selector.value
+        if first is not None:
+            func_selector.value = None
+            func_selector.value = first
 
         return app_layout
 
+    def _func_options(self) -> list[str]:
+        return [f"{module}.{func}" for module, funcs in self._hierarchy.items() for func in funcs]
+
     def _refresh_data(self) -> None:
+        """Re-read the entries after a delete and show what is left.
+
+        Re-selecting the same function re-renders its overview and entry list;
+        a function with no entries left drops out of the list.
+        """
         self._entries = self.list_entries()
         self._hierarchy = self._build_hierarchy(self._entries)
-        # Update func selector options
-        func_options = []
-        for module, funcs in self._hierarchy.items():
-            for func in funcs:
-                func_options.append(f"{module}.{func}")
-        # TODO: Update widget options without losing selection if possible
-        # For now, just simplistic refresh
+        selector = getattr(self, "_func_selector", None)
+        if selector is None:
+            return
+        selected = selector.value
+        options = sorted(self._func_options())
+        selector.value = None
+        selector.options = options
+        if selected in options:
+            selector.value = selected
 
     def _build_hierarchy(self, entries: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         hierarchy = {}
@@ -660,26 +635,24 @@ class CacheExplorer:
         k = 1024
         dm = max(decimals, 0)
         sizes = ["Bytes", "KB", "MB", "GB", "TB"]
-        import math
-
         i = math.floor(math.log(bytes_val) / math.log(k))
         return f"{bytes_val / (k**i):.{dm}f} {sizes[i]}"
 
     def show(self) -> None:
-        """
-        Display the cache entries in an interactive way (if in notebook) or print them.
-        """
+        """Display the explorer widget in IPython, or print the entries elsewhere."""
         try:
+            from IPython import get_ipython
             from IPython.display import display
-
-            # Try to display widget if in notebook
-            # How to detect?
-            # Usually if IPython is available we can try.
-            display(self.widget())
         except ImportError:
-            # Fallback for non-notebook environments
-            df = self.to_dataframe()
-            if df.empty:
-                print("Cache is empty.")
-            else:
-                print(df.to_string())
+            get_ipython = None
+        if get_ipython is not None and get_ipython() is not None:
+            display(self.widget())
+            return
+        entries = self.list_entries()
+        if not entries:
+            print("Cache is empty.")
+        elif HAS_PANDAS:
+            print(self.to_dataframe().to_string())
+        else:
+            for entry in entries:
+                print(entry.get("func_name"), entry.get("timestamp_human", ""), entry.get("key"))

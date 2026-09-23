@@ -310,8 +310,8 @@ explorer.get_preview(key)              # peek at a stored value
 explorer.clear_function("mod.func")    # surgical per-function clear
 ```
 
-<!-- claim: cash/ui/explorer.py:CacheExplorer @65748b90 broad="the listed method set is a claim about the whole class", cash/core.py:Cash.explorer @599913c8 -->
-`CacheExplorer` is the read-side: list, search, preview, and surgically clear entries by function name without touching the rest of the cache.
+<!-- claim: cash/ui/explorer.py:CacheExplorer @52e245e2 broad="the listed method set is a claim about the whole class", cash/core.py:Cash.explorer @599913c8 -->
+`CacheExplorer` is the read-side: list, preview, and surgically clear entries by function name without touching the rest of the cache.
 
 It is experimental: stick to `f.explain()` and `%cash_debug` for anything that needs to survive a version bump.
 
