@@ -77,7 +77,7 @@ def test_unpicklable_falls_back_gracefully():
 
 def _loop_key(value):
     """The key a `for` iteration binding *value* to ``x`` gets."""
-    from cash.notebook.control_structures.processor import build_iteration_context, compute_context_hash
+    from cash.notebook.control_structures.common import build_iteration_context, compute_context_hash
 
     return compute_context_hash(build_iteration_context(["x"], {"x": value}, None))
 

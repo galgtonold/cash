@@ -23,8 +23,7 @@ for the package-extraction rationale.
 
 from __future__ import annotations
 
-from .processor import (
-    ControlStructureProcessor,
+from .common import (
     ControlStructureResult,
     bind_target_values,
     build_iteration_context,
@@ -35,6 +34,7 @@ from .processor import (
     get_control_structure_type,
     is_control_structure,
 )
+from .processor import ControlStructureProcessor
 
 __all__ = [
     "ControlStructureProcessor",

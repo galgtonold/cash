@@ -376,7 +376,7 @@ for q in [[1], [1]]:
     accm.append(pull(handle))
 ```
 
-<!-- claim: cash/notebook/control_structures/processor.py:extract_target_names @f3f92993 -->
+<!-- claim: cash/notebook/control_structures/common.py:extract_target_names @f3f92993 -->
 That's because the per-iteration cache key is built from `for`-loop **target names only** (`extract_target_names`, run once against the loop header), captured at the moment those names are bound. An ordinary body-local variable never reaches that key, however it's assigned — mutated, rebound, or read from an outer container makes no difference, because the mechanism never looks at the body at all.
 
 The fix is to introduce the discriminating value as a **genuine additional loop target** instead. `enumerate` is the simplest way when the natural per-iteration signal is the iteration's own position — which it is here, since `len(accm)` grows by exactly one appended item per iteration:

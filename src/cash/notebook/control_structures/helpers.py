@@ -26,6 +26,7 @@ from ...analysis.annotations import (
 from ...analysis.cacheability import analyze_statement, selfref_reassignment_targets
 from ...analysis.code_analyzer import CodeAnalyzer
 from ..compiled_source import is_cash_filename
+from .common import extract_target_names, is_control_structure
 
 logger = logging.getLogger(__name__)
 
@@ -192,9 +193,6 @@ def update_lineage_after_execution(
 
     # Exclude loop target variables — they are not mutations
     if isinstance(node, ast.For):
-        # Local: import cycle control_structures.helpers -> control_structures.processor -> ... -> control_structures.helpers.
-        from .processor import extract_target_names
-
         target_names = set(extract_target_names(node.target))
         mutated_vars -= target_names
 
@@ -204,8 +202,6 @@ def update_lineage_after_execution(
         target_names: set[str] = set()
         if isinstance(node, ast.For):
             iterable_lineage = get_iterable_lineage(shell, statement_processor, node.iter)
-            # Local: import cycle control_structures.helpers -> control_structures.processor -> ... -> control_structures.helpers.
-            from .processor import extract_target_names
 
             target_names = set(extract_target_names(node.target))
 
@@ -355,8 +351,6 @@ def find_potentially_mutated_variables(body_nodes: list) -> set[str]:
     (subscript assignment, method calls like ``.append()``, augmented
     assigns, attribute assignments).
     """
-    # Local: import cycle control_structures.helpers -> control_structures.processor -> ... -> control_structures.helpers.
-    from .processor import is_control_structure
 
     mutated_vars: set = set()
     for body_node in body_nodes:

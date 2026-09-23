@@ -27,6 +27,7 @@ from cash.control_markers import mark_control
 
 from ..cache_status import CacheStatus
 from . import helpers as _helpers
+from .common import ControlStructureResult, is_control_structure
 
 if TYPE_CHECKING:
     from ..statement import ProcessResult
@@ -72,9 +73,6 @@ class TryHandler:
         gets its own cache key, storage info, and timing — and ``print()``
         calls are never suppressed by the SKIPPED optimisation.
         """
-        # Local: import cycle control_structures.try_handler -> control_structures.processor -> ... -> control_structures.try_handler.
-        from .processor import ControlStructureResult
-
         all_metrics: list[ProcessResult] = []
         cached_count = 0
         computed_count = 0
@@ -212,9 +210,6 @@ class TryHandler:
         Used for else and finally branches of try/except where no per-statement
         lineno tagging is needed.
         """
-        # Local: import cycle control_structures.try_handler -> control_structures.processor -> ... -> control_structures.try_handler.
-        from .processor import is_control_structure
-
         cached = computed = 0
         for body_node in body_nodes:
             if is_control_structure(body_node):
@@ -273,9 +268,6 @@ class TryHandler:
         branch_annotation=None,
     ) -> tuple[bool, Exception | None, int, int]:
         """Execute the try-body statements; return (succeeded, caught_exc, cached, computed)."""
-        # Local: import cycle control_structures.try_handler -> control_structures.processor -> ... -> control_structures.try_handler.
-        from .processor import is_control_structure
-
         cached = computed = 0
         try_body_succeeded = True
         caught_exception: Exception | None = None

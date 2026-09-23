@@ -25,7 +25,7 @@ from cash.control_markers import mark_control
 
 from ..cache_status import CacheStatus
 from . import helpers as _helpers
-from .processor import ControlStructureResult, is_control_structure
+from .common import ControlStructureResult, is_control_structure
 
 if TYPE_CHECKING:
     from ..statement import ProcessResult

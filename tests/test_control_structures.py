@@ -229,7 +229,7 @@ class TestUserObjectLoopValue:
         def _fail(value):
             raise AssertionError("recomputed a digest the caller already had")
 
-        monkeypatch.setattr("cash.notebook.control_structures.processor.compute_hash_full", _fail)
+        monkeypatch.setattr("cash.notebook.control_structures.common.compute_hash_full", _fail)
         p = _Point(1)
         assert self._hash(p, {"p": "d1"}) != self._hash(p, {"p": "d2"})
 

@@ -34,7 +34,7 @@ from ...tracking.file_tracker import FileAccessTracker
 from ..cache_status import CacheStatus
 from ..loop_split import is_split_half, loop_source_hash, split_nodes, store_for_backend
 from . import helpers as _helpers
-from .processor import (
+from .common import (
     ControlStructureResult,
     bind_target_values,
     build_iteration_context,

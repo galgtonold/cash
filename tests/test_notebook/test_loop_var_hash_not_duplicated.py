@@ -51,7 +51,7 @@ def counting_magics(monkeypatch):
 
     # Both call sites bind the function when their module is imported, so
     # patch it where each of them looks it up.
-    monkeypatch.setattr("cash.notebook.control_structures.processor.compute_hash_full", counting_compute_hash_full)
+    monkeypatch.setattr("cash.notebook.control_structures.common.compute_hash_full", counting_compute_hash_full)
     monkeypatch.setattr("cash.notebook.control_structures.for_handler.compute_hash_full", counting_compute_hash_full)
 
     shell = MockShell()
