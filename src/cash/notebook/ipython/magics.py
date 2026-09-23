@@ -1315,21 +1315,24 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             kwargs,
         )
 
-    @staticmethod
-    def _sanitize_async_delegation_kwargs(kwargs: dict) -> dict:
-        """Strip pre-transform kwargs before delegating a substitute cell.
+    def _substitute_cell_kwargs(self, source: str, kwargs: dict) -> dict:
+        """Kwargs for delegating the stand-in cell *source* to ``run_cell_async``.
 
         ipykernel calls ``run_cell_async(code, transformed_cell=…,
-        preprocessing_exc_tuple=…)``.  When ``transformed_cell`` is present
-        IPython runs IT and ignores ``raw_cell`` entirely — so delegating our
-        bookkeeping cell (``"pass"`` / ``"raise __cash_exception__"``) with the
-        original kwargs would re-run the WHOLE user cell a second time
-        (double side effects).  We drop ``transformed_cell`` (and its paired
-        ``preprocessing_exc_tuple``) so IPython freshly transforms the substitute
-        cell we actually pass.  The sync path never hits this because ipykernel
-        does not pass ``transformed_cell`` to sync ``run_cell``.
+        preprocessing_exc_tuple=…)``.  IPython runs ``transformed_cell`` and
+        ignores ``raw_cell`` -- so delegating our bookkeeping cell (``"pass"`` /
+        ``"raise __cash_exception__"``) with the caller's kwargs would re-run the
+        WHOLE user cell a second time (double side effects).  We replace both
+        with the transform of the stand-in cell itself.  Passing them rather
+        than dropping them is required: from IPython 9.16 ``run_cell_async``
+        raises ``TypeError`` without ``transformed_cell``, and every IPython
+        cash supports (>= 8.0) accepts it.
         """
-        return {k: v for k, v in kwargs.items() if k not in ("transformed_cell", "preprocessing_exc_tuple")}
+        return {
+            **kwargs,
+            "transformed_cell": self.shell.transform_cell(source),
+            "preprocessing_exc_tuple": None,
+        }
 
     async def _synthesize_run_cell_raise_async(
         self,
@@ -1355,7 +1358,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             ipython_error_result = await self._original_run_cell_async(
                 "raise __cash_exception__",
                 *args,
-                **self._sanitize_async_delegation_kwargs(kwargs),
+                **self._substitute_cell_kwargs("raise __cash_exception__", kwargs),
             )
         finally:
             try:
@@ -1563,12 +1566,12 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             timing_breakdown,
             badge_render_time,
         )
-        # Strip ``transformed_cell`` so IPython runs our ``"pass"`` and NOT the
-        # original user cell again (see _sanitize_async_delegation_kwargs).
+        # Replace ``transformed_cell`` so IPython runs our ``"pass"`` and NOT
+        # the original user cell again (see _substitute_cell_kwargs).
         return await self._original_run_cell_async(
             "pass",
             *args,
-            **self._sanitize_async_delegation_kwargs(kwargs),
+            **self._substitute_cell_kwargs("pass", kwargs),
         )
 
     def _update_last_cell_metrics(self, all_metrics: list[ProcessResult], hook_total: float) -> None:

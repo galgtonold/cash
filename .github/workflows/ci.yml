@@ -60,6 +60,7 @@ jobs:
             tests/test_notebook_integration/test_badge_integration.py \
             tests/test_notebook_integration/test_forward_probe_upstream_skip.py \
             tests/test_notebook_integration/test_file_dep_path_fallback.py \
+            tests/test_notebook_integration/test_toplevel_await_caching.py \
             -n auto --tb=short -q
         shell: bash
         timeout-minutes: 10
