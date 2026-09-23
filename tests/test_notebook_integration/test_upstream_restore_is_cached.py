@@ -70,7 +70,7 @@ def _upstream_cached(output: str) -> bool:
 def _build(nb_runner):
     nb_runner.create_notebook(
         [
-            "%load_ext cash\n%cash_badge print\n" + PIN_THRESHOLDS + "%cash_on",
+            "import cash\n%load_ext cash\n%cash_badge print\n" + PIN_THRESHOLDS + "%cash_on",
             "# @cash:persist\nroot = 2",
             "# @cash:persist\n" + EXPENSIVE,
             "# @cash:persist\nleaf = mid + 1\nprint('leaf =', leaf)",
