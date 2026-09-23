@@ -33,9 +33,13 @@ jobs:
       # without anyone adding it here (tests/test_tooling/test_ci_covers_the_suite.py checks).
       # Excluded: test_notebook_integration/ starts real kernels and is too slow
       # per push (the integration-core job runs its core set);
-      # test_wheel_gate/ belongs to the release gate; docs/ has its own job.
+      # test_wheel_gate/ builds a wheel and drives a real Jupyter server, so no
+      # workflow runs it: run it by hand before a release (see that file).
+      # docs/ has its own job.
       # `perf` tests assert wall-clock thresholds and run in benchmarks.yml.
       # -n auto replaces pyproject's -n 16, which oversubscribes 3-4 vCPU runners.
+      # -rs lists every skip with its reason, so a test that skips because a
+      # package is missing from the dev extra shows up in the log.
       - name: Run unit tests
         run: |
           pytest tests/ \
@@ -43,7 +47,7 @@ jobs:
             --ignore=tests/test_wheel_gate \
             --ignore=tests/docs \
             -m "not perf" \
-            -n auto --tb=short -q
+            -n auto --tb=short -q -rs
         # Windows defaults to pwsh, where `\` does not continue a line.
         shell: bash
 

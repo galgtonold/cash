@@ -49,7 +49,7 @@ TESTS_DIR = REPO_ROOT / "tests"
 # makes test_every_test_directory_is_accounted_for fail.
 EXPECTED_EXCLUSIONS = {
     "test_notebook_integration",  # starts real kernels; the core set and the nightly shards run it
-    "test_wheel_gate",  # builds a wheel + real Jupyter server; release gate
+    "test_wheel_gate",  # builds a wheel + real Jupyter server; run by hand before a release
     "docs",  # dedicated docs-parity job (needs docs-test extras)
 }
 
