@@ -27,7 +27,8 @@ from ..tracking.file_dep_snapshot import snapshot_is_fresh
 from ._protocols import ShellProtocol, TrackingState
 from .cache_status import CacheStatus
 from .call_refs import resolve_call_refs
-from .statement import ProcessResult
+from .restored_var import apply_restored_var
+from .statement import ProcessResult, StatementCacheMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -83,8 +84,15 @@ class Restorer:
 
             restored_vars = cached_data["variables"]
             if var_name in restored_vars:
-                self.shell.user_ns[var_name] = restored_vars[var_name]
-                self._restore_tracking_state(var_name, metadata, restored_vars)
+                value = restored_vars[var_name]
+                self.shell.user_ns[var_name] = value
+                apply_restored_var(
+                    self.tracking_state,
+                    var_name,
+                    value,
+                    StatementCacheMetadata.from_dict(metadata),
+                    compute_hash=compute_hash,
+                )
                 logger.debug("[STATE] Restored '%s' from cache", var_name)
                 restored_metrics.append(self._build_restore_metric(var_name, metadata, restored_vars))
             else:
@@ -128,37 +136,6 @@ class Restorer:
         if stale.reason in ("missing", "unreadable"):
             raise NameError(f"name '{var_name}' is not defined (file dependency missing)")
         raise NameError(f"name '{var_name}' is not defined (file dependency changed)")
-
-    def _restore_tracking_state(self, var_name: str, metadata: dict, restored_vars: dict) -> None:
-        """Update TrackingState after writing a restored variable into user_ns."""
-        restored_hash = compute_hash(restored_vars[var_name])
-        hashes = self.tracking_state.variable_hashes
-        if var_name not in hashes:
-            hashes[var_name] = set()
-        hashes[var_name].add(restored_hash)
-
-        output_lineages = metadata.get("output_lineages", {})
-        if var_name in output_lineages:
-            self.tracking_state.lineage.record(
-                var_name,
-                output_lineages[var_name],
-                value=self.shell.user_ns.get(var_name),
-            )
-
-        stored_code = metadata.get("code")
-        if stored_code:
-            self.tracking_state.executed_cell_codes[var_name] = stored_code
-
-        stored_hash = metadata.get("source_hash")
-        if stored_hash:
-            self.tracking_state.executed_cell_hashes.setdefault(var_name, set()).add(stored_hash)
-
-        file_deps = metadata.get("file_dependencies", {})
-        if file_deps:
-            file_dep_set = self.tracking_state.executed_file_deps
-            if var_name not in file_dep_set:
-                file_dep_set[var_name] = set()
-            file_dep_set[var_name].update(file_deps.keys())
 
     @staticmethod
     def _build_restore_metric(var_name: str, metadata: dict, restored_vars: dict) -> ProcessResult:
