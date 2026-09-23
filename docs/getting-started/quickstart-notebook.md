@@ -1,221 +1,64 @@
 # Quick start: notebooks
 
+!!! info "Applies to: notebook"
+    Jupyter, JupyterLab, Colab and VS Code notebooks that use `%cash_on`.
 
-!!! tip "Prefer to just try it?"
-    Run cash in your browser with no install —
-    [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/galgtonold/cash/blob/main/examples/try_cash_colab.ipynb)
-    [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/galgtonold/cash/main?labpath=examples/try_cash_binder.ipynb) — then come back here to wire it into your own notebooks.
+Install cash first: `pip install cash-lib` (see [Installation](installation.md)).
+To try it without installing, open the
+[Colab](https://colab.research.google.com/github/galgtonold/cash/blob/main/examples/try_cash_colab.ipynb)
+or [Binder](https://mybinder.org/v2/gh/galgtonold/cash/main?labpath=examples/try_cash_binder.ipynb)
+tour.
 
-### Step 1: Enable Cash
+## 1. Turn cash on
+
+Make this the first cell, with nothing else in it:
 
 ```python { .nb-cell }
 import cash
-
-# Enable auto-caching for all subsequent cells
 %cash_on
 ```
 
-That's the whole setup — no decorators, no config file. (`import cash` auto-registers
-the magics, so `%load_ext cash` is not required.)
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @8cbb17b4 -->
+cash starts tracking after this cell, so anything else you put in it is never
+cached. To skip this cell in every new kernel, run `cash autoload on` once in a
+terminal.
 
-Your imports, paths and constants can go in this cell too. Load data in the cells
-below it. Cash wasn't listening yet when this cell started, so a load in it has to
-be [re-run once under tracking](../badges.md#input-variable-missing-lineage) before
-its file is tracked, which means reading the file twice.
+## 2. Write your code in the cells below
 
-!!! tip "Skip the boilerplate"
-    Run `cash autoload on` once and every new IPython/Jupyter kernel starts with
-    `import cash` plus `%cash_on` already executed. See the [CLI reference](../cli.md).
-
-### Step 2: Write code normally
-
-<!-- test:skip reason="illustrative — references missing large_dataset.csv" -->
+<!-- test:skip reason="illustrative: large_dataset.csv is not shipped with the docs" -->
 ```python { .nb-cell }
 import pandas as pd
 
-df = pd.read_csv('large_dataset.csv')   # cached after the first run
-print(f"Loaded {len(df)} rows")
+df = pd.read_csv("large_dataset.csv")
 ```
 
-### Step 3: Re-run — it's instant
-
-Run the cell again and the `read_csv` result loads from cache. The badge above the
-cell flips from `EXECUTED` (ochre) to `CACHED` (green):
-
-**First run** — Cash ran the statement and cached the result:
+On the first run the load runs, and the badge above the output says
+`EXECUTED`:
 
 <iframe class="cash-badge" src="/_badges/quickstart_first_run.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
-**Second run** — Cash restored the value instead of recomputing:
+## 3. Run it again
+
+Now the badge says `CACHED`: cash restored `df` instead of reading the file
+again.
 
 <iframe class="cash-badge" src="/_badges/quickstart_second_run.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
-See [Reading the Cash badge](../badges.md) for the full anatomy.
+From here on:
 
-### Change one thing upstream — run only the cell you care about
+- Edit one line and only that line and the statements that use its result
+  re-run. The rest of the cell stays cached.
+- Change `large_dataset.csv` on disk and the statements that read it re-run.
+- Restart the kernel and run the cell: expensive results come back from disk.
 
-This is the part a plain cache can't do. Cash answers "what depends on this?" per
-**statement**, so it can repair *part* of a cell you never ran.
+## What's next
 
-Suppose Cell 2 mixes expensive work that ignores `THRESHOLD` with a cheap step that
-reads it:
-
-<!-- test:skip reason="illustrative — references undefined build_features()/score()" -->
-```python { .nb-cell }
-# Cell 1
-THRESHOLD = 10                          # ← change me to 15
-
-# Cell 2 — one statement ignores THRESHOLD, the other reads it
-features = build_features(df)           # expensive (minutes), THRESHOLD-independent
-flagged  = score(features, THRESHOLD)   # cheap, THRESHOLD-dependent
-
-# Cell 3
-print(f"{len(flagged)} rows flagged")
-```
-
-Change `THRESHOLD`, then **run Cell 3 by itself** — not *Run All*, and without
-touching Cell 2. Cash walks back from what Cell 3 needs, works out that `flagged`
-is stale but `features` is not, and repairs exactly that:
-
-- `build_features(df)` **does not run again** — cash reuses the value it already has,
-- `score(features, THRESHOLD)` re-runs, once, with the new threshold,
-- Cell 3 prints the new number.
-
-!!! warning "If cash has no live reader, save first — it falls back to the file on disk"
-    This is the one thing that will make the walk-back above appear not to work.
-    With no live reader, cash reads the cells it didn't execute from the **saved
-    `.ipynb`**, not from your editor's in-memory buffer. Change `THRESHOLD` to 15,
-    run Cell 3 without saving, and cash still reads `10` — so it concludes nothing
-    upstream changed, the repair never fires, and Cell 3 prints the *old* number
-    while your screen shows the new one.
-
-    **Three editors have a live reader and don't need the save:** Google Colab
-    (cells come from the frontend), JupyterLab (`pip install cash-lib` also
-    installs an extension that pushes your live cells to the kernel before each
-    run), and VS Code with hot exit on (cash reads its unsaved-state backup).
-    Everywhere else — and on JupyterLab for the *first* run after a kernel
-    restart, including a cold `Run All` — **press `Ctrl+S` (`Cmd+S` on macOS)
-    after editing an upstream cell.** JupyterLab's autosave runs on a timer, so a
-    quick edit-then-run lands inside that window.
-
-    Nothing is corrupted when it happens: you get the value your kernel actually
-    holds, which is the same thing plain Jupyter would give you. What you lose is
-    the safety net — cash's upstream check is only ever as current as the cells it
-    read. JupyterLab with cash's extension, VS Code and Colab give cash the live
-    cells; elsewhere, save before running a cell below an edit. Full detail in
-    [editing without saving](../known-limitations.md#editing-without-saving).
-
-You get the same result you'd get from *Run All*, at the cost of the one cheap
-statement that actually changed. That's the difference between caching *cells* and
-tracking lineage *between statements*: the unit of repair is the statement, and cash
-will reach into a cell you didn't run to fix just the part that went stale.
-
-Nothing to declare — no decorators on Cell 2, no dependency graph. And the same
-walk-back works from cold: jump straight to Cell 3 after a kernel restart and cash
-restores or re-runs the upstream statements it needs.
-
-**Cell 3's badge after the change.** The `Upstream` section lists what cash had to
-repair in cells you didn't run. `features = build_features(df)` isn't there — it
-never needed touching:
-
-<iframe class="cash-badge" src="/_badges/quickstart_partial_upstream.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
-
-### It follows your functions and loops
-
-Cash keys on the **source** of what you run, not the text of a cell:
-
-- Edit a function's body — or a helper it calls — and the statements that use it
-  recompute (the badge marks it **changed**). It's not blind text matching.
-- In a loop, each iteration is cached on its own — add a case and the ones you
-  already ran still restore:
-
-<!-- test:skip reason="illustrative — references undefined fetch_and_model/prices" -->
-```python { .nb-cell }
-for ticker in ["AAPL", "MSFT", "GOOG"]:
-    prices[ticker] = fetch_and_model(ticker)   # each iteration cached separately
-```
-
-!!! warning "Collect with an assignment or a store, not `.append()`"
-    A subscript store like the one above caches the **statement** per iteration.
-    A `results.append(...)` statement does **not** — cash has no snapshot that
-    would reproduce an append, so that statement always re-executes.
-
-    That no longer means the *work* is repeated, though: by default cash also
-    caches the expensive **call inside** the statement (`fetch_and_model(ticker)`
-    here, not the `append` around it), so a `.append()` loop still skips
-    redoing the slow part on a re-run — only the cheap append itself happens
-    again. `# @cash:no-cache-calls` turns that off, if you need the call to
-    genuinely re-run too. Prefer a comprehension
-    (`results = [fetch_and_model(t) for t in tickers]`) or a dict store when
-    you can — either one caches the *statement* itself and sidesteps the
-    question entirely.
-
-    A long loop (roughly 125+ iterations for a one-line body) switches to
-    whole-loop caching. Calls inside it are still cached per call, but only
-    when they can be keyed on the values they receive (plain data, and a
-    callee that does not read a name the loop sets) — see
-    [A long for-append loop can stop caching](../known-limitations.md#a-long-for-append-loop-can-stop-caching).
-
-Two more things worth knowing before you lean on loop caching: a *statement*
-that accumulates (`s += f(x)`, not a bare call) has reuse that follows the
-*order* of the items — but that historical limitation is exactly what the
-default call-level caching above already dissolves for eligible calls that
-compute and return (reordering costs nothing, not "just the tail" — a callee
-that also writes a global or a file is re-executed instead), and a long loop can switch
-to whole-loop caching. Both are measured in
-[Known limitations](../known-limitations.md#reordering-a-loops-items-re-runs-the-tail).
-See [The notebook path](../how-it-works/notebook-path.md) for how partial hits work.
-
-### Statement-level, not cell-level
-
-Cash caches each **statement**, not the whole cell:
-
-<!-- test:skip reason="illustrative — references missing data.csv" -->
-```python { .nb-cell }
-df     = pd.read_csv('data.csv')       # statement 1
-daily  = df.resample('D').mean()       # statement 2
-result = daily.rolling(7).mean()       # statement 3
-```
-
-Change statement 3 and only it re-runs — statements 1 and 2 stay cached.
-
-*One exception: a top-level statement that mutates an object **created in an
-earlier cell** (`df['x'] = ...` on an upstream `df`, `lst.append(...)` on an
-upstream list) runs fresh each time — cash tracks the mutation so everything
-downstream stays correct, it just doesn't replay a snapshot. The same mutation on
-an object built in the same cell caches normally, and inside a loop iterations are
-cached whole, mutations included.* See
-[Knowing when to recompute](../how-it-works/invalidation.md).
-
-### File changes are tracked automatically
-
-Cash intercepts file reads (`pd.read_csv`, `np.load`, `open`, `Path.read_text`, …) and
-records each file's fingerprint — change the file on disk and the statements that
-read it recompute, no annotation needed. See the [notebook reference](../notebook_caching_api.md).
-
-### It survives a kernel restart
-
-The cache lives on disk, not just in memory. Restart the kernel, re-run a cell, and
-cash restores the value instead of replaying the whole chain — a fresh kernel picks
-up where you left off, and each restored value has been checked against its lineage
-first, so you are not trusting a stale snapshot.
-
-## Configuration (both paths)
-
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @8cbb17b4 -->
-`%cash_on` takes only an optional `ttl=N`; to pick a different backend or cache
-directory, call `cash.configure(...)` first — `cash.configure(cache_dir="./my_cache")`
-before `%cash_on` in a notebook, or before the first `@cash.cache` call in a script.
-Both paths share that one default instance. Optional backends — SQLite,
-Redis, S3 — install via extras (`pip install "cash-lib[redis]"`, `[s3]`, `[all]`) and
-work the same for either path. See [Configuration](configuration.md).
-
-## What's next?
-
-- **[Why Cash?](../why-cash.md)** — when Cash helps, and how it compares to other caches.
-- **[Notebook Caching](../notebook_caching_api.md)** & **[Decorator guide](../decorator.md)** — the full reference for each path.
-- **[Annotations](../annotations.md)** — per-statement control (`# @cash:no-cache`, `ttl`, `persist`, `allow-random`).
-- **[Magic commands](../magics.md)** — `%cash_stats`, `%cash_help`, `%cash_debug`, and friends. Run `%cash_help` in any notebook for the list.
-- **[For coding agents](../for-coding-agents.md)** — using cash from Claude Code, Copilot, Cursor and friends (text badges, what an agent should read).
-- **[Benchmarks](../benchmarks.md)** — measured speedups, and how to reproduce them on your own workload.
-- **Tutorials:** [Data science](../tutorials/use-cases/data-science.md) · [LLM API calls](../tutorials/use-cases/llm-api-calls.md) · [Caching class methods](../tutorials/feature-guides/caching-class-methods.md) · [Choosing a backend](../tutorials/feature-guides/choosing-a-backend.md).
+- [Notebook guide](../notebook_caching_api.md): what cash caches, what it
+  refuses, and why.
+- [Reading the badge](../badges.md): every status and reason.
+- [Controlling caching](../tutorials/feature-guides/controlling-cache-behavior.md):
+  `# @cash:` annotations for single statements.
+- [Writing cache-safe cells](../known-limitations.md): the patterns cash cannot
+  see.
+- [Moving to a module](../tutorials/feature-guides/production-transition.md):
+  when the notebook code goes to production.
