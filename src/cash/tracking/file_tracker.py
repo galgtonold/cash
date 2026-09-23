@@ -1290,14 +1290,10 @@ class PostImportHook(importlib.abc.MetaPathFinder):
         if fullname in self._skip:
             return None
 
-        # Only interest in registered modules
-        # Note: We match top-level packages mainly.
-        # e.g. 'pandas.io' -> we patch 'pandas' too?
-        # The handlers are registered by module name.
-        top_level = fullname.split(".")[0]
-
-        targets = file_registry().handlers.keys()
-        if fullname not in targets and top_level not in targets:
+        # Only a module a handler is registered for: patching looks up
+        # handlers by the exact module name, so wrapping the loader of any
+        # other module -- every submodule of pandas, say -- patches nothing.
+        if fullname not in file_registry().handlers:
             return None
 
         # It's a target. We need to let the real import happen, then patch.
