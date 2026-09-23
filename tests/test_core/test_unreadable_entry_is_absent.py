@@ -18,10 +18,11 @@ Either fix alone leaves a real hole: existing caches are already poisoned, and
 a future non-builtin scalar would poison new ones.
 """
 
-import pickle
+import pathlib
 
 import pytest
 
+from cash.backends.entry_format import pack_entry
 from cash.backends.file_backend import FileBackend
 
 
@@ -43,11 +44,11 @@ def _missing_module_loader():  # pragma: no cover - never actually called
 
 
 def _poison(cache_dir, key="poisoned"):
-    """Write a metadata file that cannot be unpickled in this process."""
-    meta = cache_dir / f"{key}.meta"
-    meta.write_bytes(pickle.dumps({"key": key, "size": _Exploding()}))
-    (cache_dir / f"{key}.data").write_bytes(b"x")
-    return meta
+    """Write an entry whose metadata cannot be unpickled in this process, at
+    the path the backend reads *key* from."""
+    path = pathlib.Path(FileBackend(cache_dir=str(cache_dir))._get_path(key))
+    path.write_bytes(pack_entry({"key": key, "size": _Exploding()}, b"x"))
+    return path
 
 
 def _write_and_settle(cache_dir, key="good", value=None):
@@ -57,7 +58,7 @@ def _write_and_settle(cache_dir, key="good", value=None):
     drain ``self._writes`` first, which covers "the caller already set() this"
     only when the caller is the SAME instance. These tests deliberately read
     through a FRESH backend — a fresh instance's queue is empty, so it drains
-    nothing and the `.meta` file may simply not exist yet.
+    nothing and the entry file may simply not exist yet.
 
     That is exactly how these two went red on ubuntu 3.13/3.14 while every
     other job passed: `list_entries()` returned `[]`, missing the GOOD entry,

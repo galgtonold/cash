@@ -1,6 +1,6 @@
 # Warnings
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @ccd18bfb -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @b975d18b -->
 Every warning in the `CashWarning` hierarchy carries a code in square brackets
 and a link to its section here. To look one up, search this page for the code.
 
@@ -157,42 +157,6 @@ runs every time instead of being cached, which is exactly what you want.
 It is worth acting on only when the function does real work before it plots —
 that work is being repeated on every call, and splitting the function recovers
 the caching.
-
-## CACHE-DIR-MOVED {#cache-dir-moved}
-
-<!-- claim: cash/config.py:project_anchor @5074ba29, cash/config.py:_anchor_cache_dir @54c8ba02 -->
-**What happened.** Cash resolves its default cache directory next to the code
-being run -- the project the running script belongs to -- rather than next to
-wherever the process was launched from. This run found a cache in the current
-directory that the new location does not have, so it is telling you that cache
-will not be used. Two things leave one there: a cache from before this
-anchoring, when it followed the directory a process ran from, and a project
-marker (`pyproject.toml`, `setup.py`, `setup.cfg`, `.git`) added or moved since
-the cache was written.
-
-**Why it matters.** For this run only: it is a cold one, and everything
-recomputes. From then on the project's cache is in one place no matter where the
-job runs from, which is the point. Before this anchoring, running the same
-script from a different directory -- a cron job, a CI step, a colleague's
-terminal -- silently built a second cache and looked exactly like a cold start
-forever, with the disk filling up with duplicates.
-
-**What to do.** Usually nothing: let the new location fill up and delete the old
-one when you are happy. To keep using the existing cache instead, point cash at
-it explicitly, which always wins:
-
-```bash
-CASH_CACHE_DIR=/path/to/the/old/.cash python job.py
-```
-
-Note that `CASH_CACHE_DIR` and `Cash(cache_dir=...)` are taken exactly as
-written -- relative to your current directory, like any other path you type. A
-`cache_dir` in `pyproject.toml` is relative to that file. Only the default is
-anchored to the project.
-
-**When it is safe to ignore.** Always, once. Seeing it every run means each run
-starts in a different directory that has its own old cache -- the situation the
-anchoring exists to end; set `CASH_CACHE_DIR` or delete the strays.
 
 ## CACHE-DIR-UNWRITABLE {#cache-dir-unwritable}
 

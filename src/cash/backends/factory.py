@@ -60,24 +60,10 @@ def build_backend_from_config(config: "CashConfig") -> CacheBackend:
 def _sqlite_db_path(cache_dir: str) -> str:
     """The database file for a cache directory: ``<cache_dir>/cache.db``.
 
-    The cache DIRECTORY used to be passed as the database FILE, so a fresh
-    project got a SQLite database named ``.cash`` -- invisible to every CLI
-    command, which looks for entries inside a directory -- and a project that
-    already had a ``.cash/`` directory died with ``unable to open database
-    file`` (found attacking the decorator before round 26).
-
-    A database already at the old location keeps being used: it is the user's
-    data, and ``makedirs`` on top of it would raise. The directory is created
-    here because SQLite will not make it.
+    A file inside the directory, so the CLI, which looks for entries inside a
+    directory, sees it. The directory is created here because SQLite will not
+    make it.
     """
-    if os.path.isfile(cache_dir):
-        logger.warning(
-            "[SQLITE] using the database at %s, where an older cash wrote it; "
-            "move it to %s for `cash info` and `cash inspect` to see it",
-            cache_dir,
-            os.path.join(cache_dir + ".d", "cache.db"),
-        )
-        return cache_dir
     try:
         os.makedirs(cache_dir, exist_ok=True)
     except OSError:

@@ -92,9 +92,8 @@ META_SLACK = 64
 ENTRY_SUFFIX = ".entry"
 
 #: Metadata key holding the crc32 of the payload. Stamped by `pack_entry` and
-#: removed again by every read, so it never reaches a backend or a caller --
-#: entries written before it existed simply do not have it and are read as
-#: they always were.
+#: removed again by every read, so it never reaches a backend or a caller. An
+#: entry without it is not a readable entry.
 #:
 #: It is held as four bytes rather than an int so that its WIDTH does not
 #: depend on its value: a metadata region whose size varied with the payload's
@@ -214,13 +213,9 @@ def read_entry(path: str, *, with_payload: bool) -> tuple[dict[str, Any], bytes 
 
 
 def _verify(payload: bytes, expected: bytes | None, where: str) -> None:
-    """Raise :class:`CorruptEntry` if *payload* is not the bytes that were stored.
-
-    *expected* is ``None`` for an entry written before entries were
-    checksummed; those are read as they always were.
-    """
+    """Raise :class:`CorruptEntry` if *payload* is not the bytes that were stored."""
     if expected is None:
-        return
+        raise CorruptEntry(f"{where}: no payload checksum -- the value will be recomputed")
     found = _checksum(payload)
     if found != expected:
         raise CorruptEntry(
@@ -254,8 +249,9 @@ def update_metadata_in_place(path: str, metadata: dict[str, Any]) -> bool:
                 previous = pickle.loads(fh.read(meta_len))
             except Exception:  # noqa: BLE001 - unreadable metadata: leave it alone
                 return False
-            if CHECKSUM_FIELD in previous:
-                metadata = {**metadata, CHECKSUM_FIELD: previous[CHECKSUM_FIELD]}
+            if CHECKSUM_FIELD not in previous:
+                return False
+            metadata = {**metadata, CHECKSUM_FIELD: previous[CHECKSUM_FIELD]}
         meta_bytes = pickle.dumps(metadata)
         if len(meta_bytes) > cap:
             return False

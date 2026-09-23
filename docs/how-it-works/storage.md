@@ -221,7 +221,7 @@ standard `pickle` if `cloudpickle` isn't installed.
 
 ## A damaged entry is a miss
 
-<!-- claim: cash/backends/entry_format.py:pack_entry @f6d2f3e2, cash/backends/entry_format.py:_verify @47b26c8e -->
+<!-- claim: cash/backends/entry_format.py:pack_entry @f6d2f3e2, cash/backends/entry_format.py:_verify @8a91dffb -->
 Every persisted entry carries a crc32 of its payload, and every read that
 touches the payload checks it. An entry that does not match -- a half-written
 file, a bad sector, a sync client that merged two versions -- raises
@@ -232,8 +232,8 @@ hand you bytes that are not the ones it stored.
 The check costs about 4.6 ms per 64 MB, a fraction of what reading those same
 bytes from disk costs, which is why it is unconditional rather than an option.
 It detects damage, not tampering: a cache is as trusted as whoever can write to
-it (see the pickle warning above). Entries written by an earlier version carry
-no checksum and are read exactly as they always were.
+it (see the pickle warning above). An entry with no checksum at all is treated
+the same way: it is not a readable entry, and the value is recomputed.
 
 ## Deciding before you deserialize
 

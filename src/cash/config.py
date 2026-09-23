@@ -177,10 +177,6 @@ class CashConfig:
     and a modest fraction of system RAM for the memory tier (see
     ``cash.backends.adaptive_caps``). Set an integer to pin the disk
     cap explicitly; the memory tier keeps its own auto/modest cap.
-
-    Historically this defaulted to a flat 1 GiB applied to *every*
-    tier, which capped the disk tier at one medium DataFrame and put
-    persist-heavy workloads into a write-and-evict treadmill.
     When the file backend exceeds the resolved cap it evicts
     least-recently-accessed entries until it fits."""
 
@@ -1229,71 +1225,7 @@ def _anchor_cache_dir(cache_dir: Any, origin: Path | object) -> Any:
         return cache_dir
     if not isinstance(origin, Path):
         return cache_dir
-    resolved = os.path.normpath(str(origin / cache_dir))
-    _warn_if_cache_moved(resolved, cache_dir)
-    return resolved
-
-
-#: One notice per process, whatever builds a config how many times.
-_MOVE_NOTICE_GIVEN = False
-
-
-def _warn_if_cache_moved(resolved: str, relative: str) -> None:
-    """Say when the anchored default leaves an existing cwd cache behind.
-
-    Anchoring the default is the fix for a cache that silently split in two;
-    relocating somebody's 500MB cache without a word would be the same class of
-    surprise in the other direction. Fires only when there is really something
-    to leave behind: the new location does not exist yet, the old one does, and
-    it holds entries.
-    """
-    global _MOVE_NOTICE_GIVEN
-    if _MOVE_NOTICE_GIVEN:
-        return
-    try:
-        if os.path.exists(resolved):
-            return
-        # Where the cache was before: the directory a process ran from, or --
-        # before a project marker was added above it -- the running script's
-        # own directory. Only the first was looked at, so adding a
-        # pyproject.toml moved a package's cache without a word (round 20).
-        candidates = [Path.cwd() / relative]
-        script_dir = _running_script_dir()
-        if script_dir is not None:
-            candidates.append(script_dir / relative)
-        previous = next(
-            (
-                c
-                for c in candidates
-                if os.path.normcase(str(c)) != os.path.normcase(resolved) and c.is_dir() and any(c.iterdir())
-            ),
-            None,
-        )
-        if previous is None:
-            return
-    except OSError:
-        return
-    _MOVE_NOTICE_GIVEN = True
-    try:
-        from .diagnostics import warn_diagnostic
-        from .exceptions import CashCacheIneffectiveWarning
-
-        warn_diagnostic(
-            CashCacheIneffectiveWarning,
-            "CACHE-DIR-MOVED",
-            f"cash keeps this project's cache at {resolved}, next to the "
-            f"project it found, and not at {previous}, where an earlier run left "
-            f"one. That happens when the cache used to live in the directory a "
-            f"process ran from, and when the project's marker (pyproject.toml, "
-            f"setup.py, setup.cfg, .git) was added or moved since. The cache at "
-            f"{previous} will not be used, so this run is a cold one.",
-            f"nothing to do if you did not know that cache was there. To keep "
-            f"using it, set CASH_CACHE_DIR={previous} or move it to {resolved}; "
-            f"to be rid of it, delete it once this run has repopulated the new "
-            f"location.",
-        )
-    except Exception:  # noqa: BLE001 - a notice must never break a config load
-        logger.debug("Could not emit the cache-relocation notice", exc_info=True)
+    return os.path.normpath(str(origin / cache_dir))
 
 
 def get_config(

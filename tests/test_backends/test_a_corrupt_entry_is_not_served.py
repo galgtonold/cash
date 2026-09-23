@@ -72,8 +72,9 @@ def test_a_metadata_rewrite_keeps_the_check(tmp_path):
         read_entry(str(path), with_payload=True)
 
 
-def test_an_entry_written_before_the_check_still_reads(tmp_path):
-    """Older entries carry no checksum; they are read, not refused."""
+def test_an_entry_without_a_checksum_is_refused(tmp_path):
+    """Every entry this build writes carries a checksum; one without it is not
+    a readable entry, and its value is recomputed rather than trusted."""
     import pickle
 
     from cash.backends.entry_format import HEADER, MAGIC, META_SLACK
@@ -90,4 +91,7 @@ def test_an_entry_written_before_the_check_still_reads(tmp_path):
             )
         )
     )
-    assert read_entry(str(path), with_payload=True)[1] == b"payload"
+    with pytest.raises(CorruptEntry):
+        read_entry(str(path), with_payload=True)
+    # Metadata-only reads still work: they do not touch the payload.
+    assert read_entry(str(path), with_payload=False)[0]["key"] == "k"

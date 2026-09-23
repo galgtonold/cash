@@ -93,7 +93,7 @@ slow_square(1000)      # cache hit, from ./my_app_cache
 
 ### Where the cache lives
 
-<!-- claim: cash/config.py:project_anchor @5074ba29, cash/config.py:_anchor_cache_dir @54c8ba02 -->
+<!-- claim: cash/config.py:project_anchor @5074ba29, cash/config.py:_anchor_cache_dir @1a437c21 -->
 `.cash` sits next to **your project**, not next to whoever launched the job.
 Cash finds the running script, walks up to the first directory holding a
 `pyproject.toml`, `setup.py`, `setup.cfg` or `.git`, and puts the cache there —
@@ -129,10 +129,6 @@ removes every question about where the cache ends up.
 ```bash
 CASH_CACHE_DIR=/var/cache/cash python /srv/etl/run.py
 ```
-
-If your cache used to live wherever you happened to run from, the first run
-after upgrading says so ([`CACHE-DIR-MOVED`](warnings.md#cache-dir-moved)) and
-recomputes once.
 
 **Your test suite uses the same cache.** `pytest` anchors to the project too,
 so tests read entries the application wrote, and the application reads what the

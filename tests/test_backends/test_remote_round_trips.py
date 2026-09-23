@@ -276,7 +276,9 @@ def test_sqlite_keeps_the_payload_column_last(tmp_path):
         backend.shutdown()
 
 
-def test_sqlite_rebuilds_a_table_written_with_the_old_column_order(tmp_path):
+def test_sqlite_drops_a_table_from_an_unstamped_database(tmp_path):
+    """A database without the current schema version stamp (here, one with
+    the old column order) has its table dropped rather than read."""
     import pickle
     import sqlite3
 
@@ -303,7 +305,7 @@ def test_sqlite_rebuilds_a_table_written_with_the_old_column_order(tmp_path):
         cols = [row[1] for row in backend._conn.execute("PRAGMA table_info(cache_entries)")]
         assert cols.index("metadata") < cols.index("data"), cols
         assert backend.get("old") == (None, None), (
-            "the pre-migration entry survived; it cannot be read from the new schema and must not be reported as a hit"
+            "the entry from the old schema survived; it must not be reported as a hit"
         )
         backend.set("k", {"a": 1}, {"execution_time": 1.0})
         backend._writes.wait_all()

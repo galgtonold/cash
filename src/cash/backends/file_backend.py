@@ -169,13 +169,10 @@ __all__ = ["FileBackend", "CACHE_FORMAT_VERSION"]
 
 # Live entries. One file each; see ``entry_format``.
 _ENTRY_GLOB = f"*{ENTRY_SUFFIX}"
-# Everything a format migration has to sweep up, including the
-# ``.meta``/``.data`` pair that entries were stored as before v2.
-_ALL_ENTRY_GLOBS = (_ENTRY_GLOB, "*.meta", "*.data")
 
 # Version of the on-disk cache format (the ``*.entry`` layout described in
-# ``entry_format``; v1 was a ``*.meta`` / ``*.data`` pair). Bump this **whenever a change makes caches written by an older
-# build undecodable or liable to be misread** by a newer one. On init,
+# ``entry_format``). Bump this **whenever a change makes caches written by an
+# older build undecodable or liable to be misread** by a newer one. On init,
 # FileBackend compares this against the stamp it finds in the cache dir and
 # auto-invalidates a mismatched cache rather than silently decoding a stale
 # layout — automating the "run %cash_repair --full after upgrading" step.
@@ -507,9 +504,7 @@ class FileBackend(CacheBackend):
                 stored = None  # unreadable/corrupt marker → treat as mismatch
 
         if stored != CACHE_FORMAT_VERSION:
-            entry_files = [
-                f for pattern in _ALL_ENTRY_GLOBS for f in _glob_untracked(os.path.join(self.cache_dir, pattern))
-            ]
+            entry_files = _glob_untracked(os.path.join(self.cache_dir, _ENTRY_GLOB))
             if stored is None and self._entries_are_current_format(entry_files):
                 # Unstamped, but the entries say what they are. A directory
                 # cleared under a live process and refilled by it is exactly
@@ -545,11 +540,10 @@ class FileBackend(CacheBackend):
     def _entries_are_current_format(cls, entry_files: list[str]) -> bool:
         """Do these unstamped entries carry the current format's magic?
 
-        Only ``*.entry`` files count: the legacy ``.meta``/``.data`` pair is by
-        definition an older format. Relies on a format change also changing
-        ``entry_format.MAGIC`` -- bump both together.
+        Relies on a format change also changing ``entry_format.MAGIC`` -- bump
+        both together.
         """
-        if not entry_files or any(not f.endswith(ENTRY_SUFFIX) for f in entry_files):
+        if not entry_files:
             return False
         for path in entry_files[: cls._FORMAT_SAMPLE]:
             try:
@@ -1887,13 +1881,12 @@ class FileBackend(CacheBackend):
         # Drain pending writes so they don't fire after the clear and
         # resurrect entries we just removed from disk.
         self._writes.wait_all()
-        for pattern in _ALL_ENTRY_GLOBS:
-            for f in _glob_untracked(os.path.join(self.cache_dir, pattern)):
-                try:
-                    os.remove(f)
-                except OSError:
-                    # Best-effort removal during cache clear; file may be locked
-                    logger.debug("Could not remove cache file %s during clear", f, exc_info=True)
+        for f in _glob_untracked(os.path.join(self.cache_dir, _ENTRY_GLOB)):
+            try:
+                os.remove(f)
+            except OSError:
+                # Best-effort removal during cache clear; file may be locked
+                logger.debug("Could not remove cache file %s during clear", f, exc_info=True)
         # The priorities describe entries that no longer exist.
         self._rank_index.remove()
         self._versions.remove()

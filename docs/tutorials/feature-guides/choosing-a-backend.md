@@ -333,11 +333,6 @@ One S3 object per entry — `{prefix}{key}.entry` — carrying the same header, 
     exactly the span the header declares rather than reporting the entry
     absent.
 
-    **Objects written before this change are invisible, not migrated.** They
-    use the old suffixes, so nothing reads them and no migration runs against
-    your bucket — but they keep occupying storage until `clear()` (which
-    sweeps the whole prefix) or an S3 lifecycle rule removes them.
-
 **Key parameters** — `bucket` (required), `prefix` (default `cash/`), `max_pool_connections`, `retries`, plus any kwargs accepted by `boto3.client('s3', ...)` (region, profile, credentials).
 
 **Cost considerations** —

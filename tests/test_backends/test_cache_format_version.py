@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import glob
 import os
-import pickle
 
 from cash.backends.entry_format import ENTRY_SUFFIX
 from cash.backends.file_backend import CACHE_FORMAT_VERSION, FileBackend
@@ -21,15 +20,8 @@ VERSION_FILENAME = "CACHE_VERSION"
 
 
 def _entry_files(cache_dir: str) -> list[str]:
-    """Every entry file, current layout or legacy.
-
-    v2 is one ``*.entry`` per entry; v1 was a ``*.meta`` / ``*.data`` pair.
-    A migration test has to see both, or it would report a wipe that only
-    removed the half it knew to look for.
-    """
-    return [
-        f for pattern in (f"*{ENTRY_SUFFIX}", "*.meta", "*.data") for f in glob.glob(os.path.join(cache_dir, pattern))
-    ]
+    """Every entry file: one ``*.entry`` per entry."""
+    return glob.glob(os.path.join(cache_dir, f"*{ENTRY_SUFFIX}"))
 
 
 def test_fresh_cache_stamps_current_version(tmp_path):
@@ -74,22 +66,6 @@ def test_stale_version_marker_wipes_cache(tmp_path):
     assert value is None, "stale-format entry must be invalidated, not decoded"
     assert not _entry_files(str(tmp_path)), "stale entries should be removed"
     # Marker is refreshed to the current version.
-    assert (tmp_path / VERSION_FILENAME).read_text().strip() == str(CACHE_FORMAT_VERSION)
-
-
-def test_unstamped_legacy_cache_with_entries_is_wiped(tmp_path):
-    """A cache from before this feature (entries present, no marker) is
-    treated as incompatible and cleared on first open."""
-    # Hand-build a legacy-looking entry pair with no version marker.
-    key_hash = "deadbeef" * 8
-    (tmp_path / f"{key_hash}.meta").write_bytes(pickle.dumps({"key": "legacy"}))
-    (tmp_path / f"{key_hash}.data").write_bytes(pickle.dumps("legacy-value"))
-    assert not (tmp_path / VERSION_FILENAME).exists()
-
-    backend = FileBackend(str(tmp_path))
-    backend._ensure_initialized()
-
-    assert not _entry_files(str(tmp_path)), "unstamped legacy entries should be wiped"
     assert (tmp_path / VERSION_FILENAME).read_text().strip() == str(CACHE_FORMAT_VERSION)
 
 

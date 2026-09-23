@@ -75,12 +75,6 @@ class S3Backend(CacheBackend):
         whole value. S3 has ranged GETs and the entry format has a
         length-prefixed header; together they make a metadata read one small
         request.
-
-        Objects written by an older build use the ``.meta``/``.data`` suffixes
-        and are simply invisible here: nothing reads them, so no migration
-        runs against someone's bucket. They keep occupying storage until
-        ``clear()`` (which sweeps the whole prefix) or a lifecycle rule
-        removes them.
         """
         return f"{self.prefix}{key}{ENTRY_SUFFIX}"
 
@@ -261,7 +255,7 @@ class S3Backend(CacheBackend):
                     for obj in page["Contents"]:
                         key = obj["Key"]
                         if not key.endswith(ENTRY_SUFFIX):
-                            continue  # a stray, or a pre-v2 .meta/.data
+                            continue  # not a cache entry
                         try:
                             # Ranged: listing a cache must not download it. The
                             # two-object version fetched whole .meta objects,

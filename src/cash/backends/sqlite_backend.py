@@ -70,16 +70,13 @@ class SQLiteBackend(CacheBackend):
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._create_tables()
 
-    #: Column order is load-bearing, so it is checked rather than assumed.
-    #: SQLite lays a row out in declaration order and spills what does not fit
-    #: onto a chain of overflow pages, so reading a column means walking past
-    #: everything declared before it. With ``data`` first, ``SELECT metadata``
-    #: on a 16MB entry walked 16MB: measured at 7.398ms against 0.003ms with
-    #: the two swapped -- 2845x, for a change that moves no bytes.
-    #:
-    #: Every statement in this class names its columns explicitly, so the
-    #: order is free to change; only a table created by an older build has to
-    #: be noticed.
+    #: Column order is load-bearing: SQLite lays a row out in declaration
+    #: order and spills what does not fit onto a chain of overflow pages, so
+    #: reading a column means walking past everything declared before it. With
+    #: ``data`` first, ``SELECT metadata`` on a 16MB entry walked 16MB:
+    #: measured at 7.398ms against 0.003ms with the two swapped -- 2845x, for a
+    #: change that moves no bytes. Changing the table means bumping
+    #: `SCHEMA_VERSION`.
     _SCHEMA = """
         CREATE TABLE IF NOT EXISTS cache_entries (
             key TEXT PRIMARY KEY,
@@ -94,9 +91,18 @@ class SQLiteBackend(CacheBackend):
         )
     """
 
+    #: Version of `_SCHEMA`, kept in the database's ``user_version``. A
+    #: database stamped with any other version has its table dropped: this is
+    #: a cache, so every entry can be recomputed, and copying a table of
+    #: large values forward would cost more than recomputing them.
+    SCHEMA_VERSION = 2
+
     def _create_tables(self) -> None:
-        """Create cache tables if they don't exist, migrating an old layout."""
-        self._migrate_column_order()
+        """Create the cache table, dropping one written in another schema."""
+        (stored,) = self._conn.execute("PRAGMA user_version").fetchone()
+        if stored != self.SCHEMA_VERSION:
+            self._conn.execute("DROP TABLE IF EXISTS cache_entries")
+            self._conn.execute(f"PRAGMA user_version = {int(self.SCHEMA_VERSION)}")
         self._conn.execute(self._SCHEMA)
         self._conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_last_access ON cache_entries(last_access)
@@ -104,38 +110,6 @@ class SQLiteBackend(CacheBackend):
         self._conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_created_at ON cache_entries(created_at)
         """)
-        self._conn.commit()
-
-    def _migrate_column_order(self) -> None:
-        """Drop a ``cache_entries`` written with ``data`` before ``metadata``.
-
-        Dropped rather than rebuilt on purpose. Copying the table would mean
-        reading and rewriting every cached value -- potentially many gigabytes,
-        on the first cache operation, to reclaim a read cost the user may never
-        pay -- and this is a cache: the entries are all reproducible by
-        definition. The file backend answers a format change the same way.
-
-        A table that is already in the current order is left alone, so this
-        costs one ``PRAGMA`` per process after the first upgrade.
-        """
-        try:
-            cols = [row[1] for row in self._conn.execute("PRAGMA table_info(cache_entries)")]
-        except sqlite3.Error:
-            return  # no table yet, or unreadable; CREATE handles it
-
-        if not cols or "data" not in cols or "metadata" not in cols:
-            return
-        if cols.index("metadata") < cols.index("data"):
-            return  # already current
-
-        logger.warning(
-            "Cash: rebuilding the SQLite cache at %s. Its table was written "
-            "with the payload column ahead of the metadata column, which made "
-            "reading an entry's metadata walk the entry's whole value. Cached "
-            "entries are discarded; they will be recomputed on demand.",
-            self.db_path,
-        )
-        self._conn.execute("DROP TABLE cache_entries")
         self._conn.commit()
 
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:

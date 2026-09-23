@@ -20,7 +20,7 @@ most convenient — explicit code for one-off scripts, `pyproject.toml`
 for team defaults, env vars for deployment overrides, the XDG file for
 personal cross-project defaults.
 
-<!-- claim: cash/config.py:project_anchor @5074ba29, cash/config.py:_anchor_cache_dir @54c8ba02 -->
+<!-- claim: cash/config.py:project_anchor @5074ba29, cash/config.py:_anchor_cache_dir @1a437c21 -->
 ### What paths are relative to
 
 Where a relative `cache_dir` points depends on who wrote it, and the rule is
@@ -51,9 +51,8 @@ from where they are run, and report on a different directory (or on none:
 `Nothing cleared: no cache at …`). Adding a `pyproject.toml` (or `git init`) at
 the top of the project makes them agree. Until then, pass the script's
 directory: `cash inspect path/to/.cash`. The first run after adding a marker
-caches in the new place and says so if it finds the old cache in the current
-directory ([`CACHE-DIR-MOVED`](../warnings.md#cache-dir-moved)); a cache beside
-the script is left where it was. A *local* package run with
+caches in the new place and recomputes once; the cache beside the script is
+left where it was, unused. A *local* package run with
 `python -m pkg` is not in that group: its `__main__.py` is a file of yours, so
 it anchors to its project like any script.
 
@@ -102,7 +101,7 @@ cash = Cash(cache_dir="/tmp/scratch", debug=True)
 configure(debug=True, min_cache_savings_pct=0.30)
 ```
 
-<!-- claim: cash/config.py:CashConfig @0f2a3cea broad="the field table is a claim about every field of the dataclass" -->
+<!-- claim: cash/config.py:CashConfig @4fb99f5c broad="the field table is a claim about every field of the dataclass" -->
 ## All `CashConfig` fields
 
 Every field below is settable via every layer. The env-var column shows
