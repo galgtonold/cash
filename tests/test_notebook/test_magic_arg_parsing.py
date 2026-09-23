@@ -126,3 +126,26 @@ def test_cash_on_rejects_a_bad_ttl_visibly(cash_magics, capsys):
 
     assert cash_magics.cash_status("dict")["auto_cache_enabled"] is False
     assert "NOT enabled" in out
+
+
+def test_status_unknown_argument_refuses(cash_magics, capsys):
+    """`%cash_status foo` printed the status as if nothing were wrong."""
+    assert cash_magics.cash_status("foo") is None
+    out = capsys.readouterr().out
+    assert "unrecognised" in out.lower()
+    assert "last_cell" not in out
+    assert isinstance(cash_magics.cash_status("dict  # a comment"), dict)
+
+
+@pytest.mark.parametrize("line", ["x --grpah", "x y", "--all x", "--clear now", "--graph"])
+def test_provenance_unknown_argument_refuses(cash_magics, capsys, line):
+    """`%cash_provenance x --grpah` dropped the typo and showed x without the
+    graph it asked for; `--clear now` cleared anyway."""
+    cash_magics._session.provenance.clear = lambda: pytest.fail("cleared on a bad argument")
+    cash_magics.cash_provenance(line)
+    assert "unrecognised" in capsys.readouterr().out.lower()
+
+
+def test_provenance_known_flags_still_work(cash_magics, capsys):
+    cash_magics.cash_provenance("x --graph --time  # a comment")
+    assert "unrecognised" not in capsys.readouterr().out.lower()

@@ -49,7 +49,7 @@ from ..statement import ProcessResult, StatementProcessor
 from ..statement.capture import replay_outputs
 from ..statement.store import config_float
 from ..upstream import UpstreamChecker
-from ._args import strip_inline_comment
+from ._args import parse_mode, strip_inline_comment
 from ._help import help_text
 from ._types import CellMetrics
 from .admin import CashAdminMagicsMixin
@@ -680,7 +680,11 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             - cache_stats: {"keys": number of entries in the backend}
         """
 
-        mode = strip_inline_comment(line).lower() or "print"
+        mode = parse_mode(line, ("", "print", "json", "dict"))
+        if mode is None:
+            print(f"[Error] %cash_status: unrecognised argument: {strip_inline_comment(line)!r}")
+            print("   Valid forms: %cash_status | %cash_status json | %cash_status dict")
+            return None
 
         # Build comprehensive status
         status = {

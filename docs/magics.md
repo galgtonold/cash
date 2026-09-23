@@ -159,7 +159,7 @@ it lists exactly the magics that exist.
 ```
 
 ### `%cash_status`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @3d41dc2f -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @8a8b6dd0 -->
 
 Report status of the last cell plus a snapshot of session state (lineage,
 executed-code map, auto-cache flag, and the number of entries in the backend).
@@ -171,6 +171,8 @@ executed-code map, auto-cache flag, and the number of entries in the backend).
 - *(no argument)* — Pretty-print the status as JSON **and** return the dict.
 - `dict` — Return the status as a Python `dict` (no print).
 - `json` — Return the status as a JSON-serialized string.
+
+Any other argument prints an error and returns `None`.
 
 **Returns:** dict (default and `dict` mode) or JSON string (`json` mode).
 
@@ -303,7 +305,7 @@ other argument prints an error and changes nothing.
 ## Inspecting your session
 
 ### `%cash_provenance`
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_provenance @efdb75ad -->
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_provenance @a44eb4b5 -->
 
 Show how a variable was computed: its lineage hash, the cell code that produced
 it, and (optionally) a dependency graph or timeline.
@@ -321,6 +323,8 @@ it, and (optionally) a dependency graph or timeline.
   - `--time` / `--timeline` — Include a timeline of computations.
   - `--json` — Output as JSON (mutually exclusive with the human-readable
     formatter; if `--json` is set neither `--graph` nor `--time` are honoured).
+
+Any other flag, or an extra word, prints an error and shows nothing else.
 
 **Example:**
 

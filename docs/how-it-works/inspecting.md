@@ -55,7 +55,7 @@ the next run still hits.
 
 ## Where a value came from
 
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_provenance @efdb75ad, cash/notebook/provenance.py:ProvenanceTracker.format_provenance @67f073a8 -->
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_provenance @a44eb4b5, cash/notebook/provenance.py:ProvenanceTracker.format_provenance @67f073a8 -->
 Cash records the **provenance** of every variable — the code that produced it,
 its inputs, and how long it took. Ask for the dependency graph of any variable:
 

@@ -287,6 +287,20 @@ class CashAdminMagicsMixin:
             %cash_provenance --clear     - Clear provenance data
         """
         parts = strip_inline_comment(line).split()
+        # A misspelt flag (``--grpah``) or a stray word must not be dropped
+        # silently, as if the output it asked for simply had nothing to show.
+        if parts and parts[0] in ("--all", "--clear"):
+            unknown = parts[1:]
+        elif parts:
+            unknown = [p for p in parts[1:] if p not in ("--graph", "--time", "--timeline", "--json")]
+            if parts[0].startswith("-"):
+                unknown.insert(0, parts[0])
+        else:
+            unknown = []
+        if unknown:
+            print(f"[Error] %cash_provenance: unrecognised argument: {' '.join(unknown)!r}")
+            print("   Valid forms: %cash_provenance <var> [--graph] [--time] [--json] | --all | --clear")
+            return
 
         if not parts or parts[0] == "--all":
             tracked = sorted(self._session.provenance.tracked_variables)
