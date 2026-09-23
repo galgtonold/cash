@@ -20,18 +20,15 @@ from __future__ import annotations
 import logging
 import pickle
 import types
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from ..object_hashing import compute_hash
 from ..tracking.file_dep_snapshot import file_dep_is_fresh
 from ..utils import resolve_file_dep_path
-from ._protocols import ShellProtocol
+from ._protocols import ShellProtocol, TrackingState
 from .cache_status import CacheStatus
 from .call_refs import resolve_call_refs
 from .statement import ProcessResult
-
-if TYPE_CHECKING:
-    from .lineage_store import TrackingState  # only for typing
 
 logger = logging.getLogger(__name__)
 
