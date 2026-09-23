@@ -605,7 +605,7 @@ class TestTeeWriter:
         """TeeWriter should write to both the real stream and the buffer."""
         from io import StringIO
 
-        from cash.notebook.statement import TeeWriter
+        from cash.notebook.statement.capture import TeeWriter
 
         real = StringIO()
         chunks = []
@@ -618,7 +618,7 @@ class TestTeeWriter:
         """TeeWriter.flush should flush the real stream."""
         from io import StringIO
 
-        from cash.notebook.statement import TeeWriter
+        from cash.notebook.statement.capture import TeeWriter
 
         real = StringIO()
         chunks = []
@@ -633,7 +633,7 @@ class TestTeeWriter:
         """TeeWriter should forward unknown attributes to the real stream."""
         from io import StringIO
 
-        from cash.notebook.statement import TeeWriter
+        from cash.notebook.statement.capture import TeeWriter
 
         real = StringIO()
         chunks = []
@@ -645,7 +645,7 @@ class TestTeeWriter:
         """TeeWriter should NOT flush on every write — only after the interval."""
         from io import StringIO
 
-        from cash.notebook.statement import TeeWriter
+        from cash.notebook.statement.capture import TeeWriter
 
         flush_count = [0]
         real = StringIO()
@@ -672,7 +672,7 @@ class TestTeeWriter:
         import sys
         from io import StringIO
 
-        from cash.notebook.statement import tee_output
+        from cash.notebook.statement.capture import tee_output
 
         old_stdout = sys.stdout
         sys.stdout = StringIO()  # Controlled real stream
@@ -690,7 +690,7 @@ class TestTeeWriter:
         import sys
         from io import StringIO
 
-        from cash.notebook.statement import tee_output
+        from cash.notebook.statement.capture import tee_output
 
         old_stderr = sys.stderr
         sys.stderr = StringIO()
@@ -706,7 +706,7 @@ class TestTeeWriter:
         """tee_output should restore sys.stdout/stderr even on exception."""
         import sys
 
-        from cash.notebook.statement import tee_output
+        from cash.notebook.statement.capture import tee_output
 
         orig_stdout = sys.stdout
         orig_stderr = sys.stderr
@@ -720,7 +720,7 @@ class TestTeeWriter:
 
     def test_tee_output_has_empty_outputs_list(self):
         """tee_output's TeedOutput should have an empty outputs list (no rich display capture)."""
-        from cash.notebook.statement import tee_output
+        from cash.notebook.statement.capture import tee_output
 
         with tee_output() as teed:
             pass

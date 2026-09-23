@@ -67,9 +67,9 @@ from ..lineage_formula import (
     statement_environment_component,
 )
 from ..loop_split import is_split_half, loop_source_hash, split_nodes, store_for_backend
+from ..statement import is_control_body
 from ..statement.derivation_edges import bump_derived_lineages
 from ..statement.file_deps import compute_file_hash_component
-from ..statement.processor import is_control_body
 from ._types import (
     IncrementalStartResult,
     RestoreCollector,

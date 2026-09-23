@@ -62,7 +62,7 @@ def test_upstream_steps_not_re_run_are_one_line():
     folds them into a count; so does the text badge."""
     from cash.notebook.badge_renderer.renderers.text import render_text
     from cash.notebook.badge_renderer.view_builder import build_interactive_badge
-    from cash.notebook.statement.processor import CacheStatus
+    from cash.notebook.cache_status import CacheStatus
 
     metrics = [
         {"code": f"step{i} = {i}", "status": str(CacheStatus.SKIPPED), "is_upstream": True, "saved_time": 0.1}
@@ -75,7 +75,7 @@ def test_upstream_steps_not_re_run_are_one_line():
 
 
 def _chart_cell(slow_s=0.01):
-    from cash.notebook.statement.processor import CacheStatus
+    from cash.notebook.cache_status import CacheStatus
 
     steps = [
         "fig, ax = plt.subplots()",

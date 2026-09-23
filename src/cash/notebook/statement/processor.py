@@ -44,7 +44,7 @@ from cash.notebook.statement.randomness import StatementRandomness
 from cash.notebook.statement.rebuild_cost import RebuildCostLedger
 from cash.notebook.statement.records import StatementRecords
 from cash.notebook.statement.restore import StatementRestorer
-from cash.notebook.statement.results import COST_MODEL_KEYS, DecoratorCallMetric, ProcessResult
+from cash.notebook.statement.results import COST_MODEL_KEYS, ProcessResult
 from cash.notebook.statement.run import CodeRunner, StatementExecution, StatementRun, error_result
 from cash.notebook.statement.store import StatementStore
 from cash.purity import is_known_pure, is_stateful
@@ -70,12 +70,7 @@ from ..lineage_formula import key_hidden_reads
 from ..write_observer import observe_writes
 from .derivation_edges import is_uncacheable_alias
 
-__all__ = [
-    "StatementCacheMetadata",
-    "DecoratorCallMetric",
-    "ProcessResult",
-    "StatementProcessor",
-]
+__all__ = ["StatementProcessor", "is_control_body"]
 
 # Debug log prefixes — module-level constants for filtering and consistency.
 _LOG_PROCESSOR = "[PROCESSOR]"
