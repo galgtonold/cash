@@ -138,8 +138,14 @@ class StatementProcessor:
 
         self._amplification = AmplificationGuard()
 
-        self.analytics_manager = AnalyticsManager(
-            enabled=getattr(getattr(cash_instance, "config", None), "analytics", True) is not False
+        # The Cash instance's own, which the dashboard reads (`Cash.show_stats`).
+        analytics = getattr(cash_instance, "analytics", None)
+        self.analytics_manager = (
+            analytics
+            if isinstance(analytics, AnalyticsManager)
+            else AnalyticsManager(
+                enabled=getattr(getattr(cash_instance, "config", None), "analytics", True) is not False
+            )
         )
 
         # Shared with the upstream checker (the magics pass the same one to

@@ -93,6 +93,7 @@ from .tracking.file_tracker import (
 )
 
 if TYPE_CHECKING:
+    from .analytics import AnalyticsManager
     from .ui.explorer import CacheExplorer
 
 # Configure Logging
@@ -327,6 +328,7 @@ class Cash(
         self._exit_work: _ExitWork | None = None
 
         self._backend_lock = threading.Lock()
+        self._analytics: AnalyticsManager | None = None
 
         self.graph = DependencyGraph()
         self.functions: dict[str, Callable[..., Any]] = {}  # Registry of cached functions
@@ -575,6 +577,17 @@ class Cash(
         """Allow direct assignment (e.g. ``c.backend = MyBackend()``)."""
         self._backend = value
         self._exit_work.backend = value
+
+    @property
+    def analytics(self) -> AnalyticsManager:
+        """This session's analytics: the one manager its events are recorded
+        on and the dashboard reads, so "Current Session" is this one and its
+        buffered events are counted. Created on first use."""
+        if self._analytics is None:
+            from .analytics import AnalyticsManager
+
+            self._analytics = AnalyticsManager(enabled=self.config.analytics)
+        return self._analytics
 
     @property
     def backend_if_built(self) -> CacheBackend | None:
@@ -1423,7 +1436,7 @@ class Cash(
         # widgets only prints their repr.
         if HAS_WIDGETS and _in_kernel():
             try:
-                show_analytics_dashboard()
+                show_analytics_dashboard(self.analytics)
                 return
             except (ImportError, RuntimeError):
                 pass
