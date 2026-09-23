@@ -701,12 +701,13 @@ class _ScanResult(NamedTuple):
     """One statement's purely-source-derived randomness facts.
 
     Every field is immutable and independent of session state — that is the
-    contract that lets ``RandomnessDetector._scan`` memoize this by source
-    string and reuse it for the life of the session.
+    contract that lets :func:`_scan` memoize this by source string and share
+    it across detectors and the module helpers for the life of the process.
     """
 
     random_calls: tuple[RandomnessCallInfo, ...]
     seed_calls: tuple[tuple[str, int], ...]
+    entropy_seed_calls: tuple[tuple[str, int], ...]
     carrier_assigns: tuple[tuple[str, tuple[str, bool]], ...]
     carrier_clears: frozenset[str]
     carrier_calls: tuple[tuple[str, str, int, int], ...]
@@ -717,6 +718,42 @@ class _ScanResult(NamedTuple):
     # ``param_ref`` is a parameter name (keyword arg) or ``('pos', index)``
     # (positional arg) — see ``RandomnessVisitor._check_call_args``.
     call_arg_candidates: tuple[tuple[str, str | tuple[str, int], tuple, int, int], ...]
+
+
+_EMPTY_SCAN = _ScanResult((), (), (), (), frozenset(), (), (), (), ())
+
+
+@functools.lru_cache(maxsize=4096)
+def _scan(code: str) -> _ScanResult:
+    """Parse + visit *code* once: the one AST pass every randomness question reads.
+
+    The detector and the module helpers (:func:`get_drawing_rng_modules` and
+    its siblings) used to keep a cache each over the same visitor. A statement
+    asks them ten times between its key, its execution and its store: 40,414
+    parses for the 3,016 statements of a loop over 1,000 files (round 23).
+    Everything returned is an immutable, purely-source-derived fact, so the
+    memo entry stays valid for the life of the process and callers cannot
+    corrupt it. Carrier draws are kept UNRESOLVED: whether ``rng`` names a
+    carrier is session state, which the detector applies after the scan.
+    Bounded, because a long notebook session is the real risk.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return _EMPTY_SCAN
+    visitor = RandomnessVisitor()
+    visitor.visit(tree)
+    return _ScanResult(
+        tuple(visitor.random_calls),
+        tuple(visitor.seed_calls),
+        tuple(visitor.entropy_seed_calls),
+        tuple(visitor.carrier_assigns.items()),
+        frozenset(visitor.carrier_clears),
+        tuple(visitor.carrier_calls),
+        tuple(visitor.carrier_aliases),
+        tuple((fn, tuple(draws)) for fn, draws in visitor.param_draws.items()),
+        tuple(visitor.call_arg_candidates),
+    )
 
 
 class RandomnessDetector:
@@ -764,16 +801,6 @@ class RandomnessDetector:
         # global cannot leak into a function body (that resolution never happens
         # for a parameter draw; see ``_check_carrier_call``).
         self.risky_params: dict[str, dict[str, tuple[str, int, int]]] = {}
-        # Memo: code string -> the pure AST scan (see ``_ScanResult``).
-        # The scan is the expensive half of analyze_code (parse + full visit) and
-        # is a pure function of the source, so it is safe to reuse across runs.
-        # Only the cheap session-state filters below (``is_seeded``,
-        # ``_resolve_carrier_calls``) depend on session state — carrier draws are
-        # therefore memoized UNRESOLVED, since whether ``rng`` names a carrier is
-        # session state, not a property of the source.
-        # Mirrors ``Cash._capture_use_cache`` in core.py: unbounded growth is the
-        # real risk in a long notebook session, so the insert is size-gated.
-        self._scan_cache: dict[str, _ScanResult] = {}
         # Dedupe ledger: (code, warning message) pairs already warned about in
         # this session.  See ``mark_warned``.
         self._warned: set[tuple[str, str]] = set()
@@ -784,7 +811,6 @@ class RandomnessDetector:
         self.rng_carriers.clear()
         self.risky_params.clear()
         # A new session re-warns: the user is looking at a fresh set of outputs.
-        # ``_scan_cache`` is deliberately kept — it is pure w.r.t. session state.
         self._warned.clear()
 
     def mark_warned(self, code: str, message: str) -> bool:
@@ -802,39 +828,6 @@ class RandomnessDetector:
         if len(self._warned) < 4096:
             self._warned.add(key)
         return True
-
-    def _scan(self, code: str) -> "_ScanResult":
-        """Parse + visit *code*, memoized per source string.
-
-        Everything returned is an immutable, purely-source-derived fact, so the
-        memo entry stays valid for the life of the session and callers cannot
-        corrupt it.
-        """
-        cached = self._scan_cache.get(code)
-        if cached is not None:
-            return cached
-
-        try:
-            tree = ast.parse(code)
-        except SyntaxError:
-            result = _ScanResult((), (), (), frozenset(), (), (), (), ())
-        else:
-            visitor = RandomnessVisitor()
-            visitor.visit(tree)
-            result = _ScanResult(
-                tuple(visitor.random_calls),
-                tuple(visitor.seed_calls),
-                tuple(visitor.carrier_assigns.items()),
-                frozenset(visitor.carrier_clears),
-                tuple(visitor.carrier_calls),
-                tuple(visitor.carrier_aliases),
-                tuple((fn, tuple(draws)) for fn, draws in visitor.param_draws.items()),
-                tuple(visitor.call_arg_candidates),
-            )
-
-        if len(self._scan_cache) < 4096:
-            self._scan_cache[code] = result
-        return result
 
     def bind_carriers(self, assigns, clears, aliases=()) -> None:
         """Fold a statement's carrier bindings into session state."""
@@ -1071,7 +1064,7 @@ class RandomnessDetector:
             - has_seed_calls is True if the code contains seed function calls
               (these statements should not be cached, as the seed must be executed)
         """
-        scan = self._scan(code)
+        scan = _scan(code)
 
         has_seed_calls = len(scan.seed_calls) > 0
 
@@ -1416,31 +1409,10 @@ def warn_stale_estimator_fit(
 # -----------------------------------------------------------------------------
 
 
-@functools.lru_cache(maxsize=1024)
-def _scan_rng_modules(code: str) -> tuple[frozenset, frozenset, frozenset]:
-    """``(drawn, seeded, entropy-reseeded)`` modules for *code*, parsed once.
-
-    The three helpers below each parsed and walked the same source, and a statement
-    asks them ten times between its key, its execution and its store: 40,414
-    parses for the 3,016 statements of a loop over 1,000 files (round 23). The
-    visitor reads nothing but the tree, so its answer is a function of the text.
-    """
-    try:
-        tree = ast.parse(code)
-    except SyntaxError:
-        return frozenset(), frozenset(), frozenset()
-    visitor = RandomnessVisitor()
-    visitor.visit(tree)
-    drawn = frozenset(call.module for call in visitor.random_calls)
-    seeded = frozenset(module for module, _ in visitor.seed_calls)
-    entropy = frozenset(module for module, _ in visitor.entropy_seed_calls)
-    return drawn, seeded, entropy
-
-
-def _rng_scan(code: str) -> tuple[frozenset, frozenset, frozenset]:
+def _rng_scan(code: str) -> _ScanResult:
     # A loop body statement's source is prefixed per iteration with a comment
-    # naming the iteration; a comment changes nothing these scans report.
-    return _scan_rng_modules(strip_markers(code))
+    # naming the iteration; a comment changes nothing these helpers report.
+    return _scan(strip_markers(code))
 
 
 def get_drawing_rng_modules(code: str) -> set[str]:
@@ -1449,7 +1421,7 @@ def get_drawing_rng_modules(code: str) -> set[str]:
     Only a draw's result depends on the RNG state, so only a draw's cache key
     should.
     """
-    return set(_rng_scan(code)[0])
+    return {call.module for call in _rng_scan(code).random_calls}
 
 
 def _is_entropy_seed(node: ast.Call) -> bool:
@@ -1481,7 +1453,7 @@ def get_entropy_reseed_modules(code: str) -> set[str]:
     served from cache, so the printed metric described a model that had already
     been replaced in the kernel.
     """
-    return set(_rng_scan(code)[2])
+    return {module for module, _ in _rng_scan(code).entropy_seed_calls}
 
 
 def get_seeding_rng_modules(code: str) -> set[str]:
@@ -1491,4 +1463,4 @@ def get_seeding_rng_modules(code: str) -> set[str]:
     opens a new "seed epoch" for its module; every later draw from that module
     is keyed on the epoch, so re-seeding invalidates the draws that follow it.
     """
-    return set(_rng_scan(code)[1])
+    return {module for module, _ in _rng_scan(code).seed_calls}
