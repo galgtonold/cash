@@ -24,56 +24,26 @@ that asserted one of those would be pinning the environment, not the contract.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
 import pytest
-from traitlets.config import Configurable
 
 pytest.importorskip("IPython")
 
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
 from tests._cell_driver import run_cash_cell
 
 
-class _MockShell(Configurable):
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.user_ns["_ih"] = []
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
-
-
-@pytest.fixture
-def magics():
-    backend = InMemoryBackend()
-    cash = Cash(backend=backend, register_magic=False)
-    shell = _MockShell()
-    m = CashMagics(shell, cash)
-    m._auto_cache_enabled = True
-    yield m
-    backend.clear()
-
-
-def test_a_real_run_records_a_set_per_variable(magics):
-    run_cash_cell(magics, "a = 1\nb = a + 1\n")
-    recorded = magics.tracking_state.executed_cell_hashes
+def test_a_real_run_records_a_set_per_variable(cash_magics):
+    run_cash_cell(cash_magics, "a = 1\nb = a + 1\n")
+    recorded = cash_magics.tracking_state.executed_cell_hashes
     assert recorded, "nothing was recorded; the run never reached the writer"
     wrong = {k: type(v).__name__ for k, v in recorded.items() if not isinstance(v, set)}
     assert not wrong, f"executed_cell_hashes holds non-sets: {wrong}"
 
 
-def test_redefining_a_variable_accumulates_rather_than_replaces(magics):
+def test_redefining_a_variable_accumulates_rather_than_replaces(cash_magics):
     """The reason it is a set at all -- one variable, two defining statements."""
-    run_cash_cell(magics, "a = 1\n")
-    run_cash_cell(magics, "a = 2\n")
-    assert len(magics.tracking_state.executed_cell_hashes["a"]) == 2
+    run_cash_cell(cash_magics, "a = 1\n")
+    run_cash_cell(cash_magics, "a = 2\n")
+    assert len(cash_magics.tracking_state.executed_cell_hashes["a"]) == 2
 
 
 def test_the_declared_type_matches_what_is_stored():

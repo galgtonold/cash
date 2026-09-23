@@ -20,8 +20,6 @@ exact. A wall-clock threshold would be the flakiest possible way to assert it.
 
 from __future__ import annotations
 
-import tempfile
-
 import pytest
 
 from tests._cell_driver import run_cash_cell
@@ -32,7 +30,6 @@ np = pytest.importorskip("numpy")
 import cash.object_hashing as object_hashing
 from cash import Cash
 from cash.notebook.ipython.magics import CashMagics
-from tests.conftest import MockShell
 
 ITERATIONS = 4
 
@@ -40,8 +37,8 @@ CELL = "seen = []\nfor arr in arrays:\n    seen.append(float(arr.sum()))\n"
 
 
 @pytest.fixture
-def counting_magics(monkeypatch):
-    """Magics whose full-content hashes are counted per object."""
+def counting_magics(monkeypatch, mock_shell, tmp_path):
+    """Magics over a disk cache, whose full-content hashes are counted per object."""
     counts: dict[int, int] = {}
     real = object_hashing.compute_hash_full
 
@@ -54,9 +51,8 @@ def counting_magics(monkeypatch):
     monkeypatch.setattr("cash.notebook.control_structures.common.compute_hash_full", counting_compute_hash_full)
     monkeypatch.setattr("cash.notebook.control_structures.for_handler.compute_hash_full", counting_compute_hash_full)
 
-    shell = MockShell()
-    cash = Cash(cache_dir=tempfile.mkdtemp(), register_magic=False)
-    magics = CashMagics(shell, cash)
+    shell = mock_shell
+    magics = CashMagics(shell, Cash(cache_dir=str(tmp_path), register_magic=False))
     magics.cash_on("")
     magics.badges.mode = "off"
     shell.user_ns["arrays"] = [np.arange(1000, dtype=float) + i for i in range(ITERATIONS)]

@@ -22,32 +22,14 @@ import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
-from traitlets.config.configurable import Configurable
 
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
-
-
-class _Shell(Configurable):
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
+from tests._cell_driver import run_cash_cell
 
 
 @pytest.fixture
-def notebook(tmp_path):
+def notebook(tmp_path, cash_magics, mock_shell, clean_backend):
     """Magics running cells of a notebook saved in *tmp_path*."""
-    backend = InMemoryBackend()
-    shell = _Shell()
-    magics = CashMagics(shell, Cash(backend=backend, register_magic=False))
-    magics._auto_cache_enabled = True
+    magics, shell, backend = cash_magics, mock_shell, clean_backend
     nb_path = tmp_path / "analysis.ipynb"
     cells: list[str] = []
 
@@ -73,7 +55,7 @@ def notebook(tmp_path):
             patch("cash.notebook.upstream.checker.get_notebook_cells", side_effect=lambda _p=None: list(cells)),
             patch("cash.notebook.upstream.checker.get_notebook_cells_with_ids", return_value=None),
         ):
-            magics._execute_cell(code)
+            run_cash_cell(magics, code)
 
     def simulate(code):
         """The lineages the simulation gives *code*'s outputs, from scratch."""
@@ -82,8 +64,6 @@ def notebook(tmp_path):
     # The notebook's own directory: the runtime keys files relative to it.
     with patch("cash.notebook.statement.file_deps.get_notebook_path", return_value=str(nb_path)):
         yield magics, shell, backend, run, simulate
-    backend.clear()
-    shell.user_ns.clear()
 
 
 class TestFileComponent:
@@ -95,7 +75,7 @@ class TestFileComponent:
         code = f"TEXT = open({str(data)!r}).read()"
 
         run(code)
-        state = magics._statement_processor.tracking_state
+        state = magics.tracking_state
         runtime = state.variable_lineage["TEXT"]
         assert state.executed_file_deps.get("TEXT"), "the read was not tracked"
 
@@ -113,7 +93,7 @@ class TestFileComponent:
         data.write_text("a\n", encoding="utf-8")
         code = f"TEXT = open({str(data)!r}).read()"
         run(code)
-        state = magics._statement_processor.tracking_state
+        state = magics.tracking_state
         before = state.variable_lineage["TEXT"]
 
         data.write_text("a\nb\nc\n", encoding="utf-8")
@@ -175,7 +155,7 @@ class TestModuleEdits:
     def test_a_comment_only_edit_moves_no_lineage(self, notebook, local_module):
         magics, _shell, _backend, run, simulate = notebook
         name, path = local_module
-        state = magics._statement_processor.tracking_state
+        state = magics.tracking_state
 
         run(f"import {name}")
         run(f"Y = {name}.scale(21)")
@@ -195,7 +175,7 @@ class TestModuleEdits:
         simulation arrives at the runtime's new value."""
         magics, _shell, _backend, run, simulate = notebook
         name, path = local_module
-        state = magics._statement_processor.tracking_state
+        state = magics.tracking_state
 
         run(f"import {name}")
         before = state.variable_lineage[name]

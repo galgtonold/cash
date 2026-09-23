@@ -29,7 +29,6 @@ import os
 from unittest.mock import MagicMock
 
 import pytest
-from traitlets.config import Configurable
 
 from cash.backends import FileBackend
 from cash.core import Cash
@@ -46,6 +45,7 @@ from cash.notebook.statement.miss_guard import (
     resolve_cache_dir,
 )
 from tests._cell_driver import run_cash_cell
+from tests.conftest import MockShell
 
 # ---------------------------------------------------------------------------
 # State-machine unit tests — no processor, no backend.
@@ -257,18 +257,6 @@ class TestResolveCacheDir:
 # ---------------------------------------------------------------------------
 
 
-class _MockShell(Configurable):
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
-
-
 CODE = "out = sum(big) * 2"
 
 
@@ -283,7 +271,7 @@ class _Session:
         # are trivially cheap, and "too cheap to cache" would refuse the write
         # before the guard ever got a vote.
         self.cash.config.min_execution_time_to_cache_seconds = 0.0
-        self.shell = _MockShell()
+        self.shell = MockShell()  # a restart is a new shell over the same cache dir
         self.magics = CashMagics(self.shell, self.cash)
         # ...and from the cheap-write exemption, which spares a guarded statement
         # whose write costs at most a tenth of its measured compute. ``out`` is
@@ -295,7 +283,6 @@ class _Session:
         # exemption itself is tested end to end in
         # test_a_slow_result_stays_saved_through_edits.py.
         self.magics._statement_processor._store.CHEAP_WRITE_SHARE = 0.0
-        self.magics._auto_cache_enabled = True
         self.metrics: list[dict] = []
         self.magics.badges.render = lambda metrics, **kw: self.metrics.extend(metrics)
 

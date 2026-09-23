@@ -8,8 +8,6 @@ and the one that deliberately does.
 
 from __future__ import annotations
 
-import tempfile
-
 import pytest
 
 pytest.importorskip("IPython")
@@ -18,13 +16,13 @@ from cash import Cash
 from cash.notebook.ipython.magics import CashMagics
 from cash.source_norm import source_identity_digest
 from tests._cell_driver import run_cash_cell
-from tests.conftest import MockShell
 
 
 @pytest.fixture
-def cell_runner():
-    shell = MockShell()
-    cash = Cash(cache_dir=tempfile.mkdtemp(), register_magic=False)
+def cell_runner(mock_shell, tmp_path):
+    """Run cells under ``%cash_on`` over a disk cache; ``c`` is the Cash."""
+    shell = mock_shell
+    cash = Cash(cache_dir=str(tmp_path), register_magic=False)
     magics = CashMagics(shell, cash)
     magics.cash_on("")
     magics.badges.mode = "off"

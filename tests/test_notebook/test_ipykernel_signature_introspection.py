@@ -31,8 +31,6 @@ import inspect
 import pytest
 from traitlets.config import Configurable
 
-from cash.backends import InMemoryBackend
-from cash.core import Cash
 from cash.notebook.ipython.magics import CashMagics
 
 # ipykernel is a dev/runtime companion, not a hard dependency of the [notebook]
@@ -59,19 +57,19 @@ def real_shell():
         InteractiveShell.clear_instance()
 
 
-def _patch_cash_onto(shell):
+def _patch_cash_onto(shell, cash):
     """Instantiate CashMagics, which monkey-patches the shell's exec hooks."""
-    return CashMagics(shell, Cash(backend=InMemoryBackend(), register_magic=False))
+    return CashMagics(shell, cash)
 
 
 class TestIntrospectionParity:
     """cash's patched hooks must answer introspection exactly as the originals do."""
 
-    def test_run_cell_async_verdict_matches_original(self, real_shell):
+    def test_run_cell_async_verdict_matches_original(self, real_shell, cash_instance):
         original = real_shell.run_cell_async
         before = _accepts_parameters(original, PROBE)
 
-        _patch_cash_onto(real_shell)
+        _patch_cash_onto(real_shell, cash_instance)
 
         assert real_shell.run_cell_async is not original, "precondition: cash patched the hook"
         after = _accepts_parameters(real_shell.run_cell_async, PROBE)
@@ -82,11 +80,11 @@ class TestIntrospectionParity:
             "arguments the real callee rejects, and the cell hangs at [*]."
         )
 
-    def test_run_cell_verdict_matches_original(self, real_shell):
+    def test_run_cell_verdict_matches_original(self, real_shell, cash_instance):
         original = real_shell.run_cell
         before = _accepts_parameters(original, PROBE)
 
-        _patch_cash_onto(real_shell)
+        _patch_cash_onto(real_shell, cash_instance)
 
         assert real_shell.run_cell is not original, "precondition: cash patched the hook"
         after = _accepts_parameters(real_shell.run_cell, PROBE)
@@ -97,10 +95,10 @@ class TestIntrospectionParity:
         )
 
     @pytest.mark.parametrize("hook", ["run_cell", "run_cell_async"])
-    def test_patched_hook_exposes_original_signature(self, real_shell, hook):
+    def test_patched_hook_exposes_original_signature(self, real_shell, hook, cash_instance):
         """inspect.signature() — what ipykernel calls — must see the real signature."""
         before = inspect.signature(getattr(real_shell, hook))
-        _patch_cash_onto(real_shell)
+        _patch_cash_onto(real_shell, cash_instance)
         after = inspect.signature(getattr(real_shell, hook))
         assert str(after) == str(before), f"shell.{hook} signature changed under cash: {after} != {before}"
 
@@ -157,14 +155,14 @@ class TestLegacyIPythonShell:
     """IPython 8.0-8.2 (allowed by [notebook]) + an introspecting ipykernel."""
 
     @pytest.mark.parametrize("hook", ["run_cell", "run_cell_async"])
-    def test_cash_does_not_claim_cell_id_on_a_shell_that_rejects_it(self, hook):
+    def test_cash_does_not_claim_cell_id_on_a_shell_that_rejects_it(self, hook, cash_instance):
         shell = LegacyShell()
         original = getattr(shell, hook)
         assert _accepts_parameters(original, ["cell_id"]) == {"cell_id": False}, (
             "precondition: the legacy signature really does reject cell_id"
         )
 
-        _patch_cash_onto(shell)
+        _patch_cash_onto(shell, cash_instance)
 
         verdict = _accepts_parameters(getattr(shell, hook), ["cell_id"])
         assert verdict == {"cell_id": False}, (

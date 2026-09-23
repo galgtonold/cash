@@ -14,16 +14,12 @@ from __future__ import annotations
 import logging
 import os
 import warnings
-from unittest.mock import MagicMock
 
 import pytest
-from traitlets.config import Configurable
 
 from cash import Cash
-from cash.backends import InMemoryBackend
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.cache_status import CacheStatus
-from cash.notebook.ipython.magics import CashMagics
 from cash.notebook.lineage_formula import statement_environment_reads
 from cash.purity_analyzer import ISSUE_AMBIENT_READ, PurityAnalyzer
 from tests._cell_driver import run_cash_cell
@@ -185,48 +181,34 @@ def test_the_notebook_resolves_an_alias():
     assert statement_environment_reads("t = os.getenv(name)", {"os": os}) == set()
 
 
-class _Shell(Configurable):
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {"__name__": "__main__"}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-        self.display_pub = type("Pub", (), {"publish": MagicMock()})()
-
-
 @pytest.fixture
-def magics(monkeypatch):
-    m = CashMagics(_Shell(), Cash(backend=InMemoryBackend(), register_magic=False))
-    m._auto_cache_enabled = True
-    seen: list = []
-    original = m._update_last_cell_metrics
-    monkeypatch.setattr(
-        m, "_update_last_cell_metrics", lambda metrics, total: (seen.append(list(metrics)), original(metrics, total))
-    )
-    return m, seen
+def magics(cash_magics, mock_shell):
+    # The notebook's module is ``__main__``, as in a kernel.
+    mock_shell.user_ns["__name__"] = "__main__"
+    return cash_magics
 
 
-def _restored(metrics) -> bool:
-    return any(row.get("status") == CacheStatus.RESTORED for row in metrics)
+def _restored(magics) -> bool:
+    """Whether the last cell restored any statement, as ``%cash_status`` reports it."""
+    rows = magics.cash_status("dict")["last_cell"]["statements"]
+    return any(row["status"] == CacheStatus.RESTORED for row in rows)
 
 
 def test_what_is_built_on_the_read_follows_the_value(magics, monkeypatch):
     """The key alone was not enough: the read re-ran for a new tenant, but its
     output kept its lineage, so the statement below hit and returned the
     first tenant's answer."""
-    m, seen = magics
+    m = magics
     read = "import os, time\ntenant = (time.sleep(0.02), os.getenv('CASH_TEST_TENANT'))[1]"
     shout = "import time\nloud = (time.sleep(0.02), tenant.upper())[1]"
-    for value in ("acme", "globex", "acme"):
+    for run, value in enumerate(("acme", "globex", "acme")):
         monkeypatch.setenv(_VAR, value)
         run_cash_cell(m, read)
+        read_restored = _restored(m)
         run_cash_cell(m, shout)
         assert m.shell.user_ns["loud"] == value.upper()
-        restored = _restored(seen[-2]), _restored(seen[-1])
-        assert restored == ((True, True) if value == "acme" and len(seen) > 2 else (False, False)), restored
+        restored = read_restored, _restored(m)
+        assert restored == ((True, True) if run == 2 else (False, False)), restored
 
 
 def test_a_miss_names_the_variable(tmp_path, monkeypatch, caplog):

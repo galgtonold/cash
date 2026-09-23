@@ -120,25 +120,13 @@ class TestThroughARealStatement:
     """
 
     @pytest.fixture
-    def processor(self, tmp_path):
-        from traitlets.config.configurable import Configurable
-
+    def processor(self, tmp_path, mock_shell):
+        """A statement processor over a disk cache."""
         from cash.backends import FileBackend
         from cash.core import Cash
         from cash.notebook.statement import StatementProcessor
 
-        class MockShell(Configurable):
-            def __init__(self):
-                super().__init__()
-                self.user_ns: dict = {}
-                self.input_transformers_cleanup: list = []
-                self.ast_transformers: list = []
-                self.user_global_ns = self.user_ns
-
-        backend = FileBackend(cache_dir=str(tmp_path))
-        cash_instance = Cash(backend=backend, register_magic=False)
-        proc = StatementProcessor(MockShell(), cash_instance)
-        return proc
+        return StatementProcessor(mock_shell, Cash(backend=FileBackend(cache_dir=str(tmp_path)), register_magic=False))
 
     def test_a_changed_object_forces_the_statement_to_recompute(self, processor, origin):
         """The key does NOT move — it is computed before the statement runs.

@@ -9,39 +9,19 @@ arguments rebuilt); it just points at the call entries for the parts they hold.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
 import pytest
-from traitlets.config import Configurable
 
 from cash.backends import InMemoryBackend
-from cash.core import Cash
 from cash.notebook.call_refs import CallRef
-from cash.notebook.ipython.magics import CashMagics
 from tests._cell_driver import run_cash_cell
 
 
-class _Shell(Configurable):
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {"__name__": "__main__"}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-        self.display_pub = type("Pub", (), {"publish": MagicMock()})()
-
-
 @pytest.fixture
-def nb():
-    backend = InMemoryBackend()
-    shell = _Shell()
-    magics = CashMagics(shell, Cash(backend=backend, register_magic=False))
-    magics._auto_cache_enabled = True
-    run_cash_cell(magics, "import time\ndef fit(k):\n    time.sleep(0.12)\n    return list(range(k * 1000))")
-    yield magics, shell, backend
-    backend.clear()
+def nb(cash_magics, mock_shell, clean_backend):
+    # The notebook's module is ``__main__``, as in a kernel.
+    mock_shell.user_ns["__name__"] = "__main__"
+    run_cash_cell(cash_magics, "import time\ndef fit(k):\n    time.sleep(0.12)\n    return list(range(k * 1000))")
+    return cash_magics, mock_shell, clean_backend
 
 
 def _stored(backend, needle):

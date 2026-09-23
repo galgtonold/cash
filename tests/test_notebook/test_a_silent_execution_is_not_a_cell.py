@@ -14,31 +14,20 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from traitlets.config.configurable import Configurable
 
-from cash.backends import InMemoryBackend
-from cash.core import Cash
 from cash.notebook.ipython.cell_executor import EarlyReturn
 from cash.notebook.ipython.magics import CashMagics
 
 
-class _Shell(Configurable):
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.user_global_ns = self.user_ns
-        self.input_transformers_cleanup = []
-        self.ast_transformers = []
-        self.events = MagicMock()
-        self.run_cell = MagicMock(return_value="plain")
-        self.run_cell_async = AsyncMock(return_value="plain-async")
-
-
 @pytest.fixture
-def magics():
-    cash = Cash(backend=InMemoryBackend(), register_magic=False)
-    magics = CashMagics(_Shell(), cash)
-    magics._auto_cache_enabled = True
+def magics(mock_shell, cash_instance):
+    # The shell's own run_cell / run_cell_async answer with a marker, so a test
+    # can tell IPython's plain path from cash's. They are set before the magics
+    # wrap them, as IPython's are.
+    mock_shell.run_cell = MagicMock(return_value="plain")
+    mock_shell.run_cell_async = AsyncMock(return_value="plain-async")
+    magics = CashMagics(mock_shell, cash_instance)
+    magics.cash_on("")
     magics._cell_executor = MagicMock()
     magics._cell_executor.execute_cell.return_value = EarlyReturn("cash")
     magics._cell_executor.execute_cell_async = AsyncMock(return_value=EarlyReturn("cash-async"))

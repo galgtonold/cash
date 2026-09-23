@@ -11,33 +11,16 @@ file dependency, which skips the floor.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
 import pytest
-from traitlets.config import Configurable
 
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
 from tests._cell_driver import run_cash_cell
 
 
-class _Shell(Configurable):
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {"__name__": "__main__"}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-        self.display_pub = type("Pub", (), {"publish": MagicMock()})()
-
-
 @pytest.fixture
-def magics(monkeypatch):
-    m = CashMagics(_Shell(), Cash(backend=InMemoryBackend(), register_magic=False))
-    m._auto_cache_enabled = True
+def magics(cash_magics, mock_shell, monkeypatch):
+    # The notebook's module is ``__main__``, the name the skip reason reports.
+    mock_shell.user_ns["__name__"] = "__main__"
+    m = cash_magics
     seen: list = []
     original = m._update_last_cell_metrics
     monkeypatch.setattr(

@@ -12,38 +12,8 @@ routed a statement too fast for any of its calls to be stored.
 from __future__ import annotations
 
 import ast
-from unittest.mock import MagicMock
 
-import pytest
-from traitlets.config import Configurable
-
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
 from tests._cell_driver import run_cash_cell
-
-
-class _Shell(Configurable):
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
-
-
-@pytest.fixture
-def magics():
-    backend = InMemoryBackend()
-    cash = Cash(backend=backend, register_magic=False)
-    magics = CashMagics(_Shell(), cash)
-    magics.test_cash = cash
-    magics._auto_cache_enabled = True
-    yield magics
-    backend.clear()
 
 
 def _routes_calls(magics, code: str) -> bool:
@@ -52,19 +22,19 @@ def _routes_calls(magics, code: str) -> bool:
     return routed is not code
 
 
-def test_a_zero_floor_keeps_routing_a_fast_statement(magics):
-    magics.test_cash.config.call_cost_floor_seconds = 0.0
-    run_cash_cell(magics, "def bump(v):\n    return v + 1\nx = 1")
+def test_a_zero_floor_keeps_routing_a_fast_statement(cash_magics, cash_instance):
+    cash_instance.config.call_cost_floor_seconds = 0.0
+    run_cash_cell(cash_magics, "def bump(v):\n    return v + 1\nx = 1")
     # The statement's run time is wall time under cash, which a loaded
     # machine stretches past any small floor; learn from a 1 ms run directly.
-    magics._statement_processor._calls.learn_call_wrapping("y = bump(x)", 0.001, [])
+    cash_magics._statement_processor._calls.learn_call_wrapping("y = bump(x)", 0.001, [])
 
-    assert _routes_calls(magics, "y = bump(x)")
+    assert _routes_calls(cash_magics, "y = bump(x)")
 
 
-def test_a_raised_floor_stops_routing_a_statement_below_it(magics):
-    magics.test_cash.config.call_cost_floor_seconds = 5.0
-    run_cash_cell(magics, "import time\ndef slow(v):\n    time.sleep(0.02)\n    return v + 1\nx = 1")
-    run_cash_cell(magics, "y = slow(x)")
+def test_a_raised_floor_stops_routing_a_statement_below_it(cash_magics, cash_instance):
+    cash_instance.config.call_cost_floor_seconds = 5.0
+    run_cash_cell(cash_magics, "import time\ndef slow(v):\n    time.sleep(0.02)\n    return v + 1\nx = 1")
+    run_cash_cell(cash_magics, "y = slow(x)")
 
-    assert not _routes_calls(magics, "y = slow(x)")
+    assert not _routes_calls(cash_magics, "y = slow(x)")

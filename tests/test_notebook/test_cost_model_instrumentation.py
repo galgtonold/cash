@@ -9,12 +9,6 @@ present on ProcessResult when the budget check runs and absent when the
 from unittest.mock import MagicMock
 
 import numpy as np
-import pytest
-from traitlets.config.configurable import Configurable
-
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.statement import StatementProcessor
 
 _COST_MODEL_KEYS = (
     "cost_model_size_bytes",
@@ -24,41 +18,13 @@ _COST_MODEL_KEYS = (
 )
 
 
-class MockShell(Configurable):
-    """Minimal IPython shell mock for StatementProcessor."""
-
-    def __init__(self):
-        super().__init__()
-        self.user_ns: dict = {}
-        self.input_transformers_cleanup: list = []
-        self.ast_transformers: list = []
-        self.user_global_ns = self.user_ns
-        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
-
-
-@pytest.fixture
-def processor():
-    """StatementProcessor backed by InMemoryBackend.
-
-    Using process_statement directly rather than magics.cash because
-    process_statement returns the ProcessResult dict, letting us assert
-    on the cost-model fields without monkey-patching the call chain.
-    """
-    backend = InMemoryBackend()
-    cash = Cash(backend=backend, register_magic=False)
-    shell = MockShell()
-    proc = StatementProcessor(shell=shell, cash_instance=cash)
-    yield proc
-    backend.clear()
-
-
 class TestCostModelFieldsPopulated:
     """test_cost_model_fields_populated_on_budget_check:
     A non-trivial array statement must reach the budget check and expose
     all four cost-model fields on the returned ProcessResult.
     """
 
-    def test_cost_model_fields_populated_on_budget_check(self, processor):
+    def test_cost_model_fields_populated_on_budget_check(self, statement_processor):
         """A large array forces the budget check and must surface all four fields."""
         # np.zeros(5_000_000) → 40 MB float64 array; execution_time will be
         # real (measured), which keeps it above the 10 ms floor only if
@@ -68,9 +34,9 @@ class TestCostModelFieldsPopulated:
         config.min_execution_time_to_cache_seconds = 0.0
         config.min_cache_savings_pct = 0.20
         config.min_cache_fixed_budget_seconds = 0.05
-        processor.cash_instance.config = config
+        statement_processor.cash_instance.config = config
 
-        result = processor.process_statement("arr = [i for i in range(100000)]")
+        result = statement_processor.process_statement("arr = [i for i in range(100000)]")
 
         for key in _COST_MODEL_KEYS:
             assert key in result, f"Expected cost-model field '{key}' in ProcessResult, got keys: {list(result.keys())}"
@@ -83,17 +49,17 @@ class TestCostModelFieldsPopulated:
         assert isinstance(result["cost_model_family"], str)
         assert result["cost_model_family"] != ""
 
-    def test_cost_model_fields_on_large_ndarray(self, processor):
+    def test_cost_model_fields_on_large_ndarray(self, statement_processor):
         """A numpy array statement should also surface cost-model fields with correct type."""
         config = MagicMock()
         config.min_execution_time_to_cache_seconds = 0.0
         config.min_cache_savings_pct = 0.20
         config.min_cache_fixed_budget_seconds = 0.05
-        processor.cash_instance.config = config
+        statement_processor.cash_instance.config = config
 
         # Inject the array directly into the namespace to avoid import overhead
-        processor.shell.user_ns["np"] = np
-        result = processor.process_statement("arr = np.zeros(5_000_000)")
+        statement_processor.shell.user_ns["np"] = np
+        result = statement_processor.process_statement("arr = np.zeros(5_000_000)")
 
         for key in _COST_MODEL_KEYS:
             assert key in result, f"Expected cost-model field '{key}' in ProcessResult; got: {list(result.keys())}"
@@ -108,7 +74,7 @@ class TestCostModelFieldsAbsentOnFloorExit:
     cost-model fields must not appear on ProcessResult.
     """
 
-    def test_cost_model_fields_absent_on_floor_exit(self, processor):
+    def test_cost_model_fields_absent_on_floor_exit(self, statement_processor):
         """A pinned floor guarantees the short-circuit; backend stays empty; fields absent."""
         # The floor compares MEASURED wall-clock execution_time against
         # min_execution_time_to_cache_seconds, so trusting `a = 1` to land under
@@ -122,11 +88,11 @@ class TestCostModelFieldsAbsentOnFloorExit:
         #
         # Mutating the real config rather than swapping in a MagicMock (as the
         # siblings above do) is deliberate: `persist_all` is snapshotted into
-        # the processor during __init__, so a truthy MagicMock attribute would
+        # the statement_processor during __init__, so a truthy MagicMock attribute would
         # set force_persist and bypass this guard entirely.
-        processor.cash_instance.config.min_execution_time_to_cache_seconds = 3600.0
+        statement_processor.cash_instance.config.min_execution_time_to_cache_seconds = 3600.0
 
-        result = processor.process_statement("a = 1")
+        result = statement_processor.process_statement("a = 1")
 
         for key in _COST_MODEL_KEYS:
             assert key not in result, (
@@ -135,7 +101,7 @@ class TestCostModelFieldsAbsentOnFloorExit:
             )
 
         # Confirm the backend is truly empty (no metadata-only entry written).
-        backend = processor.cash_instance.backend
+        backend = statement_processor.cash_instance.backend
         assert len(backend._store) == 0, (
             f"Backend should be empty after floor exit, but has {len(backend._store)} entries"
         )

@@ -15,18 +15,18 @@ import asyncio
 
 import pytest
 
-from cash.backends import InMemoryBackend
-from cash.core import Cash
 from cash.notebook.ipython.magics import CashMagics
 
 
 @pytest.fixture
-def shell():
+def shell(cash_instance):
+    """A real IPython shell under ``%cash_on``: the delegation under test is
+    IPython's own ``run_cell_async``, which the mock shell does not have."""
     from IPython.core.interactiveshell import InteractiveShell
 
     shell = InteractiveShell.instance()
-    magics = CashMagics(shell, Cash(backend=InMemoryBackend(), register_magic=False))
-    magics._auto_cache_enabled = True
+    magics = CashMagics(shell, cash_instance)
+    magics.cash_on("")
     try:
         yield shell
     finally:

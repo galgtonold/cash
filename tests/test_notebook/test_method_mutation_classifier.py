@@ -14,14 +14,8 @@ True)`` still mutate; ``df.head()`` still does not).
 
 import ast
 import hashlib
-from unittest.mock import MagicMock
 
 import pytest
-from traitlets.config import Configurable
-
-from cash import Cash
-from cash.backends import InMemoryBackend
-from cash.notebook.ipython.magics import CashMagics
 
 
 @pytest.fixture(autouse=True)
@@ -39,29 +33,6 @@ def _force_agg_backend():
     yield
 
 
-class MockShell(Configurable):
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-
-
-@pytest.fixture
-def classifiers():
-    backend = InMemoryBackend()
-    cash = Cash(backend=backend, register_magic=False)
-    shell = MockShell()
-    magics = CashMagics(shell, cash)
-    proc = magics._statement_processor
-    yield proc, shell
-    backend.clear()
-    shell.user_ns.clear()
-
-
 def _routes_mutation(proc, shell, code):
     """True if *code*'s receiver is routed as an in-place mutation."""
     tree = ast.parse(code)
@@ -70,13 +41,12 @@ def _routes_mutation(proc, shell, code):
     return pre_route | assumed
 
 
-def test_axes_hist_is_a_mutation_but_dataframe_writes_are_not(classifiers):
+def test_axes_hist_is_a_mutation_but_dataframe_writes_are_not(statement_processor, mock_shell):
     pd = pytest.importorskip("pandas")
     plt = pytest.importorskip("matplotlib.pyplot")
-    proc, shell = classifiers
 
     fig, ax = plt.subplots()
-    shell.user_ns.update(
+    mock_shell.user_ns.update(
         {
             "df": pd.DataFrame({"x": [1, 2, 3]}),
             "ax": ax,
@@ -87,31 +57,31 @@ def test_axes_hist_is_a_mutation_but_dataframe_writes_are_not(classifiers):
     )
 
     # ax.hist(...) draws on the Axes -> mutation, despite the data tuple.
-    assert "ax" in _routes_mutation(proc, shell, "ax.hist(data)")
-    assert "ax" in _routes_mutation(proc, shell, "ax.plot(data)")
+    assert "ax" in _routes_mutation(statement_processor, mock_shell, "ax.hist(data)")
+    assert "ax" in _routes_mutation(statement_processor, mock_shell, "ax.plot(data)")
 
     # df.to_csv reads the frame and writes a file -> NOT a receiver
     # mutation, so it never bumps df's lineage and cannot become a spurious
     # producer of df that re-fires the write during reconstruction.
-    assert "df" not in _routes_mutation(proc, shell, "df.to_csv('out.csv')")
-    assert "df" not in _routes_mutation(proc, shell, "df.to_parquet('out.pq')")
+    assert "df" not in _routes_mutation(statement_processor, mock_shell, "df.to_csv('out.csv')")
+    assert "df" not in _routes_mutation(statement_processor, mock_shell, "df.to_parquet('out.pq')")
 
     # fig.savefig() is DELIBERATELY still a mutation: fig is identity-coupled
     # (never cached, re-derived as a unit) so bumping it is idempotent, and the
     # savefig->fig edge is load-bearing for chart-coherence re-derivation.
-    assert "fig" in _routes_mutation(proc, shell, "fig.savefig('out.png')")
+    assert "fig" in _routes_mutation(statement_processor, mock_shell, "fig.savefig('out.png')")
 
     # Controls — genuine mutations must STILL route (no under-invalidation).
-    assert "lst" in _routes_mutation(proc, shell, "lst.append(4)")
-    assert "df" in _routes_mutation(proc, shell, "df.sort_values('x', inplace=True)")
+    assert "lst" in _routes_mutation(statement_processor, mock_shell, "lst.append(4)")
+    assert "df" in _routes_mutation(statement_processor, mock_shell, "df.sort_values('x', inplace=True)")
 
     # Control — a genuine receiver-pure read must STILL not route (no over-invalidation).
-    assert "df" not in _routes_mutation(proc, shell, "df.head()")
+    assert "df" not in _routes_mutation(statement_processor, mock_shell, "df.head()")
 
     plt.close(fig)
 
 
-def test_captured_return_draw_routes_on_identity_coupled_receiver_only(classifiers):
+def test_captured_return_draw_routes_on_identity_coupled_receiver_only(statement_processor, mock_shell):
     """A draw whose return is CAPTURED into an assignment must route too.
 
     ``standalone_method_call_receivers`` sees only bare-``Expr`` calls, so the
@@ -122,10 +92,9 @@ def test_captured_return_draw_routes_on_identity_coupled_receiver_only(classifie
     """
     pd = pytest.importorskip("pandas")
     plt = pytest.importorskip("matplotlib.pyplot")
-    proc, shell = classifiers
 
     fig, ax = plt.subplots()
-    shell.user_ns.update(
+    mock_shell.user_ns.update(
         {
             "df": pd.DataFrame({"x": [1, 2, 3]}),
             "ax": ax,
@@ -136,23 +105,23 @@ def test_captured_return_draw_routes_on_identity_coupled_receiver_only(classifie
     )
 
     # Captured-return draws on a live Axes -> mutation, whatever the return type.
-    assert "ax" in _routes_mutation(proc, shell, "counts, bins, patches = ax.hist(data)")
-    assert "ax" in _routes_mutation(proc, shell, "h = ax.hist(data, bins=11)")  # single target
-    assert "ax" in _routes_mutation(proc, shell, "wedges, texts = ax.pie(sizes)")  # sibling: pie
-    assert "ax" in _routes_mutation(proc, shell, "ml, sl, bl = ax.stem(data)")  # sibling: stem
+    assert "ax" in _routes_mutation(statement_processor, mock_shell, "counts, bins, patches = ax.hist(data)")
+    assert "ax" in _routes_mutation(statement_processor, mock_shell, "h = ax.hist(data, bins=11)")  # single target
+    assert "ax" in _routes_mutation(statement_processor, mock_shell, "wedges, texts = ax.pie(sizes)")  # sibling: pie
+    assert "ax" in _routes_mutation(statement_processor, mock_shell, "ml, sl, bl = ax.stem(data)")  # sibling: stem
     # Nested in a larger RHS expression is still caught (whole RHS is walked).
-    assert "ax" in _routes_mutation(proc, shell, "n = int((ax.hist(data)[0] > 0).sum())")
+    assert "ax" in _routes_mutation(statement_processor, mock_shell, "n = int((ax.hist(data)[0] > 0).sum())")
 
     # No over-invalidation: a captured pure read on an ORDINARY (non-Axes)
     # receiver must NOT route -- the discriminator is the receiver, not the shape.
-    assert "df" not in _routes_mutation(proc, shell, "m = df.mean()")
-    assert "df" not in _routes_mutation(proc, shell, "s = df.describe()")
-    assert "df" not in _routes_mutation(proc, shell, "top = df.head()")
+    assert "df" not in _routes_mutation(statement_processor, mock_shell, "m = df.mean()")
+    assert "df" not in _routes_mutation(statement_processor, mock_shell, "s = df.describe()")
+    assert "df" not in _routes_mutation(statement_processor, mock_shell, "top = df.head()")
 
     plt.close(fig)
 
 
-def test_call_expression_receiver_is_not_attributed_to_the_callee(classifiers):
+def test_call_expression_receiver_is_not_attributed_to_the_callee(statement_processor, mock_shell):
     """``open(p, 'a').write(x)`` must not record a mutation of ``open``.
 
     The receiver of ``.write`` is a Call, not a name. Resolving it walked through
@@ -165,8 +134,7 @@ def test_call_expression_receiver_is_not_attributed_to_the_callee(classifiers):
     This pins the misattribution only. Whether a non-idempotent write may be
     re-fired at all is a separate defence-in-depth question.
     """
-    proc, shell = classifiers
-    shell.user_ns.update(
+    mock_shell.user_ns.update(
         {
             "p": "audit.log",
             "payload": 42,
@@ -177,13 +145,13 @@ def test_call_expression_receiver_is_not_attributed_to_the_callee(classifiers):
     )
 
     # A constructor/factory call as the receiver has NO variable to mutate.
-    assert "open" not in _routes_mutation(proc, shell, "open(p, 'a').write('x\\n')")
-    assert "open" not in _routes_mutation(proc, shell, "open(p, 'w').writelines(['x'])")
-    assert "Path" not in _routes_mutation(proc, shell, "Path(p).write_text('x')")
+    assert "open" not in _routes_mutation(statement_processor, mock_shell, "open(p, 'a').write('x\\n')")
+    assert "open" not in _routes_mutation(statement_processor, mock_shell, "open(p, 'w').writelines(['x'])")
+    assert "Path" not in _routes_mutation(statement_processor, mock_shell, "Path(p).write_text('x')")
 
     # The documented chained-call intent still resolves to the real variable:
     # this descends through the Attribute branch, not the callee branch.
-    assert "groups" in _routes_mutation(proc, shell, "groups.setdefault(key, []).append(val)")
+    assert "groups" in _routes_mutation(statement_processor, mock_shell, "groups.setdefault(key, []).append(val)")
 
     # And an ordinary named receiver is untouched by the guard.
-    assert "groups" in _routes_mutation(proc, shell, "groups.update({'a': 1})")
+    assert "groups" in _routes_mutation(statement_processor, mock_shell, "groups.update({'a': 1})")

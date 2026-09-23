@@ -11,15 +11,14 @@ reads the same capture the statement engine replays with.
 import ast
 import sys
 import types
-from unittest.mock import MagicMock
 
 import pytest
-from traitlets.config.configurable import Configurable
 
 from cash.backends import FileBackend
 from cash.core import Cash
 from cash.notebook.cache_key import control_outcome_key
 from cash.notebook.ipython.magics import CashMagics
+from tests._cell_driver import run_cash_cell
 
 
 class _FakeTorch(types.ModuleType):
@@ -41,33 +40,20 @@ class _FakeTorch(types.ModuleType):
         return self._position / 100
 
 
-class _Shell(Configurable):
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-
-
 @pytest.fixture
-def notebook(monkeypatch, tmp_path):
+def notebook(monkeypatch, tmp_path, mock_shell):
     torch = _FakeTorch()
     monkeypatch.setitem(sys.modules, "torch", torch)
     # A tier that keeps metadata alone: that is where the record goes.
     backend = FileBackend(cache_dir=str(tmp_path))
-    shell = _Shell()
-    magics = CashMagics(shell, Cash(backend=backend, register_magic=False))
-    magics._auto_cache_enabled = True
-    shell.user_ns["torch"] = torch
+    magics = CashMagics(mock_shell, Cash(backend=backend, register_magic=False))
+    mock_shell.user_ns["torch"] = torch
     yield magics, backend
     backend.clear()
 
 
 def _loop_record(magics, backend, cell):
-    magics._execute_cell(cell)
+    run_cash_cell(magics, cell)
     loop = ast.unparse(ast.parse(cell).body[1])
     return backend.get_metadata(control_outcome_key(loop))
 

@@ -6,41 +6,21 @@ where outputs of scheduled-for-execution statements are removed from needed_vars
 preventing unnecessary cascading to earlier statements.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
-from traitlets.config.configurable import Configurable
 
 from cash.analysis.mutation_effects import CellEffects
-from cash.backends import InMemoryBackend
-from cash.core import Cash
 from cash.notebook._protocols import TrackingState
 from cash.notebook.upstream import UpstreamChecker
 
 
-class MockShell(Configurable):
-    """Mock IPython shell for testing."""
-
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-
-
 @pytest.fixture
-def upstream_checker():
-    """Provide UpstreamChecker instance for testing."""
-    backend = InMemoryBackend()
-    cash_inst = Cash(backend=backend, register_magic=False)
-    shell = MockShell()
-    checker = UpstreamChecker(shell, cash_instance=cash_inst)
+def upstream_checker(mock_shell, cash_instance, clean_backend):
+    """An UpstreamChecker on its own, with an empty tracking state."""
+    checker = UpstreamChecker(mock_shell, cash_instance=cash_instance)
     checker.set_tracking_state(TrackingState())
-    yield checker, shell, backend
-    backend.clear()
+    return checker, mock_shell, clean_backend
 
 
 class TestSkipOverwrittenVarUnit:

@@ -17,28 +17,15 @@ measurement is from an earlier run on this machine.
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock
 
 import pytest
-from traitlets.config import Configurable
 
 from cash.backends.file_backend import FileBackend
 from cash.core import Cash
 from cash.notebook import compute_baselines
 from cash.notebook.cache_status import CacheStatus
 from cash.notebook.ipython.magics import CashMagics
-
-
-class _MockShell(Configurable):
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
+from tests.conftest import MockShell
 
 
 @pytest.fixture
@@ -47,10 +34,9 @@ def kernel(tmp_path):
     compute_baselines._reset_stores_for_tests()
 
     def _start():
+        # Each kernel has its own shell; the cache directory is what they share.
         cash = Cash(backend=FileBackend(cache_dir=str(tmp_path)), register_magic=False)
-        magics = CashMagics(_MockShell(), cash)
-        magics._auto_cache_enabled = True
-        return magics
+        return CashMagics(MockShell(), cash)
 
     yield _start
     compute_baselines._reset_stores_for_tests()
