@@ -33,8 +33,10 @@ STORE_FAILED_FIX = (
 
 
 #: Result types seen to refuse an attribute (dict, list, ndarray, ...): not
-#: tried again (`Cash._attach_lineage`).
+#: tried again (`Cash._attach_lineage`). At most `UNTAGGABLE_TYPES_MAX`: a
+#: class made per call would otherwise be held here for good.
 UNTAGGABLE_TYPES: set[type] = set()
+UNTAGGABLE_TYPES_MAX = 256
 
 
 class StoreMixin:
@@ -245,7 +247,8 @@ class StoreMixin:
                 # Once per type, then never tried again: it logged on every
                 # call returning a dict or an array, and meant nothing to the
                 # user reading CASH_DEBUG.
-                UNTAGGABLE_TYPES.add(type(result))
+                if len(UNTAGGABLE_TYPES) < UNTAGGABLE_TYPES_MAX:
+                    UNTAGGABLE_TYPES.add(type(result))
                 logger.debug(
                     "results of type %s cannot carry a lineage tag, so a cached function taking one hashes its content",
                     type_name,
