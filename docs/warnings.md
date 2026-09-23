@@ -740,7 +740,7 @@ row posted to a service, the dict the caller inspects afterwards — the program
 is correct on the run that filled the cache and quietly different on every run
 after it.
 
-<!-- claim: cash/decorator/store.py:StoreMixin._store_refusal @48b1ea5f, cash/decorator/purity_checks.py:PurityChecksMixin._argument_snapshot @9319e225 -->
+<!-- claim: cash/decorator/store.py:StoreMixin._store_refusal @76b546c6, cash/decorator/purity_checks.py:PurityChecksMixin._argument_snapshot @9319e225 -->
 `argument mutation` is handled differently, because it is the one that caught
 people out: an object the caller still holds would stop being changed. A call
 seen changing an argument is **not stored** — the line names the argument, and
@@ -771,7 +771,7 @@ as the line inside your helper). It waives that effect and nothing else, so an
 effect added to the function later is still reported. `@cash.cache(assume_safe=True)`
 waives the whole function, including whatever is added to it later.
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._report_observed_effects @d7888ec4 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._report_observed_effects @5bd3de81 -->
 One caveat worth knowing: only the path this particular call took was watched.
 An effect behind a branch that did not run was not seen, so silence here is not
 a proof of purity — this supplements the source scan behind

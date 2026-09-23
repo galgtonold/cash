@@ -15,6 +15,7 @@ from typing import Any
 from .._clock import perf_counter as _perf_counter
 from ..backends import CacheMetadata
 from ..backends.serialization import get_serializer
+from ..effect_observer import EffectObserver
 from ..exceptions import CacheBackendError, CashCacheIneffectiveWarning, CashCacheStoreFailedWarning
 from ..object_hashing import estimate_object_size
 from ..value_types import IMMUTABLE_PRIMS
@@ -48,7 +49,7 @@ class StoreMixin:
         cache_if: Callable[[Any], bool] | None,
         tracker: Any,
         capture_watch: Any = NO_WATCH,
-        observer: Any = None,
+        observer: EffectObserver | None = None,
     ) -> str | None:
         """Why *res* must not be stored, or ``None`` to store it.
 
@@ -86,13 +87,13 @@ class StoreMixin:
             )
         if refusal is None and self._code_moved_since_keyed(func, func_name):
             refusal = "its code changed on disk after this process keyed it"
-        if refusal is None and getattr(observer, "mock_called", False):
+        if refusal is None and observer is not None and observer.mock_called:
             # Wherever the mock sat -- below the library call the body makes,
             # or swapped in after the key's bindings were read -- the result
             # may be a test's fake, and the next real run would be served it
             # (round 20). Not waivable: no audit makes a fake the answer.
             refusal = "a unittest.mock object was called while it ran, so the result may be a test's fake"
-        mutated = getattr(observer, "mutated_args", None)
+        mutated = observer.mutated_args if observer is not None else None
         if refusal is None and mutated and self._purity_mode(func_name) != "silent":
             # A hit returns the stored value and leaves the caller's object as
             # it was, where this call changed it: downstream of the call, the

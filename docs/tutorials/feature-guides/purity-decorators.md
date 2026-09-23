@@ -550,7 +550,7 @@ both raises `ValueError` at decoration time.
 
 ### Observed effects — what the first call actually did { #observed-effects-what-the-first-call-actually-did }
 
-<!-- claim: cash/effect_observer.py:EffectObserver @fe95f92d broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecksMixin._report_observed_effects @d7888ec4 -->
+<!-- claim: cash/effect_observer.py:EffectObserver @d1a92533 broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecksMixin._report_observed_effects @5bd3de81 -->
 Static analysis stops at library boundaries, so an effect *inside* a library is
 reachable only by the method's name — and a name cannot reach everything.
 `session.get(url)` is a network call, but `get` cannot go in the write-method
@@ -577,11 +577,15 @@ Four things worth knowing:
 - **Silence is not proof of purity.** Only the path this call took was watched.
   An effect behind a branch that did not run is unobserved, which is exactly
   why this supplements the static pass rather than replacing it.
-- **It never blocks or refuses.** By the time an effect is observed, the
-  function has run and its result is worth keeping; refusing the entry would
-  cost you the compute and prevent nothing. Even `strict=True` warns here
-  rather than raising — raising after the effect has landed would throw away a
-  correct result to report something it could not have prevented.
+- **A write, a connection or a subprocess never refuses the entry.** By the
+  time one is observed, the function has run and its result is worth keeping;
+  refusing the entry would cost you the compute and prevent nothing. Even
+  `strict=True` warns here rather than raising — raising after the effect has
+  landed would throw away a correct result to report something it could not
+  have prevented. Two observations are different, because storing would make
+  a hit behave unlike the call: an argument changed in place (below), and a
+  `unittest.mock` object called while the body ran. Those results are not
+  stored.
 - **Other threads are not attributed to you.** Dispatch is per-thread and
   per-task, so an effect on a worker thread is not reported as this function's.
   (The ordinary `Thread(target=...)` shape is already caught statically.)

@@ -31,14 +31,20 @@ happens to do. A branch not taken performs no effect, so silence here is not
 proof of purity -- it is one observation. The static analyzer reasons about
 code that was never run, which is a different and complementary guarantee.
 
+**What becomes of an observation.** A file write, a connection or a
+subprocess is reported, never acted on: by the time it is seen the function
+has run, and its result is correct and worth storing. Even under
+``strict=True`` it warns rather than raising, since raising after the effect
+landed would discard a correct result and prevent nothing. Two observations do
+stop the result being stored (`Cash._store_refusal`), because storing it would
+make a hit behave differently from the call: an argument the call changed in
+place (`mutated_args`, which a hit would leave as it was), and a
+``unittest.mock`` object called while the body ran (`mock_called`: the result
+may be a test's fake). The observer only records; the decorator decides.
+
 **What it deliberately does not do:**
 
-* It does not block, refuse, or un-cache anything. By the time an effect is
-  observed the function has already run and its result is already worth
-  storing; refusing the entry would cost the user the compute and prevent
-  nothing. Even under ``strict=True`` this warns rather than raising: raising
-  after the effect has landed would discard a correct result to report
-  something the raise could not have prevented.
+* It does not block or interrupt anything while the body runs.
 * It does not watch other threads. Dispatch is via ``ContextVar``, so an
   effect started on a worker thread is not attributed to the caller -- both
   because attribution would be wrong and because a background thread of cash's
@@ -215,6 +221,17 @@ class EffectObserver:
         #: result may be a test's fake, and must not be stored as the answer.
         self.mock_called = False
         self._mock_calls_at: list[int] = []
+        #: The call's arguments before the body ran, for naming the ones it
+        #: changed in place: ``{parameter: content hash}`` of those that can
+        #: change (`Cash._argument_snapshot`), and ``{parameter: (value,
+        #: identity snapshot)}`` for plain lists and dicts
+        #: (`Cash._argument_identities`). Set by the decorator; None when not
+        #: taken.
+        self.arg_snapshot: dict[str, str] | None = None
+        self.arg_identities: dict[str, tuple[Any, list]] | None = None
+        #: The parameters the call changed in place, once the decorator has
+        #: compared (`Cash._check_argument_mutation`); None when none did.
+        self.mutated_args: list[str] | None = None
 
     # -- lifecycle ---------------------------------------------------------
     def __enter__(self) -> "EffectObserver":

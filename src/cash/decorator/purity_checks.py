@@ -466,7 +466,7 @@ class PurityChecksMixin:
         args: tuple,
         kwargs: dict,
         args_hash: str | None,
-        observer: Any,
+        observer: EffectObserver | None,
     ) -> None:
         """Did the body change the arguments it was handed?
 
@@ -487,7 +487,7 @@ class PurityChecksMixin:
         """
         if args_hash is None or observer is None:
             return
-        identities = getattr(observer, "arg_identities", None)
+        identities = observer.arg_identities
         if identities:
             moved = [
                 name for name, (value, snapshot) in identities.items() if _plain_data.identity_changed(value, snapshot)
@@ -525,9 +525,9 @@ class PurityChecksMixin:
             f"the call changed {shown} in place -- the result was not stored, so this call runs every time",
         )
 
-    def _mutated_argument_names(self, func_name: str, args: tuple, kwargs: dict, observer: Any) -> list[str]:
+    def _mutated_argument_names(self, func_name: str, args: tuple, kwargs: dict, observer: EffectObserver) -> list[str]:
         """The parameters whose value moved across the call, by name."""
-        before = getattr(observer, "arg_snapshot", None)
+        before = observer.arg_snapshot
         if not before:
             return []
         if len(before) == 1:
@@ -535,7 +535,7 @@ class PurityChecksMixin:
         now = self._argument_snapshot(func_name, args, kwargs) or {}
         return [name for name, digest in before.items() if now.get(name) != digest]
 
-    def _make_effect_observer(self) -> Any:
+    def _make_effect_observer(self) -> EffectObserver:
         """An :class:`EffectObserver` scoped to this instance's cache dir.
 
         Excluding the cache directory is load-bearing: cash writes the entry
@@ -546,7 +546,7 @@ class PurityChecksMixin:
         cache_dir = getattr(self.config, "cache_dir", None)
         return EffectObserver(exclude_under=cache_dir)
 
-    def _report_observed_effects(self, func_name: str, observer: Any) -> None:
+    def _report_observed_effects(self, func_name: str, observer: EffectObserver | None) -> None:
         """Warn once when the first call did something a hit will not do.
 
         Silent when:
