@@ -43,7 +43,7 @@ const plugin: JupyterFrontEndPlugin<void> = {
   // running while `jupyter labextension list` reported it disabled: a kill
   // switch that lied in both directions.
   //
-  // Pinned by tests/test_labextension_packaging.py::
+  // Pinned by tests/test_notebook/test_labextension_packaging.py::
   // test_the_plugin_id_is_namespaced_by_the_package_name, over BOTH this
   // source and the shipped bundle.
   id: 'cash-live-cells:plugin',
