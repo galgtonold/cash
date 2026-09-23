@@ -107,9 +107,15 @@ def test_s3_get(s3_backend):
 
 
 def test_s3_set(s3_backend):
-    """One PUT, to one key."""
+    """One PUT, to one key, carrying both the metadata and the value."""
+    from cash.backends.entry_format import unpack_entry
+
     s3_backend.set("k", "data", {})
     s3_backend._writes.wait_all()
 
     assert s3_backend.s3.put_object.call_count == 1
-    assert s3_backend.s3.put_object.call_args[1]["Key"] == "cash/k.entry"
+    call = s3_backend.s3.put_object.call_args
+    assert call[1]["Key"] == "cash/k.entry"
+    meta, payload = unpack_entry(call[1]["Body"], with_payload=True)
+    assert meta["key"] == "k"
+    assert pickle.loads(payload) == "data"
