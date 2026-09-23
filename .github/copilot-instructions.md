@@ -121,7 +121,13 @@ statement's occurrence index in the cell.
 - The root conftest points `CASH_CACHE_DIR` at a per-test directory under the
   pytest base temp, and fails a test that leaves `.cash/` in the checkout. A test
   of the default cache location must set or clear `CASH_CACHE_DIR` itself.
-- Integration tests (`tests/test_notebook_integration/`) use `nb_runner`, which
+- Integration tests live in `tests/test_notebook_integration/<feature>/`, one
+  folder per feature (`basics`, `loops`, `upstream`, `restart`, `files`,
+  `calls`, `language`, ...; each folder's `__init__.py` says what it covers).
+  Add a test to the file whose name says the behaviour it checks, or start a
+  file named that way; never name a file after the sweep or review that found
+  the bug.
+- Integration tests use `nb_runner`, which
   drives a real kernel over a real `.ipynb`: `create_notebook`, `load`,
   `start_kernel`, `run_all` / `run_cells` (1-based), `set_cell_source`,
   `get_output`, `peek` (`tests/_nbharness/runner.py`). Import helpers such as
@@ -147,7 +153,9 @@ statement's occurrence index in the cell.
 ### Choosing integration tests
 
 Never run the whole integration suite while iterating; it takes a long time.
-Run the files whose names match what you changed, at most about ten. For a
+Run the files whose names match what you changed, at most about ten; the
+feature folders (`tests/test_notebook_integration/loops/` and so on) are where
+to look for them. For a
 broader check, run the core set, the same one CI runs on every push:
 
 ```bash

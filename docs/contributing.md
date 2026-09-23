@@ -99,7 +99,10 @@ What it covers and what it doesn't is documented under
 - `tests/test_ui/` — The dashboard, the cache explorer and the generated UI
 - `tests/test_cli/` — The `python -m cash` command line
 - `tests/test_tooling/` — CI workflows, test selection, repository hygiene and the test harness
-- `tests/test_notebook_integration/` — Integration tests (real notebooks and kernels)
+- `tests/test_notebook_integration/` — Integration tests (real notebooks and kernels),
+  one folder per feature (`basics/`, `loops/`, `upstream/`, `restart/`,
+  `files/`, `calls/`, `language/`, ...), each file named after the behaviour
+  it checks
 - `tests/test_wheel_gate/` — Installs the built wheel in a fresh venv and drives a real kernel (skipped unless switched on; see that file)
 - `tests/_nbharness/` — The kernel runner and helpers the integration tests use
 - `tests/docs/` — Executes the documentation's examples and checks its claims
@@ -121,6 +124,9 @@ pytest tests/test_notebook/ -v
 
 # Integration tests only (all of them take a long time)
 pytest tests/test_notebook_integration/ -v
+
+# One feature's integration tests
+pytest tests/test_notebook_integration/loops/ -v
 
 # The integration core set CI runs on every push
 pytest @tools/test_selection/core_set.txt
