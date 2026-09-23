@@ -47,12 +47,12 @@ genuine display attempt without IPython raise.  Both are pinned by
 from __future__ import annotations
 
 import logging
-import sys
 import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from ...tracking.randomness import restore_object_rng_states, restore_rng_state
+from .capture import replay_outputs
 
 if TYPE_CHECKING:
     from .._protocols import ShellProtocol, TrackingState
@@ -354,24 +354,5 @@ class StatementRestorer:
         Returns elapsed seconds (for timing-debug accounting).
         """
         t_output = time.time()
-        if stdout:
-            print(stdout, end="")
-        if stderr:
-            print(stderr, end="", file=sys.stderr)
-
-        if rich_outputs:
-            # Imported lazily so `import cash` works without IPython, which is
-            # an optional ([notebook] extra) dependency — see the module
-            # docstring.  Deliberately NOT wrapped in a try/except
-            # no-op: a notebook user replaying rich output expects it to
-            # actually render, so failing loudly beats silently dropping it.
-            # Guarded by `if rich_outputs` so the common no-rich-output restore
-            # skips the import entirely on this hot path.
-            from IPython.display import display, publish_display_data
-
-            for output in rich_outputs:
-                if isinstance(output, dict) and "data" in output:
-                    publish_display_data(data=output["data"], metadata=output.get("metadata", {}))
-                else:
-                    display(output)
+        replay_outputs(stdout, stderr, rich_outputs)
         return time.time() - t_output

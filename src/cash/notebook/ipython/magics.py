@@ -19,7 +19,7 @@ from collections.abc import Iterator
 from typing import Any
 
 from IPython.core.magic import Magics, line_magic, magics_class
-from IPython.display import HTML, display, publish_display_data
+from IPython.display import HTML, display
 
 from ... import __version__
 from ..._console import safe_text
@@ -53,6 +53,7 @@ from ..statement import ProcessResult, StatementProcessor
 # split in %cash_stats is only honest if "worth caching" means exactly what the
 # cache meant by it, so this deliberately shares the reader rather than
 # re-deriving the threshold here.
+from ..statement.capture import replay_outputs
 from ..statement.store import config_float
 from ..upstream import UpstreamChecker
 from ._args import strip_inline_comment
@@ -1344,11 +1345,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         )
 
         # Show the buffered result (if any)
-        for output in done.buffered_outputs:
-            if isinstance(output, dict) and "data" in output:
-                publish_display_data(data=output["data"], metadata=output.get("metadata", {}))
-            else:
-                display(output)
+        replay_outputs(rich=done.buffered_outputs)
 
         # A write that failed and was thrown away is the one loss the rows
         # cannot express -- see discarded_writes_notification. Appended here,

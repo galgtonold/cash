@@ -28,7 +28,7 @@ __all__ = [
     "capture_output",
     "display_execution_output",
     "make_capture_ctx",
-    "publish_rich_outputs",
+    "replay_outputs",
     "tee_output",
 ]
 
@@ -295,20 +295,25 @@ def make_capture_ctx(stream_output: bool, skip_capture: bool) -> Any:
     return capture_output(stdout=True, stderr=True, display=True)
 
 
-def publish_rich_outputs(outputs: list) -> None:
-    """Replay a list of rich display outputs.
+def replay_outputs(stdout: str = "", stderr: str = "", rich: list | None = None) -> None:
+    """Show captured output again: *stdout*, *stderr*, then the *rich*
+    display outputs (display-data dicts, or objects to ``display``).
 
-    Raises ImportError without IPython — see the module-header note: a
-    caller replaying rich output expects it to render, so failing loudly
-    beats silently dropping it.  The ``if not outputs`` guard keeps the
-    common no-rich-output path off the import entirely.
+    Raises ImportError without IPython when there is rich output to show --
+    see the module-header note: a caller replaying rich output expects it to
+    render, so failing loudly beats silently dropping it. With no rich output
+    IPython is never imported.
     """
-    if not outputs:
+    if stdout:
+        print(stdout, end="")
+    if stderr:
+        print(stderr, end="", file=sys.stderr)
+    if not rich:
         return
 
     from IPython.display import display, publish_display_data
 
-    for output in outputs:
+    for output in rich:
         if isinstance(output, dict) and "data" in output:
             publish_display_data(data=output["data"], metadata=output.get("metadata", {}))
         else:
@@ -321,10 +326,6 @@ def display_execution_output(captured: Any, silent: bool, stream_output: bool, m
         # User already saw output in real-time via TeeWriter.
         metrics["_output_flushed"] = True
         if not silent:
-            publish_rich_outputs(captured.outputs)
+            replay_outputs(rich=captured.outputs)
     elif not silent:
-        if captured.stdout:
-            print(captured.stdout, end="")
-        if captured.stderr:
-            print(captured.stderr, end="", file=sys.stderr)
-        publish_rich_outputs(captured.outputs)
+        replay_outputs(captured.stdout, captured.stderr, captured.outputs)

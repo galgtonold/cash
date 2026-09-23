@@ -51,8 +51,6 @@ from collections.abc import Awaitable, Callable, Generator, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from IPython.display import display, publish_display_data
-
 from ...analysis.annotations import get_statement_annotations
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...backends._writes import discarded_writes
@@ -72,6 +70,7 @@ from ..cache_status import CacheStatus
 from ..consumables import consumable_state, is_consumable_unrestorable
 from ..control_structures import contains_top_level_await, is_control_structure
 from ..statement import ProcessResult
+from ..statement.capture import replay_outputs
 
 if TYPE_CHECKING:
     from ..control_structures import ControlStructureProcessor
@@ -1752,11 +1751,7 @@ class CellExecutor:
         """
         if is_last_statement:
             return rich_outputs
-        for output in rich_outputs:
-            if isinstance(output, dict) and "data" in output:
-                publish_display_data(data=output["data"], metadata=output.get("metadata", {}))
-            else:
-                display(output)
+        replay_outputs(rich=rich_outputs)
         return buffered_result_outputs
 
     @staticmethod
@@ -1810,10 +1805,7 @@ class CellExecutor:
             return buffered_result_outputs
 
         all_metrics.append(metrics)
-        if metrics.get("stdout"):
-            print(metrics["stdout"], end="")
-        if metrics.get("stderr"):
-            print(metrics["stderr"], end="", file=sys.stderr)
+        replay_outputs(metrics.get("stdout", ""), metrics.get("stderr", ""))
         if metrics.get("status") == CacheStatus.ERROR and metrics.get("error"):
             raise metrics["error"]
 
@@ -1836,10 +1828,7 @@ class CellExecutor:
                 continue
             all_metrics.append(metrics)
             if not metrics.get("_output_flushed"):
-                if metrics.get("stdout"):
-                    print(metrics["stdout"], end="")
-                if metrics.get("stderr"):
-                    print(metrics["stderr"], end="", file=sys.stderr)
+                replay_outputs(metrics.get("stdout", ""), metrics.get("stderr", ""))
             buffered_result_outputs = self._flush_rich_outputs(
                 metrics.get("rich_outputs", []),
                 is_last_statement,
