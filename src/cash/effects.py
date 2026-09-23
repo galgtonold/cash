@@ -388,7 +388,7 @@ PYPLOT_FIGURE_ACCESSORS: frozenset[str] = frozenset(
 #: The kinds a namespace is consulted for: a call to one is recognised through
 #: what its names are bound to (``from time import time as now; now()``), not
 #: only by its spelling.
-_RESOLVED_KINDS: frozenset[EffectKind] = frozenset({EffectKind.CLOCK, EffectKind.ENVIRONMENT})
+_RESOLVED_KINDS: frozenset[EffectKind] = frozenset({EffectKind.CLOCK, EffectKind.ENVIRONMENT, EffectKind.INTERACTIVE})
 
 
 def dotted_name(func: ast.AST) -> str | None:
@@ -556,6 +556,11 @@ def _roots() -> dict[int, tuple[Any, str]]:
     roots: dict[int, tuple[Any, str]] = {}
     for entry in table:
         parts = entry.split(".")
+        if len(parts) == 1:  # a builtin: `ask = input; ask()`
+            builtin = getattr(builtins, entry, None)
+            if builtin is not None:
+                roots.setdefault(id(builtin), (builtin, entry))
+            continue
         obj: Any = sys.modules.get(parts[0])
         if obj is None:
             continue

@@ -506,12 +506,6 @@ _NOT_YET_REFUSED: frozenset[str] = frozenset(
         "upload_file",
         "upload_fileobj",
         "put_object",
-        # the person at the keyboard
-        "input",
-        "breakpoint",
-        "getpass.getpass",
-        "exit",
-        "quit",
     }
 )
 

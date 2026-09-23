@@ -958,7 +958,7 @@ normal.
 out, which is when they read the clock; `time.strftime("%Y-%m", t)` and
 `time.localtime(ts)` only format or convert the time you give them.
 
-<!-- claim: cash/purity_analyzer.py:_ambient_call @999d803f, cash/effects.py:_canonical_names @e0692d46 -->
+<!-- claim: cash/purity_analyzer.py:_ambient_call @7f70a878, cash/effects.py:_canonical_names @e0692d46 -->
 It is recognised by what the names refer to, not by how they are spelled:
 `import datetime as _dt; _dt.datetime.now()`, `from datetime import datetime as
 DateTime; DateTime.now()`, `import time as _time` and `from time import time as

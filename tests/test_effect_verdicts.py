@@ -85,6 +85,11 @@ ROWS = [
     # time, and a decorated function that draws on it was silent.
     ("plt.plot([1, 2])", "refuse", "impure_call"),
     ("plt.show()", "refuse", "impure_call"),
+    # The person at the keyboard: `input()` was cached in a notebook (a hit
+    # replayed the first answer without asking), and `getpass` was silent in
+    # a decorated function.
+    ("input()", "refuse", "impure_call"),
+    ("getpass.getpass()", "refuse", "impure_call"),
 ]
 
 
@@ -179,3 +184,11 @@ def test_a_discarded_pyplot_call_is_reported_once(tmp_path):
         "impure_call",
         ["plt.title() - draws on pyplot's current figure, which a hit does not redraw"],
     )
+
+
+def test_the_keyboard_is_recognised_through_an_alias():
+    import getpass
+
+    assert notebook_verdict("r = ask()", {"ask": getpass.getpass}) == ("refuse", ["getpass.getpass"])
+    assert notebook_verdict("r = ask()", {"ask": input}) == ("refuse", ["input"])
+    assert notebook_verdict("r = ask()", {"ask": len}) == ("cache", [])

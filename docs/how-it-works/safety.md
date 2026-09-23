@@ -223,6 +223,10 @@ import time as now; now()` counts. `time.localtime(ts)` and
 is the same list a `@cash.cache` function is checked against
 ([KEY-AMBIENT-READ](../warnings.md#key-ambient-read)).
 
+So does a statement that asks the person at the keyboard — `input()`,
+`getpass.getpass()`, `breakpoint()` — since a hit would replay the first answer
+without asking again.
+
 <!-- claim: cash/effects.py:METHOD_VERBS @49934ce1, cash/effects.py:is_open_write_mode @fa37e14b, cash/effects.py:MODULE_CALLS @c6f9471b -->
 Detection is by call shape, so it works without importing anything, with two
 consequences worth knowing. A bare `open(...)` counts only when its mode

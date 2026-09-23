@@ -13,7 +13,7 @@ hot path short.
 Reason-source order (deterministic):
 
 1. ``@cash:no-cache`` annotation
-2. Forbidden function calls (e.g. ``input``)
+2. Calls the forbidden-function scan refuses: the clock, a fresh id, ``input``
 3. ``@stateful`` function calls, and calls into user code that writes files
 4. In-place mutations + side effects (from ``StatementAnalysis``)
 5. Input variable missing lineage

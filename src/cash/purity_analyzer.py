@@ -67,7 +67,6 @@ from .effects import (
     MODULE_CALLS,
     MUTATOR_METHODS,
     Action,
-    Effect,
     EffectKind,
     classify_call,
 )
@@ -165,17 +164,6 @@ DECORATOR_POLICY: dict[EffectKind, Action] = {
 #: Kinds reported as ambient reads rather than as side effects.
 _AMBIENT_KINDS = frozenset({EffectKind.CLOCK, EffectKind.ENVIRONMENT})
 
-#: Calls the decorator did not report before the two paths shared one
-#: vocabulary, although the notebook path refuses them (or both should have
-#: named them). Each group is closed on its own, with a test of the new verdict
-#: on both paths.
-_NOT_YET_REPORTED: frozenset[str] = frozenset(
-    {
-        # the person at the keyboard
-        "getpass.getpass",
-    }
-)
-
 #: Builtin names the decorator reported on ANY receiver before (``re.compile``,
 #: ``gzip.open``), not only as the builtin itself.
 _REPORTED_ON_ANY_RECEIVER = frozenset(
@@ -192,21 +180,11 @@ _DISCARD_REPORTED_BUILTINS = frozenset(name for name in MODULE_CALLS if "." not 
 }
 
 
-def decorator_effect(call: ast.Call, namespace: dict[str, Any] | None = None) -> Effect | None:
-    """The effect *call* has, as the decorator path judges it, or None."""
-    effect = classify_call(call, namespace)
-    if effect is None or effect.name in _NOT_YET_REPORTED:
-        return None
-    return effect
-
-
 #: Method names the decorator reports on any receiver: a mutator, or a verb
 #: whose kind it warns about. The discarded-call rule skips these (the call is
 #: already reported), and "does this change a global?" reads them.
 REPORTED_METHODS: frozenset[str] = MUTATOR_METHODS | frozenset(
-    name
-    for name, kind in METHOD_VERBS.items()
-    if DECORATOR_POLICY[kind] is Action.WARN and name not in _NOT_YET_REPORTED
+    name for name, kind in METHOD_VERBS.items() if DECORATOR_POLICY[kind] is Action.WARN
 )
 
 
@@ -901,7 +879,7 @@ class _PurityVisitor(ast.NodeVisitor):
             if is_log_line(node):
                 return  # a diagnostic line: a hit skipping it is what caching means
 
-            effect = decorator_effect(node, self._namespace)
+            effect = classify_call(node, self._namespace)
             if (
                 effect is not None
                 and effect.kind not in _AMBIENT_KINDS
@@ -1005,7 +983,7 @@ class _PurityVisitor(ast.NodeVisitor):
 
     def _reports_effect(self, call: ast.Call) -> bool:
         """Is *call* reported by the effect rule (`plt.plot(...)`, say)?"""
-        effect = decorator_effect(call, self._namespace)
+        effect = classify_call(call, self._namespace)
         return effect is not None and DECORATOR_POLICY[effect.kind] is Action.WARN
 
     def _is_module_function_named_like_a_mutator(self, func_node: ast.Attribute) -> bool:
@@ -1538,7 +1516,7 @@ def _ambient_call(node: ast.Call, namespace: dict[str, Any] | None) -> str | Non
     while the canonical spellings warned. Also ``pd.to_datetime("today")`` and
     ``pd.Timestamp("now")``.
     """
-    effect = decorator_effect(node, namespace)
+    effect = classify_call(node, namespace)
     if effect is not None and effect.kind in _AMBIENT_KINDS:
         if effect.name in CLOCK_WHEN_ARG_CALLS:
             return f"{effect.name}({node.args[0].value!r})"  # type: ignore[attr-defined]

@@ -14,6 +14,7 @@ import pytest
 from cash.analysis.annotations import CacheAnnotation
 from cash.analysis.cacheability import analyze_statement
 from cash.analysis.cacheability_decision import decide_cacheability, identity_coupled_reason
+from cash.analysis.code_analyzer import CodeAnalyzer
 
 
 def _analysis(code: str):
@@ -95,18 +96,31 @@ class TestAnnotationNoCache:
 
 
 class TestForbiddenFunctions:
-    def test_forbidden_reasons_returned(self):
-        def fake_scan(code, user_ns, tree):
-            return ["Calls forbidden function: input"]
-
+    def test_input_is_refused_by_the_real_scan(self):
+        """``input()`` asks the person at the keyboard: a hit would skip the
+        question and replay the first answer. This used to be pinned with a
+        scan that was told to say so; the real one did not."""
         cacheable, reasons = _decide(
             "x = input()",
             inputs=set(),
             outputs={"x"},
-            scan_forbidden=fake_scan,
+            scan_forbidden=CodeAnalyzer.scan_for_forbidden_functions,
         )
         assert cacheable is False
-        assert reasons == ["Calls forbidden function: input"]
+        assert reasons == ["input"]
+
+    def test_a_clock_read_is_refused_by_the_real_scan(self):
+        import time
+
+        cacheable, reasons = _decide(
+            "t = time.time()",
+            inputs=set(),
+            outputs={"t"},
+            user_ns={"time": time},
+            scan_forbidden=CodeAnalyzer.scan_for_forbidden_functions,
+        )
+        assert cacheable is False
+        assert reasons == ["time.time"]
 
     def test_forbidden_scan_exception_does_not_crash(self):
         def bad_scan(*_a, **_k):
