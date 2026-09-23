@@ -194,6 +194,11 @@ class TestComputeContextHash:
         h = compute_context_hash({"x": 10})
         assert len(h) == 16  # Truncated to 16 chars
 
+    def test_one_changed_variable_of_several_changes_the_hash(self):
+        h1 = compute_context_hash({"i": 0, "j": 0})
+        h2 = compute_context_hash({"i": 0, "j": 1})
+        assert h1 != h2
+
 
 class _Point:
     """A plain user object: hashable by identity, repr carries its address."""

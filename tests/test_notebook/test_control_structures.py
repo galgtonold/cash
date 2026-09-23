@@ -7,6 +7,9 @@ These tests verify that:
 - While, if, with, try are processed as single cacheable units.
 - Break/continue loops fall back to single-unit execution.
 - Iteration context hashing differentiates cache keys per iteration.
+
+The helpers the processor uses (detection, loop target names, context
+hashing) are tested on their own in test_control_structure_helpers.py.
 """
 
 import ast
@@ -15,52 +18,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from cash.notebook.cache_status import CacheStatus
-
-
-class TestControlStructureDetection:
-    """Test detection of control structures from AST nodes."""
-
-    def test_for_loop_detected(self):
-        from cash.notebook.control_structures import is_control_structure
-
-        node = ast.parse("for i in range(3): print(i)").body[0]
-        assert is_control_structure(node) is True
-
-    def test_while_loop_detected(self):
-        from cash.notebook.control_structures import is_control_structure
-
-        node = ast.parse("while True: break").body[0]
-        assert is_control_structure(node) is True
-
-    def test_if_statement_detected(self):
-        from cash.notebook.control_structures import is_control_structure
-
-        node = ast.parse("if x > 0: print('positive')").body[0]
-        assert is_control_structure(node) is True
-
-    def test_with_statement_detected(self):
-        from cash.notebook.control_structures import is_control_structure
-
-        node = ast.parse("with open('f') as f: pass").body[0]
-        assert is_control_structure(node) is True
-
-    def test_try_statement_detected(self):
-        from cash.notebook.control_structures import is_control_structure
-
-        node = ast.parse("try: pass\nexcept: pass").body[0]
-        assert is_control_structure(node) is True
-
-    def test_assignment_not_detected(self):
-        from cash.notebook.control_structures import is_control_structure
-
-        node = ast.parse("x = 1").body[0]
-        assert is_control_structure(node) is False
-
-    def test_expression_not_detected(self):
-        from cash.notebook.control_structures import is_control_structure
-
-        node = ast.parse("print('hello')").body[0]
-        assert is_control_structure(node) is False
 
 
 class TestControlStructureProcessor:
@@ -394,53 +351,6 @@ class TestControlStructureProcessor:
 
         for m in result.metrics:
             assert m.get("control_type") == "try"
-
-
-class TestIterationContextHashing:
-    """Test that iteration context hashing differentiates cache keys."""
-
-    def test_context_hash_different_values(self):
-        from cash.notebook.control_structures import compute_context_hash
-
-        h1 = compute_context_hash({"i": 0})
-        h2 = compute_context_hash({"i": 1})
-        assert h1 != h2
-
-    def test_context_hash_same_values(self):
-        from cash.notebook.control_structures import compute_context_hash
-
-        h1 = compute_context_hash({"i": 5})
-        h2 = compute_context_hash({"i": 5})
-        assert h1 == h2
-
-    def test_context_hash_multiple_variables(self):
-        from cash.notebook.control_structures import compute_context_hash
-
-        h1 = compute_context_hash({"i": 0, "j": 0})
-        h2 = compute_context_hash({"i": 0, "j": 1})
-        assert h1 != h2
-
-
-class TestTargetExtraction:
-    """Test extraction of target variable names from for loop targets."""
-
-    def test_simple_name_target(self):
-        from cash.notebook.control_structures import extract_target_names
-
-        target = ast.parse("for i in range(3): pass").body[0].target
-        assert extract_target_names(target) == ["i"]
-
-    def test_tuple_target(self):
-        from cash.notebook.control_structures import extract_target_names
-
-        target = ast.parse("for x, y, z in items: pass").body[0].target
-        assert extract_target_names(target) == ["x", "y", "z"]
-
-    def test_nested_tuple_target(self):
-        from cash.notebook.control_structures import extract_target_names
-
-        target = ast.parse("for (a, b), c in items: pass").body[0].target
-        assert set(extract_target_names(target)) == {"a", "b", "c"}
 
 
 class TestOutputFlushing:
