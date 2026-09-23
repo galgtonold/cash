@@ -472,3 +472,54 @@ def test_oracle_the_harness_measures_real_work(nb_runner, tmp_path):
         "the oracle did not re-execute; the counters are not measuring real work"
     )
     assert nb_runner.peek("CALLS_F") == "[1, 1]"
+
+
+def test_callees_sharing_a_decorator_each_restore_their_own_global(nb_runner, tmp_path):
+    """Two callees returned by one ``functools.wraps`` decorator share the
+    wrapper's code object. Each must still capture and restore the global it
+    writes itself, not the other's."""
+    ca, cb = tmp_path / "a.log", tmp_path / "b.log"
+    defs = (
+        "import functools, os, time\n"
+        "def _tick(p):\n"
+        "    fd = os.open(p, os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+        "    os.write(fd, b'X')\n"
+        "    os.close(fd)\n"
+        "def _busy(ms):\n"
+        "    t = time.perf_counter() + ms / 1000.0\n"
+        "    while time.perf_counter() < t:\n"
+        "        pass\n"
+        "def passes_through(f):\n"
+        "    @functools.wraps(f)\n"
+        "    def wrapper(v):\n"
+        "        return f(v)\n"
+        "    return wrapper\n"
+        "CALLS_A = []\n"
+        "CALLS_B = []\n"
+        "@passes_through\n"
+        "def compute_a(v):\n"
+        "    CALLS_A.append(v)\n"
+        f"    _tick(r'{ca}')\n"
+        f"    _busy({_BODY_MS})\n"
+        "    return v\n"
+        "@passes_through\n"
+        "def compute_b(v):\n"
+        "    CALLS_B.append(v)\n"
+        f"    _tick(r'{cb}')\n"
+        f"    _busy({_BODY_MS})\n"
+        "    return v\n"
+    )
+    nb_runner.create_notebook(
+        [SETUP, defs, "sink_a = []\nsink_a.append(compute_a(1))\n", "sink_b = []\nsink_b.append(compute_b(2))\n"]
+    )
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert (nb_runner.peek("CALLS_A"), nb_runner.peek("CALLS_B")) == ("[1]", "[2]"), "cold run is wrong"
+    cold = [_n(ca), _n(cb)]
+
+    nb_runner.restart()
+    nb_runner.run_all()
+
+    served = [a - b for a, b in zip([_n(ca), _n(cb)], cold)]
+    assert served == [0, 0], f"the calls were not served from cache after the restart ({served} real calls)"
+    assert (nb_runner.peek("CALLS_A"), nb_runner.peek("CALLS_B")) == ("[1]", "[2]")

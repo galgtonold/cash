@@ -237,12 +237,14 @@ def _loop_var_digest(name: str, value: object, loop_var_digests: Mapping[str, st
     return digest if digest is not None else compute_hash_full(value)
 
 
-#: ``fn.__code__ -> the globals its body mutates``, before the namespace filter.
+#: ``code object -> the globals its body mutates``, before the namespace filter.
 #:
 #: Keyed on the code object so that a hit skips ``inspect.getsource``, which is
 #: the whole cost of the analysis and would otherwise be paid on every
 #: intercepted call. A redefined function has a new code object, so an edit is
-#: never served the old verdict. Cleared when it reaches
+#: never served the old verdict. It is the code of the function ``getsource``
+#: reads, after ``inspect.unwrap``: every function one ``functools.wraps``
+#: decorator returns shares the wrapper's code. Cleared when it reaches
 #: :data:`_GLOBAL_MUTATION_CACHE_MAX` entries.
 _GLOBAL_MUTATION_CACHE: dict[Any, tuple[str, ...]] = {}
 _GLOBAL_MUTATION_CACHE_MAX = 4096
@@ -261,7 +263,10 @@ def callee_mutated_globals(fn) -> tuple[str, ...]:
     globals_dict = getattr(fn, "__globals__", None)
     if not isinstance(globals_dict, dict):
         return ()
-    memo_key = getattr(fn, "__code__", None)
+    try:
+        memo_key = getattr(_inspect.unwrap(fn), "__code__", None)
+    except ValueError:  # a __wrapped__ cycle; getsource cannot read it either
+        return ()
     cached = _GLOBAL_MUTATION_CACHE.get(memo_key) if memo_key is not None else None
     if cached is None:
         try:

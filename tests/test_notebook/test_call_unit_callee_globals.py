@@ -7,6 +7,7 @@ widened the bug into — a call whose enclosing statement is skip-cached
 serving a hit and therefore the only thing that can put the write back.
 """
 
+import functools
 import types
 
 import pytest
@@ -79,6 +80,24 @@ def is_pure(v):
     return v * 10
 
 
+def _passes_through(f):
+    @functools.wraps(f)
+    def wrapper(*args):
+        return f(*args)
+
+    return wrapper
+
+
+@_passes_through
+def wrapped_appends_to_aaa(v):
+    AAA.append(v)
+
+
+@_passes_through
+def wrapped_appends_to_zzz(v):
+    ZZZ.append(v)
+
+
 class TestIdentification:
     def test_a_write_method_on_a_global_is_named(self):
         assert callee_mutated_globals(appends_to_a_global) == ("CALLS",)
@@ -148,6 +167,16 @@ class TestIdentification:
             if str(tmp.parent) in sys.path:
                 sys.path.remove(str(tmp.parent))
             tmp.unlink(missing_ok=True)
+
+    def test_callees_sharing_a_decorator_get_their_own_verdict(self):
+        """Every function decorated by one ``functools.wraps`` decorator shares
+        the wrapper's code object, while the source read is the wrapped
+        function's. The memo must not hand the first one's verdict to the
+        second: its writes would not be captured, and the first one's global
+        would be restored over by a stale value."""
+        assert wrapped_appends_to_aaa.__code__ is wrapped_appends_to_zzz.__code__
+        assert callee_mutated_globals(wrapped_appends_to_aaa) == ("AAA",)
+        assert callee_mutated_globals(wrapped_appends_to_zzz) == ("ZZZ",)
 
     def test_a_sourceless_callee_is_silent_rather_than_raising(self):
         # A C builtin has no readable source. Fail OPEN: a callee cash cannot
