@@ -1562,8 +1562,21 @@ class VirtualLineage:
         # in the runtime leaves the planner re-running the whole loop against
         # entries written for halves -- a silent stale value, and the cause of
         # three reverted attempts. See ``notebook/loop_split.py``.
+        #
+        # Unless the loop's last run left an outcome that still holds. A
+        # verdict applies from the NEXT run, so a loop that learned it ran
+        # whole, and so did one a direct re-run split (the runtime records
+        # its outcome under the whole loop's source either way). Its halves
+        # have no outcome of their own until the planner runs them as two
+        # statements, so modelled as halves after a restart, what the loop
+        # built got lineages no entry was written with, and a restart plus
+        # one run of the last cell replayed the loop and everything above
+        # it -- whenever the first run's timing had recorded a verdict. The
+        # record holding means the loop's inputs, files and callees are what
+        # they were, so it has nothing to re-run and its outputs are the
+        # recorded ones; any change falls through to the split.
         split_k = self._loop_split_k(node)
-        if split_k is not None:
+        if split_k is not None and not self._recorded_outcome_holds(node, sim):
             try:
                 halves = split_nodes(node, split_k)
             except ValueError:  # for/else -- not splittable
@@ -1609,13 +1622,7 @@ class VirtualLineage:
         stmt_code = ast.unparse(node)
         virtual_lineage = sim.virtual_lineage
 
-        inputs, _ = CodeAnalyzer.analyze_code_block(stmt_code)
-        input_hashes = {}
-        for inp in inputs:
-            if inp in virtual_lineage:
-                input_hashes[inp] = virtual_lineage[inp]
-            elif inp in self.variable_lineage:
-                input_hashes[inp] = self.variable_lineage[inp]
+        inputs, input_hashes = self._control_input_hashes(stmt_code, virtual_lineage)
 
         outputs, lookup_time, files_stale, _ = self._update_virtual_lineage(
             stmt_code, virtual_lineage, sim.virtual_modules
@@ -1639,9 +1646,7 @@ class VirtualLineage:
         # What the runtime left behind when it last ran this very structure
         # (see TrackingState.control_outcomes): the files it read, and the
         # lineages it produced.
-        recorded = self.tracking_state.control_outcomes.get(hashlib.sha256(stmt_code.encode("utf-8")).hexdigest())
-        if recorded is None:
-            recorded = self._persisted_control_outcome(stmt_code, virtual_lineage)
+        recorded = self._recorded_control_outcome(stmt_code, virtual_lineage)
         if recorded is not None:
             if compute_file_hash_component(recorded[2]) != recorded[3]:
                 # A file behind its outputs moved: the one change the entry
@@ -1698,6 +1703,44 @@ class VirtualLineage:
             # ``PACK.mkdir()`` without it.
             # The same rule simple statements follow in simulate_one_node.
             sim.trace.append(TraceEntry(stmt_code, set(), inputs, input_hashes, {}, files_stale))
+
+    def _control_input_hashes(self, stmt_code: str, virtual_lineage: dict[str, str]) -> tuple[set[str], dict[str, str]]:
+        """What *stmt_code* reads, and the lineage each of those names has here."""
+        inputs, _ = CodeAnalyzer.analyze_code_block(stmt_code)
+        input_hashes = {}
+        for inp in inputs:
+            if inp in virtual_lineage:
+                input_hashes[inp] = virtual_lineage[inp]
+            elif inp in self.variable_lineage:
+                input_hashes[inp] = self.variable_lineage[inp]
+        return inputs, input_hashes
+
+    def _recorded_control_outcome(
+        self, stmt_code: str, virtual_lineage: dict[str, str]
+    ) -> tuple[dict[str, str], dict[str, str], frozenset[str], str] | None:
+        """The outcome the runtime recorded for *stmt_code*: this session's,
+        else an earlier kernel's that may still be trusted."""
+        recorded = self.tracking_state.control_outcomes.get(hashlib.sha256(stmt_code.encode("utf-8")).hexdigest())
+        if recorded is None:
+            recorded = self._persisted_control_outcome(stmt_code, virtual_lineage)
+        return recorded
+
+    def _recorded_outcome_holds(self, node: ast.AST, sim: SimulationResult) -> bool:
+        """Whether *node*'s recorded outcome would be taken as its result here:
+        read with these input lineages, and every file behind it unchanged --
+        the two checks ``_simulate_one_control_unit`` makes before trusting it."""
+        stmt_code = ast.unparse(node)
+        try:
+            _, input_hashes = self._control_input_hashes(stmt_code, sim.virtual_lineage)
+            recorded = self._recorded_control_outcome(stmt_code, sim.virtual_lineage)
+            return (
+                recorded is not None
+                and recorded[0] == input_hashes
+                and compute_file_hash_component(recorded[2]) == recorded[3]
+            )
+        except Exception:  # noqa: BLE001 - any doubt keeps the split, as before
+            logger.debug("[UPSTREAM_DEBUG] could not check a loop's recorded outcome", exc_info=True)
+            return False
 
     def _persisted_mutation_verdict(self, source_hash: str) -> set[str] | None:
         """The runtime's verdict on a bare method call, from an earlier kernel.

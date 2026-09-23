@@ -136,6 +136,55 @@ def test_a_restart_restores_what_a_loop_built_without_replaying_it(nb_runner, _t
     assert ran == [REPORT], f"ran after the restart: {ran}"
 
 
+#: Makes the loop's first run record a split verdict whatever the machine's
+#: load. The verdict is a wall-clock judgement of the first iterations
+#: (``LoopSplitPolicy``): about 3 to 6 ms each records one, so on a busy
+#: machine this notebook learned a split about one run in six, and with it the
+#: restart replayed everything. Raising the ceiling and dropping the floor makes
+#: that case the one every run takes.
+LEARNS_A_SPLIT = "cash.configure(loop_split_max_iter_seconds=1.0, loop_split_min_remaining_seconds=0.0)"
+
+
+def _split_expr(loop_src: str) -> str:
+    """The split point recorded for *loop_src*'s loop, as the kernel's store holds it."""
+    code = ast.unparse(ast.parse(loop_src).body[1])
+    split = "__import__('cash.notebook.loop_split', fromlist=['_'])"
+    return (
+        f"{split}.store_for_backend(__import__('cash')._global_cash.backend)"
+        f".get({split}.loop_source_hash(__import__('ast').parse({code!r}).body[0]))"
+    )
+
+
+def test_a_restart_restores_what_a_loop_built_after_it_learned_to_split(nb_runner, _teed):
+    """A split verdict applies from the loop's NEXT run, so the run that
+    learned it ran the loop whole and recorded its outcome under the whole
+    loop. Modelled as a head and a tail after the restart, the loop had no
+    outcome to restore from, and every cell above the report ran again."""
+    _run_all(nb_runner, [f"{CELLS[0]}\n{LEARNS_A_SPLIT}", *CELLS[1:]])
+    assert WANT in nb_runner.get_output(REPORT_CELL)
+    assert nb_runner.peek(_split_expr(LOOP)) != "None", "the loop learned no split"
+    assert nb_runner.peek(_record_expr(LOOP)) != "None", "the loop's outcome was not persisted"
+
+    ran = _restart_and_run(nb_runner, REPORT_CELL)
+
+    assert WANT in nb_runner.get_output(REPORT_CELL)
+    assert ran == [REPORT], f"ran after the restart: {ran}"
+
+
+def test_a_loop_that_learned_to_split_still_sees_a_changed_file(nb_runner, _teed):
+    """Negative control for the test above: the whole loop's outcome is used
+    only while it still holds. A file behind it changed, so the split loop runs."""
+    _run_all(nb_runner, [f"{CELLS[0]}\n{LEARNS_A_SPLIT}", *CELLS[1:]])
+    assert nb_runner.peek(_split_expr(LOOP)) != "None", "the loop learned no split"
+    edited = Path(nb_runner.work_dir) / "exports" / "e000.csv"
+    edited.write_text("v\n" + "\n".join(str(j + 1) for j in range(50)) + "\n")
+
+    ran = _restart_and_run(nb_runner, REPORT_CELL)
+
+    assert f"S {sum(range(50)) * N + 50}" in nb_runner.get_output(REPORT_CELL), nb_runner.get_output(REPORT_CELL)
+    assert "d = parse(f)" in ran, f"ran after the restart: {ran}"
+
+
 def test_a_helper_edited_through_another_helper_is_not_served_stale(nb_runner, _teed):
     """The loop calls ``parse``, which calls ``clean``. Editing ``clean`` changes
     no lineage the loop's own inputs name -- only its callees' globals do."""
