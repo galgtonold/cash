@@ -30,7 +30,14 @@ The unit twin is ``tests/test_backends/test_ram_tier_sheds_its_share.py``.
 
 import pytest
 
-pytestmark = [pytest.mark.integration, pytest.mark.timeout(600)]
+# A fresh kernel: SETUP patches cash's memory backend in place, and a warm
+# kernel's reset between tests keeps cash's modules but clears the names the
+# patch's lambda reads. On a warm kernel every later test on the worker then
+# got a NameError out of the RAM tier's pressure check on every tenth write
+# (measured: the next test's `m.psutil.virtual_memory()` raised); a fresh
+# kernel takes the patch with it, and starts this test from nothing earlier
+# tests left behind.
+pytestmark = [pytest.mark.integration, pytest.mark.timeout(600), pytest.mark.fresh_kernel]
 
 # Restoring from cache, the standing caveat: the canonical explanation is in
 # `test_loop_edit_rerun_matrix.py`. Only a failure saying "re-ran" is retried.
