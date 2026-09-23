@@ -1063,17 +1063,17 @@ class FileBackend(CacheBackend):
 
         split = metadata_span(blob)
         try:
-            # Raw fd writes, NOT os.fdopen. The file tracker patches
-            # ``builtins.open`` and ``io.open``, and ``os.fdopen`` goes
-            # through the latter -- so opening the entry file that way makes
-            # cash's own storage a dependency of the user's function, and the
-            # cache never hits again. The old path escaped that only by
-            # accident: ``os.replace`` is not a patched API, so the entry file
-            # was never opened under its real name. The guard that should
-            # catch this matches on the directory being named `.cash` or
-            # `_global_cash`, so any other `cache_dir` goes unprotected.
+            # Raw fd writes. The file tracker and the effect observer watch
+            # the ``open`` audit event, which every Python-level open of a
+            # named file raises (``open``, ``io.open``, ``pathlib``): a read
+            # there becomes a dependency of the user's function, and a write
+            # an effect of it. ``os.open`` raises the event with no mode,
+            # which neither watches, so the entry file never reaches them. The
+            # guard that would otherwise catch cash's own storage matches on
+            # the directory being named `.cash` or `_global_cash`, so any
+            # other `cache_dir` would go unprotected.
             #
-            # Writing the fd directly keeps cash's storage out of the patched
+            # Writing the fd directly keeps cash's storage out of the watched
             # surface entirely, which is the property that should hold whatever
             # the directory is called. It also removes the buffering, so the
             # payload and the header reach the page cache in program order
