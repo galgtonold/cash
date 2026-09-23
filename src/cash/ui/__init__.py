@@ -1,21 +1,5 @@
-"""Visualization and debugging tools for cache inspection."""
+"""Interactive display components: the cache explorer and the analytics dashboard.
 
-from __future__ import annotations
-
-# Import only what doesn't cause circular dependencies
-from cash.graph import DependencyGraph
-
-
-# Lazy imports to avoid circular dependencies
-def __getattr__(name):
-    if name == "CacheExplorer":
-        from .explorer import CacheExplorer
-
-        return CacheExplorer
-    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
-
-
-__all__ = [
-    "CacheExplorer",
-    "DependencyGraph",
-]
+Import each from its module: ``cash.ui.explorer.CacheExplorer`` (or
+``Cash.explorer()``) and ``cash.ui.dashboard.show_analytics_dashboard``.
+"""

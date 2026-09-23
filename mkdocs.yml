@@ -175,7 +175,7 @@ nav:
     - Data sources: api/data_sources.md
     - Exceptions & warnings: api/exceptions.md
     - Notebook integration: api/notebook.md
-    - Experimental: api/experimental.md
+    - Inspection tools: api/inspection.md
   - Resources:
     - FAQ: faq.md
     - Warnings: warnings.md

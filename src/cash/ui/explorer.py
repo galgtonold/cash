@@ -46,9 +46,6 @@ class CacheExplorer:
     explorer.get_preview(key)       # peek at a stored value
     explorer.clear_function("my_module.my_func")  # surgical clear
     ```
-
-    Status: experimental. Import via `cash.experimental.CacheExplorer`
-    if instantiating outside `Cash.explorer()`.
     """
 
     def __init__(self, cash_app: Cash) -> None:

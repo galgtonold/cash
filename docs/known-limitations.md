@@ -838,7 +838,7 @@ on a library upgrade. Measured on a class planted under a `site-packages` path:
 | `vendorlib.Widget` (module-level) | `Widget` | no |
 | `vendorlib.DynamicWidget` (built in a function) | `make_dynamic.<locals>.DynamicWidget` | **yes** |
 
-That is a recompute, never a wrong answer. `cash.mark_opaque(TheClass)` stops it
+That is a recompute, never a wrong answer. `cash.opaque(TheClass)` stops it
 if the churn matters.
 
 ### A closure or `lambda` passed as an argument stops the call caching entirely

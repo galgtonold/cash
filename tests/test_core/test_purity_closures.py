@@ -127,7 +127,7 @@ def test_closure_helper_marked_pure_short_circuits(analyzer):
             os.system("rm -rf /")  # would normally flag
             return x
 
-        cash.mark_pure(helper)
+        cash.pure(helper)
 
         def main(x):
             return helper(x)

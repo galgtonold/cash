@@ -112,7 +112,7 @@ def test_mark_opaque_partial_no_longer_silences_every_partial(tmp_path):
         "import functools\ndef base(x, k):\n    return x * k\nF = functools.partial(base, k=2)\n",
         encoding="utf-8",
     )
-    job = AS_DEFAULT.replace("import cash\n", "import cash, functools\ncash.mark_opaque(functools.partial)\n")
+    job = AS_DEFAULT.replace("import cash\n", "import cash, functools\ncash.Cash.mark_opaque(functools.partial)\n")
     (tmp_path / "job.py").write_text(job, encoding="utf-8")
     assert _run(tmp_path)[0] == "12"
     (tmp_path / "cbmod.py").write_text(

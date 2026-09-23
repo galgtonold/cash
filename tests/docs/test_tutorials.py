@@ -613,7 +613,7 @@ _DOC_NAMESPACES: dict[str, dict] = {
         ),
         "my_function": lambda: None,
     },
-    "experimental": {
+    "inspection": {
         **_COMMON_NONTUT,
     },
     "backend_internals": {

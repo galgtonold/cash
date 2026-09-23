@@ -626,7 +626,6 @@ also count as issues — the paranoid setting.
 `strict=True` and `assume_safe=True` are mutually exclusive; passing
 both raises `ValueError` at decoration time.
 
-<!-- claim: cash/__init__.py:mark_pure @860cda7f, cash/__init__.py:mark_stateful @d1ea88e3 -->
 ### Observed effects — what the first call actually did { #observed-effects-what-the-first-call-actually-did }
 
 <!-- claim: cash/effect_observer.py:EffectObserver @c5e827d0 broad="the observed-effect contract is the class as a whole", cash/core.py:Cash._report_observed_effects @60289c7d -->
@@ -708,22 +707,25 @@ Two limits worth stating:
   globals would be both expensive and noisy. If a library keeps a registry you
   depend on being updated, that call is a poor candidate for caching.
 
-### `cash.mark_pure(func)` and `cash.mark_stateful(func)`
+<!-- claim: cash/notebook/purity.py:pure @b3cd5bc3, cash/notebook/purity.py:stateful @d2b97ef0 -->
+### Marking a third-party callable: `cash.pure(func)` and `cash.stateful(func)`
 
-The `@pure` and `@stateful` decorators wrap the function — convenient
-for code you own, awkward for third-party callables (C extensions,
-classes you can't subclass). Use `mark_pure` / `mark_stateful` to
-annotate in-place without wrapping:
+`@pure` and `@stateful` mark the function they are given before they wrap
+it, so calling them on a library callable you can't decorate marks it in
+place — you can ignore the wrapper they return:
 
 ```python
 import cash, pandas as pd
 
 # We've audited and know this is fine — silence the analyzer for it.
-cash.mark_pure(pd.DataFrame.merge)
+cash.pure(pd.DataFrame.merge)
 
 # This one really does write to disk — tell the analyzer.
-cash.mark_stateful(pd.DataFrame.to_sql)
+cash.stateful(pd.DataFrame.to_sql)
 ```
+
+A callable that takes no new attributes (a builtin or C function) raises
+`AttributeError` here rather than being marked silently in name only.
 
 Now any `@cash.cache`d function whose body calls `pd.DataFrame.merge`
 won't flag on it, and any function whose body calls
@@ -764,7 +766,7 @@ it flags:
     `map(cb, xs)`, `min(rows, key=cb)`): those are hashed by source,
     transitively through the helpers they call. Where cash genuinely cannot
     hash one — `functools.partial` — it warns at that argument instead, naming
-    `depends_on=` or `cash.mark_opaque()`.
+    `depends_on=` or `cash.opaque()`.
 - **Ambient reads** — the clock (`datetime.now`, `time.time`), the
   environment (`os.getenv`, `os.environ[...]`), the working directory, a
   fresh `uuid4()`. These are hidden *inputs* rather than side effects, so
@@ -819,7 +821,7 @@ module/enclosing state still flags. So does anything bound by a `for` loop or a
 `with` block, and `model = model.fit(x)`: `fit` returns `self`.
 
 Stops at library boundaries (anything under `site-packages` /
-stdlib) — those are trusted unless you `mark_stateful` them
+stdlib) — those are trusted unless you mark them with `cash.stateful`
 explicitly. A call to another `@cash.cache`-decorated function is treated
 as a dependency-graph edge, not walked into.
 
@@ -831,10 +833,8 @@ notebook cell), and the parent's cache invalidates automatically.
 
 | Symbol | Import path | Type | Effect |
 |---|---|---|---|
-| `pure` | `from cash import pure` | decorator | Sets `_cash_pure = True`. Cash skips the stateful check for bare-name calls to this function. |
-| `stateful` | `from cash import stateful` | decorator | Sets `_cash_stateful = True`. Cash refuses to cache any cell that calls this by bare name. |
-| `mark_pure(func)` | `from cash import mark_pure` | in-place marker | Sets `_cash_pure = True` on *func* without wrapping. For third-party callables. |
-| `mark_stateful(func)` | `from cash import mark_stateful` | in-place marker | Sets `_cash_stateful = True` on *func* without wrapping. |
+| `pure` | `from cash import pure` | decorator | Sets `_cash_pure = True` on *func* and on the wrapper, so `cash.pure(lib_func)` marks a third-party callable. Cash skips the stateful check for bare-name calls to this function. |
+| `stateful` | `from cash import stateful` | decorator | Sets `_cash_stateful = True` on *func* and on the wrapper. Cash refuses to cache any cell that calls this by bare name. |
 | `is_pure(func)` | `from cash import is_pure` | bool | Marker-only check. Does not analyze source. |
 | `is_stateful(func)` | `from cash import is_stateful` | bool | Marker-only check. |
 | `analyze_function_purity(func, user_ns=None)` | `from cash import analyze_function_purity` | bool | AST-based heuristic. Result is SHA-256-cached. |

@@ -3,10 +3,7 @@
 A warning without a handle is a warning nobody can look up: there is nothing to
 search for, nothing to google, nothing to ask a colleague about. Every warning
 in the ``CashWarning`` hierarchy (see ``cash.exceptions``) carries a code from
-this module and a link to its section in ``docs/warnings.md``. The one
-exception is ``cash.experimental``, whose import-time notice warns with a
-plain ``FutureWarning`` outside that hierarchy on purpose -- it flags an
-unstable API, not a diagnosable condition, so it gets no code.
+this module and a link to its section in ``docs/warnings.md``.
 
 Codes are mnemonic on purpose. ``CACHE-THRASH`` tells the reader something
 before they click; ``CASH-W012`` requires exactly the lookup we are trying to

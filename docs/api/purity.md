@@ -9,8 +9,7 @@ heuristic, common footguns — see the [Purity tutorial](../tutorials/feature-gu
 
 ```python
 from cash import (
-    pure, stateful,           # decorators
-    mark_pure, mark_stateful, # in-place markers for third-party callables
+    pure, stateful,           # decorators; also mark a third-party callable in place
     is_pure, is_stateful,     # introspection
     analyze_function_purity,  # AST-based heuristic (returns bool)
 )
@@ -37,23 +36,18 @@ declaration.
 
 ---
 
-## Module-level markers
+## Marking third-party callables
 
-For library callables you can't decorate at the source (C extensions,
-classes you can't subclass) — annotate them in your code where you
-import them. **Plain function calls, NOT decorators** — they set the
-marker in place without wrapping the callable.
+For library callables you can't decorate at the source, call the same
+decorators on them where you import them. They set the marker on the
+callable itself before wrapping it, so the returned wrapper can be ignored:
 
 ```python
 import cash, pandas as pd
 
-cash.mark_pure(pd.DataFrame.merge)        # tell the analyzer this is fine
-cash.mark_stateful(pd.DataFrame.to_sql)   # tell it this writes
+cash.pure(pd.DataFrame.merge)        # tell the analyzer this is fine
+cash.stateful(pd.DataFrame.to_sql)   # tell it this writes
 ```
-
-::: cash.mark_pure
-
-::: cash.mark_stateful
 
 ---
 

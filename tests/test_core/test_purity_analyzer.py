@@ -265,17 +265,17 @@ def _marked_pure_callee(x):
 
 import cash as _cash  # noqa: E402
 
-_cash.mark_pure(_marked_pure_callee)
+_cash.pure(_marked_pure_callee)  # marks the function itself, not only a wrapper
 
 
 def _marked_stateful_callee(x):
     return x  # body is fine; we declare it stateful externally
 
 
-_cash.mark_stateful(_marked_stateful_callee)
+_cash.stateful(_marked_stateful_callee)
 
 
-def test_mark_pure_short_circuits(analyzer):
+def test_a_callee_marked_pure_short_circuits(analyzer):
     """A callee marked pure (via _cash_pure attribute) is not recursed
     into and does not contribute to issues."""
 
@@ -286,7 +286,7 @@ def test_mark_pure_short_circuits(analyzer):
     assert not any(i.kind == ISSUE_IMPURE_CALL for i in r.issues)
 
 
-def test_mark_stateful_propagates(analyzer):
+def test_a_callee_marked_stateful_propagates(analyzer):
     def main(x):
         return _marked_stateful_callee(x)
 

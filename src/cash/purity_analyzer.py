@@ -25,7 +25,7 @@ the callable's source file is outside stdlib / site-packages
 (``is_local_module``) **or** the callable shares the cached
 function's top-level package. Everything else is treated as opaque
 and optimistic (not flagged). Users who want a library call flagged
-add ``cash.mark_stateful(library_func)``.
+call ``cash.stateful(library_func)`` on it.
 
 The analyzer is pure: no side effects of its own, no warnings
 emitted from here. The decorator layer turns the report into

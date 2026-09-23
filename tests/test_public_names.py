@@ -1,35 +1,54 @@
-"""Tests for experimental namespace and DependencyGraph."""
+"""Tests for the cash.ui and cash.backends namespaces, and DependencyGraph."""
 
 import importlib
 import unittest.mock
 
 import pytest
 
-from cash.experimental import __getattr__ as exp_getattr
 from cash.graph import DependencyGraph
 
 
-class TestUIInit:
-    """Test the cash.ui lazy import namespace."""
+class TestOneImportPath:
+    """Each public name has one import path, with no aliases in between."""
 
-    def test_import_dependency_graph(self):
-        """DependencyGraph is directly importable from cash.ui."""
-        from cash.ui import DependencyGraph as DG
-
-        assert DG is not None
-
-    def test_lazy_import_cache_explorer(self):
-        """CacheExplorer can be lazy-imported from cash.ui."""
-        from cash.ui import CacheExplorer
-
-        assert CacheExplorer is not None
-
-    def test_lazy_import_invalid(self):
-        """Invalid attribute raises AttributeError."""
+    def test_cash_ui_re_exports_nothing(self):
         import cash.ui
 
-        with pytest.raises(AttributeError):
-            _ = cash.ui.nonexistent_thing  # noqa: B018
+        for name in ("CacheExplorer", "DependencyGraph"):
+            assert not hasattr(cash.ui, name)
+
+    def test_the_experimental_namespace_is_gone(self):
+        with pytest.raises(ImportError):
+            importlib.import_module("cash.experimental")
+
+    def test_the_markers_have_one_spelling(self):
+        import cash
+
+        for name in ("mark_opaque", "mark_pure", "mark_stateful", "CascadingBackend"):
+            assert not hasattr(cash, name)
+
+    def test_opaque_leaves_the_class_unmodified(self):
+        """`cash.opaque` marks a class once, in the registry, and does not
+        write to the class -- so it works on one that refuses new attributes,
+        which is the kind of class it is called on from outside."""
+        import cash
+
+        class Frozen(type):
+            def __setattr__(cls, name, value):
+                raise TypeError("this class takes no new attributes")
+
+        class Vendor(metaclass=Frozen):
+            pass
+
+        assert cash.opaque(Vendor) is Vendor
+        assert cash.Cash._is_opaque(Vendor) is True
+        assert "__cash_opaque__" not in vars(Vendor)
+
+    def test_tiered_backend_is_exported_at_the_top_level(self):
+        import cash
+        from cash.backends.tiered_backend import TieredBackend
+
+        assert cash.TieredBackend is TieredBackend
 
 
 class TestBackendsInit:
@@ -61,71 +80,14 @@ class TestBackendsInit:
         assert Serializer is not None
         assert PickleSerializer is not None
 
-    def test_redis_backend_is_none_without_redis(self):
-        """RedisBackend is None when redis is not installed."""
-        from cash.backends import RedisBackend
+    def test_remote_backends_resolve_to_their_classes(self):
+        """The lazy names are the classes themselves, installed client or not."""
+        from cash.backends import RedisBackend, S3Backend
+        from cash.backends.redis_backend import RedisBackend as RedisFromModule
+        from cash.backends.s3_backend import S3Backend as S3FromModule
 
-        # May be None if redis not installed, or a class if it is
-        # Just check it doesn't crash
-        assert RedisBackend is None or RedisBackend is not None
-
-    def test_s3_backend_is_none_without_boto3(self):
-        """S3Backend is None when boto3 is not installed."""
-        from cash.backends import S3Backend
-
-        assert S3Backend is None or S3Backend is not None
-
-
-class TestExperimentalNamespace:
-    """Test the cash.experimental lazy import namespace."""
-
-    def test_import_cache_explorer(self):
-        """CacheExplorer can be imported from experimental."""
-        from cash.experimental import CacheExplorer
-
-        assert CacheExplorer is not None
-
-    def test_import_analytics_manager(self):
-        """AnalyticsManager can be imported from experimental."""
-        from cash.experimental import AnalyticsManager
-
-        assert AnalyticsManager is not None
-
-    def test_import_tiered_backend(self):
-        """TieredBackend can be imported from experimental."""
-        from cash.experimental import TieredBackend
-
-        assert TieredBackend is not None
-
-    def test_import_dependency_graph(self):
-        """DependencyGraph can be imported from experimental."""
-        from cash.experimental import DependencyGraph
-
-        assert DependencyGraph is not None
-
-    def test_invalid_attribute_raises(self):
-        """Invalid attribute raises AttributeError."""
-        with pytest.raises(AttributeError, match="has no attribute"):
-            exp_getattr("NonExistentThing")
-
-    def test_redis_backend_import_error(self):
-        """RedisBackend raises ImportError if redis not installed."""
-        try:
-            from cash.experimental import RedisBackend
-
-            # If redis is installed, this should work
-            assert RedisBackend is not None
-        except ImportError:
-            pass  # Expected if redis not installed
-
-    def test_s3_backend_import_error(self):
-        """S3Backend raises ImportError if boto3 not installed."""
-        try:
-            from cash.experimental import S3Backend
-
-            assert S3Backend is not None
-        except ImportError:
-            pass  # Expected if boto3 not installed
+        assert RedisBackend is RedisFromModule
+        assert S3Backend is S3FromModule
 
 
 class TestDependencyGraph:

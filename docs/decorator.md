@@ -682,9 +682,9 @@ arguments, like the function itself. Library code is deliberately **not**
 folded, and rightly gets no warning — with one edge where cash cannot tell:
 see [known limitations](known-limitations.md#code-passed-as-an-argument).
 
-#### `cash.mark_opaque(T)` / `@cash.opaque` — opt a type out
+#### `@cash.opaque` / `cash.opaque(T)` — opt a type out
 
-<!-- claim: cash/core.py:Cash._is_opaque @d25796c2, cash/__init__.py:opaque @3e1ca111 -->
+<!-- claim: cash/core.py:Cash._is_opaque @d25796c2, cash/__init__.py:opaque @679c15ff -->
 For a marker class you pass but do not depend on, or one whose code churns for
 reasons that never change the result:
 
@@ -694,17 +694,18 @@ class RenderTarget:
     ...
 
 VendorWidget = type("VendorWidget", (), {})   # stands in for a library's class
-cash.mark_opaque(VendorWidget)                # one you can't decorate — same marker,
-                                              # applied from outside
+cash.opaque(VendorWidget)                     # one you can't decorate — same call,
+                                              # made from outside
 ```
 
 `@cash.opaque` returns the class itself, not a wrapper, so `isinstance` and
-identity comparisons are unaffected. Neither spelling is inherited: a subclass
+identity comparisons are unaffected; the class is recorded in a registry,
+not modified. Opacity is not inherited: a subclass
 of an opaque class is *not* opaque, because it may carry freshly written methods
 of its own. Mark the subclass too if you want the same treatment.
 
 A `functools.partial` cannot be marked: it is the function it wraps plus
-arguments, and both are keyed. `cash.mark_opaque(functools.partial)` used to be
+arguments, and both are keyed. `cash.opaque(functools.partial)` used to be
 the way to silence KEY-OPAQUE-CALLABLE for one, and it exempted every partial in
 the process — including ones over code you were still editing.
 
@@ -1044,8 +1045,8 @@ covers the statement it sits on, so new code is reported. It works under
 findings (a read of a mutated global, which has no line to attach to).
 
 See [Purity tutorial](tutorials/feature-guides/purity-decorators.md) for the full story including
-`@pure`, `@stateful`, and `mark_pure`/`mark_stateful` for third-party
-callables.
+`@pure` and `@stateful`, which also mark third-party callables when called
+on them.
 
 ### `allow_random=` — unseeded randomness
 
@@ -1625,8 +1626,7 @@ but the individual chunk entries (keyed
 ## Where to go next
 
 - [API reference — Cash class](api/cash.md) — exhaustive signatures
-- [Purity tutorial](tutorials/feature-guides/purity-decorators.md) — `@pure`, `@stateful`,
-  `mark_pure`, `mark_stateful`
+- [Purity tutorial](tutorials/feature-guides/purity-decorators.md) — `@pure`, `@stateful`
 - [Caching class methods](tutorials/feature-guides/caching-class-methods.md) — recipe for
   stateful receivers via `register_hasher`
 - [Choosing a backend](tutorials/feature-guides/choosing-a-backend.md) —

@@ -10,14 +10,14 @@ source — if you spot an issue, file it against the corresponding
 | Page | Covers |
 |---|---|
 | [Cash class](cash.md) | `Cash`, the lazily-created module-level singleton, `configure`, `reset_session`, and `CacheExplanation` (returned by `f.explain()`). |
-| [Backends](backends.md) | Concrete backends users instantiate: `InMemoryBackend`, `FileBackend`, `SQLiteBackend`, and `TieredBackend` (the default `Cash()` builds one, and so does `Cash(backends=[...])`), plus the experimental `RedisBackend` and `S3Backend`. |
+| [Backends](backends.md) | Concrete backends users instantiate: `InMemoryBackend`, `FileBackend`, `SQLiteBackend`, and `TieredBackend` (the default `Cash()` builds one, and so does `Cash(backends=[...])`), plus the remote `RedisBackend` and `S3Backend`. |
 | [Backend internals](backend_internals.md) | The `CacheBackend` ABC, the `CacheMetadata` dataclass (and the plain-dict wire format backends actually see), `Serializer` hierarchy, `PendingWrites` helper. Read this if you want to write your own backend or contribute fixes. |
-| [Purity & annotations](purity.md) | `@pure`, `@stateful`, `mark_pure`, `mark_stateful`, `is_pure`, `is_stateful`, `analyze_function_purity`. |
+| [Purity & annotations](purity.md) | `@pure`, `@stateful`, `is_pure`, `is_stateful`, `analyze_function_purity`. |
 | [Configuration](config.md) | `CashConfig` dataclass, `get_config`, `create_default_config`. |
 | [Data sources](data_sources.md) | `FileDataSource` and the `DataSource` ABC for custom dependency tracking. |
 | [Exceptions & warnings](exceptions.md) | The full hierarchy of `CashError` subclasses and `CashWarning` subclasses. |
 | [Notebook integration](notebook.md) | `CashStripPreprocessor` (nbconvert), `CacheStatus`, `ExecutionResult`, `CashMagics`, `CodeAnalyzer`. The Python-side hooks used by tooling around the magics. |
-| [Experimental](experimental.md) | `CacheExplorer`, `DependencyGraph`, `AnalyticsManager`. Useful but unstable APIs under `cash.experimental`. |
+| [Inspection tools](inspection.md) | `CacheExplorer`, `DependencyGraph`, `AnalyticsManager`: looking at a cache from code. |
 
 ## Looking for narrative guides?
 

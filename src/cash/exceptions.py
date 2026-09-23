@@ -136,7 +136,7 @@ class CashImpureFunctionError(CashError):
 
     The body lists each reason with line numbers. Cache it anyway (accepting the
     staleness risk) with ``@cash.cache(assume_safe=True)``, mark an audited
-    callee with ``@cash.mark_pure(callee)``, or refactor to a static call.
+    callee with ``cash.pure(callee)``, or refactor to a static call.
     """
 
 

@@ -1,11 +1,8 @@
 # Warnings
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @ccd18bfb, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @ccd18bfb -->
 Every warning in the `CashWarning` hierarchy carries a code in square brackets
 and a link to its section here. To look one up, search this page for the code.
-The one exception is the import-time notice from `cash.experimental`: it is a
-plain `FutureWarning` outside that hierarchy — it flags an unstable API rather
-than a diagnosable condition — and it carries neither a code nor a link.
 
 Warnings are informational by default. To turn them into errors:
 
@@ -382,7 +379,7 @@ speaks up once the loss has accumulated past a couple of real seconds *and* its
 per-call overhead exceeds even the largest body time it has seen, so a function
 that is usually fast but occasionally very slow will not be flagged.
 
-<!-- claim: cash/effectiveness.py:EffectivenessLedger.final_verdicts @0f748126 -->
+<!-- claim: cash/effectiveness.py:EffectivenessLedger.final_verdicts @4332e49a -->
 It needs three calls of a function to judge during the run, and a command-line
 tool that calls each function once per process never gets there — so the same
 test runs again when the process exits, and there one call can count. The
@@ -1334,13 +1331,13 @@ the *wrapped* function explicitly with `@cash.cache(depends_on=[the_function])`
 the invalidation gap; it does not silence the warning, because the carrier
 itself is still unhashable. If the result does not depend on it — the identity
 is already covered by another argument, or the carrier is library code Cash
-misjudged — say so deliberately: `cash.mark_opaque(TheType)`, which does silence
-it, or `@cash.opaque` on a class you own. Both cover the whole type: every
+misjudged — say so deliberately: `cash.opaque(TheType)`, which does silence
+it (as a decorator, `@cash.opaque`, on a class you own). It covers the whole type: every
 object of it in the process, including ones passed later over code you are
 still editing, so prefer passing a plain function and keyword arguments where
-you can. (`cash.mark_opaque(functools.partial)`,
+you can. (`cash.opaque(functools.partial)`,
 once the advice for partials, no longer applies to them: it silenced every partial
-in the process, including ones over code you were still editing.) Both record the decision in the code,
+in the process, including ones over code you were still editing.) It records the decision in the code,
 which is what makes them better than a warning filter.
 
 **When it is safe to ignore.** In the one case where the carrier only *looks*

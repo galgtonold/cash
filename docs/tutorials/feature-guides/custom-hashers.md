@@ -215,7 +215,7 @@ When you cache a method, `self` is one of the arguments and Cash hashes it. The 
 
 ### Changing a hasher invalidates old entries
 
-By design. The source hash is embedded in the per-argument digest, which folds into the args hash, which folds into the cache key. Edit `hash_model`'s body and every cache entry it produced becomes unreachable — the next call computes a fresh key and re-runs the function. If you want to refactor the hasher *without* invalidating, keep the function body byte-identical (rename via alias, or use `mark_pure`-style attribute patching instead of editing).
+By design. The source hash is embedded in the per-argument digest, which folds into the args hash, which folds into the cache key. Edit `hash_model`'s body and every cache entry it produced becomes unreachable — the next call computes a fresh key and re-runs the function. If you want to refactor the hasher *without* invalidating, keep the function body byte-identical (rename via alias, or set attributes on the function from outside instead of editing).
 
 ### MRO dispatch — subclasses inherit
 

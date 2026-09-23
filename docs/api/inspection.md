@@ -1,26 +1,14 @@
-# Experimental
+# Inspection tools
 
-<!-- claim: cash/experimental/__init__.py:_LOADERS @b2b28cf4, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
-APIs under `cash.experimental` are useful but their surfaces are
-still evolving — minor versions may rearrange them. Importing emits
-a `FutureWarning` so you can spot the dependency in any project that
-upgrades cash unexpectedly.
-
-## Imports
+<!-- claim: cash/core.py:Cash.explorer @599913c8, cash/ui/explorer.py:CacheExplorer @29620f36 broad="the page documents the class as a whole" -->
+Three classes for looking at a cache from code rather than from a magic or
+the badge. Each has one import path:
 
 ```python
-from cash.experimental import (
-    CacheExplorer,        # browse / search / clear cache entries
-    DependencyGraph,      # the structure behind Cash.graph
-    AnalyticsManager,     # rolling cache analytics db
-)
+from cash.ui.explorer import CacheExplorer   # browse / preview / clear cache entries
+from cash.graph import DependencyGraph       # the structure behind Cash.graph
+from cash.analytics import AnalyticsManager  # rolling cache analytics db
 ```
-
-`RedisBackend` and `S3Backend` are also reachable here — see
-[Backends](backends.md) for those. `TieredBackend` is re-exported from this
-module too, but it is **not** experimental: it is the default backend every
-`Cash()` builds. Import it from `cash.backends.tiered_backend` to skip the
-`FutureWarning` this module raises.
 
 ---
 

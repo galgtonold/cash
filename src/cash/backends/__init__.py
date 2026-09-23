@@ -9,15 +9,12 @@ from .serialization import ParquetSerializer, PickleSerializer, Serializer, get_
 from .sqlite_backend import SQLiteBackend
 from .tiered_backend import TieredBackend
 
-# Optional backends are resolved on FIRST ATTRIBUTE ACCESS (PEP 562), not at
+# The remote backends are resolved on FIRST ATTRIBUTE ACCESS (PEP 562), not at
 # import. Importing them eagerly costs ~1.7s for the redis client alone, on the
 # ``import cash`` path that every kernel start and every test subprocess pays,
-# and almost nobody configures a remote backend. ``factory.py`` already imports
-# both function-locally; these names exist for the public API surface.
-#
-# The ``None`` contract is preserved: an absent dependency still yields
-# ``cash.backends.RedisBackend is None`` rather than raising, so existing
-# availability checks keep working.
+# and almost nobody configures a remote backend. Their modules import without
+# the client library installed; constructing one without it raises
+# ``DependencyNotFoundError``.
 _OPTIONAL_BACKENDS = {
     "RedisBackend": ".redis_backend",
     "S3Backend": ".s3_backend",
@@ -28,12 +25,9 @@ def __getattr__(name: str):
     module_name = _OPTIONAL_BACKENDS.get(name)
     if module_name is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    try:
-        from importlib import import_module
+    from importlib import import_module
 
-        value = getattr(import_module(module_name, __name__), name)
-    except ImportError:
-        value = None
+    value = getattr(import_module(module_name, __name__), name)
     globals()[name] = value  # resolve once; later reads skip this hook
     return value
 

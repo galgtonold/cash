@@ -27,12 +27,12 @@
     "anchors": 1,
     "audited": "2026-07-27"
   },
-  "docs/api/experimental.md": {
-    "anchors": 2,
-    "audited": "2026-07-27"
-  },
   "docs/api/index.md": {
     "anchors": 0,
+    "audited": "2026-07-27"
+  },
+  "docs/api/inspection.md": {
+    "anchors": 2,
     "audited": "2026-07-27"
   },
   "docs/api/notebook.md": {

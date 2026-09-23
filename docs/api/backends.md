@@ -40,11 +40,10 @@ from cash import (
     TieredBackend,  # the default; Cash() and Cash(backends=[...]) build one
 )
 
-# Experimental — extras-gated:
+# Remote backends — extras-gated:
 #   pip install 'cash-lib[redis]'
 #   pip install 'cash-lib[s3]'
-from cash.backends.redis_backend import RedisBackend
-from cash.backends.s3_backend import S3Backend
+from cash.backends import RedisBackend, S3Backend
 ```
 
 ::: cash.InMemoryBackend
@@ -69,9 +68,9 @@ from cash.backends.s3_backend import S3Backend
 
 ---
 
-The two backends below ship as **experimental** under
-`cash.experimental` — their configuration surfaces tend to evolve
-faster than the core. Install the relevant extra:
+The two remote backends below are imported from `cash.backends`. Their
+configuration surfaces tend to evolve faster than the core. Install the
+relevant extra:
 
 ```bash
 pip install 'cash-lib[redis]'

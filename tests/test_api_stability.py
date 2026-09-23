@@ -1,33 +1,4 @@
-"""Tests for cash.experimental namespace."""
-
-import pytest
-
-
-def test_experimental_import_cache_explorer():
-    """Test that CacheExplorer can be imported from experimental."""
-    from cash.experimental import CacheExplorer
-
-    assert CacheExplorer is not None
-
-
-def test_experimental_import_analytics():
-    """Test that AnalyticsManager can be imported from experimental."""
-    from cash.experimental import AnalyticsManager
-
-    assert AnalyticsManager is not None
-
-
-def test_experimental_import_tiered_backend():
-    """Test that TieredBackend can be imported from experimental."""
-    from cash.experimental import TieredBackend
-
-    assert TieredBackend is not None
-
-
-def test_experimental_import_nonexistent():
-    """Test that importing nonexistent attribute raises ImportError."""
-    with pytest.raises(ImportError):
-        from cash.experimental import NonExistentThing  # noqa
+"""The public names ``cash`` exports."""
 
 
 def test_core_exports_stable():
@@ -52,11 +23,8 @@ def test_core_exports_stable():
         "is_pure",
         "is_stateful",
         "analyze_function_purity",
-        "mark_pure",
-        "mark_stateful",
         # Code-surface opt-out
-        "opaque",  # public since 06c2bd6 (decorator form of the escape hatch)
-        "mark_opaque",  # public since 06c2bd6 (same, for a class you cannot edit)
+        "opaque",  # public since 06c2bd6 (the code-surface escape hatch)
         # Configuration
         "get_config",
         "CashConfig",

@@ -9,9 +9,7 @@
   Import from ``cash.notebook``, e.g. ``from cash.notebook import CacheStatus``.
 
 Purity decorators (``pure``, ``stateful``, ``is_pure``, ``is_stateful``) are
-part of the public API and are re-exported here from ``cash.notebook.purity``
-for convenience.  Either import path is valid for those symbols; prefer
-``from cash import pure`` in application code.
+part of the public API; import them from ``cash``, e.g. ``from cash import pure``.
 """
 
 from __future__ import annotations
@@ -46,87 +44,20 @@ from .notebook.purity import analyze_function_purity, is_pure, is_stateful, pure
 from .notebook.randomness import CashRandomnessWarning
 from .remote_source import RemoteFileDataSource
 
-# ---------------------------------------------------------------------------
-# Annotation helpers for third-party callables
-# ---------------------------------------------------------------------------
-
-
-def mark_pure(func: Any) -> Any:
-    """Mark *func* as pure for cash's purity analyzer.
-
-    Use this on library functions you've audited and want the
-    analyzer to trust. Sets the same ``_cash_pure`` attribute the
-    `pure` decorator sets, so it composes with the existing
-    annotation system. Returns *func* unmodified (no wrapping).
-
-    Unlike `pure`, this does not wrap the function — the
-    attribute is set directly on the passed object. This matters for
-    third-party callables that may not survive wrapping (C extensions,
-    callable instances with strict signatures).
-
-    Example:
-
-        import pandas as pd
-        import cash
-
-        cash.mark_pure(pd.DataFrame.merge)
-
-    Returns:
-        The same callable, with ``_cash_pure = True`` attached if
-        possible. Silently no-ops on objects that don't allow
-        attribute setting.
-    """
-    try:
-        setattr(func, "_cash_pure", True)
-    except (AttributeError, TypeError):
-        pass
-    return func
-
-
-def mark_stateful(func: Any) -> Any:
-    """Mark *func* as stateful (side-effecting) for cash's purity analyzer.
-
-    Tells the analyzer to flag any call to *func* as an impure call
-    when analyzing a cached function. Sets the same
-    ``_cash_stateful`` attribute the `stateful` decorator sets.
-
-    Use on library functions whose impurity the analyzer can't see
-    (C extensions, database drivers, etc.) so that calling them
-    from a ``@cash.cache``-decorated function triggers the warning.
-
-    Example:
-
-        import pandas as pd
-        import cash
-
-        cash.mark_stateful(pd.DataFrame.to_sql)
-
-    Returns:
-        The same callable, with ``_cash_stateful = True`` attached
-        if possible. Silently no-ops on objects that don't allow
-        attribute setting.
-    """
-    try:
-        setattr(func, "_cash_stateful", True)
-    except (AttributeError, TypeError):
-        pass
-    return func
-
 
 def opaque(cls: type) -> type:
-    """Class decorator: exclude this class's code from every cache key.
+    """Exclude this class's code from every cache key.
 
-    Use on a class you own -- when a call takes an instance of it, or the
-    class itself, as an argument -- but don't want its methods' source
-    participating in the cache key. For a class you do NOT own (third-party,
-    generated, vendored) decorating it isn't an option; register it from
-    outside with `mark_opaque` instead. The two are the same marker spelled
-    two ways for the two kinds of owner.
+    Use it when a call takes an instance of the class, or the class itself,
+    as an argument, but its methods' source should not take part in the key.
+    Decorate a class you own with ``@cash.opaque``; for one you do not own
+    (third-party, generated, vendored) call it on the class instead:
+    ``cash.opaque(VendorWidget)``.
 
-    Returns *cls* itself, unchanged apart from one new attribute
-    (``__cash_opaque__``) -- never a wrapper, so ``isinstance`` checks and
-    identity comparisons against the decorated class keep working exactly
-    as before.
+    Returns *cls* itself -- never a wrapper, so ``isinstance`` checks and
+    identity comparisons against it keep working exactly as before. The class
+    is recorded in a process-wide registry and is left unmodified, so this
+    works on classes that refuse new attributes too.
 
     Example:
 
@@ -139,15 +70,12 @@ def opaque(cls: type) -> type:
     Does NOT propagate to a subclass. A subclass may carry its own
     freshly-written methods the user actively edits, and inheriting opacity
     from an ancestor would silently exempt that new code from ever
-    invalidating the cache. A subclass that wants the same treatment
-    decorates itself.
+    invalidating the cache. A subclass that wants the same treatment is
+    marked itself.
     """
     Cash.mark_opaque(cls)
-    cls.__cash_opaque__ = True
     return cls
 
-
-mark_opaque = Cash.mark_opaque
 
 __version__ = "0.11.0"
 
@@ -458,7 +386,6 @@ __all__ = [
     "show_stats",
     "register_hasher",
     "opaque",
-    "mark_opaque",
     "help",
     "reset_session",
     "configure",
@@ -470,8 +397,6 @@ __all__ = [
     "is_pure",
     "is_stateful",
     "analyze_function_purity",
-    "mark_pure",
-    "mark_stateful",
     # Configuration (stable)
     "get_config",
     "CashConfig",
@@ -504,9 +429,6 @@ __all__ = [
     "CashUpstreamSyntaxWarning",
     "CashRandomnessWarning",
 ]
-
-# Experimental features are available via:
-#   from cash.experimental import CacheExplorer, AnalyticsManager, etc.
 
 
 def _jupyter_labextension_paths():
