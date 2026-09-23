@@ -1330,6 +1330,24 @@ _CALL_ENTRY: "contextvars.ContextVar[list | None]" = contextvars.ContextVar("_ca
 #: keeps only the most recent calls rather than one entry per call forever.
 _CALL_LOG_MAX = 10_000
 
+#: The capture watch of the key being built: {name: (pre-call hash, scope,
+#: owner_globals, owner)} for every provisional capture folded into it. Both
+#: `_fold_closure` and `_fold_read_globals` add to it; `_resolve_cache_key`
+#: sets a fresh one per key and hands it back with the key, so two threads, or
+#: a cached call nested in another's key build, never share one.
+#:
+#: `owner_globals` is the mapping the pre-call hash was taken FROM, and it is
+#: not always the decorated function's own. `_fold_read_globals` also runs on
+#: behalf of module-bounded HELPERS, so a global read by a helper in another
+#: module lands here under a bare name that does not exist in
+#: `func.__globals__` at all. Re-reading it there found None, hashed that, and
+#: reported every such global as mutated by the call -- a provider registry
+#: read by a client helper warned on every first call. Carrying the owning
+#: mapping is what makes the after-hash look at the same variable the
+#: before-hash did. Unset (None) outside a real call's key build, so
+#: `explain()` records nothing.
+_CAPTURE_WATCH: "contextvars.ContextVar[dict | None]" = contextvars.ContextVar("_cash_capture_watch", default=None)
+
 #: `_store_refusal` was not handed a capture watch (the streaming path).
 _NO_WATCH = object()
 
@@ -1826,22 +1844,6 @@ class Cash:
         self._mutating_globals: dict = {}
         # code object -> closure free vars folded only provisionally (CAS-270).
         self._provisional_capture_cache: dict = {}
-        # Per-call scratch: {name: (pre-call hash, scope, owner_globals)} for
-        # every provisional capture folded into the key being built. Cleared
-        # once per `_resolve_cache_key`, because BOTH `_fold_closure` and
-        # `_fold_read_globals` contribute and either clearing it would wipe the
-        # other's entries.
-        #
-        # `owner_globals` is the mapping the pre-call hash was taken FROM, and
-        # it is not always the decorated function's own. `_fold_read_globals`
-        # also runs on behalf of module-bounded HELPERS, so a global read by a
-        # helper in another module lands here under a bare name that does not
-        # exist in `func.__globals__` at all. Re-reading it there found None,
-        # hashed that, and reported every such global as mutated by the call --
-        # a provider registry read by a client helper warned on every first
-        # call. Carrying the owning mapping is what makes the after-hash look
-        # at the same variable the before-hash did.
-        self._pending_capture_watch: dict[str, tuple[str, str, Any, Any]] = {}
         # func_name -> RNG modules that function was OBSERVED drawing from.
         # Learned on a miss; only these functions get a seed-epoch in their key.
         self._rng_drawing_funcs: dict[str, set[str]] = {}
@@ -3246,14 +3248,20 @@ class Cash:
     ) -> Any:
         """`_resolve_cache_key_now`, with one plain-data census per argument
         shared across the key it builds (`_plain_census`), and a ledger of
-        what its state segment is made of (`STATE_LEDGER`)."""
+        what its state segment is made of (`STATE_LEDGER`).
+
+        Returns ``(resolved, capture_watch)``: what `_resolve_cache_key_now`
+        returned, and this key's `_CAPTURE_WATCH`."""
         previous = getattr(_PLAIN_CENSUS, "memo", None)
         _PLAIN_CENSUS.memo = {}
         ledger: dict = {}
         ledger_token = STATE_LEDGER.set(ledger)
+        watch: dict = {}
+        watch_token = _CAPTURE_WATCH.set(watch)
         try:
             resolved = self._resolve_cache_key_now(func, func_name, dynamic_depends_on, args, kwargs, call_start)
         finally:
+            _CAPTURE_WATCH.reset(watch_token)
             STATE_LEDGER.reset(ledger_token)
             _PLAIN_CENSUS.memo = previous
         if resolved[0] is not _CACHE_MISS and ledger:
@@ -3261,7 +3269,7 @@ class Cash:
             slot = (func_name, resolved[1])
             if slot not in self._state_ledgers:
                 self._keep_state_ledger(slot, ledger)
-        return resolved
+        return resolved, watch
 
     def _resolve_cache_key_now(
         self,
@@ -3282,9 +3290,6 @@ class Cash:
           - (_CACHE_MISS, result, 'unhashable')             - unhashable args
           - (_CACHE_MISS, result, 'error')                  - key generation error
         """
-        # One reset per key build: both _fold_closure and
-        # _fold_read_globals contribute, so neither may clear it.
-        self._pending_capture_watch = {}
         # Outside the try below, which catches TypeError/ValueError from key
         # building: an exception from the user's own body must not be caught
         # there and the body run a second time.
@@ -4821,10 +4826,9 @@ class Cash:
             # against a 25.5us floor for the cheapest possible cached call --
             # 0.8%, so this is not gated behind a heuristic.
             overhead_t0 = _perf_counter()
-            key_result = self._resolve_cache_key(func, func_name, dynamic_depends_on, args, kwargs, call_start)
-            # Snapshot into a LOCAL immediately: a nested cached call would
-            # overwrite the instance scratch before this body finishes (CAS-270).
-            capture_watch = self._pending_capture_watch
+            key_result, capture_watch = self._resolve_cache_key(
+                func, func_name, dynamic_depends_on, args, kwargs, call_start
+            )
             if key_result[0] is _CACHE_MISS:
                 return key_result[1]
             cache_key, current_state_hash, args_hash = key_result
@@ -5022,9 +5026,9 @@ class Cash:
             # See the sync wrapper: this span is cash's own cost, not the
             # user's work.
             overhead_t0 = _perf_counter()
-            key_result = self._resolve_cache_key(func, func_name, dynamic_depends_on, args, kwargs, call_start)
-            # See the sync wrapper: snapshot before anything else can run.
-            capture_watch = self._pending_capture_watch
+            key_result, capture_watch = self._resolve_cache_key(
+                func, func_name, dynamic_depends_on, args, kwargs, call_start
+            )
             if key_result[0] is _CACHE_MISS:
                 # _resolve_cache_key called `func(*args, **kwargs)` on the
                 # unhashable/error path. For an async function that returns
@@ -5911,8 +5915,9 @@ class Cash:
                 except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
                     continue
                 captures.append((name, h))
-                if provisional is None or name in provisional:
-                    self._pending_capture_watch[name] = (h, "closure", None, func)
+                pending = _CAPTURE_WATCH.get()
+                if pending is not None and (provisional is None or name in provisional):
+                    pending[name] = (h, "closure", None, func)
         if not captures:
             return state_hash
         clo = self._serialize_args(func_name, tuple(captures), {})
@@ -7434,7 +7439,9 @@ class Cash:
                     if surface is not None:
                         parts.append((f"{name}#cls:{item.__qualname__}", surface))
         parts.extend(self._module_attr_parts(func, func_name, g, learned=learned_mutating, watch=watch))
-        self._pending_capture_watch.update(watch)
+        pending = _CAPTURE_WATCH.get()
+        if pending is not None:
+            pending.update(watch)
         parts.extend(self._local_binding_parts(func))
         # By name, for a miss that has to say which global moved. A helper's
         # or a called function's reads are labelled with the reader.
