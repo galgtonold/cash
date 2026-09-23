@@ -13,7 +13,7 @@ Every computation Cash touches — a notebook statement or a decorated function 
 <!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @3dd62608, cash/tracking/function_tracker.py:FunctionTracker @7ea78663 broad="the trust thesis names two whole mechanisms - file freshness and function-source tracking - not one function each" -->
 The trust thesis is simple: Cash recomputes whenever something relevant changed, and refuses to cache when replaying a snapshot would be wrong. If your code reads a file that was modified or calls a function whose source changed, Cash will not serve you the old answer.
 
-<!-- claim: cash/tracking/randomness.py:capture_rng_state @39505ae0, cash/tracking/randomness.py:restore_rng_state @3e10fc77 -->
+<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @39505ae0, cash/tracking/randomness/state.py:restore_rng_state @3e10fc77 -->
 Non-determinism is the one case where "recompute" is not the safe answer, and Cash treats it separately: an unseeded random draw is **frozen**, not blocked. The first value you drew is the value you keep, so the notebook stays reproducible — see [knowing when to recompute](invalidation.md#randomness-re-seeding-invalidates-the-draws-below-it). Change the seed and every draw below it does recompute.
 
 <div class="cash-coreloop" aria-hidden="true">

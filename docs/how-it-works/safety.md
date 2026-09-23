@@ -278,7 +278,7 @@ Random calls are *deterministic only if seeded*. Cash's `RandomnessDetector`
 finds unseeded draws and **warns** — the statement is still cached, and the
 first result is simply frozen:
 
-<!-- claim: cash/tracking/randomness.py:RANDOM_FUNCTIONS @5801a3eb, cash/tracking/randomness.py:SEED_FUNCTIONS @2fe6d536 -->
+<!-- claim: cash/tracking/randomness/detect.py:RANDOM_FUNCTIONS @5801a3eb, cash/tracking/randomness/detect.py:SEED_FUNCTIONS @2fe6d536 -->
 | Module | Tracked functions |
 |--------|-------------------|
 | `random` | `random()`, `randint()`, `choice()`, `shuffle()`, `sample()`, `uniform()`, … |
@@ -286,7 +286,7 @@ first result is simply frozen:
 | `torch` | `rand()`, `randn()`, `randint()`, `randperm()`, `normal()`, … |
 | `tensorflow.random` | `uniform()`, `normal()`, `truncated_normal()`, `shuffle()`, … |
 
-<!-- claim: cash/tracking/randomness.py:RandomnessDetector @ac3951cb broad="the claim is about the detector having exactly two channels, which is a property of the class", cash/tracking/randomness.py:RandomnessDetector.is_seeded @9ff99734, cash/tracking/randomness.py:RNG_CARRIER_CONSTRUCTORS @cec10494 -->
+<!-- claim: cash/tracking/randomness/detect.py:RandomnessDetector @ac3951cb broad="the claim is about the detector having exactly two channels, which is a property of the class", cash/tracking/randomness/detect.py:RandomnessDetector.is_seeded @9ff99734, cash/tracking/randomness/detect.py:RNG_CARRIER_CONSTRUCTORS @cec10494 -->
 Two channels feed it, because there are two ways to be random. **Module
 globals** (`np.random.rand()`) are reproducible if the *module* was seeded, so
 the detector tracks `seed()` calls across the session: once a module is seeded,

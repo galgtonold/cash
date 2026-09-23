@@ -16,9 +16,9 @@ from types import SimpleNamespace
 from cash.tracking.randomness import (
     CashRandomnessWarning,
     RandomnessDetector,
-    RandomnessVisitor,
     check_and_warn_randomness,
 )
+from cash.tracking.randomness.detect import RandomnessVisitor
 
 
 def _randomness_warnings(recorded):

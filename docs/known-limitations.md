@@ -15,7 +15,7 @@ This page lists every such case we know about, what you actually see, and what t
 
 The single most-often-misread behaviour, and it is working as designed.
 
-<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @a4042c14, cash/tracking/randomness.py:restore_rng_state @3e10fc77 -->
+<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @a4042c14, cash/tracking/randomness/state.py:restore_rng_state @3e10fc77 -->
 An unseeded random draw that is expensive enough to cache **is** cached. Re-running the cell returns the *same* numbers, because you are seeing a restored value rather than a fresh draw:
 
 <!-- test:skip reason="illustrative: demonstrates replayed randomness across re-runs" -->
@@ -71,7 +71,7 @@ x = np.random.rand(10**6) # cell 2 — run this alone
 
 The **module-global** RNG channels — `np.random.*`, `random.*`, `torch.*` — are fully tracked: a draw is flagged on the badge (a `random` / `unseeded` pill), an unseeded draw's cached value is announced as a frozen replay, editing a `seed()` invalidates everything cached downstream, and a re-run reflects the position a clean top-to-bottom run would produce.
 
-<!-- claim: cash/tracking/randomness.py:RNG_CARRIER_CONSTRUCTORS @cec10494, cash/tracking/randomness.py:capture_object_rng_states @51b16e5b -->
+<!-- claim: cash/tracking/randomness/detect.py:RNG_CARRIER_CONSTRUCTORS @cec10494, cash/tracking/randomness/state.py:capture_object_rng_states @51b16e5b -->
 A **per-object generator** created with `np.random.default_rng()` (or `Generator(...)` / `RandomState(...)`) is a different, narrower story. Its **seed is tracked** — `rng = np.random.default_rng(SEED)` binds a variable, so editing `SEED` and re-running refreshes through the ordinary variable-lineage path, and an *unseeded* named generator (`rng = np.random.default_rng()`) drawn from by name is flagged. But three things about a per-object generator are **not** tracked:
 
 **1. Stream position across cells.** cash does not follow a generator's internal position as several cells draw from it:

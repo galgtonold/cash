@@ -96,7 +96,7 @@ The annotation sets `force_persist = True`, which the post-execute path threads 
 
 ### `@cash:allow-random` — accept non-reproducibility
 
-<!-- claim: cash/tracking/randomness.py:check_and_warn_randomness @4b5eb84f, cash/tracking/randomness.py:MODULE_ALIASES @993c2ed1, cash/tracking/randomness.py:RANDOM_FUNCTIONS @5801a3eb -->
+<!-- claim: cash/tracking/randomness/detect.py:check_and_warn_randomness @4b5eb84f, cash/tracking/randomness/detect.py:MODULE_ALIASES @993c2ed1, cash/tracking/randomness/detect.py:RANDOM_FUNCTIONS @5801a3eb -->
 Cash scans every statement for unseeded calls to known RNG functions (`numpy.random.randn`, `torch.rand`, `random.choice`, dozens more — full list in `RANDOM_FUNCTIONS`) and raises a `CashRandomnessWarning` when it finds one. The reasoning: a cached `np.random.rand(1000)` won't match what a fresh re-execution would produce, so cache hits are silently non-reproducible.
 
 Two fixes. Seed it:
@@ -130,7 +130,7 @@ The warning fires once per statement per session, so a re-run of an unchanged ce
 
 ## RNG state is replayed across cache hits
 
-<!-- claim: cash/tracking/randomness.py:capture_object_rng_states @51b16e5b, cash/tracking/randomness.py:restore_object_rng_states @9b0cccf3 -->
+<!-- claim: cash/tracking/randomness/state.py:capture_object_rng_states @51b16e5b, cash/tracking/randomness/state.py:restore_object_rng_states @9b0cccf3 -->
 A cache hit restores more than the value. If you hold your own RNG object — an
 `np.random.Generator`, an `np.random.RandomState`, or a `random.Random` —
 its internal state is captured alongside the cached statement and **replayed**

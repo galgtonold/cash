@@ -32,10 +32,10 @@ def _cash():
 
 
 def test_a_function_that_draws_random_numbers(monkeypatch):
-    from cash.tracking import randomness
+    from cash.tracking.randomness import lineage as randomness_lineage
 
     # What a seeded session records (the notebook's seed tracking fills it).
-    monkeypatch.setattr(randomness, "_ACTIVE_SEED_EPOCHS", {"random": "epoch-1"})
+    monkeypatch.setattr(randomness_lineage, "_ACTIVE_SEED_EPOCHS", {"random": "epoch-1"})
     c = _cash()
 
     @c.cache(allow_random=True)

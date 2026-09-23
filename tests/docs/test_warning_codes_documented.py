@@ -145,7 +145,7 @@ def _raw_cash_warns() -> list[str]:
     """`warnings.warn*(...)` calls naming a Cash category, outside diagnostics.py.
 
     ``warn_explicit`` is matched as well as ``warn``. The notebook warnings that
-    blame a cell line (in ``tracking/randomness.py`` and
+    blame a cell line (in ``tracking/randomness/`` and
     ``notebook/upstream/checker.py``) once called it directly, and a matcher
     checking only ``attr == "warn"`` passed while every one of them was
     unmigrated.

@@ -160,7 +160,7 @@ That verdict dictionary is shared with the upstream simulation, which cannot obs
 
 `x = np.random.rand(3)` has stable source and no tracked inputs. Editing `np.random.seed(0)` to `seed(1)` above it therefore moved nothing, and Cash replayed the first seed's numbers — following the documented advice for reproducibility produced provably wrong values. Three mechanisms now cover this, and they are separate on purpose:
 
-<!-- claim: cash/tracking/randomness.py:hidden_lineage_writes @1369d609, cash/tracking/randomness.py:hidden_lineage_reads @e9ddd20b -->
+<!-- claim: cash/tracking/randomness/lineage.py:hidden_lineage_writes @1369d609, cash/tracking/randomness/lineage.py:hidden_lineage_reads @e9ddd20b -->
 - **The seed is a hidden lineage variable.** A `seed()` writes `__cash_rng__<module>`, a draw reads it, and that lineage flows through the ordinary input path — so a re-seed re-keys the draw *and* propagates to everything cached downstream of it.
 - **A stale RNG replay is suppressed.** Restoring a cached statement also restores the RNG state it left behind, which keeps the stream coherent when a restore stands in for an execution. After a re-seed that replay would rewind the generator to the old regime, so entries record the seed epoch they were written under and are only replayed while it still holds. Keying the draw was necessary but not sufficient — both halves are required.
 - **The stream is repositioned before a re-executed draw.** If reconstruction re-runs a draw because one of its *ordinary* inputs changed, the unchanged `seed()` above it is not scheduled, so the draw would continue from wherever the live stream happened to be. Cash restores the position that draw holds top-to-bottom before running it.

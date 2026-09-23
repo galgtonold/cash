@@ -182,7 +182,7 @@ Without Cash: 30s of CSV reloads + aggregations on every iteration. With Cash: e
 
 ## Where to be careful in DS workflows
 
-<!-- claim: cash/tracking/randomness.py:RANDOM_FUNCTIONS @5801a3eb -->
+<!-- claim: cash/tracking/randomness/detect.py:RANDOM_FUNCTIONS @5801a3eb -->
 - **Randomness without a seed.** `df.sample(100)` or `np.random.randn(...)` without a seed produces different values per call. Cash still caches these — it warns rather than refusing, and only for calls it can see are RNG calls (`np.random.*`, `random.*`, `torch.*`); a draw hidden behind a method like `df.sample(100)` passes silently. Seed the RNG when you want reproducibility. See [Controlling Cache Behavior](../feature-guides/controlling-cache-behavior.md) for `@cash:allow-random`.
 - **In-place mutations to DataFrames.** `df.sort_values(..., inplace=True)` and friends mutate without returning. Cash detects these: on a frame built in the *same* cell the receiver is treated as the statement's output, so it caches normally. When the frame came from an *earlier* cell there's no local definition to re-derive, so the mutating statement re-runs every time to stay correct — which is why returning new frames (`df = df.sort_values(...)`) is the more cache-friendly style across cells. See [Knowing when not to cache](../../how-it-works/safety.md).
 - **`df['col'] = ...` follows the same same-cell / earlier-cell split** as the bullet above, and is easier to miss because a subscript store doesn't look like a mutation. Built in this cell, it caches; inherited from an earlier one, it re-runs every time. Use `df = df.assign(col=...)` for any column expensive enough to be worth caching. See the tip in Cell 3.
