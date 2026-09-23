@@ -41,18 +41,10 @@ def get_version() -> str:
 def resolved_cache_dir() -> str:
     """The cache directory the LIBRARY would use, for commands that act on it.
 
-    ``inspect`` and ``clear`` used to assume ``./.cash`` while ``info`` read
-    the merged config, so the two commands whose whole job is to act on the
-    cache acted on a different one from the library that wrote it. Setting
-    ``CASH_CACHE_DIR`` and then running ``cash inspect`` reported on nothing,
-    and ``cash clear --all`` reported success having deleted a directory the
-    user did not mean (CAS-83, reproduced by a round-16 tester).
-
-    Going through ``get_config()`` means one merge order for everyone --
-    defaults, user TOML, project TOML, environment -- so the CLI cannot drift
-    from the library again. It also follows the project anchor, which is what
-    makes the CLI usable at all now that the default is not relative to the
-    directory you are standing in.
+    Through ``get_config()``: one merge order for everyone -- defaults, user
+    TOML, project TOML, environment -- and the same project anchor, so
+    ``inspect`` and ``clear`` act on the cache the library wrote, never on a
+    ``./.cash`` the user did not mean.
     """
     try:
         return str(get_config().cache_dir)
@@ -82,8 +74,7 @@ def _sqlite_cache(cache_dir: str) -> tuple[int, int] | None:
     """``(entries, bytes)`` for a sqlite cache here, or ``None`` if there is none.
 
     A sqlite cache is one database file, so the entry-file count every other
-    command uses reports "nothing here" while the cache works fine -- which is
-    how this was found, attacking the decorator before round 26.
+    command uses would report "nothing here" while the cache works fine.
     """
     path = cache_dir if os.path.isfile(cache_dir) else os.path.join(cache_dir, DB_FILENAME)
     if not os.path.isfile(path):
@@ -127,7 +118,7 @@ def cmd_info(args: argparse.Namespace) -> None:
     print(f"  Backend:    {config.backend}")
     print(f"  Cache dir:  {config.cache_dir}")
     # What it holds, next to where it is: the number a user asks for when
-    # deciding whether to clear it (round 25 had to `du` the folder).
+    # deciding whether to clear it.
     database = _sqlite_cache(config.cache_dir)
     held = database if database is not None else entry_totals(config.cache_dir)
     if database is not None:
@@ -137,25 +128,19 @@ def cmd_info(args: argparse.Namespace) -> None:
     else:
         print(f"  Holds:      {held[0]} entries, {human_bytes(held[1])}")
     if held:
-        # A total alone is a dead end (round 27, r27s1): the next question is
-        # always which entries, and whether they earn their space.
+        # A total alone is a dead end: the next question is always which
+        # entries, and whether they earn their space.
         print("              `cash inspect` lists them, with what each one saves")
     if config.disable:
         print(f"  Disabled:   yes -- every cached function runs uncached ({origins.get('disable', 'disable = true')})")
-    # Resolved, not just configured. "auto (scaled per tier)" is true and
-    # useless: a user asking what their cache is allowed to hold needs the two
-    # numbers it actually resolves to, and the RAM one in particular appears
-    # nowhere else -- a tester spent a round reading a growing RSS as a leak
-    # when it was a 4 GiB cap doing exactly what it says.
+    # Resolved, not just configured: a user asking what their cache may hold
+    # needs the two numbers "auto" resolves to, and the RAM one appears
+    # nowhere else (a growing RSS is easily read as a leak).
     if config.max_cache_size is None:
         # Sized the way the BACKEND sizes it: from free space plus what the
-        # cache already holds. `resolve_disk_cap` uses free space alone, and
-        # free space excludes the cache's own bytes -- so this printed a
-        # number lower than the one being enforced by a quarter of whatever
-        # the cache held. r26s4 read `Holds: 21.19 GiB` directly above
-        # `Max size: 12.0 GiB` and reported a cap blown by 77%; the cap in
-        # force was 17.3 GiB and nothing was over it. A cap a user is shown
-        # has to be the cap the cache is keeping to.
+        # cache already holds. Free space alone (`resolve_disk_cap`) excludes
+        # the cache's own bytes and would show a cap lower than the one
+        # enforced, next to a "Holds" that seems to exceed it.
         own = held[1] if held is not None else 0
         disk = human_bytes(adaptive_disk_cap_for(config.cache_dir, own))
         print(f"  Max size:   auto -- disk {disk}, RAM {human_bytes(resolve_ram_cap())}")
@@ -168,9 +153,7 @@ def cmd_info(args: argparse.Namespace) -> None:
     print(f"  Persist:    {PersistencePolicy.from_config(config).describe()}")
     if config.tiers:
         print(f"  Tiers:      {', '.join(_tier_text(t) for t in config.tiers)}")
-    # Where this run looked, and what each layer set. Round 18: a nested
-    # pyproject.toml, a pytest launched from the directory above its project
-    # and a `disable = true` were each invisible here -- a Source line names
+    # Where this run looked, and what each layer set: the Source line names
     # the layers, not which file, nor which setting came from where.
     outcome = {
         TOML_SECTION: "read",
@@ -200,11 +183,8 @@ def cmd_info(args: argparse.Namespace) -> None:
 
 
 def _tier_text(tier) -> str:
-    """``file (default_ttl=5s)``: a tier's type and every option it sets.
-
-    Round 19: a tier's ``default_ttl`` decides when entries expire and was
-    shown nowhere -- `Tiers: memory, file` said nothing about it.
-    """
+    """``file (default_ttl=5s)``: a tier's type and every option it sets,
+    since a ``default_ttl`` decides when entries expire."""
 
     parts = []
     for f in dataclasses.fields(tier):
@@ -296,8 +276,7 @@ def _effective_ttl(metadata: dict, tier_default: int | None) -> int | None:
 
     The decorator's ``ttl=`` as written; otherwise the SHORTER of the ttl it
     was written with and the tier's ``default_ttl`` as configured now -- so a
-    lowered default shows here as it takes effect, rather than as the day the
-    entry was written with (round 20).
+    lowered default shows here as it takes effect.
     """
     written = metadata.get("ttl")
     if metadata.get("ttl_declared") or tier_default is None:
@@ -450,10 +429,9 @@ def cmd_inspect(args: argparse.Namespace) -> None:
         return
 
     if target and not os.path.isdir(target):
-        # Not silently replaced by the configured cache: a mistyped path (or a
-        # mistyped notebook name) printed a full, plausible report about an
-        # unrelated cache and exited 0, while `cash clear` refused the same
-        # input (found attacking the decorator before round 26).
+        # Not silently replaced by the configured cache: a mistyped path must
+        # not print a plausible report about an unrelated cache, and `cash
+        # clear` refuses the same input.
         print(f"Not found: {target}")
         print(
             "Pass a cache directory or a notebook, or leave it out to inspect the cache `cash info` reports for here."
@@ -464,9 +442,7 @@ def cmd_inspect(args: argparse.Namespace) -> None:
         print(f"No cache found at {os.path.abspath(cache_dir)}.")
         print("Specify a notebook or cache directory, or set CASH_CACHE_DIR.")
         sys.exit(1)
-    # The directory is printed once, by `_inspect_cache_dir`, absolute: this
-    # used to print it too, so every default `cash inspect` began with two
-    # headers naming the same place (round 18).
+    # The directory is printed once, absolute, by `_inspect_cache_dir`.
     _inspect_cache_dir(cache_dir, only_function=only_function)
 
 
@@ -510,8 +486,7 @@ def _inspect_cache_dir(cache_dir: str, only_function: str | None = None) -> None
 
     The default view is a per-function table sorted by SIZE, because the
     question that sends anyone here is "what is filling my disk, and what can
-    I afford to drop?". A user who wanted that used to get a file-extension
-    histogram and had to go to the file explorer instead.
+    I afford to drop?".
     """
     cache_path = Path(cache_dir)
     total_size = sum(f.stat().st_size for f in cache_path.rglob("*") if f.is_file())
@@ -590,10 +565,8 @@ def _inspect_cache_dir(cache_dir: str, only_function: str | None = None) -> None
 def _clear_function(cache_dir: str, wanted: str) -> None:
     """Delete every entry belonging to one cached function.
 
-    The alternative for someone short on disk used to be all-or-nothing: keep
-    a cache they cannot afford or delete work they still want. Dropping the
-    one function they are finished with is the decision they actually wanted
-    to make.
+    For someone short on disk, the alternative to keeping a cache they cannot
+    afford or deleting work they still want.
     """
     cache_path = Path(cache_dir)
     if not cache_path.is_dir():
@@ -627,8 +600,7 @@ def _clear_expired(cache_dir: str) -> None:
     """Delete the entries whose ttl has run out, and say what that freed.
 
     An expired entry is never served, but it stays on disk until something
-    writes over it: lowering a tier's ``default_ttl`` to make room freed
-    nothing (round 20).
+    writes over it, so lowering a tier's ``default_ttl`` alone frees nothing.
     """
     cache_path = Path(cache_dir)
     if not cache_path.is_dir():
@@ -647,10 +619,9 @@ def _clear_expired(cache_dir: str) -> None:
 def _looks_like_a_cache(cache_dir: str) -> bool:
     """Does this directory hold a cash cache, or something else entirely?
 
-    ``clear --all`` now deletes a directory the user did not type -- whatever
-    the config resolved to. That is the point of the fix, and it is also a
-    reason to look before recursively removing: a mistyped ``CASH_CACHE_DIR``
-    used to cost the user nothing because the CLI ignored it.
+    ``clear --all`` deletes a directory the user did not type -- whatever the
+    config resolved to -- so a mistyped ``CASH_CACHE_DIR`` is a reason to look
+    before recursively removing.
     """
     if os.path.exists(os.path.join(cache_dir, VERSION_FILENAME)):
         return True
@@ -675,12 +646,9 @@ def _rmtree_cache(cache_dir: str, force: bool = False) -> None:
     """Remove a cache directory, having checked that it is one.
 
     Every removal goes through here -- an explicit path, ``--all``, ``--tool``,
-    a notebook's sibling ``.cash``. The explicit path used to go straight to
-    ``shutil.rmtree``: round 17 ran ``cash clear .`` in a project, which
-    deleted the project's files and then crashed trying to remove the
-    directory it was standing in (CAS-107). "Destructive without confirmation"
-    covered deleting a cache you meant to delete; it never covered deleting
-    something that was not a cache at all.
+    a notebook's sibling ``.cash`` -- so ``cash clear .`` in a project cannot
+    delete the project. "Destructive without confirmation" covers deleting a
+    cache you meant to delete, never something that is not a cache at all.
     """
     resolved = os.path.abspath(cache_dir)
     if _contains_cwd(resolved):
@@ -751,10 +719,8 @@ def _not_cash_files(cache_dir: str) -> list[str]:
 def cmd_clear(args: argparse.Namespace) -> None:
     """Clear cache."""
     if args.all and args.path:
-        # "everything" and "this one directory" are two different requests and
-        # the flag reads as neither. It used to accept both and silently drop
-        # the path, clearing a cache the user had not named -- the one
-        # behaviour that cannot be right (CAS-83).
+        # "everything" and "this one directory" are two different requests;
+        # dropping either would clear a cache the user had not named.
         print("cash clear: --all and a path are mutually exclusive.")
         print(f"  To clear that directory:   cash clear {args.path}")
         print(f"  To clear the cache in use: cash clear --all   ({os.path.abspath(resolved_cache_dir())})")
@@ -794,10 +760,9 @@ def cmd_clear(args: argparse.Namespace) -> None:
         if os.path.isdir(cache_dir):
             _rmtree_cache(cache_dir, force=force)
         else:
-            # "Nothing here" is true and was not enough: a live service kept
-            # its whole cache while this reported success (round 18). Say
-            # which directory was looked at, and the two ways a running
-            # program's cache is somewhere else.
+            # "Nothing here" is true and not enough: a running program's cache
+            # may be elsewhere. Say which directory was looked at, and the two
+            # ways that happens.
             print(
                 f"Nothing cleared: no cache at {os.path.abspath(cache_dir)}, "
                 f"the directory `cash info` reports for here."

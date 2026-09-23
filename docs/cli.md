@@ -216,7 +216,7 @@ cash info
   that is not a setting, or a value cash could not use, is left out of the
   list and reported as a warning.
 
-<!-- claim: cash/__main__.py:cmd_inspect @0975006f, cash/__main__.py:_inspect_cache_dir @7568ad2a, cash/__main__.py:_inspect_notebook @22209429 -->
+<!-- claim: cash/__main__.py:cmd_inspect @0975006f, cash/__main__.py:_inspect_cache_dir @79ce6b6f, cash/__main__.py:_inspect_notebook @22209429 -->
 ### `cash inspect [path] [--function NAME]` { #cash-inspect-path }
 
 Summarise a cache directory, or report on a notebook and its sibling `.cash`

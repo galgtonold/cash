@@ -146,8 +146,7 @@ class InMemoryBackend(CacheBackend):
             if value_type is dict:
                 # A notebook entry is dicts around the values, and carries the
                 # RNG state: `random.getstate()` is a tuple of 625 ints, which
-                # deepcopy walks an int at a time -- 2.3M calls for the 2,629
-                # entries of one loop over files (round 23, r23s2). Its plain
+                # deepcopy would walk an int at a time. Its plain
                 # parts go into deepcopy's memo as already copied: a tuple is
                 # shared, a list of immutables gets a new list, and two names
                 # for one object still come back as one object.
@@ -166,8 +165,7 @@ class InMemoryBackend(CacheBackend):
             if required:
                 # Storing it would hand every caller the SAME object: a caller
                 # mutating a hit changes what later calls get, and two threads
-                # get one object to mutate at once (found attacking the
-                # decorator before round 26). Isolation is what makes a cached
+                # get one object to mutate at once. Isolation is what makes a cached
                 # value safe to hand out, so a value that cannot be isolated is
                 # not stored -- and it is unpicklable too, so no disk tier
                 # could hold it either.
@@ -184,10 +182,8 @@ class InMemoryBackend(CacheBackend):
 
         Under pandas copy-on-write -- always on from pandas 3 -- a SHALLOW copy
         is that already: the first write to either side copies then, and only
-        what it writes. A deep copy of every stored frame, and again on every
-        RAM hit, was most of cash's own first-run cost on frame-heavy work:
-        0.28 of 0.44 s for 20 statements making 1M-row frames, against 0.09 s
-        plain (measured after round 28). Without copy-on-write, deep as before.
+        what it writes, where a deep copy on every store and RAM hit dominates
+        cash's own cost on frame-heavy work. Without copy-on-write, deep.
         """
         return frame.copy(deep=not _pandas_copy_on_write())
 
@@ -224,9 +220,8 @@ class InMemoryBackend(CacheBackend):
     def get_metadata(self, key: str) -> MetadataDict | None:
         """The metadata, counted as an access the way `get` counts one.
 
-        Without this the base class answered through ``get()``, which
-        deep-copies the value only to drop it: the upstream simulation reading
-        entries' metadata spent 5.3 s of one 6 s cell copying (round 23, r23s1).
+        Not through ``get()``, which deep-copies the value only to drop it --
+        the upstream simulation reads many entries' metadata.
         """
         entry = self._store.get(key)
         if entry is None:
@@ -272,11 +267,10 @@ class InMemoryBackend(CacheBackend):
             size = plain[0]
 
         # A value above the eviction target can never stay: the byte cap evicts
-        # down to 90% of the cap, and it would be the last one standing. It
-        # used to be stored anyway, and the eviction took every older entry and
-        # then the value itself -- one oversized write, or one restore of a big
-        # disk entry (read-repair promotes into this tier with no size gate),
-        # emptied the tier. Refused here, before the copy: copying a frame of
+        # down to 90% of the cap, so storing it would evict every older entry
+        # and then the value itself -- one oversized write, or one restore of a
+        # big disk entry (read-repair promotes into this tier with no size
+        # gate), would empty the tier. Refused here, before the copy: copying a frame of
         # gigabytes only to throw it away is its own cost. The previous value
         # for the key goes too, or a later read would serve it as current.
         if self._max_size_bytes is not None and size > self._max_size_bytes * 0.9:
@@ -289,8 +283,7 @@ class InMemoryBackend(CacheBackend):
 
         if dict_rows_size is not None:
             # csv.DictReader / JSON records with immutable values: a new dict
-            # per row is a complete copy, built in C (round 20: dict rows were
-            # 10x slower to cache than the same data as tuples).
+            # per row is a complete copy, built in C, instead of a deepcopy.
             immutable = False
             stored = list(map(dict, value))
         elif plain is None:
@@ -400,24 +393,13 @@ class InMemoryBackend(CacheBackend):
         """Give back this tier's SHARE of the machine's memory pressure.
 
         Same order as the byte cap (`_evict_to_byte_cap`): least value per
-        byte first. It used to score ``execution_time * access_count / size``,
-        which put every entry not yet read at zero -- a 30-second result went
-        before a 1 ms one that had been read once.
+        byte first. Scoring by ``execution_time * access_count / size`` would
+        put every entry not yet read at zero, ahead of a 1 ms one read once.
 
-        **How much.** This used to drop entries until the WHOLE MACHINE fell
-        under the target. When the pressure is someone else's, that never
-        happens, so one check emptied the tier -- measured: 200 entries to 0
-        in a single call -- and every later check emptied it again. Round 27
-        ran five testers on one box, each with a cash kernel and an uncached
-        oracle kernel over its full dataset: r27s3's parameter sweep went from
-        13.4 s to ~100 s, stayed there through reruns and even through
-        reverting the edit it blamed, while the uncached kernel beside it
-        barely moved. Its `cached=` count fell from 601 to ~170 and never
-        recovered. A clean replay of the same seven steps on a quiet machine
-        stays at 9-12 s throughout. Emptying a cache the machine's pressure
-        does not come from costs its user everything and the machine nothing.
-
-        So it sheds its share: ``overshoot * own / in_use`` bytes, where
+        **How much.** Not until the whole machine falls under the target:
+        when the pressure is someone else's that never happens, and every
+        check would empty the tier -- costing its user everything and the
+        machine nothing. It sheds its share: ``overshoot * own / in_use`` bytes, where
         ``own`` is this tier's footprint. A tier that IS most of the memory in
         use sheds nearly the whole overshoot, as before; one that holds a
         sliver of it sheds a sliver.
@@ -531,13 +513,9 @@ class InMemoryBackend(CacheBackend):
         GreedyDual-Size-Frequency: the lowest ``H = L + hits * cost / size``
         goes first, and the clock ``L`` rises to each victim's H, so an entry
         that stops being read ages below newer ones however valuable it was.
-        Recency alone treated a 30 s result like a 50 ms one of the same size,
-        and 4 MB like 1 MB; in the eviction simulation (benchmarks/eviction_sim)
-        that difference was most of the loss. In a notebook: a folder loop's
-        per-file frames (20 ms each) were all dropped for a later cell's
-        full-table copies (0.1-3 s per 570 MB), so the loop's next run read
-        every file again (round 23, r23s2). Ties go to the least recently
-        touched.
+        Recency alone would treat a 30 s result like a 50 ms one of the same
+        size, and 4 MB like 1 MB (see benchmarks/eviction_sim). Ties go to the
+        least recently touched.
 
         Evicts down to 90% of the cap, giving headroom so the next few writes
         don't immediately re-trigger eviction. No-op when the cap is unset or

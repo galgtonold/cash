@@ -240,7 +240,7 @@ and entry counts it points you at `cash info` in a terminal.
 Anything that requires touching the cache directory itself lives in the CLI, not
 in a magic. These five subcommands are the whole surface:
 
-<!-- claim: cash/__main__.py:main @fc218b1b, cash/__main__.py:cmd_info @f8794ec8, cash/__main__.py:_inspect_cache_dir @7568ad2a -->
+<!-- claim: cash/__main__.py:main @fc218b1b, cash/__main__.py:cmd_info @f8794ec8, cash/__main__.py:_inspect_cache_dir @79ce6b6f -->
 ```bash
 cash version            # installed version
 cash info               # resolved config, where it came from, what the cache holds

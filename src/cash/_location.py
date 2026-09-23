@@ -83,11 +83,9 @@ def _running_script_dir() -> Path | None:
     if not raw:
         # A spawned multiprocessing worker has no ``__main__.__file__`` and no
         # ``__spec__`` -- but it does inherit the parent's ``sys.argv[0]``.
-        # Without this the parent anchored to its project and every pool worker
-        # fell back to the cwd, so one run wrote into two cache directories and
-        # neither side could see the other's entries. A round-16 tester
-        # measured exactly that, 3/3, and it defeats the whole point of a
-        # shared cache across a fan-out.
+        # Without this the parent would anchor to its project and every pool
+        # worker to the cwd: one run writing into two cache directories,
+        # neither seeing the other's entries.
         #
         # Only a real file counts, which is what keeps the interpreter's own
         # invocations out: ``python -c`` leaves ``-c`` here, a REPL leaves the
@@ -134,9 +132,9 @@ def _running_installed_code() -> bool:
 
 
 #: The tables that make a ``pyproject.toml`` a project's. A ``tests/pyproject.toml``
-#: holding only ``[tool.ruff]`` made ``tests/`` a project of its own: a second,
-#: cold cache when pytest ran from there, and the repository's ``[tool.cash]``
-#: ignored (round 19).
+#: holding only ``[tool.ruff]`` does not make ``tests/`` a project of its own
+#: (a second, cold cache when pytest runs from there, and the repository's
+#: ``[tool.cash]`` ignored).
 _PYPROJECT_PROJECT_TABLE = re.compile(
     r"^\s*\[\[?\s*(project|build-system|tool\.cash|tool\.poetry)\s*[\].]", re.MULTILINE
 )
@@ -223,11 +221,8 @@ def _invocation_project_root() -> Path | None:
     """The project an installed program -- pytest above all -- is working on.
 
     The one the cwd is in. Failing that, under pytest, the one the tests
-    belong to: ``pytest proj/tests`` typed from the directory above used to
-    find no project, so it cached per user under ``…/cash/pytest`` and never
-    read ``proj/pyproject.toml``, while ``python -m pytest`` from the same
-    place cached in ``./.cash`` -- two caches and two configs for one command
-    (round 18).
+    belong to, so ``pytest proj/tests`` typed from the directory above reads
+    ``proj/pyproject.toml`` and caches where ``python -m pytest`` does.
 
     Only a project BELOW the cwd: a test that changes into a scratch
     directory keeps the scratch directory, as it always has.
@@ -247,17 +242,11 @@ def project_anchor() -> Path:
     """The directory cash treats as "here" -- for the DEFAULT cache location
     and for finding ``pyproject.toml``.
 
-    Both used to be resolved from ``os.getcwd()``, which made the cache a
-    property of where you were standing rather than of what you were running.
-    Run the same script from a different directory -- a cron job, a CI step, a
-    colleague -- and the entire cache was silently discarded and a second one
-    built: measured at ``6 of 6 restored`` dropping to ``0 of 6``, a fresh 232MB
-    ``.cash``, no warning, indistinguishable from a cold run. Three separate
-    round-15 projects hit it, one of them writing a ``.cash`` at the drive root
-    because the cwd
-    happened to be the drive root. The documented escape hatch --
-    ``[tool.cash] cache_dir`` in ``pyproject.toml`` -- was found the same broken
-    way, so it did not work in exactly the case that needed it.
+    Not ``os.getcwd()``, which would make the cache a property of where you
+    are standing rather than of what you are running: the same script run
+    from another directory -- a cron job, a CI step, a colleague -- would
+    silently build a second cache, and ``[tool.cash] cache_dir`` would move
+    with it.
 
     The anchor walks up from the RUNNING SCRIPT to its project root, so
     ``python /srv/etl/run.py`` uses the same cache from anywhere on the machine.
@@ -270,8 +259,8 @@ def project_anchor() -> Path:
     anchor to, but there is usually a project the user is standing in, and the
     code being cached is that project's. So it walks up from the cwd instead.
     That puts a test suite's cache beside its project whichever way ``pytest``
-    was typed and from whichever subdirectory, where round 17 found one
-    per-user cache shared by every project on the machine.
+    was typed and from whichever subdirectory, instead of one per-user cache
+    shared by every project on the machine.
     """
     start = _running_script_dir()
     if start is None:
@@ -292,9 +281,8 @@ def _running_console_script() -> str | None:
     A ``[project.scripts]`` console script lives in the interpreter's own
     ``bin`` / ``Scripts`` directory, so it has no project to anchor to and
     ``_running_script_dir`` correctly returns None for it -- leaving it on the
-    cwd, which means a `pip install`ed tool drops a fresh ``.cash`` in every
-    directory you happen to run it from, and never reuses one. A round-16
-    tester reported that as blocking.
+    cwd, where a `pip install`ed tool would drop a fresh ``.cash`` in every
+    directory it is run from and never reuse one.
 
     Detected from ``sys.argv[0]`` rather than from the absence of an anchor,
     because that absence also covers a notebook, a REPL and ``python -c``,
@@ -328,10 +316,9 @@ def _running_console_script() -> str | None:
 def _running_installed_module_name() -> str | None:
     """The top-level package of ``python -m <installed module>``, or None.
 
-    The same tool as its console script, launched the other way: cron's
-    ``python -m nightly`` from whatever directory cron picked cached in
-    ``<that directory>/.cash``, a fresh one for every place it was started
-    from, while ``nightly`` itself used the per-user cache (round 19). Inside
+    The same tool as its console script, launched the other way, so cron's
+    ``python -m nightly`` uses the per-user cache ``nightly`` itself uses
+    rather than a fresh ``.cash`` wherever it was started. Inside
     a project it anchors to the project like any installed code; this name is
     only asked for outside one.
     """
@@ -371,15 +358,14 @@ def installed_entry_point_cache_dir() -> Path | None:
     per-user location is the answer for "nothing here claims this run", not a
     blanket override.
 
-    Two refinements from round 17, where every tester hit the first:
+    Two refinements:
 
     * **Never for ``cash`` itself.** cash's own CLI is an installed console
-      script too, so it resolved a per-user ``…/cash/cash`` that nothing writes
-      to -- ``cash inspect`` found nothing and ``cash clear --all`` "succeeded"
-      while the real cache kept serving. The CLI resolves like the context it
-      is run in; ``--tool NAME`` reaches an installed tool's cache.
+      script too, and a per-user ``…/cash/cash`` is a cache nothing writes to.
+      The CLI resolves like the context it is run in; ``--tool NAME`` reaches
+      an installed tool's cache.
     * **Not inside a project.** ``pytest`` is a console script as well, and
-      took every project's test suite into one shared per-user cache. Any
+      must not take every project's test suite into one per-user cache. Any
       launcher run inside a project anchors to that project instead (see
       ``project_anchor``); the per-user location is for a tool run from
       somewhere no project claims -- a home directory, a scratch directory, a

@@ -523,7 +523,7 @@ meant a 500 MB cap cached nothing at all for a 263 MB working set. It is the
 whole cap now, measured on the serialized bytes, so a value that fits is stored
 and eviction does the rest.
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @2f16cf81, cash/backends/memory_backend.py:InMemoryBackend.set @980d4716 -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @2e17ed9e, cash/backends/memory_backend.py:InMemoryBackend.set @980d4716 -->
 **Why it matters.** Usually you get no caching at all, not RAM-only caching.
 The RAM tier has its own byte cap, scaled to the machine and independent of
 `max_cache_size`, which caps only disk — and it is the *smaller* of the two.
@@ -555,7 +555,7 @@ decorator is buying you nothing.
 
 ## CONFIG-UNKNOWN-KEY {#config-unknown-key}
 
-<!-- claim: cash/config.py:_validated_layer @ad9630b5, cash/config.py:_unknown_key @87165926 -->
+<!-- claim: cash/config.py:_validated_layer @84048bbe, cash/config.py:_unknown_key @87165926 -->
 **What happened.** A `[tool.cash]` table, a `[cash]` table or a cash config
 file sets a key that is not one of cash's settings. The message names it, and
 the nearest real setting when there is one:
@@ -581,7 +581,7 @@ effect and the file or variable it came from, so you can check the result.
 
 ## CONFIG-INVALID {#config-invalid}
 
-<!-- claim: cash/config.py:_validated_layer @ad9630b5, cash/config.py:_warn_toml_malformed @b070e115, cash/config.py:_load_toml_layer @045509b5, cash/config.py:_build_tiers @d9b42b7d -->
+<!-- claim: cash/config.py:_validated_layer @84048bbe, cash/config.py:_warn_toml_malformed @ca4597b4, cash/config.py:_load_toml_layer @045509b5, cash/config.py:_build_tiers @d9b42b7d -->
 **What happened.** Cash could not use something in its configuration. One of
 these:
 

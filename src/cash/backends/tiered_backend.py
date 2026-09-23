@@ -202,9 +202,9 @@ class TieredBackend(CacheBackend):
         judged on their own -- refusing one leaves the statement pointing at
         something that is not there -- so the decision belongs to the
         statement, and when the statement is refused for its bytes the call
-        results go with it. Without this the refusal reclaims nothing: r26s5's
-        seven 1.3 GB frames are ``call:`` entries, and its statements' own
-        entries are a few KB each.
+        results go with it. Without this the refusal reclaims nothing: the
+        large values are in the call entries, and the statements' own entries
+        are a few KB each.
 
         Only the PERSISTENT tiers. The RAM copy is what makes the rest of this
         session fast and is not what the cache is spending disk on.
@@ -308,13 +308,9 @@ class TieredBackend(CacheBackend):
                 # About to refuse. `cap_size` is the value's IN-MEMORY
                 # footprint (the RAM tier measures it on the way past), and
                 # what this tier stores is the SERIALIZED form -- for a
-                # frame of strings, two or more times smaller. Refusing on
-                # the memory number cost a tester their whole cache: a
-                # 160 MB entry, under their 500 MB cap by any measure they
-                # could see, was never stored because it took more than
-                # that in RAM, and `cash inspect` showed them the 160.
-                #
-                # So measure properly before refusing. Serializing is
+                # frame of strings, two or more times smaller, and the
+                # serialized size is the one `cash inspect` shows. So
+                # measure properly before refusing. Serializing is
                 # expensive, which is why it happens HERE and not on every
                 # write: this branch is reached only when the value was
                 # about to be dropped, and the alternative to the cost is a
@@ -340,11 +336,8 @@ class TieredBackend(CacheBackend):
             except Exception as e:  # noqa: BLE001 (intentional: backend errors must not propagate)
                 logger.warning("[TIERED] Failed to write to backend %s: %s", type(backend).__name__, e)
                 # And on the entry's metadata, which is how the caller hears
-                # about it: a failure here used to be this log line alone, so
-                # an unpicklable result reported STORE-FAILED on a FileBackend
-                # and nothing at all on the default tiered one -- no warning,
-                # and an empty cache_info()['warnings'] (found attacking the
-                # decorator before round 26).
+                # about it (STORE-FAILED, cache_info()['warnings']), as it
+                # would from a bare FileBackend.
                 errors.append(f"{type(backend).__name__}: {type(e).__name__}: {e}")
         return _TierWrites(stored_destinations, size_refused, refused_size, refusing_caps, errors)
 
@@ -355,8 +348,8 @@ class TieredBackend(CacheBackend):
         ``set`` decides by the statement's own compute time, and a statement is
         often cheap only because its inputs are there: ``latest =
         sales['week'].max()`` takes 0.06 s, but after a restart ``sales`` is
-        gone too, and so is everything back to the folder it was read from --
-        35 s (round 23, r23s2). *rebuild_seconds* is that whole cost, and the
+        gone too, and so is everything back to the folder it was read from.
+        *rebuild_seconds* is that whole cost, and the
         same cost-model rule decides with it. Only a notebook value (it carries
         a cost-model family) is considered. Returns True when it was written.
         """

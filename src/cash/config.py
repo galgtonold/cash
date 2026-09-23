@@ -424,9 +424,9 @@ _FALSY = {"0", "false", "no", "off"}
 
 
 #: Fields that hold a number of BYTES, and so also accept ``"2GB"`` /
-#: ``"512MiB"``. People write sizes that way -- a round-15 operator set
-#: ``CASH_MAX_CACHE_SIZE=500MB`` -- and a bare integer of bytes is the one
-#: spelling nobody reads correctly at a glance.
+#: ``"512MiB"``. People write sizes that way (``CASH_MAX_CACHE_SIZE=500MB``),
+#: and a bare integer of bytes is the one spelling nobody reads correctly at a
+#: glance.
 SIZE_FIELDS = frozenset({"max_cache_size", "file_hash_full_max_bytes", "max_size_bytes"})
 
 _SIZE_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([kmgt]i?b|b)?\s*$", re.IGNORECASE)
@@ -459,11 +459,9 @@ def parse_size(raw: str) -> int:
 def format_size(n: int) -> str:
     """*n* bytes the way `parse_size` reads it back: ``2000000000`` -> ``"2 GB"``.
 
-    A size written ``"2GB"`` was shown back as ``1.9 GB`` -- parsed in powers
-    of 1000 and displayed in powers of 1024 under the decimal label, so the
-    setting looked mis-read (round 18, three testers). A whole number of a
-    decimal or a binary unit is shown in that unit; anything else in binary
-    units, labelled as such.
+    A size written ``"2GB"`` must not come back as ``1.9 GB``, which reads as
+    mis-parsed: a whole number of a decimal or a binary unit is shown in that
+    unit; anything else in binary units, labelled as such.
     """
     for name in ("TB", "TiB", "GB", "GiB", "MB", "MiB", "KB", "KiB"):
         unit = _SIZE_UNITS[name.lower()]
@@ -614,13 +612,10 @@ def _load_toml_layer(path: Path) -> tuple[dict[str, Any], str]:
         except ImportError:
             # ``tomllib`` is 3.11+, and cash has no required dependencies by
             # design, so on 3.10 without ``tomli`` there is nothing that can
-            # read this file. That used to be a debug line: the config existed,
-            # was found, and was silently ignored -- every setting in it, on
-            # the oldest Python cash supports. Reached only when a config file
-            # with cash settings in it is actually there: nearly every project
-            # has a pyproject.toml, and a notice about one with no [tool.cash]
-            # would be wrong nearly every time -- the way to teach people to
-            # filter it out before the one case it exists for.
+            # read this file, and every setting in it would be silently
+            # ignored. Said only when the file may hold cash settings: nearly
+            # every project has a pyproject.toml, and a notice about one with
+            # no [tool.cash] would teach people to filter it out.
             if _may_hold_cash_settings(path):
                 _warn_toml_unreadable(path)
             return {}, TOML_UNREADABLE
@@ -655,7 +650,7 @@ def _warn_toml_malformed(path: Path, exc: Exception) -> None:
     A UTF-8 byte-order mark is invisible in every editor and is what Windows
     PowerShell 5.1 writes for ``-Encoding utf8``; TOML forbids it, and the
     parser's own complaint -- an invalid statement at line 1, column 1 --
-    points at a character nobody can see (round 18).
+    points at a character nobody can see.
     """
     try:
         bom = path.read_bytes()[:3] == b"\xef\xbb\xbf"
@@ -779,10 +774,10 @@ def _anchor_cache_dir(cache_dir: Any, origin: Path | object) -> Any:
 
     * **the default** (nobody wrote it) -- relative to the project anchor, so
       ``.cash`` means "this project's cache" rather than "a cache wherever this
-      job was launched from". That difference is the whole of CAS-84.
+      job was launched from".
     * **a config file** -- relative to that file's directory, the ordinary rule
-      for paths in config files. Anchoring it to the cwd instead is what made
-      ``[tool.cash] cache_dir`` useless for the case it was documented to fix.
+      for paths in config files, so ``[tool.cash] cache_dir`` does not move
+      with the cwd.
     * **an env var or a kwarg** -- left exactly as written. The user typed it in
       the shell or in the code that is running now, so cwd-relative is what they
       meant, and it is what every other command-line path does.
@@ -791,8 +786,8 @@ def _anchor_cache_dir(cache_dir: Any, origin: Path | object) -> Any:
     """
     if not isinstance(cache_dir, str) or not cache_dir:
         return cache_dir
-    # `~/crunch-cache` in a shipped config file became a directory literally
-    # named `~` beside that file, inside site-packages (round 20).
+    # Before anchoring: `~/crunch-cache` in a shipped config file must not
+    # become a directory named `~` beside that file, inside site-packages.
     cache_dir = os.path.expanduser(cache_dir)
     if origin is _CALLER_RELATIVE or os.path.isabs(cache_dir):
         return cache_dir
@@ -975,9 +970,8 @@ def validate_value(name: str, value: Any, dataclass_type: type = CashConfig) -> 
             if name in _NAMED_CHOICES and value not in _NAMED_CHOICES[name]:
                 # Checked here so a file or env layer reports it
                 # (CONFIG-INVALID) and falls back, as every other bad value
-                # does. It used to reach the backend factory, which raised
-                # ValueError out of `import cash` -- and out of `cash info`,
-                # the command for finding out what is wrong.
+                # does, instead of the backend factory raising out of `import
+                # cash` and `cash info`.
                 raise ValueError(f"{name}={value!r}: not one of {', '.join(sorted(_NAMED_CHOICES[name]))}")
             return value
     else:
@@ -997,9 +991,8 @@ def _validated_layer(data: dict[str, Any], label: str, *, strict: bool, unknown_
 
     With *unknown_keys* -- a ``[tool.cash]`` table or a cash config file, where
     every key is meant to be cash's -- a key that is not a setting is reported
-    (CONFIG-UNKNOWN-KEY, with the nearest real name). It used to pass through
-    to ``_build_config`` and be dropped there without a word, while
-    ``cash.configure()`` raised on the same typo (round 18).
+    (CONFIG-UNKNOWN-KEY, with the nearest real name), as ``cash.configure()``
+    raises on the same typo.
     """
     valid = {f.name for f in fields(CashConfig) if not f.name.startswith("_")}
     tier_valid = {f.name for f in fields(TierConfig)}

@@ -176,8 +176,8 @@ class CacheMetadata:
     # being judged is inside the number it would be judged against.
     body_seconds: float | None = None
     # The wall time a hit stands in for: the body's time divided by the
-    # threads that were running cached calls alongside it. Sixteen 0.5 s calls
-    # on eight threads took 1 s to run, not 8 s (round 20).
+    # threads that were running cached calls alongside it: sixteen 0.5 s calls
+    # on eight threads take 1 s, not 8 s.
     saves_seconds: float | None = None
     outputs: list[str] | None = None
     lineage_hash: str | None = None
@@ -388,12 +388,10 @@ class CacheBackend(ABC):
     def peek_metadata(self, key: str) -> MetadataDict | None:
         """Metadata for *key* WITHOUT counting it as a use, or ``None``.
 
-        For looking, not reading: ``explain()`` asks whether the next call
-        would hit, and going through ``get()`` recorded that as an access --
-        USES and LAST USED moved in ``cash inspect``, and the file backend
-        rewrote the entry to persist the stamp (round 18). The default is
-        ``get_metadata``; a backend whose ``get_metadata`` records an access
-        overrides this.
+        For looking, not reading (``explain()``): a use would move USES and
+        LAST USED in ``cash inspect`` and make the file backend rewrite the
+        entry. The default is ``get_metadata``; a backend whose
+        ``get_metadata`` records an access overrides this.
         """
         return self.get_metadata(key)
 

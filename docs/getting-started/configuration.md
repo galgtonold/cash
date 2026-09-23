@@ -20,7 +20,7 @@ most convenient — explicit code for one-off scripts, `pyproject.toml`
 for team defaults, env vars for deployment overrides, the XDG file for
 personal cross-project defaults.
 
-<!-- claim: cash/_location.py:project_anchor @5074ba29, cash/config.py:_anchor_cache_dir @1a437c21 -->
+<!-- claim: cash/_location.py:project_anchor @46e903a7, cash/config.py:_anchor_cache_dir @ae7a94f7 -->
 ### What paths are relative to
 
 Where a relative `cache_dir` points depends on who wrote it, and the rule is
@@ -107,7 +107,7 @@ configure(debug=True, min_cache_savings_pct=0.30)
 Every field below is settable via every layer. The env-var column shows
 the `CASH_*` binding; the TOML key matches the field name.
 
-<!-- claim: cash/config.py:validate_value @78aa44f0, cash/config.py:parse_size @11b4b371, cash/config.py:_validated_layer @ad9630b5 -->
+<!-- claim: cash/config.py:validate_value @78aa44f0, cash/config.py:parse_size @11b4b371, cash/config.py:_validated_layer @84048bbe -->
 Every value is checked against the field's type — and, for `backend` and a
 tier's `type`, against the set of names cash has — whichever layer it comes
 from. A string is read the way an environment variable is — `"true"`, `"8"` —

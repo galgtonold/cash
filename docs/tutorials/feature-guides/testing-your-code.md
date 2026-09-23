@@ -99,7 +99,7 @@ entries, and it also gives up everything the cache saves you between local
 runs. To keep that, and switch the cache off only for the tests that must not
 see it, use a fixture:
 
-<!-- claim: cash/__init__.py:disabled @8ca8a96a -->
+<!-- claim: cash/__init__.py:disabled @c23cd1a2 -->
 <!-- test:skip reason="a conftest.py fixture; run under CASH_DISABLE=1 by tests/test_core/test_disabled_context.py" -->
 ```python
 # conftest.py

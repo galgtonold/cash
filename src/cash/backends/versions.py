@@ -1,11 +1,9 @@
 """Superseded versions of one statement, and how many of them are worth keeping.
 
 A statement re-run on changed inputs stores a new entry under a new key, and
-the old one stays: nothing but the byte cap ever removed it, and the cap is a
-quarter of the free disk. Round 24 measured what that grows into. r24s1 held
-nine versions of ``X_all = build_features(labelled)``, ~700 MB each for 1.4 s
-of compute; r24s2 five to seven versions of each ~500 MB frame of its cleaning
-chain -- 10 GB for a 200 MB input folder.
+the old one stays: nothing but the byte cap would remove it, and the cap is a
+quarter of the free disk. A cleaning chain of a few ~500 MB frames, re-run a
+handful of times, grows to 10 GB for a 200 MB input folder.
 
 So a statement's versions are pruned as they are written, before the cache is
 full, by what they are worth. The newest superseded version always stays: an

@@ -78,9 +78,9 @@ class AnalyticsManager:
         self.db_path = str(db_path if db_path is not None else default_db_path())
         self.session_id = str(uuid.uuid4())
         self._event_buffer: list[tuple] = []
-        # Events per commit. A commit is an fsync, ~12 ms on Windows; at 50 a
-        # loop's 3,000 statements committed 60 times (round 23). What a hard
-        # kill can lose is this many telemetry rows, never a cached result.
+        # Events per commit. A commit is an fsync (~12 ms on Windows), and a
+        # loop records thousands of statements. What a hard kill can lose is
+        # this many telemetry rows, never a cached result.
         self._flush_threshold = 1000
         # True when analytics is switched off, or the db cannot be created even
         # after a recreate (read-only dir, disk full). Analytics then no-ops

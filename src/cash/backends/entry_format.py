@@ -10,23 +10,19 @@ One file per entry, holding both the metadata and the payload::
 
 Why one file
 ------------
-It used to be two, a ``.meta`` and a ``.data``. Splitting them was the right
-call at the time for one specific reason: reading an entry's metadata must not
-cost deserializing its payload, and with a single naive file it would have --
-you would read a 200MB frame to answer "when was this last accessed?".
-
-A length-prefixed header removes that reason. ``read_entry(...,
+Reading an entry's metadata must not cost deserializing its payload -- a 200MB
+frame to answer "when was this last accessed?". A length-prefixed header gives
+that without a second file: ``read_entry(...,
 with_payload=False)`` reads twelve bytes plus the metadata and stops, so the
 metadata read is O(metadata) whatever the payload weighs. With that settled,
 one file is strictly better than two:
 
 * **Half the write cost.** A write is four filesystem metadata operations per
-  file -- create a temp file (121us), write it (133us), rename it (156us),
-  stat it (21us) -- and about two thirds of that is namespace churn rather
-  than data. Doing it once instead of twice is the single largest saving
-  available on the write path.
-* **Half the files.** 100k entries meant 200k directory entries, and each one
-  occupies a filesystem cluster whatever its byte count.
+  file (create a temp file, write, rename, stat), mostly namespace churn
+  rather than data; doing them once instead of twice is the largest saving on
+  the write path.
+* **Half the files.** Each directory entry occupies a filesystem cluster
+  whatever its byte count.
 * **Atomicity for free.** With two files a reader could observe the data
   without the metadata, which ``get`` had to detect and report as a miss. One
   file renamed into place is either wholly there or wholly absent.
@@ -48,16 +44,14 @@ anything if metadata ever outgrows it.
 
 Why the payload is checksummed
 ------------------------------
-Truncation was already caught -- a short file cannot satisfy its own header --
-but damage that leaves the pickle structurally valid was not, and a flipped
-byte inside a stored value came back as data (found attacking the decorator
-before round 26: a cached string returned with one character changed, no
-warning). A recompute is always available and never wrong, so an entry that
-does not match its checksum is treated exactly like a truncated one: absent.
+Truncation shows by itself -- a short file cannot satisfy its own header --
+but damage that leaves the pickle structurally valid does not: a flipped byte
+inside a stored value would come back as data. A recompute is always
+available and never wrong, so an entry that does not match its checksum is
+treated exactly like a truncated one: absent.
 
-crc32 is what makes that affordable. It runs at 14 GB/s here -- 4.6ms for 64MB,
-against the 23.7ms sha256 takes over the same bytes -- so it costs a fraction
-of writing or reading the payload it covers. It detects damage, not forgery:
+crc32 costs a fraction of writing or reading the payload it covers (several
+times faster than sha256). It detects damage, not forgery:
 nothing here defends against someone who can write the cache directory, and
 nothing needs to.
 """

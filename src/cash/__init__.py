@@ -183,10 +183,8 @@ def disabled(on: bool = True) -> Iterator[None]:
     Inside ``with cash.disabled():`` every ``@cash.cache`` call runs its body
     and nothing is read from or written to the cache. On the way out the
     ``disable`` setting returns to what it was -- including ``True``, when the
-    run was started with ``CASH_DISABLE=1``. The fixture the testing guide
-    showed ended with ``cash.configure(disable=False)``, which switched a
-    ``CASH_DISABLE=1`` run back ON from the first test that used it, so the
-    job meant to run uncached read and wrote the cache (round 19).
+    run was started with ``CASH_DISABLE=1``, which ``configure(disable=False)``
+    on the way out would switch back on.
 
     ``disabled(False)`` is the reverse: force caching on for the block.
     """

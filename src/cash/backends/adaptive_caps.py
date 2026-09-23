@@ -1,14 +1,9 @@
 """Machine-scaled cache-size caps.
 
-A single 1 GiB ``max_cache_size`` used to cap *every* tier, including the
-disk tier — whose whole job is to hold big frames persistently. Persisting
-two ~680 MB DataFrames on that default put a real user into a
-write-and-evict treadmill: each frame was written, then immediately
-LRU-evicted to stay under 1 GiB, so cash ended up **slower** than parsing
-from scratch, with no warning. "Persisting fewer things made it faster."
-
-The fix is to stop sharing one number. This module derives a *separate*,
-machine-scaled cap for each tier:
+One fixed number for every tier would either starve the disk tier -- whose
+job is to hold big frames persistently, and which under a small cap writes
+each one and evicts it straight away -- or let the RAM tier take the machine.
+This module derives a *separate*, machine-scaled cap for each tier:
 
 * **disk** — a generous fraction of the *free* space on the cache volume,
   so it can actually retain what the user persists;
