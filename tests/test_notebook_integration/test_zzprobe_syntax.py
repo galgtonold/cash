@@ -36,6 +36,8 @@ Known limitations deliberately NOT re-filed: multi-target swap a,b = b,a
 (CAS-61), exhausted generators (CAS-50).
 """
 
+import sys
+
 import pytest
 
 pytestmark = [pytest.mark.timeout(90)]
@@ -191,11 +193,23 @@ def test_match_capture_bindings_edit_invalidation(nb_runner):
 # --- 10. annotated assignment + PEP 695 type alias ---------------------------
 
 
-def test_annassign_and_type_alias_edit_invalidation(nb_runner):
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        pytest.param("", id="annassign"),
+        # The kernel runs this interpreter, and `type` statements parse from 3.12.
+        pytest.param(
+            "type Vec = list[int]\n",
+            id="with_type_alias",
+            marks=pytest.mark.skipif(sys.version_info < (3, 12), reason="PEP 695 `type` needs Python 3.12"),
+        ),
+    ],
+)
+def test_annassign_and_type_alias_edit_invalidation(nb_runner, prefix):
     nb_runner.create_notebook(
         [
             "x: int = 5",
-            "type Vec = list[int]\ny: int = x * 2\nprint(f'y={y}')",
+            prefix + "y: int = x * 2\nprint(f'y={y}')",
         ]
     )
     nb_runner.start_kernel()
