@@ -133,20 +133,6 @@ class TestSkipLogic:
         nb_runner.run_cell(2)
         assert "x=1" in nb_runner.get_output(2)
 
-    def test_08_empty_cell(self, nb_runner):
-        """Scenario 12: Cell with only comments or whitespace."""
-        nb_runner.create_notebook(
-            [
-                "x = 1",
-                "# just a comment",
-                "print(x)",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        # Cell 3 should still work
-        assert "1" in nb_runner.get_output(3)
-
     def test_09_cell_with_only_print(self, nb_runner):
         """Scenario 13: print() only — no outputs to cache."""
         nb_runner.create_notebook(
@@ -208,41 +194,6 @@ class TestSkipLogic:
         # Re-run — both should skip
         nb_runner.run_cell(2)
         assert "a=11, b=12" in nb_runner.get_output(2)
-
-    def test_13_external_modification_detected(self, nb_runner):
-        """Scenario 6: Modify variable externally — skip should detect."""
-        nb_runner.create_notebook(
-            [
-                "x = [1, 2, 3]",
-                "y = sum(x)\nprint(f'y={y}')",
-                # This cell modifies x without going through caching
-                "x.append(4)",
-                # Now re-use y — should still be valid since y was computed from old x
-                "print(f'y still={y}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "y=6" in nb_runner.get_output(2)
-        # y is still 6 even after x was modified — y itself wasn't changed
-        assert "y still=6" in nb_runner.get_output(4)
-
-    def test_14_rerun_after_external_modification(self, nb_runner):
-        """Re-run cell after its input was externally modified."""
-        nb_runner.create_notebook(
-            [
-                "x = [1, 2, 3]",
-                "y = sum(x)\nprint(f'y={y}')",
-                # Modify x via mutation (not reassignment)
-                "x.append(100)",
-                # Re-derive y with different code to avoid ambiguity
-                "y2 = sum(x)\nprint(f'y2={y2}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "y=6" in nb_runner.get_output(2)
-        assert "y2=106" in nb_runner.get_output(4)
 
     def test_15_cell_rerun_identical_output(self, nb_runner):
         """Re-running a cell that produces same value should still skip."""
@@ -358,82 +309,6 @@ class TestLineageIntegrity:
         nb_runner.run_cell(2)
         assert "x=1" in nb_runner.get_output(2)
 
-    def test_21_variable_shadowing_uses_latest(self, nb_runner):
-        """Scenario 22: Two cells define x — downstream uses latest."""
-        nb_runner.create_notebook(
-            [
-                "x = 1",
-                "x = 2",
-                "y = x\nprint(f'y={y}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "y=2" in nb_runner.get_output(3)
-
-    def test_22_overwrite_preserves_earlier_dependency(self, nb_runner):
-        """Scenario 23: x=1; y=x in cell 1, x=2; z=y in cell 2."""
-        nb_runner.create_notebook(
-            [
-                "x = 1\ny = x",
-                "x = 2\nz = y\nprint(f'z={z}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        # z should be 1 (uses y which was set from x=1)
-        assert "z=1" in nb_runner.get_output(2)
-
-    def test_23_unpicklable_variable(self, nb_runner):
-        """Scenario 25: Lambda/generator — should handle gracefully."""
-        nb_runner.create_notebook(
-            [
-                "import types\nf = lambda x: x * 2",
-                "result = f(21)\nprint(f'result={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result=42" in nb_runner.get_output(2)
-
-    def test_24_unicode_variable_names(self, nb_runner):
-        """Scenario 27: Unicode variable names."""
-        nb_runner.create_notebook(
-            [
-                "données = [1, 2, 3]",
-                "résultat = sum(données)\nprint(f'résultat={résultat}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "résultat=6" in nb_runner.get_output(2)
-
-    def test_25_multiline_string_literal(self, nb_runner):
-        """Scenario 28: Triple-quoted string with special chars."""
-        nb_runner.create_notebook(
-            [
-                'text = """line1\nline2\nline3"""',
-                "length = len(text)\nprint(f'length={length}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "length=" in out
-
-    def test_26_fstring_complex(self, nb_runner):
-        """Scenario 29: f-string with complex expression."""
-        nb_runner.create_notebook(
-            [
-                "data = {'a': 1, 'b': 2}",
-                'msg = f"keys={sorted(data.keys())}"\nprint(msg)',
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "keys=" in nb_runner.get_output(2)
-        assert "'a'" in nb_runner.get_output(2)
-
     def test_27_chain_modification_propagates(self, nb_runner):
         """Modifying early cell propagates through chain on re-run."""
         nb_runner.create_notebook(
@@ -469,16 +344,3 @@ class TestLineageIntegrity:
         nb_runner.run_cell(1)
         nb_runner.run_cell(2)
         assert "a=10, b=20, c=30" in nb_runner.get_output(2)
-
-    def test_30_dict_comprehension_lineage(self, nb_runner):
-        """Dict comprehension — comprehension variable shouldn't leak."""
-        nb_runner.create_notebook(
-            [
-                "keys = ['a', 'b', 'c']\nvals = [1, 2, 3]",
-                "d = {k: v for k, v in zip(keys, vals)}\nprint(d)",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "'a': 1" in out

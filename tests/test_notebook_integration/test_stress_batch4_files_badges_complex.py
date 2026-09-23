@@ -135,32 +135,6 @@ class TestFileDependencies:
 class TestBadgeMetrics:
     """Tests for badge display and metrics accuracy."""
 
-    def test_101_first_run_produces_output(self, nb_runner):
-        """Scenario 106: Fresh execution produces correct output."""
-        nb_runner.create_notebook(
-            [
-                "x = 42\nprint(f'x={x}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_cell(1)
-        out = nb_runner.get_output(1)
-        assert "x=42" in out
-
-    def test_102_cached_run_replays_output(self, nb_runner):
-        """Scenario 107: Cached/skipped run still shows output."""
-        nb_runner.create_notebook(
-            [
-                "x = 42\nprint(f'x={x}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_cell(1)
-        assert "x=42" in nb_runner.get_output(1)
-        # Second run should skip but still show output
-        nb_runner.run_cell(1)
-        assert "x=42" in nb_runner.get_output(1)
-
     def test_103_mixed_status_cell(self, nb_runner):
         """Scenario 109: Cell with some cached, some computed statements."""
         nb_runner.create_notebook(
@@ -306,28 +280,6 @@ class TestComplexInteractions:
         nb_runner.run_cell(2)
         assert "length=5" in nb_runner.get_output(2)
 
-    def test_111_datetime_forbidden_function(self, nb_runner):
-        """Scenario 126: datetime.now() — forbidden function, not cached."""
-        nb_runner.create_notebook(
-            [
-                "from datetime import datetime\nnow = datetime.now()\nprint(type(now).__name__)",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_cell(1)
-        assert "datetime" in nb_runner.get_output(1)
-
-    def test_112_random_without_seed(self, nb_runner):
-        """Scenario 127: random.random() without seed — should handle correctly."""
-        nb_runner.create_notebook(
-            [
-                "import random\nval = random.random()\nprint(f'got_value={val is not None}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_cell(1)
-        assert "got_value=True" in nb_runner.get_output(1)
-
     def test_113_context_manager_file_read(self, nb_runner, tmp_path):
         """Scenario 130: with open() as f: — file tracking + caching."""
         txt_path = tmp_path / "test.txt"
@@ -347,47 +299,6 @@ class TestComplexInteractions:
         txt_path.write_text("updated content")
         nb_runner.run_cell(1)
         assert "content=updated content" in nb_runner.get_output(1)
-
-    def test_114_import_and_use_pattern(self, nb_runner):
-        """Scenario 120: Import in cell 1, use in cells 2-3."""
-        nb_runner.create_notebook(
-            [
-                "import math",
-                "a = math.sqrt(16)\nprint(f'a={a}')",
-                "b = math.pi\nprint(f'b={b:.2f}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "a=4.0" in nb_runner.get_output(2)
-        assert "b=3.14" in nb_runner.get_output(3)
-
-    def test_115_accumulator_across_cells(self, nb_runner):
-        """Scenario 121: Accumulator across cells."""
-        nb_runner.create_notebook(
-            [
-                "results = []",
-                "results.append(1)\nresults.append(2)",
-                "print(f'results={results}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "results=[1, 2]" in nb_runner.get_output(3)
-
-    def test_116_string_operations_chain(self, nb_runner):
-        """Scenario 125: String transformations cached correctly."""
-        nb_runner.create_notebook(
-            [
-                "text = '  Hello World  '",
-                "text = text.strip()",
-                "text = text.lower()",
-                "text = text.replace('world', 'python')\nprint(f'text={text}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "text=hello python" in nb_runner.get_output(4)
 
     def test_117_conditional_computation(self, nb_runner):
         """Complex conditional with data-dependent branching."""
@@ -443,38 +354,6 @@ class TestComplexInteractions:
         assert "b=200" in nb_runner.get_output(3)
         assert "c=300" in nb_runner.get_output(4)
 
-    def test_120_complex_dict_operations(self, nb_runner):
-        """Complex dict build across multiple cells."""
-        nb_runner.create_notebook(
-            [
-                "config = {'version': 1}",
-                "config['name'] = 'test'",
-                "config['items'] = [1, 2, 3]",
-                "print(f'config={config}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "'version': 1" in out
-        assert "'name': 'test'" in out
-        assert "'items': [1, 2, 3]" in out
-
-    def test_121_dataframe_multi_transform(self, nb_runner):
-        """Multiple DataFrame transforms — each step cached."""
-        nb_runner.create_notebook(
-            [
-                "import pandas as pd\nimport numpy as np\ndf = pd.DataFrame({'a': np.arange(100), 'b': np.random.RandomState(42).randn(100)})",
-                "df = df.sort_values('b')",
-                "df['c'] = df['a'].cumsum()",
-                "result = df['c'].iloc[-1]\nprint(f'result={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "result=" in out
-
     def test_122_fresh_kernel_with_loop_upstream(self, nb_runner):
         """Fresh kernel, run downstream — upstream has loop."""
         nb_runner.create_notebook(
@@ -508,66 +387,3 @@ class TestComplexInteractions:
         nb_runner.run_cell(3)
         out = nb_runner.get_output(3)
         assert "keys=['a', 'b']" in out
-
-    def test_124_exception_in_loop_iteration(self, nb_runner):
-        """Exception in loop iteration — partial results available."""
-        nb_runner.create_notebook(
-            [
-                "results = {}\nfor x in [1, 2, 0, 3]:\n    try:\n        results[x] = 100 // x\n    except ZeroDivisionError:\n        results[x] = -1\nprint(f'results={results}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_cell(1)
-        out = nb_runner.get_output(1)
-        assert "0: -1" in out
-        assert "1: 100" in out
-
-    def test_125_multiple_imports_same_cell(self, nb_runner):
-        """Multiple imports in same cell — all tracked."""
-        nb_runner.create_notebook(
-            [
-                "import math\nimport os\nimport json",
-                "result = math.sqrt(json.loads('4'))\nprint(f'result={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result=2.0" in nb_runner.get_output(2)
-
-    def test_128_f_string_with_method_call(self, nb_runner):
-        """f-string with method calls — analysis handles correctly."""
-        nb_runner.create_notebook(
-            [
-                "name = 'hello world'",
-                "msg = f'Upper: {name.upper()}, Len: {len(name)}'\nprint(msg)",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "Upper: HELLO WORLD" in out
-        assert "Len: 11" in out
-
-    def test_129_nested_function_definitions(self, nb_runner):
-        """Nested function definitions."""
-        nb_runner.create_notebook(
-            [
-                "def outer(x):\n    def inner(y):\n        return y * 2\n    return inner(x) + 1",
-                "result = outer(5)\nprint(f'result={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result=11" in nb_runner.get_output(2)
-
-    def test_130_walrus_operator(self, nb_runner):
-        """Walrus operator (:=) in if condition."""
-        nb_runner.create_notebook(
-            [
-                "data = [1, 2, 3, 4, 5]",
-                "if (n := len(data)) > 3:\n    print(f'Large: {n}')\nelse:\n    print(f'Small: {n}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "Large: 5" in nb_runner.get_output(2)

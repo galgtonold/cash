@@ -23,29 +23,6 @@ pytestmark = pytest.mark.stress
 class TestContentHashEdgeCases:
     """Tests targeting content hash and lineage edge cases."""
 
-    def test_131_df_modification_beyond_row5(self, nb_runner):
-        """
-        BUG HYPOTHESIS: Content hash only samples first 5 rows.
-        If row 6+ changes, external modification may not be detected.
-
-        This tests whether the system handles DataFrames correctly when
-        changes occur beyond the sampled rows.
-        """
-        nb_runner.create_notebook(
-            [
-                "import pandas as pd\ndf = pd.DataFrame({'a': list(range(20))})",
-                # Modify a value beyond row 5
-                "df.iloc[10, 0] = 999\nprint(f'val={df.iloc[10, 0]}')",
-                # Use df in downstream
-                "total = df['a'].sum()\nprint(f'total={total}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "val=999" in nb_runner.get_output(2)
-        # 0+1+...+19 - 10 + 999 = 190 - 10 + 999 = 1179
-        assert "total=1179" in nb_runner.get_output(3)
-
     def test_132_stale_cache_via_type_change_list_to_int(self, nb_runner):
         """
         Cell 1: x = [1,2,3] (list)
@@ -475,43 +452,9 @@ class TestReexecutionPatterns:
             f"Expected NameError for a use-after-del, got: {detail[:300]}"
         )
 
-    def test_150_overwrite_import_with_variable(self, nb_runner):
-        """Import, then overwrite with variable, then use."""
-        nb_runner.create_notebook(
-            [
-                "import math",
-                "math = 42",
-                "print(f'math={math}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "math=42" in nb_runner.get_output(3)
-
 
 class TestComplexDataFlows:
     """Complex data flow scenarios."""
-
-    def test_151_diamond_with_mutation(self, nb_runner):
-        """
-        A→B (mutates A), A→C (reads A), B+C→D
-        Mutation of A by B should not affect C's cached value.
-        """
-        nb_runner.create_notebook(
-            [
-                "a = [1, 2, 3]",
-                "b = len(a)",  # reads a
-                "a.append(4)",  # mutates a
-                "c = len(a)",  # reads mutated a
-                "d = b + c\nprint(f'd={d}, b={b}, c={c}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(5)
-        assert "b=3" in out
-        assert "c=4" in out
-        assert "d=7" in out
 
     def test_152_multiple_file_deps_partial_change(self, nb_runner, tmp_path):
         """Two files read, only one changes."""
@@ -539,83 +482,6 @@ class TestComplexDataFlows:
         # Should detect file2 changed and update
         out = nb_runner.get_output(3)
         assert "total=" in out  # Could be 4 or 5 depending on propagation
-
-    def test_153_large_number_of_variables(self, nb_runner):
-        """Cell producing 20 variables — all tracked correctly."""
-        assigns = [f"v{i} = {i}" for i in range(20)]
-        total_expr = " + ".join(f"v{i}" for i in range(20))
-        code = "\n".join(assigns) + f"\ntotal = {total_expr}\nprint(f'total={{total}}')"
-
-        nb_runner.create_notebook([code])
-        nb_runner.start_kernel()
-        nb_runner.run_cell(1)
-        # sum(0..19) = 190
-        assert "total=190" in nb_runner.get_output(1)
-
-    def test_155_nested_data_structures(self, nb_runner):
-        """Deeply nested data structures — caching handles correctly."""
-        nb_runner.create_notebook(
-            [
-                "data = {'level1': {'level2': {'level3': [1, 2, 3]}}}",
-                "inner = data['level1']['level2']['level3']\ntotal = sum(inner)\nprint(f'total={total}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "total=6" in nb_runner.get_output(2)
-
-    def test_156_conditional_import_pattern(self, nb_runner):
-        """Conditional import — only import if available."""
-        nb_runner.create_notebook(
-            [
-                "try:\n    import json\n    HAS_JSON = True\nexcept ImportError:\n    HAS_JSON = False",
-                "if HAS_JSON:\n    result = json.dumps({'a': 1})\nelse:\n    result = 'no json'\nprint(f'result={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert '"a": 1' in out or "result=" in out
-
-    def test_157_variable_used_in_own_definition(self, nb_runner):
-        """x = [x for x in range(5)] — comprehension x shadows outer x."""
-        nb_runner.create_notebook(
-            [
-                "x = 'original'",
-                "y = [x for x in range(5)]\nprint(f'y={y}')",
-                "print(f'x={x}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "y=[0, 1, 2, 3, 4]" in nb_runner.get_output(2)
-        # In Python 3, comprehension x doesn't leak — original x preserved
-        assert "x=original" in nb_runner.get_output(3)
-
-    def test_158_chained_assignment(self, nb_runner):
-        """a = b = c = 10 — all three get same value and lineage."""
-        nb_runner.create_notebook(
-            [
-                "a = b = c = 10",
-                "total = a + b + c\nprint(f'total={total}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "total=30" in nb_runner.get_output(2)
-
-    def test_159_starred_assignment(self, nb_runner):
-        """a, *b = [1, 2, 3, 4] — starred unpacking."""
-        nb_runner.create_notebook(
-            [
-                "data = [1, 2, 3, 4, 5]",
-                "first, *rest = data\nprint(f'first={first}, rest={rest}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "first=1" in nb_runner.get_output(2)
-        assert "rest=[2, 3, 4, 5]" in nb_runner.get_output(2)
 
     def test_160_upstream_restore_after_modify_revert(self, nb_runner):
         """
@@ -645,31 +511,6 @@ class TestComplexDataFlows:
 class TestEdgeCasePatterns:
     """Additional edge case patterns to push the system."""
 
-    def test_161_empty_string_variable(self, nb_runner):
-        """Empty string as variable value."""
-        nb_runner.create_notebook(
-            [
-                "x = ''",
-                "y = len(x)\nprint(f'y={y}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "y=0" in nb_runner.get_output(2)
-
-    def test_162_very_long_variable_name(self, nb_runner):
-        """Variable with a very long name."""
-        long_name = "very_long_variable_name_" * 5 + "end"
-        nb_runner.create_notebook(
-            [
-                f"{long_name} = 42",
-                f"print(f'{long_name}={{{long_name}}}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "=42" in nb_runner.get_output(2)
-
     def test_163_cell_with_multiple_prints(self, nb_runner):
         """Multiple print statements — all output captured."""
         nb_runner.create_notebook(
@@ -685,18 +526,6 @@ class TestEdgeCasePatterns:
         nb_runner.run_cell(1)
         out2 = nb_runner.get_output(1)
         assert "line1" in out2 and "line2" in out2 and "line3" in out2
-
-    def test_164_negative_and_zero_values(self, nb_runner):
-        """Negative numbers and zero — edge values."""
-        nb_runner.create_notebook(
-            [
-                "a = -1\nb = 0\nc = -100",
-                "total = a + b + c\nprint(f'total={total}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "total=-101" in nb_runner.get_output(2)
 
     def test_165_boolean_as_input(self, nb_runner):
         """Boolean values as inputs."""

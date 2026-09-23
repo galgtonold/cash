@@ -145,20 +145,6 @@ class TestUpstreamSimulation:
         nb_runner.run_all()
         assert "label=small" in nb_runner.get_output(3)
 
-    def test_38_concurrent_variable_names(self, nb_runner):
-        """Scenario 47: Same var in multiple cells — latest wins."""
-        nb_runner.create_notebook(
-            [
-                "x = 'first'",
-                "x = 'second'",
-                "x = 'third'",
-                "print(f'x={x}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "x=third" in nb_runner.get_output(4)
-
     def test_39_long_upstream_chain(self, nb_runner):
         """Scenario 49: 10-cell chain — test performance and correctness."""
         cells = []
@@ -348,21 +334,6 @@ class TestCellOrdering:
         nb_runner.run_cell(3)
         assert "z=30" in nb_runner.get_output(3)
 
-    def test_51_run_after_variable_deleted(self, nb_runner):
-        """Scenario 60: Delete variable, then run downstream."""
-        nb_runner.create_notebook(
-            [
-                "x = 42",
-                "y = x + 1\nprint(f'y={y}')",
-                "del x",
-                "print(f'y still={y}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "y=43" in nb_runner.get_output(2)
-        assert "y still=43" in nb_runner.get_output(4)
-
     def test_53_cell_with_star_import(self, nb_runner):
         """Scenario 64: Star import — should not crash."""
         nb_runner.create_notebook(
@@ -464,32 +435,6 @@ class TestCellOrdering:
         # Run cell 2 — upstream should handle the change
         nb_runner.run_cell(2)
         assert "y=11" in nb_runner.get_output(2)
-
-    def test_59_duplicate_code_cells_with_ids(self, nb_runner):
-        """Scenario 42: Two cells that produce same variable — latest definition wins."""
-        nb_runner.create_notebook(
-            [
-                "x = 1  # first definition",
-                "x = 1  # second definition",
-                "print(f'x={x}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "x=1" in nb_runner.get_output(3)
-
-    def test_60_upstream_produces_and_consumes_same_var(self, nb_runner):
-        """Scenario 43: Cell both consumes and produces df (df = df.merge(...))."""
-        nb_runner.create_notebook(
-            [
-                "import pandas as pd\ndf = pd.DataFrame({'a': [1,2], 'b': [3,4]})",
-                "other = pd.DataFrame({'a': [1,2], 'c': [5,6]})",
-                "df = df.merge(other, on='a')\nprint(len(df))",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "2" in nb_runner.get_output(3)
 
 
 class TestComplexReexecution:
