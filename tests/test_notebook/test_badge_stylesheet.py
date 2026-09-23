@@ -59,3 +59,35 @@ def test_it_is_meaningfully_smaller():
     only if it happens to lack comments, which this stylesheet does not."""
     css = _emitted_css(SIMPLE)
     assert len(css) < len(H._CSS) * 0.75, f"expected a real reduction, got {len(H._CSS)} -> {len(css)}"
+
+
+def _stylesheet_source() -> str:
+    from importlib import resources
+
+    return resources.files("cash.notebook.badge_renderer.renderers").joinpath("badge.css").read_text(encoding="utf-8")
+
+
+def test_the_stylesheet_is_a_package_resource():
+    """Shipped as a file beside the renderer, so the wheel must carry it."""
+    assert ".c3-wrap" in _stylesheet_source()
+
+
+def test_the_stylesheet_hard_codes_no_colour():
+    """Colours come from the theme, so a palette change is a one-file change."""
+    source = re.sub(r"/\*.*?\*/", "", _stylesheet_source(), flags=re.S)
+    assert re.findall(r"#[0-9a-fA-F]{3,8}\b|rgba?\(", source) == []
+
+
+def test_every_token_the_stylesheet_reads_is_declared():
+    used = set(re.findall(r"var\(--c3-([a-z0-9-]+)\)", H._CSS))
+    declared = set(re.findall(r"--c3-([a-z0-9-]+):", H._CSS))
+    assert used, "the stylesheet reads no tokens"
+    assert used == declared
+
+
+def test_the_tier_rack_comes_from_the_badge_being_rendered():
+    """Two renders with different tier lists do not share a rack."""
+    three = build_interactive_badge(SIMPLE, configured_tiers=("RAM", "REDIS", "DISK"))
+    one = build_interactive_badge(SIMPLE, configured_tiers=("RAM",))
+    assert render_html(three).count('class="c3-dot ') == 3
+    assert render_html(one).count('class="c3-dot ') == 1

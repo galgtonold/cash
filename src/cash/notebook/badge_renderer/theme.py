@@ -96,6 +96,115 @@ BG_DETAIL = "#fafbfc"
 # Bug-report pill (subtle tertiary link in v3).
 BUG_FG = "#888"
 BUG_FG_HOVER = "#444"
+BG_BUG_HOVER = "#f5f5f5"
+
+# Surfaces and rules the stylesheet uses in one place each.
+BG_SURFACE = "#fff"
+BG_ROWTIP = "#fbfaf5"
+BG_TRACK = "#f2efea"
+BG_ITER_TRACK = "#ececec"
+BG_CTRL_BODY = "#fbfaf3"
+BG_OVERHEAD = "#fbfbfa"
+RULE_SECTION = "#ececec"
+RULE_SUMMARY = "#efece4"
+RULE_SPARK = "#e8e5dc"
+RULE_CHIP = "#e2e2e0"
+RULE_ROWTIP = "#e6e1d2"
+RULE_TIME_CHIP = "#f0eee8"
+RULE_WARN_PILL = "#f1c8c1"
+RULE_DETAIL = "#f0f0ef"
+RULE_CTRL_BODY = "#e8e1ce"
+ACCENT_ROWTIP = "#b69a4d"
+DOT_EMPTY_BORDER = "#d2d4d8"
+CACHE_TAG_FG = "#1a73e8"
+CACHE_TAG_BG = "#e8f0fe"
+SCROLLBAR_THUMB = "#c5c1b5"
+SCROLLBAR_THUMB_HOVER = "#a8a496"
+
+# Syntax highlighting of the code in a row.
+SYNTAX_KEYWORD = "#cf222e"
+SYNTAX_STRING = "#0a3069"
+SYNTAX_COMMENT = "#6e7781"
+SYNTAX_NUMBER = "#0550ae"
+
+
+# ---------------------------------------------------------------------------
+# CSS custom properties
+# ---------------------------------------------------------------------------
+
+# Every token ``badge.css`` reads, as ``var(--c3-<name>)`` with ``_`` -> ``-``.
+_CSS_TOKENS = (
+    "FONT_SANS",
+    "FONT_MONO",
+    "RAIL_CACHED",
+    "BAR_CACHED",
+    "CHIP_BG_CACHED",
+    "CHIP_FG_CACHED",
+    "RAIL_EXEC",
+    "BAR_EXEC",
+    "CHIP_BG_EXEC",
+    "CHIP_FG_EXEC",
+    "RAIL_WARN",
+    "BAR_WARN",
+    "CHIP_BG_WARN",
+    "CHIP_FG_WARN",
+    "RAIL_MIXED",
+    "SUMMARY_BG_CACHED",
+    "SUMMARY_BG_EXEC",
+    "INK",
+    "INK_2",
+    "INK_3",
+    "INK_4",
+    "INK_5",
+    "RULE",
+    "RULE_SOFT",
+    "BG_PANEL",
+    "BG_UPSTREAM",
+    "BG_HOVER",
+    "BG_DETAIL",
+    "BUG_FG",
+    "BUG_FG_HOVER",
+    "BG_BUG_HOVER",
+    "BG_SURFACE",
+    "BG_ROWTIP",
+    "BG_TRACK",
+    "BG_ITER_TRACK",
+    "BG_CTRL_BODY",
+    "BG_OVERHEAD",
+    "RULE_SECTION",
+    "RULE_SUMMARY",
+    "RULE_SPARK",
+    "RULE_CHIP",
+    "RULE_ROWTIP",
+    "RULE_TIME_CHIP",
+    "RULE_WARN_PILL",
+    "RULE_DETAIL",
+    "RULE_CTRL_BODY",
+    "ACCENT_ROWTIP",
+    "DOT_EMPTY_BORDER",
+    "CACHE_TAG_FG",
+    "CACHE_TAG_BG",
+    "SYNTAX_KEYWORD",
+    "SYNTAX_STRING",
+    "SYNTAX_COMMENT",
+    "SYNTAX_NUMBER",
+)
+
+# The scrollbar rules style the badge's scrolling ANCESTORS, which sit
+# outside ``.c3-wrap`` and so need these declared on themselves.
+_SCROLLBAR_TOKENS = ("SCROLLBAR_THUMB", "SCROLLBAR_THUMB_HOVER")
+
+
+def _declarations(names: tuple[str, ...]) -> str:
+    return "".join(f"  --c3-{n.lower().replace('_', '-')}: {globals()[n]};\n" for n in names)
+
+
+def css_custom_properties() -> str:
+    """The token declarations ``badge.css`` is written against."""
+    return (
+        f".c3-wrap {{\n{_declarations(_CSS_TOKENS)}}}\n"
+        f":has(> .c3-wrap),\n:has(.c3-wrap) {{\n{_declarations(_SCROLLBAR_TOKENS)}}}\n"
+    )
 
 
 # ---------------------------------------------------------------------------

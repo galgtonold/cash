@@ -1,0 +1,752 @@
+/* Scoped scrollbar styling — applies only to scrollable elements that
+   *contain* a Cash badge. Uses :has() (Chromium 105+, Safari 15.4+,
+   Firefox 121+) so we don't repaint scrollbars in cells that don't
+   show our badge. Firefox uses scrollbar-color / scrollbar-width;
+   Chromium falls back to ::-webkit-scrollbar pseudo-elements. */
+:has(> .c3-wrap),
+:has(.c3-wrap) {
+  scrollbar-width: thin;
+  scrollbar-color: var(--c3-scrollbar-thumb) transparent;
+}
+:has(> .c3-wrap)::-webkit-scrollbar,
+:has(.c3-wrap)::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+  background: transparent;
+}
+:has(> .c3-wrap)::-webkit-scrollbar-thumb,
+:has(.c3-wrap)::-webkit-scrollbar-thumb {
+  background: var(--c3-scrollbar-thumb);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+:has(> .c3-wrap)::-webkit-scrollbar-thumb:hover,
+:has(.c3-wrap)::-webkit-scrollbar-thumb:hover {
+  background: var(--c3-scrollbar-thumb-hover);
+  background-clip: padding-box;
+}
+:has(> .c3-wrap)::-webkit-scrollbar-corner,
+:has(.c3-wrap)::-webkit-scrollbar-corner { background: transparent; }
+
+/* Outer wrap is a thin positioning anchor only — no reserved padding,
+   so the badge takes its natural width and doesn't trigger horizontal
+   scroll. Hover detail panels render *in flow* under their row (see
+   .c3-rowtip below), which sidesteps every ancestor-overflow trap. */
+.c3-wrap {
+  display: inline-block;
+  position: relative;
+  margin-top: 5px;
+  max-width: 100%;
+}
+/* Neutralize host (Jupyter / VS Code) defaults — but only on the inline
+   row code block (.c3-code). The expanded rowtip code block (.c3-rt-code)
+   wants its own background, so we don't touch it. */
+.c3-code {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+.c3-card {
+  display: inline-flex;
+  flex-direction: column;
+  background: var(--c3-bg-surface);
+  border: 1px solid var(--c3-rule);
+  border-left: 3px solid;
+  border-radius: 4px;
+  overflow: visible;
+  font-family: var(--c3-font-sans);
+  font-size: 12px;
+  color: var(--c3-ink);
+  max-width: 100%;
+  position: relative;
+}
+.c3-card[data-kind="cached"] { border-left-color: var(--c3-rail-cached); }
+.c3-card[data-kind="exec"]   { border-left-color: var(--c3-rail-exec); }
+.c3-card[data-kind="warn"]   { border-left-color: var(--c3-rail-warn); }
+.c3-card[data-kind="mixed"]  { border-left-color: var(--c3-rail-mixed); }
+
+/* Summary chip */
+.c3-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+  list-style: none;
+  outline: none;
+  min-height: 22px;
+}
+.c3-summary::-webkit-details-marker { display: none; }
+.c3-summary::marker { content: ""; }
+.c3-card[open] > .c3-summary { border-bottom: 1px solid var(--c3-rule-summary); }
+.c3-card[data-kind="cached"][open] > .c3-summary { background: var(--c3-summary-bg-cached); }
+.c3-card[data-kind="exec"][open]   > .c3-summary { background: var(--c3-summary-bg-exec); }
+
+.c3-summary-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.c3-card[data-kind="cached"] .c3-summary-label { color: var(--c3-rail-cached); }
+.c3-card[data-kind="exec"]   .c3-summary-label { color: var(--c3-rail-exec); }
+.c3-card[data-kind="warn"]   .c3-summary-label { color: var(--c3-rail-warn); }
+.c3-card[data-kind="mixed"]  .c3-summary-label { color: var(--c3-rail-mixed); }
+.c3-summary-sep { color: var(--c3-ink-5); font-size: 10px; }
+.c3-summary-sub {
+  font-family: var(--c3-font-mono);
+  font-size: 11px;
+  color: var(--c3-ink-3);
+}
+.c3-summary-spark {
+  display: inline-flex;
+  align-items: flex-end;
+  height: 18px;
+  padding: 0 4px;
+  border-left: 1px solid var(--c3-rule-spark);
+  border-right: 1px solid var(--c3-rule-spark);
+  margin-left: 4px;
+  /* Cap so a 100-statement cell can't push the filter chips off the
+     edge — overflow clips the trailing bars rather than expanding. */
+  max-width: 200px;
+  overflow: hidden;
+}
+.c3-spark {
+  display: inline-flex;
+  align-items: flex-end;
+  height: 16px;
+  gap: 1px;
+  flex-shrink: 0;
+}
+.c3-spark-bar {
+  width: 3px;
+  min-height: 2px;
+  border-radius: 0.5px;
+}
+.c3-summary-chips {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+.c3-fchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px 2px 5px;
+  background: var(--c3-bg-surface);
+  border: 1px solid var(--c3-rule-chip);
+  border-radius: 10px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--c3-ink-3);
+}
+.c3-fchip-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+.c3-fchip-exec   .c3-fchip-dot { background: var(--c3-bar-exec); }
+.c3-fchip-cached .c3-fchip-dot { background: var(--c3-bar-cached); }
+.c3-fchip-warn   .c3-fchip-dot { background: var(--c3-bar-warn); }
+.c3-fchip-count  { color: var(--c3-ink); font-variant-numeric: tabular-nums; }
+.c3-summary-caret {
+  width: 7px; height: 7px;
+  border-right: 1.5px solid var(--c3-ink-4);
+  border-bottom: 1.5px solid var(--c3-ink-4);
+  transform: rotate(45deg) translate(-2px, -2px);
+  margin-left: 6px;
+  align-self: center;
+  transition: transform 0.15s ease;
+}
+.c3-card[open] > .c3-summary > .c3-summary-caret {
+  transform: rotate(-135deg) translate(-2px, -2px);
+}
+
+/* Panel — overflow is visible so click-to-expand tooltips can escape;
+   we trade per-badge scroll for the badge growing with its content. */
+.c3-panel {
+  background: var(--c3-bg-panel);
+  padding: 0;
+  min-width: 0;
+  overflow: visible;
+}
+
+/* Upstream subsection — reuses the EXACT same .c3-rowx + checkbox-hack
+   pattern as expandable rows below, so it inherits everything that
+   already works (grid alignment, VS Code rendering, hover state). The
+   head is a real .c3-row label; the body is a sibling div that becomes
+   visible when the checkbox is checked. No <details>/<summary> — that
+   markup added a separate code path that VS Code's notebook renderer
+   styled differently from real rows. */
+.c3-upstream {
+  background: var(--c3-bg-upstream);
+  border-bottom: 1px solid var(--c3-rule-section);
+}
+/* Head-row content cell — sits in the row's "code" column.
+   Plain block + inline children with explicit margin, so we don't
+   rely on flex `gap` (which VS Code's older Chromium renderer
+   distributes oddly — pushing the meta to the column centre). */
+.c3-upstream-head-cell {
+  padding: 0 10px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.c3-upstream-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--c3-ink-4);
+}
+.c3-upstream-meta {
+  font-family: var(--c3-font-mono);
+  font-size: 10px;
+  color: var(--c3-ink-5);
+  /* padding-left rather than margin-left: some notebook hosts reset
+     margins on bare <span> elements. The HTML also emits a literal
+     &nbsp; before the meta as a belt-and-braces backup. */
+  padding-left: 6px;
+}
+.c3-upstream-body {
+  display: none;
+  border-top: 1px solid var(--c3-rule-section);
+  padding: 2px 0;
+}
+/* Body becomes visible when the head row's hidden checkbox is checked
+   (general-sibling combinator — same mechanism as .c3-rowtip). */
+.c3-rxtog:checked ~ .c3-upstream-body { display: block; }
+
+/* Row grid */
+.c3-row {
+  display: grid;
+  grid-template-columns: 5px minmax(0, 1fr) 70px 80px 76px;
+  align-items: center;
+  border-bottom: 1px solid var(--c3-rule-soft);
+  min-height: 26px;
+  position: relative;          /* tooltip anchor */
+}
+/* A multi-line .c3-code cell (a captured StatementRow.display_code, or a
+   `match` statement's full body -- see _statement_source) makes the row
+   taller than its dots/bar/chip siblings; start-align those instead of
+   letting them float to the row's vertical midpoint. Scoped to
+   [data-multiline="true"] -- stamped by _statement_row_html only when the
+   rendered code actually contains a newline -- so every other row (which
+   is most rows, and EVERY display_code=None row) keeps the original
+   center alignment untouched, byte-for-byte. */
+.c3-row[data-multiline="true"] {
+  align-items: start;
+}
+.c3-row:last-child { border-bottom: 0; }
+.c3-row[data-clickable="true"] { cursor: pointer; }
+.c3-row[data-clickable="true"]:hover { background: var(--c3-bg-hover); }
+.c3-row:hover { background: var(--c3-bg-hover); }
+
+/* Click-to-expand row detail via the checkbox-hack pattern.
+   <input type="checkbox" hidden> + <label for="..."> + sibling CSS.
+   Bulletproof across every browser since IE9 — no <details>/<summary>
+   quirks, no JS, no overflow traps, no layout shift on hover. */
+.c3-rowx, .c3-loop-body { display: block; }
+.c3-rxtog {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 0; height: 0;
+  margin: 0;
+}
+label.c3-row { cursor: pointer; }
+.c3-rowtip {
+  display: none;
+  background: var(--c3-bg-rowtip);
+  border-top: 1px solid var(--c3-rule-rowtip);
+  border-bottom: 1px solid var(--c3-rule-rowtip);
+  padding: 10px 14px 12px;
+  font-family: var(--c3-font-sans);
+  font-size: 11px;
+  color: var(--c3-ink);
+  white-space: normal;
+  box-shadow: inset 3px 0 0 var(--c3-accent-rowtip);
+}
+.c3-rxtog:checked ~ .c3-rowtip { display: block; }
+.c3-rxtog:checked ~ label.c3-row { background: var(--c3-bg-hover); }
+/* Loop body expansion (per-iteration drill-down + tooltip) uses its
+   own checkbox toggle but keeps the existing summary/drill-down
+   markup inside the label. */
+.c3-rxtog:checked ~ .c3-iter-table { display: flex; }
+.c3-iter-table { display: none; }
+.c3-rt-h {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 10px;
+}
+.c3-rt-status {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 3px;
+}
+.c3-rt-time {
+  font-family: var(--c3-font-mono);
+  font-size: 11px;
+  color: var(--c3-ink-2);
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.c3-rt-saved { color: var(--c3-rail-cached); }
+/* Quiet eyebrow over the drawer's code block -- same treatment as the
+   `dt` labels in .c3-rt-dl below (9px, uppercase, INK_4) -- naming what
+   .c3-rt-code shows (the keyed, comment-free text) so it reads as
+   intentional rather than as a mismatch with the row above it. */
+.c3-rt-code-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--c3-ink-4);
+  margin-bottom: 3px;
+}
+.c3-rt-code {
+  margin: 0 0 12px;
+  padding: 7px 10px;
+  background: var(--c3-bg-surface);
+  border-radius: 3px;
+  font-family: var(--c3-font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 110px;
+  overflow: hidden;
+  color: var(--c3-ink);
+  line-height: 1.45;
+}
+.c3-rt-dl {
+  display: grid;
+  grid-template-columns: 84px 1fr;
+  gap: 3px 12px;
+  margin: 0;
+  font-size: 10px;
+  align-items: baseline;
+}
+.c3-rt-dl dt {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--c3-ink-4);
+}
+.c3-rt-dl dd {
+  margin: 0;
+  color: var(--c3-ink);
+  font-family: var(--c3-font-mono);
+  font-size: 10px;
+  word-break: break-word;
+}
+.c3-rt-dl dd code {
+  font-family: var(--c3-font-mono);
+  background: var(--c3-bg-surface);
+  border-radius: 2px;
+  padding: 0 4px;
+  font-size: 9.5px;
+}
+
+.c3-rail { width: 5px; align-self: stretch; }
+.c3-rail-soft { opacity: 0.5; }
+/* Upstream rows are de-emphasised by softening their rail. This is a
+   section-level fact (the row lives in the UPSTREAM section), so it lives
+   here as a cascade off the section-body wrapper rather than as a per-row
+   class the view layer has to stamp on every StatementRow. */
+.c3-upstream-body .c3-rail { opacity: 0.5; }
+
+.c3-code {
+  /* !important throughout: Jupyter's .jp-RenderedHTMLCommon pre rules
+     (padding: 0; line-height: 1.21429; menlo-first font stack, and
+     overflow:auto which puts a horizontal scrollbar on every long row)
+     would otherwise win on specificity and compress / scroll-bar
+     every row. */
+  margin: 0 !important;
+  padding: 5px 10px !important;
+  font-family: var(--c3-font-mono) !important;
+  font-size: 12px !important;
+  color: var(--c3-ink) !important;
+  white-space: pre !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  line-height: 1.4 !important;
+}
+.c3-code-body  { color: var(--c3-ink-2); }
+/* Faded suffix listing produced/restored variable names. Lives inline,
+   appended after the code on its LAST line (the only line, for a
+   single-line row) — .c3-code's overflow:hidden + text-overflow:ellipsis
+   apply per LINE BOX, so that line's own ellipsis hides the suffix first
+   when there's not enough room on it — never pushes the code itself off,
+   and never touches any earlier line of a multi-line statement. */
+.c3-row-vars {
+  margin-left: 10px;
+  color: var(--c3-ink-5);
+  font-size: 10.5px;
+  font-style: italic;
+}
+.c3-code-group { font-style: italic; }
+.c3-caret {
+  display: inline-block;
+  color: var(--c3-ink-5);
+  font-size: 9px;
+  width: 10px;
+  margin-right: 2px;
+}
+
+/* Python syntax tokens */
+.c3-kw  { color: var(--c3-syntax-keyword); }
+.c3-str { color: var(--c3-syntax-string); }
+.c3-com { color: var(--c3-syntax-comment); font-style: italic; }
+.c3-num { color: var(--c3-syntax-number); }
+
+/* Tier dots cell */
+.c3-dots-cell { padding: 0 4px; text-align: left; }
+.c3-dots { display: inline-flex; align-items: center; gap: 2px; }
+.c3-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+  border: 1.5px solid var(--c3-rule);
+  background: transparent;
+  vertical-align: middle;
+}
+.c3-dot-solid   { background: currentColor; border-color: currentColor; }
+.c3-dot-ring    { background: transparent;  border-color: currentColor; }
+.c3-dot-blocked { background: transparent;  border-color: currentColor; border-style: dashed; }
+.c3-dot-empty   { background: transparent;  border-color: var(--c3-dot-empty-border); }
+.c3-dots-cached  { color: var(--c3-rail-cached); }
+.c3-dots-exec    { color: var(--c3-rail-exec); }
+.c3-dots-warn    { color: var(--c3-rail-warn); }
+
+/* Timing bar */
+.c3-tbar-cell { padding: 0 8px; }
+.c3-tbar {
+  display: block;
+  height: 6px;
+  background: var(--c3-bg-track);
+  border-radius: 3px;
+  overflow: hidden;
+  width: 100%;
+}
+.c3-tbar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+}
+.c3-tbar-fill-cached { background: var(--c3-bar-cached); }
+.c3-tbar-fill-exec   { background: var(--c3-bar-exec); }
+.c3-tbar-fill-warn   { background: var(--c3-bar-warn); }
+
+/* Time chip */
+.c3-time-chip {
+  padding: 3px 8px 3px 6px;
+  text-align: right;
+  display: block;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--c3-font-mono);
+  line-height: 1.3;
+  border-left: 1px solid var(--c3-rule-time-chip);
+}
+.c3-time-chip-exec   { color: var(--c3-chip-fg-exec);   background: var(--c3-chip-bg-exec); }
+.c3-time-chip-cached { color: var(--c3-chip-fg-cached); background: var(--c3-chip-bg-cached); }
+.c3-time-chip-warn   { color: var(--c3-chip-fg-warn);   background: var(--c3-chip-bg-warn); }
+.c3-time-sub {
+  display: block;
+  font-size: 9px;
+  color: var(--c3-rail-cached);
+  margin-top: 1px;
+}
+.c3-notif-pill {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--c3-rail-warn);
+  padding: 1px 5px;
+  background: var(--c3-bg-surface);
+  border: 1px solid var(--c3-rule-warn-pill);
+  border-radius: 3px;
+}
+
+/* Randomness role pill — same vocabulary as the notification pill. Neutral
+   (grey) for a seed or a seeded/reproducible draw; the warn-red family for an
+   unseeded draw, whose cached value is a frozen replay. */
+.c3-rng-pill {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--c3-ink-4);
+  padding: 1px 5px;
+  margin: 0 4px;
+  background: var(--c3-bg-panel);
+  border: 1px solid var(--c3-rule);
+  border-radius: 3px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.c3-rng-pill.c3-rng-warn {
+  color: var(--c3-chip-fg-warn);
+  background: var(--c3-chip-bg-warn);
+  border-color: var(--c3-rule-warn-pill);
+}
+/* A row's RNG pill shares ONE grid cell with the code (this flex box) instead of
+   being a SEPARATE grid item. The statement-row grid has exactly five columns
+   (rail, code, dots, bar, chip); a sixth child overflowed to a new implicit row,
+   wrapping the time chip onto a second line under the code. Here the code
+   truncates (min-width:0) and the pill never shrinks, so the warning stays whole
+   and the chip keeps its column. */
+.c3-codepill {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+}
+.c3-codepill > .c3-code { min-width: 0; flex: 0 1 auto; }
+.c3-codepill > .c3-rng-pill { flex: 0 0 auto; }
+
+/* Loop heading line */
+.c3-loop-head .c3-code { font-weight: 500; }
+.c3-loop-meta {
+  font-family: var(--c3-font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--c3-ink-3);
+  padding: 0 6px;
+  text-align: left;
+}
+
+/* Inline iteration mini-histogram on loop body line */
+.c3-iter-cell { padding: 0 4px; display: flex; align-items: center; }
+.c3-iter-strip {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 16px;
+  max-width: 100%;
+  overflow: hidden;
+}
+.c3-iter-bar {
+  width: 4px;
+  min-height: 3px;
+  border-radius: 0.5px;
+  flex-shrink: 0;
+}
+
+/* Per-iteration drill-down — collapsed by default, revealed when the
+   parent loop-body row's checkbox is checked. The display rule lives
+   with the click-to-expand rules above; here we only set layout. */
+.c3-iter-table {
+  background: var(--c3-bg-detail);
+  padding: 6px 12px 8px 30px;
+  border-bottom: 1px solid var(--c3-rule-soft);
+  flex-direction: column;
+  gap: 2px;
+}
+.c3-iter-row {
+  display: grid;
+  grid-template-columns: 12px 160px 1fr 70px;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+}
+.c3-iter-bullet {
+  width: 7px; height: 7px; border-radius: 50%; display: inline-block;
+}
+.c3-iter-key {
+  color: var(--c3-ink-3);
+  font-family: var(--c3-font-mono);
+}
+.c3-iter-more .c3-iter-key { color: var(--c3-ink-5); font-style: italic; }
+.c3-iter-key b { color: var(--c3-ink); }
+.c3-iter-bar-track {
+  height: 4px;
+  background: var(--c3-bg-iter-track);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.c3-iter-bar-track > span { display: block; height: 100%; border-radius: 2px; }
+.c3-iter-time {
+  color: var(--c3-ink-2);
+  text-align: right;
+  font-family: var(--c3-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Decorator inline detail */
+.c3-detail {
+  background: var(--c3-bg-detail);
+  padding: 10px 14px 10px 30px;
+  border-bottom: 1px solid var(--c3-rule-detail);
+  font-size: 11px;
+  color: var(--c3-ink-2);
+}
+.c3-detail-h {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--c3-ink-3);
+  margin-bottom: 6px;
+}
+.c3-cache-tag {
+  display: inline-block;
+  padding: 1px 5px;
+  font-family: var(--c3-font-mono);
+  font-size: 9px;
+  color: var(--c3-cache-tag-fg);
+  background: var(--c3-cache-tag-bg);
+  border-radius: 3px;
+  margin-right: 4px;
+}
+.c3-deco-detail {
+  display: none;
+  background: var(--c3-bg-detail);
+  border-top: 1px solid var(--c3-rule-soft);
+  padding: 8px 16px 10px 22px;
+  font-size: 11px;
+}
+.c3-rxtog:checked ~ .c3-deco-detail { display: block; }
+.c3-deco-fn      { margin-top: 6px; }
+.c3-deco-fn-name {
+  font-family: var(--c3-font-mono);
+  font-size: 11px;
+  color: var(--c3-ink-2);
+  margin-bottom: 4px;
+}
+.c3-deco-strip {
+  display: flex; align-items: flex-end; gap: 2px; height: 20px;
+}
+.c3-deco-bar { width: 6px; border-radius: 1px; }
+
+/* Control structure (if / elif / else / try / except).
+   Head row is shown verbatim; body rows render inline beneath it (no
+   click-to-expand) so the if's body is always visible — same way it
+   reads in the source. */
+.c3-ctrl { display: block; }
+.c3-ctrl-head { /* uses .c3-row grid via the markup */ }
+.c3-ctrl-body {
+  border-left: 2px solid var(--c3-rule-ctrl-body);
+  /* Visual indent of one "tab" so nested loops/controls read at a
+     similar shift as Python's 4-space source indent — the previous
+     5px just aligned rails and looked unindented in deep nesting. */
+  margin-left: 24px;
+  background: var(--c3-bg-ctrl-body);
+}
+
+/* Overhead row — collapsed single-row variant. Section label sits inline
+   with the breakdown so we never spend 3 rows showing 0.00s sub-categories. */
+.c3-ovh { background: var(--c3-bg-overhead); }
+.c3-ovh-cell {
+  padding: 5px 10px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--c3-font-sans);
+  font-size: 10px;
+  color: var(--c3-ink-4);
+}
+.c3-ovh-label {
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 9px;
+  color: var(--c3-ink-4);
+  margin-right: 10px;
+}
+.c3-ovh-parts { font-family: var(--c3-font-mono); font-size: 10px; }
+.c3-ovh-part  { white-space: nowrap; }
+.c3-ovh-time  { color: var(--c3-ink-3); font-variant-numeric: tabular-nums; }
+
+/* Section divider (current cell, decorator cache) — kept low-key */
+.c3-section {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--c3-ink-4);
+  padding: 8px 12px 4px;
+}
+
+/* Skipped intermediate-dependency bucket (collapsible <details>) */
+.c3-skipped {
+  background: var(--c3-bg-upstream);
+  border-top: 1px solid var(--c3-rule-section);
+  border-bottom: 1px solid var(--c3-rule-section);
+}
+.c3-skipped > summary {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--c3-ink-3);
+  list-style: none;
+}
+.c3-skipped > summary::-webkit-details-marker { display: none; }
+.c3-skipped > summary::marker { content: ""; }
+.c3-skipped-meta {
+  font-family: var(--c3-font-mono);
+  font-size: 10px;
+  color: var(--c3-ink-4);
+  margin-left: auto;
+}
+/* A file the repair left out of date (its data changed, its write did not re-run) */
+.c3-stale-export {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--c3-rail-warn);
+  background: var(--c3-bg-upstream);
+  border-bottom: 1px solid var(--c3-rule-section);
+}
+
+/* Footer */
+.c3-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 7px 12px;
+  border-top: 1px solid var(--c3-rule-section);
+  background: var(--c3-bg-panel);
+}
+.c3-hint {
+  font-size: 9px;
+  color: var(--c3-ink-5);
+  font-family: var(--c3-font-mono);
+  letter-spacing: 0.02em;
+}
+/* !important here because Jupyter classic's notebook.css sets
+   a strong default anchor color that would repaint our subtle bug
+   link bright blue otherwise. */
+a.c3-bug,
+a.c3-bug:link,
+a.c3-bug:visited {
+  font-family: var(--c3-font-sans);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--c3-bug-fg) !important;
+  background: transparent !important;
+  text-decoration: none !important;
+  padding: 3px 6px;
+  border-radius: 3px;
+}
+a.c3-bug:hover {
+  color: var(--c3-bug-fg-hover) !important;
+  background: var(--c3-bg-bug-hover) !important;
+}
+.c3-bug-arrow {
+  margin-left: 2px;
+  color: var(--c3-ink-5);
+  display: inline-block;
+}

@@ -18,26 +18,19 @@ silently break in VS Code's sanitised renderer. All "click to expand"
 state is driven by hidden checkboxes + ``label[for]`` + CSS sibling
 selectors. Filter chips are static visual indicators only.
 
-Style is hoisted into a single per-badge ``<style>`` block so HTML output
-stays compact and the CSS class names form a stable contract for tests.
+Style lives in ``badge.css`` next to this module, written against the
+``--c3-*`` custom properties :func:`.theme.css_custom_properties` declares,
+and is inlined as one ``<style>`` block per badge so a saved notebook renders
+standalone. The ``c3-`` class names form a stable contract for tests.
 """
 
 from __future__ import annotations
 
 import html as _html
-from contextvars import ContextVar
+import uuid as _uuid
+from dataclasses import dataclass
+from importlib import resources
 from typing import Any
-
-# Active tier list for the current render pass — set at the top of
-# ``render_html`` from the badge's ``configured_tiers`` field. ``_dots()``
-# reads it through ``.get()`` so every row, control body, iteration row,
-# and tooltip drawer in one render shares the same tier rack without each
-# helper taking a kwarg. Reset to ``()`` at the start of each render to
-# prevent leakage between successive renders in the same thread.
-_CONFIGURED_TIERS: ContextVar[tuple[str, ...]] = ContextVar(
-    "_CONFIGURED_TIERS",
-    default=(),
-)
 
 from .. import theme
 from .._headline import mixed_headline
@@ -63,6 +56,7 @@ from ..view import (
     SubUnitGroup,
     iter_iterations,
 )
+from ._cssmin import minify_css
 from ._pytoken import highlight_python
 
 # Threshold for the loop-body expansion view: at or below this many
@@ -72,787 +66,30 @@ from ._pytoken import highlight_python
 # without forcing scroll on a typical screen.
 _ITER_INLINE_LIMIT = 25
 
-# ---------------------------------------------------------------------------
-# CSS — emitted once per badge inside a <style> block. Class names are
-# prefixed with ``c3-`` so they form a stable test contract and don't
-# collide with notebook-host styles.
-# ---------------------------------------------------------------------------
 
-_CSS = f"""
-/* Scoped scrollbar styling — applies only to scrollable elements that
-   *contain* a Cash badge. Uses :has() (Chromium 105+, Safari 15.4+,
-   Firefox 121+) so we don't repaint scrollbars in cells that don't
-   show our badge. Firefox uses scrollbar-color / scrollbar-width;
-   Chromium falls back to ::-webkit-scrollbar pseudo-elements. */
-:has(> .c3-wrap),
-:has(.c3-wrap) {{
-  scrollbar-width: thin;
-  scrollbar-color: #c5c1b5 transparent;
-}}
-:has(> .c3-wrap)::-webkit-scrollbar,
-:has(.c3-wrap)::-webkit-scrollbar {{
-  width: 10px;
-  height: 10px;
-  background: transparent;
-}}
-:has(> .c3-wrap)::-webkit-scrollbar-thumb,
-:has(.c3-wrap)::-webkit-scrollbar-thumb {{
-  background: #c5c1b5;
-  border-radius: 5px;
-  border: 2px solid transparent;
-  background-clip: padding-box;
-}}
-:has(> .c3-wrap)::-webkit-scrollbar-thumb:hover,
-:has(.c3-wrap)::-webkit-scrollbar-thumb:hover {{
-  background: #a8a496;
-  background-clip: padding-box;
-}}
-:has(> .c3-wrap)::-webkit-scrollbar-corner,
-:has(.c3-wrap)::-webkit-scrollbar-corner {{ background: transparent; }}
-
-/* Outer wrap is a thin positioning anchor only — no reserved padding,
-   so the badge takes its natural width and doesn't trigger horizontal
-   scroll. Hover detail panels render *in flow* under their row (see
-   .c3-rowtip below), which sidesteps every ancestor-overflow trap. */
-.c3-wrap {{
-  display: inline-block;
-  position: relative;
-  margin-top: 5px;
-  max-width: 100%;
-}}
-/* Neutralize host (Jupyter / VS Code) defaults — but only on the inline
-   row code block (.c3-code). The expanded rowtip code block (.c3-rt-code)
-   wants its own background, so we don't touch it. */
-.c3-code {{
-  background: transparent !important;
-  border: 0 !important;
-  box-shadow: none !important;
-}}
-.c3-card {{
-  display: inline-flex;
-  flex-direction: column;
-  background: #fff;
-  border: 1px solid {theme.RULE};
-  border-left: 3px solid;
-  border-radius: 4px;
-  overflow: visible;
-  font-family: {theme.FONT_SANS};
-  font-size: 12px;
-  color: {theme.INK};
-  max-width: 100%;
-  position: relative;
-}}
-.c3-card[data-kind="cached"] {{ border-left-color: {theme.RAIL_CACHED}; }}
-.c3-card[data-kind="exec"]   {{ border-left-color: {theme.RAIL_EXEC}; }}
-.c3-card[data-kind="warn"]   {{ border-left-color: {theme.RAIL_WARN}; }}
-.c3-card[data-kind="mixed"]  {{ border-left-color: {theme.RAIL_MIXED}; }}
-
-/* Summary chip */
-.c3-summary {{
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
-  cursor: pointer;
-  user-select: none;
-  font-size: 11px;
-  list-style: none;
-  outline: none;
-  min-height: 22px;
-}}
-.c3-summary::-webkit-details-marker {{ display: none; }}
-.c3-summary::marker {{ content: ""; }}
-.c3-card[open] > .c3-summary {{ border-bottom: 1px solid #efece4; }}
-.c3-card[data-kind="cached"][open] > .c3-summary {{ background: {theme.SUMMARY_BG_CACHED}; }}
-.c3-card[data-kind="exec"][open]   > .c3-summary {{ background: {theme.SUMMARY_BG_EXEC}; }}
-
-.c3-summary-label {{
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}}
-.c3-card[data-kind="cached"] .c3-summary-label {{ color: {theme.RAIL_CACHED}; }}
-.c3-card[data-kind="exec"]   .c3-summary-label {{ color: {theme.RAIL_EXEC}; }}
-.c3-card[data-kind="warn"]   .c3-summary-label {{ color: {theme.RAIL_WARN}; }}
-.c3-card[data-kind="mixed"]  .c3-summary-label {{ color: {theme.RAIL_MIXED}; }}
-.c3-summary-sep {{ color: {theme.INK_5}; font-size: 10px; }}
-.c3-summary-sub {{
-  font-family: {theme.FONT_MONO};
-  font-size: 11px;
-  color: {theme.INK_3};
-}}
-.c3-summary-spark {{
-  display: inline-flex;
-  align-items: flex-end;
-  height: 18px;
-  padding: 0 4px;
-  border-left: 1px solid #e8e5dc;
-  border-right: 1px solid #e8e5dc;
-  margin-left: 4px;
-  /* Cap so a 100-statement cell can't push the filter chips off the
-     edge — overflow clips the trailing bars rather than expanding. */
-  max-width: 200px;
-  overflow: hidden;
-}}
-.c3-spark {{
-  display: inline-flex;
-  align-items: flex-end;
-  height: 16px;
-  gap: 1px;
-  flex-shrink: 0;
-}}
-.c3-spark-bar {{
-  width: 3px;
-  min-height: 2px;
-  border-radius: 0.5px;
-}}
-.c3-summary-chips {{
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin-left: auto;
-}}
-.c3-fchip {{
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 7px 2px 5px;
-  background: #fff;
-  border: 1px solid #e2e2e0;
-  border-radius: 10px;
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: {theme.INK_3};
-}}
-.c3-fchip-dot {{ width: 6px; height: 6px; border-radius: 50%; display: inline-block; }}
-.c3-fchip-exec   .c3-fchip-dot {{ background: {theme.BAR_EXEC}; }}
-.c3-fchip-cached .c3-fchip-dot {{ background: {theme.BAR_CACHED}; }}
-.c3-fchip-warn   .c3-fchip-dot {{ background: {theme.BAR_WARN}; }}
-.c3-fchip-count  {{ color: {theme.INK}; font-variant-numeric: tabular-nums; }}
-.c3-summary-caret {{
-  width: 7px; height: 7px;
-  border-right: 1.5px solid {theme.INK_4};
-  border-bottom: 1.5px solid {theme.INK_4};
-  transform: rotate(45deg) translate(-2px, -2px);
-  margin-left: 6px;
-  align-self: center;
-  transition: transform 0.15s ease;
-}}
-.c3-card[open] > .c3-summary > .c3-summary-caret {{
-  transform: rotate(-135deg) translate(-2px, -2px);
-}}
-
-/* Panel — overflow is visible so click-to-expand tooltips can escape;
-   we trade per-badge scroll for the badge growing with its content. */
-.c3-panel {{
-  background: {theme.BG_PANEL};
-  padding: 0;
-  min-width: 0;
-  overflow: visible;
-}}
-
-/* Upstream subsection — reuses the EXACT same .c3-rowx + checkbox-hack
-   pattern as expandable rows below, so it inherits everything that
-   already works (grid alignment, VS Code rendering, hover state). The
-   head is a real .c3-row label; the body is a sibling div that becomes
-   visible when the checkbox is checked. No <details>/<summary> — that
-   markup added a separate code path that VS Code's notebook renderer
-   styled differently from real rows. */
-.c3-upstream {{
-  background: {theme.BG_UPSTREAM};
-  border-bottom: 1px solid #ececec;
-}}
-/* Head-row content cell — sits in the row's "code" column.
-   Plain block + inline children with explicit margin, so we don't
-   rely on flex `gap` (which VS Code's older Chromium renderer
-   distributes oddly — pushing the meta to the column centre). */
-.c3-upstream-head-cell {{
-  padding: 0 10px;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}}
-.c3-upstream-label {{
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: {theme.INK_4};
-}}
-.c3-upstream-meta {{
-  font-family: {theme.FONT_MONO};
-  font-size: 10px;
-  color: {theme.INK_5};
-  /* padding-left rather than margin-left: some notebook hosts reset
-     margins on bare <span> elements. The HTML also emits a literal
-     &nbsp; before the meta as a belt-and-braces backup. */
-  padding-left: 6px;
-}}
-.c3-upstream-body {{
-  display: none;
-  border-top: 1px solid #ececec;
-  padding: 2px 0;
-}}
-/* Body becomes visible when the head row's hidden checkbox is checked
-   (general-sibling combinator — same mechanism as .c3-rowtip). */
-.c3-rxtog:checked ~ .c3-upstream-body {{ display: block; }}
-
-/* Row grid */
-.c3-row {{
-  display: grid;
-  grid-template-columns: 5px minmax(0, 1fr) 70px 80px 76px;
-  align-items: center;
-  border-bottom: 1px solid {theme.RULE_SOFT};
-  min-height: 26px;
-  position: relative;          /* tooltip anchor */
-}}
-/* A multi-line .c3-code cell (a captured StatementRow.display_code, or a
-   `match` statement's full body -- see _statement_source) makes the row
-   taller than its dots/bar/chip siblings; start-align those instead of
-   letting them float to the row's vertical midpoint. Scoped to
-   [data-multiline="true"] -- stamped by _statement_row_html only when the
-   rendered code actually contains a newline -- so every other row (which
-   is most rows, and EVERY display_code=None row) keeps the original
-   center alignment untouched, byte-for-byte. */
-.c3-row[data-multiline="true"] {{
-  align-items: start;
-}}
-.c3-row:last-child {{ border-bottom: 0; }}
-.c3-row[data-clickable="true"] {{ cursor: pointer; }}
-.c3-row[data-clickable="true"]:hover {{ background: {theme.BG_HOVER}; }}
-.c3-row:hover {{ background: {theme.BG_HOVER}; }}
-
-/* Click-to-expand row detail via the checkbox-hack pattern.
-   <input type="checkbox" hidden> + <label for="..."> + sibling CSS.
-   Bulletproof across every browser since IE9 — no <details>/<summary>
-   quirks, no JS, no overflow traps, no layout shift on hover. */
-.c3-rowx, .c3-loop-body {{ display: block; }}
-.c3-rxtog {{
-  position: absolute;
-  opacity: 0;
-  pointer-events: none;
-  width: 0; height: 0;
-  margin: 0;
-}}
-label.c3-row {{ cursor: pointer; }}
-.c3-rowtip {{
-  display: none;
-  background: #fbfaf5;
-  border-top: 1px solid #e6e1d2;
-  border-bottom: 1px solid #e6e1d2;
-  padding: 10px 14px 12px;
-  font-family: {theme.FONT_SANS};
-  font-size: 11px;
-  color: {theme.INK};
-  white-space: normal;
-  box-shadow: inset 3px 0 0 #b69a4d;
-}}
-.c3-rxtog:checked ~ .c3-rowtip {{ display: block; }}
-.c3-rxtog:checked ~ label.c3-row {{ background: {theme.BG_HOVER}; }}
-/* Loop body expansion (per-iteration drill-down + tooltip) uses its
-   own checkbox toggle but keeps the existing summary/drill-down
-   markup inside the label. */
-.c3-rxtog:checked ~ .c3-iter-table {{ display: flex; }}
-.c3-iter-table {{ display: none; }}
-.c3-rt-h {{
-  display: flex; align-items: center; gap: 8px;
-  margin-bottom: 10px;
-}}
-.c3-rt-status {{
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  padding: 2px 7px;
-  border-radius: 3px;
-}}
-.c3-rt-time {{
-  font-family: {theme.FONT_MONO};
-  font-size: 11px;
-  color: {theme.INK_2};
-  margin-left: auto;
-  font-variant-numeric: tabular-nums;
-}}
-.c3-rt-saved {{ color: {theme.RAIL_CACHED}; }}
-/* Quiet eyebrow over the drawer's code block -- same treatment as the
-   `dt` labels in .c3-rt-dl below (9px, uppercase, INK_4) -- naming what
-   .c3-rt-code shows (the keyed, comment-free text) so it reads as
-   intentional rather than as a mismatch with the row above it. */
-.c3-rt-code-label {{
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: {theme.INK_4};
-  margin-bottom: 3px;
-}}
-.c3-rt-code {{
-  margin: 0 0 12px;
-  padding: 7px 10px;
-  background: #fff;
-  border-radius: 3px;
-  font-family: {theme.FONT_MONO};
-  font-size: 11px;
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 110px;
-  overflow: hidden;
-  color: {theme.INK};
-  line-height: 1.45;
-}}
-.c3-rt-dl {{
-  display: grid;
-  grid-template-columns: 84px 1fr;
-  gap: 3px 12px;
-  margin: 0;
-  font-size: 10px;
-  align-items: baseline;
-}}
-.c3-rt-dl dt {{
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: {theme.INK_4};
-}}
-.c3-rt-dl dd {{
-  margin: 0;
-  color: {theme.INK};
-  font-family: {theme.FONT_MONO};
-  font-size: 10px;
-  word-break: break-word;
-}}
-.c3-rt-dl dd code {{
-  font-family: {theme.FONT_MONO};
-  background: #fff;
-  border-radius: 2px;
-  padding: 0 4px;
-  font-size: 9.5px;
-}}
-
-.c3-rail {{ width: 5px; align-self: stretch; }}
-.c3-rail-soft {{ opacity: 0.5; }}
-/* Upstream rows are de-emphasised by softening their rail. This is a
-   section-level fact (the row lives in the UPSTREAM section), so it lives
-   here as a cascade off the section-body wrapper rather than as a per-row
-   class the view layer has to stamp on every StatementRow. */
-.c3-upstream-body .c3-rail {{ opacity: 0.5; }}
-
-.c3-code {{
-  /* !important throughout: Jupyter's .jp-RenderedHTMLCommon pre rules
-     (padding: 0; line-height: 1.21429; menlo-first font stack, and
-     overflow:auto which puts a horizontal scrollbar on every long row)
-     would otherwise win on specificity and compress / scroll-bar
-     every row. */
-  margin: 0 !important;
-  padding: 5px 10px !important;
-  font-family: {theme.FONT_MONO} !important;
-  font-size: 12px !important;
-  color: {theme.INK} !important;
-  white-space: pre !important;
-  overflow: hidden !important;
-  text-overflow: ellipsis !important;
-  line-height: 1.4 !important;
-}}
-.c3-code-body  {{ color: {theme.INK_2}; }}
-/* Faded suffix listing produced/restored variable names. Lives inline,
-   appended after the code on its LAST line (the only line, for a
-   single-line row) — .c3-code's overflow:hidden + text-overflow:ellipsis
-   apply per LINE BOX, so that line's own ellipsis hides the suffix first
-   when there's not enough room on it — never pushes the code itself off,
-   and never touches any earlier line of a multi-line statement. */
-.c3-row-vars {{
-  margin-left: 10px;
-  color: {theme.INK_5};
-  font-size: 10.5px;
-  font-style: italic;
-}}
-.c3-code-group {{ font-style: italic; }}
-.c3-caret {{
-  display: inline-block;
-  color: {theme.INK_5};
-  font-size: 9px;
-  width: 10px;
-  margin-right: 2px;
-}}
-
-/* Python syntax tokens */
-.c3-kw  {{ color: #cf222e; }}
-.c3-str {{ color: #0a3069; }}
-.c3-com {{ color: #6e7781; font-style: italic; }}
-.c3-num {{ color: #0550ae; }}
-
-/* Tier dots cell */
-.c3-dots-cell {{ padding: 0 4px; text-align: left; }}
-.c3-dots {{ display: inline-flex; align-items: center; gap: 2px; }}
-.c3-dot {{
-  width: 7px; height: 7px;
-  border-radius: 50%;
-  display: inline-block;
-  border: 1.5px solid {theme.RULE};
-  background: transparent;
-  vertical-align: middle;
-}}
-.c3-dot-solid   {{ background: currentColor; border-color: currentColor; }}
-.c3-dot-ring    {{ background: transparent;  border-color: currentColor; }}
-.c3-dot-blocked {{ background: transparent;  border-color: currentColor; border-style: dashed; }}
-.c3-dot-empty   {{ background: transparent;  border-color: #d2d4d8; }}
-.c3-dots-cached  {{ color: {theme.RAIL_CACHED}; }}
-.c3-dots-exec    {{ color: {theme.RAIL_EXEC}; }}
-.c3-dots-warn    {{ color: {theme.RAIL_WARN}; }}
-
-/* Timing bar */
-.c3-tbar-cell {{ padding: 0 8px; }}
-.c3-tbar {{
-  display: block;
-  height: 6px;
-  background: #f2efea;
-  border-radius: 3px;
-  overflow: hidden;
-  width: 100%;
-}}
-.c3-tbar-fill {{
-  display: block;
-  height: 100%;
-  border-radius: 3px;
-}}
-.c3-tbar-fill-cached {{ background: {theme.BAR_CACHED}; }}
-.c3-tbar-fill-exec   {{ background: {theme.BAR_EXEC}; }}
-.c3-tbar-fill-warn   {{ background: {theme.BAR_WARN}; }}
-
-/* Time chip */
-.c3-time-chip {{
-  padding: 3px 8px 3px 6px;
-  text-align: right;
-  display: block;
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  font-family: {theme.FONT_MONO};
-  line-height: 1.3;
-  border-left: 1px solid #f0eee8;
-}}
-.c3-time-chip-exec   {{ color: {theme.CHIP_FG_EXEC};   background: {theme.CHIP_BG_EXEC}; }}
-.c3-time-chip-cached {{ color: {theme.CHIP_FG_CACHED}; background: {theme.CHIP_BG_CACHED}; }}
-.c3-time-chip-warn   {{ color: {theme.CHIP_FG_WARN};   background: {theme.CHIP_BG_WARN}; }}
-.c3-time-sub {{
-  display: block;
-  font-size: 9px;
-  color: {theme.RAIL_CACHED};
-  margin-top: 1px;
-}}
-.c3-notif-pill {{
-  display: inline-block;
-  font-size: 9px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: {theme.RAIL_WARN};
-  padding: 1px 5px;
-  background: #fff;
-  border: 1px solid #f1c8c1;
-  border-radius: 3px;
-}}
-
-/* Randomness role pill — same vocabulary as the notification pill. Neutral
-   (grey) for a seed or a seeded/reproducible draw; the warn-red family for an
-   unseeded draw, whose cached value is a frozen replay. */
-.c3-rng-pill {{
-  display: inline-block;
-  font-size: 9px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: {theme.INK_4};
-  padding: 1px 5px;
-  margin: 0 4px;
-  background: {theme.BG_PANEL};
-  border: 1px solid {theme.RULE};
-  border-radius: 3px;
-  vertical-align: middle;
-  white-space: nowrap;
-}}
-.c3-rng-pill.c3-rng-warn {{
-  color: {theme.CHIP_FG_WARN};
-  background: {theme.CHIP_BG_WARN};
-  border-color: #f1c8c1;
-}}
-/* A row's RNG pill shares ONE grid cell with the code (this flex box) instead of
-   being a SEPARATE grid item. The statement-row grid has exactly five columns
-   (rail, code, dots, bar, chip); a sixth child overflowed to a new implicit row,
-   wrapping the time chip onto a second line under the code. Here the code
-   truncates (min-width:0) and the pill never shrinks, so the warning stays whole
-   and the chip keeps its column. */
-.c3-codepill {{
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  overflow: hidden;
-}}
-.c3-codepill > .c3-code {{ min-width: 0; flex: 0 1 auto; }}
-.c3-codepill > .c3-rng-pill {{ flex: 0 0 auto; }}
-
-/* Loop heading line */
-.c3-loop-head .c3-code {{ font-weight: 500; }}
-.c3-loop-meta {{
-  font-family: {theme.FONT_MONO};
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: {theme.INK_3};
-  padding: 0 6px;
-  text-align: left;
-}}
-
-/* Inline iteration mini-histogram on loop body line */
-.c3-iter-cell {{ padding: 0 4px; display: flex; align-items: center; }}
-.c3-iter-strip {{
-  display: inline-flex;
-  align-items: flex-end;
-  gap: 1px;
-  height: 16px;
-  max-width: 100%;
-  overflow: hidden;
-}}
-.c3-iter-bar {{
-  width: 4px;
-  min-height: 3px;
-  border-radius: 0.5px;
-  flex-shrink: 0;
-}}
-
-/* Per-iteration drill-down — collapsed by default, revealed when the
-   parent loop-body row's checkbox is checked. The display rule lives
-   with the click-to-expand rules above; here we only set layout. */
-.c3-iter-table {{
-  background: {theme.BG_DETAIL};
-  padding: 6px 12px 8px 30px;
-  border-bottom: 1px solid {theme.RULE_SOFT};
-  flex-direction: column;
-  gap: 2px;
-}}
-.c3-iter-row {{
-  display: grid;
-  grid-template-columns: 12px 160px 1fr 70px;
-  align-items: center;
-  gap: 8px;
-  font-size: 10px;
-}}
-.c3-iter-bullet {{
-  width: 7px; height: 7px; border-radius: 50%; display: inline-block;
-}}
-.c3-iter-key {{
-  color: {theme.INK_3};
-  font-family: {theme.FONT_MONO};
-}}
-.c3-iter-more .c3-iter-key {{ color: {theme.INK_5}; font-style: italic; }}
-.c3-iter-key b {{ color: {theme.INK}; }}
-.c3-iter-bar-track {{
-  height: 4px;
-  background: #ececec;
-  border-radius: 2px;
-  overflow: hidden;
-}}
-.c3-iter-bar-track > span {{ display: block; height: 100%; border-radius: 2px; }}
-.c3-iter-time {{
-  color: {theme.INK_2};
-  text-align: right;
-  font-family: {theme.FONT_MONO};
-  font-variant-numeric: tabular-nums;
-}}
-
-/* Decorator inline detail */
-.c3-detail {{
-  background: {theme.BG_DETAIL};
-  padding: 10px 14px 10px 30px;
-  border-bottom: 1px solid #f0f0ef;
-  font-size: 11px;
-  color: {theme.INK_2};
-}}
-.c3-detail-h {{
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: {theme.INK_3};
-  margin-bottom: 6px;
-}}
-.c3-cache-tag {{
-  display: inline-block;
-  padding: 1px 5px;
-  font-family: {theme.FONT_MONO};
-  font-size: 9px;
-  color: #1a73e8;
-  background: #e8f0fe;
-  border-radius: 3px;
-  margin-right: 4px;
-}}
-.c3-deco-detail {{
-  display: none;
-  background: {theme.BG_DETAIL};
-  border-top: 1px solid {theme.RULE_SOFT};
-  padding: 8px 16px 10px 22px;
-  font-size: 11px;
-}}
-.c3-rxtog:checked ~ .c3-deco-detail {{ display: block; }}
-.c3-deco-fn      {{ margin-top: 6px; }}
-.c3-deco-fn-name {{
-  font-family: {theme.FONT_MONO};
-  font-size: 11px;
-  color: {theme.INK_2};
-  margin-bottom: 4px;
-}}
-.c3-deco-strip {{
-  display: flex; align-items: flex-end; gap: 2px; height: 20px;
-}}
-.c3-deco-bar {{ width: 6px; border-radius: 1px; }}
-
-/* Control structure (if / elif / else / try / except).
-   Head row is shown verbatim; body rows render inline beneath it (no
-   click-to-expand) so the if's body is always visible — same way it
-   reads in the source. */
-.c3-ctrl {{ display: block; }}
-.c3-ctrl-head {{ /* uses .c3-row grid via the markup */ }}
-.c3-ctrl-body {{
-  border-left: 2px solid #e8e1ce;
-  /* Visual indent of one "tab" so nested loops/controls read at a
-     similar shift as Python's 4-space source indent — the previous
-     5px just aligned rails and looked unindented in deep nesting. */
-  margin-left: 24px;
-  background: #fbfaf3;
-}}
-
-/* Overhead row — collapsed single-row variant. Section label sits inline
-   with the breakdown so we never spend 3 rows showing 0.00s sub-categories. */
-.c3-ovh {{ background: #fbfbfa; }}
-.c3-ovh-cell {{
-  padding: 5px 10px;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-family: {theme.FONT_SANS};
-  font-size: 10px;
-  color: {theme.INK_4};
-}}
-.c3-ovh-label {{
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  font-size: 9px;
-  color: {theme.INK_4};
-  margin-right: 10px;
-}}
-.c3-ovh-parts {{ font-family: {theme.FONT_MONO}; font-size: 10px; }}
-.c3-ovh-part  {{ white-space: nowrap; }}
-.c3-ovh-time  {{ color: {theme.INK_3}; font-variant-numeric: tabular-nums; }}
-
-/* Section divider (current cell, decorator cache) — kept low-key */
-.c3-section {{
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: {theme.INK_4};
-  padding: 8px 12px 4px;
-}}
-
-/* Skipped intermediate-dependency bucket (collapsible <details>) */
-.c3-skipped {{
-  background: {theme.BG_UPSTREAM};
-  border-top: 1px solid #ececec;
-  border-bottom: 1px solid #ececec;
-}}
-.c3-skipped > summary {{
-  display: flex; align-items: center; gap: 6px;
-  padding: 6px 12px;
-  cursor: pointer;
-  font-size: 11px;
-  color: {theme.INK_3};
-  list-style: none;
-}}
-.c3-skipped > summary::-webkit-details-marker {{ display: none; }}
-.c3-skipped > summary::marker {{ content: ""; }}
-.c3-skipped-meta {{
-  font-family: {theme.FONT_MONO};
-  font-size: 10px;
-  color: {theme.INK_4};
-  margin-left: auto;
-}}
-/* A file the repair left out of date (its data changed, its write did not re-run) */
-.c3-stale-export {{
-  padding: 6px 12px;
-  font-size: 11px;
-  color: {theme.RAIL_WARN};
-  background: {theme.BG_UPSTREAM};
-  border-bottom: 1px solid #ececec;
-}}
-
-/* Footer */
-.c3-footer {{
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 7px 12px;
-  border-top: 1px solid #ececec;
-  background: {theme.BG_PANEL};
-}}
-.c3-hint {{
-  font-size: 9px;
-  color: {theme.INK_5};
-  font-family: {theme.FONT_MONO};
-  letter-spacing: 0.02em;
-}}
-/* !important here because Jupyter classic's notebook.css sets
-   a strong default anchor color that would repaint our subtle bug
-   link bright blue otherwise. */
-a.c3-bug,
-a.c3-bug:link,
-a.c3-bug:visited {{
-  font-family: {theme.FONT_SANS};
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.04em;
-  color: {theme.BUG_FG} !important;
-  background: transparent !important;
-  text-decoration: none !important;
-  padding: 3px 6px;
-  border-radius: 3px;
-}}
-a.c3-bug:hover {{
-  color: {theme.BUG_FG_HOVER} !important;
-  background: #f5f5f5 !important;
-}}
-.c3-bug-arrow {{
-  margin-left: 2px;
-  color: {theme.INK_5};
-  display: inline-block;
-}}
-"""
-
-from ._cssmin import minify_css
-
-# Minified once, here, rather than at build time or as a committed generated
-# file: it costs 0.57ms against a 157ms `import cash`, and it keeps an editable
-# dev install byte-identical to the wheel users receive. `_CSS` above stays the
-# readable source -- the tests compare against it.
-_CSS_MIN = minify_css(_CSS)
+def _load_stylesheet() -> str:
+    """The badge stylesheet: the theme's tokens, then ``badge.css`` using them."""
+    rules = resources.files(__package__).joinpath("badge.css").read_text(encoding="utf-8")
+    return theme.css_custom_properties() + rules
 
 
-# Emit the style block at most once per <details id>. Because each
-# notebook output is a fresh DOM fragment we can re-emit it cheaply; the
-# browser deduplicates rule sets.
-_STYLE_BLOCK = f"<style>{_CSS_MIN}</style>"
+# Kept readable for the tests; what ships is minified once, at import: it is
+# inlined into every badge, so a saved notebook carries one copy per cell.
+_CSS = _load_stylesheet()
+_STYLE_BLOCK = f"<style>{minify_css(_CSS)}</style>"
+
+
+@dataclass(frozen=True)
+class _RenderPass:
+    """What every row of one render shares: the bar scale and the tier rack."""
+
+    max_time: float
+    tiers: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-import uuid as _uuid  # noqa: E402
 
 
 def _uid(prefix: str = "id") -> str:
@@ -930,7 +167,7 @@ def _dots(
     storage_tiers: tuple[str, ...],
     source: str | None,
     uncacheable_reasons: tuple[str, ...],
-    configured_tiers: tuple[str, ...] | None = None,
+    configured_tiers: tuple[str, ...],
 ) -> str:
     """N-dot tier indicator — one dot per configured backend tier.
 
@@ -938,12 +175,8 @@ def _dots(
     the active backend exposes, in configured order (e.g. ``('RAM',
     'REDIS', 'DISK')``). Each dot's fill encodes whether that tier holds
     this entry; the row-level kind colour (cached/exec/warn) still
-    derives from the row's status.
-
-    Fallback chain when no configured tier list is available (e.g.
-    a standalone renderer test that builds a row directly without
-    going through ``render_html``): use this row's own
-    ``storage_tiers``; otherwise render a single empty dot.
+    derives from the row's status. Without a configured list the row's own
+    ``storage_tiers`` are the rack, and failing that one empty dot.
     """
     written = {t.upper() for t in storage_tiers}
     src_upper = (source or "").upper()
@@ -991,13 +224,6 @@ def _dots(
 
         aggregate_title = "no storage info"
 
-    # Tier list resolution:
-    # 1. caller-supplied configured tiers (explicit kwarg wins)
-    # 2. the render-pass ContextVar set by render_html
-    # 3. this row's own storage_tiers (standalone-test fallback)
-    # 4. a single empty placeholder so the cell always has at least one dot
-    if configured_tiers is None:
-        configured_tiers = _CONFIGURED_TIERS.get()
     tiers: tuple[str, ...] = configured_tiers or storage_tiers or ("",)
 
     def _dot_title(tier: str, state: str) -> str:
@@ -1119,7 +345,7 @@ def _rng_pill(row: StatementRow) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _rowtip_html(row: StatementRow) -> str:
+def _rowtip_html(row: StatementRow, rp: _RenderPass) -> str:
     """Pure-CSS click-to-expand tooltip body for a :class:`StatementRow`.
 
     ``code_block`` below always shows ``row.code`` -- the normalized,
@@ -1169,6 +395,7 @@ def _rowtip_html(row: StatementRow) -> str:
         storage_tiers=row.storage_tiers,
         source=row.source,
         uncacheable_reasons=row.uncacheable_reasons,
+        configured_tiers=rp.tiers,
     )
     if row.uncacheable_reasons:
         dl_parts.append(
@@ -1279,7 +506,7 @@ def _row_code_html(row: StatementRow) -> str:
     return highlight_python(row.display_code) if row.display_code else _code_html(row.code)
 
 
-def _statement_row_html(row: StatementRow, max_time: float) -> str:
+def _statement_row_html(row: StatementRow, rp: _RenderPass) -> str:
     status = row.status
     kind = theme.kind_of(status.value)
     rail = theme.rail_color(status.value)
@@ -1318,7 +545,7 @@ def _statement_row_html(row: StatementRow, max_time: float) -> str:
         names = row.restored_vars or row.output_vars
         suffix = f'<span class="c3-row-vars">← {", ".join(_esc(n) for n in names)}</span>' if names else ""
         code_html = f'<pre class="c3-code">{_row_code_html(row)}{suffix}</pre>'
-        bar = _tbar(row.time_s, max_time, kind)
+        bar = _tbar(row.time_s, rp.max_time, kind)
         chip = _time_chip(row.time_s, row.saved_time_s, kind)
 
     # True only when the CODE ITSELF spans multiple lines (a captured
@@ -1326,7 +553,7 @@ def _statement_row_html(row: StatementRow, max_time: float) -> str:
     # for the descriptor branches above, which are always first-line-only
     # by construction. Stamped onto the row so the CSS can start-align the
     # dots/bar/chip WITHOUT moving every other row's alignment (see
-    # .c3-row[data-multiline] in _CSS) -- the row carries what the renderer
+    # .c3-row[data-multiline] in badge.css) -- the row carries what the renderer
     # needs, the CSS never has to guess from content it can't see.
     is_multiline = "\n" in code_html
 
@@ -1335,9 +562,10 @@ def _statement_row_html(row: StatementRow, max_time: float) -> str:
         storage_tiers=row.storage_tiers,
         source=row.source,
         uncacheable_reasons=row.uncacheable_reasons,
+        configured_tiers=rp.tiers,
     )
     rng_pill = _rng_pill(row)
-    drawer = _rowtip_html(row)
+    drawer = _rowtip_html(row, rp)
 
     # The pill and the code share ONE grid cell (a flex box) so the pill is not a
     # sixth child of the five-column row grid — a sixth child wraps the time chip
@@ -1599,7 +827,7 @@ def _aggregate_kind(statuses: tuple[BadgeStatus, ...]) -> str:
     return "cached" if cached and not computed else "exec"
 
 
-def _for_loop_group_html(g: ForLoopGroup, max_time: float) -> str:
+def _for_loop_group_html(g: ForLoopGroup, rp: _RenderPass) -> str:
     """Render one ForLoopGroup as **one** for-header row + N body-line rows.
 
     A loop with several body statements (the common case) used to emit
@@ -1703,7 +931,7 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float) -> str:
             f'<span class="c3-rail" style="background:{head_rail};"></span>'
             f'<pre class="c3-code">{_code_html(loop_header)}</pre>'
             f'<span class="c3-loop-meta">{_esc(head_meta)}</span>'
-            f"{_tbar(head_total_time, max_time, head_kind)}"
+            f"{_tbar(head_total_time, rp.max_time, head_kind)}"
             f"{_time_chip(head_total_time, head_total_saved, head_kind)}"
             f"</label>"
             f"{head_tip}"
@@ -1748,14 +976,14 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float) -> str:
                 f'<span class="c3-rail c3-rail-soft" style="background:{stmt_rail};"></span>'
                 f'<pre class="c3-code c3-code-body">{_code_html(item.base_code or "…")}</pre>'
                 f"{_iter_histogram_html(iters)}"
-                f"{_tbar(stmt_time, max_time, stmt_kind)}"
+                f"{_tbar(stmt_time, rp.max_time, stmt_kind)}"
                 f"{_time_chip(stmt_time, stmt_saved, stmt_kind)}"
                 f"</label>"
                 f"{expansion}"
                 f"</div>"
             )
         else:
-            body_pieces.append(_render_section_item(item, max_time))
+            body_pieces.append(_render_section_item(item, rp))
 
     # Wrap the entire body in ONE shared .c3-ctrl-body so everything sits
     # at the same indent level — matching Python's 4-space convention
@@ -1767,7 +995,7 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float) -> str:
     return head_row + inner
 
 
-def _control_group_html(cg: ControlGroup, max_time: float) -> str:
+def _control_group_html(cg: ControlGroup, rp: _RenderPass) -> str:
     # Walk nested items to gather every status — body rows may include
     # ForLoopGroups, ControlGroupSingles, etc. that don't carry .status
     # directly. We only need a kind for the aggregate visual treatment.
@@ -1805,11 +1033,11 @@ def _control_group_html(cg: ControlGroup, max_time: float) -> str:
         # body_statements metrics get wrapped as ControlGroupSingle by the
         # view-builder; unwrap to the inner StatementRow for the static path.
         if isinstance(r, ControlGroupSingle):
-            body_parts.append(_static_statement_row_html(r.row, max_time, indented=True))
+            body_parts.append(_static_statement_row_html(r.row, rp, indented=True))
         elif isinstance(r, StatementRow):
-            body_parts.append(_static_statement_row_html(r, max_time, indented=True))
+            body_parts.append(_static_statement_row_html(r, rp, indented=True))
         else:
-            body_parts.append(_render_section_item(r, max_time))
+            body_parts.append(_render_section_item(r, rp))
     body_rows = "".join(body_parts)
     head = (
         f'<div class="c3-ctrl">'
@@ -1817,7 +1045,7 @@ def _control_group_html(cg: ControlGroup, max_time: float) -> str:
         f'<span class="c3-rail" style="background:{rail};"></span>'
         f'<pre class="c3-code">{_code_html(head_code)}</pre>'
         f'<span class="c3-loop-meta">{len(cg.rows)} stmt{"s" if len(cg.rows) != 1 else ""}</span>'
-        f"{_tbar(total_time, max_time, kind)}"
+        f"{_tbar(total_time, rp.max_time, kind)}"
         f"{_time_chip(total_time, total_saved, kind)}"
         f"</div>"
         f'<div class="c3-ctrl-body">{body_rows}</div>'
@@ -1828,7 +1056,7 @@ def _control_group_html(cg: ControlGroup, max_time: float) -> str:
 
 def _static_statement_row_html(
     row: StatementRow,
-    max_time: float,
+    rp: _RenderPass,
     *,
     indented: bool = False,
 ) -> str:
@@ -1847,8 +1075,9 @@ def _static_statement_row_html(
         storage_tiers=row.storage_tiers,
         source=row.source,
         uncacheable_reasons=row.uncacheable_reasons,
+        configured_tiers=rp.tiers,
     )
-    bar = _tbar(row.time_s, max_time, kind)
+    bar = _tbar(row.time_s, rp.max_time, kind)
     chip = _time_chip(row.time_s, row.saved_time_s, kind)
     return (
         f'<div class="c3-row" data-kind="{kind}" data-status="{status.value}">'
@@ -1861,7 +1090,7 @@ def _static_statement_row_html(
     )
 
 
-def _control_group_single_html(cgs: ControlGroupSingle, max_time: float) -> str:
+def _control_group_single_html(cgs: ControlGroupSingle, rp: _RenderPass) -> str:
     row = cgs.row
     # While / with / try are processed as a single unit by the runtime
     # (no per-iteration metrics), but the runtime records the original
@@ -1869,11 +1098,11 @@ def _control_group_single_html(cgs: ControlGroupSingle, max_time: float) -> str:
     # a for-loop so the structure reads at a glance instead of one opaque
     # multi-line row.
     if row.body_statements and len(row.body_statements) > 1:
-        return _multiline_control_html(row, max_time)
-    return _statement_row_html(row, max_time)
+        return _multiline_control_html(row, rp)
+    return _statement_row_html(row, rp)
 
 
-def _multiline_control_html(row: StatementRow, max_time: float) -> str:
+def _multiline_control_html(row: StatementRow, rp: _RenderPass) -> str:
     """Render a single-unit control structure (``while``, ``with``, ``try``)
     as a for-loop-style block: the first body statement becomes the head
     (carrying the row's aggregate timing and status), subsequent lines
@@ -1889,7 +1118,7 @@ def _multiline_control_html(row: StatementRow, max_time: float) -> str:
         f'<span class="c3-rail" style="background:{rail};"></span>'
         f'<pre class="c3-code">{_code_html(head_line)}</pre>'
         f'<span class="c3-loop-meta">{len(body_lines)} stmt{"s" if len(body_lines) != 1 else ""}</span>'
-        f"{_tbar(row.time_s, max_time, kind)}"
+        f"{_tbar(row.time_s, rp.max_time, kind)}"
         f"{_time_chip(row.time_s, row.saved_time_s, kind)}"
         f"</div>"
     )
@@ -1905,7 +1134,7 @@ def _multiline_control_html(row: StatementRow, max_time: float) -> str:
     return head + f'<div class="c3-ctrl-body">{"".join(body_rows)}</div>'
 
 
-def _skipped_bucket_html(sb: SkippedBucket, max_time: float) -> str:
+def _skipped_bucket_html(sb: SkippedBucket, rp: _RenderPass) -> str:
     """Render the collapsible bucket of upstream statements that were *not* re-run.
 
     Semantically: each statement here produced data that some later upstream
@@ -1927,7 +1156,7 @@ def _skipped_bucket_html(sb: SkippedBucket, max_time: float) -> str:
         "Running them again would do work the cache already covered."
     )
     saved = f"saved {sb.total_saved_time_s:.2f}s" if sb.total_saved_time_s > theme.MIN_TIME_DISPLAY_S else "—"
-    body = "".join(_render_section_item(i, max_time) for i in sb.items)
+    body = "".join(_render_section_item(i, rp) for i in sb.items)
     return (
         f'<details class="c3-skipped">'
         f'<summary title="{_esc(title)}">'
@@ -1961,7 +1190,7 @@ def _cache_tag_html(intercepted: bool) -> str:
     return '<span class="c3-cache-tag">@cache</span>'
 
 
-def _decorator_call_row_html(c: DecoratorCall, max_time: float, *, intercepted: bool = False) -> str:
+def _decorator_call_row_html(c: DecoratorCall, rp: _RenderPass, *, intercepted: bool = False) -> str:
     kind = theme.kind_of(c.status.value)
     rail = theme.rail_color(c.status.value)
     short_name = c.func_name.split(".")[-1] if "." in c.func_name else c.func_name
@@ -1976,15 +1205,15 @@ def _decorator_call_row_html(c: DecoratorCall, max_time: float, *, intercepted: 
         f'<span class="c3-rail" style="background:{rail};"></span>'
         f'<pre class="c3-code">{code}</pre>'
         f'<span class="c3-dots-cell"></span>'
-        f"{_tbar(c.time_s, max_time, kind)}"
+        f"{_tbar(c.time_s, rp.max_time, kind)}"
         f"{_time_chip(c.time_s, 0.0, kind)}"
         f"</div>"
     )
 
 
-def _decorator_group_html(g: DecoratorCallGroup, max_time: float) -> str:
+def _decorator_group_html(g: DecoratorCallGroup, rp: _RenderPass) -> str:
     if not g.condensed:
-        return "".join(_decorator_call_row_html(c, max_time, intercepted=g.intercepted) for c in g.calls)
+        return "".join(_decorator_call_row_html(c, rp, intercepted=g.intercepted) for c in g.calls)
     n = len(g.calls)
     hits = sum(1 for c in g.calls if c.status is BadgeStatus.RESTORED)
     misses = n - hits
@@ -2017,7 +1246,7 @@ def _decorator_group_html(g: DecoratorCallGroup, max_time: float) -> str:
         f'<span class="c3-kw">{_esc(short)}</span>() '
         f'<span class="c3-com">{_esc(summary_label)}</span></pre>'
         f'<span class="c3-dots-cell"></span>'
-        f"{_tbar(total_time, max_time, kind)}"
+        f"{_tbar(total_time, rp.max_time, kind)}"
         f"{_time_chip(total_time, 0.0, kind)}"
         f"</label>"
         # Inline detail block (own class so we don't share rowtip's
@@ -2038,7 +1267,7 @@ def _decorator_group_html(g: DecoratorCallGroup, max_time: float) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _overhead_html(ob: OverheadBreakdown, max_time: float) -> str:
+def _overhead_html(ob: OverheadBreakdown, rp: _RenderPass) -> str:
     """Render the whole overhead breakdown as a single dim row.
 
     The sub-categories used to render as separate near-zero rows, which
@@ -2069,7 +1298,7 @@ def _overhead_html(ob: OverheadBreakdown, max_time: float) -> str:
         f'<span class="c3-ovh-parts">{parts}</span>'
         f"</div>"
         f'<span class="c3-dots-cell"></span>'
-        f"{_tbar(ob.total_s, max_time, 'exec')}"
+        f"{_tbar(ob.total_s, rp.max_time, 'exec')}"
         f"{_time_chip(ob.total_s, 0.0, 'exec')}"
         f"</div>"
     )
@@ -2080,21 +1309,21 @@ def _overhead_html(ob: OverheadBreakdown, max_time: float) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _render_section_item(item: SectionItem, max_time: float) -> str:
+def _render_section_item(item: SectionItem, rp: _RenderPass) -> str:
     if isinstance(item, StatementRow):
-        return _statement_row_html(item, max_time)
+        return _statement_row_html(item, rp)
     if isinstance(item, ForLoopGroup):
-        return _for_loop_group_html(item, max_time)
+        return _for_loop_group_html(item, rp)
     if isinstance(item, ControlGroup):
-        return _control_group_html(item, max_time)
+        return _control_group_html(item, rp)
     if isinstance(item, ControlGroupSingle):
-        return _control_group_single_html(item, max_time)
+        return _control_group_single_html(item, rp)
     if isinstance(item, SkippedBucket):
-        return _skipped_bucket_html(item, max_time)
+        return _skipped_bucket_html(item, rp)
     if isinstance(item, DecoratorCallGroup):
-        return _decorator_group_html(item, max_time)
+        return _decorator_group_html(item, rp)
     if isinstance(item, OverheadBreakdown):
-        return _overhead_html(item, max_time)
+        return _overhead_html(item, rp)
     raise TypeError(f"Unsupported BadgeView node: {type(item).__name__}")
 
 
@@ -2280,24 +1509,14 @@ def _footer_html(footer: BugReportLink | None) -> str:
 
 def render_html(badge: InteractiveBadge) -> str:
     """Render an :class:`InteractiveBadge` to v3-design HTML."""
-    # Publish the configured tier list for every nested ``_dots()`` call
-    # in this render pass. Reset on exit so a subsequent render doesn't
-    # inherit stale tiers from a previous one.
-    _tier_token = _CONFIGURED_TIERS.set(badge.configured_tiers)
-    try:
-        return _render_html_impl(badge)
-    finally:
-        _CONFIGURED_TIERS.reset(_tier_token)
-
-
-def _render_html_impl(badge: InteractiveBadge) -> str:
     kind, label, sub = _summary_meta(badge.header)
-    max_time = _max_time(badge)
+    rp = _RenderPass(max_time=_max_time(badge), tiers=badge.configured_tiers)
+    max_time = rp.max_time
 
     body_html = ""
     upstream = next((s for s in badge.sections if s.kind is SectionKind.UPSTREAM), None)
     if upstream is not None and upstream.items:
-        rows = "".join(_render_section_item(i, max_time) for i in upstream.items)
+        rows = "".join(_render_section_item(i, rp) for i in upstream.items)
         n = sum(1 for i in upstream.items if not isinstance(i, SkippedBucket))
         up_saved = sum(_item_saved_time(i) for i in upstream.items)
         up_exec = sum(_item_total_time(i) for i in upstream.items)
@@ -2362,7 +1581,7 @@ def _render_html_impl(badge: InteractiveBadge) -> str:
             continue
         body_html += _section_label(section.kind, section.header)
         for item in section.items:
-            body_html += _render_section_item(item, max_time)
+            body_html += _render_section_item(item, rp)
 
     sparkline = _sparkline_html(badge)
     chips = _filter_chips_html(badge.header)

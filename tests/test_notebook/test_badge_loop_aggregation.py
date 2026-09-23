@@ -85,7 +85,7 @@ def test_the_loop_tip_counts_trips_not_statement_runs() -> None:
     """``for mg in [200, 400, 600]:`` with three body
     statements read "Iterations 9" -- the statement-iterations summed. The
     loop ran three times."""
-    from cash.notebook.badge_renderer.renderers.html import _for_loop_group_html
+    from cash.notebook.badge_renderer.renderers.html import _for_loop_group_html, _RenderPass
 
     def stmt(code, statuses):
         return LoopStatement(
@@ -99,6 +99,6 @@ def test_the_loop_tip_counts_trips_not_statement_runs() -> None:
         stmts=(stmt("sel = pick(mg)", (R, R, C)), stmt("n = count(sel)", (R, C, C)), stmt("rows.append(n)", (R, R, C))),
         loop_header="for mg in [200, 400, 600]:",
     )
-    html = _for_loop_group_html(loop, 1.0)
+    html = _for_loop_group_html(loop, _RenderPass(max_time=1.0))
     assert "<dt>Iterations</dt><dd>3</dd>" in html, html[:400]
     assert "<dt>Iterations</dt><dd>9</dd>" not in html
