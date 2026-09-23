@@ -27,7 +27,7 @@ import time
 import types
 import weakref
 from collections import Counter, OrderedDict, deque
-from collections.abc import Callable, Iterator, Sized
+from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
 
 from . import _log, _plain_data
@@ -45,16 +45,11 @@ from .backends.serialization import get_serializer
 from .config import CashConfig, get_config
 from .data_source import DataSource, state_token_of
 from .decorator.arg_hashing import (
-    ARG_COST,
-    CODE_ARG_FIX,
     CODE_VALUE_TYPES,
     LINEAGE_SRC_DECORATOR,
     LINEAGE_SRC_FROZEN,
-    LINEAGE_SRC_STATEMENT,
-    NO_SUSPECT,
     PLAIN_CENSUS,
-    is_cow_pandas,
-    plain_key_part,
+    ArgHashingMixin,
     unhashable_arg_fix,
 )
 from .decorator.call_state import (
@@ -112,7 +107,7 @@ from .decorator.explain import (
     is_sampled_dep,
     same_file_key,
 )
-from .decorator.frozen import FROZEN_AUDIT_EVERY, FROZEN_AUDIT_FIRST
+from .decorator.frozen import FrozenMixin
 from .decorator.globals_fold import (
     GlobalsFoldMixin,
 )
@@ -154,8 +149,7 @@ from .exceptions import (
     CashImpurityWarning,
 )
 from .graph import DependencyGraph
-from .lineage_tag import own_tag
-from .object_hashing import builtin_hash, builtin_hash_family, estimate_object_size, stable_key_repr
+from .object_hashing import estimate_object_size
 from .purity_analyzer import (
     ISSUE_AMBIENT_READ,
     ISSUE_MUTABLE_GLOBAL,
@@ -199,8 +193,6 @@ from .tracking.randomness import (
     seed_epochs,
 )
 from .value_types import (
-    BUILTIN_CONTAINERS,
-    CODELESS_PRIMS,
     IMMUTABLE_PRIMS,
     IMMUTABLE_VALUE_TYPES,
 )
@@ -256,7 +248,7 @@ def _backend_cache_dir(backend: CacheBackend | None) -> str | None:
 _CALL_LOG_MAX = 10_000
 
 
-class Cash(CodeIdentityMixin, CodeArgsMixin, ClosureFoldMixin, GlobalsFoldMixin):
+class Cash(CodeIdentityMixin, CodeArgsMixin, ClosureFoldMixin, GlobalsFoldMixin, ArgHashingMixin, FrozenMixin):
     """Smart caching framework for Python functions and Jupyter notebooks.
 
     Provides decorator-based caching with automatic dependency tracking,
@@ -1244,58 +1236,6 @@ class Cash(CodeIdentityMixin, CodeArgsMixin, ClosureFoldMixin, GlobalsFoldMixin)
         cache_key = self._compute_cache_key(func_name, state_hash, dynamic_state_hash, args_hash)
         return BuiltKey(cache_key, state_hash, args_hash, normalized_args)
 
-    def _warn_unhashable_args(self, func_name: str, args: tuple, kwargs: dict) -> None:
-        """KEY-UNHASHABLE-ARG, naming the argument when one can be singled out."""
-        arg_type_name = self._first_unhashable_arg_type(args, kwargs)
-        if arg_type_name == "<unknown>":
-            which = (
-                "an argument could not be hashed, and cash cannot say which -- the value is nested inside a container"
-            )
-            suggestion = (
-                "find the nested value, then register a hasher for its "
-                "type with cash.register_hasher(SomeType, ...) or pass "
-                "something hashable in its place."
-            )
-        else:
-            which = f"an argument of type {arg_type_name} could not be hashed"
-            suggestion = unhashable_arg_fix(self._first_unhashable_arg(args, kwargs), arg_type_name)
-        self._warn_once(
-            CashCacheIneffectiveWarning,
-            func_name,
-            arg_type_name,
-            f"@cash.cache on {func_name}: {which}, so this call and every call like it does not cache.",
-            code="KEY-UNHASHABLE-ARG",
-            fix=suggestion,
-        )
-
-    def _warn_key_build_failed(self, func_name: str, args: tuple, kwargs: dict, e: Exception) -> None:
-        """KEY-BUILD-FAILED: a step of the key build raised where it did not expect to."""
-        arg_type_name = self._first_unhashable_arg_type(args, kwargs)
-        if arg_type_name == "<unknown>":
-            hint = (
-                "check the function's arguments -- cash could not identify "
-                "the offending type; if the exception does not belong to "
-                "your code, report it as a bug with the traceback."
-            )
-        elif isinstance(self._first_unhashable_arg(args, kwargs), CODE_VALUE_TYPES):
-            hint = CODE_ARG_FIX
-        else:
-            hint = (
-                f"register a hasher with "
-                f"cash.register_hasher({arg_type_name}, ...) if "
-                f"{arg_type_name} is the unhashable argument."
-            )
-        self._warn_once(
-            CashCacheIneffectiveWarning,
-            func_name,
-            arg_type_name,
-            f"@cash.cache on {func_name}: cache-key generation raised "
-            f"{type(e).__name__} ({e}) somewhere it did not anticipate, so "
-            f"this call does not cache.",
-            code="KEY-BUILD-FAILED",
-            fix=hint,
-        )
-
     def _explain_call(
         self,
         func: Callable,
@@ -1500,21 +1440,6 @@ class Cash(CodeIdentityMixin, CodeArgsMixin, ClosureFoldMixin, GlobalsFoldMixin)
             details=details,
         )
 
-    def _frozen_arg_names(self, normalized_args: tuple[tuple, dict]) -> list[str]:
-        """`explain()`'s list of arguments keyed by a frozen=True producer."""
-        args, kwargs = normalized_args
-        names = []
-        for name, value in [*((f"#{i}", v) for i, v in enumerate(args)), *kwargs.items()]:
-            if getattr(value, "_cash_lineage_src", None) == LINEAGE_SRC_FROZEN or (
-                self._frozen_arrays and id(value) in self._frozen_arrays
-            ):
-                producer = (
-                    getattr(value, "_cash_lineage_producer", None)
-                    or (self._frozen_arrays.get(id(value), [None, None])[1])
-                )
-                names.append(f"{name} (the result of {producer}, declared frozen)")
-        return names
-
     def _describe_dynamic_dependencies(
         self,
         dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None,
@@ -1542,38 +1467,6 @@ class Cash(CodeIdentityMixin, CodeArgsMixin, ClosureFoldMixin, GlobalsFoldMixin)
                     except Exception:  # noqa: BLE001
                         ids.append(repr(ds))
         return ids
-
-    def _first_unhashable_arg_type(self, args: tuple, kwargs: dict) -> str:
-        """Return the qualname of the argument that could not be hashed, or '<unknown>'.
-
-        Used to attribute CashCacheIneffectiveWarning to a concrete type name
-        so the user knows which register_hasher() call to add. See
-        `_first_unhashable_arg` for how the argument is found.
-        """
-        suspect = self._first_unhashable_arg(args, kwargs)
-        return "<unknown>" if suspect is NO_SUSPECT else type(suspect).__qualname__
-
-    def _first_unhashable_arg(self, args: tuple, kwargs: dict) -> Any:
-        """The argument that could not be hashed, or ``NO_SUSPECT``.
-
-        Each candidate is hashed ALONE and the first that fails is named. It
-        used to be simply the first argument of a non-built-in type, so
-        ``score(df, lambda d: d * 2)`` blamed the DataFrame and advised a
-        DataFrame hasher -- which cash rejects, and which with override=True
-        would re-key every DataFrame function -- while the lambda was the
-        culprit (round 18). This runs only on the failure path. Strings,
-        numbers, None and built-in containers are skipped: a scalar always
-        hashes, and a container holding the culprit is reported as "nested",
-        which says more than naming the list. When no single candidate fails
-        on its own, the first non-built-in is the best remaining guess.
-        """
-        candidates = [a for a in (*args, *kwargs.values()) if not isinstance(a, IMMUTABLE_PRIMS + BUILTIN_CONTAINERS)]
-        for candidate in candidates:
-            try:
-                self._hash_arg_payload((candidate,), {})
-            except Exception:  # noqa: BLE001 - exactly what we are looking for
-                return candidate
-        return candidates[0] if candidates else NO_SUSPECT
 
     def _try_get_cached(
         self,
@@ -3219,661 +3112,6 @@ class Cash(CodeIdentityMixin, CodeArgsMixin, ClosureFoldMixin, GlobalsFoldMixin)
             return hashlib.sha256(":".join(sorted(dynamic_state_parts)).encode("utf-8")).hexdigest()
         return ""
 
-    def _normalize_call_args(
-        self,
-        func_name: str,
-        args: tuple,
-        kwargs: dict,
-    ) -> tuple[tuple, dict]:
-        """Bind ``(args, kwargs)`` to the function signature and apply defaults.
-
-        Collapses logically-identical calls written in different forms - ``f(1)``
-        vs ``f(1, y=10)`` (the default) vs ``f(x=1, y=10)``, and kwargs in any
-        order - to one canonical argument shape so they share a cache key
-        instead of producing wasteful misses.
-
-        Best-effort: any introspection or bind failure (builtins with no
-        signature, ``*args`` calls that don't match, deliberately mismatched
-        calls) returns the inputs unchanged, so behavior never regresses.
-        """
-        func = self.functions.get(func_name)
-        cached = self._signatures.get(func_name)
-        # Re-read the signature when the name has been rebound to a different
-        # function object: a notebook cell re-run with an edited default keeps
-        # the qualname but changes what `apply_defaults()` must fold.
-        if cached is not None and cached[0] is func:
-            sig = cached[1]
-        else:
-            try:
-                sig = inspect.signature(func) if func is not None else None
-            except (ValueError, TypeError):
-                sig = None
-            self._signatures[func_name] = (func, sig)
-        if sig is None:
-            return args, kwargs
-        try:
-            bound = sig.bind(*args, **kwargs)
-            bound.apply_defaults()
-        except TypeError:
-            # The call doesn't match the signature (the function itself would
-            # raise when invoked). Leave the raw form untouched.
-            return args, kwargs
-        # ``bound.arguments`` is ordered by parameter definition, so the result
-        # is canonical regardless of how the caller wrote the call. Re-express
-        # named params as kwargs; keep *args positional; sort **kwargs so its
-        # order doesn't leak into the key. (We only build a payload to hash, so
-        # routing named params through kwargs is purely for determinism.)
-        canon_args: list[Any] = []
-        canon_kwargs: dict[str, Any] = {}
-        for name, param in sig.parameters.items():
-            if name not in bound.arguments:
-                continue
-            val = bound.arguments[name]
-            if param.kind is inspect.Parameter.VAR_POSITIONAL:
-                canon_args.extend(val)
-            elif param.kind is inspect.Parameter.VAR_KEYWORD:
-                # Under its own name: a `**kwargs` entry may be called after a
-                # parameter, and writing both into one dict let it overwrite
-                # that parameter's value. `def request(url, /, **params)`
-                # called as `request("/a", url="x")` then keyed on the kwargs
-                # `url` alone, so every such call shared one entry and
-                # `request("/b", url="x")` was served `GET /a` (found
-                # attacking the decorator before round 26).
-                for k in sorted(val):
-                    canon_kwargs[f"{name}:{k}"] = val[k]
-            else:
-                canon_kwargs[name] = val
-        return tuple(canon_args), canon_kwargs
-
-    _ARG_HASH_MEMO_CAP = 1024
-
-    def _memo_arg_hash(self, arg: Any, lineage: str, content_hash: str) -> None:
-        """Record ``id(arg) -> (weakref, lineage, content_hash)`` for the session,
-        bounded so a long session can't grow the memo without limit. When full,
-        drop it wholesale: the memo is a pure speedup, so an occasional cold
-        start just re-hashes. Values that cannot be weak-referenced are skipped
-        (they simply keep full-hashing).
-        """
-        try:
-            wref = weakref.ref(arg)
-        except TypeError:
-            return
-        memo = self._arg_hash_memo
-        if len(memo) >= self._ARG_HASH_MEMO_CAP:
-            memo.clear()
-        memo[id(arg)] = (wref, lineage, content_hash)
-
-    _FRAME_MEMO_CAP = 256
-
-    def _frozen_array_hash(self, arr: Any) -> str | None:
-        """The content hash of a frozen function's numpy result, computed once.
-
-        Valid while the array is still that object and still read-only; an
-        array made writeable again (``a.flags.writeable = True``) is keyed by
-        content from then on.
-        """
-        entry = self._frozen_arrays.get(id(arr))
-        if entry is None:
-            return None
-        wref, _producer, content_hash = entry
-        if wref() is not arr or getattr(arr, "flags", None) is None or arr.flags.writeable:
-            self._frozen_arrays.pop(id(arr), None)
-            return None
-        if content_hash is None:
-            content_hash = builtin_hash(arr)
-            entry[2] = content_hash
-        return content_hash
-
-    #: Frozen list/tuple/dict results held at once. Past it the oldest goes.
-    _FROZEN_CONTAINERS_MAX = 256
-
-    def _remember_frozen_container(self, obj: Any, producer: str, lineage: str) -> None:
-        """Key a frozen function's list, tuple or dict by its producer's lineage.
-
-        A list of two million parsed rows, passed on to two cached consumers,
-        was pickled in full for every call -- warm runs about 9x slower than
-        uncached -- and ``frozen=True`` on the parser changed nothing: its fast
-        path covered numpy arrays alone, and a list cannot carry a tag (round
-        19). Such a result is now keyed like a frozen frame: by the lineage of
-        the call that produced it, audited now and then (`_audit_frozen`'s
-        schedule).
-
-        It has no weakref either, so the object is held here -- and let go
-        again once nothing else holds it, swept on each new entry.
-        """
-        table = self._frozen_containers
-        # What "held by the table alone" reads as, measured the same way: the
-        # count differs between Python versions (3.14 borrows references).
-        probe = [None, None, None, None, None]
-        probe[0] = object()
-        alone = sys.getrefcount(probe[0])
-        for key, entry in list(table.items()):
-            if sys.getrefcount(entry[0]) <= alone:
-                table.pop(key, None)
-        while len(table) >= self._FROZEN_CONTAINERS_MAX:
-            table.pop(next(iter(table)))
-        table[id(obj)] = [obj, producer, f"frozen:{lineage}", 0, None, self._frozen_shape(obj)]
-
-    def _frozen_container_hash(self, obj: Any) -> str | None:
-        """The lineage a frozen list/tuple/dict is keyed by, or None once it
-        has been seen to change (KEY-FROZEN-MUTATED, as for a frozen frame)."""
-        entry = self._frozen_containers.get(id(obj))
-        if entry is None or entry[0] is not obj:
-            return None
-        entry[3] += 1
-        uses = entry[3]
-        shape = self._frozen_shape(obj)
-        if len(entry) > 5 and entry[5] is not None and shape != entry[5]:
-            self._frozen_containers.pop(id(obj), None)
-            self._warn_frozen_mutated(obj, entry[1])
-            return None
-        due = (
-            (self.debug or os.environ.get("CASH_DEBUG"))
-            or uses == FROZEN_AUDIT_FIRST
-            or (uses > FROZEN_AUDIT_FIRST and uses % FROZEN_AUDIT_EVERY == 0)
-        )
-        if due:
-            try:
-                digest = hashlib.sha256(pickle.dumps(obj)).hexdigest()
-            except Exception:  # noqa: BLE001 - cannot audit: the declaration stands
-                digest = None
-            if digest is not None:
-                if entry[4] is None:
-                    entry[4] = digest
-                elif entry[4] != digest:
-                    self._frozen_containers.pop(id(obj), None)
-                    warn_diagnostic(
-                        CashImpurityWarning,
-                        "KEY-FROZEN-MUTATED",
-                        f"a {type(obj).__name__} returned by {entry[1]}, which is "
-                        f"declared @cash.cache(frozen=True), has been modified since "
-                        f"it was returned. Calls that received it before the change "
-                        f"may have been served results for the unmodified object; "
-                        f"from now on it is keyed by its contents.",
-                        f"take frozen=True off {entry[1]} if its result is meant to "
-                        f"be modified, or modify a copy (`obj = copy.deepcopy(obj)`) "
-                        f"instead.",
-                    )
-                    return None
-        return entry[2]
-
-    def _warn_frozen_has_no_effect(self, func_name: str, result: Any) -> None:
-        """Say so when ``frozen=True`` cannot apply to what the function returned."""
-        self._warn_once(
-            CashCacheIneffectiveWarning,
-            func_name,
-            "frozen_no_effect",
-            f"@cash.cache(frozen=True) on {func_name}: it returned a "
-            f"{type(result).__name__}, which cash cannot mark, so frozen=True has "
-            f"no effect on it -- a call that receives it still hashes it in full. "
-            f"frozen=True applies to a numpy array, a pandas/polars/modin frame, "
-            f"a pyarrow table, a list, tuple or dict, and any object that takes "
-            f"an attribute.",
-            code="KEY-FROZEN-NO-EFFECT",
-            fix="return one of those types, or take frozen=True off; "
-            "cash.register_hasher gives the type a cheap identity instead.",
-        )
-
-    def _warn_frozen_mutated(self, obj: Any, producer: Any = None) -> None:
-        """KEY-FROZEN-MUTATED: a result declared frozen is not what it was."""
-        producer = producer or getattr(obj, "_cash_lineage_producer", None) or "a frozen=True function"
-        try:
-            obj._cash_lineage_src = LINEAGE_SRC_DECORATOR
-        except (AttributeError, TypeError):
-            pass
-        warn_diagnostic(
-            CashImpurityWarning,
-            "KEY-FROZEN-MUTATED",
-            f"a {type(obj).__name__} returned by {producer}, which is declared "
-            f"@cash.cache(frozen=True), has been modified since it was returned. "
-            f"Calls that received it before the change may have been served "
-            f"results for the unmodified object; from now on it is keyed by its "
-            f"contents.",
-            f"take frozen=True off {producer} if its result is meant to be "
-            f"modified, or modify a copy (`obj = copy.deepcopy(obj)`) instead.",
-        )
-
-    #: How many of a container's elements the cheap audit measures.
-    _FROZEN_SHAPE_SAMPLE = 8
-
-    def _frozen_shape(self, obj: Any) -> tuple | None:
-        """What *obj* is shaped like, in O(1)-ish work, or ``None``.
-
-        The full audit hashes every byte, so it runs rarely -- the baseline at
-        the 8th use and a comparison every 64th after that. That left the
-        ordinary shape unprotected: produce a result, change it, pass it again.
-        A length, a frame's shape and dtypes, and the lengths of a few elements
-        cost nothing to read on EVERY use, and they move for the changes a
-        caller actually makes (``model["w"].append(...)``). A change they
-        cannot see -- a value overwritten in place, same length -- is still
-        caught by the full audit.
-        """
-        try:
-            shape = getattr(obj, "shape", None)
-            if shape is not None:
-                dtypes = getattr(obj, "dtypes", None)
-                dtype = tuple(str(d) for d in dtypes) if dtypes is not None else str(getattr(obj, "dtype", ""))
-                return ("shaped", tuple(shape), dtype)
-            if isinstance(obj, (str, bytes)):
-                return None
-            values = list(obj.values())[: self._FROZEN_SHAPE_SAMPLE] if isinstance(obj, dict) else None
-            if values is None and isinstance(obj, (list, tuple)):
-                values = list(obj[: self._FROZEN_SHAPE_SAMPLE])
-            inner = tuple(len(v) for v in values or () if isinstance(v, Sized))
-            return ("sized", len(obj), inner) if isinstance(obj, Sized) else None
-        except Exception:  # noqa: BLE001 - no cheap signal is not a failure
-            return None
-
-    def _audit_frozen(self, obj: Any) -> bool:
-        """Is a frozen=True result still what it was? False once it is not.
-
-        The declaration is trusted, and checked now and then: at the object's
-        8th use as an argument and every 64th after that, and at every use
-        under CASH_DEBUG. The first check records a baseline -- the content
-        hash for a type cash content-hashes, a digest of the pickle otherwise
-        -- and each later one compares. On a change, KEY-FROZEN-MUTATED names
-        the producer, the object's tag stops being trusted, and it is keyed by
-        its content from then on. An object that cannot be pickled cannot be
-        audited, and stays trusted.
-        """
-        key = id(obj)
-        entry = self._frozen_uses.get(key)
-        if entry is None or entry[0]() is not obj:
-            try:
-                wref = weakref.ref(obj, lambda _r, k=key, m=self._frozen_uses: m.pop(k, None))
-            except TypeError:
-                return True
-            entry = [wref, 0, None, self._frozen_shape(obj)]
-            if len(self._frozen_uses) >= 4096:
-                self._frozen_uses.clear()
-            self._frozen_uses[key] = entry
-        entry[1] += 1
-        uses = entry[1]
-        shape = self._frozen_shape(obj)
-        if entry[3] is not None and shape != entry[3]:
-            self._frozen_uses.pop(key, None)
-            self._warn_frozen_mutated(obj)
-            return False
-        due = (
-            (self.debug or os.environ.get("CASH_DEBUG"))
-            or uses == FROZEN_AUDIT_FIRST
-            or (uses > FROZEN_AUDIT_FIRST and uses % FROZEN_AUDIT_EVERY == 0)
-        )
-        if not due:
-            return True
-        try:
-            digest = builtin_hash(obj)
-            if digest is None:
-                digest = hashlib.sha256(pickle.dumps(obj)).hexdigest()
-        except Exception:  # noqa: BLE001 - cannot audit: the declaration stands
-            return True
-        if entry[2] is None:
-            entry[2] = digest
-            return True
-        if entry[2] == digest:
-            return True
-        producer = getattr(obj, "_cash_lineage_producer", None) or "a frozen=True function"
-        try:
-            obj._cash_lineage_src = LINEAGE_SRC_DECORATOR
-        except (AttributeError, TypeError):
-            pass
-        self._frozen_uses.pop(key, None)
-        warn_diagnostic(
-            CashImpurityWarning,
-            "KEY-FROZEN-MUTATED",
-            f"a {type(obj).__name__} returned by {producer}, which is declared "
-            f"@cash.cache(frozen=True), has been modified since it was returned. "
-            f"Calls that received it before the change may have been served "
-            f"results for the unmodified object; from now on it is keyed by its "
-            f"contents.",
-            f"take frozen=True off {producer} if its result is meant to be "
-            f"modified, or modify a copy (`obj = copy.deepcopy(obj)`) instead.",
-        )
-        return False
-
-    @staticmethod
-    def _frame_signature(obj: Any) -> tuple:
-        """What must stay the same for a pandas object's content hash to hold.
-
-        Under copy-on-write, a frame whose data another frame also references
-        cannot be written in place: every write path (``loc``/``iloc``/``at``,
-        column assignment, ``inplace=True`` methods, ``update``, ``insert``,
-        ``pop``) first gives the written frame NEW block arrays, and writes
-        through ``.values`` / ``to_numpy()`` raise (the arrays are read-only).
-        So the identities of the block arrays, the manager and the axes are an
-        exact change signal -- measured on 17 mutation forms, pandas 3.0.3. The
-        axis NAMES are compared by value, because ``df.index.name = ...``
-        renames the same Index object and the content hash includes them.
-        """
-        mgr = obj._mgr
-        blocks = tuple(id(block.values) for block in mgr.blocks)
-        if hasattr(obj, "columns"):
-            return (id(mgr), blocks, id(obj.columns), tuple(obj.columns.names), id(obj.index), tuple(obj.index.names))
-        return (id(mgr), blocks, id(obj.index), tuple(obj.index.names), obj.name)
-
-    @staticmethod
-    def _frame_borrows_its_data(obj: Any, held: Any = None) -> bool:
-        """Whether *obj*'s blocks sit on memory something else may write.
-
-        Copy-on-write is what makes the block identities an exact change
-        signal, and it only governs writes through PANDAS. ``pd.DataFrame(arr,
-        copy=False)`` keeps the caller's ndarray, and ``arr[0, 0] = 100`` goes
-        straight past pandas: same blocks, changed data. The memo answered 10.0
-        where the frame really summed to 109.0 (found attacking the decorator
-        before round 26). Such a frame is re-hashed on every call.
-
-        *held* is the memo's own shallow copy of *obj*. Its blocks are views
-        whose ``base`` is *obj*'s array, one reference each. Those references
-        are cash's, not an outside writer's, so they are not counted against
-        the baseline; counting them made every memoised frame look borrowed,
-        and it was re-hashed on every call.
-        """
-        try:
-            ours = Cash._held_block_refs(held) if held is not None else {}
-            for block in obj._mgr.blocks:
-                # Counted before this loop binds the array to a name of its
-                # own, exactly as the baseline was measured.
-                refcount = Cash._block_refcount(block)
-                values = block.values
-                base = getattr(values, "base", None)
-                if base is not None or not getattr(getattr(values, "flags", None), "owndata", True):
-                    return True
-                # A 1-D block IS the caller's array (`pd.Series(arr,
-                # copy=False)`), with no base and owning its data -- only the
-                # extra reference the caller still holds tells them apart. A
-                # count above the baseline can only make cash re-hash a frame
-                # it could have memoised: slower, never wrong.
-                if refcount > Cash._block_refcount_baseline() + ours.get(id(values), 0):
-                    return True
-                del values, base
-        except Exception:  # noqa: BLE001 - a pandas internals change: keep the memo
-            return False
-        return False
-
-    @staticmethod
-    def _held_block_refs(held: Any) -> dict[int, int]:
-        """``{id(array): n}``: the references *held*'s blocks keep to arrays.
-
-        A function of its own so that no loop variable outlives it: one left
-        pointing at an array would itself be a reference over the baseline.
-        """
-        refs: dict[int, int] = {}
-        for block in held._mgr.blocks:
-            values = block.values
-            for ref in (values, getattr(values, "base", None)):
-                if ref is not None:
-                    refs[id(ref)] = refs.get(id(ref), 0) + 1
-        return refs
-
-    @staticmethod
-    def _block_refcount(block: Any) -> int:
-        """``sys.getrefcount`` of *block*'s array, taken the same way for the
-        baseline and for every check."""
-        return sys.getrefcount(block.values)
-
-    @staticmethod
-    def _block_refcount_baseline() -> int:
-        """What `_block_refcount` reads for an array only its block holds.
-
-        Measured rather than written down: what ``sys.getrefcount`` counts
-        besides the holders varies across Python versions (3.14 counts one
-        fewer), and a baseline one too high lets a caller's array through
-        as the frame's own -- the stale answer this check exists to stop.
-        """
-        baseline = Cash._BLOCK_REFCOUNT_BASELINE
-        if baseline is None:
-            import pandas as pd
-
-            probe = pd.Series([0.0, 1.0, 2.0])
-            baseline = Cash._BLOCK_REFCOUNT_BASELINE = Cash._block_refcount(probe._mgr.blocks[0])
-        return baseline
-
-    #: See ``_block_refcount_baseline``; anything above it means something
-    #: outside can write to the array, see ``_frame_borrows_its_data``.
-    _BLOCK_REFCOUNT_BASELINE: int | None = None
-
-    def _frame_memo_lookup(self, obj: Any) -> str | None:
-        """The content hash recorded for *obj*, if *obj* has not changed since."""
-        entry = self._frame_memo.get(id(obj))
-        if entry is None:
-            return None
-        wref, held, signature, content_hash = entry
-        if self._frame_borrows_its_data(obj, held):
-            self._frame_memo.pop(id(obj), None)
-            return None
-        try:
-            if wref() is obj and self._frame_signature(obj) == signature:
-                return content_hash
-        except Exception:  # noqa: BLE001 - a pandas internals change: just re-hash
-            pass
-        self._frame_memo.pop(id(obj), None)
-        return None
-
-    def _frame_memo_store(self, obj: Any, content_hash: str) -> None:
-        """Remember *obj*'s content hash, and hold a shallow copy of it.
-
-        The shallow copy shares the data and is what makes the signature
-        exact: while cash references the blocks, pandas must copy before any
-        write. Cost: the first in-place write to each block afterwards copies
-        that block, once. The entry, copy included, goes when *obj* is
-        collected, or when the memo fills.
-        """
-        try:
-            held = obj.copy(deep=False)
-            signature = self._frame_signature(obj)
-            memo = self._frame_memo
-            key = id(obj)
-            wref = weakref.ref(obj, lambda _ref, key=key, memo=memo: memo.pop(key, None))
-        except Exception:  # noqa: BLE001 - the memo is a speedup; hash every time
-            return
-        if len(self._frame_memo) >= self._FRAME_MEMO_CAP:
-            self._frame_memo.clear()
-        self._frame_memo[key] = (wref, held, signature, content_hash)
-
-    def _hash_arg_payload(self, args: tuple, kwargs: dict) -> str:
-        """Hash one concrete ``(args, kwargs)`` form. May raise on unpicklable
-        values; the caller decides whether to retry with a different form."""
-
-        def get_arg_hash(arg):
-            # Content-authoritative builtin hashers FIRST. pandas /
-            # numpy / polars / pyarrow / modin / dask hash the argument's
-            # *content*, which is byte-stable across processes and kernel
-            # restarts. The notebook's in-memory ``_cash_lineage_hash`` (checked
-            # next) is recomputed per session and is NOT reproducible across a
-            # restart -- keying a persisted @cash.cache entry on it makes the
-            # decorator miss after a restart even though the argument is
-            # byte-identical (re-training the model the docs promise survives a
-            # restart). A value that has a content hash must key on content so
-            # the entry survives; the modest extra hashing cost is the price of
-            # the flagship "restart-and-run-all in seconds" guarantee. Mirrors
-            # principle: the reproducible signal, not the volatile
-            # in-memory one, is authoritative.
-            # Fast path: skip re-hashing a possibly-huge argument we already
-            # content-hashed this session, when it is provably the SAME,
-            # unmutated object. Keyed on ``id`` (NOT lineage): two *different*
-            # objects that happen to share a lineage string must still be
-            # distinguished by content -- an explicit invariant
-            # (test_arg_hash_restart_stable) -- and distinct live objects have
-            # distinct ids. The entry is validated on read by BOTH a weakref
-            # identity check (guards id reuse after GC) AND the object's
-            # ``_cash_lineage_hash`` being unchanged (cash's own mutation signal,
-            # the same one it trusts to cache every notebook statement). The
-            # stored value is still the reproducible content hash, so the cache
-            # key is byte-identical and restart-safe; the memo is a pure
-            # within-session speedup, empty after a restart.
-            #
-            # Trusted only where something KEEPS it current: the notebook's
-            # statement layer re-tags a variable on every assignment and
-            # mutation. The decorator also tags what it returns, and nothing
-            # ever moves that tag -- in a script, `q.F = 0.03; run(q)` or
-            # `df.loc[0, "a"] = 100` left it as it was, and both the memo below
-            # and the tag-as-identity shortcut further down served the result
-            # for the unmutated object (rounds 17-18).
-            # The instance's OWN tag: one inherited from a tagged class made
-            # every instance key alike (see cash.lineage_tag).
-            lineage = own_tag(arg)
-            if lineage is not None:
-                src = own_tag(arg, "_cash_lineage_src")
-                if src == LINEAGE_SRC_FROZEN:
-                    if not self._audit_frozen(arg):
-                        lineage = None
-                elif src != LINEAGE_SRC_STATEMENT:
-                    lineage = None
-            if self._frozen_arrays and id(arg) in self._frozen_arrays:
-                frozen_hash = self._frozen_array_hash(arg)
-                if frozen_hash is not None:
-                    return frozen_hash
-            if self._frozen_containers and id(arg) in self._frozen_containers:
-                frozen_hash = self._frozen_container_hash(arg)
-                if frozen_hash is not None:
-                    return frozen_hash
-            if lineage is not None:
-                entry = self._arg_hash_memo.get(id(arg))
-                if entry is not None:
-                    wref, memo_lineage, content_hash = entry
-                    if memo_lineage == lineage and wref() is arg:
-                        return content_hash
-            # pandas >= 3 copy-on-write: an exact "has this frame changed?"
-            # check instead of a trusted tag. See `_frame_memo_lookup`.
-            frame_memo = lineage is None and is_cow_pandas(arg)
-            if frame_memo:
-                content_hash = self._frame_memo_lookup(arg)
-                if content_hash is not None:
-                    return content_hash
-
-            # Overriding hashers, ahead of everything cash would do itself.
-            # The user has said their identity for this type beats content
-            # hashing, which is the only way to stop re-reading a 800MB array
-            # on every call. Guarded by the emptiness check so the ordinary
-            # case pays one dict truth test, not a loop.
-            if self._override_hashers:
-                for type_, (hasher_fn, src_hash) in self._override_hashers.items():
-                    if isinstance(arg, type_):
-                        return f"{src_hash}:{hasher_fn(arg)}"
-
-            content_digest = builtin_hash(arg)
-            if content_digest is not None:
-                if lineage is not None:
-                    self._memo_arg_hash(arg, lineage, content_digest)
-                elif frame_memo:
-                    self._frame_memo_store(arg, content_digest)
-                return content_digest
-            # Notebook lineage hash: the authoritative, cheap identity for
-            # values that carry NO content hasher (custom objects). Kept ahead
-            # of registered hashers so a lineage-carrying object short-circuits
-            # its (possibly expensive) registered hasher within a session
-            # (test_hasher_priority_cash_hash_first).
-            if lineage is not None:
-                return lineage
-            for type_, (hasher_fn, src_hash) in self._type_hashers.items():
-                if isinstance(arg, type_):
-                    # Embed the hasher source hash so that changing the
-                    # hasher's body invalidates dependent cache entries
-                    # even when the hasher's output coincidentally matches.
-                    return f"{src_hash}:{hasher_fn(arg)}"
-            return arg
-
-        # Timed per argument -- two clock reads each -- so that a
-        # CACHE-NET-LOSS verdict can name the argument that costs the time.
-        costliest: tuple | None = None
-
-        def timed(label: str, value: Any) -> Any:
-            nonlocal costliest
-            t0 = _perf_counter()
-            digest = get_arg_hash(value)
-            seconds = _perf_counter() - t0
-            if costliest is None or seconds > costliest[1]:
-                producer = getattr(value, "_cash_lineage_producer", None)
-                if producer is None and self._frozen_arrays and id(value) in self._frozen_arrays:
-                    producer = self._frozen_arrays[id(value)][1]
-                if producer is None and self._frozen_containers and id(value) in self._frozen_containers:
-                    producer = self._frozen_containers[id(value)][1]
-                old_pandas = (
-                    type(value).__name__ in ("DataFrame", "Series")
-                    and (type(value).__module__ or "").startswith("pandas")
-                    and not is_cow_pandas(value)
-                )
-                costliest = (label, seconds, type(value).__name__, producer, old_pandas)
-            return digest
-
-        hashed_args = tuple(timed(f"#{i}", a) for i, a in enumerate(args))
-        hashed_kwargs = {k: timed(k, v) for k, v in kwargs.items()}
-        # An argument with no hasher of its own goes into the payload AS IS,
-        # and its cost is the walk and the pickle below, not the lookup timed
-        # above -- so CACHE-NET-LOSS named a 2M-row list as taking "about 0ms
-        # to hash" (round 19). The payload's time is charged to the largest
-        # such argument.
-        raw = [
-            (label, value)
-            for (label, value), digest in zip(
-                [(f"#{i}", a) for i, a in enumerate(args)] + list(kwargs.items()),
-                list(hashed_args) + list(hashed_kwargs.values()),
-            )
-            if digest is value and type(value) not in CODELESS_PRIMS
-        ]
-        payload_t0 = _perf_counter()
-
-        # One canonical form (`stable_key_repr`): sets and dicts in a stable
-        # order, every container tagged with its type.
-        payload = stable_key_repr(
-            (tuple(map(plain_key_part, hashed_args)), {k: plain_key_part(v) for k, v in hashed_kwargs.items()})
-        )
-        args_bytes = _plain_data.key_dumps(payload)
-        if raw:
-            payload_seconds = _perf_counter() - payload_t0
-            if costliest is None or payload_seconds > costliest[1]:
-                label, value = max(raw, key=lambda r: len(r[1]) if hasattr(r[1], "__len__") else sys.getsizeof(r[1]))
-                producer = getattr(value, "_cash_lineage_producer", None)
-                if producer is None and self._frozen_containers and id(value) in self._frozen_containers:
-                    producer = self._frozen_containers[id(value)][1]
-                costliest = (label, payload_seconds, type(value).__name__, producer, False)
-        ARG_COST.last = costliest
-        return hashlib.sha256(args_bytes).hexdigest()
-
-    def _serialize_args(
-        self, func_name: str, args: tuple, kwargs: dict, normalized: tuple[tuple, dict] | None = None
-    ) -> str | None:
-        """Hash the arguments, canonicalised.
-
-        *normalized* lets a caller that has ALREADY canonicalised pass the
-        result in rather than have it recomputed. That is not an optimisation:
-        the code channel (`_fold_code_args`) and this value channel must key
-        off the SAME bound arguments, or `f()` and `f(<the default>)` -- the
-        same logical call -- disagree in one channel and split into two cache
-        entries. One canonicalisation, shared, is the only way that invariant
-        holds by construction rather than by two call sites staying in step.
-        """
-        if normalized is None:
-            normalized = self._normalize_call_args(func_name, args, kwargs)
-        try:
-            return self._hash_arg_payload(*normalized)
-        except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
-            # Normalization can fold a default value into the payload (so
-            # f(1) keys identically to f(1, y=<default>)). If that default is
-            # unpicklable it must not make a call that hashed fine before stop
-            # caching - retry with the raw, un-normalized form first.
-            if normalized[0] is not args or normalized[1] is not kwargs:
-                try:
-                    return self._hash_arg_payload(args, kwargs)
-                except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
-                    pass
-            # Pickle failure here is surfaced via CashCacheIneffectiveWarning in
-            # _resolve_cache_key (which sees the None return). Keep this log at
-            # debug level so it's available when explicitly enabled but doesn't
-            # double-warn.
-            logger.debug("Could not serialize arguments for %s: %s", func_name, e)
-            return None
-
-    @staticmethod
-    def builtin_hashed_family(type_: type) -> str | None:
-        """Which built-in content hasher claims *type_*, or ``None``.
-
-        Tells a user at ``register_hasher`` time that the hasher they just
-        handed over would never be consulted -- the moment they can still do
-        something about it. See `cash.object_hashing.builtin_hash_family`.
-        """
-        return builtin_hash_family(type_)
-
     def _compute_with_lock(self, spec: CallSpec, call: Call, compute: Callable[[], Any]) -> Any:
         """Compute with double-checked locking; falls back to unlocked on error.
 
@@ -4952,57 +4190,6 @@ class Cash(CodeIdentityMixin, CodeArgsMixin, ClosureFoldMixin, GlobalsFoldMixin)
         self._arg_hash_memo.clear()
         self._frame_memo.clear()
 
-    #: Types whose code must not participate in any cache key. Process-wide,
-    #: not per-instance: a marker is a property of the type, and a user who
-    #: marks it once should not have to repeat it per Cash instance.
-    #:
-    #: Holds STRONG references deliberately, so a registered class can never
-    #: be garbage collected. Considered and rejected a WeakSet: opaque types
-    #: are registered by hand, at import time, in the tens at most for any
-    #: real user -- not generated in volume -- so the leak this trades away
-    #: has no realistic scale to bite at. A WeakSet would also silently
-    #: un-register a type the moment nothing else references it, which is
-    #: the opposite of "mark it once and forget about it."
-    _OPAQUE_TYPES: set = set()
-
-    @staticmethod
-    def mark_opaque(*types_: type) -> None:
-        """Exclude *types_* from code-surface hashing: what ``cash.opaque`` records."""
-        Cash._OPAQUE_TYPES.update(types_)
-
-    @staticmethod
-    def _is_opaque(obj: Any) -> bool:
-        """True when *obj* -- a class, or an instance of one -- must not have
-        its code hashed into a cache key.
-
-        The type itself must be in ``_OPAQUE_TYPES`` (``cash.opaque``); a
-        subclass of an opaque class is not covered. It may carry its own
-        freshly-written methods the user actively edits, and inheriting the
-        mark would silently exempt that code from ever invalidating the cache.
-        A subclass that wants the same treatment is marked itself (pinned by
-        ``test_a_subclass_of_an_opaque_class_does_not_inherit_opacity``).
-
-        Never raises. Measured, not assumed: a metaclass that defines
-        ``__eq__`` without ``__hash__`` makes the CLASS ITSELF unhashable
-        (Python's data-model default, not just its instances), so
-        ``target in Cash._OPAQUE_TYPES`` can raise ``TypeError`` on a real,
-        if unusual, class shape. An opacity check must not be the thing
-        that breaks an otherwise-cacheable call.
-        """
-        try:
-            if isinstance(obj, functools.partial):
-                # A partial is the function it wraps plus arguments, both of
-                # which are keyed now. `cash.opaque(functools.partial)` was the
-                # old advice for silencing KEY-OPAQUE-CALLABLE, and it silenced
-                # EVERY partial in the process, including ones over code the
-                # user then edited (round 18).
-                return False
-            target = obj if isinstance(obj, type) else type(obj)
-            return target in Cash._OPAQUE_TYPES
-        except Exception as e:  # noqa: BLE001 - opacity check must never break a call
-            logger.debug("[CORE] opacity check failed for %r: %s", obj, e)
-            return False
-
     def _learn_mutating_captures(self, func: Callable, func_name: str, watched: dict[str, tuple[str, str]]) -> None:
         """Demote any provisional global this call was OBSERVED to mutate.
 
@@ -5170,24 +4357,6 @@ class Cash(CodeIdentityMixin, CodeArgsMixin, ClosureFoldMixin, GlobalsFoldMixin)
             "and draw the figure from them in an uncached function.",
         )
         return True
-
-    def _note_arg_cost(self, func_name: str) -> None:
-        """Keep the costliest argument to hash seen for *func_name*.
-
-        Only its description is kept -- parameter, type, seconds, the cached
-        function that produced it -- never the value, which may be large.
-        """
-        cost = getattr(ARG_COST, "last", None)
-        ARG_COST.last = None
-        if cost is None:
-            return
-        label, seconds, type_name, producer, old_pandas = cost
-        known = self._arg_costs.get(func_name)
-        if known is not None and known[2] >= seconds:
-            return
-        if known is None and len(self._arg_costs) >= 1024:
-            return
-        self._arg_costs[func_name] = (label, type_name, seconds, producer, old_pandas)
 
     def _note_effectiveness(
         self,
@@ -6058,22 +5227,6 @@ class Cash(CodeIdentityMixin, CodeArgsMixin, ClosureFoldMixin, GlobalsFoldMixin)
                 if snapshot is not None and any(level is not None for level in snapshot):
                     found[name] = (value, snapshot)
         return found
-
-    def _forget_frozen_container(self, obj: Any) -> None:
-        """Stop trusting a frozen result a call was just seen to change."""
-        entry = self._frozen_containers.get(id(obj))
-        if entry is None or entry[0] is not obj:
-            return
-        self._frozen_containers.pop(id(obj), None)
-        warn_diagnostic(
-            CashImpurityWarning,
-            "KEY-FROZEN-MUTATED",
-            f"a {type(obj).__name__} returned by {entry[1]}, which is declared "
-            f"@cash.cache(frozen=True), was modified in place by a cached call. "
-            f"From now on it is keyed by its contents.",
-            f"take frozen=True off {entry[1]} if its result is meant to be "
-            f"modified, or modify a copy (`obj = copy.deepcopy(obj)`) instead.",
-        )
 
     def _check_argument_mutation(
         self,

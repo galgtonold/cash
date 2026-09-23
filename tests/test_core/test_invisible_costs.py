@@ -31,7 +31,7 @@ def _rows(n):
 
 
 def test_a_frozen_list_is_keyed_by_its_producer_not_its_contents(tmp_path, monkeypatch):
-    import cash.core as core
+    import pickle
 
     c = Cash(cache_dir=str(tmp_path / "cache"))
     calls = []
@@ -51,8 +51,8 @@ def test_a_frozen_list_is_keyed_by_its_producer_not_its_contents(tmp_path, monke
     # Counted, not timed (a timed bound flaked under a loaded -n 16 run): the
     # hit neither pickles the list nor walks it.
     dumped = []
-    real_dumps = core.pickle.dumps
-    monkeypatch.setattr(core.pickle, "dumps", lambda obj, *a, **k: dumped.append(obj) or real_dumps(obj, *a, **k))
+    real_dumps = pickle.dumps
+    monkeypatch.setattr(pickle, "dumps", lambda obj, *a, **k: dumped.append(obj) or real_dumps(obj, *a, **k))
     total(rows)
     # The canonical payload: ("__cash_type__", "tuple", (positional, keyword)).
     payloads = [x for x in dumped if isinstance(x, tuple) and x[:2] == ("__cash_type__", "tuple")]

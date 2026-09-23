@@ -1202,7 +1202,7 @@ the `dynamic_depends_on=` argument instead of filtering the warning.
 
 ## KEY-FROZEN-MUTATED {#key-frozen-mutated}
 
-<!-- claim: cash/core.py:Cash._audit_frozen @12932111 -->
+<!-- claim: cash/decorator/frozen.py:FrozenMixin._audit_frozen @12932111 -->
 **What happened.** A function is decorated `@cash.cache(frozen=True)` — a
 promise that its result is not modified after it is returned — and one of its
 results was modified anyway: a later audit found it had changed since cash

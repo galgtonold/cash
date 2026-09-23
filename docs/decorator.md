@@ -304,7 +304,7 @@ for the cases this model *can't* see.
 
 ### What else is in the key — the ones that cost a recompute
 
-<!-- claim: cash/decorator/closure_fold.py:ClosureFoldMixin._fold_defaults @b9735923, cash/core.py:Cash._hash_arg_payload @7bc7e4ca, cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe -->
+<!-- claim: cash/decorator/closure_fold.py:ClosureFoldMixin._fold_defaults @b9735923, cash/decorator/arg_hashing.py:ArgHashingMixin._hash_arg_payload @7bc7e4ca, cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe -->
 None of these gives a wrong answer. Each one costs a recompute you might not
 expect, measured across fresh processes:
 
@@ -677,7 +677,7 @@ see [known limitations](known-limitations.md#code-passed-as-an-argument).
 
 #### `@cash.opaque` / `cash.opaque(T)` — opt a type out
 
-<!-- claim: cash/core.py:Cash._is_opaque @94932d6e, cash/__init__.py:opaque @679c15ff -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHashingMixin._is_opaque @338bc5d6, cash/__init__.py:opaque @679c15ff -->
 For a marker class you pass but do not depend on, or one whose code churns for
 reasons that never change the result:
 
@@ -1294,7 +1294,7 @@ bypass caching entirely.
 
 ## Passing large objects between cached functions
 
-<!-- claim: cash/core.py:Cash._frame_signature @28a3f549, cash/core.py:Cash._frame_memo_store @99f98c8a -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHashingMixin._frame_signature @28a3f549, cash/decorator/arg_hashing.py:ArgHashingMixin._frame_memo_store @99f98c8a -->
 An argument is keyed by what it holds **at the time of the call**, so a result
 you mutate in place and pass on is keyed by its new contents:
 
@@ -1347,7 +1347,7 @@ When the object comes from another cached function and nothing modifies it
 afterwards — a trained model, a lookup table, a feature matrix — say so on the
 function that makes it:
 
-<!-- claim: cash/core.py:Cash._audit_frozen @12932111, cash/core.py:Cash._frozen_array_hash @e1115b1b -->
+<!-- claim: cash/decorator/frozen.py:FrozenMixin._audit_frozen @12932111, cash/decorator/frozen.py:FrozenMixin._frozen_array_hash @e1115b1b -->
 ```python
 @cash.cache(frozen=True)
 def train(data):
@@ -1358,7 +1358,7 @@ def score(model, batch):            # keys `model` by train()'s identity:
     return model.predict(batch)     # no hash per call, same key in every process
 ```
 
-<!-- claim: cash/core.py:Cash._remember_frozen_container @b292fc7e, cash/core.py:Cash._warn_frozen_has_no_effect @f605e5d3 -->
+<!-- claim: cash/decorator/frozen.py:FrozenMixin._remember_frozen_container @b292fc7e, cash/decorator/frozen.py:FrozenMixin._warn_frozen_has_no_effect @f605e5d3 -->
 A cached function receiving a frozen result keys it by the call that produced
 it: microseconds, the same in every process, and it works for an object that
 cannot be pickled. That covers a numpy array, a pandas / polars / modin frame, a

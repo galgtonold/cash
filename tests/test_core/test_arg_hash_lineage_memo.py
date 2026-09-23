@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-import cash.core as core
+import cash.decorator.arg_hashing as arg_hashing
 from cash import Cash, InMemoryBackend
 
 
@@ -33,13 +33,13 @@ def _df(vals, lineage=None):
 def _count_hashes(monkeypatch):
     """Wrap the (expensive) builtin content hasher to count invocations."""
     calls = {"n": 0}
-    orig = core.builtin_hash
+    orig = arg_hashing.builtin_hash
 
     def spy(v):
         calls["n"] += 1
         return orig(v)
 
-    monkeypatch.setattr(core, "builtin_hash", spy)
+    monkeypatch.setattr(arg_hashing, "builtin_hash", spy)
     return calls
 
 
