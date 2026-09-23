@@ -171,18 +171,6 @@ _AMBIENT_KINDS = frozenset({EffectKind.CLOCK, EffectKind.ENVIRONMENT})
 #: on both paths.
 _NOT_YET_REPORTED: frozenset[str] = frozenset(
     {
-        # other programs
-        "os.popen",
-        "os.execv",
-        "os.execve",
-        "os.execl",
-        "os.execlp",
-        "os.execvp",
-        "os.spawnv",
-        "os.spawnl",
-        "os.posix_spawn",
-        "subprocess.getoutput",
-        "subprocess.getstatusoutput",
         # network reads not named alongside `requests.get`
         "requests.head",
         "requests.options",

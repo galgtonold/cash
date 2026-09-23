@@ -196,7 +196,7 @@ request never gets sent). Cash's side-effect analysis flags these statements as
 | File writes | `open('f', 'w')`, `df.to_csv()`, `df.to_parquet()`, `Path(p).write_text()` | The file wouldn't be written on a cache hit |
 | Serializing writers | `json.dump()`, `pickle.dump()`, `np.save()`, `fig.savefig()` | The artifact wouldn't be produced |
 | Filesystem changes | `os.remove()`, `shutil.move()`, `shutil.copyfile()`, `os.symlink()`, `os.chmod()`, `Path(p).mkdir()`, `Path(p).touch()`, `Path(p).unlink()` | The change to disk wouldn't happen |
-| System calls | `os.system()`, `subprocess.run()` | The process wouldn't run |
+| System calls | `os.system()`, `os.popen()`, `subprocess.run()` | The process wouldn't run |
 | Network writes | `requests.post()`, `requests.put()`, `requests.delete()`, `requests.patch()` | The request wouldn't be sent |
 | Database writes | `df.to_sql()` | The rows wouldn't reach the database |
 

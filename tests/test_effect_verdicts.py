@@ -51,6 +51,10 @@ ROWS = [
     ("p.mkdir()", "refuse", "impure_call"),
     ("p.touch()", "refuse", "impure_call"),
     ("p.unlink()", "refuse", "impure_call"),
+    # Other programs: the notebook refused os.system but not os.popen, and
+    # the decorator saw os.popen only by watching the first call spawn it.
+    ("os.popen('true')", "refuse", "impure_call"),
+    ("subprocess.getoutput('true')", "refuse", "impure_call"),
 ]
 
 

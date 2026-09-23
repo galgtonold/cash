@@ -493,18 +493,6 @@ _NOTEBOOK_LABELS: dict[EffectKind, str] = {
 #: on its own, with a test of the new verdict on both paths.
 _NOT_YET_REFUSED: frozenset[str] = frozenset(
     {
-        # other programs
-        "os.popen",
-        "os.execv",
-        "os.execve",
-        "os.execl",
-        "os.execlp",
-        "os.execvp",
-        "os.spawnv",
-        "os.spawnl",
-        "os.posix_spawn",
-        "subprocess.getoutput",
-        "subprocess.getstatusoutput",
         # the network: the generic request forms, and writes through a client
         "requests.request",
         "httpx.post",
