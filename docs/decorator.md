@@ -310,7 +310,7 @@ for the cases this model *can't* see.
 
 ### What else is in the key — the ones that cost a recompute
 
-<!-- claim: cash/core.py:Cash._fold_defaults @9e3f82f2, cash/core.py:Cash._hash_arg_payload @6cf42ecf, cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe -->
+<!-- claim: cash/core.py:Cash._fold_defaults @b9735923, cash/core.py:Cash._hash_arg_payload @9b2e47ef, cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe -->
 None of these gives a wrong answer. Each one costs a recompute you might not
 expect, measured across fresh processes:
 
@@ -762,9 +762,12 @@ The cache key is `f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"`.
   set).
 - `args_hash` is a SHA-256 over the pickled args (with custom hashers
   via `cash.register_hasher` taking precedence for non-picklable types).
-  Dicts are canonicalised to sorted-key order first, so two dicts that
-  are equal but for insertion order share a key —
-  `f({"a": 1, "b": 2})` and `f({"b": 2, "a": 1})` hit the same entry.
+  The arguments are put in one canonical form first: dicts in sorted-key
+  order and sets in sorted order, so two values that are equal but for
+  their order share a key — `f({"a": 1, "b": 2})` and
+  `f({"b": 2, "a": 1})` hit the same entry, in every process. Every
+  container is tagged with its type, so `f([1, 2])` and `f((1, 2))`, or two
+  namedtuple types holding equal values, never share one.
 
 When something that affects the result *isn't* among those signals — a
 database table, a remote URL, a file you never `open()` — declare it with the

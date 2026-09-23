@@ -46,9 +46,10 @@ def test_lone_function_hash_is_sha256_of_its_source_hash(tmp_path):
 
 
 def test_helper_token_format_is_helper_qual_hash(tmp_path):
-    """A captured module helper contributes a ``helper:{qual}:{hash}``
-    token, ``:``-joined after the function's own source hash, the whole
-    thing sha256'd. Reconstructed from the documented resolution path
+    """A captured module helper contributes a
+    ``helper:{qual}:{hash}:defaults:{defaults digest}`` token, ``:``-joined
+    after the function's own source hash, the whole thing sha256'd. The
+    defaults digest is there for every helper, one with no defaults too. Reconstructed from the documented resolution path
     using ``inspect.getsource`` (not the private hasher) to stay
     independent of the implementation under test.
 
@@ -78,11 +79,12 @@ def test_helper_token_format_is_helper_qual_hash(tmp_path):
         if callable(obj):
             live[qual] = hashlib.sha256(normalize_source_for_hash(inspect.getsource(obj)).encode("utf-8")).hexdigest()
 
+    no_defaults = c._hash_arg_payload((), {})
     parts = [c.source_hashes[name]]
     for qual in sorted(report.helper_source_hashes):
         if qual == name:
             continue
-        parts.append(f"helper:{qual}:{live.get(qual, report.helper_source_hashes[qual])}")
+        parts.append(f"helper:{qual}:{live.get(qual, report.helper_source_hashes[qual])}:defaults:{no_defaults}")
     expected = hashlib.sha256(":".join(parts).encode("utf-8")).hexdigest()
 
     assert state_hash(c, name) == expected

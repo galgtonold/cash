@@ -139,11 +139,9 @@ def test_unchanged_default_still_hits():
     assert len(_RUNS) == 1, "re-defining with an unchanged default missed"
 
 
-def test_no_defaults_keeps_key_byte_identical():
-    """Functions with no defaults must not be re-keyed by this fold at all.
-
-    Bounds the one-time cold cache to functions that actually have defaults.
-    """
+def test_a_function_without_defaults_keys_the_same_on_every_call():
+    """The defaults fold runs for every function, one with none included, and
+    gives the same key each time."""
     c = _cash()
 
     @c.cache
@@ -153,28 +151,7 @@ def test_no_defaults_keeps_key_byte_identical():
     before = f.explain(1, 2).cache_key
     assert f(1, 2) == 3
     assert f.explain(1, 2).cache_key == before
-    # Pinned literal: the key of a defaults-free function is unchanged by CAS-183.
-    assert before == c._compute_cache_key(
-        c._get_func_key(f.__wrapped__),
-        c._fold_read_globals(
-            f.__wrapped__,
-            c._get_func_key(f.__wrapped__),
-            c._fold_bound_self(
-                f.__wrapped__,
-                c._get_func_key(f.__wrapped__),
-                c._fold_closure(
-                    f.__wrapped__,
-                    c._get_func_key(f.__wrapped__),
-                    c._state_hasher.compute(
-                        c._get_func_key(f.__wrapped__),
-                        own_source_override=c._pin_own_source(f.__wrapped__),
-                    ),
-                ),
-            ),
-        ),
-        c._resolve_dynamic_dependencies(c._get_func_key(f.__wrapped__), None, (1, 2), {}),
-        c._serialize_args(c._get_func_key(f.__wrapped__), (1, 2), {}),
-    )
+    assert f.explain(1, 2).reason == "hit"
 
 
 def test_explicitly_passed_arg_still_behaves():

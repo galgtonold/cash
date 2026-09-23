@@ -54,9 +54,11 @@ def test_a_frozen_list_is_keyed_by_its_producer_not_its_contents(tmp_path, monke
     real_dumps = core.pickle.dumps
     monkeypatch.setattr(core.pickle, "dumps", lambda obj, *a, **k: dumped.append(obj) or real_dumps(obj, *a, **k))
     total(rows)
-    payloads = [x for x in dumped if isinstance(x, tuple) and len(x) == 2 and isinstance(x[0], tuple)]
+    # The canonical payload: ("__cash_type__", "tuple", (positional, keyword)).
+    payloads = [x for x in dumped if isinstance(x, tuple) and x[:2] == ("__cash_type__", "tuple")]
     assert payloads, "no key was hashed"
-    assert not any(a is rows for x in payloads for a in x[0]), "a hit still serialized the whole list"
+    positional = payloads[-1][2][0][2]
+    assert all(isinstance(a, str) for a in positional), "a hit still serialized the whole list"
 
 
 def test_a_frozen_list_keys_the_same_in_the_next_process(tmp_path):

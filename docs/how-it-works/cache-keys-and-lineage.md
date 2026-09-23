@@ -224,14 +224,14 @@ See [custom hashers](../tutorials/feature-guides/custom-hashers.md) for the full
 
 The two paths answer "what is this object's fingerprint?" differently, and the ordering in each is deliberate.
 
-<!-- claim: cash/core.py:Cash._hash_arg_payload @6cf42ecf -->
+<!-- claim: cash/core.py:Cash._hash_arg_payload @9b2e47ef -->
 **Decorator — hashing a call argument** (`Cash._hash_arg_payload`):
 
 1. **Hashers registered with `override=True`** — see [overriding a built-in](../tutorials/feature-guides/custom-hashers.md#overriding-a-built-in-content-hasher). Nothing below runs for such a type.
 2. **Built-in content hashers** — pandas, numpy, polars, PyArrow, modin, dask. A pandas 3 frame's hash is reused while copy-on-write shows the frame unchanged, and a `frozen=True` numpy result's is computed once.
 3. **`_cash_lineage_hash` attribute** — the cheap identity for objects with no content hasher. Only a tag something keeps current counts: one the notebook's statement layer wrote (it re-tags a variable on every change), or one from a function declared `frozen=True`. The tag a plain `@cash.cache` call puts on its result is not used, because nothing moves it when the object is modified in place. A `frozen=True` function's list, tuple or dict, which cannot carry a tag, is remembered by identity instead and keyed the same way.
 4. **Registered type hashers** — anything added via `register_hasher()`.
-5. **`pickle.dumps()` of the whole argument payload.**
+5. **`pickle.dumps()` of the whole argument payload**, in one canonical form: sets and dicts in a stable order, every container tagged with its type.
 6. **No key at all** — an unpicklable argument means the call runs *uncached* and Cash emits `CashCacheIneffectiveWarning`. It is never cached under a wrong key.
 
 Content beats the lineage attribute, and that ordering is the fix for a real bug: a notebook variable's `_cash_lineage_hash` is re-derived in every kernel session and is not reproducible across a restart, so keying a persisted decorator entry on it made `train_model(X_train, ...)` miss after a restart and re-train the model. Pinned by `tests/test_core/test_arg_hash_restart_stable.py`.

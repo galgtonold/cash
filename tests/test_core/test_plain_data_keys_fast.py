@@ -1,8 +1,8 @@
 """A big plain-data argument is keyed by its content, without walking it in Python.
 
 A warm hit on a function receiving two million parsed rows took 8.4 s against a
-0.04 s body: three Python-level walks over every element (`_contains_set`,
-`_canonicalize_dict_order`, `_iter_code_carriers`) that can find nothing in
+0.04 s body: Python-level walks over every element (`_stable_key_repr`,
+`_contains_set`, `_iter_code_carriers`) that can find nothing in
 lists and tuples of primitives, then a pickle whose memo -- a dict entry per
 tuple and string -- was 80 % of what was left. Plain data is now proven so at C
 speed and pickled without the memo: 0.37 s. Without the memo the key is the
@@ -111,8 +111,8 @@ def test_a_warm_hit_on_many_rows_does_not_walk_them(tmp_path, monkeypatch):
         return sum(r[0] for r in rows)
 
     total(rows)
-    calls = {"_contains_set": 0, "_canonicalize_dict_order": 0, "carriers": 0}
-    for name in ("_contains_set", "_canonicalize_dict_order"):
+    calls = {"_contains_set": 0, "_stable_key_repr": 0, "carriers": 0}
+    for name in ("_contains_set", "_stable_key_repr"):
         real = getattr(core, name)
         monkeypatch.setattr(
             core, name, lambda *a, _r=real, _n=name, **k: calls.__setitem__(_n, calls[_n] + 1) or _r(*a, **k)
@@ -197,9 +197,9 @@ def test_a_small_dict_beside_a_big_list_leaves_the_list_on_the_fast_path(tmp_pat
     c = Cash(cache_dir=str(tmp_path / "cache"))
     rows = [(i, str(i)) for i in range(50_000)]
     unshared, walked = [], []
-    real_pickle, real_canon = _plain_data.pickle_unshared, core._canonicalize_dict_order
+    real_pickle, real_canon = _plain_data.pickle_unshared, core._stable_key_repr
     monkeypatch.setattr(_plain_data, "pickle_unshared", lambda v: unshared.append(v) or real_pickle(v))
-    monkeypatch.setattr(core, "_canonicalize_dict_order", lambda *a, **k: walked.append(1) or real_canon(*a, **k))
+    monkeypatch.setattr(core, "_stable_key_repr", lambda *a, **k: walked.append(1) or real_canon(*a, **k))
     c._hash_arg_payload((rows,), {"opts": {"b": 1, "a": 2}})
     assert any(v is rows for v in unshared), "the list was not keyed on its own"
     assert len(walked) < 100, f"the general path walked the rows ({len(walked)} calls)"

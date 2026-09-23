@@ -1341,7 +1341,7 @@ answering it after the restart. Round 18 found the same for the cached function
 itself, in a worker that imported the old code and made its first call after
 the deploy landed.
 
-<!-- claim: cash/core.py:Cash._pin_own_source @8c28a2eb -->
+<!-- claim: cash/core.py:Cash._pin_own_source @06d168df -->
 So cash keys that code by what is **actually running** instead: a cached
 function by the source it was imported with (its identity is taken when the
 decorator runs, not at its first call — and by its loaded bytecode when even
@@ -1399,9 +1399,11 @@ that is fine.
 
 **What happened.** One of the function's *parameter defaults* — a value in the
 `def` line, not something a caller passed — could not be fingerprinted, so Cash
-declined to cache the call. The message names the type.
+declined to cache the call. The message names the type. The same holds for a
+default of a helper the function calls, since a helper's defaults are folded
+into the key too; the message then names the helper.
 
-<!-- claim: cash/core.py:Cash._defaults_unhashable @3cc2a9a2 -->
+<!-- claim: cash/core.py:Cash._defaults_unhashable @3cc2a9a2, cash/core.py:Cash._hash_helper_identity @3015ee2a -->
 **Why it matters.** Cash folds defaults into the key so that `build()` and
 `build(Schema)` are recognised as the same call, and so that changing a default
 invalidates. It cannot tell whether an unhashable default has changed, and it

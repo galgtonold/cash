@@ -245,29 +245,30 @@ def _object_state(value: Any) -> dict:
     return state
 
 
-def _tag_subtype(value: Any, base: type, canon: Any) -> Any:
-    """Wrap *canon* with the concrete type when *value* is a SUBCLASS of *base*.
+#: The tag a builtin container is keyed under: one string object per type, so a
+#: key's pickle stores it once however many containers it holds.
+_BUILTIN_CONTAINER_TAGS = {t: t.__qualname__ for t in (dict, list, tuple, set, frozenset)}
 
-    tuple/dict/list subclasses (namedtuple, OrderedDict, defaultdict, ...) were
-    canonicalised into their base type, so ``f(P(1,2))`` and ``f(Q(1,2))`` --
-    two distinct namedtuple types with equal values -- collided onto one cache
-    key and the second call was served the first's result (a silent wrong-HIT).
-    The ``__cash_obj__`` path already tags arbitrary objects with their type for
-    exactly this reason; the container branches did not.
 
-    An EXACT base instance is returned untouched, so ordinary tuple/dict/list
-    arguments keep byte-identical keys and no cache is invalidated.
+def _typed(value: Any, canon: Any) -> tuple:
+    """*canon*, a container's canonical items, tagged with the container's type.
+
+    Every container carries its type, so containers holding equal items key
+    apart when their types differ: a list and a tuple, a set and a frozenset,
+    or ``P(1, 2)`` and ``Q(1, 2)`` from two namedtuple types, which otherwise
+    shared one entry and were served each other's results.
+
+    A subclass also brings the state it holds beside its items, which its
+    items drop: ``defaultdict(list)`` and ``defaultdict(set)`` shared one
+    entry, and a ``dict`` subclass holding ``self.source`` served the first
+    caller's answer for every source. Nothing is caught here: a part that
+    cannot be read is not left out of the key, it makes the call unkeyable
+    (run uncached, with a warning).
     """
-    if type(value) is base:
-        return canon
     t = type(value)
-    # ...and with the state the subclass carries beside its items, which the
-    # rebuild drops: `defaultdict(list)` and `defaultdict(set)` shared one
-    # entry, and a `dict` subclass holding `self.source` served the first
-    # caller's answer for every source (found attacking the decorator before
-    # round 26). Pickle carries both, so this is signal cash had and dropped.
-    # Nothing is caught here: a part that cannot be read is not left out of the
-    # key, it makes the call unkeyable (run uncached, with a warning).
+    tag = _BUILTIN_CONTAINER_TAGS.get(t)
+    if tag is not None:
+        return ("__cash_type__", tag, canon)
     state: Any = ()
     factory = getattr(value, "default_factory", None)
     own = {k: v for k, v in (getattr(value, "__dict__", None) or {}).items() if not k.startswith("__")}
@@ -276,7 +277,7 @@ def _tag_subtype(value: Any, base: type, canon: Any) -> Any:
     if own:
         state += tuple(sorted((k, _stable_key_repr(v, 45)) for k, v in own.items()))
     tag = f"{t.__module__}.{t.__qualname__}"
-    return ("__cash_subtype__", tag, canon) if not state else ("__cash_subtype__", tag, canon, state)
+    return ("__cash_type__", tag, canon, state) if state else ("__cash_type__", tag, canon)
 
 
 class _KeyBuildFailed(Exception):
@@ -418,18 +419,25 @@ def _shares_memory(result, value) -> bool:
 
 
 def _stable_key_repr(value: Any, _depth: int = 0, _stack: set | None = None) -> Any:
-    """Rewrite *value* into a form whose pickled bytes are independent of
-    set/dict iteration order (which depends on PYTHONHASHSEED for str/bytes
-    elements). Sets/frozensets and dict items are sorted by their pickled
-    element bytes; lists/tuples keep order. Recurses into arbitrary objects via
-    their ``__dict__`` so a set buried inside a dataclass is canonicalised too.
-    Leaf values pass through unchanged.
+    """The form a cache key hashes *value* in: equal values pickle to equal
+    bytes, in any process.
 
-    A graph that loops back on itself raises `CyclicValueError` (a
+    * Every dict, list, tuple, set and frozenset becomes a tuple tagged with its
+      type (`_typed`), so containers of different types never key alike.
+    * The items of a set, and of a plain dict, are sorted by their pickled
+      bytes: a set of strings iterates in an order PYTHONHASHSEED picks, and a
+      dict equals its reordering. A dict subclass keeps its order, which may be
+      what it means (``OrderedDict``).
+    * An object with a set somewhere inside becomes its type and its
+      canonicalised instance state (`_object_state`), so that set is sorted
+      too. Any other object is left to pickle, which stores it as it asks to
+      be stored (its ``__reduce__``) and keeps the loops in its graph.
+
+    A container graph that loops back on itself raises `CyclicValueError` (a
     TypeError, so the value is reported as unhashable and the call runs
-    uncached). It used to be expanded once per path to the depth limit and
-    the call never returned; and a form that stood in for the loop could
-    make two different graphs key alike, which would be a wrong answer.
+    uncached). Expanding it path by path to the depth limit never returned,
+    and a form that stood in for the loop could make two different graphs key
+    alike, which would be a wrong answer.
     """
     if _depth > 50:
         return value
@@ -438,9 +446,7 @@ def _stable_key_repr(value: Any, _depth: int = 0, _stack: set | None = None) -> 
     if _stack is None:
         _stack = set()
     if id(value) in _stack:
-        raise CyclicValueError(
-            f"a {type(value).__qualname__} that contains itself, with a set inside, has no stable form to key on"
-        )
+        raise CyclicValueError(f"a {type(value).__qualname__} that contains itself has no stable form to key on")
     _stack.add(id(value))
     try:
         return _stable_key_repr_of(value, _depth, _stack)
@@ -456,79 +462,19 @@ def _stable_key_repr_of(value: Any, _depth: int, _stack: set) -> Any:
 
     if isinstance(value, (set, frozenset)):
         items = [sub(v) for v in value]
-        items.sort(key=lambda x: pickle.dumps(x, protocol=4))
-        tag = "__cash_frozenset__" if isinstance(value, frozenset) else "__cash_set__"
-        return (tag, tuple(items))
+        items.sort(key=_plain_data.key_dumps)
+        return _typed(value, tuple(items))
     if isinstance(value, dict):
-        # A dict SUBCLASS (OrderedDict, defaultdict) may be order-significant,
-        # so preserve item order and tag the type; a plain dict is order-
-        # insensitive by ``==`` and keeps the sorted, untagged form so its key
-        # is byte-identical to before this change.
-        subclass = type(value) is not dict
         items = [(sub(k), sub(v)) for k, v in value.items()]
-        if not subclass:
-            items.sort(key=lambda kv: pickle.dumps(kv[0], protocol=4))
-        canon = ("__cash_dict__", tuple(items))
-        return _tag_subtype(value, dict, canon)
-    if isinstance(value, list):
-        canon = ("__cash_list__", tuple(sub(v) for v in value))
-        return _tag_subtype(value, list, canon)
-    if isinstance(value, tuple):
-        canon = tuple(sub(v) for v in value)
-        return _tag_subtype(value, tuple, canon)
-    obj_state = _object_state(value)
-    if obj_state:
-        # Arbitrary object (dataclass, __slots__ class, ...) - canonicalise its
-        # instance state, tagged with the type so two types don't collide.
-        return ("__cash_obj__", type(value).__qualname__, sub(obj_state))
-    return value
-
-
-def _canonicalize_dict_order(value: Any, _depth: int = 0) -> Any:
-    """Rebuild every ``dict`` in *value* in canonical (sorted-key) order so that
-     two dicts that are equal but for insertion order pickle to identical bytes
-    . Recurses through ``dict``/``list``/``tuple``; other types pass
-     through unchanged. ``list``/``tuple`` order is preserved (semantic), and the
-     dict TYPE is kept, so a payload whose dicts are already sorted (e.g. the
-     top-level kwargs canonicalised by ``_normalize_call_args``) is byte-identical
-     to before — only out-of-order dict *values* change.
-
-     Keys are ordered by their pickled bytes (a total order that never raises on
-     mixed key types); on an unpicklable key it falls back to ``repr(key)``, then
-     to insertion order — it never crashes. Sets are intentionally NOT handled
-     here: a payload containing a set is routed through ``_stable_key_repr``
-     instead, which canonicalises sets (including frozenset dict keys, whose
-     pickle bytes are PYTHONHASHSEED-dependent) deterministically.
-    """
-    if _depth > 50:
+        if type(value) is dict:
+            items.sort(key=lambda kv: _plain_data.key_dumps(kv[0]))
+        return _typed(value, tuple(items))
+    if isinstance(value, (list, tuple)):
+        return _typed(value, tuple(sub(v) for v in value))
+    if not _contains_set(value):
         return value
-    # Same short-circuit as ``_contains_set``: a primitive has no dict inside
-    # to reorder, and this runs once per element of every container argument.
-    if type(value) in _CODELESS_PRIMS:
-        return value
-    if isinstance(value, dict):
-        # A dict SUBCLASS keeps insertion order (it may be semantic) and is
-        # tagged with its type; a plain dict is sorted (order-insensitive) and
-        # untagged, so its key is byte-identical to before this change.
-        subclass = type(value) is not dict
-        items = [(k, _canonicalize_dict_order(v, _depth + 1)) for k, v in value.items()]
-        if not subclass:
-            try:
-                items.sort(key=lambda kv: pickle.dumps(kv[0], protocol=4))
-            except Exception:  # noqa: BLE001 - unpicklable key: degrade, never crash
-                try:
-                    items.sort(key=lambda kv: repr(kv[0]))
-                except Exception:  # noqa: BLE001 - unsortable even by repr: keep order
-                    pass
-        canon = dict(items)
-        return _tag_subtype(value, dict, canon)
-    if isinstance(value, list):
-        canon = [_canonicalize_dict_order(v, _depth + 1) for v in value]
-        return _tag_subtype(value, list, canon)
-    if isinstance(value, tuple):
-        canon = tuple(_canonicalize_dict_order(v, _depth + 1) for v in value)
-        return _tag_subtype(value, tuple, canon)
-    return value
+    t = type(value)
+    return ("__cash_obj__", f"{t.__module__}.{t.__qualname__}", sub(_object_state(value)))
 
 
 _PLAIN_SEQS = (list, tuple)
@@ -539,10 +485,10 @@ def _is_plain(value: Any) -> bool:
 
     Plain: exact lists and tuples, nested, over exact primitives
     (`_CODELESS_PRIMS`) -- the rows a parser returns. Such a value holds no set,
-    no dict to put in order and no code, so the three Python-level walks a key
-    otherwise makes over every element of it -- `_contains_set`,
-    `_canonicalize_dict_order`, `_iter_code_carriers` -- can find nothing, and
-    they were nearly all of a warm hit: 8.4 s on two million rows whose body
+    no dict to put in order and no code, so the Python-level walks a key
+    otherwise makes over every element of it -- `_stable_key_repr`,
+    `_iter_code_carriers` -- can find nothing, and they were nearly all of a
+    warm hit: 8.4 s on two million rows whose body
     took 0.04 s (round 19). This proves "plain" one level at a time at C speed
     instead (``chain.from_iterable``, ``map(type, ...)``), about 0.2 s on the
     same rows. Anything else -- a dict, a set, an object, a subclass, a cycle,
@@ -601,7 +547,8 @@ def _plain_key_part(value: Any) -> Any:
 
 def _contains_set(value: Any, _depth: int = 0, _seen: set[int] | None = None) -> bool:
     """True if *value* contains a set/frozenset anywhere (recursively, including
-    inside objects). Gates the canonicalisation so ordinary args are untouched.
+    inside objects). `_stable_key_repr` opens an object up only when it holds
+    one; any other object is left to pickle.
 
     Each container or object is looked at once per walk. Without that, a
     cyclic graph was walked once per PATH to the depth limit: a module-level
@@ -3154,10 +3101,8 @@ class Cash:
         sharing the ``<lambda>`` qualname overwrites that slot, letting a
         stale wrapper store its results under the new function's identity.
 
-        For named functions the pin equals the registration-time source
-        hash (byte-identical keys for the normal single-registration case,
-        so persisted entries keep hitting). Lambdas additionally fold the
-        code fingerprint: two lambdas defined on the SAME source line share
+        For named functions the pin is the registration-time source hash.
+        Lambdas additionally fold the code fingerprint: two lambdas defined on the SAME source line share
         their source text, and only ``co_code``/consts tell them apart.
 
         Taken when the decorator runs (*source_hash* is the hash registration
@@ -3240,8 +3185,8 @@ class Cash:
 
         Deliberately narrow on three axes:
 
-        * Only functions OBSERVED to draw (``_rng_drawing_funcs``), so every
-          other key is byte-identical to before.
+        * Only functions OBSERVED to draw (``_rng_drawing_funcs``), so seeding
+          the stream does not invalidate functions that never read it.
         * Only the *epoch*, never the raw RNG state -- the state advances on
           every draw, so keying on it would miss forever.
         * Empty when the module is unseeded, so an unseeded sample keeps being
@@ -5898,8 +5843,7 @@ class Cash:
 
         Not inside ``_hash_callable_source``'s memo: that is keyed per CODE
         object, and two closures from one factory share a code object while
-        holding different defaults. A helper with no defaults returns exactly
-        the old digest, so entries already on disk keep hitting.
+        holding different defaults.
         """
         source = self._hash_callable_source(fn)
         if isinstance(fn, type):
@@ -5921,16 +5865,11 @@ class Cash:
             source = f"{source}:captures:{captured}"
         defaults = getattr(fn, "__defaults__", None)
         kwdefaults = getattr(fn, "__kwdefaults__", None)
-        wrapped = getattr(fn, "__wrapped__", None)
-        if not defaults and not kwdefaults and wrapped is None:
-            return source
         memo_key = id(fn)
         cached = self._helper_defaults_memo.get(memo_key)
         if cached is not None and cached[0] is fn and cached[1] is defaults and cached[2] is kwdefaults:
             return cached[3]
         pos, kwd = self._defaults_of(fn)
-        if not pos and not kwd:
-            return source
         try:
             digest = self._hash_arg_payload(pos, kwd)
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
@@ -5939,8 +5878,19 @@ class Cash:
                     tuple(self._fingerprint_default(v) for v in pos),
                     {k: self._fingerprint_default(v) for k, v in kwd.items()},
                 )
-            except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
-                return source  # as before: this helper's defaults stay unfolded
+            except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
+                bad_type = self._first_unhashable_arg_type(pos, kwd)
+                name = getattr(fn, "__qualname__", repr(fn))
+                raise _KeyBuildFailed(
+                    "KEY-UNHASHABLE-DEFAULT",
+                    f"@cash.cache: a parameter default of type {bad_type} on the helper "
+                    f"{name} could not be hashed ({type(e).__name__}), so the call ran "
+                    f"uncached rather than risk serving a result computed under a "
+                    f"default that changed.",
+                    f"get the value out of {name}'s signature -- build it in the body or "
+                    f"pass it at the call site -- or register a hasher with "
+                    f"cash.register_hasher({bad_type}, ...).",
+                ) from e
         identity = f"{source}:defaults:{digest}"
         if len(self._helper_defaults_memo) >= 4096:
             self._helper_defaults_memo.clear()
@@ -6028,10 +5978,6 @@ class Cash:
             ):
                 return hashlib.sha256(f"{state_hash}:defaults:{digest}".encode("utf-8")).hexdigest()
         pos, kwd = self._defaults_of(func)
-        if not pos and not kwd:
-            # No defaults: leave the hash byte-identical so entries already on
-            # disk for such functions keep hitting.
-            return state_hash
         try:
             digest = self._hash_arg_payload(pos, kwd)
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
@@ -6099,8 +6045,7 @@ class Cash:
         shares its source with every other one the factory makes; the value it
         was built with lives in its closure, and was not keyed -- `make(3)` ->
         `make(1)` served the old result (round 18). `_hash_helper_identity`
-        adds its immutable captures and its own defaults; a plain function
-        with neither gets exactly the old fingerprint.
+        adds its immutable captures and its own defaults.
         """
         if inspect.isfunction(v):
             return f"__cash_callable__:{self._hash_helper_identity(v)}"
@@ -8717,24 +8662,11 @@ class Cash:
         ]
         payload_t0 = _perf_counter()
 
-        payload: Any = (hashed_args, hashed_kwargs)
-        # A set/frozenset pickles in PYTHONHASHSEED-dependent iteration
-        # order, so the same set argument hashes differently in every
-        # process, silently breaking cross-process cache hits. Canonicalise
-        # to a deterministic, order-independent form (recursing into objects
-        # so a set inside a dataclass is covered too) - but only when a set
-        # is actually present, so all other argument shapes keep
-        # byte-identical keys. _stable_key_repr also canonicalises dict order.
-        #
-        # When there's no set, still canonicalise dict *ordering* so two dict
-        # args equal but for insertion order share a key. This is
-        # byte-identical for already-sorted dicts (the normalised top-level
-        # kwargs), so only out-of-order dict values change their key.
-        payload = (tuple(map(_plain_key_part, hashed_args)), {k: _plain_key_part(v) for k, v in hashed_kwargs.items()})
-        if _contains_set(payload):
-            payload = _stable_key_repr(payload)
-        else:
-            payload = _canonicalize_dict_order(payload)
+        # One canonical form (`_stable_key_repr`): sets and dicts in a stable
+        # order, every container tagged with its type.
+        payload = _stable_key_repr(
+            (tuple(map(_plain_key_part, hashed_args)), {k: _plain_key_part(v) for k, v in hashed_kwargs.items()})
+        )
         args_bytes = _plain_data.key_dumps(payload)
         if raw:
             payload_seconds = _perf_counter() - payload_t0
