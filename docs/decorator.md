@@ -310,7 +310,7 @@ for the cases this model *can't* see.
 
 ### What else is in the key — the ones that cost a recompute
 
-<!-- claim: cash/core.py:Cash._fold_defaults @b9735923, cash/core.py:Cash._hash_arg_payload @90df99e0, cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe -->
+<!-- claim: cash/core.py:Cash._fold_defaults @b9735923, cash/core.py:Cash._hash_arg_payload @6349310c, cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe -->
 None of these gives a wrong answer. Each one costs a recompute you might not
 expect, measured across fresh processes:
 
@@ -1337,7 +1337,7 @@ When the object comes from another cached function and nothing modifies it
 afterwards — a trained model, a lookup table, a feature matrix — say so on the
 function that makes it:
 
-<!-- claim: cash/core.py:Cash._audit_frozen @be3add82, cash/core.py:Cash._frozen_array_hash @5352bc8e -->
+<!-- claim: cash/core.py:Cash._audit_frozen @8c352220, cash/core.py:Cash._frozen_array_hash @e1115b1b -->
 ```python
 @cash.cache(frozen=True)
 def train(data):

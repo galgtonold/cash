@@ -111,7 +111,8 @@ import hashlib
 
 # What compute_context_hash (module level, control_structures/processor.py) does.
 # Primitive values go in as they are; any other value (a DataFrame, a user
-# object) goes in as its full content digest, never its str().
+# object) goes in as its full content digest -- dtypes and memory layout
+# included, the hash the decorator keys an argument on -- never its str().
 context = {"ticker": "AAPL"}
 context_hash = hashlib.sha256(str(sorted(context.items())).encode("utf-8")).hexdigest()[:16]
 

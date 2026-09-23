@@ -62,11 +62,11 @@ content-hashes itself means passing `override=True` (see
 
 Registering for `types.FunctionType`, `types.MethodType` or `functools.partial` is accepted but warns ([KEY-CALLABLE-HASHER](../../warnings.md#key-callable-hasher)): the hasher then covers every function passed to any cached function, and one keyed on the name gives every closure a factory makes the same cache entry. Pass what the closure captures as a plain argument instead.
 
-<!-- claim: cash/core.py:Cash._hash_arg_payload @90df99e0, cash/core.py:Cash._try_builtin_type_hash @964ede10 -->
+<!-- claim: cash/core.py:Cash._hash_arg_payload @6349310c, cash/object_hashing.py:builtin_hash @bd4210c7 -->
 When a cached function runs, `_serialize_args` calls `_hash_arg_payload`, which walks each argument in this order — **the order matters, and it is not the one you might expect**:
 
 0. **Hashers registered with `override=True`.** Nothing else is consulted for a type you have explicitly taken over — see [overriding a built-in](#overriding-a-built-in-content-hasher).
-1. **Built-in content hashers.** `_try_builtin_type_hash` handles pandas / numpy / polars / PyArrow / modin / dask. These are *content*-derived and therefore byte-stable across processes and kernel restarts, which is what lets a persisted entry survive a restart. They are not a fallback — they take precedence over everything below.
+1. **Built-in content hashers.** `cash.object_hashing.builtin_hash` handles pandas / numpy / polars / PyArrow / modin / dask. These are *content*-derived and therefore byte-stable across processes and kernel restarts, which is what lets a persisted entry survive a restart. The notebook keys a loop iteration's values with the same hashers. They are not a fallback — they take precedence over everything below.
 2. **Notebook lineage hash.** If the value carries its own `_cash_lineage_hash` (one inherited from its class does not count) (the output of an upstream cached statement) *and* no built-in content hasher claimed it, that hash is used directly. It sits here rather than first because it is recomputed per session and would not survive a restart. Only a tag something keeps current counts: one the notebook's statement layer wrote (it re-tags a variable on every change), or one from a function declared `frozen=True`. The tag a plain `@cash.cache` call puts on its result is not used, because nothing moves it when the object is modified in place.
 3. **Registered type hashers.** Cash iterates `self._type_hashers.items()` in insertion order and tests each with `isinstance(arg, type_)`. First match wins, and `isinstance` makes the dispatch MRO-aware: register on `BaseModel` and every subclass uses it.
 4. **Pickle fallback.** Anything left is put in one canonical form — sets and dicts in a stable order, every container tagged with its type — and goes through `pickle.dumps`; those bytes feed the SHA-256 that yields the args hash.
@@ -138,8 +138,8 @@ Four properties, in priority order:
 
 - **Deterministic.** Same input, same hash, every time. No `id(obj)`, no `time.time()`, no `random.random()`, no `hash(str)` (PYTHONHASHSEED randomises that across processes). If your hasher returns a different string on two runs of the same Python script for the same input, every cache entry is a guaranteed miss.
 - **Total.** Capture every field that affects the function's output. If `MyModel` has a `temperature` knob and your hasher only reads `weights`, two models with different temperatures share a cache entry — your function returns the wrong answer.
-<!-- claim: cash/core.py:Cash._try_hash_numpy @60c55bee -->
-- **Cheap, but never at the cost of correctness.** The hasher runs on every call, so it should be fast — but a hasher that only samples the data will collide two different inputs into a wrong cache hit. Cash's built-in `_try_hash_numpy` hashes the **full** buffer (plus shape, dtype and memory order) for this reason. Only sample if you can *guarantee* the sampled fields uniquely identify the value (e.g. a content version you control), never as a blind speed shortcut over raw bytes.
+<!-- claim: cash/object_hashing.py:hash_numpy @8f6f3203 -->
+- **Cheap, but never at the cost of correctness.** The hasher runs on every call, so it should be fast — but a hasher that only samples the data will collide two different inputs into a wrong cache hit. Cash's built-in `hash_numpy` hashes the **full** buffer (plus shape, dtype and memory order) for this reason. Only sample if you can *guarantee* the sampled fields uniquely identify the value (e.g. a content version you control), never as a blind speed shortcut over raw bytes.
 - **Stable across processes.** Don't depend on the process-local hash seed, `id()`, memory addresses, or anything else that varies between Python invocations. The whole point of disk caching is sharing entries across runs.
 
 A useful sanity check: call your hasher twice on freshly constructed-equal instances. If the two outputs match, you're on the right track. If they don't, you're hashing identity, not value.
@@ -191,21 +191,20 @@ A new `Engine` constructed for the same URL hashes the same way, so the cache su
 
 ## Built-in registrations Cash provides automatically
 
-Cash ships with module-level fingerprinting for the dataframe ecosystem. These are *not* installed via `register_hasher` — they live in `_try_builtin_type_hash`, and as the dispatch order above shows they run **before** the user registry, so for these types the built-in always wins and a user registration is a no-op.
+Cash ships with module-level fingerprinting for the dataframe ecosystem. These are *not* installed via `register_hasher` — they live in `cash.object_hashing.builtin_hash`, and as the dispatch order above shows they run **before** the user registry, so for these types the built-in always wins and a user registration is a no-op.
 
-<!-- claim: cash/core.py:Cash._try_builtin_type_hash @964ede10 broad="the table enumerates every type the builtin dispatcher recognises" -->
+<!-- claim: cash/object_hashing.py:builtin_hash @bd4210c7 broad="the table enumerates every type the builtin dispatcher recognises", cash/object_hashing.py:builtin_hash_family @ac9cffe9 -->
 | Type | Hash strategy | Source |
 |---|---|---|
-| `pandas.DataFrame`, `pandas.Series` | Schema (column / series / index names) **and** `pd.util.hash_pandas_object(value).values.tobytes()`, SHA-256'd together — so a column rename invalidates even with identical row values | `_try_hash_pandas` |
-| `numpy.ndarray` | Full-buffer SHA-256 (zero-copy memoryview) + shape/dtype/memory order, at any size | `_try_hash_numpy` |
-| `polars.DataFrame`, `Series`, `LazyFrame` | `hash_rows()`, `hash()`, or `explain()` output then SHA-256 | `_try_hash_polars` |
-| `pyarrow.Table`, `RecordBatch` | Schema + row count + every column buffer (full content, any size) | `_try_hash_pyarrow` |
-| `modin.DataFrame`, `Series` | Convert to pandas, then `hash_pandas_object` | `_try_hash_modin` |
-| `dask` objects | `str(value.__dask_keys__())` then SHA-256 | `_try_hash_dask` |
-| Generators / iterators | Returns `None` — never hashable | `_try_builtin_type_hash` |
+| `pandas.DataFrame`, `pandas.Series` | Schema (column / series / index names, column and index dtypes) **and** `pd.util.hash_pandas_object(value).values.tobytes()`, SHA-256'd together — so a column rename, or `int64` against `Int64`, invalidates even with identical row values | `hash_pandas` |
+| `numpy.ndarray` | Full-buffer SHA-256 (zero-copy memoryview) + shape/dtype/memory order, at any size | `hash_numpy` |
+| `polars.DataFrame`, `Series`, `LazyFrame` | Schema (names and dtypes) + `hash_rows()` / `hash()`; a `LazyFrame` by `serialize()` (plan and in-memory data), and not at all when that fails | `hash_polars` |
+| `pyarrow.Table`, `RecordBatch` | Schema + row count + every column buffer (full content, any size) | `hash_pyarrow` |
+| `modin.DataFrame`, `Series` | Convert to pandas, then hashed as pandas, schema included | `hash_modin` |
+| `dask` objects | `str(value.__dask_keys__())` + the schema of its `_meta`, then SHA-256 | `hash_dask` |
 | Everything else | Falls through to `pickle.dumps` + SHA-256 | `_serialize_args` |
 
-If pandas isn't installed and you pass a pandas DataFrame anyway, the import inside `_try_hash_pandas` raises `ImportError` and the value falls through to pickle. So Cash never *requires* the optional dataframe libraries — it just uses better hashing when they're available.
+If pandas isn't installed and you pass a pandas DataFrame anyway, the import inside `hash_pandas` raises `ImportError` and the value falls through to pickle. So Cash never *requires* the optional dataframe libraries — it just uses better hashing when they're available.
 
 ## Caveats
 
@@ -257,7 +256,7 @@ When Cash can't hash an argument at all, the warning names the type explicitly a
 | `Cash.register_hasher(type_, hasher_fn)` | Instance method | Same, but on a user-constructed `Cash(...)`. |
 | `_type_hashers` registry | Private dict | `type → (hasher_fn, src_hash)`. Iterated in insertion order during `isinstance` dispatch. |
 | `_override_hashers` registry | Private dict | Same shape, consulted *before* Cash's own content hashers. Populated by `override=True`; a type lives in exactly one of the two. |
-| Built-in fallbacks | `_try_builtin_type_hash` | Auto-applies to pandas / numpy / polars / PyArrow / modin / dask without registration. User registrations take precedence. |
+| Built-in content hashers | `cash.object_hashing.builtin_hash` | Auto-applies to pandas / numpy / polars / PyArrow / modin / dask without registration, ahead of registered hashers; only `override=True` takes a type back. |
 | Pickle fallback | `_serialize_args` | `pickle.dumps` + SHA-256 for anything that didn't match a registered or built-in hasher. |
 
 There is no `unregister_hasher`, no public way to list registered hashers, and no way to clear the registry short of `reset_session()`.

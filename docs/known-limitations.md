@@ -314,7 +314,7 @@ data = my_reader.load('sensor.bin')    # CACHED — the old contents
 
 ### A polars `LazyFrame` that reads from a file
 
-<!-- claim: cash/core.py:Cash._try_hash_polars @082cc732 -->
+<!-- claim: cash/object_hashing.py:hash_polars @bf8009b1 -->
 A `LazyFrame` is identified by `serialize()`, which carries the query plan **and
 any data the plan closes over**. That is exact for a frame built from memory:
 `pl.DataFrame({"x": [1, 2, 3]}).lazy()` and the same over `[10, 20, 30]` get

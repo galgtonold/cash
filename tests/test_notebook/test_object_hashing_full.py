@@ -63,3 +63,65 @@ def test_unpicklable_falls_back_gracefully():
 
     h = compute_hash_full(threading.Lock())
     assert isinstance(h, str) and len(h) == 64
+
+
+# ---------------------------------------------------------------------------
+# The schema reaches the notebook's keys, as it reaches the decorator's
+# ---------------------------------------------------------------------------
+# `compute_hash_full` builds the per-iteration loop keys. It hashed a frame by
+# its values alone and an array by its C-order bytes, so values that are equal
+# but are different objects to the code reading them keyed alike: the second
+# iteration was served the first one's result. The decorator's hasher had long
+# folded in dtypes and memory layout; both paths now use that one hasher.
+
+
+def _loop_key(value):
+    """The key a `for` iteration binding *value* to ``x`` gets."""
+    from cash.notebook.control_structures.processor import build_iteration_context, compute_context_hash
+
+    return compute_context_hash(build_iteration_context(["x"], {"x": value}, None))
+
+
+def _distinct_on_the_notebook_path(a, b):
+    assert compute_hash_full(a) != compute_hash_full(b)
+    assert _loop_key(a) != _loop_key(b)
+
+
+def test_int64_and_nullable_int64_key_apart():
+    """``Int64`` has pd.NA semantics; ``int64`` does not."""
+    _distinct_on_the_notebook_path(pd.Series([1, 2, 3], dtype="int64"), pd.Series([1, 2, 3], dtype="Int64"))
+    frame = pd.DataFrame({"a": [1, 2, 3]})
+    _distinct_on_the_notebook_path(frame, frame.astype({"a": "Int64"}))
+
+
+def test_tz_naive_and_tz_aware_timestamps_key_apart():
+    """The same instants, one with a zone: ``tz_convert`` works on one and
+    raises on the other."""
+    naive = pd.Series(pd.date_range("2024-01-01", periods=3, freq="D"))
+    _distinct_on_the_notebook_path(naive, naive.dt.tz_localize("UTC"))
+    _distinct_on_the_notebook_path(naive.to_frame("t"), naive.dt.tz_localize("UTC").to_frame("t"))
+
+
+def test_c_and_fortran_ordered_arrays_key_apart():
+    """Equal values, different memory order: ``np.ravel(x, order="A")`` reads
+    them differently."""
+    c_order = np.arange(12.0).reshape(3, 4)
+    f_order = np.asfortranarray(c_order)
+    assert np.array_equal(c_order, f_order), "precondition: equal values"
+    _distinct_on_the_notebook_path(c_order, f_order)
+
+
+def test_equal_values_with_equal_schema_still_share_a_key():
+    """The control: the schema must add distinctions, not make every value unique."""
+    assert _loop_key(pd.Series([1, 2, 3], dtype="Int64")) == _loop_key(pd.Series([1, 2, 3], dtype="Int64"))
+    assert _loop_key(np.asfortranarray(np.ones((3, 4)))) == _loop_key(np.asfortranarray(np.ones((3, 4))))
+
+
+def test_the_notebook_and_the_decorator_hash_a_frame_alike():
+    """One hasher: the full hash of a library value IS the decorator's key for it."""
+    from cash.object_hashing import builtin_hash
+
+    frame = pd.DataFrame({"a": [1, 2], "b": ["x", "y"]})
+    assert compute_hash_full(frame) == builtin_hash(frame)
+    arr = np.arange(6).reshape(2, 3).T
+    assert compute_hash_full(arr) == builtin_hash(arr)

@@ -1,6 +1,6 @@
 """A polars LazyFrame must be identified by its data, not by its plan.
 
-``_try_hash_polars`` hashed ``LazyFrame.explain()`` -- the human-readable
+The polars hasher hashed ``LazyFrame.explain()`` -- the human-readable
 query plan. Two frames over different in-memory data print identically::
 
     pl.DataFrame({"x": [1, 2, 3]}).lazy().explain()
@@ -122,3 +122,26 @@ def test_a_scan_backed_plan_notices_its_file_changing(tmp_path):
     assert total(pl.scan_csv(csv)) == 6
     csv.write_text("x\n10\n20\n30\n", encoding="utf-8")
     assert total(pl.scan_csv(csv)) == 60
+
+
+def test_no_plan_digest_when_serialize_refuses(monkeypatch):
+    """A plan ``serialize()`` refuses gets no built-in hash at all. It used to
+    fall back to the ``explain()`` text, which is the collision above."""
+    from cash.object_hashing import builtin_hash
+
+    def refuse(self, *args, **kwargs):
+        raise RuntimeError("serialize() unavailable")
+
+    monkeypatch.setattr(pl.LazyFrame, "serialize", refuse)
+    assert builtin_hash(pl.DataFrame({"x": [1, 2, 3]}).lazy()) is None
+
+
+def test_eager_frames_carry_their_schema():
+    """Equal values under two dtypes, or two names, are different frames."""
+    from cash.object_hashing import builtin_hash
+
+    base = pl.DataFrame({"x": [1, 2, 3]})
+    assert builtin_hash(base) != builtin_hash(base.cast({"x": pl.Int32}))
+    assert builtin_hash(base) != builtin_hash(base.rename({"x": "y"}))
+    assert builtin_hash(base["x"]) != builtin_hash(base["x"].cast(pl.Int32))
+    assert builtin_hash(base) == builtin_hash(pl.DataFrame({"x": [1, 2, 3]}))

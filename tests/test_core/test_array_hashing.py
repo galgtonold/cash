@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from cash import Cash, FileBackend
+from cash.object_hashing import hash_numpy
 
 
 def _counter_fn(c):
@@ -222,7 +223,7 @@ def test_arrays_share_a_key_only_when_every_order_reading_agrees():
             b = forms[b_name]
             if a.shape != b.shape or a.dtype != b.dtype or not np.array_equal(a, b):
                 continue
-            if Cash._try_hash_numpy(a) == Cash._try_hash_numpy(b):
+            if hash_numpy(a) == hash_numpy(b):
                 assert _order_readings(a) == _order_readings(b), (
                     f"{a_name} and {b_name} share a key but a callee reads them differently"
                 )
@@ -245,7 +246,7 @@ def test_forms_no_callee_can_tell_apart_still_share_a_key(pair):
     function returning a view makes its caller run twice after every edit."""
     a, b = pair[-1](_forms())
     assert _order_readings(a) == _order_readings(b)
-    assert Cash._try_hash_numpy(a) == Cash._try_hash_numpy(b)
+    assert hash_numpy(a) == hash_numpy(b)
 
 
 def test_a_returned_view_does_not_rerun_its_caller(tmp_path):

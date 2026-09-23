@@ -10,8 +10,8 @@ other layout's result::
     F-ordered, fresh  -> [0, 1, 2, ..., 11]      WRONG, served from the C entry
     oracle for F      -> [0, 4, 8, 1, 5, 9, ...]
 
-`_try_hash_numpy` folds in shape and dtype but not layout, and its own docstring
-notes the fallback is `tobytes()`, "a C-order copy" — so an F-contiguous array
+The numpy hasher folded in shape and dtype but not layout, and its own docstring
+noted the fallback is `tobytes()`, "a C-order copy" — so an F-contiguous array
 is hashed as though it were C-ordered. That normalisation is right for value
 equality and wrong for a key, because `order='A'`, `reshape`, `.flags` and any
 compiled callee that expects a layout all read it.

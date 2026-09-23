@@ -16,6 +16,7 @@ from unittest.mock import patch
 import pytest
 
 from cash.core import Cash
+from cash.object_hashing import builtin_hash
 
 # ============================================================================
 # A1: Decorator Call Logging
@@ -726,23 +727,23 @@ class TestDataFrameLibraryOnboarding:
         assert calls[1]["cache_hit"] is False
 
     def test_builtin_type_hash_module_dispatch(self):
-        """_try_builtin_type_hash should dispatch based on module, not just type name."""
+        """builtin_hash should dispatch based on module, not just type name."""
         import pandas as pd
 
         # Ensure pandas DataFrame is detected via module
         df = pd.DataFrame({"a": [1]})
-        h = Cash._try_builtin_type_hash(df)
+        h = builtin_hash(df)
         assert h is not None
 
     def test_builtin_type_hash_returns_none_for_plain_dict(self):
         """Plain dicts should fall through to pickle path."""
-        h = Cash._try_builtin_type_hash({"key": "value"})
+        h = builtin_hash({"key": "value"})
         assert h is None  # Dicts are handled by pickle
 
     def test_builtin_type_hash_returns_none_for_generator(self):
         """Generators should return None (cannot hash)."""
         gen = (x for x in range(10))
-        h = Cash._try_builtin_type_hash(gen)
+        h = builtin_hash(gen)
         assert h is None
 
 

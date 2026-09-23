@@ -179,18 +179,18 @@ A statement's `inputs` come from its AST, which only sees the names it mentions.
 
 Most notebook variables never need content hashing: a variable produced by a tracked statement already carries a lineage hash, and that is what the key uses. Content hashing is the fallback for a value Cash sees but did not produce — and it is the *primary* path for the decorator, which hashes call arguments.
 
-<!-- claim: cash/core.py:Cash._try_builtin_type_hash @964ede10 -->
-The decorator path's built-in type hashers (`Cash._try_builtin_type_hash`) cover the common data-science types:
+<!-- claim: cash/object_hashing.py:builtin_hash @bd4210c7, cash/object_hashing.py:compute_hash_full @b86706dd -->
+The built-in type hashers (`cash.object_hashing.builtin_hash`) cover the common data-science types. The decorator keys call arguments with them, and the notebook keys a loop iteration's values and a cached call's arguments with them (`compute_hash_full`), so both paths tell two values apart the same way:
 
 | Type | Module | Hashing strategy |
 |------|--------|------------------|
 | `DataFrame`, `Series` | pandas | schema labels **and dtypes** (column, `Series.name`, index names, column and index dtypes) + `pd.util.hash_pandas_object()`. The dtypes are in the key because the same values under two of them are two different objects to the body: a tz-naive and a tz-aware series used to collide, and so did `int64`/`Int64` |
 | `ndarray` | numpy | shape + dtype + **memory order** + **all** bytes (object arrays: stable repr) |
-| `DataFrame`, `Series` | polars | `hash_rows()` / `hash()` |
-| `LazyFrame` | polars | `serialize()` — the plan **and** the data it closes over. Not `explain()`: two frames over different in-memory data print the same plan, so they collided into a wrong hit. A plan reading from a file still serializes the *path*, not the contents — see [known limitations](../known-limitations.md). |
+| `DataFrame`, `Series` | polars | schema (names and dtypes) + `hash_rows()` / `hash()` |
+| `LazyFrame` | polars | `serialize()` — the plan **and** the data it closes over. Not `explain()`: two frames over different in-memory data print the same plan, so they collided into a wrong hit. A plan reading from a file still serializes the *path*, not the contents — see [known limitations](../known-limitations.md). A plan `serialize()` refuses gets no built-in hash. |
 | `Table`, `RecordBatch` | PyArrow | schema + row count + every column buffer |
-| `DataFrame`, `Series` | modin | convert to pandas, then hash |
-| any collection | dask | `__dask_keys__()` task-graph key hash |
+| `DataFrame`, `Series` | modin | convert to pandas, then hash as pandas (schema included) |
+| any collection | dask | `__dask_keys__()` task-graph key hash + the schema of its `_meta` |
 
 Numpy arrays are hashed in **full**, not sampled: two large arrays differing only outside a sampled window would otherwise collide and return a wrong result. The **memory order** — which axis is outermost in memory: C, F, or another permutation — is in the key because it is part of what an array is to its caller: the byte-hashing fallback normalises to C-order, so without it a C-ordered and an F-ordered array of equal values hashed identically and a layout-sensitive callee — `np.ravel(x, order='A')`, `reshape`, or compiled code expecting a layout — was served the other one's result. So a C- and an F-ordered array of equal values do **not** share an entry. Stride *sizes* are deliberately left out: a strided view (`arr[:, 0]`, `arr[::2]`) and its contiguous copy hold the same values in the same order, and keying them apart made a function that returns a view re-run its caller once after every restore, because a cached array comes back as a contiguous copy. (A function whose result depends on `.flags` contiguity itself therefore shares an entry between a view and its copy.) The one flag that is in the key is F-contiguity for an F-ordered array: `order='A'` reads Fortran order only for an F-*contiguous* array, so an F-like strided view (`a.T[::2]`) and its F-contiguous copy read differently and key apart. One shape still re-keys once: a view that is F-like but not contiguous is restored C-ordered, and it genuinely reads differently from its C-ordered copy. The schema prefix on pandas is there because `hash_pandas_object` covers values and index values but not column names, so `df.rename(columns=...)` used to collide with the original.
 
@@ -224,7 +224,7 @@ See [custom hashers](../tutorials/feature-guides/custom-hashers.md) for the full
 
 The two paths answer "what is this object's fingerprint?" differently, and the ordering in each is deliberate.
 
-<!-- claim: cash/core.py:Cash._hash_arg_payload @90df99e0 -->
+<!-- claim: cash/core.py:Cash._hash_arg_payload @6349310c -->
 **Decorator — hashing a call argument** (`Cash._hash_arg_payload`):
 
 1. **Hashers registered with `override=True`** — see [overriding a built-in](../tutorials/feature-guides/custom-hashers.md#overriding-a-built-in-content-hasher). Nothing below runs for such a type.

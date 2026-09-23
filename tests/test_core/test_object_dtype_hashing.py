@@ -9,39 +9,40 @@ could alias distinct content onto one key. These assert content-based hashing.
 import numpy as np
 
 from cash import Cash
+from cash.object_hashing import hash_numpy
 
 
 class TestObjectDtypeArrayHashing:
     def test_identical_content_fresh_objects_share_key(self):
         a1 = np.array([{"k": 1}, {"k": 22}], dtype=object)
         a2 = np.array([{"k": 1}, {"k": 22}], dtype=object)  # fresh objects
-        assert Cash._try_hash_numpy(a1) == Cash._try_hash_numpy(a2)
+        assert hash_numpy(a1) == hash_numpy(a2)
 
     def test_different_content_does_not_collide(self):
         a1 = np.array([{"k": 1}, {"k": 22}], dtype=object)
         a3 = np.array([{"k": 1}, {"k": 99}], dtype=object)
-        assert Cash._try_hash_numpy(a1) != Cash._try_hash_numpy(a3)
+        assert hash_numpy(a1) != hash_numpy(a3)
 
     def test_string_object_array_content_hashed(self):
         s1 = np.array(["a", "bb", "ccc"], dtype=object)
         s2 = np.array(["a", "bb", "ccc"], dtype=object)
         s3 = np.array(["a", "bb", "cCc"], dtype=object)
-        assert Cash._try_hash_numpy(s1) == Cash._try_hash_numpy(s2)
-        assert Cash._try_hash_numpy(s1) != Cash._try_hash_numpy(s3)
+        assert hash_numpy(s1) == hash_numpy(s2)
+        assert hash_numpy(s1) != hash_numpy(s3)
 
     def test_object_array_with_nested_set_is_order_independent(self):
         # A set element pickles in PYTHONHASHSEED-dependent order; the stable
         # canonicalisation must make the two arrays share a key.
         a1 = np.array([{1, 2, 3}], dtype=object)
         a2 = np.array([{3, 2, 1}], dtype=object)
-        assert Cash._try_hash_numpy(a1) == Cash._try_hash_numpy(a2)
+        assert hash_numpy(a1) == hash_numpy(a2)
 
     def test_numeric_arrays_unaffected(self):
         n1 = np.array([1.0, 2.0, 3.0])
         n2 = np.array([1.0, 2.0, 3.0])
         n3 = np.array([1.0, 2.0, 4.0])
-        assert Cash._try_hash_numpy(n1) == Cash._try_hash_numpy(n2)
-        assert Cash._try_hash_numpy(n1) != Cash._try_hash_numpy(n3)
+        assert hash_numpy(n1) == hash_numpy(n2)
+        assert hash_numpy(n1) != hash_numpy(n3)
 
     def test_end_to_end_cache_hit_on_identical_object_array(self):
         c = Cash()

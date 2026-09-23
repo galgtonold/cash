@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import pandas as pd
 
+import cash.core as core
 from cash import Cash, InMemoryBackend
 
 
@@ -29,22 +30,22 @@ def _df(vals, lineage=None):
     return d
 
 
-def _count_hashes(c: Cash):
+def _count_hashes(monkeypatch):
     """Wrap the (expensive) builtin content hasher to count invocations."""
     calls = {"n": 0}
-    orig = c._try_builtin_type_hash
+    orig = core.builtin_hash
 
     def spy(v):
         calls["n"] += 1
         return orig(v)
 
-    c._try_builtin_type_hash = spy  # shadows the staticmethod for self. access
+    monkeypatch.setattr(core, "builtin_hash", spy)
     return calls
 
 
-def test_same_lineage_reuses_hash_without_recomputing():
+def test_same_lineage_reuses_hash_without_recomputing(monkeypatch):
     c = _cash()
-    calls = _count_hashes(c)
+    calls = _count_hashes(monkeypatch)
     df = _df(range(100), lineage="L1")
 
     k1 = c._serialize_args("f", (df,), {})
@@ -54,9 +55,9 @@ def test_same_lineage_reuses_hash_without_recomputing():
     assert calls["n"] == 1, "second call must hit the memo, not re-hash"
 
 
-def test_lineage_bump_recomputes_and_changes_key():
+def test_lineage_bump_recomputes_and_changes_key(monkeypatch):
     c = _cash()
-    calls = _count_hashes(c)
+    calls = _count_hashes(monkeypatch)
     df = _df(range(100), lineage="L1")
     k1 = c._serialize_args("f", (df,), {})
 
@@ -85,7 +86,7 @@ def test_no_lineage_still_content_hashes_every_call(monkeypatch):
     # (test_mutated_cached_result.py); switched off here.
     monkeypatch.setattr("cash.core._COW_PANDAS", False)
     c = _cash()
-    calls = _count_hashes(c)
+    calls = _count_hashes(monkeypatch)
     df = _df(range(100))  # no lineage attribute
     c._serialize_args("f", (df,), {})
     c._serialize_args("f", (df,), {})

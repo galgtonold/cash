@@ -22,7 +22,7 @@ import gc
 
 import pytest
 
-from cash import Cash
+from cash import Cash, object_hashing
 from cash.core import _is_cow_pandas
 
 pd = pytest.importorskip("pandas")
@@ -124,13 +124,13 @@ def test_every_in_place_mutation_is_seen_by_the_copy_on_write_check(c, mutation)
 def test_an_unchanged_frame_is_not_re_hashed(c, monkeypatch):
     """The point of the memo: the same frame through a pipeline hashes once."""
     calls = []
-    real = Cash._try_hash_pandas
+    real = object_hashing.hash_pandas
 
-    def counting(value, type_name):
-        calls.append(type_name)
-        return real(value, type_name)
+    def counting(value):
+        calls.append(type(value).__name__)
+        return real(value)
 
-    monkeypatch.setattr(Cash, "_try_hash_pandas", staticmethod(counting))
+    monkeypatch.setattr(object_hashing, "hash_pandas", counting)
 
     @c.cache
     def mean_a(df):
@@ -150,13 +150,13 @@ def test_an_unchanged_series_is_not_re_hashed(c, monkeypatch):
     """The memo's own shallow copy references the series' array; that is not
     an outside writer, so it must not send every call back to a full hash."""
     calls = []
-    real = Cash._try_hash_pandas
+    real = object_hashing.hash_pandas
 
-    def counting(value, type_name):
-        calls.append(type_name)
-        return real(value, type_name)
+    def counting(value):
+        calls.append(type(value).__name__)
+        return real(value)
 
-    monkeypatch.setattr(Cash, "_try_hash_pandas", staticmethod(counting))
+    monkeypatch.setattr(object_hashing, "hash_pandas", counting)
 
     @c.cache
     def total(s):
@@ -189,13 +189,13 @@ def test_a_statement_maintained_tag_is_still_trusted(c, monkeypatch):
     """The notebook path: the statement layer re-tags on every change, so its
     tag stands in for the content and a big frame is not re-hashed per call."""
     calls = []
-    real = Cash._try_hash_pandas
+    real = object_hashing.hash_pandas
 
-    def counting(value, type_name):
-        calls.append(type_name)
-        return real(value, type_name)
+    def counting(value):
+        calls.append(type(value).__name__)
+        return real(value)
 
-    monkeypatch.setattr(Cash, "_try_hash_pandas", staticmethod(counting))
+    monkeypatch.setattr(object_hashing, "hash_pandas", counting)
     monkeypatch.setattr("cash.core._COW_PANDAS", False)  # isolate from the CoW memo
 
     @c.cache

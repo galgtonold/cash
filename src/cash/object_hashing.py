@@ -1,15 +1,24 @@
-"""Pure functions for hashing and sizing arbitrary Python objects.
+"""Pure functions for hashing and sizing arbitrary Python values.
 
-Hash helpers (``compute_hash``) are used as the ``compute_hash_fn``
-callable seam threaded into ``StatementProcessor`` and ``UpstreamChecker``
-and by ``Restorer`` to verify restored objects against their stored
-lineage.
+One module for every value hash cash takes, so the decorator and the notebook
+cannot drift apart on what makes two values the same:
 
-Size helpers (``estimate_object_size``) are used by
-``StatementProcessor`` to enforce per-statement cache-budget decisions
-(skip caching when an object would exceed the configured RAM/disk
-budgets).  Order-of-magnitude correct, not precise; bounded in runtime
-by a depth cap and sampling.
+* ``builtin_hash`` and the per-library hashers under it (pandas, numpy,
+  polars, PyArrow, modin, dask) read every byte of a value together with its
+  schema -- column names, dtypes, an array's memory layout. The decorator keys
+  arguments on them; ``compute_hash_full`` uses them for the notebook's
+  per-iteration loop keys and call keys.
+* ``stable_key_repr`` is the canonical form a key pickles a value in: sets and
+  dicts in a stable order, every container tagged with its type.
+* ``compute_hash`` SAMPLES large values. It is the ``compute_hash_fn`` seam
+  threaded into ``StatementProcessor`` and ``UpstreamChecker``, and what
+  ``Restorer`` checks a restored object against: a cheap freshness signal,
+  never a key discriminator.
+
+Size helpers (``estimate_object_size``) are used by ``StatementProcessor`` to
+enforce per-statement cache-budget decisions (skip caching when an object
+would exceed the configured RAM/disk budgets). Order-of-magnitude correct, not
+precise; bounded in runtime by a depth cap and sampling.
 
 **Anti-god-class rule (load-bearing):** this module is *pure functions*.
 No state, no class, no IPython, no ``Cash`` dependency. If a caller
@@ -26,11 +35,473 @@ import pickle
 import sys
 from typing import Any
 
-from cash._sizing import pandas_nbytes
+from . import _plain_data
+from ._sizing import pandas_nbytes
+from .value_types import CODELESS_PRIMS
 
 logger = logging.getLogger(__name__)
 
 _HASH_ERRORS = (TypeError, ValueError, AttributeError, pickle.PicklingError)
+
+
+# ---------------------------------------------------------------------------
+# The canonical form a key pickles a value in
+# ---------------------------------------------------------------------------
+
+
+class CyclicValueError(TypeError):
+    """A value whose object graph loops back on itself and holds a set."""
+
+
+def object_state(value: Any) -> dict:
+    """Return an object's instance state as a name -> value dict, covering both
+    ``__dict__`` and ``__slots__`` (collected across the MRO so slots declared
+    on base classes are included). Builtins and leaf values yield ``{}``. Used
+    so set-canonicalisation reaches a set buried inside a ``__slots__`` object,
+    not just a ``__dict__``-backed one.
+    """
+    state: dict = {}
+    obj_dict = getattr(value, "__dict__", None)
+    if isinstance(obj_dict, dict):
+        state.update(obj_dict)
+    for klass in type(value).__mro__:
+        slots = getattr(klass, "__slots__", ())
+        if isinstance(slots, str):
+            slots = (slots,)
+        for name in slots:
+            if name in ("__dict__", "__weakref__") or name in state:
+                continue
+            try:
+                state[name] = getattr(value, name)
+            except AttributeError:
+                pass  # slot declared but never assigned
+    return state
+
+
+#: The tag a builtin container is keyed under: one string object per type, so a
+#: key's pickle stores it once however many containers it holds.
+_BUILTIN_CONTAINER_TAGS = {t: t.__qualname__ for t in (dict, list, tuple, set, frozenset)}
+
+
+def _typed(value: Any, canon: Any) -> tuple:
+    """*canon*, a container's canonical items, tagged with the container's type.
+
+    Every container carries its type, so containers holding equal items key
+    apart when their types differ: a list and a tuple, a set and a frozenset,
+    or ``P(1, 2)`` and ``Q(1, 2)`` from two namedtuple types, which otherwise
+    shared one entry and were served each other's results.
+
+    A subclass also brings the state it holds beside its items, which its
+    items drop: ``defaultdict(list)`` and ``defaultdict(set)`` shared one
+    entry, and a ``dict`` subclass holding ``self.source`` served the first
+    caller's answer for every source. Nothing is caught here: a part that
+    cannot be read is not left out of the key, it makes the call unkeyable
+    (run uncached, with a warning).
+    """
+    t = type(value)
+    tag = _BUILTIN_CONTAINER_TAGS.get(t)
+    if tag is not None:
+        return ("__cash_type__", tag, canon)
+    state: Any = ()
+    factory = getattr(value, "default_factory", None)
+    own = {k: v for k, v in (getattr(value, "__dict__", None) or {}).items() if not k.startswith("__")}
+    if factory is not None:
+        state += (("default_factory", getattr(factory, "__qualname__", repr(factory))),)
+    if own:
+        state += tuple(sorted((k, stable_key_repr(v, 45)) for k, v in own.items()))
+    tag = f"{t.__module__}.{t.__qualname__}"
+    return ("__cash_type__", tag, canon, state) if state else ("__cash_type__", tag, canon)
+
+
+def stable_key_repr(value: Any, _depth: int = 0, _stack: set | None = None) -> Any:
+    """The form a cache key hashes *value* in: equal values pickle to equal
+    bytes, in any process.
+
+    * Every dict, list, tuple, set and frozenset becomes a tuple tagged with its
+      type (`_typed`), so containers of different types never key alike.
+    * The items of a set, and of a plain dict, are sorted by their pickled
+      bytes: a set of strings iterates in an order PYTHONHASHSEED picks, and a
+      dict equals its reordering. A dict subclass keeps its order, which may be
+      what it means (``OrderedDict``).
+    * An object with a set somewhere inside becomes its type and its
+      canonicalised instance state (`object_state`), so that set is sorted
+      too. Any other object is left to pickle, which stores it as it asks to
+      be stored (its ``__reduce__``) and keeps the loops in its graph.
+
+    A container graph that loops back on itself raises `CyclicValueError` (a
+    TypeError, so the value is reported as unhashable and the call runs
+    uncached). Expanding it path by path to the depth limit never returned,
+    and a form that stood in for the loop could make two different graphs key
+    alike, which would be a wrong answer.
+    """
+    if _depth > 50:
+        return value
+    if type(value) in CODELESS_PRIMS:
+        return value
+    if _stack is None:
+        _stack = set()
+    if id(value) in _stack:
+        raise CyclicValueError(f"a {type(value).__qualname__} that contains itself has no stable form to key on")
+    _stack.add(id(value))
+    try:
+        return _stable_key_repr_of(value, _depth, _stack)
+    finally:
+        _stack.discard(id(value))
+
+
+def _stable_key_repr_of(value: Any, _depth: int, _stack: set) -> Any:
+    """`stable_key_repr` of one object, with the path walked so far."""
+
+    def sub(v: Any) -> Any:
+        return stable_key_repr(v, _depth + 1, _stack)
+
+    if isinstance(value, (set, frozenset)):
+        items = [sub(v) for v in value]
+        items.sort(key=_plain_data.key_dumps)
+        return _typed(value, tuple(items))
+    if isinstance(value, dict):
+        items = [(sub(k), sub(v)) for k, v in value.items()]
+        if type(value) is dict:
+            items.sort(key=lambda kv: _plain_data.key_dumps(kv[0]))
+        return _typed(value, tuple(items))
+    if isinstance(value, (list, tuple)):
+        return _typed(value, tuple(sub(v) for v in value))
+    if not contains_set(value):
+        return value
+    t = type(value)
+    return ("__cash_obj__", f"{t.__module__}.{t.__qualname__}", sub(object_state(value)))
+
+
+def contains_set(value: Any, _depth: int = 0, _seen: set[int] | None = None) -> bool:
+    """True if *value* contains a set/frozenset anywhere (recursively, including
+    inside objects). `stable_key_repr` opens an object up only when it holds
+    one; any other object is left to pickle.
+
+    Each container or object is looked at once per walk. Without that, a
+    cyclic graph was walked once per PATH to the depth limit: a module-level
+    ``logger = logging.getLogger(...)`` read in a cached function reaches the
+    logging manager, whose dict of every logger reaches the manager again, and
+    the first call never returned -- in every release up to 0.10.0. A node
+    seen before is either still being walked (its other branches answer for
+    it) or was walked and held no set, or the walk would have stopped there.
+    """
+    if _depth > 50:
+        return False
+    if _seen is None:
+        _seen = set()
+    # An exact builtin primitive cannot contain anything, so it cannot contain
+    # a set. Without this the fall-through below called ``object_state`` on
+    # EVERY element -- which walks ``type(value).__mro__`` looking for
+    # ``__slots__`` -- so hashing a 10k-element list of ints made 10k such
+    # walks per cache hit. Exact-type test, matching ``CODELESS_PRIMS``'s own
+    # contract: a str/int SUBCLASS can carry a ``__dict__`` holding a set and
+    # must still be walked.
+    if type(value) in CODELESS_PRIMS:
+        return False
+    if isinstance(value, (set, frozenset)):
+        return True
+    if id(value) in _seen:
+        return False
+    if isinstance(value, logging.Logger):
+        # Pickled by NAME (`Logger.__reduce__`), so nothing inside it reaches
+        # the key -- and walking it means walking every logger in the process,
+        # 270 us on each call of any function that reads a module `logger`.
+        return False
+    _seen.add(id(value))
+    if isinstance(value, dict):
+        return any(contains_set(k, _depth + 1, _seen) or contains_set(v, _depth + 1, _seen) for k, v in value.items())
+    if isinstance(value, (list, tuple)):
+        return any(contains_set(v, _depth + 1, _seen) for v in value)
+    obj_state = object_state(value)
+    if obj_state:
+        return any(contains_set(v, _depth + 1, _seen) for v in obj_state.values())
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Content hashers: one per library, shared by the decorator's argument keys and
+# the notebook's full-content hash (`compute_hash_full`)
+# ---------------------------------------------------------------------------
+
+
+def builtin_hash_family(type_: type) -> str | None:
+    """Name the built-in content hasher that claims *type_*, or ``None``.
+
+    Asked of a bare TYPE as well as of a value: ``register_hasher`` needs it
+    to tell a user that the hasher they are registering would never run.
+
+    Matched on module PREFIX, so a user's own subclass defined in their own
+    module is deliberately not claimed -- registering a hasher for it has
+    always worked and still does.
+    """
+    type_name = getattr(type_, "__name__", "")
+    module = getattr(type_, "__module__", "") or ""
+    if module.startswith("pandas") and type_name in ("DataFrame", "Series"):
+        return "pandas"
+    if type_name == "ndarray" and module.startswith("numpy"):
+        return "numpy"
+    if module.startswith("polars"):
+        return "polars"
+    if module.startswith("pyarrow"):
+        return "pyarrow"
+    if module.startswith("modin"):
+        return "modin"
+    if module.startswith("dask"):
+        return "dask"
+    return None
+
+
+def builtin_hash(value: Any) -> str | None:
+    """Every byte of *value*, with its schema, for the library types cash knows.
+
+    A hex digest for pandas, numpy, polars, PyArrow, modin and dask values, or
+    ``None`` when no built-in hasher claims *value*'s type or hashing it failed
+    -- a normal answer: the caller falls through to its own next step.
+
+    Every hasher folds in what the values alone do not say: column and index
+    names, dtypes, the memory layout of an array. The same values under two
+    dtypes are two different objects to the code reading them.
+    """
+    family = builtin_hash_family(type(value))
+    if family == "pandas":
+        return hash_pandas(value)
+    if family == "numpy":
+        return hash_numpy(value)
+    if family == "polars":
+        return hash_polars(value)
+    if family == "pyarrow":
+        return hash_pyarrow(value)
+    if family == "modin":
+        return hash_modin(value)
+    if family == "dask":
+        return hash_dask(value)
+    return None
+
+
+def hash_pandas(value: Any) -> str | None:
+    """Hash a pandas DataFrame or Series over values AND schema.
+
+    ``hash_pandas_object`` covers row values + index values but NOT the
+    schema labels: column names, ``Series.name``, and index name(s) are
+    invisible to it, so ``df.rename(columns=...)`` (or an empty frame of any
+    shape) collided with the original and returned its cached result. Fold
+    the labels in as a digest prefix.
+
+    The dtypes go in for the same reason, and it is the sharper one: the same
+    values under two dtypes are two different objects to the body. A tz-naive
+    and a tz-aware series collided, and the tz-aware call was served the naive
+    one's ``TypeError: Cannot convert tz-naive timestamps``; so did
+    ``int64``/``Int64`` (pd.NA semantics), ``int64``/``int32`` and a
+    categorical against an object column (found attacking the decorator
+    before round 26).
+    """
+    try:
+        import pandas as pd
+
+        index_dtypes = [str(dt) for dt in getattr(value.index, "dtypes", [value.index.dtype])]
+        if type(value).__name__ == "DataFrame":
+            schema = (
+                f"{list(value.columns)!r}:{list(value.index.names)!r}:"
+                f"{[str(dt) for dt in value.dtypes]!r}:{index_dtypes!r}:"
+            )
+        else:  # Series
+            schema = f"{value.name!r}:{list(value.index.names)!r}:{str(value.dtype)!r}:{index_dtypes!r}:"
+        h = hashlib.sha256(schema.encode("utf-8"))
+        h.update(pd.util.hash_pandas_object(value).values.tobytes())
+        return h.hexdigest()
+    except (ImportError, TypeError, ValueError, AttributeError):
+        logger.debug("Failed to hash pandas %s via hash_pandas_object", type(value).__name__)
+        return None
+
+
+def array_layout(value: Any) -> str:
+    """The order *value*'s axes are laid out in memory: ``C``, ``F`` or ``K…``.
+
+    The key used to fold in the raw strides (0fd2cb5), which separated C-
+    from F-ordered arrays -- the point -- but also a strided VIEW from its
+    contiguous copy. Those hold the same values in the same memory order,
+    so no order-reading callee (``ravel(order='A'/'K')``, ``reshape``) tells
+    them apart -- only ``.flags`` does, and a result computed FROM
+    contiguity now shares an entry between the two, knowingly. What did
+    tell them apart, on every run, was the cache itself. A function that
+    returned ``arr[:, 0]`` handed its caller a view on the computing run and
+    a contiguous copy on every restored one, so the caller's key changed
+    between the two and its expensive step ran twice after every upstream
+    edit (round 17, measured 1 then 1 then 0 executions).
+
+    So: the axes of length > 1, ordered by |stride| from outermost in, with
+    a broadcast (zero-stride) axis outermost. Identity is ``C``, reversed is
+    ``F``; anything else spells the permutation. Stride MAGNITUDE and sign
+    do not change what a memory-order read returns, so they stay out.
+
+    Except for one flag. ``order='A'`` (``ravel``, ``reshape``, ``tobytes``,
+    ``copy``) reads in Fortran order only when the array is F-CONTIGUOUS,
+    and C order otherwise -- so an F-like strided view (``a.T[::2]``) and
+    its F-contiguous copy read differently, and sharing ``F`` handed one the
+    other's result (round 18, 8/8). ``Fs`` is the F-like array that is not
+    F-contiguous. Nothing else needs the flag: with two or more axes longer
+    than 1, only an F-like layout can be F-contiguous, and ``order='A'``
+    reads everything else in C order, as ``C`` and ``K…`` already imply.
+
+    One case still re-keys once: an F-like but non-contiguous view is stored
+    by pickle as a C-ordered copy, and it genuinely ravels differently from
+    one, so the restored value must key apart. Safe direction.
+    """
+    axes = [(axis, stride) for axis, (n, stride) in enumerate(zip(value.shape, value.strides)) if n > 1]
+    if len(axes) <= 1:
+        return "C"
+    outer_first = sorted(axes, key=lambda a: (-abs(a[1]) if a[1] else float("-inf"), a[0]))
+    perm = tuple(axis for axis, _ in outer_first)
+    natural = tuple(axis for axis, _ in axes)
+    if perm == natural:
+        return "C"
+    if perm == natural[::-1]:
+        return "F" if value.flags.f_contiguous else "Fs"
+    return "K" + ",".join(map(str, perm))
+
+
+def hash_numpy(value: Any) -> str | None:
+    """Hash a numpy ndarray over its FULL contents.
+
+    Correctness requires hashing every byte, not a sample: two large arrays
+    that differ only outside a sampled window would otherwise collide and
+    return a wrong cached result (a silent data-corruption bug, especially for
+    the large ML/data arrays caching targets). Shape and dtype are folded in
+    so a reshape or retype of the same bytes does not collide. Uses a
+    zero-copy ``memoryview`` for contiguous arrays and falls back to
+    ``tobytes()`` (C-order copy) otherwise.
+
+    The LAYOUT is folded in too -- the order the axes sit in memory, see
+    `array_layout` -- because the C-order fallback above erases it. Without
+    it a C-ordered and an F-ordered array holding equal values hash
+    identically, and a layout-sensitive callee is served the other one's
+    result: measured, ``np.ravel(x, order='A')`` returned ``[0, 1, 2, …]``
+    for an F-ordered input whose true answer is ``[0, 4, 8, 1, …]``.
+    Normalising to C-order is right for value EQUALITY and wrong for a KEY.
+    """
+    try:
+        h = hashlib.sha256(f"{value.shape}:{value.dtype}:{array_layout(value)}:".encode())
+        if getattr(value.dtype, "hasobject", False):
+            # object-dtype arrays: the buffer holds raw PyObject *pointers*,
+            # not content, so tobytes() hashes memory addresses - identical
+            # content in fresh objects never collides (permanent misses,
+            # cross-process-unstable) and address reuse could alias distinct
+            # content onto one key. Hash the elements' stable representation
+            # instead (canonicalising nested sets/dicts so the key is order-
+            # and PYTHONHASHSEED-independent).
+            h.update(pickle.dumps(stable_key_repr(value.tolist()), protocol=4))
+            return h.hexdigest()
+        try:
+            h.update(memoryview(value).cast("B"))  # no copy if C-contiguous
+        except (TypeError, ValueError):
+            h.update(value.tobytes())  # non-contiguous / odd layout
+        return h.hexdigest()
+    except (TypeError, ValueError, AttributeError, MemoryError, pickle.PicklingError):
+        logger.debug("Failed to hash numpy ndarray")
+        return None
+
+
+def hash_polars(value: Any) -> str | None:
+    """Hash a polars DataFrame, Series, or LazyFrame, schema included.
+
+    ``hash_rows()`` and ``hash()`` see the values only: an ``Int32`` and an
+    ``Int64`` column holding the same numbers, or a renamed column, would
+    collide. The schema -- names and dtypes -- is folded in ahead of them.
+
+    A ``LazyFrame`` is identified by ``serialize()``, never by ``explain()``.
+    ``explain()`` renders the human-readable QUERY PLAN, and two frames over
+    different in-memory data print identically -- both
+    ``pl.DataFrame({"x": [1, 2, 3]}).lazy()`` and the same over
+    ``[10, 20, 30]`` are ``DF ["x"]; PROJECT */1 COLUMNS``, so the second
+    call was served the first's result. ``serialize()`` carries the plan
+    *and* the data the plan closes over, and is byte-identical across
+    processes, so persisted entries still hit after a restart. A plan
+    ``serialize()`` refuses gets no built-in hash at all.
+
+    KNOWN GAP: a plan that reads from an external source
+    (``scan_csv``/``scan_parquet``/...) serializes the PATH, not the file's
+    contents, so editing that file in place does not move the key. Closing
+    that would mean collecting the frame to build a cache key, which defeats
+    the point of a LazyFrame and can be arbitrarily expensive. Collect before
+    passing, or name the file with ``file_depends_on=``.
+    """
+    try:
+        import polars as pl
+
+        if isinstance(value, pl.DataFrame):
+            h = hashlib.sha256(f"{value.schema}:{value.height}:".encode("utf-8"))
+            h.update(repr(value.hash_rows().to_list()).encode("utf-8"))
+            return h.hexdigest()
+        if isinstance(value, pl.Series):
+            h = hashlib.sha256(f"{value.name!r}:{value.dtype}:{len(value)}:".encode("utf-8"))
+            h.update(repr(value.hash().to_list()).encode("utf-8"))
+            return h.hexdigest()
+        if isinstance(value, pl.LazyFrame):
+            try:
+                return hashlib.sha256(value.serialize()).hexdigest()
+            except Exception:  # noqa: BLE001 - polars raises its own types
+                logger.debug("polars LazyFrame serialize() failed; no built-in hash for it")
+                return None
+    except (ImportError, TypeError, ValueError, AttributeError):
+        logger.debug("Failed to hash polars %s", type(value).__name__)
+    return None
+
+
+def hash_pyarrow(value: Any) -> str | None:
+    """Hash a PyArrow Table or RecordBatch: schema, row count and every buffer.
+
+    The previous size-gated path hashed ONLY schema+row-count for tables
+    >=10 MB, so any two same-shape tables collided into a wrong cache hit.
+    Buffer hashing is zero-copy and total.
+    """
+    try:
+        import pyarrow as pa
+
+        if isinstance(value, (pa.Table, pa.RecordBatch)):
+            h = hashlib.sha256(f"{value.schema}:{value.num_rows}:".encode())
+            for col in value.columns:
+                chunks = col.chunks if hasattr(col, "chunks") else [col]
+                for chunk in chunks:
+                    for buf in chunk.buffers():
+                        if buf is not None:
+                            h.update(memoryview(buf))
+            return h.hexdigest()
+    except (ImportError, TypeError, ValueError, AttributeError, MemoryError):
+        logger.debug("Failed to hash PyArrow %s", type(value).__name__)
+    return None
+
+
+def hash_modin(value: Any) -> str | None:
+    """Hash a modin DataFrame or Series as the pandas one it converts to --
+    schema included (`hash_pandas`)."""
+    try:
+        return hash_pandas(value._to_pandas() if hasattr(value, "_to_pandas") else value)
+    except (TypeError, ValueError, AttributeError):
+        logger.debug("Failed to hash modin %s", type(value).__name__)
+        return None
+
+
+def hash_dask(value: Any) -> str | None:
+    """Hash a dask collection by its task-graph keys, plus its schema.
+
+    The keys carry a data-derived token. The schema is the collection's
+    ``_meta``, the empty pandas frame or numpy array that stands for its
+    columns and dtypes, hashed as that type is.
+    """
+    try:
+        h = hashlib.sha256(str(value.__dask_keys__()).encode("utf-8"))
+        meta = getattr(value, "_meta", None)
+        if meta is not None:
+            h.update(f":{builtin_hash(meta)}".encode("utf-8"))
+        return h.hexdigest()
+    except (TypeError, ValueError, AttributeError):
+        logger.debug("Failed to hash dask object via __dask_keys__")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Sampled and full hashes
+# ---------------------------------------------------------------------------
 
 
 def _content_bytes(values: Any) -> bytes:
@@ -218,34 +689,19 @@ def compute_hash_full(obj: Any) -> str:
     arrays that agreed in the sample onto one entry and produced a wrong
     result on the very first run. This variant hashes every byte.
 
-    Fallback ladder mirrors ``compute_hash`` (generic pickle, then the
-    sampled/identity ladder as a last resort).
+    A library value goes through ``builtin_hash``, the hasher the decorator
+    keys arguments on, so it carries the value's schema as well: an ``int64``
+    and an ``Int64`` column, a tz-naive and a tz-aware one, or a C- and an
+    F-ordered array holding equal values key apart here too. Anything else is
+    pickled whole; what cannot be pickled falls back to ``compute_hash``.
     """
-    type_name = type(obj).__name__
+    digest = builtin_hash(obj)
+    if digest is not None:
+        return digest
     try:
-        if type_name in ("DataFrame", "Series"):
-            import pandas as pd
-
-            if type_name == "DataFrame":
-                schema = f"{list(obj.columns)!r}:{list(obj.index.names)!r}:"
-            else:
-                schema = f"{obj.name!r}:{list(obj.index.names)!r}:"
-            h = hashlib.sha256(schema.encode("utf-8"))
-            h.update(pd.util.hash_pandas_object(obj).values.tobytes())
-            return h.hexdigest()
-        if type_name == "ndarray":
-            if getattr(obj.dtype, "hasobject", False):
-                # Object arrays' buffer bytes are raw pointers, not content.
-                return hashlib.sha256(pickle.dumps(obj)).hexdigest()
-            h = hashlib.sha256(f"{obj.shape}:{obj.dtype}:".encode("utf-8"))
-            try:
-                h.update(memoryview(obj).cast("B"))  # no copy if contiguous
-            except (TypeError, ValueError):
-                h.update(obj.tobytes())
-            return h.hexdigest()
         return hashlib.sha256(pickle.dumps(obj)).hexdigest()
     except _HASH_ERRORS as exc:
-        logger.debug("Full hash failed for %s: %s", type_name, exc)
+        logger.debug("Full hash failed for %s: %s", type(obj).__name__, exc)
     return compute_hash(obj)
 
 
@@ -381,9 +837,9 @@ def mutation_fingerprint(obj: Any) -> str | None:
     ``compute_hash`` samples a large frame or array, which is right for a
     cache key and wrong for "did this call change its argument": a function
     that adds a column or rescales values in place can leave the sample alone.
-    This reads the whole value -- ``pd.util.hash_pandas_object`` for pandas, the
-    buffer for numpy, and for an AnnData-like object the key sets scanpy adds
-    to (``obs``/``var`` columns, ``uns``/``obsm``/``varm``/``obsp``/``layers``
+    This reads the whole value -- `builtin_hash` for the library types
+    (pandas, numpy, polars, ...), and for an AnnData-like object the key sets
+    scanpy adds to (``obs``/``var`` columns, ``uns``/``obsm``/``varm``/``obsp``/``layers``
     keys) plus a checksum of ``X``. Taken only around a statement that is
     actually executing, twice, so its O(n) cost is paid next to real work.
 
@@ -393,25 +849,11 @@ def mutation_fingerprint(obj: Any) -> str | None:
     h = hashlib.sha256()
     t = type(obj)
     h.update(f"{t.__module__}.{t.__qualname__}".encode("utf-8"))
+    digest = builtin_hash(obj)
+    if digest is not None:
+        h.update(digest.encode("utf-8"))
+        return h.hexdigest()
     try:
-        if t.__name__ in ("DataFrame", "Series"):
-            import pandas as pd
-
-            h.update(
-                repr(
-                    (
-                        obj.shape,
-                        [str(c) for c in getattr(obj, "columns", [obj.name])],
-                        [str(d) for d in getattr(obj, "dtypes", [obj.dtype])],
-                    )
-                ).encode("utf-8")
-            )
-            h.update(pd.util.hash_pandas_object(obj, index=True).to_numpy().tobytes())
-            return h.hexdigest()
-        if t.__name__ == "ndarray":
-            h.update(repr((obj.shape, str(obj.dtype))).encode("utf-8"))
-            h.update(obj.tobytes() if obj.dtype != object else pickle.dumps(obj))
-            return h.hexdigest()
         if all(hasattr(obj, a) for a in ("obs", "var", "uns", "X")):
             parts = [getattr(obj, "shape", None), [str(c) for c in obj.obs.columns], [str(c) for c in obj.var.columns]]
             for slot in ("uns", "obsm", "varm", "obsp", "varp", "layers"):

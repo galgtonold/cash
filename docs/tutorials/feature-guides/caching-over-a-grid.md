@@ -31,7 +31,7 @@ field(np.linspace(0.0, 1.0, 200))     # back to 200 — cache hit
 assert CALLS == []                    # nothing ran
 ```
 
-<!-- claim: cash/core.py:Cash._try_hash_numpy @60c55bee -->
+<!-- claim: cash/object_hashing.py:hash_numpy @8f6f3203 -->
 `np.linspace(0.0, 1.0, 200)` reproduces the same array bit for bit every time,
 so the third call is a plain cache hit. Sweeping a resolution downward until
 accuracy breaks, then stepping back to the last good one, is exactly this
@@ -45,7 +45,7 @@ field(np.linspace(0.0, 1.0, 240))     # refined from 200 — recompute
 assert CALLS == [240]                 # all 240 recomputed
 ```
 
-<!-- claim: cash/core.py:Cash._hash_arg_payload @90df99e0 -->
+<!-- claim: cash/core.py:Cash._hash_arg_payload @6349310c -->
 The axis is a *single argument*. Ask for 240 points instead of 200 and every
 value in the array is different, so there is no earlier result that corresponds
 to any part of it. Cash isn't declining to reuse the old work; there is no old
