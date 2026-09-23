@@ -99,19 +99,10 @@ class BadgePresenter:
             self.print_text(metrics, cell_total_time=cell_total_time)
 
     def _throttle_allows(self) -> bool:
-        """Check if enough time has passed to render a progress badge update.
-
-        Badge throttling policy:
-        Enforce a minimum interval between badge renders to prevent flicker
-        when many fast statements execute in quick succession.  The first
-        render after cell start is always allowed so the user immediately
-        sees what is running.
-
-        Returns True if a badge update should be rendered now.
-        """
+        """Whether a progress update may render now: at most one per
+        :attr:`MIN_RENDER_INTERVAL`, so fast statements do not flicker. The
+        first one after :meth:`start_cell` always may."""
         now = time.time()
-
-        # Throttle: skip if we rendered very recently
         if now - self._last_render_time < self.MIN_RENDER_INTERVAL:
             return False
 
@@ -126,12 +117,7 @@ class BadgePresenter:
         total: int,
         code: str | None,
     ) -> None:
-        """Render a RUNNING badge update if throttle allows.
-
-        Consolidates the throttle check + render into a single call so the
-        execution loop reads as: ``execute → maybe_progress(...)`` rather
-        than the repeated ``if mode == 'html' and _throttle_allows()`` pattern.
-        """
+        """Render a RUNNING badge update, if the throttle allows one."""
         if self.mode == "html" and self._throttle_allows():
             self.render(
                 metrics,
@@ -145,25 +131,19 @@ class BadgePresenter:
     def arm_progress(
         self, metrics: list[ProcessResult], display_id: str, step: int, total: int, code: str | None
     ) -> None:
-        """Publish a RUNNING badge only if this statement is still running.
+        """Publish a RUNNING badge naming this statement, if it is still
+        running after :attr:`MIN_RENDER_INTERVAL`.
 
-        Rendering BEFORE the statement published once per statement no matter
-        how fast it was -- 68 progress badges in a ten-cell run. Throttling the
-        leading edge instead would be worse than the traffic: it drops the
-        render that says "now running the slow one", so a long statement shows
-        the PREVIOUS one for its whole duration.
-
-        Deferring inverts that. A statement faster than the interval publishes
-        nothing; a slower one publishes once, naming itself.
+        Deferred rather than throttled: a statement faster than the interval
+        publishes nothing, and a slow one is always named while it runs
+        (throttling the leading edge would leave the previous statement on
+        screen for the whole of a slow one).
         """
         self.cancel_progress()
         if self.mode != "html":
             return
 
-        # Resolve the display publisher HERE, on the main thread, while no
-        # statement -- and therefore no output capture -- is running. By the
-        # time `fire()` runs, `shell.display_pub` has been swapped out for a
-        # capturing stand-in and asking for it then loses the badge. See
+        # Resolved here, before the statement's output capture starts; see
         # `_uncaptured_display_pub`.
         publisher = self._uncaptured_display_pub()
 
@@ -171,22 +151,11 @@ class BadgePresenter:
             generation = self._progress_generation
 
         def fire() -> None:
-            # Build OUTSIDE the lock. This is the expensive half of a render:
-            # `_build_html` calls `_get_bug_report_context`, which can
-            # hit disk, poll for an in-flight notebook save, or (on a cache
-            # miss) make a bounded network call to the Jupyter server.
-            # Holding `_progress_lock` across that is what used to make
-            # `cancel_progress` block the main thread for as long as
-            # the render took (measured: ~400ms for a 400ms render). Only the
-            # generation re-check + the actual publish need the lock.
-            #
-            # `metrics` is also the live `all_metrics` list the main thread
-            # keeps mutating via `.append()` (cell_executor.py's
-            # `_handle_regular_stmt_metrics` / `_collect_ctrl_outputs`), and
-            # reading it here holds no lock either -- a deliberately accepted
-            # race, since the window is narrow, a stress run of hundreds of
-            # concurrent appends raised nothing, and `_build_html`'s own
-            # blanket `except Exception` swallows whatever would.
+            # Build OUTSIDE the lock: the build can hit disk or the notebook
+            # server, and `cancel_progress` on the main thread would block for
+            # as long. `metrics` is the executor's live list, read unlocked; a
+            # racing append at worst costs this one render, which swallows
+            # its own errors.
             html = self._build_html(
                 metrics,
                 status="RUNNING",
@@ -197,25 +166,14 @@ class BadgePresenter:
             if not html:
                 return
 
-            # Re-check under the SAME lock `cancel_progress` takes.
-            # `Timer.cancel()` alone cannot stop a timer whose `run()` has
-            # already passed its internal `is_set()` check -- at that point
-            # the callback WILL execute no matter what the main thread does.
-            # The generation check makes that execution a no-op if a cancel
-            # happened anytime before we got the lock; if a cancel is
-            # concurrently in flight (already past ITS own is_set check on
-            # the timer, now waiting on this lock), it blocks until we
-            # release it, so the cancel's caller (about to publish its own,
-            # e.g. DONE, badge) never runs ahead of us -- this PUBLISH is
-            # always fully finished before that one starts. The lock no
-            # longer guards the build, so that blocking window is now
-            # bounded by a publish call (a ZMQ send), not by a render.
+            # `Timer.cancel()` cannot stop a timer already running its
+            # callback. Under the lock `cancel_progress` takes, a cancel made
+            # before this point turns the publish into a no-op, and a cancel
+            # made during it waits for it, so the caller's own DONE badge is
+            # always published last.
             with self._progress_lock:
                 if generation != self._progress_generation:
                     return
-                # `_publish_html` already swallows everything: a
-                # badge must never break a cell, and this runs on a timer
-                # thread where a raise would be lost anyway.
                 self._publish_html(html, display_id=display_id, _from_thread=True, publisher=publisher)
 
         try:
@@ -230,15 +188,9 @@ class BadgePresenter:
     def cancel_progress(self) -> None:
         """Stop a pending progress badge. Safe to call when none is armed.
 
-        Bumps the generation counter FIRST (under the lock a concurrent
-        `fire()` also holds), so either `fire()` hasn't reached its own
-        lock yet -- and will see the mismatch and no-op -- or it is already
-        inside the lock publishing, and this call blocks until that publish
-        finishes. `fire()` builds the HTML for that publish BEFORE taking the
-        lock, so this can only ever block for a publish (a ZMQ send), never
-        for a full render. Either way, nothing this function's caller does
-        next (typically publishing a DONE badge) can be overtaken by a stale
-        RUNNING render.
+        Once this returns, no RUNNING render can overtake what the caller
+        publishes next: it blocks, at most for one publish, while a timer is
+        publishing (see ``arm_progress``).
         """
         with self._progress_lock:
             self._progress_generation += 1
@@ -257,33 +209,14 @@ class BadgePresenter:
         return isinstance(pub, CapturingDisplayPublisher)
 
     def _uncaptured_display_pub(self) -> Any:
-        """The shell's REAL display publisher, not whatever a capture installed.
+        """The shell's real display publisher, not a capture's stand-in.
 
-        Every statement executes inside
-        ``IPython.utils.capture.capture_output(display=True)`` (see
-        ``StatementProcessor._make_capture_ctx``), which swaps
-        ``shell.display_pub`` for a ``CapturingDisplayPublisher``. That swap is
-        PROCESS-wide, not thread-local -- so a progress badge published from
-        the timer thread while a slow statement is running never reaches the
-        frontend at all. It is swallowed into that STATEMENT's captured
-        outputs, which cash then replays with
-        ``publish_display_data(data, metadata)`` -- dropping both ``transient``
-        and ``update``. The badge lands as a brand-new ``display_data`` with no
-        display id, so no later update can ever reach it: a frozen RUNNING
-        badge stored for good beside the cell's real DONE badge, and (because
-        captured outputs become ``metrics['rich_outputs']``, part of the
-        statement's cache payload) replayed again on every future cache hit.
-
-        Resolving the publisher on the MAIN thread at arm time -- before the
-        statement, and so before its capture, starts -- hands ``fire()`` the
-        real one to publish through. The last non-capturing publisher is
-        remembered so that an arm which somehow does land inside a capture
-        still has one. Returns ``None`` when there is no shell to ask, or on
-        the session's very first arm if it lands inside a capture before any
-        real publisher has ever been remembered -- in which case
-        :meth:`_publish_html` skips the publish rather than falling
-        back to IPython's module-level ``publish_display_data``, which would
-        land inside the same capture and swallow the badge right back in.
+        A statement runs under ``capture_output(display=True)``, which swaps
+        ``shell.display_pub`` process-wide. A progress badge published through
+        the stand-in from the timer thread would land in the statement's
+        captured outputs -- and so in its cache entry, replayed on every hit
+        as a frozen RUNNING badge. The last real publisher seen is remembered;
+        ``None`` until one has been.
         """
         try:
             pub = getattr(self.shell, "display_pub", None) if self.shell is not None else None
@@ -306,27 +239,12 @@ class BadgePresenter:
         timing_breakdown: dict[str, float] | None = None,
         _from_thread: bool = False,
     ) -> None:
-        """Render a clickable interactive badge with detailed execution history.
+        """Render the interactive badge: :meth:`_build_html`, then
+        :meth:`_publish_html`.
 
-        Delegates HTML generation to :func:`badge_renderer.render_interactive_badge`
-        and handles the IPython display / publish lifecycle.
-
-        The badge is a diagnostic overlay drawn AROUND the user's cell — it is
-        rendered before each statement runs (see CellExecutor) and again at the
-        end. So a failure to BUILD or DISPLAY it must never propagate: if it
-        did, it would abort the statement loop before the user's code ran and
-        swallow the cell's output entirely. Degrade to "no badge" instead.
-        (A broken renderer once shipped that raised at import on Python 3.11,
-        which is exactly how this manifested: every cell went blank.)
-
-        Split into :meth:`_build_html` (expensive) and
-        :meth:`_publish_html` (cheap) so a caller that must not hold a
-        lock across the build -- ``arm_progress``'s ``fire()`` -- can
-        call them separately, taking a lock around only the publish half.
-        Every other caller (all of them, other than ``fire()``) goes through
-        this method and sees identical behaviour to before the split: both
-        halves always run in sequence, and both still swallow every
-        exception.
+        Never raises. The badge is drawn around the user's cell, and a failure
+        to build or show it must not abort the statements or swallow their
+        output; the cell goes without a badge instead.
         """
         html = self._build_html(
             metrics_list,
@@ -356,19 +274,9 @@ class BadgePresenter:
         cell_total_time: float | None = None,
         timing_breakdown: dict[str, float] | None = None,
     ) -> str | None:
-        """Build badge HTML without publishing it. The expensive half of a render.
-
-        Delegates to :func:`badge_renderer.render_interactive_badge`, which
-        calls :meth:`_get_bug_report_context` -- that can hit disk, poll for
-        an in-flight notebook save, or (on a cache miss) make a bounded
-        network call to the Jupyter server. Callers that must not block a
-        lock for that long -- see ``arm_progress``'s ``fire()`` -- call
-        this OUTSIDE the lock and only take one around :meth:`_publish_html`.
-
-        Returns ``None`` (never raises) on failure or empty markup: see
-        :meth:`render` for why a badge must never break a
-        cell.
-        """
+        """The badge's HTML, or ``None`` on failure or empty markup. The slow
+        half of a render: the bug-report context can read the notebook from
+        disk or the Jupyter server."""
         try:
             html = _badge.render_interactive_badge(
                 metrics_list=metrics_list,
@@ -395,31 +303,19 @@ class BadgePresenter:
         _from_thread: bool = False,
         publisher: Any = None,
     ) -> None:
-        """Publish already-built badge HTML. The cheap half of a render.
+        """Publish built badge HTML: one display message, so it is safe under
+        ``_progress_lock``. Never raises.
 
-        Just an IPython display / publish_display_data call (a ZMQ send) --
-        nothing here touches disk or the notebook server, so it is safe to
-        call while holding ``_progress_lock``.
-
-        Never raises: see :meth:`render` for why a badge
-        must never break a cell.
-
-        ``publisher``, when given, is the shell's real display publisher as
-        resolved by :meth:`_uncaptured_display_pub` on the main thread. A
-        background-thread publish MUST go through it rather than through
-        IPython's module-level ``publish_display_data``: that helper resolves
-        ``shell.display_pub`` at call time, and while a statement is running
-        that is a ``CapturingDisplayPublisher`` which swallows the badge into
-        the statement's own output. When no publisher was resolved, this
-        publishes nothing at all rather than risk that fallback -- see the
-        comment at the call site.
+        From the timer thread (*_from_thread*) it goes through *publisher*,
+        the real publisher :meth:`_uncaptured_display_pub` resolved, as an
+        update of *display_id*; with no publisher it publishes nothing, since
+        the module-level ``publish_display_data`` would find the capture's
+        stand-in.
         """
         try:
             if _from_thread and display_id:
-                # From a background thread, publish an ``update_display_data``
-                # message directly. This avoids display()'s bookkeeping which
-                # can create duplicate output areas when called from non-main
-                # threads.
+                # Directly: display()'s bookkeeping can create duplicate output
+                # areas when called off the main thread.
                 if publisher is not None:
                     publisher.publish(
                         {"text/html": html},
@@ -427,17 +323,6 @@ class BadgePresenter:
                         transient={"display_id": display_id},
                         update=True,
                     )
-                # else: publish NOTHING. `_uncaptured_display_pub` returns
-                # None only on the session's very first arm, if it lands
-                # inside a capture before any real publisher has ever been
-                # remembered. Falling back to module-level
-                # ``publish_display_data`` here would resolve
-                # ``shell.display_pub`` at call time -- mid-statement, that is
-                # the ``CapturingDisplayPublisher`` this whole publisher
-                # resolution dance exists to avoid -- and re-swallow the badge
-                # into the statement's captured outputs and its cache entry,
-                # the exact defect this branch fixed. A missing progress
-                # badge beats a RUNNING one frozen into the cache forever.
             elif display_id:
                 display(HTML(html), display_id=display_id, update=update_existing)
             else:
@@ -465,17 +350,15 @@ class BadgePresenter:
     ) -> None:
         """Display an exception with a clean traceback pointing to the user's cell.
 
-        Delegates to :func:`error_display.show_error`.
+        Delegates to :func:`error_display.show_clean_error`.
         """
         show_clean_error(exc, raw_cell, node, self.shell)
 
     def _get_bug_report_context(self) -> dict:
-        """Collect runtime environment info for the pre-filled bug report URL.
+        """Runtime environment info for the pre-filled bug report URL.
 
-        Once per cell run. Every badge render asked, progress renders
-        included, and each read the whole notebook again: 20 reads, 0.9-1.9 s,
-        per cell. The notebook's source cannot change while the cell
-        runs, so the first answer stands until the next cell.
+        Collected once per cell (per execution count): it reads the whole
+        notebook, and every render asks for it.
         """
         count = getattr(self.shell, "execution_count", None)
         cached = self._bug_report_context_cache

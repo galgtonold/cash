@@ -162,78 +162,19 @@ def _is_dunder_loop_var(name: str) -> bool:
 
 
 def _loop_var_digest(name: str, value: object, loop_var_digests: Mapping[str, str]) -> str:
-    """The discriminating hash for one loop-var entry -- full, never sampled,
-    and a dict lookup whenever possible instead of a fresh content hash.
+    """The discriminating hash for one loop-var entry: full, never sampled.
 
-    **Why full, never sampled.** `compute_hash` (the sampling hash used
-    elsewhere in this module, e.g. `_hash_args`) reduces any list/tuple over
-    200 elements to its first 5 + last 5 (`object_hashing._hash_collection`).
-    Two long loop items that agree on both ends but differ in the middle hash
-    EQUAL under it while being genuinely different values -- so a loop var
-    hashed with `compute_hash` can collapse two iterations onto one key, and
-    the second is served the first's cached value. First-run wrongness, no
-    pre-existing cache required -- the exact failure `loop_vars` exists to
-    prevent, just reached through this leg instead of the missing-loop_vars
-    one. `for_handler.py` already learned this lesson for the loop
-    variable's own lineage (`_process_one_iteration`): "a sampled hash keyed
-    two iterations over arrays that agreed in the sample onto ONE entry -
-    wrong result on the first run." `_hash_args`'s sampling stays as-is on
-    purpose -- it is a per-call mutation smoke test on a possibly-large live
-    argument, a documented, coarser trade that is fine to get occasionally
-    wrong in the direction of "assume unmutated." A loop var IS the
-    per-iteration discriminator; it has no such slack.
+    A loop variable is the per-iteration discriminator, so it gets the full
+    hash: the sampling ``compute_hash`` reduces a long list to its ends, and
+    two items agreeing there would share one entry (a wrong value on the
+    first run). The fallback must stay ``compute_hash_full``.
 
-    **Why prefer `loop_var_digests`, not just "full hash it here."** A fresh
-    `compute_hash_full(value)` call here is correct but was measured too
-    expensive for what it buys: a 200k-row DataFrame costs 0.15ms sampled vs
-    19ms full; a 5M-float ndarray 0.03ms vs 14.7ms; a 1M-int list 0.01ms vs
-    12.4ms. Against `_COST_FLOOR_S` (3ms, the bar a call's own execution
-    time must clear to be worth caching at all), the KEY for a large loop var
-    can cost more than the call being decided about. It is also PER CALL, not
-    per iteration -- the digest is read fresh inside `CallUnit._build_key`,
-    which runs once per intercepted call, so an iteration with N cached calls
-    against the same large loop var would pay the full hash N times over.
-
-    `for_handler.py` already pays this exact cost, once per iteration, for a
-    different reason: `_process_one_iteration` computes `h =
-    val._cash_lineage_hash if hasattr(val, '_cash_lineage_hash') else
-    compute_hash_full(val)` for every loop-target binding, at the moment it
-    binds the value, before any body statement in that iteration runs. That
-    is the SAME digest this function would otherwise recompute -- reusing it
-    turns the common case back into a dict lookup, restoring the design's
-    actual selling point for this leg (see the module docstring's "bare-Name
-    arguments resolve through the lineage ladder" point), with IDENTICAL
-    discrimination, because it is the same full hash, shared instead of
-    repeated.
-
-    **Why `loop_var_digests`, a value pushed through `loop_vars_scope`, and
-    NOT `ctx.variable_lineage`.** A first version of this fix (now reverted)
-    looked the digest up in `variable_lineage` instead -- cheap the same way,
-    but WRONG: `variable_lineage` is a flat dict keyed only by name, written
-    by `for_handler.py` once per iteration and never popped. A nested loop
-    reusing the outer loop's target name overwrites the entry for the whole
-    remainder of the outer iteration, and nothing restores it when the inner
-    loop finishes -- `for t in A: for t in B: pass; call(...)` reads the
-    INNER loop's last `t` for a call that runs after the inner loop has
-    already ended, back in the OUTER iteration. First-run wrongness, found
-    live via a real-kernel repro. `loop_var_digests` instead travels through
-    `CallRouting.loop_vars_scope`'s push/pop stack -- the SAME stack
-    `loop_vars` (values) already uses, which correctly nests because it is
-    popped when an iteration's body finishes, restoring whatever level was
-    beneath it. Sourcing the digest from that stack, rather than from a
-    dict with no scope discipline, is what fixes the staleness without
-    reintroducing the cost this whole leg exists to avoid.
-
-    **The fallback.** A name absent from `loop_var_digests` (a loop var whose
-    binding didn't go through `for_handler.py`'s own per-iteration push, or
-    one bound by an ancestor loop several levels up whose own digest wasn't
-    carried this far down -- see `CallRouting._depth_keyed_loop_scope`)
-    computes `compute_hash_full(value)` directly. This MUST stay the full
-    hash. Do not "simplify" it to `compute_hash` -- that would silently
-    reintroduce the exact sampled-collision bug this function exists to
-    prevent, only for callers that happen to miss the fast path, which is a
-    worse failure mode than never having the fast path at all (wrong
-    occasionally and quietly, instead of slow always).
+    A full hash of a large value can cost more than the call it keys, and is
+    paid per call, so *loop_var_digests* -- the hashes ``for_handler`` took
+    when it bound each loop variable, carried down ``CallRouting``'s
+    ``loop_vars_scope`` stack -- are used when present. Not
+    ``variable_lineage``: it is keyed by bare name and never popped, so after
+    an inner loop reusing the outer loop's name it holds the inner value.
     """
     digest = loop_var_digests.get(name)
     return digest if digest is not None else compute_hash_full(value)
@@ -298,183 +239,40 @@ def call_cache_key(
 ) -> str | None:
     """The cache key for one intercepted call, or ``None`` to refuse caching it.
 
-    Delegates to the canonical builder (:func:`compute_cache_key`, ADR-007's
-    only key assembler) with the *call's* source and free names in place of
-    the statement's, under the ``"call"`` namespace. Three things fall out of
-    that for free, because the callee name is itself one of the free names:
+    Built by :func:`compute_cache_key` (ADR-007's only key assembler) from
+    the *call's* source and free names, under the ``"call"`` namespace. The
+    callee is one of the free names, so editing it re-keys the call and the
+    globals it reaches are folded in; bare-name arguments resolve through the
+    lineage ladder, a dict lookup per call. Then, each hashed and
+    ``|``-delimited so no two parts can run together:
 
-    * editing the callee re-keys the call (``func_source_hashes``),
-    * globals the callee reaches at call time are folded in
-      (``called_function_dependencies``), including ones bound below,
-    * bare-``ast.Name`` arguments resolve through the lineage ladder — a dict
-      lookup, so a loop-invariant ``big_df`` costs nothing per iteration,
-      which is the whole reason this is not the decorator.
+    * *arg_digests*: a content hash of each argument that is not a bare name,
+      one per ``site.computed_arg_positions``. Required: ``compute(next(it))``
+      reads an ``it`` whose lineage never moves, so without it every
+      iteration would share one entry. A count mismatch returns ``None``;
+      the caller then runs the call uncached.
+    * *loop_vars*: the enclosing loops' variables, by value, keyed
+      ``"{depth}:{name}"`` so a name reused by a nested loop keeps both.
+      Values, not the iteration context: they are order-independent and
+      stable across runs, so reordering an iterable or re-running only a
+      loop's tail keys correctly. Dunder entries (``__iterable_lineage__``,
+      which changes for every iteration on a reorder) are filtered out here,
+      past the depth prefix. *loop_var_digests* are their precomputed full
+      hashes (see :func:`_loop_var_digest`); leaving it out is correct, only
+      slower.
+    * *global_digests*: the pre-call state of each global the callee writes,
+      so a call entered with a different accumulator is not served another's
+      end state.
+    * ``site.stmt_identity``: the enclosing statement, so two statements
+      making the same call (``fetch_next(conn)`` in two cells' loops) keep
+      their own entries.
 
-    **Hybrid keying.** That lineage resolution is not enough on its own: every
-    argument expression that is NOT a bare ``ast.Name`` contributes a content
-    hash of its *evaluated value*, supplied by the caller as *arg_digests*
-    (the thunk holds the live arguments). That second half is not an
-    optimisation, it is a correctness requirement. ``compute(next(it))`` reads
-    ``it``, whose lineage is an id-based hash that never moves as the
-    iterator is consumed (``it`` fails ``pickle.dumps``, so ``compute_hash``
-    falls back to ``sha256(str(id(obj)))``) — so a pure-lineage key would
-    collapse every iteration onto one entry and serve iteration 1's value for
-    all of them, wrong on the first run with no cache pre-existing.
-
-    Both *arg_digests* and *loop_vars* are REQUIRED, with no default. A
-    default would let a caller silently omit the only discriminator a call
-    has, producing a collapsed key with no error and no failing test — exactly
-    the bug this function exists to prevent.
-
-    ``computed_arg_positions`` records exactly which argument positions are
-    NOT bare Names, so ``len(arg_digests)`` must equal
-    ``len(site.computed_arg_positions)``. A mismatch means the caller has lost
-    the only discriminator those arguments have, and minting a key anyway
-    would risk a collapsed, wrong one — so this refuses (returns ``None``)
-    rather than guess. A caching optimisation must never be why user code
-    fails: an uncached call is merely slow, a wrong cached value is silently
-    incorrect. The caller must treat ``None`` as "run uncached".
-
-    **loop_vars** are the non-dunder entries of the enclosing iteration
-    context (``for_handler.py:278``) — the loop variable's *value*, empty
-    outside a loop. They close the remaining channel: hidden state behind a
-    bare Name (``fetch_next(conn)``), where no argument expression exists to
-    hash and the lineage never moves. That "non-dunder" restriction is
-    enforced HERE, not merely documented and trusted to the caller: any
-    dunder-prefixed entry in *loop_vars* is filtered out before hashing.
-    ``for_handler``'s iteration context carries a dunder half too
-    (``__iterable_lineage__``, the whole iterable's lineage — the reorder
-    culprit) alongside the loop variable's value, and if a caller ever passed
-    that whole context through unfiltered it would be hashed in like any
-    other entry and a reorder would re-run every iteration again. Three properties, and all three
-    are needed:
-
-    * they discriminate iterations, which is what the omitted iteration
-      context used to do;
-    * they are order-independent — item ``5``'s value is ``5`` whatever
-      position it occupies — unlike ``__iterable_lineage__``, which changes
-      for every iteration on a reorder and is the whole of the reorder bug;
-    * they are stable across runs, so restoring the earlier iterations and
-      re-running only the tail keys correctly. A per-run execution counter
-      was specified in an earlier draft (``repeat_index``) and fails exactly
-      here: it restarts at 0 each run, so under partial tail re-execution the
-      new iteration keys ``rpt0`` and is served run 1's *first* value — wrong,
-      in the workflow this feature exists for. It has been removed.
-
-    Note that duplicate loop items collapse to one key, and that is CORRECT —
-    same callee, same inputs, no dependency cash cannot see. The statement
-    path already collapses them: ``compute_context_hash`` yields one hash for
-    three identical iteration contexts, so this matches shipped behaviour.
-
-    **Entry names carry an optional depth prefix.** In
-    production, ``loop_vars``/``loop_var_digests`` arrive from
-    ``CallRouting.current_loop_vars_for_call_key`` /
-    ``current_loop_var_digests_for_call_key``, whose entries are keyed
-    ``"{depth}:{name}"`` rather than bare ``name`` — a name reused by a
-    nested loop (``for q in A: for q in B: acc.append(pull(handle))``) would
-    otherwise occupy one slot for two different loops' values, silently
-    losing the outer scope's discrimination for any call sitting *inside*
-    the reuse. Sorting, hashing, and the ``arg_digests``/``loop_var_digests``
-    lookups below treat this as an opaque string either way — it only has to
-    agree between the two dicts, which the shared provider guarantees. The
-    ONE place the prefix is not opaque is the dunder filter immediately
-    below (``_is_dunder_loop_var``): a depth-prefixed dunder
-    (``"0:__iterable_lineage__"``) no longer starts with ``"__"`` itself, so
-    that filter has to look past the prefix rather than at the whole string,
-    or the reorder guard it enforces would silently stop firing for the
-    production shape.
-
-    **What is deliberately NOT here: the iteration context.** ``for_handler``
-    prepends ``# __iteration_context__: <hash>`` to each body statement, and
-    that context carries ``__iterable_lineage__`` — so reordering a loop's
-    iterable changes the source hash of *every* iteration and re-runs the
-    whole tail. A call keyed on its own source, its own free
-    variables, and the loop variable's *value* (not the iterable's lineage)
-    has no such comment to inherit, which is precisely why this fixes it.
-    **Do not "fix" a cache miss by adding the iteration context here.**
-
-    **stmt_identity.** The base key above is built from the call's
-    OWN source and free names alone, which is silent about which *statement*
-    the call sits in. Two different statements whose call text and free names
-    happen to agree collapse onto the same base key::
-
-        # cell 2
-        for step in ['a', 'b', 'c']:
-            vals[step] = fetch_next(conn)      # -> [('a',1), ('b',2), ('c',3)]
-
-        # cell 3
-        for step in ['a', 'b', 'c']:
-            other[step] = fetch_next(conn)     # served cell 2's values -- WRONG
-
-    Both loops call ``fetch_next(conn)`` with the same free names, the same
-    occurrence index (0, each statement starts its own count), and the same
-    per-iteration ``loop_vars`` (``step`` takes the same three values) -- so
-    without a statement-level discriminator the second loop's every iteration
-    hits the first's cache entries. First-run wrongness, no pre-existing cache
-    required. ``site.stmt_identity`` (``CallSite``'s docstring has the full
-    reasoning for why it is ``ast.unparse`` of the enclosing statement, not
-    its raw source text) closes this: it is folded in here as one more
-    discriminating component, hashed and delimited exactly like the
-    ``arg_digests``/``loop_vars`` components below rather than concatenated
-    into ``base``'s own source string, so it cannot collide with them under
-    string-join ambiguity. Empty (``""``, the default -- a ``CallSite`` built
-    before this field existed, or one where ``wrap_eligible_calls`` could not
-    unparse the enclosing statement) contributes nothing, which is exactly
-    today's pre-existing behaviour: never a NEW failure mode, only a fix that
-    can fail to apply.
-
-    **loop_var_digests** (optional) short-circuits the per-loop-var hashing
-    :func:`_loop_var_digest` would otherwise do from scratch: a precomputed,
-    already-correctly-scoped ``{name: full_hash}`` map, sourced from
-    ``CallRouting``'s ``loop_vars_scope`` push/pop stack rather than
-    the flat, never-popped ``variable_lineage`` dict (see
-    :func:`_loop_var_digest`'s docstring for why that distinction is
-    load-bearing, not cosmetic). Omitting it (``None``, the default) is
-    always CORRECT, only slower — every entry falls through to a fresh
-    ``compute_hash_full(value)`` call, same as before this parameter existed.
-
-    **global_digests** pins the PRE-call state of every global the
-    callee writes, ``{name: full_hash}``. Without it the entry's restored
-    post-state would be served over a prefix that never produced it: two calls
-    that agree on arguments but enter with a different accumulator get the same
-    key, and the second is handed the first's absolute end state. That is the
-    partial-accumulator hazard ``mutations.cacheable_accumulator_loop``'s
-    requirement (2) refuses outright, and that the split tail had to
-    satisfy by keying on the accumulator's post-head lineage.
-
-    ``None``/empty is the shape for every call whose callee writes no globals,
-    which is nearly all of them, and it contributes nothing — so an entry
-    written before this parameter existed keys identically. Unlike
-    ``arg_digests`` there is no count to cross-check against the site, because
-    the watch list comes from the CALLEE's source rather than the call's: the
-    one caller that populates it (:class:`CallUnit`) derives it from the same
-    :func:`callee_mutated_globals` result it uses to capture, so the two cannot
-    disagree about which names are covered.
-
-    **by_content** keys the call on what it receives rather than on where its
-    arguments came from. The names read only inside computed arguments
-    (``site.content_names``) leave the base: their contribution is the
-    argument's value, already in *arg_digests* -- which the caller must then
-    hash in full. And the statement's identity leaves the key: two statements
-    making the same call on the same values get the same result.
-    ``fit_score(make_features(cleaned[mid], W))`` was keyed on the lineage of
-    all of ``cleaned``, so fixing 35 of 200 machines re-fitted every one --
-    495 of 600 on identical features -- and renaming the variable the
-    sweep assigns to re-fitted all 180.
-
-    Only the caller can say it is safe, and :class:`CallUnit` says so only
-    when nothing the call reads can change without its key changing: every
-    argument, loop variable and global the callee reaches is plain data or
-    code. ``fetch_next(conn)`` reads a connection whose state moves under a
-    fixed lineage -- two statements calling it must keep their own entries.
-
-    **name_digests** (content keying only) are full hashes of arguments passed
-    as a bare name, ``{name: digest}``: those names leave the base too. A
-    setting passed by name (``fit_series(g, PARAMS, cutoff)``) was keyed on
-    its lineage, and ``cutoff = work['date'].max() - 28d`` is rebuilt from
-    the frame, so fixing one store re-fitted all 360. The caller
-    leaves a large value out, keeping its lineage: hashing a big frame on
-    every call would cost more than the dict lookup it replaces.
+    *by_content* keys the call on what it receives: the names read only in
+    computed arguments, and the bare names in *name_digests* (full hashes of
+    those arguments), leave the base, and the statement's identity leaves the
+    key, so fixing some of a frame's rows re-runs only the calls whose inputs
+    changed. Only the caller can say that is safe: :class:`CallUnit` does
+    when everything the call reads is plain data or code.
     """
     free_names = set(site.free_names)
     source, occurrence = site.source, site.occurrence_index
@@ -494,61 +292,31 @@ def call_cache_key(
         occurrence_index=occurrence,
         namespace="call",
     ).cache_key
-    # Refuse rather than mint a key we cannot justify. `computed_arg_positions`
-    # records exactly which arguments are NOT bare Names, so a caller that
-    # supplies the wrong number of digests has lost the only discriminator
-    # those arguments have -- and a collapsed key is a first-run wrong answer,
-    # while an uncached call is merely slow.
+    # A collapsed key is a wrong answer; an uncached call is merely slow.
     if len(arg_digests) != len(site.computed_arg_positions):
         return None
 
-    # Dunder keys are filtered HERE, not trusted to the caller. `loop_vars` is
-    # documented as the non-dunder entries of the iteration context, and the
-    # dunder half is `__iterable_lineage__` -- the whole iterable's lineage,
-    # which changes for every iteration on a reorder. If it ever reached this
-    # function unfiltered it would be hashed in like any other entry and
-    # a reorder would re-run every iteration. Enforce the contract rather than
-    # documenting it.
-    #
-    # `_is_dunder_loop_var`, not a bare `name.startswith("__")` -- a
-    # depth-prefixed key (`"0:__iterable_lineage__"`, the production
-    # shape) no longer starts with `"__"` itself, so a bare check here would
-    # silently stop enforcing this exact guard for the only caller that
-    # actually reaches it today.
     filtered_loop_vars = {name: value for name, value in loop_vars.items() if not _is_dunder_loop_var(name)}
 
     if not arg_digests and not filtered_loop_vars and not site.stmt_identity and not global_digests and not by_content:
         return base
-    # Length-prefixed and `|`-delimited deliberately: `":".join(["a", "b"])`
-    # and `":".join(["a:b"])` are the same string, so an undelimited join
-    # would let two different calls collide on one key.
+    # Length-prefixed and `|`-delimited, so two calls cannot collide on a join.
     parts = [f"{len(arg_digests)}"]
     parts.extend(arg_digests)
-    # See `_loop_var_digest`'s docstring: full hash (never sampled) for
-    # correctness, preferring a precomputed `loop_var_digests` entry (a dict
-    # lookup) over a fresh `compute_hash_full` call for cost -- and NOT
-    # `ctx.variable_lineage`, whose lack of scope discipline is what caused
-    # the nested-loop staleness bug this parameter exists to fix.
     resolved_digests: Mapping[str, str] = loop_var_digests or {}
     parts.extend(
         f"{name}={_loop_var_digest(name, value, resolved_digests)}"
         for name, value in sorted(filtered_loop_vars.items())
     )
-    # The enclosing statement's identity.
-    # Hashed rather
-    # than appended raw so an unbounded statement source cannot itself defeat
-    # the `|`-delimiting the other parts already rely on.
-    # The PRE-call state of the globals this callee writes. Prefixed
-    # `g:` so a global named like a loop variable cannot occupy the same slot
-    # as that loop var's component under the shared `|`-join.
+    # `g:`, `n:`: a global or a name cannot take a loop variable's slot.
     if global_digests:
         parts.extend(f"g:{name}={digest}" for name, digest in sorted(global_digests.items()))
     if by_content:
-        # Prefixed `n:` so a name cannot share a slot with a loop var or a global.
         parts.extend(f"n:{name}={digest}" for name, digest in sorted((name_digests or {}).items()))
         # Marked, so a key without the statement can never equal one with it.
         parts.append("by=content")
     elif site.stmt_identity:
+        # Hashed, so the statement's own text cannot break the delimiting.
         parts.append("stmt=" + hashlib.sha256(site.stmt_identity.encode("utf-8")).hexdigest())
     return "call:" + hashlib.sha256((base + "|" + "|".join(parts)).encode("utf-8")).hexdigest()
 

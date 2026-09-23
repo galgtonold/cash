@@ -233,70 +233,17 @@ class CallRouting:
         """``(values, digests)`` for the call-unit key build, each entry keyed
         by ``"{depth}:{name}"`` rather than bare ``name``.
 
-        **The bug this exists to fix.** Reading only the TOP of
-        ``_loop_vars`` (or merging the stack by bare name) is
-        correct for a call AFTER a name-reusing inner loop (the inner scope
-        is already popped by then), but wrong for a call INSIDE one: while
-        both scopes are active, the inner push's own value for a REUSED name
-        (``build_iteration_context`` pre-merges the parent forward, so the
-        inner level's dict already has the outer's OTHER names too, but its
-        OWN name entry overwrites the parent's) is the only one reachable --
-        the outer iteration has no slot in the key at all. Two different
-        outer iterations that share the same inner sequence (``for q in
-        ['p','r']: for q in [7,8]: acc.append(pull(handle))`` -- outer
-        'p'/'r' collapse whenever the inner cycles through the same 7/8 both
-        times) are then indistinguishable: cash serves ``[1, 2, 1, 2]``
-        where the cash-off oracle gives ``[1, 2, 3, 4]``. Both dicts need
-        every active depth's entry to survive at once.
+        Every active loop level must reach the key: inside ``for q in A: for
+        q in B: pull(h)`` the inner level shadows the outer ``q``, and two
+        outer iterations over the same inner sequence would share entries.
+        The stack depth is the call's lexical nesting, the same on every run
+        and for any iteration order.
 
-        **Why depth, not iteration order.** ``_loop_vars`` /
-        ``_loop_var_digests`` are stacks whose length at any
-        instant is exactly the LEXICAL nesting depth of whatever is
-        currently executing -- push on entering an iteration's body, pop on
-        leaving it (``loop_vars_scope``). That depth is a property of WHERE
-        in the source a call sits relative to its enclosing loops, not of
-        WHICH iteration is running or in what order the iterable was
-        walked. A reordered outer iterable still produces the exact same
-        stack depths for the exact same call site on every run, and a
-        rerun of one already-cached iteration pushes to the exact same
-        depth it did originally.
-
-        **Why this doesn't need for_handler.py to push anything new.** Each
-        digest level already holds only the names ``for_handler.py`` bound
-        at THAT push (see ``_loop_var_digests``'s constructor
-        comment) -- so a level's digest keyset is exactly its OWN loop-target
-        names, and (because both stacks are pushed together, from the same
-        ``bindings``, by the same ``loop_vars_scope`` call) the matching
-        values stack level normally holds an entry for every one of those
-        same names too, pre-merged or not.
-
-        **A missing digest must never delete the value.** An earlier version
-        of this method walked only the digest level and looked the matching
-        value up in the values level, dropping a name silently whenever it
-        had a value but no digest. That direction is dangerous where the
-        mirror-image guard (a digest with no value, harmless -- nothing ever
-        reads a digest-only entry) is not: a value entry with nothing to
-        discriminate it should still occupy its key and fall back to a fresh
-        hash, exactly like :func:`call_unit._loop_var_digest`'s documented
-        fallback for a plain, un-keyed ``loop_var_digests`` miss -- not
-        vanish from the key entirely and silently under-discriminate two
-        iterations onto one. So this walks the UNION of both levels' names
-        at each depth: a name present in only one level still gets an entry
-        in that level's dict, with nothing written to the other. Production
-        cannot reach the missing-digest case today (``for_handler.py``
-        always builds both from the same ``bindings`` dict at the same push),
-        but the key build must not depend on that holding forever -- a
-        caching optimisation must never be why user code fails, including by
-        silently caching a WRONG value because a name it should have
-        discriminated on quietly disappeared.
-
-        Dunder entries (``__iterable_lineage__``) can never appear here:
-        ``for_handler.py`` strips them before either stack is pushed, so
-        there is simply nothing dunder-shaped for either dict to carry. Note
-        that ``call_cache_key``'s own defensive dunder filter matches on the
-        name SEGMENT AFTER the ``"depth:"`` prefix specifically because a
-        depth-prefixed key like ``"0:__iterable_lineage__"`` no longer starts
-        with ``"__"`` itself -- see that function's docstring.
+        Each depth contributes the union of its values' and digests' names:
+        a value with no digest keeps its slot and is hashed fresh (see
+        :func:`call_unit._loop_var_digest`) rather than dropping out of the
+        key. ``for_handler`` strips dunder names before either stack is
+        pushed.
         """
         values: dict[str, Any] = {}
         digests: dict[str, str] = {}
