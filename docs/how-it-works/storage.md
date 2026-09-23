@@ -148,7 +148,7 @@ total to the cap. If the cache is over, it deletes entries until the cache is
 back under **90%** of the cap. The extra 10% of room means the next few writes
 fit without each one starting another round.
 
-<!-- claim: cash/backends/file_eviction.py:FileEvictor.ensure_size_scanned @d2b3cc61, cash/backends/file_backend.py:FileBackend.get @cc5c8a6e -->
+<!-- claim: cash/backends/file_eviction.py:FileEvictor.ensure_size_scanned @d2b3cc61, cash/backends/file_backend.py:FileBackend.get @152521ee -->
 **Reading never evicts.** A cache hit deletes nothing from disk to make room, however
 full the cache is. A process that only reads, such as a kernel restart that
 replays everything from cache, never even adds up the directory's size. That

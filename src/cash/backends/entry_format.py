@@ -109,10 +109,25 @@ def _checksum(payload: bytes) -> bytes:
 class CorruptEntry(ValueError):
     """The bytes at this path are not a readable cache entry.
 
-    Raised rather than returned so it lands in the same handler as a failed
-    ``pickle.load``: every caller already treats an unreadable entry as
-    absent, because a recompute is always available and is never wrong.
+    Every caller treats an unreadable entry as absent: a recompute is always
+    available and is never wrong. Metadata that fails to unpickle is reported
+    as this too, so a caller catches ``(OSError, CorruptEntry)`` and nothing
+    broader.
     """
+
+
+def _load_metadata(meta_bytes: bytes, where: str) -> dict[str, Any]:
+    """Unpickle an entry's metadata region, or raise :class:`CorruptEntry`."""
+    try:
+        metadata = pickle.loads(meta_bytes)
+    except Exception as exc:  # noqa: BLE001 - unpickling runs arbitrary code
+        # A module missing in this environment (a numpy scalar written by
+        # another one), a user object's __setstate__: any of it means the
+        # entry cannot be read here.
+        raise CorruptEntry(f"{where}: metadata does not unpickle ({type(exc).__name__}: {exc})") from exc
+    if not isinstance(metadata, dict):
+        raise CorruptEntry(f"{where}: metadata is a {type(metadata).__name__}, not a dict")
+    return metadata
 
 
 def pack_entry(metadata: dict[str, Any], payload: bytes) -> bytes:
@@ -162,7 +177,7 @@ def unpack_entry(blob: bytes, *, with_payload: bool) -> tuple[dict[str, Any], by
     end = HEADER_SIZE + meta_len
     if len(blob) < end:
         raise CorruptEntry(f"have {len(blob)} bytes, metadata needs {end}")
-    metadata = pickle.loads(blob[HEADER_SIZE:end])
+    metadata = _load_metadata(blob[HEADER_SIZE:end], "entry")
     expected = metadata.pop(CHECKSUM_FIELD, None)
     if not with_payload:
         return metadata, None
@@ -202,7 +217,7 @@ def read_entry(path: str, *, with_payload: bool) -> tuple[dict[str, Any], bytes 
         meta_bytes = fh.read(meta_len)
         if len(meta_bytes) < meta_len:
             raise CorruptEntry(f"{path}: metadata truncated")
-        metadata = pickle.loads(meta_bytes)
+        metadata = _load_metadata(meta_bytes, path)
         expected = metadata.pop(CHECKSUM_FIELD, None)
         if not with_payload:
             return metadata, None
@@ -246,8 +261,8 @@ def update_metadata_in_place(path: str, metadata: dict[str, Any]) -> bool:
         # 0.6us against the ~150us the write itself takes.
         if CHECKSUM_FIELD not in metadata:
             try:
-                previous = pickle.loads(fh.read(meta_len))
-            except Exception:  # noqa: BLE001 - unreadable metadata: leave it alone
+                previous = _load_metadata(fh.read(meta_len), path)
+            except CorruptEntry:
                 return False
             if CHECKSUM_FIELD not in previous:
                 return False

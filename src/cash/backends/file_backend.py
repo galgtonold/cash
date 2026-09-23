@@ -34,7 +34,7 @@ from .cache_dir import (
     warn_if_unwritable,
     write_all,
 )
-from .entry_format import ENTRY_SUFFIX, metadata_span, pack_entry, read_entry, update_metadata_in_place
+from .entry_format import ENTRY_SUFFIX, CorruptEntry, metadata_span, pack_entry, read_entry, update_metadata_in_place
 from .file_eviction import FileEvictor
 from .serialization import PickleSerializer, Serializer
 from .versions import VersionIndex, superseded_to_drop
@@ -101,14 +101,6 @@ def _untracked() -> Any:
     user's listing of a directory ``cache_dir`` may also be.
     """
     return untracked()
-
-
-#: What reading an entry's metadata can raise, all meaning "not readable here,
-#: treat as absent". ``Exception`` on purpose: these sites scan every entry, and
-#: unpickling can raise anything -- a missing module for a numpy scalar written
-#: by another environment, a user object's ``__setstate__``. A skipped entry
-#: costs a recompute; an escaped exception costs the session.
-UNREADABLE_ENTRY = Exception
 
 
 class FileBackend(CacheBackend):
@@ -385,7 +377,7 @@ class FileBackend(CacheBackend):
             return metadata
         except FileNotFoundError:
             return None
-        except UNREADABLE_ENTRY:
+        except (OSError, CorruptEntry):
             logger.debug("Unreadable metadata for key %s; treating as absent", key, exc_info=True)
             return None
 
@@ -412,7 +404,7 @@ class FileBackend(CacheBackend):
                 with self._lock:
                     self._metadata_cache.pop(key, None)
             return None, None
-        except UNREADABLE_ENTRY as exc:
+        except (OSError, CorruptEntry) as exc:
             logger.debug("Cache get failed for key %r: %s", key, exc)
             return None, None
 
@@ -750,7 +742,7 @@ class FileBackend(CacheBackend):
         else:
             try:
                 existing, _ = read_entry(path, with_payload=False)
-            except UNREADABLE_ENTRY:
+            except (OSError, CorruptEntry):
                 existing = None
         if existing is not None and not existing.get("metadata_only"):
             return
@@ -861,7 +853,7 @@ class FileBackend(CacheBackend):
             try:
                 metadata, _ = read_entry(path, with_payload=False)
                 entries.append(metadata)
-            except UNREADABLE_ENTRY:
+            except (OSError, CorruptEntry):
                 logger.debug("Skipping unreadable entry %s in list_entries", path, exc_info=True)
         return entries
 
@@ -890,6 +882,6 @@ class FileBackend(CacheBackend):
                 if is_expired(metadata):
                     os.remove(path)
                     count += 1
-            except UNREADABLE_ENTRY:
+            except (OSError, CorruptEntry):
                 logger.debug("Skipping unreadable entry %s during cleanup", path, exc_info=True)
         return count
