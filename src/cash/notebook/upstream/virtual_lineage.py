@@ -145,7 +145,7 @@ _FRESH_ENTRY_VERDICTS: dict = {}
 #: Per cell run, per FILE: the freshness answer for each (path, recorded
 #: snapshot) pair, and each path's resolution and mtime. The same run-long trust the entry verdicts
 #: above already take, one level down: upstream entries share their files -- in
-#: r23s4 every entry depended on the same 5,222 documents, in two spellings --
+#: one notebook every entry depended on the same 5,222 documents, in two spellings --
 #: and each entry checked all of them again, twice (freshness, then mtime):
 #: 7-11 s before every cell of a notebook that runs in 30 s uncached.
 _FILE_STATE_THIS_RUN: dict = {}
@@ -424,7 +424,7 @@ class VirtualLineage:
         snapshot has no file dependency for a file read inside a helper; the
         replay then restores the statement, and the snapshot stays blind. A
         re-delivered file was never looked at again and the old result was
-        served (round 22, r22s1). With the files the restore brought back
+        served. With the files the restore brought back
         (``executed_file_deps``) in the snapshot, a later change of one makes
         the next simulation redo the cell, as it always did without a restart.
 
@@ -596,7 +596,7 @@ class VirtualLineage:
         # A reloaded helper module changes what cells compute without changing
         # their text or their files, which is all that scan compares, so it
         # replayed the pre-edit simulation and a cell below the helper's caller
-        # printed the pre-edit value (r28s5). Re-simulate from the first cell
+        # printed the pre-edit value. Re-simulate from the first cell
         # that READS the module -- see TrackingState.reloaded_names for why not
         # from the import. Like a file change, this is not flagged as an
         # upstream CODE modification, which would withdraw trust from every
@@ -630,7 +630,7 @@ class VirtualLineage:
         # The cells kept from the cache include the import, so a reloaded
         # module's name still carries its PRE-edit lineage there. A loop that
         # read it recorded its outcome against that lineage and found it
-        # matching -- r28s5's regional table was adopted stale. The invalidator
+        # matching -- a regional table was adopted stale. The invalidator
         # has already given the name its new lineage; use that one. Module
         # names only: a from-imported name's lineage is cleared on purpose.
         for name in reloaded:
@@ -808,7 +808,7 @@ class VirtualLineage:
         frame read from it changed, the loop over it (``for k in grid:
         rows.append(score(raw, k))``) did not re-run, and everything derived
         from it -- the tuned parameter picked from ``rows`` -- was trusted and
-        served from the old data (round 22, r22s4, 3/3).
+        served from the old data.
 
         So compare each data input of a loop producing an accumulator, as the
         simulation has it at that point, with the lineage it had when the
@@ -1022,8 +1022,7 @@ class VirtualLineage:
             for mv, pat in patterns.items():
                 # Only a statement that WRITES it: `def draw_roc` iterating
                 # `results.items()` matched the text, so the init was scheduled
-                # for a loop that was not, and `results` was re-run empty
-                # (round 25, r25s1).
+                # for a loop that was not, and `results` was re-run empty.
                 if mv not in fully_rerun_mutated and mv in outputs and pat.search(stmt_code):
                     fully_rerun_mutated.add(mv)
         return fully_rerun_mutated
@@ -1235,7 +1234,7 @@ class VirtualLineage:
         expression followed by ``;`` WITH the ``;`` (IPython's display
         suppression), which ``ast.unparse`` drops -- so ``ax.bar(...);
         ax.set_xlabel(...)`` on one line got another key and lineage here, and
-        every chart drawn that way disagreed (round 21).
+        every chart drawn that way disagreed.
         """
         try:
             if is_control_structure(node):
@@ -1302,7 +1301,7 @@ class VirtualLineage:
             # (``_fills_carrier``). The runtime's recorded mutation verdict
             # usually gives it an output, but that record dies with the
             # kernel, so after a restart the call vanished from the trace and
-            # a figure was rebuilt without it (round 21, replay corpus).
+            # a figure was rebuilt without it.
             if statement_writes_files(stmt_code) or (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)):
                 sim.trace.append(TraceEntry(stmt_code, outputs, inputs, input_hashes, {}, files_stale))
 
@@ -1551,7 +1550,7 @@ class VirtualLineage:
         The practical consequence, worth knowing before reasoning about loop
         cache keys: for a decomposed loop the key computed here corresponds to
         no entry the runtime ever writes, so it simply misses. What keeps an
-        unrelated upstream edit from re-planning such a loop (CAS-262) is the
+        unrelated upstream edit from re-planning such a loop is the
         outcome the runtime recorded for it -- see
         ``TrackingState.control_outcomes`` in ``_simulate_one_control_unit``.
         """
@@ -1666,7 +1665,7 @@ class VirtualLineage:
                 # listening when that cell started) while the simulation, which
                 # reads that cell from the file, has one -- so `entry` lacked a
                 # key `input_hashes` carried, equality was false forever, and
-                # neither branch ran. That is r27s4's cell 0. (The gap itself
+                # neither branch ran. (The gap itself
                 # is closed separately, in `_entry_lineages`; this check no
                 # longer depends on it either way.)
                 #
@@ -1696,7 +1695,7 @@ class VirtualLineage:
         elif self._may_write_files(node, stmt_code):
             # ``if PACK.exists(): shutil.rmtree(PACK)`` binds nothing, so it had
             # no trace entry, and a replay after a restart re-ran the cell's
-            # ``PACK.mkdir()`` without it (round 23, r23s2: FileExistsError).
+            # ``PACK.mkdir()`` without it.
             # The same rule simple statements follow in simulate_one_node.
             sim.trace.append(TraceEntry(stmt_code, set(), inputs, input_hashes, {}, files_stale))
 
@@ -1783,7 +1782,7 @@ class VirtualLineage:
         *memo_key* -- the entry's cache key. A "fresh" verdict holds for the
         rest of the cell run: the simulation re-validated the same upstream
         entry for every statement of the cell, twice -- 5,222 files x 2 x 24
-        statements of stats in r23s4. Within one run the upstream values are
+        statements of one notebook. Within one run the upstream values are
         what a from-the-top run gives even if this cell later writes one of
         their files (upstream ran before the write), so re-checking can only
         repeat the answer.
@@ -2061,7 +2060,7 @@ class VirtualLineage:
         function. After a restart ``EXPORTS = Path(...)`` was simulated before
         the import had run again: no ``Path`` in ``user_ns``, no digest, and a
         lineage the runtime never gave ``EXPORTS`` -- so nothing built from it
-        restored (round 23, r23s2). The digest comes from the module object
+        restored. The digest comes from the module object
         when it is already imported (``pathlib`` always is), else from what the
         statement bound when it last ran (``_import_bindings``): the simulation
         never imports anything itself.
@@ -2182,7 +2181,7 @@ class VirtualLineage:
         name that came from the module. This used to be a second copy that
         gave every output one hash and knew only ``import X`` -- so every name
         from ``from helpers import clean`` disagreed with the runtime, and so
-        did everything computed from it (round 21).
+        did everything computed from it.
 
         A callee that is only a simulated def contributes its digest as the
         live function would (``_virtual_callable_hashes``).
@@ -2229,7 +2228,7 @@ class VirtualLineage:
         value (``is_module_like``): a function goes in as an input with its
         source hash. Counting every imported name as a module gave
         ``df = clean(raw)`` a different key in the simulation, so the
-        simulation never found that statement's entry (round 21).
+        simulation never found that statement's entry.
 
         A name not bound yet is answered by what the statement bound when it
         last ran (``_import_bindings``), and without that record keeps the old
@@ -2294,7 +2293,7 @@ class VirtualLineage:
         # `import sys` in the next. After a restart the second never runs --
         # `sys` is bound -- and `sys` kept the first's lineage while the session
         # before had keyed everything with the second's. Every helper reading
-        # `sys.__stderr__` that ran again got a new lineage, and r23s3's 235 s
+        # `sys.__stderr__` that ran again got a new lineage, and a 235 s
         # sweep missed.
         for out in outputs:
             if out not in lineage_by_out:
@@ -2404,7 +2403,7 @@ class VirtualLineage:
                 for var in hidden_writes:
                     virtual_lineage[var] = hidden_write_lineage(seed_key)
 
-            # CAS-260: the globals a CALLEE writes join ``outputs`` so the
+            # The globals a CALLEE writes join ``outputs`` so the
             # simulated lineage is bumped with the same source-based formula
             # the runtime uses. The runtime ALSO skip-caches such a statement;
             # that half is runtime-only, exactly like ``mut_pre_route``.
@@ -2915,7 +2914,7 @@ class VirtualLineage:
                 # above, not an edit to them. This cell counts: re-running one
                 # that adds a column to a frame from above
                 # (``docs['topic'] = ...``) found the frame ahead by its own
-                # earlier write and rebuilt everything derived from it (r23s4).
+                # earlier write and rebuilt everything derived from it.
                 is_downstream = any(
                     normalized_prod in notebook_cells[di] for di in range(current_cell_idx, len(notebook_cells))
                 )
@@ -3114,7 +3113,7 @@ def _first_cell_reading(notebook_cells: list[str], limit: int, names: set[str]) 
     pre-reload lineage into every reader below, while a fresh kernel's import
     gives it the reloaded file's. A helper whose function reads the whole
     module (a clock read) was keyed apart in the session from the next
-    morning, and nothing it built restored (round 29, r29s1/r29s3). Replaying
+    morning, and nothing it built restored. Replaying
     the import is safe since imports are never restored (b4f2539).
     """
     if not names:

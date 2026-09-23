@@ -8,8 +8,7 @@ facts that exist only in the kernel -- the live Axes -> Figure edges through
 which ``ax.bar(...)`` advances ``fig``, and the runtime's verdict on which call
 mutated what. After a restart none of that is there, the simulation arrives at
 another lineage for the same figure, and every chart writer re-fired with
-everything it reads (round 23, r23s2: 84 s to run a table cell after a restart,
-re-reading 1,200 exports for two charts nobody asked for).
+everything it reads.
 
 So for a figure the record carries its **history** instead: the statements
 from the one that created it (``fig, ax = plt.subplots()``) to the write, each
@@ -127,7 +126,7 @@ def carrier_history_fingerprint(
         # What a draw on the figure hands back (``sc = ax.scatter(...)``, then
         # ``fig.colorbar(sc)``) belongs to the figure like ``fig`` and ``ax``:
         # the two sides give it different lineages, so counting it made every
-        # chart with a colorbar read as stale (round 30, r30s1 and r30s5). The
+        # chart with a colorbar read as stale. The
         # data that statement read is counted there, where it is read.
         if _reads_any(tree, siblings):
             siblings |= _assigned_names(tree)

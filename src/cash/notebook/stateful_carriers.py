@@ -57,8 +57,8 @@ __all__ = ["stateful_carrier_kind", "carrier_kind_from_producer"]
 # What a carrier's PRODUCER looks like, for when there is no live object to
 # classify: after a kernel restart ``fig`` is not in the namespace, so
 # ``stateful_carrier_kind(user_ns.get('fig'))`` is None and the history pass
-# went quiet exactly when a plan rebuilds the figure from scratch. Measured in
-# the replay acceptance corpus (round 21): restart, a corrected data file, run
+# went quiet exactly when a plan rebuilds the figure from scratch. Measured:
+# restart, a corrected data file, run
 # the backtest cell -> ``plt.subplots``, ``tight_layout`` and ``savefig`` re-ran
 # without the two ``.plot(ax=...)`` calls, and a wrong chart was written.
 _PRODUCER_PATTERNS: tuple[tuple[re.Pattern, str], ...] = (

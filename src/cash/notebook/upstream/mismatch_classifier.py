@@ -142,8 +142,8 @@ class MismatchClassifier:
         The input check above compares simulated lineages with live ones, and a
         loop-derived chain agrees with itself there even when nothing in it was
         re-run: after the sweep re-ran on edited data, ``best = pick(sweep)``
-        and ``best_scores = f(best)`` still looked current (round 24, r24s3,
-        silent). What each value was built from is recorded when it ran, so
+        and ``best_scores = f(best)`` still looked current.
+        What each value was built from is recorded when it ran, so
         compare that with the live lineage instead. Walks the loop-derived
         inputs only; everything else gets the lineage checks.
         """
@@ -152,7 +152,7 @@ class MismatchClassifier:
         # `results` among its inputs; taking that as "built on an older results"
         # rebuilt the chart functions after the comparison cell re-ran, with
         # `results = {}` and not the loop that fills it: UpstreamStateError,
-        # 'logreg', on a run order with no edit (r25s1). A VALUE computed by
+        # 'logreg', on a run order with no edit. A VALUE computed by
         # calling one is still walked through it: `best = score(1)` read `rows`.
         user_ns = getattr(self.shell, "user_ns", {}) or {}
         if isinstance(user_ns.get(var_name), (types.FunctionType, type)):
@@ -507,11 +507,11 @@ class MismatchClassifier:
 
         # A figure this cell saved (``fig.savefig(...)``) is ahead of its
         # simulated lineage for the same reason: the save counts as a change so
-        # an edit to the plotted data still redraws and resaves (40f6263), and
-        # the simulation stops before the cell doing it. Taken as a downstream
-        # change, the figure was rebuilt every time the cell ran again (round
-        # 25, r25s1). Saving draws nothing, so the live figure is current. A
-        # draw (``ax.plot``) still rebuilds: re-running it would add artists.
+        # an edit to the plotted data still redraws and resaves, and the
+        # simulation stops before the cell doing it. Taken as a downstream
+        # change, the figure was rebuilt every time the cell ran again. Saving
+        # draws nothing, so the live figure is current. A draw (``ax.plot``)
+        # still rebuilds: re-running it would add artists.
         if (
             required_inputs
             and var_name in required_inputs
@@ -590,7 +590,7 @@ class MismatchClassifier:
             # upstream edit the live value may be the cell's output built on the
             # OLD upstream frame: resetting its lineage to the new virtual one
             # kept that value, and ``docs['n_chars'] = ...`` printed the rows an
-            # edited filter had removed (round 23, r23s4, silent).
+            # edited filter had removed.
             if upstream_has_modifications and not self._current_cell_reproduces(
                 var_name, actual_lineage, sim, check.cell_code
             ):
@@ -901,7 +901,7 @@ class MismatchClassifier:
         unsaved edit: the user changed a cell, ran it and has not saved. Then
         the saved version ran before it, so it is in the variable's history.
         The other way round it is not: an edit that was saved but never run
-        leaves the old value in memory, and trusting it served it. r24s5 edited
+        leaves the old value in memory, and trusting it served it. A user edited
         ``models = {...}`` and ran a cell that needed only the edited function,
         then one whose back-test loop reads ``models``: the loop re-ran on the
         dict the old statement had built (silent; old and new code agreed).
@@ -1089,8 +1089,7 @@ class MismatchClassifier:
         leaves nothing that knows it came from a file; it lists the others in
         ``TrackingState.rerun_bindings``. Without a repair, every statement
         reading such a name was refused as "Input variable missing lineage",
-        run after run, until some other cell happened to trigger one (round
-        27, r27s1).
+        run after run, until some other cell happened to trigger one.
 
         Scheduling the binding to re-run IS the repair: under tracking it gets
         its lineage and its file dependencies and is keyed like any other
@@ -1129,7 +1128,7 @@ class MismatchClassifier:
         built from the module, which can be a chain: a loop filling ``blocks``
         with ``hm.summary(...)``, then ``tbl = pd.DataFrame(blocks.values())``.
         Repairing only ``tbl`` re-ran its statement on the stale ``blocks``,
-        and the table came out pre-edit (r28s5's repro, its loop variants).
+        and the table came out pre-edit.
         So walk the simulation trace upstream from the required inputs, and
         repair every name in ``TrackingState.rerun_bindings`` on the way.
         """

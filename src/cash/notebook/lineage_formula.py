@@ -96,7 +96,7 @@ def module_read_lineage(
 
     A statement reading ``lib.load`` was keyed on the whole of ``lib``, so
     editing any other function in the file re-ran it and everything built on
-    it. Round 27, r27s2: editing one helper re-read all 10,000 of their
+    it: editing one helper re-read all 10,000
     ticket files, 48.7 s against a 17.3 s control, later 9.1x. This returns
     a digest of exactly what ``load`` reaches inside the module (see
     ``module_symbols``), plus the module's tracked dependency FILES whole --
@@ -286,8 +286,8 @@ def _from_module_hash(module_name: str, function_tracker: Any, name: str | None 
     With the *name* the import statement read, only what that name reaches
     inside the module: `from helpers import load` then depends on `load`, and
     editing `report` in the same file no longer re-runs everything built on
-    `load` (round 27, r27s2 -- the same fix as `module_read_lineage`, for the
-    other common spelling). Without one, or when the closure cannot be
+    `load`.
+    Without one, or when the closure cannot be
     bounded, the whole module, as before.
     """
     if module_name not in _tracked(function_tracker):
@@ -353,8 +353,7 @@ def module_source_component(
         # after an edit to tickets_lib.py, and every statement built on it
         # kept its cached value. Reloading worked, the badge said MODULE
         # RELOADED, and the cell still returned the pre-edit answer until the
-        # kernel was restarted (round 27, r27s2, 3/3, with two exported
-        # deliverables computed from a number the user had just fixed).
+        # kernel was restarted.
         #
         # `var_name` is still accepted so a tracker that registered the bound
         # name keeps working; for an unaliased import the two are equal, so

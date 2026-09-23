@@ -164,8 +164,8 @@ def _passes_carrier_to_a_call(code: str, sibling_names: set[str]) -> bool:
       ``draw_panel(ax)``. The outputs name the receiver (``tot``, ``imp``),
       never ``ax``.
 
-    Missing either re-drew the figure without it: round 21's blank chart
-    (r21s2), and again in the replay acceptance corpus. A call that merely
+    Missing either re-drew the figure without it, as a blank chart. A call
+    that merely
     reads the axes is re-run too: within the carrier's own history, one
     statement too many is harmless; one too few writes a wrong file.
     """
@@ -252,9 +252,9 @@ class ReexecutionPlanner:
 
         Several passes promote a statement the backward scan restored to a
         re-run and leave its restore entry behind; the badge then listed it
-        twice, ``^CACHED: models = {}`` above ``^CACHED: models = {}`` (round
-        25, r25s5 and r25s1). Done once here, by code as the per-pass filters
-        do, so no pass can leave one behind.
+        twice, ``^CACHED: models = {}`` above ``^CACHED: models = {}``. Done
+        once here, by code as the per-pass filters do, so no pass can leave one
+        behind.
         """
         scheduled = {simulation_trace[i].stmt_code for i in stmts_to_run_indices}
         if not scheduled:
@@ -340,8 +340,7 @@ class ReexecutionPlanner:
         # statements to re-execution (a restore validated before a scheduled
         # write), and a promoted statement's inputs were never cascaded. After
         # a restart ``counts = build_counts(events)`` restored, was promoted
-        # behind ``OUT.mkdir()``, and ran without its ``def`` -- a NameError
-        # (replay corpus, churn).
+        # behind ``OUT.mkdir()``, and ran without its ``def`` -- a NameError.
         # Inputs back, later producers forward, until neither adds anything: a
         # producer brought in for an input may itself be followed by writes.
         while True:
@@ -557,8 +556,7 @@ class ReexecutionPlanner:
                     # A def or class reads its body's globals when called, at
                     # whatever version they then are: defining it consumes
                     # none. Taken as a consumer, `def plot_region` re-ran the
-                    # whole back-test cell the summary cell had just rebuilt
-                    # (round 25, r25s5).
+                    # whole back-test cell the summary cell had just rebuilt.
                     continue
                 inputs, input_hashes = entry.inputs, (entry.input_hashes or {})
                 for v in inputs:
@@ -679,7 +677,7 @@ class ReexecutionPlanner:
         in cell 3, after a restart, resolved to cell 3's import, which runs
         AFTER cell 2's ``files = glob.glob(...)``: the replay raised
         ``NameError: glob`` and every jump downstream was refused until the
-        imports were merged (round 22, r22s3 and r22s4). The shadow pass above
+        imports were merged. The shadow pass above
         cannot see it: both imports bind the same lineage.
 
         With *virtual_lineage*, the globals the statement's callees read count
@@ -704,7 +702,7 @@ class ReexecutionPlanner:
                 # not stand in for the `sales['refund'] = ...` between it and
                 # its reader. Accepting it rebuilt a cleaning cell without the
                 # refund write after a restart, and the summary below showed 0
-                # refunds for three stores, silently (round 25, r25s2).
+                # refunds for three stores, silently.
                 p = self.latest_producer(simulation_trace, v, before=i)
                 if p is not None and p not in scheduled:
                     scheduled.add(p)
@@ -720,11 +718,11 @@ class ReexecutionPlanner:
     def _live_is_behind_producer(self, simulation_trace: list, var: str, before: int, live_lineage: dict) -> bool:
         """Is live *var* NOT what its latest producer before *before* makes?
 
-        Live used to be enough. r25s3 ran the export cell (``results["f1"] =
+        Live used to be enough. A user ran the export cell (``results["f1"] =
         ...`` in place), re-ran the sweep cell (``results`` rebound, no f1),
         then the chart cell: the plan re-ran ``best = results.sort_values(
         ['f1', ...])`` on the live table without the f1 write above it, and
-        raised ``UpstreamStateError: 'f1'`` (round 25).
+        raised ``UpstreamStateError: 'f1'``.
 
         Behind only on evidence: the live lineage is what an EARLIER producer
         made. A live value matching no producer (a loop's iterations, an edit
@@ -752,7 +750,7 @@ class ReexecutionPlanner:
         unless the ``for`` loop below that fills it runs as well. The plan
         re-ran the init and the functions reading ``results``, not the loop,
         and the report raised ``UpstreamStateError: 'logreg'`` with the dict
-        left empty (round 25, r25s1). The backward completion cannot see it:
+        left empty. The backward completion cannot see it:
         it asks for the producer BEFORE a reader, and the init is one.
 
         Only a statement that READS the variable as it writes it continues
@@ -760,7 +758,7 @@ class ReexecutionPlanner:
         and owes it nothing: a re-run ``for r in sorted(obs.run.unique())``
         pulled in a chart loop with a ``for r`` of its own, whose ``ax`` pulled
         in the UMAP loop ``for ax, col in zip(axes, ...)`` -- which then drew the
-        new labels over an embedding nothing had rebuilt (round 29, r29s4).
+        new labels over an embedding nothing had rebuilt.
         """
         scheduled = set(stmts_to_run_indices)
         pending = sorted(scheduled)
@@ -789,7 +787,7 @@ class ReexecutionPlanner:
         statement that reads ``sys``. An import does not read it, yet finding a
         module not loaded yet depends on it: after a restart, a jump below
         ``import bt`` re-ran the import without the insert above it and stopped
-        on ``No module named 'bt'`` (round 29, r29s3, 2/2).
+        on ``No module named 'bt'``.
         """
 
         scheduled = set(stmts_to_run_indices)
@@ -911,7 +909,7 @@ class ReexecutionPlanner:
                     # reads `sub`, `sub` is not a carrier, and the backward scan
                     # never treated it as a broken var, so nothing pulls its
                     # producer in. Scheduling the reader without the writer is
-                    # the round-14 BLOCKING report -- `NameError: name 'sub' is
+                    # a blocking report -- `NameError: name 'sub' is
                     # not defined`, surfaced as an UpstreamStateError on a
                     # completely unrelated cell, five cells blocked at once.
                     #
@@ -996,8 +994,7 @@ class ReexecutionPlanner:
                 # A value that is live and still what this statement read needs
                 # no producer: the fill can run as it is. Without this, the
                 # wider fill rule pulled `imp.plot.barh(..., ax=ax)` in and then
-                # re-fitted the whole model chain behind a perfectly good `imp`
-                # (replay acceptance corpus, round 21).
+                # re-fitted the whole model chain behind a perfectly good `imp`.
                 if name in user_ns and name in expected and recorded.get(name) == expected[name]:
                     continue
                 producer = self.latest_producer(simulation_trace, name, j)
@@ -1295,13 +1292,13 @@ class ReexecutionPlanner:
         """A statement that writes files -- in its own text, or through a user
         function it calls (``save_png(kind, path)``, whose ``savefig`` sits in
         the helper). A replay that re-ran a cell's inline writes but not its
-        helper's left the report folder half old, half new (round 23)."""
+        helper's left the report folder half old, half new."""
 
         if _only_defines(stmt_code):
             # ``def save_page(...)`` writes nothing when it runs; its callers do,
             # and they are writers above. Taken for one, it had no provenance to
             # vouch for it after a restart, was re-fired, and pulled every write
-            # of its cell along (round 23, r23s2).
+            # of its cell along.
             return False
         if statement_writes_files(stmt_code):
             return True
@@ -1442,7 +1439,7 @@ class ReexecutionPlanner:
         # this writer: the live value is the later binding. A chart cell that
         # reuses `fig, axes = plt.subplots(...)` for a second figure re-ran the
         # first figure's `save(fig, ...)` and its draws on the second figure's
-        # axes (r22s3 session). Its producer before the writer re-runs, and so
+        # axes. Its producer before the writer re-runs, and so
         # does the last one, so the name ends bound as the cell leaves it.
         pending = list(writer_indices)
         while pending:
@@ -1478,7 +1475,7 @@ class ReexecutionPlanner:
         # dependency" promoted nearly everything after the writer, because
         # recorded dependencies include inherited ones: saving a cleaned copy of
         # the data re-ran the backtest and the forecast behind it for a cell that
-        # read only the copy (round 21, r21s2's doubled backtest; replay corpus).
+        # read only the copy.
         # A writer whose path does not resolve keeps the broad rule.
         written_forms = self._written_path_forms(simulation_trace, writer_indices)
 
@@ -1527,14 +1524,14 @@ class ReexecutionPlanner:
         the stale ones left states no run order produces: a report folder
         whose grid came from the new models and whose ROC chart from the old,
         or -- when ``shutil.rmtree`` re-ran and the loop that refills the
-        folder did not -- charts that were simply gone (round 23, r23s1, three
-        ways). Running the cell writes every one of its files; so does this.
+        folder did not -- charts that were simply gone.
+        Running the cell writes every one of its files; so does this.
 
         Only writes that provably REPLACE their file are pulled in: they land
         the same bytes when repeated. A write that is not stale itself and may
         append -- ``os.write(fd, ...)`` on a descriptor opened elsewhere -- is
         left to run when its own cell runs; re-firing it here duplicated a
-        counter line on every replay (CAS-176 probe). The exception is a cell
+        counter line on every replay. The exception is a cell
         whose replay already re-fires such a write -- a ``shutil.rmtree`` --
         where everything but a provable append follows it, or ``PACK.mkdir()``
         stays behind and the next write finds no folder.
@@ -1604,7 +1601,7 @@ class ReexecutionPlanner:
         changed -- an input's lineage drifted from the one it was written
         with -- is appended to *stale_exports* as ``(index, paths)``: the
         file on disk is now out of date, and the badge must not call it
-        current (round 28, r28s3 and r28s5).
+        current.
         """
         tracking = getattr(self.classifier, "tracking_state", None)
         executed_writes = getattr(tracking, "executed_write_stmt_codes", None)
@@ -1691,7 +1688,7 @@ class ReexecutionPlanner:
             # non-idempotent side effect and re-derive stale data), check its
             # persisted provenance: if the payload is unchanged AND the output
             # file is still fresh on disk, the effect is already applied — do
-            # NOT schedule it (round-3).
+            # NOT schedule it.
             #
             # An input whose producer is scheduled is answered the same way. A
             # producer is scheduled to REBUILD a value as often as to change it
@@ -1699,8 +1696,8 @@ class ReexecutionPlanner:
             # provenance tells the two apart: the lineage the input had when
             # the file was written against the lineage the simulation gives it
             # now, which an upstream edit changes. Without this every writer
-            # above a restarted cell re-fired, with everything it reads
-            # (round 23, r23s3: a 263 s sweep). A lineage that drifted from the
+            # above a restarted cell re-fired, with everything it reads.
+            # A lineage that drifted from the
             # runtime's (an unsaved edit) always re-runs.
             if (
                 (changed or scheduled_inputs)
@@ -1754,8 +1751,8 @@ class ReexecutionPlanner:
         what was drawn into it. Not the drift of its inputs at the end of the
         simulation: that missed a chart drawn through ``for ax in axes`` --
         ``fig`` itself never changes -- and every chart after a restart, which
-        has no runtime lineage to drift from (round 29, r29s4 and r29s5). A
-        folder has no content to be out of date (r29s2: ``os.makedirs``)."""
+        has no runtime lineage to drift from. A
+        folder has no content to be out of date."""
         reason = self._writer_not_fresh_because(
             stmt_code, inputs, virtual_lineage, runtime_lineage, simulation_trace=simulation_trace, index=i
         )
@@ -1833,9 +1830,9 @@ class ReexecutionPlanner:
         """``(comparable forms, folders listed, places)`` of the paths read, once
         per set of read paths rather than once per writer: each is a resolve and
         an ``isdir``, and 12 writers over 1,312 read files made 44,000 of them
-        before one restarted cell (r23s2). The simulator and the planner ask
-        with the same set in one check, so it is kept across passes too; r24s4's
-        10,000 documents were indexed twice per cell, 1.8 s, and each resolved
+        before one restarted cell. The simulator and the planner ask
+        with the same set in one check, so it is kept across passes too; one
+        notebook's 10,000 documents were indexed twice per cell, 1.8 s, and each resolved
         twice."""
         cached = getattr(self, "_read_index", None)
         if cached is not None and cached[0] is relevant_read_paths and cached[1] == len(relevant_read_paths):
@@ -1936,7 +1933,7 @@ class ReexecutionPlanner:
 
         Conservative in every uncertain case: no backend, missing provenance, an
         unreadable / stale output file, or a drifted input lineage all return
-        False, so the writer is scheduled exactly as before (round-3).
+        False, so the writer is scheduled exactly as before.
         """
         return (
             self._writer_not_fresh_because(

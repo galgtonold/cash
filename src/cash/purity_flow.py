@@ -1,7 +1,7 @@
 """Two data-flow questions the purity analyzer asks of one function body.
 
-Both exist to stop advisories that were wrong on ordinary code (round 17,
-four of five testers), without going quiet on the code they are for:
+Both exist to stop advisories that were wrong on ordinary code,
+without going quiet on the code they are for:
 
 * **Is this receiver fresh where it is mutated?** ``df["x"] = ...`` is harmless
   when ``df`` is an object the function made itself, and a real side effect
@@ -67,7 +67,7 @@ _FRESH_CONSTRUCTOR_ATTRS = frozenset(
         # Aggregations and reshapes that return a NEW frame/array/scalar. Missing
         # these made ordinary pandas -- `g = df.groupby(...).sum()` then
         # `g["col"] = ...` -- read as a mutation of caller state (found attacking
-        # the decorator before round 26).
+        # the decorator).
         "sum",
         "mean",
         "median",
@@ -189,7 +189,7 @@ _ELEMENT_METHODS = frozenset({"get", "pop", "popitem", "setdefault", "item", "__
 #: per-key accumulator -- ``by_user[k].append(x)``, ``acc = out.get(k); acc[0]
 #: += 1``, ``for u, stamps in by_user.items(): stamps.sort()`` -- mutates
 #: elements of such a container, and was reported as a side effect in every
-#: parser three round-20 testers wrote. One level only: an element of an
+#: parser three testers wrote. One level only: an element of an
 #: element may still be anyone's.
 _DEEP = "\0deep:"
 
@@ -390,8 +390,7 @@ _DEEP_BUILDER_ATTRS = frozenset({"to_dict", "to_records", "tolist", "to_list"})
 
 #: Builtins that rebuild a container, element for element. `sorted(rows)` of a
 #: deep-fresh list is deep-fresh: a parser sorting its rows and then editing
-#: one warned about a side effect on its own data (found attacking the
-#: decorator before round 26).
+#: one warned about a side effect on its own data.
 _DEEP_REBUILDERS = frozenset({"sorted", "list", "tuple", "set", "dict", "reversed"})
 
 
@@ -823,7 +822,7 @@ def _is_log_sink(call: ast.Call, log_helpers: frozenset[str] = frozenset()) -> b
     recv = f.value
     # `logging.getLogger(__name__).info(...)` in one expression: the receiver is
     # a CALL, so the name test below saw nothing and every function logging that
-    # way was reported (found attacking the decorator before round 26).
+    # way was reported.
     if isinstance(recv, ast.Call) and f.attr in _LOG_METHODS:
         callee = recv.func
         made_by = (
@@ -853,7 +852,7 @@ def is_log_line(call: ast.Call) -> bool:
 
     A cache hit skipping one is what caching means -- the work it reported on
     did not happen -- so it is not a side effect to warn about. Three of five
-    round-20 testers got an IMPURE-SIDE-EFFECTS on every function that called
+    testers got an IMPURE-SIDE-EFFECTS on every function that called
     their progress helper. A ``print`` to stdout is not in this set: stdout
     may be the program's output, which a hit would drop.
     """
@@ -865,7 +864,7 @@ def is_log_line(call: ast.Call) -> bool:
     recv = f.value
     # `logging.getLogger(__name__).info(...)` in one expression: the receiver is
     # a CALL, so the name test below saw nothing and every function logging that
-    # way was reported (found attacking the decorator before round 26).
+    # way was reported.
     if isinstance(recv, ast.Call) and f.attr in _LOG_METHODS:
         callee = recv.func
         made_by = (

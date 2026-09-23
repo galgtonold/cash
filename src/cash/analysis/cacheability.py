@@ -183,7 +183,7 @@ def analyze_statement(
     A loop body's statements are analysed on every iteration, and the analysis
     is pure AST apart from telling a module apart from an ordinary object. A
     631-iteration loop spent 15% of its cash overhead re-walking the same four
-    statements (round 28, r28s3). So the result is keyed on the code and on
+    statements. So the result is keyed on the code and on
     which of its identifiers are bound to modules right now -- everything it
     reads from *user_ns*. Only without *resolve_source*, whose answers about
     callee source can change under it. The result is a frozen dataclass of
@@ -226,7 +226,7 @@ def _analyze_statement(
         resolve_source: Optional ``name -> source`` for called functions. When
             supplied, globals a CALLEE mutates in place are propagated into
             the mutation sets as though the mutation had been written inline
-            at the call site (CAS-265).
+            at the call site.
 
             This is the single seam that makes a callee's write visible to
             every consumer at once -- the checker's idempotent-rerun reset
@@ -264,7 +264,7 @@ def _analyze_statement(
         top_level_visitor.visit(node)
     top_level_mutated = frozenset(m.variable for m in top_level_visitor.mutations)
 
-    # CAS-265: a global mutated INSIDE a called function is invisible to the
+    # A global mutated INSIDE a called function is invisible to the
     # visitors above -- the mutation is not in this statement's source. Fold it
     # in here, at the one place every consumer already reads, so the write is
     # treated exactly as the inline spelling of it would be.

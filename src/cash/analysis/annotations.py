@@ -71,8 +71,8 @@ class CacheAnnotation:
 # leading digit run and silently dropped the rest, so ``ttl=5m`` parsed as
 # ``ttl=5`` -- five SECONDS where five minutes was asked for, a 60x error, and
 # ``ttl=1h`` a 3600x one. The only symptom is a cache that keeps missing, which
-# reads as "cash isn't working" rather than "my annotation was truncated"
-# (CAS-249). Capturing the whole token lets the directive handler see ``5m``
+# reads as "cash isn't working" rather than "my annotation was truncated".
+# Capturing the whole token lets the directive handler see ``5m``
 # and reject it out loud.
 ANNOTATION_PATTERN = re.compile(r"#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\S*))?")
 
@@ -236,7 +236,7 @@ def leading_cell_annotation(source_lines: list[str]) -> CacheAnnotation:
       values the user was trying to prevent. Over-applying it merely costs speed,
       so it fails safe cell-wide.
     * ``no-cache-calls`` is the same shape of opt-out, one level down: call
-      interception is on by default (CAS-243), and under default-on the
+      interception is on by default, and under default-on the
       placement trap inverts -- someone who needs to disable it for a whole
       cell should not have to annotate every statement in it. Applying it to
       only the first statement would leave statements 2..n intercepted despite

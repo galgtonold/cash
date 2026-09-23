@@ -633,8 +633,7 @@ class UpstreamChecker:
         is called, not when the cell executes -- but that is a premise, not
         the condition. It only says the cell can run in order if the call
         happens AFTER the binding. Two shapes call it inside this very cell
-        and so really do read the name now (round 27, r27s5, both silently
-        wrong before this):
+        and so really do read the name now:
 
         * a lambda handed to a call -- ``s.map(lambda v: f(v))`` invokes it
           inside that statement;
@@ -727,7 +726,7 @@ class UpstreamChecker:
         Both describe a notebook that cannot reproduce itself, and both are
         invisible while the value happens to be sitting in ``user_ns``.
 
-        Round 26, r26s5: a cell read a variable bound in a cell below it. Under
+        A cell read a variable bound in a cell below it. Under
         cash the notebook worked -- the later cell had been run at some point,
         so the name was there -- and a clean in-order run died with
         ``NameError``. Only the uncached oracle caught it; cash reported
@@ -807,7 +806,7 @@ class UpstreamChecker:
         on it can no longer have its dependency tracked. Without this, caching
         degrades silently mid-edit while every signal the user has (the badge,
         ``auto_cache_enabled``) still says it is on — the exact trap that cost
-        two round-5 testers a long debugging detour.
+        testers a long debugging detour.
 
         Deduped per ``(cell index, cell hash)`` on this checker so a persistent
         break warns once — not on every downstream cell run — but a NEW or
@@ -1064,7 +1063,7 @@ class UpstreamChecker:
     ) -> dict[int, dict] | None:
         """Which of a run of assignments in the cell being run need not run.
 
-        Round 25 (r25s2): a cell rebuilding ``sales`` through a dozen steps
+        A cell rebuilding ``sales`` through a dozen steps
         writes only the last version to disk (``_written_later_in_cell``), and
         after a restart Run All re-ran every step to get back to it. Here the
         run is simulated the way the upstream repair simulates a cell above,
@@ -1164,7 +1163,7 @@ class UpstreamChecker:
         when only ``b = g(x)`` was asked for) still holds the value computed
         from the old ``x``, and its snapshot is the only place that knows.
         Syncing it laundered the stale value into a match, and the next cell
-        that read it was served the old result (round 22).
+        that read it was served the old result.
 
         After upstream statements are executed/restored/skipped, ``variable_lineage``
         holds the authoritative lineage for each variable.  The simulation cache
@@ -1218,7 +1217,7 @@ class UpstreamChecker:
                 # Left behind, a loop there compared its recorded inputs with
                 # the old lineage and read as reading changed data on every run
                 # after a repair: ``results = {}`` and everything built on it
-                # re-ran each time (round 25, r25s1).
+                # re-ran each time.
                 input_hashes = trace_entry.input_hashes
                 if moved and isinstance(input_hashes, dict):
                     for var_name, (old, new) in moved.items():
@@ -1596,8 +1595,8 @@ class UpstreamChecker:
 
         The restores came first and the re-runs after them, so the badge's
         Upstream list read ``^CACHED: results[name] = evaluate(...)`` above
-        ``^EXECUTED: results = {}`` -- an order nothing ran in (round 25,
-        r25s1). The restores carried a simulation-trace position and the
+        ``^EXECUTED: results = {}`` -- an order nothing ran in.
+        The restores carried a simulation-trace position and the
         re-runs none. Both are placed by their statement's place in the
         notebook; a loop's passes carry their loop's (``stmt_code``, stamped
         by ``_reexecute_statements``) and keep their order. A metric whose
@@ -1629,9 +1628,9 @@ class UpstreamChecker:
     def _statement_directives(notebook_cells: list[str] | None) -> dict[str, Any]:
         """``{statement code: its # @cash: directives}`` across the notebook.
 
-        A statement re-run as an upstream repair ran with no annotation: r25s4
+        A statement re-run as an upstream repair ran with no annotation: one notebook
         put ``# @cash:no-cache-calls`` on a comprehension, and its calls were
-        cached whenever a cell below repaired it (round 25). The repair has the
+        cached whenever a cell below repaired it. The repair has the
         statement's code, keyed as the simulator keys it; the directive is read
         from its cell as a direct run reads it. Only statements that carry one.
         """
@@ -1708,8 +1707,8 @@ class UpstreamChecker:
                     # ANOTHER cell's statement, and its output belongs to that
                     # cell -- a plain run of this cell never prints it. Re-running
                     # a figure's history (``print('panels', len(axes))`` among
-                    # its fills) put that line into an unrelated cell's output
-                    # (round 21, replay acceptance corpus). A failure still
+                    # its fills) put that line into an unrelated cell's output.
+                    # A failure still
                     # surfaces: the processor reports it in ``result['error']``.
                     stmt_annotation = (annotations or {}).get(stmt_code)
                     result = (
@@ -1726,7 +1725,7 @@ class UpstreamChecker:
                         # through the same loud path below.
                         # With its type: ``str(KeyError('f1'))`` is just ``'f1'``,
                         # and nothing below could tell a NameError from it --
-                        # every round-25 repair failure took this path and got
+                        # every repair failure took this path and got
                         # "fix the upstream cell" for a cell with nothing wrong.
                         error = result.get("error")
                         if error:
@@ -1753,7 +1752,7 @@ class UpstreamChecker:
                 # catch-all for cash's own bugs: a notebook whose cell wrote an
                 # .xlsx without openpyxl installed told the user "cash hit an
                 # internal error ... Nothing in your code caused this ... Please
-                # report it" on the FOLLOWING cell (round-26 rehearsal).
+                # report it" on the FOLLOWING cell.
                 # Swallowing here served the downstream cell a STALE value
                 # while the upstream producer was silently broken -
                 # the worst failure mode for a caching layer. Fail the user's
@@ -1799,8 +1798,8 @@ class UpstreamChecker:
           that WRITES it, or ran it against incomplete state -- cash's problem,
           and there is nothing in the cell to fix.
 
-        Round 14: ``ax.plot(sub[...])`` without ``sub = mm[...]`` four statements
-        earlier. Round 25, four projects: ``name 'in_cents' is not defined`` with
+        ``ax.plot(sub[...])`` without ``sub = mm[...]`` four statements
+        earlier. In four projects: ``name 'in_cents' is not defined`` with
         ``in_cents = ...`` above it in the same cell; ``KeyError: 'f1'`` right
         below ``results["f1"] = ...``; ``KeyError: 'logreg'`` for a dict whose
         filling loop was not re-run. Each tester went looking for a bug in a
@@ -1958,7 +1957,7 @@ class UpstreamChecker:
         # raised, and actively misleading for a NameError. That one usually
         # means the cell simply has not run in THIS kernel -- there is nothing
         # to fix, and the remedy (run that cell) is the one thing the old text
-        # never suggested. A round-14 tester lost time to exactly that: five
+        # never suggested. A tester lost time to exactly that: five
         # cells blocked at once, the message pointing at a cell they had just
         # read through and found nothing wrong with.
         advice = "fix the upstream cell and re-run"

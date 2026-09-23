@@ -305,7 +305,7 @@ class PurityReport:
     #: ``qualname -> weakref`` for walked helpers that have NO resolution path
     #: -- a closure from a factory (``_make.<locals>.scaled``) cannot be looked
     #: up by qualname, so it used to be keyed by the analysis-time snapshot
-    #: forever, which never sees its parameter defaults (CAS-112). Holding a
+    #: forever, which never sees its parameter defaults. Holding a
     #: weak reference lets the per-call rehash reach the live object.
     helper_objects: dict[str, Any] = field(default_factory=dict)
     opaque_callees: tuple[str, ...] = ()
@@ -850,7 +850,7 @@ class _PurityVisitor(ast.NodeVisitor):
 
     #: Container mutators (`MUTATOR_METHODS`) called on a MODULE (`np.sort`,
     #: `np.append`, `np.insert`) return a new array and change nothing --
-    #: round 19 reported "np.sort() - write method". A module's real writes
+    #: a tester got "np.sort() - write method". A module's real writes
     #: (`np.save`, `plt.savefig`, `os.write`) keep being reported.
 
     def _reports_effect(self, call: ast.Call) -> bool:
@@ -876,7 +876,7 @@ class _PurityVisitor(ast.NodeVisitor):
     def _discard_is_expected(self, func_node: ast.AST) -> bool:
         """A discarded call whose result nobody wants and whose effect a hit
         may skip: a log helper of the module's own, or `time.sleep` however it
-        is spelled. Round 19: the quickstart's own `time.sleep(5)` was reported
+        is spelled. The quickstart's own `time.sleep(5)` was reported
         as `discarded_call`, a label documented for calls made for an effect."""
         if isinstance(func_node, ast.Name) and func_node.id in self._log_helpers:
             return True
@@ -1033,7 +1033,7 @@ class _PurityVisitor(ast.NodeVisitor):
         "a scope mutation": it changes the CALLER's object, on a miss only -- a
         hit returns the stored result and the caller's object stays as it was,
         so everything downstream of the call sees two different objects
-        depending on whether it hit (round 18: 31 of 64 values wrong)."""
+        depending on whether it hit."""
         root = (base or "").split(".")[0].split("[")[0]
         if root and root in self._param_names:
             return (
@@ -1113,7 +1113,7 @@ def callable_layers(obj: Any) -> list[Any]:
     A decorated helper is two or more functions, and the key has to see all of
     them: with ``functools.wraps`` only the wrapped function was followed, so
     an edit to the wrapper's body was served stale; without it, only the
-    wrapper was, so an edit to the wrapped function was (round 18). Followed:
+    wrapper was, so an edit to the wrapped function was. Followed:
 
     * ``__wrapped__`` (``functools.wraps``, ``update_wrapper``, ``lru_cache``);
     * function-valued closure cells (a wrapper written without ``wraps``, and
@@ -1254,7 +1254,7 @@ def local_import_map(func_def: ast.AST, func: Any) -> dict[str, tuple[str, tuple
 
     ``from helpmod import scale`` inside the body binds a LOCAL, so the helper
     walk, which resolves names in the module's globals, found nothing and an
-    edit to ``scale`` was served stale (round 18) -- in the common shape of an
+    edit to ``scale`` was served stale -- in the common shape of an
     import moved into the function to break an import cycle. Each import runs
     on every call, so the binding it makes is ``helpmod.scale`` as the module
     holds it at call time: that is the path recorded for the per-call check.
@@ -1349,8 +1349,8 @@ def _ambient_call(node: ast.Call, namespace: dict[str, Any] | None) -> str | Non
     """The ambient read *node* makes, spelled canonically, or None.
 
     The spelling in the source first (``datetime.now()``), then what its names
-    are bound to in *namespace* (:func:`cash.effects.classify_call`): round 19
-    found ``import datetime as _dt; _dt.datetime.now()``, ``from datetime
+    are bound to in *namespace* (:func:`cash.effects.classify_call`): testers
+    wrote ``import datetime as _dt; _dt.datetime.now()``, ``from datetime
     import datetime as DateTime``, ``import time as _time``, ``import os as
     _os`` and ``pd.Timestamp.now()`` freezing a timestamp with no warning,
     while the canonical spellings warned. Also ``pd.to_datetime("today")`` and
@@ -1377,8 +1377,8 @@ def _clock_helper_read(value: Any) -> str | None:
     ``return <ambient read>``: ``def mark(name): print(..., file=sys.stderr);
     return time.perf_counter()``. Calling it IS the ambient read, so it is
     judged where it is called -- where ``t0 = mark("step")`` handed only to a
-    ``done(name, t0)`` that prints it cannot reach a result (round 20: a
-    KEY-AMBIENT-READ per step, every run). Inside the helper it is not
+    ``done(name, t0)`` that prints it cannot reach a result.
+    Inside the helper it is not
     reported at all when the helper is reached from a cached function.
     """
     code = getattr(value, "__code__", None)
@@ -1439,7 +1439,7 @@ def is_mock(obj: Any) -> bool:
     # `create_autospec` / `patch(..., autospec=True)` on a function makes a
     # real function that carries its mock. Walked as code, it led into the
     # TEST's side_effect, analysed as production code -- an `__import__` in a
-    # fake raised CashImpureFunctionError out of the test (round 20).
+    # fake raised CashImpureFunctionError out of the test.
     return isinstance(obj, types.FunctionType) and isinstance(obj.__dict__.get("mock"), module.NonCallableMock)
 
 
@@ -1999,7 +1999,7 @@ class PurityAnalyzer:
                     # -- or the whole module swapped for a MagicMock -- is seen
                     # on the next call and runs it uncached. It was not: the
                     # fake answer was stored under the real key and served to
-                    # every later, unpatched run (round 19).
+                    # every later, unpatched run.
                     #
                     # Plain and builtin functions only, reached back through
                     # their path: a bound method is a new object on every
@@ -2196,7 +2196,7 @@ def _anchor_issue_lines(issues: list[PurityIssue], start: int, func: Any) -> Non
     Anchored on the same object `own_source` read: for a ``functools.wraps``
     wrapper, its own code. ``getsourcelines`` unwraps, so a print in the
     wrapper was numbered from the WRAPPED function's first line, in another
-    file -- "line 46" of an 11-line deco.py (round 19).
+    file -- "line 46" of an 11-line deco.py.
     """
     try:
         target = func.__code__ if isinstance(func, types.FunctionType) and hasattr(func, "__wrapped__") else func
@@ -2219,7 +2219,7 @@ def _log_only_ambient_reads(
     """ids of the ambient reads in *func_def* whose value is only logged.
 
     "Logged" includes being passed to one of the module's own log helpers
-    (`_log_helper_names`): round 18 counted ~20 KEY-AMBIENT-READ lines per
+    (`_log_helper_names`): one project counted ~20 KEY-AMBIENT-READ lines per
     worker start from ``_log(f"... {time.perf_counter() - t0:.2f}s")``,
     none of which could reach a result.
     """

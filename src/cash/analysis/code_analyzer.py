@@ -308,8 +308,8 @@ class _FlowVisitor(ast.NodeVisitor):
             # What selects the element is read too: `too_high` in
             # `sales.loc[too_high, ['price']] /= 100`. Unread, it was no input,
             # so a restart rebuilt the statement without its producer --
-            # UpstreamStateError, `name 'too_high' is not defined` (round 25,
-            # r25s2) -- and an edit to the mask did not re-key the statement.
+            # UpstreamStateError, `name 'too_high' is not defined`
+            # -- and an edit to the mask did not re-key the statement.
             target = node.target
             while isinstance(target, (ast.Subscript, ast.Attribute)):
                 if isinstance(target, ast.Subscript):
@@ -371,7 +371,7 @@ class _ForbiddenVisitor(ast.NodeVisitor):
     def visit_FunctionDef(self, node) -> None:  # noqa: N802
         """A function's BODY runs when it is called, not where it is defined.
 
-        Round 30 (r30s1): every ``def`` whose body called ``time.time()`` got
+        Every ``def`` whose body called ``time.time()`` got
         a "NOT CACHED: def f(...) - time.time" row -- "a def is never
         something I wanted cached; the row reads as if cash refuses to cache
         my function". What does run here is the decorators, the default
@@ -472,7 +472,7 @@ class CodeAnalyzer:
         a known function the body only REFERENCES counts too: handed to
         ``map``, a pool, ``joblib.delayed``, kept in a list or a default. A
         ``functools.partial`` over one resolves to it, called or referenced.
-        Round 19: ``sum(map(inner, [n]))`` with ``inner`` cached kept its old
+        ``sum(map(inner, [n]))`` with ``inner`` cached kept its old
         result after ``inner``'s helper changed -- only a CALL made an edge.
         """
 
@@ -727,7 +727,7 @@ class CodeAnalyzer:
             tree: Optional pre-parsed AST to avoid redundant parsing.
             resolve_source: Optional ``name -> source`` for called functions.
                 When supplied, a global that a CALLEE mutates in place is
-                declared as an OUTPUT of the calling statement (CAS-265), so
+                declared as an OUTPUT of the calling statement, so
                 the global gets a producer and a lineage that advances.
 
                 An output, and deliberately NOT also an input, even though the
@@ -776,7 +776,7 @@ class CodeAnalyzer:
             # produced a MODULE. `sc.pp.calculate_qc_metrics(adata, inplace=True)`
             # read as mutating its receiver, which is rooted at `sc`: the badge
             # said "Produced sc" and every such line bumped the module's lineage,
-            # so every statement reading `sc` missed (round 28, r28s4). What the
+            # so every statement reading `sc` missed. What the
             # call really changes, `adata`, is observed at runtime instead. Module
             # SETTINGS (`plt.rcParams.update(...)`) are routed separately.
             bound = {

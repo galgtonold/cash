@@ -1,8 +1,8 @@
 """What reading some names from a module depends on -- and when that cannot be bounded.
 
 A statement that reads ``lib.load`` used to be keyed on the whole of ``lib``,
-so editing any other function in the file re-ran it. Round 27, r27s2: editing
-one helper re-read all 10,000 of their ticket files, 48.7 s against a 17.3 s
+so editing any other function in the file re-ran it: editing
+one helper re-read all 10,000 ticket files, 48.7 s against a 17.3 s
 control, later 9.1x, because ``corpus = tl.load_corpus(ROOT, MONTH)`` was
 keyed on a module that had changed while ``load_corpus`` had not.
 
@@ -180,7 +180,7 @@ def _is_dynamic(stmt: ast.stmt, runs_at_import: bool = True) -> bool:
     function's body runs when it is called, and a reload gives it nothing new
     -- a helper timing its own steps (``t0 = time.perf_counter()``) keyed
     every statement using it on the whole module, so any edit to the file
-    re-ran them (round 29, r29s1 and r29s3). *runs_at_import* is False for a
+    re-ran them. *runs_at_import* is False for a
     ``def`` nothing at import time calls; its decorators and default values
     run at import time all the same.
     """

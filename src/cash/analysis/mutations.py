@@ -106,8 +106,8 @@ PANDAS_INPLACE_METHODS = {
 #
 # A DataFrame/Series/ndarray cannot be observed (its content hash is a sample),
 # so an unlisted method on one is ASSUMED to mutate it and bumps its lineage:
-# the last line of a cell showing a frame -- ``comparison.round(4)`` (r23s1),
-# ``feat_demo.describe().round(3)`` (r23s3) -- was badged an in-place
+# the last line of a cell showing a frame -- ``comparison.round(4)``,
+# ``feat_demo.describe().round(3)`` -- was badged an in-place
 # mutation, and editing it re-ran everything built from the frame below it.
 # A chain is pure when nothing inside it is known to mutate
 # (:func:`chain_is_pure`): ``df.sort_values('x').head()`` leaves ``df``
@@ -1022,7 +1022,7 @@ def module_setting_receivers(tree: ast.Module | None) -> frozenset[str]:
     neither: a function on the module itself, returning a new array).
 
     Such a statement binds nothing, so rebuilding variables after a restart
-    never reached it: r24s2's charts came out in matplotlib's default style
+    never reached it: charts came out in matplotlib's default style
     because ``plt.rcParams.update`` in the setup cell was not replayed.
     Counted as a change to the module, it is replayed with the import.
     """
@@ -1059,12 +1059,12 @@ def chain_is_pure(method: str, inner: frozenset[str]) -> bool:
     removes a column. An unlisted inner method is let through, as it always
     was -- ``df.sort_values('x').head()`` -- because a method that mutates in
     place almost always returns ``None`` and cannot be chained; asking that
-    every inner method be listed made r23s2's ``vs_plan.sort_values(...).head()``
+    every inner method be listed made ``vs_plan.sort_values(...).head()``
     an assumed mutation, and a restart rebuilt the frame from 1,312 files.
 
     A known-pure method inside the chain counts too: it returns a new object,
     and what follows acts on that. ``dwells[m].groupby('hour').size()`` was a
-    mutation of ``dwells`` because ``size`` is not listed (round 30, r30s1),
+    mutation of ``dwells`` because ``size`` is not listed,
     and a repair re-ran it and everything built from ``dwells``.
     """
     if inner & MUTATING_METHODS:
@@ -1086,7 +1086,7 @@ def top_level_call_argument_bases(tree: ast.Module | None) -> frozenset[str]:
     MUTATED when it is a live Axes/Figure: a plotting call draws on the axes
     it is given. Keyed on the receiver alone, ``imp.plot.barh(..., ax=ax)``
     looked like a pure call on ``imp``, was served from cache during a replay,
-    and the re-created figure was saved blank (round 21, replay corpus).
+    and the re-created figure was saved blank.
     """
     if tree is None:
         return frozenset()
@@ -1112,8 +1112,8 @@ def is_pandas_plot_call(method: str, receiver: object) -> bool:
     A DataFrame cannot be content-observed (its hash samples), so any unknown
     method on one was ASSUMED to mutate it. That bumped ``data``'s lineage for
     ``data.groupby('region')['churn'].mean().plot.bar(ax=ax)``, and every cell
-    reading ``data`` above it then re-ran its producers with nothing changed
-    (round 21: r21s1's last cell, 9 statements). The Axes it draws on is what
+    reading ``data`` above it then re-ran its producers with nothing changed.
+    The Axes it draws on is what
     changes, and the carrier-history pass follows it through ``ax=``.
     Shared by the runtime and the simulation, which must decide identically.
     """
@@ -1209,13 +1209,13 @@ def selfref_reassignment_targets(node: ast.AST) -> frozenset[str]:
 # Accumulator-loop shape detection
 # ---------------------------------------------------------------------------
 #
-# CAS-259 history: this used to be consulted directly by a dispatcher in
+# History: this used to be consulted directly by a dispatcher in
 # ``control_structures/processor.py`` that routed a matching loop through the
 # statement cache as one unit BEFORE the cost-based
 # ``_should_execute_loop_as_single_unit`` check ever ran -- so every
 # accumulator loop, however cheap, skipped per-iteration decomposition and
-# interception. CAS-259 deleted that dispatch. That was too broad a deletion:
-# a CAS-259 follow-up review (measured on a 150-iteration, 4.6s-body loop)
+# interception. Deleting that dispatch was too broad:
+# a follow-up review (measured on a 150-iteration, 4.6s-body loop)
 # found that above the cost check's own single-unit threshold (>50
 # iterations, >1s estimated overhead), NEITHER mechanism caches anymore --
 # decomposition never runs (the cost check chose single-unit), and the

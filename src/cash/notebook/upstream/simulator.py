@@ -183,8 +183,8 @@ class NotebookSimulator:
         `import cash; %cash_on; import helpers as hm` -- the layout the
         quickstart recommends -- left `helpers` untracked: an edit to it
         reloaded nothing, and its source reached no cache key, so a value built
-        from it was served pre-edit, even after Restart & Run All (round 28,
-        r28s4, exported). Done before pass 1, so this very simulation already
+        from it was served pre-edit, even after Restart & Run All.
+        Done before pass 1, so this very simulation already
         keys the module's readers on its source.
         """
         ft = self.virtual_lineage.function_tracker
@@ -221,7 +221,7 @@ class NotebookSimulator:
         has no runtime lineage: cash was not listening when that cell started.
         The first statement reading it was refused as "Input variable missing
         lineage" -- in the quickstart's own layout, that is the cell that loads
-        the data (round 27, r27s1 and r27s4). The simulation reads the cell out
+        the data. The simulation reads the cell out
         of the .ipynb and has a lineage for it like any other, and it is the
         one the simulation keys the reader with, so adopting it is also what
         lets the runtime store under the key a restart will look up.
@@ -424,7 +424,7 @@ class NotebookSimulator:
             # it read -- this cell's starting state only when that statement
             # is in this cell. When it is in a cell above (``df['b'] = ...``
             # there, ``df['a'] = ...`` here), a first run looked stale and the
-            # value was rebuilt (r23s4: its article frame, every Run All).
+            # value was rebuilt.
             # Only when each write this cell makes moves the value's lineage:
             # ``del df['b']`` or ``lst.append(x)`` changes it in place and
             # leaves the lineage where it was, so a re-run would pass for a
@@ -842,7 +842,7 @@ class NotebookSimulator:
         scope, one unresolvable read anywhere above -- a helper's
         ``pd.read_parquet(path)`` -- let every stale writer in the notebook
         re-fire, and with them the fits feeding their charts: a sanity-check
-        cell reading only the loaded frame took 309 s (round 24, r24s1).
+        cell reading only the loaded frame took 309 s.
         """
         if required_inputs is None:
             return set(range(len(simulation_trace)))
@@ -959,7 +959,7 @@ class NotebookSimulator:
                 # recorded what fed its outputs -- a superset of what it read.
                 # Without this one comprehension switched the scope gate off
                 # for the whole notebook, and a chart nothing reads was re-drawn
-                # for every downstream cell (round 21, R5).
+                # for every downstream cell.
                 r = set()
                 for o in outputs:
                     dep = efd[o]
@@ -997,7 +997,7 @@ class NotebookSimulator:
             # whole cell's text is no statement's key).
             # The cell has not run yet, so a path its own earlier statement
             # binds (``TF = [Path('other.csv')]``) is in no namespace; resolve
-            # it from the code (round 30, r30s5).
+            # it from the code.
             bound: dict = {}
             for stmt in _statement_codes(notebook_cells[current_cell_idx]):
                 _collect(stmt, namespace=collections.ChainMap(bound, user_ns or {}))
@@ -1055,7 +1055,7 @@ class NotebookSimulator:
         if is_tracing():
             # Every variable the two engines disagree on, relevant or not. In a
             # plain top-to-bottom run there must be none: each one is a spurious
-            # "changed" waiting for a cell that reads it (round 21).
+            # "changed" waiting for a cell that reads it.
             recorded = self.variable_lineage
             virtual_lineage = sim.virtual_lineage
             trace_event(

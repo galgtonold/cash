@@ -64,7 +64,7 @@ def statement_calls_user_writer(
     ``save_png(...)``, and ``helpers.save_png(...)`` through a module. The
     second is how a function in the user's PROJECT is normally reached, and
     it used to be skipped -- only ``ast.Name`` callees were offered to the
-    predicate, so r27s2's four project-module exports were all cached and a
+    predicate, so four project-module exports were all cached and a
     deleted deliverable did not come back. The analysis was never the
     problem; it was simply never asked.
 
@@ -102,7 +102,7 @@ def user_callee_writing_files(func: Any, _depth: int = 0) -> str | None:
     ``save(fig, "chart.png")``, where ``save`` calls ``fig.savefig``, writes a
     file exactly as the inline ``fig.savefig(...)`` does -- which runs every
     time. Served from the cache instead, the call skipped the write, and a
-    Restart & Run All left the deck without its chart (round 22, 3/3). So a
+    Restart & Run All left the deck without its chart. So a
     call into USER code whose body writes a file, directly or through another
     user function it calls, is judged like the write itself.
 
@@ -222,10 +222,10 @@ def resolve_literal_path(node: ast.AST, namespace: dict[str, Any] | None) -> str
                 return None
     # The spellings notebooks actually use: ``OUT / 'chart.png'``,
     # ``Path(OUT, 'chart.png')``, ``os.path.join(OUT, name)``,
-    # ``f'{OUT}/chart.png'``. Until round 21 only a literal or a bare name
+    # ``f'{OUT}/chart.png'``. Once only a literal or a bare name
     # resolved, so ``fig.savefig(OUT / 'chart.png')`` was "unresolvable" and the
     # scope gate never suppressed it: a chart nothing reads was re-drawn for
-    # every downstream cell (R5). Each part must itself resolve, so anything
+    # every downstream cell. Each part must itself resolve, so anything
     # genuinely computed still returns None.
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
         left = resolve_literal_path(node.left, namespace)
@@ -324,7 +324,7 @@ def _write_call_path(
         # ``shutil.rmtree(OUT)``: its effect is the folder. Unresolved, the
         # ``rmtree`` + ``mkdir`` a report cell starts with could never be ruled
         # out as unread, and a cell below it re-ran the whole report after a
-        # restart (round 23, r23s2).
+        # restart.
         if method in ("mkdir", "rmdir") and not call.args:
             return resolve_literal_path(func.value, namespace), True
         if get_base_name(func.value) in ("os", "shutil") and method in _FOLDER_FUNCTIONS:
@@ -489,7 +489,7 @@ def resolve_path_list(node: ast.AST, namespace: dict[str, Any] | None) -> list[s
 
     A literal display whose every element resolves, a name bound to such a
     list in *namespace*, or either wrapped in ``sorted``/``list``/``tuple``.
-    Round 30 (r30s5): ``pd.concat([pd.read_csv(f) for f in TF])`` read as
+    ``pd.concat([pd.read_csv(f) for f in TF])`` used to read as
     unknown, so a cell doing it re-drew an unrelated stale chart above.
     """
     if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
