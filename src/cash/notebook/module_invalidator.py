@@ -132,7 +132,7 @@ class ModuleInvalidator:
                     old_module_lineages[name] = old_lineage
                 lineage = self._lineage_as_imported(name, processor) or new_lineage
                 processor.forget_variable(name)
-                processor.tracking_state.variable_lineage[name] = lineage
+                processor.tracking_state.lineage.record(name, lineage)
                 logger.debug(
                     "[MODULE_INVALIDATE] Updated lineage for %r: %s... -> %s...",
                     name,

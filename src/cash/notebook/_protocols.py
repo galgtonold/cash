@@ -11,6 +11,7 @@ Using protocols instead of ``Any`` provides:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
@@ -131,10 +132,11 @@ class TrackingState:
     # fixture believed it, stored a bare string, and made `.add()` raise.
     executed_cell_hashes: dict[str, set[str]] = field(default_factory=dict)
 
-    # Written by StatementProcessor (and ControlStructureProcessor for mutations).
-    # Read by UpstreamChecker to detect stale variables; occasionally reset by
-    # UpstreamChecker when resynchronising simulation state with actual memory.
-    variable_lineage: dict[str, str] = field(default_factory=dict)
+    # Every variable's lineage hash. Written only through this store
+    # (StatementProcessor, ControlStructureProcessor for mutations, the
+    # restorers, ModuleInvalidator; UpstreamChecker resets entries when it
+    # resynchronises the simulation with memory). Read as ``variable_lineage``.
+    lineage: LineageStore = field(default_factory=LineageStore)
 
     # Written by StatementProcessor (via FileAccessTracker) after each execution.
     # Read by UpstreamChecker to detect stale file dependencies.
@@ -350,10 +352,7 @@ class TrackingState:
     # simulation only REPLAYS this recorded map.
     derivation_edges: dict[str, set[str]] = field(default_factory=dict)
 
-    # The single seam for reading/writing variable lineage. Wraps
-    # ``variable_lineage`` as its backing dict so callers that still mutate
-    # the dict directly during migration stay in sync.
-    lineage: "LineageStore" = field(init=False)
-
-    def __post_init__(self) -> None:
-        self.lineage = LineageStore(backing=self.variable_lineage)
+    @property
+    def variable_lineage(self) -> Mapping[str, str]:
+        """A read-only live view of :attr:`lineage`; write through the store."""
+        return self.lineage.view

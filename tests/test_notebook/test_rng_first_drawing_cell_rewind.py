@@ -105,13 +105,13 @@ def test_stale_pre_state_is_rejected_when_the_seed_changed():
     from_anchor = random.random()
 
     # Own position recorded while seed lineage was "seed-v1"...
-    state.variable_lineage[rng_virtual_var("random")] = "seed-v1"
+    state.lineage.record(rng_virtual_var("random"), "seed-v1")
     random.seed(4321)
     _record_pre(state, DRAW)
 
     # ...but the seed has since changed. The saved position belongs to the old
     # seed, so it must be discarded in favour of the upstream anchor.
-    state.variable_lineage[rng_virtual_var("random")] = "seed-v2"
+    state.lineage.record(rng_virtual_var("random"), "seed-v2")
 
     random.random()
     checker._restore_position_rng_state(DRAW, CELLS, 1)

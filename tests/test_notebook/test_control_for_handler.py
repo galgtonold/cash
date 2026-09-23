@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from cash.notebook._protocols import TrackingState
 from cash.notebook.cache_status import CacheStatus
 from cash.notebook.control_structures.for_handler import ForLoopHandler
 
@@ -42,8 +43,7 @@ def mock_statement_processor():
             "outputs": [],
         }
     )
-    processor.tracking_state.variable_lineage = {}
-    processor.tracking_state.vars_with_mutation_lineage = set()
+    processor.tracking_state = TrackingState()
     processor.compute_hash = MagicMock(return_value="fakehash")
     return processor
 

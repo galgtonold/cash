@@ -13,13 +13,13 @@ import dis
 import hashlib
 import logging
 import types
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any, NamedTuple, Protocol, runtime_checkable
 
-from cash.notebook.lineage_store import LineageStore
+from cash.notebook.lineage_store import resolve_lineage
 from cash.source_norm import unparse_without_docstrings
 
 from .lineage_formula import (
@@ -172,7 +172,7 @@ class CacheKeyContext:
     remain as direct arguments to ``compute_cache_key``.
     """
 
-    variable_lineage: dict[str, str]
+    variable_lineage: Mapping[str, str]
     user_ns: Mapping[str, Any]
     function_tracker: FunctionTrackerProtocol | None = None
     virtual_lineage: dict[str, str] | None = None
@@ -184,13 +184,6 @@ class CacheKeyContext:
     #: named as an input that is not live in ``user_ns``. The runtime never
     #: sets it, so its keys are unchanged.
     virtual_callables: Mapping[str, VirtualCallable] | None = None
-    _lineage_store: LineageStore = field(init=False, repr=False, compare=False)
-
-    def __post_init__(self) -> None:
-        # Wrap once so per-input resolution doesn't allocate a new LineageStore
-        # per variable on the cache-key hot path. The store shares the backing
-        # dict, so external writes to ``variable_lineage`` remain visible.
-        self._lineage_store = LineageStore(backing=self.variable_lineage)
 
 
 class CacheKeyResult(NamedTuple):
@@ -434,7 +427,6 @@ def _process_input_var(
     user_ns: Mapping[str, Any],
     variable_lineage: dict[str, str],
     virtual_lineage: dict[str, str],
-    lineage_store: LineageStore,
     compute_hash_fn: Callable[[object], str] | None,
     function_tracker: FunctionTrackerProtocol | None,
     debug: bool,
@@ -467,8 +459,9 @@ def _process_input_var(
                 debug_print_fn(f"[CACHE_KEY] Module component for '{var_name}': {variable_lineage[var_name][:12]}...")
         return
 
-    lineage = lineage_store.resolve(
+    lineage = resolve_lineage(
         var_name,
+        variable_lineage,
         value=val,
         virtual=virtual_lineage,
         compute_hash_fn=compute_hash_fn,
@@ -645,7 +638,6 @@ def compute_cache_key(
             user_ns,
             variable_lineage,
             virtual_lineage,
-            ctx._lineage_store,
             compute_hash_fn,
             function_tracker,
             debug,

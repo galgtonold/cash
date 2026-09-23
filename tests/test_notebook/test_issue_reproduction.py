@@ -58,12 +58,8 @@ class TestIssueReproduction(unittest.TestCase):
 
             # Set ACTUAL lineage in memory. Written into the shared tracking
             # state (not rebound on the checker) so the simulator sees it too.
-            self.checker.variable_lineage.update(
-                {
-                    "stats": "hash_BROKEN_stats",  # Mismatch
-                    "ticker_stats": "hash_virtual_ticker_stats",  # Match
-                }
-            )
+            self.checker.tracking_state.lineage.record("stats", "hash_BROKEN_stats")  # Mismatch
+            self.checker.tracking_state.lineage.record("ticker_stats", "hash_virtual_ticker_stats")  # Match
             self.shell.user_ns = {"stats": 1, "ticker_stats": 1}
 
             # Set executed codes to match

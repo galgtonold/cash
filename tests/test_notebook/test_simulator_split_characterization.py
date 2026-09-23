@@ -65,7 +65,7 @@ def _snapshot_tracking_state(simulator):
     TrackingState.
     """
     return {
-        "variable_lineage": copy.deepcopy(simulator.variable_lineage),
+        "variable_lineage": dict(simulator.variable_lineage),
         "executed_cell_codes": copy.deepcopy(simulator.executed_cell_codes),
         "executed_cell_hashes": copy.deepcopy(simulator.executed_cell_hashes),
         "executed_input_lineages": copy.deepcopy(simulator.executed_input_lineages),

@@ -23,7 +23,7 @@ class TestUpstreamSafety(unittest.TestCase):
         self.checker.set_tracking_state(state)
         self.codes = state.executed_cell_codes
         self.hashes = state.executed_cell_hashes
-        self.lineage = state.variable_lineage
+        self.lineage = state.lineage
 
     @patch("cash.notebook.upstream.checker.get_notebook_cells")
     def test_lineage_projection_safety(self, mock_get_cells):
@@ -59,7 +59,7 @@ class TestUpstreamSafety(unittest.TestCase):
         mock_get_cells.return_value = [code_start]
 
         # Setup Memory (Actual)
-        self.lineage["x"] = lineage_mod
+        self.lineage.record("x", lineage_mod)
         self.codes["x"] = code_mod
         self.hashes["x"] = hash_mod  # Not strictly needed for logic but good practice
 

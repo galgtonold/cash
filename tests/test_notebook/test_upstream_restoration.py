@@ -52,7 +52,7 @@ class TestUpstreamRestoration(unittest.TestCase):
 
         # Mismatch.
 
-        self.checker.variable_lineage["x"] = lineage_actual
+        self.checker.tracking_state.lineage.record("x", lineage_actual)
 
         # We need to ensure _simulate results in broken variable.
         # _simulate runs code_new_base -> x outputs.

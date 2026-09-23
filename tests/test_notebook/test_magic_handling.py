@@ -100,7 +100,7 @@ class TestMagicHandling(unittest.TestCase):
             # IPython -- so `x == 20` below held for a reason that had nothing
             # to do with the magic being ignored.
             self.magics.tracking_state.executed_cell_hashes["x"] = {"hash_of_x_10"}
-            self.magics.tracking_state.variable_lineage["x"] = "lineage_of_x_10"
+            self.magics.tracking_state.lineage.record("x", "lineage_of_x_10")
             self.shell.user_ns["x"] = 10
 
             print("--- Step 2: Modify notebook to have magic and x=20 ---")

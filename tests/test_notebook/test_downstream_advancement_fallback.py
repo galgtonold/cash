@@ -91,7 +91,7 @@ class TestDownstreamAdvancementFallback:
         ahead_lineage_df = "bbbb2222" * 8  # 64 char hex
 
         # Set the "ahead" lineage in variable_lineage (as if previous cell execution advanced it)
-        upstream.variable_lineage["df"] = ahead_lineage_df
+        upstream.tracking_state.lineage.record("df", ahead_lineage_df)
 
         # Set up simulation cache with the virtual lineage
         # Format: (cell_code_hash, virtual_lineage, virtual_modules, trace, mutated, stale_files, file_deps)
@@ -152,7 +152,7 @@ class TestDownstreamAdvancementFallback:
         virtual_lineage_x = "aaaa1111" * 8
         actual_lineage_x = "bbbb2222" * 8
 
-        upstream.variable_lineage["x"] = actual_lineage_x
+        upstream.tracking_state.lineage.record("x", actual_lineage_x)
         upstream.simulator.cache.entries = [
             SimulationCacheEntry("hash_cell_0", {"x": virtual_lineage_x}, set(), [], set(), set(), {}),
         ]
@@ -189,7 +189,7 @@ class TestDownstreamAdvancementFallback:
         upstream = magics._upstream_checker
 
         actual_lineage_df = "bbbb2222" * 8
-        upstream.variable_lineage["df"] = actual_lineage_df
+        upstream.tracking_state.lineage.record("df", actual_lineage_df)
         upstream.simulator.cache.entries = []  # No cache
 
         cell_code = "df['col'] = 1"
@@ -220,7 +220,7 @@ class TestDownstreamAdvancementFallback:
         upstream = magics._upstream_checker
 
         same_lineage = "aaaa1111" * 8
-        upstream.variable_lineage["df"] = same_lineage
+        upstream.tracking_state.lineage.record("df", same_lineage)
         upstream.simulator.cache.entries = [
             SimulationCacheEntry("hash_cell_0", {"df": same_lineage}, set(), [], set(), set(), {}),
         ]
@@ -259,8 +259,8 @@ class TestDownstreamAdvancementFallback:
         ahead_df1 = "bbbb2222" * 8
         ahead_df2 = "dddd4444" * 8
 
-        upstream.variable_lineage["df1"] = ahead_df1
-        upstream.variable_lineage["df2"] = ahead_df2
+        upstream.tracking_state.lineage.record("df1", ahead_df1)
+        upstream.tracking_state.lineage.record("df2", ahead_df2)
         upstream.simulator.cache.entries = [
             SimulationCacheEntry("hash_cell_0", {"df1": virtual_df1, "df2": virtual_df2}, set(), [], set(), set(), {}),
         ]
@@ -345,7 +345,7 @@ class TestDownstreamAdvancementFallback:
         upstream.last_cell_index = 1
 
         # Set df's lineage to the "ahead" value (as if both statements already ran)
-        upstream.variable_lineage["df"] = df_lineage_after_both
+        upstream.tracking_state.lineage.record("df", df_lineage_after_both)
 
         # Now run _check_notebook_based with cell code that won't match notebook
         edited_cell_code = "df['VolAdj'] = df['Close'] * df['Volume']\ndf['SMA_61'] = df['Close'].rolling(2).mean()"

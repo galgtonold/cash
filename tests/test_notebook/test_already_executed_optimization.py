@@ -98,7 +98,7 @@ class TestAlreadyExecutedOptimization:
 
         # Modify input 'a' with different lineage
         shell.user_ns["a"] = 20
-        processor.tracking_state.variable_lineage.pop("a", None)
+        processor.tracking_state.lineage.discard("a")
         if hasattr(shell.user_ns.get("a"), "_cash_hash"):
             with contextlib.suppress(AttributeError, TypeError):
                 delattr(shell.user_ns["a"], "_cash_hash")
@@ -176,7 +176,7 @@ class TestAlreadyExecutedOptimization:
 
         # Externally modify x - remove its lineage
         shell.user_ns["x"] = 999
-        processor.tracking_state.variable_lineage.pop("x", None)
+        processor.tracking_state.lineage.discard("x")
         processor.tracking_state.executed_cell_codes.pop("x", None)
 
         # Should re-compute since x was externally modified
@@ -218,7 +218,7 @@ class TestAlreadyExecutedOptimization:
 
         # Same base code with different context (different iteration)
         shell.user_ns["item"] = 5
-        processor.tracking_state.variable_lineage.pop("item", None)
+        processor.tracking_state.lineage.discard("item")
         code_with_context2 = "# __iteration_context__: def456\nresult = item * 2"
         metrics2 = processor.process_statement(code_with_context2)
         # Should NOT be skipped since it has iteration context
@@ -389,7 +389,7 @@ class TestRedundantImportSkip:
 
         # Remove json from namespace AND all tracking
         del shell.user_ns["json"]
-        processor.tracking_state.variable_lineage.pop("json", None)
+        processor.tracking_state.lineage.discard("json")
         processor.tracking_state.executed_cell_codes.pop("json", None)
         # Also clear hashes so it can't be found via any path
         processor.tracking_state.executed_cell_hashes.pop("json", None)
@@ -449,8 +449,8 @@ class TestCacheRestorePaths:
         # Clear from namespace to force cache restore
         del shell.user_ns["x"]
         del shell.user_ns["y"]
-        processor.tracking_state.variable_lineage.pop("x", None)
-        processor.tracking_state.variable_lineage.pop("y", None)
+        processor.tracking_state.lineage.discard("x")
+        processor.tracking_state.lineage.discard("y")
         processor.tracking_state.executed_cell_codes.pop("x", None)
         processor.tracking_state.executed_cell_codes.pop("y", None)
 
@@ -514,7 +514,7 @@ class TestSizeAwareEdgeCases:
         assert metrics["status"] == CacheStatus.COMPUTED
 
         del shell.user_ns["big"]
-        processor.tracking_state.variable_lineage.pop("big", None)
+        processor.tracking_state.lineage.discard("big")
         processor.tracking_state.executed_cell_codes.pop("big", None)
 
         metrics2 = processor.process_statement("big = list(range(sum(range(5_000_000)) // 12499997500000))")

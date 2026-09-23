@@ -243,8 +243,8 @@ The two paths answer "what is this object's fingerprint?" differently, and the o
 
 Content beats the lineage attribute, and that ordering is the fix for a real bug: a notebook variable's `_cash_lineage_hash` is re-derived in every kernel session and is not reproducible across a restart, so keying a persisted decorator entry on it made `train_model(X_train, ...)` miss after a restart and re-train the model. Pinned by `tests/test_core/test_arg_hash_restart_stable.py`.
 
-<!-- claim: cash/notebook/lineage_store.py:LineageStore.resolve @26a7e634, cash/object_hashing.py:_hash_dataframe_or_series @f6c309e2, cash/object_hashing.py:_hash_collection @c5d5c637, cash/object_hashing.py:compute_hash @a7245478 -->
-**Notebook — resolving a statement input** (`LineageStore.resolve`):
+<!-- claim: cash/notebook/lineage_store.py:resolve_lineage @e6dc6918, cash/object_hashing.py:_hash_dataframe_or_series @f6c309e2, cash/object_hashing.py:_hash_collection @c5d5c637, cash/object_hashing.py:compute_hash @a7245478 -->
+**Notebook — resolving a statement input** (`resolve_lineage`):
 
 1. **Virtual lineage** — the simulated value, when an upstream simulation is in flight.
 2. **The recorded lineage** for that variable name.

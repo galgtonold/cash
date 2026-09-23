@@ -1050,7 +1050,7 @@ class StatementProcessor:
         next statement that reads *name* treats it as having no lineage. The
         value in ``user_ns`` is left alone.
         """
-        self.tracking_state.variable_lineage.pop(name, None)
+        self.tracking_state.lineage.discard(name)
         self.tracking_state.executed_cell_codes.pop(name, None)
         self.tracking_state.executed_input_lineages.pop(name, None)
         self.tracking_state.current_session_hashes.pop(name, None)
@@ -4930,8 +4930,8 @@ class StatementProcessor:
         entropy_modules = get_entropy_reseed_modules(code)
         entropy_vars = {rng_virtual_var(m) for m in entropy_modules}
         for var in hidden_lineage_writes(code):
-            self.tracking_state.variable_lineage[var] = (
-                entropy_write_lineage() if var in entropy_vars else hidden_write_lineage(cache_key)
+            self.tracking_state.lineage.record(
+                var, entropy_write_lineage() if var in entropy_vars else hidden_write_lineage(cache_key)
             )
         for module in get_seeding_rng_modules(code):
             self._rng_seed_epochs[module] = entropy_write_lineage() if module in entropy_modules else cache_key

@@ -250,7 +250,7 @@ class TestModuleLineagePropagation(unittest.TestCase):
     def test_existing_variable_lineage_not_overwritten(self):
         """If variable_lineage already has a module, don't overwrite it."""
         existing_lineage = "existing_lineage_hash"
-        self.checker.variable_lineage["pd"] = existing_lineage
+        self.checker.tracking_state.lineage.record("pd", existing_lineage)
 
         self.checker.simulator.simulate_cell("import pandas as pd")
 
@@ -342,7 +342,7 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
         np_lineage = hashlib.sha256(b"np_module").hexdigest()
 
         # Simulate import having been processed (lineage propagated)
-        self.checker.variable_lineage["np"] = np_lineage
+        self.checker.tracking_state.lineage.record("np", np_lineage)
 
         inputs = {"np", "df"}
         outputs = {"result"}
@@ -390,7 +390,7 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
         df_lineage = hashlib.sha256(b"df_data").hexdigest()
 
         # np is in variable_lineage (from import simulation) and user_ns
-        self.checker.variable_lineage["np"] = np_lineage
+        self.checker.tracking_state.lineage.record("np", np_lineage)
 
         code = "result = np.mean(df)"
         virtual_lineage = {"df": df_lineage, "np": np_lineage}

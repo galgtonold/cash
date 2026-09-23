@@ -312,7 +312,7 @@ class _Session:
 
     def run(self, lineage: str, code: str = CODE) -> dict:
         self.shell.user_ns["big"] = list(range(1000))
-        self.magics.tracking_state.variable_lineage["big"] = lineage
+        self.magics.tracking_state.lineage.record("big", lineage)
         self.metrics.clear()
         run_cash_cell(self.magics, code)
         assert self.metrics, "no metrics captured"

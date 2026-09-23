@@ -105,7 +105,7 @@ class TestTrackingState:
         """Each TrackingState instance should have independent containers."""
         state1 = TrackingState()
         state2 = TrackingState()
-        state1.variable_lineage["x"] = "hash1"
+        state1.lineage.record("x", "hash1")
         assert "x" not in state2.variable_lineage
 
     def test_mutation_through_reference(self):
@@ -123,7 +123,7 @@ class TestTrackingState:
         expected = {
             "executed_cell_codes",
             "executed_cell_hashes",
-            "variable_lineage",
+            "lineage",
             "executed_file_deps",
             "variable_hashes",
             "variable_sources",

@@ -530,14 +530,14 @@ class TestGranularInvalidation:
 
         # Setup: variable 'result' depends on module.compute
         old_lineage = hashlib.sha256(b"old").hexdigest()
-        sp.tracking_state.variable_lineage[module_name] = old_lineage
-        sp.tracking_state.variable_lineage["result"] = "result_hash"
+        sp.tracking_state.lineage.record(module_name, old_lineage)
+        sp.tracking_state.lineage.record("result", "result_hash")
         sp.tracking_state.executed_cell_codes["result"] = f"result = {module_name}.compute(5)"
         sp.tracking_state.executed_input_lineages["result"] = {module_name: old_lineage}
         sp.tracking_state.module_attribute_deps["result"] = {module_name: {"compute"}}
 
         # Setup: variable 'version_str' depends on module.VERSION
-        sp.tracking_state.variable_lineage["version_str"] = "version_hash"
+        sp.tracking_state.lineage.record("version_str", "version_hash")
         sp.tracking_state.executed_cell_codes["version_str"] = f"version_str = {module_name}.VERSION"
         sp.tracking_state.executed_input_lineages["version_str"] = {module_name: old_lineage}
         sp.tracking_state.module_attribute_deps["version_str"] = {module_name: {"VERSION"}}
@@ -568,13 +568,13 @@ class TestGranularInvalidation:
         sp = magics._statement_processor
 
         old_lineage = hashlib.sha256(b"old").hexdigest()
-        sp.tracking_state.variable_lineage[module_name] = old_lineage
-        sp.tracking_state.variable_lineage["result"] = "result_hash"
+        sp.tracking_state.lineage.record(module_name, old_lineage)
+        sp.tracking_state.lineage.record("result", "result_hash")
         sp.tracking_state.executed_cell_codes["result"] = f"result = {module_name}.compute(5)"
         sp.tracking_state.executed_input_lineages["result"] = {module_name: old_lineage}
         sp.tracking_state.module_attribute_deps["result"] = {module_name: {"compute"}}
 
-        sp.tracking_state.variable_lineage["version_str"] = "version_hash"
+        sp.tracking_state.lineage.record("version_str", "version_hash")
         sp.tracking_state.executed_cell_codes["version_str"] = f"version_str = {module_name}.VERSION"
         sp.tracking_state.executed_input_lineages["version_str"] = {module_name: old_lineage}
         sp.tracking_state.module_attribute_deps["version_str"] = {module_name: {"VERSION"}}
@@ -600,8 +600,8 @@ class TestGranularInvalidation:
         sp = magics._statement_processor
 
         old_lineage = hashlib.sha256(b"old").hexdigest()
-        sp.tracking_state.variable_lineage[module_name] = old_lineage
-        sp.tracking_state.variable_lineage["result"] = "result_hash"
+        sp.tracking_state.lineage.record(module_name, old_lineage)
+        sp.tracking_state.lineage.record("result", "result_hash")
         sp.tracking_state.executed_cell_codes["result"] = f"result = {module_name}.compute(5)"
         sp.tracking_state.executed_input_lineages["result"] = {module_name: old_lineage}
         # No module_attribute_deps set for 'result'
@@ -625,8 +625,8 @@ class TestGranularInvalidation:
         sp = magics._statement_processor
 
         old_lineage = hashlib.sha256(b"old").hexdigest()
-        sp.tracking_state.variable_lineage[module_name] = old_lineage
-        sp.tracking_state.variable_lineage["result"] = "result_hash"
+        sp.tracking_state.lineage.record(module_name, old_lineage)
+        sp.tracking_state.lineage.record("result", "result_hash")
         sp.tracking_state.executed_cell_codes["result"] = f"result = {module_name}.compute(5)"
         sp.tracking_state.executed_input_lineages["result"] = {module_name: old_lineage}
         sp.tracking_state.module_attribute_deps["result"] = {module_name: {"compute"}}
@@ -651,8 +651,8 @@ class TestGranularInvalidation:
         sp = magics._statement_processor
 
         old_lineage = hashlib.sha256(b"old").hexdigest()
-        sp.tracking_state.variable_lineage[module_name] = old_lineage
-        sp.tracking_state.variable_lineage["result"] = "result_hash"
+        sp.tracking_state.lineage.record(module_name, old_lineage)
+        sp.tracking_state.lineage.record("result", "result_hash")
         sp.tracking_state.executed_cell_codes["result"] = f"result = {module_name}.compute(5)"
         sp.tracking_state.executed_input_lineages["result"] = {module_name: old_lineage}
 
@@ -682,23 +682,23 @@ class TestGranularInvalidation:
         old_lineage_a = hashlib.sha256(b"old_a").hexdigest()
         old_lineage_b = hashlib.sha256(b"old_b").hexdigest()
 
-        sp.tracking_state.variable_lineage[mod_a_name] = old_lineage_a
-        sp.tracking_state.variable_lineage[mod_b_name] = old_lineage_b
+        sp.tracking_state.lineage.record(mod_a_name, old_lineage_a)
+        sp.tracking_state.lineage.record(mod_b_name, old_lineage_b)
 
         # var_x uses mod_a.func_a
-        sp.tracking_state.variable_lineage["var_x"] = "x_hash"
+        sp.tracking_state.lineage.record("var_x", "x_hash")
         sp.tracking_state.executed_cell_codes["var_x"] = f"var_x = {mod_a_name}.func_a()"
         sp.tracking_state.executed_input_lineages["var_x"] = {mod_a_name: old_lineage_a}
         sp.tracking_state.module_attribute_deps["var_x"] = {mod_a_name: {"func_a"}}
 
         # var_y uses mod_a.CONST_A
-        sp.tracking_state.variable_lineage["var_y"] = "y_hash"
+        sp.tracking_state.lineage.record("var_y", "y_hash")
         sp.tracking_state.executed_cell_codes["var_y"] = f"var_y = {mod_a_name}.CONST_A"
         sp.tracking_state.executed_input_lineages["var_y"] = {mod_a_name: old_lineage_a}
         sp.tracking_state.module_attribute_deps["var_y"] = {mod_a_name: {"CONST_A"}}
 
         # var_z uses mod_b.func_b
-        sp.tracking_state.variable_lineage["var_z"] = "z_hash"
+        sp.tracking_state.lineage.record("var_z", "z_hash")
         sp.tracking_state.executed_cell_codes["var_z"] = f"var_z = {mod_b_name}.func_b()"
         sp.tracking_state.executed_input_lineages["var_z"] = {mod_b_name: old_lineage_b}
         sp.tracking_state.module_attribute_deps["var_z"] = {mod_b_name: {"func_b"}}
@@ -944,17 +944,17 @@ class TestGranularEdgeCases:
         sp = magics._statement_processor
 
         old_lineage = hashlib.sha256(b"old").hexdigest()
-        sp.tracking_state.variable_lineage[module_name] = old_lineage
+        sp.tracking_state.lineage.record(module_name, old_lineage)
 
         # Both a and b use compute
         for var in ["a", "b"]:
-            sp.tracking_state.variable_lineage[var] = f"{var}_hash"
+            sp.tracking_state.lineage.record(var, f"{var}_hash")
             sp.tracking_state.executed_cell_codes[var] = f"{var} = {module_name}.compute(1)"
             sp.tracking_state.executed_input_lineages[var] = {module_name: old_lineage}
             sp.tracking_state.module_attribute_deps[var] = {module_name: {"compute"}}
 
         # c uses format_result (unchanged)
-        sp.tracking_state.variable_lineage["c"] = "c_hash"
+        sp.tracking_state.lineage.record("c", "c_hash")
         sp.tracking_state.executed_cell_codes["c"] = f"c = {module_name}.format_result(1)"
         sp.tracking_state.executed_input_lineages["c"] = {module_name: old_lineage}
         sp.tracking_state.module_attribute_deps["c"] = {module_name: {"format_result"}}
@@ -979,10 +979,10 @@ class TestGranularEdgeCases:
         sp = magics._statement_processor
 
         old_lineage = hashlib.sha256(b"old").hexdigest()
-        sp.tracking_state.variable_lineage[module_name] = old_lineage
+        sp.tracking_state.lineage.record(module_name, old_lineage)
 
         # Variable uses both compute AND VERSION
-        sp.tracking_state.variable_lineage["mixed"] = "mixed_hash"
+        sp.tracking_state.lineage.record("mixed", "mixed_hash")
         sp.tracking_state.executed_cell_codes["mixed"] = f"mixed = {module_name}.compute(int({module_name}.VERSION))"
         sp.tracking_state.executed_input_lineages["mixed"] = {module_name: old_lineage}
         sp.tracking_state.module_attribute_deps["mixed"] = {module_name: {"compute", "VERSION"}}
@@ -1007,8 +1007,8 @@ class TestGranularEdgeCases:
         sp = magics._statement_processor
 
         old_lineage = hashlib.sha256(b"old").hexdigest()
-        sp.tracking_state.variable_lineage[module_name] = old_lineage
-        sp.tracking_state.variable_lineage["result"] = "result_hash"
+        sp.tracking_state.lineage.record(module_name, old_lineage)
+        sp.tracking_state.lineage.record("result", "result_hash")
         sp.tracking_state.executed_cell_codes["result"] = f"result = {module_name}.compute(5)"
         sp.tracking_state.executed_input_lineages["result"] = {module_name: old_lineage}
         sp.tracking_state.module_attribute_deps["result"] = {module_name: {"compute"}}

@@ -31,7 +31,7 @@ def processor(tmp_path):
 
 
 def _record(proc, name):
-    proc.tracking_state.variable_lineage[name] = "lin"
+    proc.tracking_state.lineage.record(name, "lin")
     proc.tracking_state.executed_cell_codes[name] = f"{name} = lib.f()"
     proc.tracking_state.executed_input_lineages[name] = {"lib": "old"}
     proc.tracking_state.current_session_hashes[name] = "h"

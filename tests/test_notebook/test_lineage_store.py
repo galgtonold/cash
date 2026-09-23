@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 
+import pytest
+
 from cash.notebook.lineage_store import LineageStore
 
 
@@ -150,9 +152,8 @@ class TestResolvePriorityLadder:
 
 
 class TestTrackingStateWiring:
-    """``TrackingState.lineage`` is a LineageStore that shares state with
-    ``TrackingState.variable_lineage``. During migration the dict view and the
-    store view must observe each other's writes."""
+    """``TrackingState.lineage`` is the store; ``TrackingState.variable_lineage``
+    is a read-only live view of it, so every write has to go through the store."""
 
     def test_state_exposes_lineage_store(self):
         from cash.notebook._protocols import TrackingState
@@ -160,16 +161,38 @@ class TestTrackingStateWiring:
         state = TrackingState()
         assert isinstance(state.lineage, LineageStore)
 
-    def test_dict_writes_visible_through_store(self):
+    def test_store_writes_visible_through_the_view(self):
         from cash.notebook._protocols import TrackingState
 
         state = TrackingState()
-        state.variable_lineage["x"] = "h1"
-        assert state.lineage.get("x") == "h1"
-
-    def test_store_writes_visible_through_dict(self):
-        from cash.notebook._protocols import TrackingState
-
-        state = TrackingState()
+        view = state.variable_lineage
         state.lineage.record("x", "h1")
-        assert state.variable_lineage["x"] == "h1"
+        assert view["x"] == "h1"
+        assert state.variable_lineage is view
+
+    def test_the_view_refuses_writes(self):
+        from cash.notebook._protocols import TrackingState
+
+        state = TrackingState()
+        with pytest.raises(TypeError):
+            state.variable_lineage["x"] = "h1"  # type: ignore[index]
+        assert "x" not in state.lineage
+
+
+class TestForgetting:
+    def test_discard_drops_one_name(self):
+        store = LineageStore()
+        store.record("x", "h1")
+        store.record("y", "h2")
+        store.discard("x")
+        store.discard("never-recorded")
+        assert dict(store) == {"y": "h2"}
+
+    def test_clear_drops_every_name_and_keeps_the_view_live(self):
+        store = LineageStore()
+        view = store.view
+        store.record("x", "h1")
+        store.clear()
+        assert len(store) == 0
+        store.record("y", "h2")
+        assert dict(view) == {"y": "h2"}

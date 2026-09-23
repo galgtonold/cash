@@ -335,7 +335,7 @@ class TestFileDependencyPropagation:
 
         # Set up 'df' in namespace (as a list to avoid pandas dependency)
         shell.user_ns["df"] = [1, 2, 3]
-        processor.tracking_state.variable_lineage["df"] = "df_lineage"
+        processor.tracking_state.lineage.record("df", "df_lineage")
 
         # Now compute a scalar from df
         processor.process_statement("n = len(df)")
@@ -356,7 +356,7 @@ class TestFileDependencyPropagation:
         processor.tracking_state.executed_file_deps["data"] = {str(test_file)}
 
         shell.user_ns["data"] = [1, 2, 3]
-        processor.tracking_state.variable_lineage["data"] = "data_lineage"
+        processor.tracking_state.lineage.record("data", "data_lineage")
 
         # Create a non-scalar output from data
         processor.process_statement("result = list(data)")
@@ -420,8 +420,8 @@ class TestPurityChecks:
         shell.user_ns["add"] = add
         shell.user_ns["x"] = 5
         shell.user_ns["y"] = 3
-        processor.tracking_state.variable_lineage["x"] = "x_lin"
-        processor.tracking_state.variable_lineage["y"] = "y_lin"
+        processor.tracking_state.lineage.record("x", "x_lin")
+        processor.tracking_state.lineage.record("y", "y_lin")
 
         metrics = processor.process_statement("result = add(x, y)")
         assert shell.user_ns.get("result") == 8

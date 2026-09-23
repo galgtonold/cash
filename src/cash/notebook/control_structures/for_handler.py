@@ -424,7 +424,7 @@ class ForLoopHandler:
                 # `val` answers it soundly -- one full hash per iteration.
                 tag = own_tag(val)
                 h = tag if tag is not None else full
-                self.statement_processor.tracking_state.variable_lineage[name] = h
+                self.statement_processor.tracking_state.lineage.record(name, h)
                 loop_var_digests[name] = full
             except (TypeError, ValueError, AttributeError) as exc:
                 logger.debug("[CONTROL] Failed to hash loop variable %s: %s", name, exc)

@@ -215,7 +215,7 @@ def apply_collected_mutations(collector: "RestoreCollector", state: Any) -> None
             if op.value is not None:
                 state.lineage.record(op.var_name, op.lineage_hash, value=op.value)
             else:
-                state.variable_lineage[op.var_name] = op.lineage_hash
+                state.lineage.record(op.var_name, op.lineage_hash)
         if op.code is not None:
             state.executed_cell_codes[op.var_name] = op.code
         if op.code_hash is not None:

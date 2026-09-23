@@ -1898,7 +1898,7 @@ try:
     _cash_magics = get_ipython().magics_manager.registry.get('CashMagics')
     if _cash_magics:
         # Clear shared tracking dicts (underscore-prefixed private attributes)
-        _cash_magics.tracking_state.variable_lineage.clear()
+        _cash_magics.tracking_state.lineage.clear()
         _cash_magics.tracking_state.executed_cell_codes.clear()
         _cash_magics.tracking_state.executed_cell_hashes.clear()
         _cash_magics.tracking_state.current_session_hashes.clear()

@@ -58,7 +58,7 @@ class TestConstructionWithoutOrchestrator:
             tracking_state=ts,
             compute_hash_fn=None,
         )
-        sim.variable_lineage["x"] = "abc"
+        sim.tracking_state.lineage.record("x", "abc")
         assert ts.variable_lineage["x"] == "abc"
 
 

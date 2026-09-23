@@ -62,7 +62,7 @@ def test_cache_unpicklable_object_in_memory(notebook_caching_magics):
     shell.user_ns["LocalClass"] = LocalClass
 
     # Needs lineage to be cacheable
-    magics.tracking_state.variable_lineage["LocalClass"] = "mock_class_hash"
+    magics.tracking_state.lineage.record("LocalClass", "mock_class_hash")
 
     # Mock capture_output context manager
     with patch("cash.notebook.statement.processor.capture_output") as mock_capture:
