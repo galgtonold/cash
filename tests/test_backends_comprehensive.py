@@ -84,6 +84,21 @@ class TestInMemoryBackendAdvanced:
         _, val = b.get("key1")
         assert val == "value"
 
+    def test_a_held_key_lock_is_shared_and_a_released_one_is_forgotten(self):
+        """Callers of one key get one lock while it is in use, and the locks
+        of keys nobody holds do not accumulate over a session."""
+        import gc
+
+        b = InMemoryBackend()
+        held = b.lock("busy")
+        assert b.lock("busy") is held
+        for i in range(500):
+            with b.lock(f"k{i}"):
+                pass
+        gc.collect()
+        assert b.lock("busy") is held
+        assert len(b.__dict__["_inprocess_key_locks"]) == 1
+
     def test_shutdown(self):
         """Shutdown doesn't raise."""
         b = InMemoryBackend()

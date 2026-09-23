@@ -2103,7 +2103,7 @@ left behind by a process that was killed, a full disk, or a `cache_dir` on a
 filesystem where locking does not work properly — some network mounts do not.
 Fix that and locking resumes on its own; nothing needs to be reset.
 
-<!-- claim: cash/backends/_base.py:CacheBackend.lock @03560a4b -->
+<!-- claim: cash/backends/_base.py:CacheBackend.lock @89b52144 -->
 **When it is safe to ignore.** When nothing is concurrent. A single-threaded
 script or a single notebook kernel has no second caller to race with, so the
 lock was never doing anything for you and its absence changes nothing. It

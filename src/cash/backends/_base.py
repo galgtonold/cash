@@ -7,6 +7,7 @@ import logging
 import math
 import threading
 import time
+import weakref
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, fields
@@ -44,10 +45,8 @@ def gdsf_value(metadata: MetadataDict | dict, size: int) -> float:
     return 2.0 ** (math.floor(math.log2(value) * _GDSF_STEPS_PER_OCTAVE) / _GDSF_STEPS_PER_OCTAVE)
 
 
-# Serializes the one-time, per-instance creation of a backend's in-process
-# per-key lock registry (see ``CacheBackend._inprocess_key_lock``). A single
-# process-global mutex is enough: it is held only for the cheap bootstrap
-# check-and-create, never around a compute.
+# Serializes the one-time creation of a backend's per-key lock registry
+# (``CacheBackend._inprocess_key_lock``); held only for that, never a compute.
 _KEY_LOCK_BOOTSTRAP = threading.Lock()
 
 # The metadata channel backends actually see: an opaque dict they round-trip
@@ -394,13 +393,9 @@ class CacheBackend(ABC):
         miss→compute→store body runs once and the rest observe the stored
         result (double-checked inside the lock).
 
-        The default is an **in-process** per-key lock — a ``threading.RLock``
-        kept in a process-local registry guarded by a meta-lock. This honors
-        the ``use_locking`` promise for single-process notebooks/apps on the
-        Tiered / in-memory / file / SQLite backends (which previously returned
-        a ``nullcontext`` no-op). Cross-*process* single-flight legitimately
-        still needs the Redis backend, which overrides this with a distributed
-        lock.
+        The default is an **in-process** per-key ``threading.RLock``.
+        Cross-*process* single-flight needs the Redis backend, which overrides
+        this with a distributed lock.
 
         ``RLock`` (not ``Lock``) so a compute that re-enters the same key on
         the same thread — memoized recursion, a fn that calls itself — re-
@@ -409,24 +404,23 @@ class CacheBackend(ABC):
         """
         return self._inprocess_key_lock(key)
 
-    def _inprocess_key_lock(self, key: str) -> "threading.RLock":
-        """Return the process-local per-key ``RLock`` for *key*, creating it
-        (and the registry) on first use. Lazy so the ABC needs no ``__init__``
-        cooperation from the many subclasses that don't call ``super().__init__``.
+    def _inprocess_key_lock(self, key: str) -> threading.RLock:
+        """The process-local ``RLock`` for *key*, created on first use.
+
+        The registry holds the locks weakly: a lock lives while some caller
+        holds or waits on it, so one lock per key ever used does not pile up
+        over a long session. Created lazily because many subclasses do not
+        call ``super().__init__``.
         """
         registry = self.__dict__.get("_inprocess_key_locks")
         if registry is None:
-            # Bootstrap the registry + its meta-lock exactly once per instance.
-            # The module-global bootstrap lock serializes the check-and-create
-            # so two threads racing the first lock() don't build two registries.
             with _KEY_LOCK_BOOTSTRAP:
                 registry = self.__dict__.get("_inprocess_key_locks")
                 if registry is None:
                     self.__dict__["_inprocess_key_locks_meta"] = threading.Lock()
-                    registry = {}
+                    registry = weakref.WeakValueDictionary()
                     self.__dict__["_inprocess_key_locks"] = registry
-        meta = self.__dict__["_inprocess_key_locks_meta"]
-        with meta:
+        with self.__dict__["_inprocess_key_locks_meta"]:
             lk = registry.get(key)
             if lk is None:
                 lk = registry[key] = threading.RLock()

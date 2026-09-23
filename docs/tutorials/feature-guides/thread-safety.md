@@ -63,7 +63,7 @@ Lock acquisition uses **the cache backend itself** — `self.backend.lock(cache_
 
 ## Which backends implement locking
 
-<!-- claim: cash/backends/_base.py:CacheBackend.lock @03560a4b, cash/backends/_base.py:CacheBackend._inprocess_key_lock @f545fb46, cash/backends/_base.py:_KEY_LOCK_BOOTSTRAP @43b21da4 -->
+<!-- claim: cash/backends/_base.py:CacheBackend.lock @89b52144, cash/backends/_base.py:CacheBackend._inprocess_key_lock @3582d030, cash/backends/_base.py:_KEY_LOCK_BOOTSTRAP @43b21da4 -->
 All of them. The base-class implementation, `CacheBackend.lock`, is a **real per-key `threading.RLock`**, drawn from a process-local registry (`CacheBackend._inprocess_key_lock`) that is created lazily and guarded by a per-instance meta-lock, with a module-global bootstrap lock (`_KEY_LOCK_BOOTSTRAP`) serializing the first-use race. Every backend that doesn't override `lock()` inherits this — so `use_locking=True` honors its promise on the default `Cash()`.
 
 It's an `RLock`, not a `Lock`, so a compute that re-enters the same key on the same thread (memoized recursion, a function that calls itself) re-acquires instead of deadlocking. Other threads still block until the leader fully releases.
