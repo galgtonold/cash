@@ -61,27 +61,31 @@ class TryHandler:
     ):
         """Execute a try/except/else/finally by processing each statement individually.
 
-        1. Execute try body statements one by one.
-        2. If a statement raises an exception, find the matching except handler
-           and execute its body statements.
-        3. If no exception, execute the else body (if present).
-        4. Always execute the finally body (if present).
-        5. Build ``body_stmts`` showing only the actually-executed parts.
+        The branches run inside a real ``try``/``finally`` in the same shape
+        as the user's, so control flow is Python's:
+
+        1. The try body runs statement by statement until one raises.
+        2. An exception (any ``BaseException``) goes to the first matching
+           ``except``; with none matching it propagates.
+        3. The ``else`` body runs only when the try body finished, and its
+           errors are not caught by the handlers.
+        4. The ``finally`` body always runs, including when no handler
+           matched or a handler or the ``else`` body raised.
+        5. ``except ... as name`` unbinds ``name`` when the handler ends.
 
         This mirrors the if per-statement path so that each sub-statement
         gets its own cache key, storage info, and timing — and ``print()``
         calls are never suppressed by the SKIPPED optimisation.
+
+        An ``Exception`` that leaves the construct is returned as the result's
+        ``error``; any other ``BaseException`` propagates.
         """
         all_metrics: list[ProcessResult] = []
-        cached_count = 0
+        try_body_succeeded = False
+        matched_handler: ast.ExceptHandler | None = None
         computed_count = 0
 
-        branch_label = "try"
-        caught_exception = None
-        matched_handler = None
-
         try:
-            branch_hash = hashlib.sha256(branch_label.encode()).hexdigest()[:16]
             # A directive on the ``try`` header scopes to the whole construct and
             # flows down into every branch within it.
             try_annotation = _helpers.resolve_header_annotation(
@@ -89,77 +93,35 @@ class TryHandler:
                 node,
                 inherited_annotation,
             )
-            try_body_succeeded, caught_exception, c, d = self._execute_try_body_stmts(
-                node,
-                branch_hash,
-                branch_label,
-                ttl,
-                silent,
-                all_metrics,
-                raw_cell,
-                try_annotation,
-            )
-            cached_count += c
-            computed_count += d
 
-            # If an exception occurred, find and execute the matching handler
-            if caught_exception is not None and node.handlers:
-                matched_handler = self._find_matching_handler(node.handlers, caught_exception)
-                if matched_handler is not None:
-                    handler_label = self._format_handler_label(matched_handler)
-                    branch_label = handler_label
-                    handler_hash = hashlib.sha256(handler_label.encode()).hexdigest()[:16]
-                    self._bind_exception_to_handler(matched_handler, caught_exception)
-                    c, d = self._execute_simple_branch(
-                        matched_handler.body,
-                        handler_hash,
-                        handler_label,
-                        ttl,
-                        silent,
-                        all_metrics,
-                        raw_cell,
-                        try_annotation,
-                    )
-                    cached_count += c
-                    computed_count += d
-                    caught_exception = None
+            def run_branch(body: list, label: str) -> None:
+                nonlocal computed_count
+                label_hash = hashlib.sha256(label.encode()).hexdigest()[:16]
+                _cached, computed = self._execute_simple_branch(
+                    body, label_hash, label, ttl, silent, all_metrics, raw_cell, try_annotation
+                )
+                computed_count += computed
+
+            try:
+                try:
+                    run_branch(node.body, "try")
+                except BaseException as caught:
+                    handler = self._find_matching_handler(node.handlers, caught)
+                    if handler is None:
+                        raise
+                    matched_handler = handler
+                    self._bind_exception_to_handler(handler, caught)
+                    try:
+                        run_branch(handler.body, self._format_handler_label(handler))
+                    finally:
+                        self._unbind_handler_name(handler)
                 else:
-                    raise caught_exception
-
-            if try_body_succeeded and node.orelse:
-                else_label = "else"
-                else_hash = hashlib.sha256(else_label.encode()).hexdigest()[:16]
-                c, d = self._execute_simple_branch(
-                    node.orelse,
-                    else_hash,
-                    else_label,
-                    ttl,
-                    silent,
-                    all_metrics,
-                    raw_cell,
-                    try_annotation,
-                )
-                cached_count += c
-                computed_count += d
-
-            if getattr(node, "finalbody", None):
-                finally_label = "finally"
-                finally_hash = hashlib.sha256(finally_label.encode()).hexdigest()[:16]
-                c, d = self._execute_simple_branch(
-                    node.finalbody,
-                    finally_hash,
-                    finally_label,
-                    ttl,
-                    silent,
-                    all_metrics,
-                    raw_cell,
-                    try_annotation,
-                )
-                cached_count += c
-                computed_count += d
-
-            if caught_exception is not None:
-                raise caught_exception
+                    try_body_succeeded = True
+                    if node.orelse:
+                        run_branch(node.orelse, "else")
+            finally:
+                if node.finalbody:
+                    run_branch(node.finalbody, "finally")
 
             _helpers.update_lineage_after_execution(self.shell, self.statement_processor, node, ast.unparse(node))
             body_stmts = self._build_try_executed_body_stmts(node, try_body_succeeded, matched_handler)
@@ -177,7 +139,7 @@ class TryHandler:
                 computed_iterations=1 if computed_count > 0 else 0,
             )
 
-        except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user try/except body code
+        except Exception as e:  # noqa: BLE001 - the user's error, after their own handlers and finally ran
             # Handed back to the cell, which raises it; logged above debug it
             # would print the traceback a second time.
             logger.debug("[CONTROL] Error in try per-statement execution: %s", e, exc_info=True)
@@ -204,8 +166,7 @@ class TryHandler:
     ) -> tuple[int, int]:
         """Execute body nodes under a context hash; return (cached_count, computed_count).
 
-        Used for else and finally branches of try/except where no per-statement
-        lineno tagging is needed.
+        A statement that fails raises its error, marked with its cell line.
         """
         cached = computed = 0
         for body_node in body_nodes:
@@ -255,37 +216,18 @@ class TryHandler:
         )
         return metrics.get("status") == CacheStatus.COMPUTED
 
-    def _execute_try_body_stmts(
-        self,
-        node: ast.Try,
-        branch_hash: str,
-        branch_label: str,
-        ttl: int | None,
-        silent: bool,
-        all_metrics: list,
-        raw_cell: str | None = None,
-        branch_annotation=None,
-    ) -> tuple[bool, Exception | None, int, int]:
-        """Execute the try-body statements; return (succeeded, caught_exc, cached, computed)."""
-        cached = computed = 0
-        for body_node in node.body:
-            try:
-                ran = self._run_body_node(
-                    body_node, branch_hash, branch_label, ttl, silent, all_metrics, raw_cell, branch_annotation
-                )
-            except Exception as e:  # noqa: BLE001 - the try's own except clauses decide what the user's error means
-                return False, e, cached, computed
-            if ran:
-                computed += 1
-            elif is_control_structure(body_node) or _helpers.counts_as_cached(all_metrics[-1]):
-                cached += 1
-        return True, None, cached, computed
-
     # ------------------------------------------------------------------
     # Handler matching
     # ------------------------------------------------------------------
 
-    def _bind_exception_to_handler(self, matched_handler: ast.ExceptHandler, caught_exception: Exception) -> None:
+    def _unbind_handler_name(self, handler: ast.ExceptHandler) -> None:
+        """Delete ``except ... as name`` once the handler ends, as Python does."""
+        if not handler.name:
+            return
+        self.shell.user_ns.pop(handler.name, None)
+        self.statement_processor.tracking_state.lineage.discard(handler.name)
+
+    def _bind_exception_to_handler(self, matched_handler: ast.ExceptHandler, caught_exception: BaseException) -> None:
         """Bind the caught exception to the handler's variable and set its lineage."""
         if not matched_handler.name:
             return
@@ -304,7 +246,7 @@ class TryHandler:
         except (ValueError, AttributeError, TypeError) as exc:
             logger.debug("[CONTROL] Failed to compute exception lineage for handler variable: %s", exc)
 
-    def _find_matching_handler(self, handlers: list[ast.ExceptHandler], exc: Exception) -> ast.ExceptHandler | None:
+    def _find_matching_handler(self, handlers: list[ast.ExceptHandler], exc: BaseException) -> ast.ExceptHandler | None:
         """Find the first except handler that matches the given exception.
 
         Returns None if no handler matches.

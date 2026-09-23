@@ -132,20 +132,34 @@ def test_unmatched_handler_propagates(handler, mock_statement_processor):
 
 
 def test_exception_bound_to_handler_var(handler, mock_shell, mock_statement_processor):
-    """except X as e → e is bound in user_ns before handler body runs."""
+    """except X as e → e is bound in user_ns while the handler body runs, and
+    unbound (with its lineage) once the handler ends, as Python does."""
     err = ValueError("captured")
-    mock_statement_processor.process_statement.side_effect = [
-        err,
-        {"status": CacheStatus.COMPUTED, "execution_time": 0.0, "stdout": "", "stderr": "", "outputs": []},
-    ]
+    seen_in_handler = []
+
+    def handler_stmt(*_args, **_kwargs):
+        seen_in_handler.append(mock_shell.user_ns.get("e"))
+        return {"status": CacheStatus.COMPUTED, "execution_time": 0.0, "stdout": "", "stderr": "", "outputs": []}
+
+    calls = iter([err, None])
+
+    def process_statement(*_args, **_kwargs):
+        exc = next(calls)
+        if exc is not None:
+            raise exc
+        return handler_stmt()
+
+    mock_statement_processor.process_statement.side_effect = process_statement
     node = _parse_try("try:\n    x = 1\nexcept ValueError as e:\n    y = 2")
     handler.process(node, None, True)
-    assert mock_shell.user_ns.get("e") is err
+    assert seen_in_handler == [err]
+    assert "e" not in mock_shell.user_ns
     # Exception should have a lineage entry recorded through the LineageStore seam
     mock_statement_processor.tracking_state.lineage.record.assert_called_once()
     args, kwargs = mock_statement_processor.tracking_state.lineage.record.call_args
     assert args[0] == "e"
     assert kwargs.get("value") is err
+    mock_statement_processor.tracking_state.lineage.discard.assert_called_once_with("e")
 
 
 # ---------------------------------------------------------------------------
