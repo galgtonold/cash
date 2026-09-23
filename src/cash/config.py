@@ -871,101 +871,63 @@ def _resolve_config(
     def file_layer(layer: str, path: Any) -> dict[str, Any]:
         data, found = _load_toml_layer(Path(path))
         files.append((layer, str(path), found))
-        data = _validated_layer(data, str(path), strict=False, unknown_keys=found == TOML_SECTION)
-        for key in data:
-            origins[key] = str(path)
-        return data
+        return _validated_layer(data, str(path), strict=False, unknown_keys=found == TOML_SECTION)
 
-    # Where a relative ``cache_dir`` should be resolved FROM. Starts as the
-    # project anchor (the default ``.cash`` belongs to the project, not to
-    # wherever the job was launched); each layer that sets ``cache_dir``
-    # replaces it with the directory that layer is written relative to.
-    cache_dir_origin: Path | object = project_anchor()
-    #: Did any layer below actually set ``cache_dir``? Only when none did is
-    #: the value still the dataclass default, and only then may an installed
-    #: console script be redirected to a per-user location.
-    cache_dir_was_configured = False
+    if config_path is not None and not Path(config_path).exists():
+        # Named in code, so it was meant to exist: a tool that forgot to ship
+        # its config file would otherwise run on defaults without a word.
+        _config_notice(
+            "CONFIG-FILE-MISSING",
+            f"Cash(config_path=...) names {config_path}, a file that does not "
+            f"exist, so none of its settings apply: cash is running on the "
+            f"other layers and its defaults.",
+            "check the path -- for a packaged tool, that the file is included "
+            "in the package (package data) and located relative to the module "
+            "(Path(__file__).parent / 'cash.toml'), not the working directory.",
+        )
 
-    # Layer 1: defaults from CashConfig dataclass
+    user_path = default_user_config_path() if user_config_path is _USE_DEFAULT_PATH else user_config_path
+    project_path = default_project_config_path() if project_config_path is _USE_DEFAULT_PATH else project_config_path
+    env_data = _load_env_config()
+    kwarg_data = _validated_layer(overrides, "Cash(...) arguments", strict=True) if overrides else {}
+
+    # The layers, lowest priority first: (source label, settings, where each
+    # setting came from, what a relative cache_dir in it is relative to). A
+    # file named in code outranks the pyproject.toml found by walking up, so a
+    # package can ship its own settings; the environment and Cash(...)
+    # arguments outrank both, and their paths are relative to the cwd.
+    layers: list[tuple[str, dict[str, Any], Any, Path | object]] = []
+    for layer, path, label in (
+        ("user", user_path, "user"),
+        ("project", project_path, "project"),
+        ("config_path", config_path, "file"),
+    ):
+        if path is not None:
+            layers.append((f"{label}:{path}", file_layer(layer, path), str(path), Path(path).parent))
+    layers.append(("env", env_data, None, _CALLER_RELATIVE))
+    layers.append(("kwargs", kwarg_data, "Cash(...)", _CALLER_RELATIVE))
+
     merged: dict[str, Any] = {
         f.name: getattr(CashConfig(), f.name) for f in fields(CashConfig) if not f.name.startswith("_")
     }
-
-    # Layer 2: user TOML
-    if user_config_path is _USE_DEFAULT_PATH:
-        user_path = default_user_config_path()
-    else:
-        user_path = user_config_path
-    if user_path is not None:
-        user_data = file_layer("user", user_path)
-        if user_data:
-            _merge(merged, user_data)
-            sources.append(f"user:{user_path}")
-            if "cache_dir" in user_data:
-                cache_dir_origin = Path(user_path).parent
-                cache_dir_was_configured = True
-
-    # Layer 3: project TOML
-    if project_config_path is _USE_DEFAULT_PATH:
-        project_path = default_project_config_path()
-    else:
-        project_path = project_config_path
-    if project_path is not None:
-        project_data = file_layer("project", project_path)
-        if project_data:
-            _merge(merged, project_data)
-            sources.append(f"project:{project_path}")
-            if "cache_dir" in project_data:
-                cache_dir_origin = Path(project_path).parent
-                cache_dir_was_configured = True
-
-    # Layer 3b: explicit ``Cash(config_path=...)``, above the project file. A
-    # file named in code outranks the one found by walking up from wherever
-    # the process started: a package shipping its own cash settings had them
-    # overridden by the pyproject.toml of whatever project launched it
-    # (round 19). Environment variables and Cash(...) arguments still win.
-    if config_path is not None:
-        if not Path(config_path).exists():
-            # Named in code, so it was meant to exist: a tool that forgot to
-            # ship its config file ran on defaults -- its cache lifetime gone
-            # -- and nothing said so (round 20).
-            _config_notice(
-                "CONFIG-FILE-MISSING",
-                f"Cash(config_path=...) names {config_path}, a file that does not "
-                f"exist, so none of its settings apply: cash is running on the "
-                f"other layers and its defaults.",
-                "check the path -- for a packaged tool, that the file is included "
-                "in the package (package data) and located relative to the module "
-                "(Path(__file__).parent / 'cash.toml'), not the working directory.",
-            )
-        override_data = file_layer("config_path", config_path)
-        if override_data:
-            _merge(merged, override_data)
-            sources.append(f"file:{config_path}")
-            if "cache_dir" in override_data:
-                cache_dir_origin = Path(config_path).parent
-                cache_dir_was_configured = True
-
-    # Layer 4: env vars
-    env_data = _load_env_config()
-    if env_data:
-        _merge(merged, env_data)
-        sources.append("env")
-        for key in env_data:
-            origins[key] = "CASH_TIER_<N>_*" if key == "tiers" else f"CASH_{key.upper()}"
-        if "cache_dir" in env_data:
-            cache_dir_origin = _CALLER_RELATIVE
-            cache_dir_was_configured = True
-
-    # Layer 5: explicit overrides (kwargs)
-    if overrides:
-        overrides = _validated_layer(overrides, "Cash(...) arguments", strict=True)
-        _merge(merged, overrides)
-        sources.append("kwargs")
-        for key in overrides:
-            origins[key] = "Cash(...)"
-        if "cache_dir" in overrides:
-            cache_dir_origin = _CALLER_RELATIVE
+    # Where a relative ``cache_dir`` is resolved from: the project anchor for
+    # the default ``.cash``, else the layer that set it.
+    cache_dir_origin: Path | object = project_anchor()
+    #: Only when no layer set ``cache_dir`` may an installed console script
+    #: be redirected to a per-user location.
+    cache_dir_was_configured = False
+    for source, data, origin, relative_to in layers:
+        if not data:
+            continue
+        _merge(merged, data)
+        sources.append(source)
+        for key in data:
+            if origin is not None:
+                origins[key] = origin
+            else:  # the environment names each variable
+                origins[key] = "CASH_TIER_<N>_*" if key == "tiers" else f"CASH_{key.upper()}"
+        if "cache_dir" in data:
+            cache_dir_origin = relative_to
             cache_dir_was_configured = True
 
     if not cache_dir_was_configured:

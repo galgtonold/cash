@@ -342,7 +342,7 @@ additionally overridable element-by-element with `CASH_TIER_<N>_<FIELD>`.
 cash = Cash(config_path="./my_special_config.toml")
 ```
 
-<!-- claim: cash/config.py:_resolve_config @41bfeaba -->
+<!-- claim: cash/config.py:_resolve_config @afb12473 -->
 Loads the named TOML above the user and project files — a file named in code
 outranks the `pyproject.toml` found by walking up from wherever the process
 started — and below environment variables and constructor kwargs. That is how
@@ -356,7 +356,7 @@ anywhere else are not read, and cash says so. A relative `cache_dir` in it is re
 own directory, and a leading `~` is your home directory — so a tool that wants
 its cache outside site-packages writes `cache_dir = "~/.cache/mytool"`.
 
-<!-- claim: cash/config.py:_resolve_config @41bfeaba -->
+<!-- claim: cash/config.py:_resolve_config @afb12473 -->
 A path that does not exist is not silently skipped: cash warns
 [`CONFIG-FILE-MISSING`](../warnings.md#config-file-missing) and runs on the
 other layers. The usual cause is a wheel that did not include the file — list
