@@ -40,7 +40,6 @@ def test_core_exports_stable():
         # Exception hierarchy
         "CashError",
         "CacheBackendError",
-        "CacheExpiredError",
         "CacheSerializationError",
         "DependencyNotFoundError",
         "AmbiguousCellError",

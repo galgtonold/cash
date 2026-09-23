@@ -14,7 +14,6 @@ __all__ = [
     "CashError",
     "CacheBackendError",
     "CacheSerializationError",
-    "CacheExpiredError",
     "DependencyNotFoundError",
     "AmbiguousCellError",
     "ForwardReferenceError",
@@ -76,10 +75,6 @@ class CacheBackendError(CashError):
 
 class CacheSerializationError(CashError):
     """Raised when a value cannot be serialized or deserialized for caching."""
-
-
-class CacheExpiredError(CashError):
-    """Raised when a cache entry has exceeded its TTL."""
 
 
 # ---------------------------------------------------------------------------

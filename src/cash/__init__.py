@@ -28,7 +28,6 @@ from .data_source import DataSource, FileDataSource
 from .exceptions import (
     AmbiguousCellError,
     CacheBackendError,
-    CacheExpiredError,
     CacheKeyComputationError,
     CacheSerializationError,
     CashCacheIneffectiveWarning,
@@ -270,7 +269,6 @@ __all__ = [
     # Exceptions (stable)
     "CashError",
     "CacheBackendError",
-    "CacheExpiredError",
     "CacheSerializationError",
     "DependencyNotFoundError",
     "AmbiguousCellError",

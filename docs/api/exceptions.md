@@ -17,7 +17,7 @@ what to do about it, every warning carries a diagnostic code — look it up in
 from cash import (
     # Exceptions
     CashError,
-    CacheBackendError, CacheSerializationError, CacheExpiredError,
+    CacheBackendError, CacheSerializationError,
     DependencyNotFoundError,
     AmbiguousCellError, UpstreamStateError, CacheKeyComputationError,
     ForwardReferenceError,
@@ -35,7 +35,7 @@ top-level `cash` module, except the internal warnings named at the top of
 this page. `CashError` and `CashWarning` are the
 inheritance roots — see the hierarchies below for filtering recipes.
 
-<!-- claim: cash/exceptions.py:__all__ @4903975e broad="the page claims to be the COMPLETE hierarchy, which is a claim about the whole module's exports" -->
+<!-- claim: cash/exceptions.py:__all__ @7e2c7a88 broad="the page claims to be the COMPLETE hierarchy, which is a claim about the whole module's exports" -->
 ## Exception hierarchy
 
 ```text
@@ -43,7 +43,6 @@ Exception
 └── CashError                          — base for everything Cash raises
     ├── CacheBackendError              — backend I/O failures
     ├── CacheSerializationError        — pickle / serialize round-trip failed
-    ├── CacheExpiredError              — entry TTL exceeded (caught internally)
     ├── CacheKeyComputationError       — cache key build failed (notebook)
     ├── CashImpureFunctionError        — @cash.cache(strict=True) saw issues
     ├── AmbiguousCellError             — notebook cell cannot be identified
@@ -60,8 +59,6 @@ A single `except cash.CashError` catches everything cash throws.
 ::: cash.CacheBackendError
 
 ::: cash.CacheSerializationError
-
-::: cash.CacheExpiredError
 
 ::: cash.DependencyNotFoundError
 
