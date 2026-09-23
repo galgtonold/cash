@@ -255,7 +255,7 @@ def load_model():
     return MyModel.from_disk("models/embeddings.bin", "models/vocab.json")
 ```
 
-<!-- claim: cash/core.py:Cash._track_declared_files @1a1a4d66 -->
+<!-- claim: cash/decorator/file_deps.py:FileDepsMixin._track_declared_files @1a1a4d66 -->
 Under the hood, `_register_func` records each path (made absolute at decoration time), and every miss adds them to the call's file tracker as if the body had read them. The entry therefore stores their content fingerprint beside anything the body read itself, every lookup checks it the way it checks an auto-tracked read, and a cached function that calls this one inherits the files on a hit too.
 
 A declared file that does not exist yet is recorded as *absent*, like a lookup for a missing file: creating it later forces a miss. It does *not* fail loudly; you have to remember it's there.

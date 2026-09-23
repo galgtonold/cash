@@ -443,7 +443,7 @@ import of cash's file tracker. `multiprocessing.Pool` and joblib's workers are
 not wrapped: files read only there are not seen, so name them with
 `file_depends_on=`.
 
-<!-- claim: cash/core.py:Cash._credit_remembered_reads @22499d44, cash/tracking/file_tracker.py:_credit_read_to_stack @a47279d7 -->
+<!-- claim: cash/decorator/file_deps.py:FileDepsMixin._credit_remembered_reads @22499d44, cash/tracking/file_tracker.py:_credit_read_to_stack @a47279d7 -->
 A read your code **memoises** counts for every call that uses it. With
 `parse = functools.lru_cache()(parse_csv)` — or a module-level dict of parsed
 files — only the first cached function to call `parse(path)` actually opens
@@ -859,7 +859,7 @@ def parse_config():
     return yaml.safe_load(open("config.yaml"))
 ```
 
-<!-- claim: cash/core.py:Cash._track_declared_files @1a1a4d66 -->
+<!-- claim: cash/decorator/file_deps.py:FileDepsMixin._track_declared_files @1a1a4d66 -->
 Pass a list for multiple files. A declared file is recorded exactly as if the
 function had read it: its **content** fingerprint is stored with the entry and
 checked on every lookup, the same check automatic tracking uses. A `touch` that
@@ -968,7 +968,7 @@ adding or tightening a predicate, drop what was stored under the old rule with
 
 ### `strict=` and `assume_safe=` — purity gates
 
-<!-- claim: cash/core.py:Cash._surface_purity @6efa629c, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._surface_purity @6efa629c, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 By default, `@cash.cache` runs a static analyzer on the function body
 (and module-bounded helpers) on first call. What it does depends on what it finds:
 
@@ -1057,7 +1057,7 @@ on them.
 
 ### `allow_random=` — unseeded randomness
 
-<!-- claim: cash/core.py:Cash._warn_unseeded_randomness @68507ddb -->
+<!-- claim: cash/decorator/rng.py:RngMixin._warn_unseeded_randomness @68507ddb -->
 At decoration time, `@cash.cache` scans the function's source for draws
 from an unseeded RNG and emits a one-shot `CashRandomnessWarning`:
 
@@ -1395,7 +1395,7 @@ frozen, so a call receiving one runs uncached
 
 ### When a cached function changes what it was given
 
-<!-- claim: cash/core.py:Cash._argument_identities @4f205dbb, cash/_plain_data.py:identity_changed @a853a1cf -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._argument_identities @4f205dbb, cash/_plain_data.py:identity_changed @a853a1cf -->
 A call that sorts, appends to or rewrites an argument in place makes a change
 the caller sees — and a hit would not make it. Cash checks for that after each
 miss, and a call it catches is not stored: it runs every time, as it would
@@ -1558,7 +1558,7 @@ A network **read** is not in this group; see the next section.
 
 ### A cached GET goes stale
 
-<!-- claim: cash/core.py:Cash._surface_purity @6efa629c, cash/purity_analyzer.py:DECORATOR_POLICY @44b8bc03 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._surface_purity @6efa629c, cash/purity_analyzer.py:DECORATOR_POLICY @44b8bc03 -->
 `requests.get(url)` writes nothing, so it is not reported with the side
 effects. What the server returns is an **input**, and it is not in the key:
 the first answer is stored and served on every later call, in every later
@@ -1593,7 +1593,7 @@ A `requests.get` is not a file read, and is never checked.
 
 ### A function returning a matplotlib `Figure` is never cached
 
-<!-- claim: cash/core.py:Cash._refuses_identity_coupled @0612aaac -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._refuses_identity_coupled @0612aaac -->
 `@cash.cache` refuses to store a result that is — or contains — a matplotlib
 `Figure` or `Axes`, and warns once saying so.
 

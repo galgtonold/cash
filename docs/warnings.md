@@ -131,7 +131,7 @@ not ignore it if this is the function you were trying to speed up.
 
 ## CACHE-IDENTITY-COUPLED {#cache-identity-coupled}
 
-<!-- claim: cash/core.py:Cash._refuses_identity_coupled @0612aaac -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._refuses_identity_coupled @0612aaac -->
 **What happened.** Your cached function returned a live matplotlib `Figure` or
 `Axes` — or a list, tuple, dict or array holding one — and Cash refused to
 store it. "Identity-coupled" is Cash's term for an object that a library keeps
@@ -195,7 +195,7 @@ truth and there is nothing to fix.
 
 ## CACHE-FRESHNESS-COST {#cache-freshness-cost}
 
-<!-- claim: cash/core.py:Cash._warn_if_local_validation_is_expensive @f15ec824, cash/remote_source.py:validation_is_expensive @18292cc6 -->
+<!-- claim: cash/decorator/file_deps.py:FileDepsMixin._warn_if_local_validation_is_expensive @f15ec824, cash/remote_source.py:validation_is_expensive @18292cc6 -->
 **What happened.** Before serving a cached result, cash re-checks every file the
 call read, to be sure none of them changed. On this call that check cost a
 serious share of the compute it saved — more than half of it, or more than two
@@ -411,7 +411,7 @@ roomier volume.
 
 ## CACHE-RESULT-SHARED {#cache-result-shared}
 
-<!-- claim: cash/core.py:Cash._warn_shared_result @209d97fe, cash/core.py:Cash._shared_with @26fa6105 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._warn_shared_result @209d97fe, cash/decorator/purity_checks.py:PurityChecksMixin._shared_with @26fa6105 -->
 **What happened.** The result shares state with an object the caller still
 holds: it *is* an argument, holds one inside it, sits on the same memory as an
 ndarray argument, or is one of the function's module globals. On the run that
@@ -740,7 +740,7 @@ row posted to a service, the dict the caller inspects afterwards — the program
 is correct on the run that filled the cache and quietly different on every run
 after it.
 
-<!-- claim: cash/core.py:Cash._store_refusal @4e1877c1, cash/core.py:Cash._argument_snapshot @929ba8ad -->
+<!-- claim: cash/core.py:Cash._store_refusal @4e1877c1, cash/decorator/purity_checks.py:PurityChecksMixin._argument_snapshot @929ba8ad -->
 `argument mutation` is handled differently, because it is the one that caught
 people out: an object the caller still holds would stop being changed. A call
 seen changing an argument is **not stored** — the line names the argument, and
@@ -750,7 +750,7 @@ invisible to the caller and never counts. The price is the caching itself, so
 the fix below is still worth making; `assume_safe=True` on the decorator stores
 such a call anyway.
 
-<!-- claim: cash/core.py:Cash._argument_identities @4f205dbb, cash/_plain_data.py:identity_changed @a853a1cf -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._argument_identities @4f205dbb, cash/_plain_data.py:identity_changed @a853a1cf -->
 A list or tuple of plain values — parsed rows, of any size — is checked by
 the identities of what it holds, level by level, which costs a fraction of
 hashing it: `rows.sort()`, an append, a `del`, `rows[i] = ...` or a field
@@ -771,7 +771,7 @@ as the line inside your helper). It waives that effect and nothing else, so an
 effect added to the function later is still reported. `@cash.cache(assume_safe=True)`
 waives the whole function, including whatever is added to it later.
 
-<!-- claim: cash/core.py:Cash._report_observed_effects @488c45ec -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._report_observed_effects @488c45ec -->
 One caveat worth knowing: only the path this particular call took was watched.
 An effect behind a branch that did not run was not seen, so silence here is not
 a proof of purity — this supplements the source scan behind
@@ -800,7 +800,7 @@ file and line number. That line can be in a helper several calls below the
 cached function (`through LEDGER.record(result) in docmind.llm.complete`); the
 write itself may be deeper still, in a method of the object that line calls.
 
-<!-- claim: cash/core.py:Cash._learn_mutating_captures @61423a78 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._learn_mutating_captures @f2f93512 -->
 **Why it matters.** Two things follow, and neither is visible at the call site.
 A cache hit runs no body, so the write stops happening: a counter stops
 counting, an accumulator stops accumulating, and code that reads the variable
@@ -835,14 +835,14 @@ ways to mute it.
 
 ## IMPURE-SIDE-EFFECTS {#impure-side-effects}
 
-<!-- claim: cash/core.py:Cash._surface_purity @6efa629c -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._surface_purity @6efa629c -->
 **What happened.** Before the first call, Cash reads the source of your function
 and of the helpers it calls, looking for shapes that make a cached result
 questionable. It found some. The message lists each one with its line number and
 a short label in square brackets, and the label is the part that tells you how
 much to care:
 
-<!-- claim: cash/core.py:Cash._mutable_global_is_keyed @3a7ccf15 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._mutable_global_is_keyed @3a7ccf15 -->
 - `impure_call` — a call whose job is a side effect: `print` to stdout,
   `input`, `open(..., "w")`, `os.remove`, `subprocess.run`, `requests.post`,
   `json.dump`, or a write-shaped method on a receiver the function did not
@@ -1279,7 +1279,7 @@ cache looks healthy and is silently doing nothing.
 
 ## KEY-NETWORK-READ {#key-network-read}
 
-<!-- claim: cash/core.py:Cash._surface_purity @6efa629c, cash/purity_analyzer.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @c6f9471b -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._surface_purity @6efa629c, cash/purity_analyzer.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @c6f9471b -->
 **What happened.** Reading the source of the function you decorated found a
 call that fetches from a server: `requests.get(...)`, `requests.head(...)`,
 `requests.request("GET", ...)`, the same calls on `httpx`, or
@@ -1825,7 +1825,7 @@ Whichever you pick, pick it per statement or per function. Switching caching off
 across the board to "fix" this trades a known frozen value for a slow notebook
 and gains nothing.
 
-<!-- claim: cash/core.py:Cash._warn_unseeded_randomness @68507ddb -->
+<!-- claim: cash/decorator/rng.py:RngMixin._warn_unseeded_randomness @68507ddb -->
 The decorator form is checked when the decorator is applied rather than when the
 function runs, so it appears at import time, before the function has been called
 once, and once per decorated function. It reads that function's source alone: a
@@ -1989,7 +1989,7 @@ failing until you fix its cause.
 
 ## STORE-CODE-CHANGED {#store-code-changed}
 
-<!-- claim: cash/core.py:Cash._code_moved_since_keyed @0f4b33ea, cash/core.py:Cash._code_functions @bbc5e6f3 -->
+<!-- claim: cash/decorator/file_deps.py:FileDepsMixin._code_moved_since_keyed @0f4b33ea, cash/core.py:Cash._code_functions @bbc5e6f3 -->
 **What happened.** The file holding your cached function, a helper it calls, or
 another cached function it depends on changed on disk after this process read
 the code it keys that function by — and the change touched the code this call
@@ -2042,7 +2042,7 @@ the benefit.
 
 ## STORE-INPUT-CHANGED {#store-input-changed}
 
-<!-- claim: cash/core.py:Cash._inputs_moved_during_call @80b6ca64, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @faa17b34 -->
+<!-- claim: cash/decorator/file_deps.py:FileDepsMixin._inputs_moved_during_call @80b6ca64, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @faa17b34 -->
 **What happened.** A file the cached function read changed before the function
 returned — its size or timestamps moved between the moment it was read and the
 moment the result was about to be stored. The warning names the file. The
