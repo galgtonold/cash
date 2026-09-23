@@ -1,6 +1,6 @@
 """MEASUREMENT: where is the break-even body size?
 
-Round 1 measured per-call store ~0.7ms and hit ~0.8ms against a 5ms body
+An earlier measurement put per-call store at ~0.7ms and hit at ~0.8ms against a 5ms body
 (caching wins ~6x). Lowering _COST_FLOOR_S is only safe down to the point
 where the hit cost still beats re-running the body. Below that, caching a
 call makes the notebook SLOWER -- which is what the 10ms floor exists to

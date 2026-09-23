@@ -47,7 +47,7 @@ NOTEBOOKS = [
     # cell 3 to 12+ seconds of pure pandas groupby.
     ("synthetic_heavy", "benchmarks/synthetic_heavy.ipynb"),
     ("synthetic_heavy_xl", "benchmarks/synthetic_heavy_xl.ipynb"),
-    # Round 23's two slowest shapes, where cash cost more than it saved:
+    # The two slowest shapes seen in user testing, where cash cost more than it saved:
     # thousands of small inputs feeding many derived statements, and a loop
     # over a folder of files. Cheap work per statement, bookkeeping per file
     # and per statement -- the regime synthetic_heavy never reaches. Measured
