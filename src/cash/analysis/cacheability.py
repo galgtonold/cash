@@ -3840,6 +3840,20 @@ def is_pandas_plot_call(method: str, receiver: object) -> bool:
     return (type(receiver).__module__ or "").startswith("pandas")
 
 
+def is_estimator(value: object) -> bool:
+    """Whether *value* duck-types as an sklearn estimator: a callable ``fit``
+    and a callable ``get_params``, and not a module.
+
+    ``get_params`` is what keeps out ``list.append``-style mutators and any
+    object that merely has a ``fit`` method, so rules keyed on estimators
+    never loosen general mutation handling. One predicate for the runtime and
+    the simulation.
+    """
+    if isinstance(value, types.ModuleType):
+        return False
+    return callable(getattr(value, "fit", None)) and callable(getattr(value, "get_params", None))
+
+
 #: Methods that fit their receiver in place, whatever they return.
 FITTING_METHODS = frozenset({"fit", "partial_fit", "fit_transform", "fit_predict", "fit_resample"})
 
@@ -3850,13 +3864,10 @@ def fits_its_receiver(method: str, receiver: object) -> bool:
     Such a call returns a value AND fits the estimator it is called on. Cached
     as ``X = vec.fit_transform(texts)`` with ``X`` as the only output, a hit
     restored ``X`` and left ``vec`` unfitted -- silent in the same kernel,
-    ``NotFittedError`` after a restart (round 23, r23s4). The duck type is the
-    one the bare ``est.fit(X, y)`` rule uses: a callable ``fit`` and a callable
-    ``get_params``. Shared by the runtime and the simulation.
+    ``NotFittedError`` after a restart. Shared by the runtime and the
+    simulation.
     """
-    if method not in FITTING_METHODS or isinstance(receiver, types.ModuleType):
-        return False
-    return callable(getattr(receiver, "fit", None)) and callable(getattr(receiver, "get_params", None))
+    return method in FITTING_METHODS and is_estimator(receiver)
 
 
 def assigned_method_call_receivers(tree: ast.Module | None) -> frozenset[tuple[str, str]]:

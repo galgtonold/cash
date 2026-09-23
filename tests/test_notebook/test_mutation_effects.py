@@ -190,3 +190,25 @@ def test_live_function_source():
     assert live_function_source("resolve_callee", {"f": ast_util.called_names}).startswith("def resolve_callee")
     assert live_function_source("resolve_callee", {"f": len, "k": dict}) is None
     assert live_function_source("dict", {"dict": dict}) is None
+
+
+def test_is_estimator():
+    from cash.analysis.cacheability import is_estimator
+
+    class Est:
+        def fit(self, x):
+            return self
+
+        def get_params(self):
+            return {}
+
+    class FitOnly:
+        def fit(self, x):
+            return self
+
+    fake_module = type(os)("fake")
+    fake_module.fit = fake_module.get_params = len
+    assert is_estimator(Est())
+    assert not is_estimator(FitOnly())
+    assert not is_estimator(fake_module)
+    assert not is_estimator([1])

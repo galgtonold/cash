@@ -509,6 +509,7 @@ from ...analysis.cacheability import (
     assigned_method_call_receivers,
     bare_call_arguments,
     fits_its_receiver,
+    is_estimator,
     standalone_method_call_receivers,
 )
 from ...analysis.cacheability_decision import (
@@ -3524,22 +3525,16 @@ class StatementProcessor:
         expensive cell in an ML notebook and its cache key is already
         input-lineage-based (the estimator is an input), so a user who asks for it
         can have it cached. This narrow gate selects ONLY sklearn-style
-        estimators: the ``fit`` / ``partial_fit`` method name plus the
-        ``BaseEstimator`` duck-type contract -- a callable ``fit`` AND a callable
-        ``get_params``. ``get_params`` is what excludes ``list.append`` /
-        ``dict.update`` and a generic object that merely happens to expose a
-        ``fit`` method, so the estimator-caching path never loosens general
-        mutation caching.
+        estimators (``is_estimator``) called through a fit method, so the
+        estimator-caching path never loosens general mutation caching.
 
-        Modules are excluded (mirroring ``_classify_method_mutations``): a
-        ``pkg.fit(...)`` module-function call is not a receiver mutation. Names
-        already surfaced as AST outputs are excluded too -- those are produced by
+        A module is never an estimator (``pkg.fit(...)`` is a module
+        function call). Names already surfaced as AST outputs are excluded too -- those are produced by
         an assignment (a fresh binding each run), so an in-place transfer onto a
         pre-existing object would be wrong for them.
         """
         # The assignment form too: `X = vec.fit_transform(texts)` fits `vec`
-        # as it returns X, and the directive did not reach it (round 29,
-        # r29s2: TF-IDF was never cached, 11-17 s every pass).
+        # as it returns X.
         candidates = standalone_method_call_receivers(tree) | assigned_method_call_receivers(tree)
         if not candidates:
             return set()
@@ -3547,23 +3542,15 @@ class StatementProcessor:
         for base, method in candidates:
             if method not in _FIT_METHODS:
                 continue
-            v = self.shell.user_ns.get(base)
-            if isinstance(v, types.ModuleType):
-                continue
-            if callable(getattr(v, "fit", None)) and callable(getattr(v, "get_params", None)):
+            if is_estimator(self.shell.user_ns.get(base)):
                 receivers.add(base)
         return receivers - outputs
 
     def _cache_fit_hint(self, receivers) -> str:
         """How to have a fitted estimator cached, when one of *receivers* is
-        one -- the refusal otherwise gave no way out (round 29, r29s2)."""
+        one: the refusal otherwise gives no way out."""
         for base in receivers:
-            v = self.shell.user_ns.get(base)
-            if (
-                not isinstance(v, types.ModuleType)
-                and callable(getattr(v, "fit", None))
-                and callable(getattr(v, "get_params", None))
-            ):
+            if is_estimator(self.shell.user_ns.get(base)):
                 return (
                     f" -- `{base}` is an estimator being fitted; add `# @cash:cache-fit` "
                     "to cache the fit with it (see that directive's identity caveat)"

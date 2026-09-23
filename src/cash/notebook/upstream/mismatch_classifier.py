@@ -15,7 +15,7 @@ import types
 
 from cash.control_markers import strip_markers
 
-from ...analysis.cacheability import analyze_statement
+from ...analysis.cacheability import analyze_statement, is_estimator
 from ...analysis.cacheability_decision import is_lineage_exempt, receiver_is_identity_coupled
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...value_types import BUILTIN_NAMES
@@ -771,9 +771,8 @@ class MismatchClassifier:
         idempotent) so a lineage-only reset is safe; ``partial_fit`` is CUMULATIVE,
         so a lineage-only reset while the partially-fitted object survives in
         ``user_ns`` would double-count on a miss -- it keeps the value-safe
-        full-re-derivation path. The estimator duck-type (a callable ``fit`` AND a
-        callable ``get_params``) mirrors ``StatementProcessor._estimator_fit_receivers``
-        and excludes ``list.append`` / a generic object that merely exposes ``fit``.
+        full-re-derivation path. The estimator is the runtime's
+        (``is_estimator``).
         """
         code = self.executed_cell_codes.get(var_name)
         if not code:
@@ -793,10 +792,7 @@ class MismatchClassifier:
         # chained/attribute receiver (``obj.model.fit``) is not this var.
         if not isinstance(call.func.value, ast.Name) or call.func.value.id != var_name:
             return False
-        v = self.shell.user_ns.get(var_name)
-        if isinstance(v, types.ModuleType):
-            return False
-        return callable(getattr(v, "fit", None)) and callable(getattr(v, "get_params", None))
+        return is_estimator(self.shell.user_ns.get(var_name))
 
     def _handle_lineage_mismatch(
         self,
