@@ -517,7 +517,13 @@ from ...analysis.cacheability_decision import (
     receiver_is_identity_coupled,
 )
 from ...analysis.code_analyzer import CodeAnalyzer
-from ...analysis.mutation_effects import StatementEffects, classify_receivers, drawn_on_arguments, statement_effects
+from ...analysis.mutation_effects import (
+    StatementEffects,
+    classify_receivers,
+    drawn_on_arguments,
+    live_function_source,
+    statement_effects,
+)
 from ...analytics import AnalyticsManager
 from ...tracking.function_tracker import FunctionTracker
 from ...tracking.randomness import (
@@ -3498,30 +3504,7 @@ class StatementProcessor:
         return set(bare_call_arguments(tree, self.shell.user_ns)) - outputs
 
     def _resolve_live_function_source(self, name: str) -> str | None:
-        # *name* bound directly, else a module-level helper in the __globals__ of
-        # any imported function (so ``build(ds)`` calling ``clean(ds)`` -- clean
-        # in build's module, not the notebook -- resolves for interprocedural
-        # arg-mutation detection).
-        ns = self.shell.user_ns
-        fn = ns.get(name)
-        if callable(fn) and not isinstance(fn, type):
-            try:
-                return inspect.getsource(fn)
-            except (OSError, TypeError):
-                pass
-        seen: set[int] = set()
-        for value in ns.values():
-            g = getattr(value, "__globals__", None)
-            if not isinstance(g, dict) or id(g) in seen:
-                continue
-            seen.add(id(g))
-            cand = g.get(name)
-            if callable(cand) and not isinstance(cand, type):
-                try:
-                    return inspect.getsource(cand)
-                except (OSError, TypeError):
-                    continue
-        return None
+        return live_function_source(name, self.shell.user_ns)
 
     def _estimator_fit_receivers(
         self,

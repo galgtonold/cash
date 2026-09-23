@@ -14,6 +14,7 @@ from cash.analysis.mutation_effects import (
     cell_effects,
     classify_receivers,
     is_module_name,
+    live_function_source,
     statement_effects,
 )
 
@@ -179,3 +180,13 @@ class TestClassifyReceivers:
 
         assert self._c("X = vec.fit_transform(t)", {"vec": Est()}).mutated == {"vec"}
         assert self._c("m = df.mean()", {"df": [1]}) == ReceiverClasses()
+
+
+def test_live_function_source():
+    from cash.analysis import ast_util
+
+    assert live_function_source("called_names", {"called_names": ast_util.called_names}).startswith("def called_names")
+    # A helper reached through the module globals of a bound function.
+    assert live_function_source("resolve_callee", {"f": ast_util.called_names}).startswith("def resolve_callee")
+    assert live_function_source("resolve_callee", {"f": len, "k": dict}) is None
+    assert live_function_source("dict", {"dict": dict}) is None

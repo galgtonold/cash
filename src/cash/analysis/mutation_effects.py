@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import ast
 import functools
+import inspect
 import types
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
@@ -63,11 +64,42 @@ __all__ = [
     "classify_receivers",
     "drawn_on_arguments",
     "is_module_name",
+    "live_function_source",
     "nocache_written_vars",
     "statement_effects",
 ]
 
 SourceResolver = Callable[[str], "str | None"]
+
+
+def live_function_source(name: str, namespace: Mapping[str, Any]) -> str | None:
+    """Source of the function *name* as the kernel holds it, or None.
+
+    *name* bound in *namespace*, else a module-level helper in the globals of
+    any function there: an imported ``build(ds)`` calling ``clean(ds)``, with
+    ``clean`` living in ``build``'s module and never in the notebook, resolves
+    too. The runtime resolves through this; the simulation falls back to it
+    for what the cell text does not define.
+    """
+    fn = namespace.get(name)
+    if callable(fn) and not isinstance(fn, type):
+        try:
+            return inspect.getsource(fn)
+        except (OSError, TypeError):
+            pass
+    seen: set[int] = set()
+    for value in namespace.values():
+        module_globals = getattr(value, "__globals__", None)
+        if not isinstance(module_globals, dict) or id(module_globals) in seen:
+            continue
+        seen.add(id(module_globals))
+        candidate = module_globals.get(name)
+        if callable(candidate) and not isinstance(candidate, type):
+            try:
+                return inspect.getsource(candidate)
+            except (OSError, TypeError):
+                continue
+    return None
 
 
 # ---------------------------------------------------------------------------
