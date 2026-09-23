@@ -23,8 +23,7 @@ import types
 from typing import Any
 
 from ..object_hashing import compute_hash
-from ..tracking.file_dep_snapshot import file_dep_is_fresh
-from ..utils import resolve_file_dep_path
+from ..tracking.file_dep_snapshot import snapshot_is_fresh
 from ._protocols import ShellProtocol, TrackingState
 from .cache_status import CacheStatus
 from .call_refs import resolve_call_refs
@@ -126,21 +125,16 @@ class Restorer:
         Called before restoring a cached variable — if files have changed the
         cached value is stale and must be recomputed.
         """
-        for fpath, stored in metadata.get("file_dependencies", {}).items():
-            resolved = resolve_file_dep_path(fpath)
-            if resolved is None:
-                if self._debug:
-                    print(f"[STATE] Cannot restore '{var_name}': file dependency missing: {fpath}")
-                raise NameError(f"name '{var_name}' is not defined (file dependency missing)")
-            # Content-authoritative freshness: a touch keeps the
-            # restore valid, a same-size sub-resolution edit invalidates it.
-            is_fresh, reason = file_dep_is_fresh(resolved, stored)
-            if not is_fresh:
-                if reason == "unreadable":
-                    raise NameError(f"name '{var_name}' is not defined (file dependency missing)")
-                if self._debug:
-                    print(f"[STATE] Cannot restore '{var_name}': file dependency stale ({reason}): {resolved}")
-                raise NameError(f"name '{var_name}' is not defined (file dependency changed)")
+        # Content-authoritative freshness: a touch keeps the restore valid, a
+        # same-size sub-resolution edit invalidates it.
+        fresh, stale = snapshot_is_fresh(metadata.get("file_dependencies"))
+        if fresh:
+            return
+        if self._debug:
+            print(f"[STATE] Cannot restore '{var_name}': file dependency stale ({stale})")
+        if stale.reason in ("missing", "unreadable"):
+            raise NameError(f"name '{var_name}' is not defined (file dependency missing)")
+        raise NameError(f"name '{var_name}' is not defined (file dependency changed)")
 
     def _restore_tracking_state(self, var_name: str, metadata: dict, restored_vars: dict) -> None:
         """Update TrackingState after writing a restored variable into user_ns."""

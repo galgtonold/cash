@@ -49,13 +49,13 @@ def _inputs(tmp_path):
 @pytest.fixture
 def checks(monkeypatch):
     calls: list[str] = []
-    real = virtual_lineage.file_dep_is_fresh
+    real = file_dep_snapshot.file_dep_is_fresh
 
     def counting(path, *a, **k):
         calls.append(path)
         return real(path, *a, **k)
 
-    monkeypatch.setattr(virtual_lineage, "file_dep_is_fresh", counting)
+    monkeypatch.setattr(file_dep_snapshot, "file_dep_is_fresh", counting)
     return calls
 
 

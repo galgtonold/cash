@@ -47,8 +47,6 @@ _BIG = _FULL_MAX + 1024 * 1024  # 2 MiB -> sampled regime
 @pytest.fixture(autouse=True)
 def _sample_above_one_mib(monkeypatch):
     monkeypatch.setattr(file_dep_snapshot, "full_hash_max_bytes", lambda: _FULL_MAX)
-    # The decorator reads the threshold through its own binding.
-    monkeypatch.setattr("cash.core.full_hash_max_bytes", lambda: _FULL_MAX)
 
 
 def _sampled_offsets(size: int) -> list[tuple[int, int]]:

@@ -73,10 +73,10 @@ hourly_report = generate_summary(df)       # one hour
 daily_data = fetch_daily_metrics()         # one day
 ```
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._parse_annotation @70e15ddd, cash/core.py:Cash._validate_ttl @98fd97a4 -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._parse_annotation @70e15ddd, cash/core.py:Cash._validate_ttl @95cdd62d -->
 The annotation TTL overrides the global TTL set by `%cash_on ttl=N` or `%%cash ttl=N`. `_parse_annotation` does the merge: if `annotation.ttl is not None`, the effective TTL becomes that value; otherwise the global TTL applies.
 
-The check itself is in `Cash._validate_ttl`: on a lookup hit, `_validate_ttl` compares `time.time() - metadata['timestamp']` against the TTL and raises `CacheExpiredError` when it's stale. Stale entries fall through to recompute as if the cache had missed.
+The check itself is in `Cash._validate_ttl`: on a lookup hit, `_validate_ttl` asks the one TTL rule every cache path shares (`ttl_expired`) and raises `CacheExpiredError` when the entry is stale: older than the TTL, or at once for `ttl=0`, which is never fresh. Stale entries fall through to recompute as if the cache had missed.
 
 ### `@cash:persist` — force it onto disk
 

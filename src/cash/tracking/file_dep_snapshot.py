@@ -41,11 +41,11 @@ import os
 import stat as _stat
 import sys
 import time
-from collections.abc import Iterable
-from typing import Any
+from collections.abc import Iterable, Mapping
+from typing import Any, NamedTuple
 
 from cash.config import get_config
-from cash.utils import normalize_path
+from cash.utils import normalize_path, resolve_file_dep_path
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +57,10 @@ __all__ = [
     "existing_file_deps",
     "file_content_hash",
     "file_dep_is_fresh",
+    "dep_is_fresh",
+    "snapshot_is_fresh",
+    "FreshnessMemo",
+    "StaleDep",
 ]
 
 # Marks a snapshot entry as a REMOTE object rather than a local path. Remote
@@ -894,3 +898,136 @@ def dep_path_for_this_process(path: str, recorded: Any) -> str:
     if not root:
         return path
     return os.path.join(root, *rel.split("/")).replace(os.sep, "/")
+
+
+# ---------------------------------------------------------------------------
+# Is a whole snapshot still fresh?
+# ---------------------------------------------------------------------------
+#
+# The one place that decides where a recorded dependency is looked for and
+# whether it still matches. The decorator, call units, restore, the statement
+# freshness check, the upstream simulation and the re-execution planner all
+# ask through here, so a fix to either half (the relocated install above, the
+# moved-project fallbacks in ``resolve_file_dep_path``) reaches all of them.
+
+
+class FreshnessMemo:
+    """Answers reused across :func:`snapshot_is_fresh` calls.
+
+    The caller owns its lifetime and must drop it whenever a file could have
+    changed (a statement ran, a new cell started). ``answers`` holds one
+    ``(resolved, is_fresh, reason)`` per (path, recorded snapshot);
+    ``listed`` holds stats taken from directory listings (``stats_from_listings``).
+    """
+
+    __slots__ = ("answers", "listed")
+
+    def __init__(self) -> None:
+        self.answers: dict[Any, tuple[str | None, bool, str | None]] = {}
+        self.listed: dict[str, os.stat_result] = {}
+
+
+class StaleDep(NamedTuple):
+    """The first dependency of a snapshot that is not fresh."""
+
+    path: str
+    """The path as recorded."""
+    resolved: str | None
+    """Where this process looked for it; None when it is nowhere to be found."""
+    reason: str
+    """A :func:`file_dep_is_fresh` reason code, ``'missing'`` or ``'unrecorded'``."""
+
+    def __str__(self) -> str:
+        return f"{self.reason}: {self.resolved or self.path}"
+
+
+def _memo_key(path: str, recorded: Any) -> Any:
+    # A tuple of the snapshot's items, not its repr: the key is built on every
+    # check, answered or not, and a sorted repr was 1 s of r24s4's 120,000
+    # lookups against 5,000 real checks.
+    try:
+        key = (path, tuple(recorded.items()) if isinstance(recorded, dict) else recorded)
+        hash(key)
+        return key
+    except TypeError:
+        try:
+            return (path, repr(sorted(recorded.items())) if isinstance(recorded, dict) else repr(recorded))
+        except TypeError:
+            return None
+
+
+def _check_dep(
+    path: str, recorded: Any, full_hash_max: int | None, listed: os.stat_result | None
+) -> tuple[str | None, bool, str | None]:
+    if not isinstance(recorded, Mapping):
+        return path, False, "unrecorded"
+    here = dep_path_for_this_process(path, recorded)
+    # Checked where it was recorded first: the stat that decides freshness
+    # also says the file is there, so a dependency costs one syscall, not an
+    # ``exists`` and then a stat (a re-run of statements derived from 3,000
+    # files made 72,000; round 23).
+    is_fresh, reason = file_dep_is_fresh(here, recorded, full_hash_max, listed if here == path else None)
+    if reason != "unreadable" or here != path or recorded.get(_REMOTE_MARKER):
+        # A dependency beside the code is checked in THIS install's copy and
+        # nowhere else: missing there is a miss.
+        return here, is_fresh, reason
+    # Not where it was recorded: the project may have moved.
+    moved = resolve_file_dep_path(path)
+    if moved is None:
+        return None, False, "missing"
+    if moved == path:
+        return path, False, "unreadable"
+    return (moved, *file_dep_is_fresh(moved, recorded, full_hash_max))
+
+
+def dep_is_fresh(
+    path: str,
+    recorded: Any,
+    full_hash_max: int | None = None,
+    memo: FreshnessMemo | None = None,
+) -> tuple[str | None, bool, str | None]:
+    """``(resolved, is_fresh, stale_reason)`` for one recorded dependency.
+
+    Looked for where THIS process would read it: this install's own copy for a
+    file beside the code (:func:`dep_path_for_this_process`), otherwise the
+    recorded path, and when that is gone, the moved-project fallbacks of
+    :func:`cash.utils.resolve_file_dep_path`. ``resolved`` is None when the
+    file is nowhere to be found (reason ``'missing'``). A recorded value that
+    is not a snapshot entry is stale (``'unrecorded'``).
+    """
+    key = _memo_key(path, recorded) if memo is not None else None
+    if key is not None:
+        known = memo.answers.get(key)
+        if known is not None:
+            return known
+    answer = _check_dep(path, recorded, full_hash_max, memo.listed.get(path) if memo is not None else None)
+    if key is not None:
+        memo.answers[key] = answer
+    return answer
+
+
+def snapshot_is_fresh(
+    snap: Mapping[str, Any] | None, memo: FreshnessMemo | None = None
+) -> tuple[bool, StaleDep | None]:
+    """``(True, None)`` when every dependency in *snap* still matches, else
+    ``(False, StaleDep)`` naming the first one that does not.
+
+    *snap* is an ``auto_file_deps`` / ``file_dependencies`` snapshot
+    (``{path: entry}``); an empty or missing one is vacuously fresh. Each entry
+    is judged by :func:`dep_is_fresh`. With a *memo*, answers and directory
+    listings are shared with the caller's other checks for as long as it
+    keeps the memo.
+    """
+    if not snap:
+        return True, None
+    full_hash_max = full_hash_max_bytes()
+    if memo is not None and len(snap) >= LISTING_MIN_FILES:
+        # Many files: read their directories once rather than stat each.
+        unlisted = [p for p, s in snap.items() if isinstance(s, dict) and "size" in s and p not in memo.listed]
+        if len(unlisted) >= LISTING_MIN_FILES:
+            memo.listed.update(stats_from_listings(unlisted))
+    for path, recorded in snap.items():
+        resolved, is_fresh, reason = dep_is_fresh(path, recorded, full_hash_max, memo)
+        if not is_fresh:
+            return False, StaleDep(path, resolved, reason or "changed")
+    return True, None

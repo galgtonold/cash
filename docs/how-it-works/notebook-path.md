@@ -245,7 +245,7 @@ counts as a change to the module, so after a restart a cell that uses the
 module runs the setting line again before it draws or prints. Before this, a
 chart drawn after a restart silently lost the notebook's style.
 
-<!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._writer_output_already_fresh @34f917c2, cash/notebook/write_observer.py:observe_writes @cb18a8f7, cash/notebook/carrier_history.py:carrier_history_fingerprint @0ef3e0bc -->
+<!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._writer_output_already_fresh @c847d626, cash/notebook/write_observer.py:observe_writes @cb18a8f7, cash/notebook/carrier_history.py:carrier_history_fingerprint @0ef3e0bc -->
 A cell that writes files (`df.to_csv(...)`, a loop saving one chart per kind)
 is not re-run after a restart just because it ran in an earlier kernel. When it
 runs, Cash records the files it actually wrote, whether the path is in the code or

@@ -22,7 +22,7 @@ from cash.utils import replace_with_retry
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning, CashCacheStoreFailedWarning
 from ..tracking.file_tracker import register_cache_dir, untracked
-from ._base import CacheBackend, MetadataDict, PendingWrites, gdsf_value
+from ._base import CacheBackend, MetadataDict, PendingWrites, gdsf_value, ttl_expired
 from .adaptive_caps import adaptive_disk_cap_for, free_bytes_on_volume, human_bytes
 from .entry_format import (
     ENTRY_SUFFIX,
@@ -841,11 +841,8 @@ class FileBackend(CacheBackend):
                 metadata, _ = read_entry(path, with_payload=False)
                 self._remember(key, metadata)
 
-            ttl = metadata.get("ttl", self._default_ttl)
-            if ttl is not None:
-                created_at = metadata.get("created_at", 0)
-                if time.time() - created_at > ttl:
-                    return None
+            if ttl_expired(metadata.get("created_at", 0), metadata.get("ttl", self._default_ttl)):
+                return None
 
             return metadata
         except FileNotFoundError:
@@ -896,13 +893,9 @@ class FileBackend(CacheBackend):
             if metadata.get("metadata_only"):
                 return None, None
 
-            ttl = metadata.get("ttl", self._default_ttl)
-            if ttl is not None:
-                created_at = metadata.get("created_at", 0)
-                if time.time() - created_at > ttl:
-                    # Entry expired - delete it
-                    self.delete(key)
-                    return None, None
+            if ttl_expired(metadata.get("created_at", 0), metadata.get("ttl", self._default_ttl)):
+                self.delete(key)
+                return None, None
 
             # Update Access Time (Async)
             metadata["last_access"] = time.time()

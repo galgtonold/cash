@@ -8,8 +8,8 @@ statement executes (it may write the file) or the next cell begins.
 
 import types
 
-import cash.notebook.statement.freshness as freshness
 from cash.notebook.statement.freshness import CacheFreshnessChecker
+from cash.tracking import file_dep_snapshot
 from cash.tracking.file_dep_snapshot import snapshot_file_deps
 
 
@@ -28,13 +28,13 @@ def _setup(tmp_path, monkeypatch, n=20):
         p.write_text(f"doc {i}\n")
         paths.append(str(p))
     checks = []
-    real = freshness.file_dep_is_fresh
+    real = file_dep_snapshot.file_dep_is_fresh
 
     def counting(*args, **kwargs):
         checks.append(args[0])
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(freshness, "file_dep_is_fresh", counting)
+    monkeypatch.setattr(file_dep_snapshot, "file_dep_is_fresh", counting)
     checker = CacheFreshnessChecker(_Backend(snapshot_file_deps(set(paths))))
     state = types.SimpleNamespace(executed_file_deps={}, variable_sources={})
     return paths, checks, checker, state
@@ -87,10 +87,8 @@ def test_a_set_already_found_fresh_is_not_walked_again(tmp_path, monkeypatch):
     lapse."""
     paths, checks, checker, state = _setup(tmp_path, monkeypatch, n=100)
     walked = []
-    real = CacheFreshnessChecker._resolve_and_check
-    monkeypatch.setattr(
-        CacheFreshnessChecker, "_resolve_and_check", lambda self, *a, **k: walked.append(a[0]) or real(self, *a, **k)
-    )
+    real = file_dep_snapshot.dep_is_fresh
+    monkeypatch.setattr(file_dep_snapshot, "dep_is_fresh", lambda *a, **k: walked.append(a[0]) or real(*a, **k))
     for key in ("stmt:a", "stmt:b", "stmt:c"):
         _, data, _ = checker.check_cache(state, key, None, epoch=7)
         assert data == "value"

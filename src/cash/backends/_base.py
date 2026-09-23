@@ -25,7 +25,7 @@ from ..config import get_config
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["CacheMetadata", "MetadataDict", "CacheBackend", "PendingWrites"]
+__all__ = ["CacheMetadata", "MetadataDict", "CacheBackend", "PendingWrites", "ttl_expired"]
 
 #: Cost assumed for an entry whose execution time is unknown -- written without
 #: one (raw backend use), or ranked with nothing recorded about it. Small, so an
@@ -672,6 +672,24 @@ class PendingWrites:
                 unfinished,
                 timeout,
             )
+
+
+def ttl_expired(timestamp: float | None, ttl: float | None, now: float | None = None) -> bool:
+    """Has an entry written at *timestamp* outlived *ttl* seconds?
+
+    The one TTL rule every cache path applies. ``None`` never expires.
+    ``ttl <= 0`` means "never fresh" and is decided without consulting the
+    clock: a same-tick re-read can measure an age of ``0.0`` on a coarse
+    timer, and ``0.0 > 0`` would hand back the very entry ``ttl=0`` exists to
+    reject. Otherwise an entry is expired once its age exceeds the ttl. An
+    entry with no timestamp reads as written at the epoch, so it expires under
+    any ttl rather than being served forever.
+    """
+    if ttl is None:
+        return False
+    if ttl <= 0:
+        return True
+    return (time.time() if now is None else now) - (timestamp or 0) > ttl
 
 
 @dataclass(frozen=True)

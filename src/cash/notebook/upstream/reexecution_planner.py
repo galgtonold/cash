@@ -25,7 +25,7 @@ from ...analysis.cacheability import (
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...diagnostics import warn_diagnostic
 from ...exceptions import CashWarning
-from ...tracking.file_dep_snapshot import file_dep_is_fresh
+from ...tracking.file_dep_snapshot import snapshot_is_fresh
 from ...utils import resolve_file_dep_path
 from .._trace import trace_event
 from ..cache_key import called_function_globals, write_provenance_key
@@ -1964,7 +1964,7 @@ class ReexecutionPlanner:
         code was never seen THIS session (the post-restart case). Returns True —
         meaning "do not re-fire" — only when the persisted provenance for this
         exact writer source is present, EVERY recorded output path is still fresh
-        (:func:`file_dep_is_fresh`), AND every recorded input lineage still
+        (:func:`snapshot_is_fresh`), AND every recorded input lineage still
         matches the writer's current (simulated / runtime) lineage.
 
         Conservative in every uncertain case: no backend, missing provenance, an
@@ -2014,13 +2014,12 @@ class ReexecutionPlanner:
         file_deps = record.get("file_deps") or {}
         if not paths or not file_deps:
             return stale("no files recorded")
-        for path in paths:
-            stored = file_deps.get(path)
-            if not stored:
-                return stale("file not recorded", path=path)
-            fresh, _reason = file_dep_is_fresh(path, stored)
-            if not fresh:
-                return stale("file changed", path=path)
+        missing = [path for path in paths if not file_deps.get(path)]
+        if missing:
+            return stale("file not recorded", path=missing[0])
+        fresh, changed = snapshot_is_fresh({path: file_deps[path] for path in paths})
+        if not fresh:
+            return stale("file changed", path=changed.path)
         # The output on disk is only the writer's CURRENT output if its inputs
         # still carry the lineage they had when it was written. A drift means
         # the file was produced from a now-stale payload.

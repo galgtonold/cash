@@ -44,6 +44,7 @@ from cash._clock import perf_counter as _perf_counter
 from cash.analysis.annotations import CacheAnnotation
 from cash.analysis.cacheability import analyze_statement, callee_source_global_mutations
 from cash.analysis.cacheability_decision import decide_cacheability, identity_coupled_reason
+from cash.backends._base import ttl_expired
 from cash.backends.value_policy import worth_its_bytes
 from cash.install_paths import is_user_path
 from cash.notebook._trace import trace_event
@@ -64,7 +65,12 @@ from cash.object_hashing import (
     pandas_nbytes,
     pickled_size_estimate,
 )
-from cash.tracking.file_dep_snapshot import file_dep_is_fresh, snapshot_dependencies
+from cash.tracking.file_dep_snapshot import (
+    attach_code_relative,
+    dep_path_for_this_process,
+    snapshot_dependencies,
+    snapshot_is_fresh,
+)
 from cash.tracking.file_tracker import FileAccessTracker, active_tracker
 from cash.tracking.randomness import capture_rng_state, rng_modules_changed
 
@@ -1401,6 +1407,7 @@ class CallUnit:
                         callee_globals=captured,
                         function=func_name,
                         plain_value=site.source == self.plain_value_source,
+                        code_module=getattr(fn, "__module__", None),
                     )
                     stored = True
             self._record(func_name, site, key, cache_hit=False, elapsed=elapsed, stored=stored)
@@ -1466,7 +1473,8 @@ class CallUnit:
                 if isinstance(recorded, dict) and recorded.get("remote"):
                     tracker.add_tracked_remote(path)
                 else:
-                    tracker.add_tracked(path)
+                    # The file THIS process reads, as the decorator replays it.
+                    tracker.add_tracked(dep_path_for_this_process(path, recorded))
             except Exception:  # noqa: BLE001
                 logger.debug("call unit: could not replay dep %r", path)
 
@@ -1961,8 +1969,8 @@ class CallUnit:
         this task's dependency-propagation fix: propagating a dependency the
         call itself never re-checks would just make the STATEMENT re-declare
         a staleness nobody underneath it ever notices. ``_auto_file_deps_fresh``
-        re-validates it, exactly mirroring ``Cash._auto_file_deps_fresh``
-        (``core.py``) -- a stale entry is treated as a miss like any other,
+        re-validates it through ``snapshot_is_fresh``, the check
+        ``Cash._auto_file_deps_fresh`` makes -- a stale entry is treated as a miss like any other,
         so it falls through to a genuine recompute (and gets overwritten
         under the same key) rather than being replayed.
         """
@@ -1985,8 +1993,8 @@ class CallUnit:
         return True, value, cost, metadata
 
     def _ttl_fresh(self, metadata: Mapping[str, Any]) -> bool:
-        """Mirrors ``CacheFreshnessChecker._invalidate_if_ttl_expired``
-        (``statement/freshness.py``) for a call entry (CAS-268).
+        """The statement's TTL applied to a call entry, by the rule
+        every cache path shares (:func:`cash.backends._base.ttl_expired`).
 
         Before this, ``call_unit.py`` contained no reference to ``ttl`` at all,
         so call entries never expired. Once call interception became the
@@ -1996,56 +2004,27 @@ class CallUnit:
         ``# @cash:ttl=0`` -- the spelling the docs give for data that must
         never be served stale -- the work did not re-run at all until
         ``# @cash:no-cache-calls`` was added as well.
-
-        Two details are copied deliberately rather than re-derived, because
-        both are load-bearing and both are easy to get subtly wrong:
-
-        * ``is not None``, not truthiness. ``ttl=0`` is a REQUEST ("expire
-          immediately"), not an absent setting -- the falsy-vs-``None`` slip is
-          exactly what CAS-221 was at the statement layer.
-        * ``ttl <= 0`` short-circuits without consulting the clock. A
-          same-tick re-read can measure ``age == 0.0`` on a coarse timer, and
-          ``0.0 > 0`` would hand back the very entry ``ttl=0`` exists to
-          reject.
-
-        An entry with no recorded ``timestamp`` reads as age-since-epoch, so it
-        expires under any TTL rather than being served forever -- the
-        fail-safe direction for a value the caller has asked to keep fresh.
         """
-        ttl = self._ttl_provider()
-        if ttl is None:
-            return True
-        if ttl <= 0:
-            return False
         try:
             timestamp = float(metadata.get("timestamp") or 0)
         except (TypeError, ValueError):
             timestamp = 0.0
-        return (_time.time() - timestamp) <= ttl
+        return not ttl_expired(timestamp, self._ttl_provider())
 
     @staticmethod
     def _auto_file_deps_fresh(metadata: Mapping[str, Any]) -> bool:
-        """Mirrors ``Cash._auto_file_deps_fresh`` (``core.py``) for a call
-        entry's own recorded dependencies.
+        """Is every dependency the call recorded still as it was?
 
-        Same snapshot shape (``{path: {'mtime', 'size'[, 'hash']}}`` for a
-        local file, ``{'remote': True, ...}`` for a remote read -- see
-        :mod:`cash.tracking.file_dep_snapshot`) and the same freshness
-        helper, so the two subsystems cannot drift on what "fresh" means.
-        Absent/empty ``auto_file_deps`` (a call that read no files) is
-        vacuously fresh, same as the decorator's version.
+        The same snapshot shape and the same :func:`snapshot_is_fresh` the
+        decorator uses, so the two cannot drift on what "fresh" means -- or on
+        where a file beside the callee's own code is looked for. Absent/empty
+        ``auto_file_deps`` (a call that read no files) is vacuously fresh.
         """
-        snap = metadata.get("auto_file_deps") or {}
-        if not snap:
-            return True
-        for path, recorded in snap.items():
-            try:
-                is_fresh, _reason = file_dep_is_fresh(path, recorded)
-            except Exception:  # noqa: BLE001 - fail closed: cannot prove fresh
-                return False
-            if not is_fresh:
-                return False
-        return True
+        try:
+            fresh, _stale = snapshot_is_fresh(metadata.get("auto_file_deps"))
+        except Exception:  # noqa: BLE001 - fail closed: cannot prove fresh
+            return False
+        return fresh
 
     def _store(
         self,
@@ -2060,6 +2039,7 @@ class CallUnit:
         callee_globals: Mapping[str, Any] | None = None,
         function: str | None = None,
         plain_value: bool = False,
+        code_module: str | None = None,
     ) -> None:
         """Write through ``backend.set(key, value, metadata)`` -- the same
         two-positional-argument shape the statement path uses
@@ -2098,7 +2078,9 @@ class CallUnit:
             metadata["force_persist"] = True
         if file_deps or remote_deps:
             try:
-                snap = snapshot_dependencies(file_deps, remote_deps)
+                # A file beside the callee's own code is checked in each
+                # install's own copy, as the decorator records it.
+                snap = attach_code_relative(snapshot_dependencies(file_deps, remote_deps), code_module)
             except Exception:  # noqa: BLE001 - never let dep snapshotting break the store
                 snap = None
             if snap:

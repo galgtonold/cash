@@ -217,3 +217,31 @@ def test_cash_info_shows_a_tier_s_default_ttl(monkeypatch, capsys):
     monkeypatch.setenv("CASH_TIER_1_DEFAULT_TTL", "5")
     cmd_info(SimpleNamespace())
     assert "file (default_ttl=5s)" in capsys.readouterr().out
+
+
+def test_ttl_zero_recomputes_even_within_one_clock_tick(cash_instance, clock):
+    """``ttl=0`` means "never fresh", as in the notebook: decided without
+    reading the clock, so a lookup in the same tick as the write (age 0.0,
+    which ``age > ttl`` would call fresh) still recomputes."""
+    runs = []
+
+    @cash_instance.cache(ttl=0)
+    def fetch(x):
+        runs.append(x)
+        time.sleep(0.15)  # over the persistence floor
+        return x
+
+    assert fetch(1) == 1
+    assert fetch(1) == 1
+    assert runs == [1, 1], "a ttl=0 entry was served"
+    assert fetch.explain(1).reason == "ttl_expired"
+
+
+def test_one_ttl_rule():
+    from cash.backends._base import ttl_expired
+
+    assert ttl_expired(100.0, None, now=1e9) is False
+    assert ttl_expired(100.0, 0, now=100.0) is True
+    assert ttl_expired(100.0, 5, now=105.0) is False
+    assert ttl_expired(100.0, 5, now=105.5) is True
+    assert ttl_expired(None, 5, now=10.0) is True

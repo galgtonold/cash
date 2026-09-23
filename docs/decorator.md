@@ -204,7 +204,7 @@ The id in brackets is the one `cash inspect --function` lists and
 `CASH_VERBOSE=1` or `verbose = true` give these lines without the other debug
 records.
 
-<!-- claim: cash/core.py:Cash._absent_entry_reason @6316cce8, cash/core.py:Cash._remember_ram_only @17341e53 -->
+<!-- claim: cash/core.py:Cash._absent_entry_reason @088b0f19, cash/core.py:Cash._remember_ram_only @17341e53 -->
 A reason is not limited to what this process saw: each function's recently
 stored keys are recorded beside the cache (in `.keys/`), so the first call of a
 new run can still say that the code changed, that the arguments are new, that
@@ -827,12 +827,12 @@ def stock_price(symbol):
     return requests.get(f"https://api.example.com/{symbol}").json()
 ```
 
-<!-- claim: cash/core.py:Cash._validate_ttl @98fd97a4, cash/core.py:Cash.cleanup @ba377011 -->
+<!-- claim: cash/core.py:Cash._validate_ttl @95cdd62d, cash/core.py:Cash.cleanup @20df501f -->
 After the TTL elapses, the next call recomputes and replaces the entry.
 Entries whose calls never come back stay on disk until you reclaim them —
 call `cash.cleanup()`, or run `python -m cash clear` from the CLI.
 
-<!-- claim: cash/core.py:Cash._entry_ttl @4df547f6, cash/core.py:Cash._absent_entry_reason @6316cce8 -->
+<!-- claim: cash/core.py:Cash._entry_ttl @4df547f6, cash/core.py:Cash._absent_entry_reason @088b0f19 -->
 An entry remembers the `ttl` it was written with, and the decorator's
 current `ttl` applies too, so the **shorter** of the two wins. Lengthening
 `ttl=60` to `ttl=3600` does not rescue entries already written under 60 s:
@@ -1230,7 +1230,7 @@ dedup marks (so the next misbehavior re-warns instead of being silent).
 
 ### `func.explain(*args, **kwargs)`
 
-<!-- claim: cash/core.py:Cash._explain_call @d9b240c2 -->
+<!-- claim: cash/core.py:Cash._explain_call @fb72fb49 -->
 Pure introspection — returns a `CacheExplanation` describing whether
 the next call with these args would hit or miss the cache, and why:
 

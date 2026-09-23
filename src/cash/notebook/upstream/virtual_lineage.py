@@ -49,7 +49,7 @@ from ...analysis.cacheability_decision import receiver_is_identity_coupled
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...source_norm import source_identity_digest
 from ...tracking import file_dep_snapshot as _fds
-from ...tracking.file_dep_snapshot import LISTING_MIN_FILES, file_dep_is_fresh, stats_from_listings
+from ...tracking.file_dep_snapshot import LISTING_MIN_FILES, FreshnessMemo, snapshot_is_fresh, stats_from_listings
 from ...tracking.randomness import (
     hidden_lineage_reads,
     hidden_lineage_writes,
@@ -181,8 +181,8 @@ def key_lineages(input_hashes: dict[str, str]) -> dict[str, str]:
 #: (see VirtualLineage._validate_file_freshness).
 _FRESH_ENTRY_VERDICTS: dict = {}
 
-#: Per cell run, per FILE: the (path, recorded snapshot) pairs found fresh, and
-#: each path's resolution and mtime. The same run-long trust the entry verdicts
+#: Per cell run, per FILE: the freshness answer for each (path, recorded
+#: snapshot) pair, and each path's resolution and mtime. The same run-long trust the entry verdicts
 #: above already take, one level down: upstream entries share their files -- in
 #: r23s4 every entry depended on the same 5,222 documents, in two spellings --
 #: and each entry checked all of them again, twice (freshness, then mtime):
@@ -198,7 +198,7 @@ def _file_state_this_run() -> dict | None:
         return None
     if _FILE_STATE_THIS_RUN.get("epoch") != epoch:
         _FILE_STATE_THIS_RUN.clear()
-        _FILE_STATE_THIS_RUN.update(epoch=epoch, fresh=set(), where={})
+        _FILE_STATE_THIS_RUN.update(epoch=epoch, memo=FreshnessMemo(), where={})
     return _FILE_STATE_THIS_RUN
 
 
@@ -206,19 +206,6 @@ def forget_file_state_this_run() -> None:
     """A statement of this cell run wrote files: answers taken before it are
     not answers for entries checked after it."""
     _FILE_STATE_THIS_RUN.clear()
-
-
-def _snapshot_token(stored: Any) -> Any:
-    """What identifies a recorded snapshot, cheaply."""
-    if isinstance(stored, dict):
-        return (
-            stored.get("hash"),
-            stored.get("size"),
-            stored.get("mtime_ns", stored.get("mtime")),
-            stored.get("remote"),
-            stored.get("absent"),
-        )
-    return repr(stored)
 
 
 def _locate_files(paths: Iterable[str], run: dict | None) -> dict[str, tuple[str | None, Any]]:
@@ -2098,26 +2085,12 @@ class VirtualLineage:
                 memo["keys"] = set()
             if memo_key in memo["keys"]:
                 return True
-        full_hash_max = _fds.full_hash_max_bytes() if hist_files else None
         run = _file_state_this_run()
-        fresh_this_run = run["fresh"] if run is not None else set()
-        pending = {(fpath, _snapshot_token(stored)): (fpath, stored) for fpath, stored in hist_files.items()}
-        pending = {k: v for k, v in pending.items() if k not in fresh_this_run}
-        located = _locate_files([fpath for fpath, _ in pending.values()], run)
-        for token, (fpath, stored) in pending.items():
-            resolved, listed = located[fpath]
-            if resolved is None:
-                if debug:
-                    logger.debug("[UPSTREAM] Forward prop failed: Miss file %s", fpath)
-                return False
-            # Content-authoritative freshness when the size matches.
-            is_fresh, reason = file_dep_is_fresh(resolved, stored, full_hash_max, listed)
-            if not is_fresh:
-                if debug:
-                    logger.debug("[UPSTREAM] Forward prop failed: Stale file (%s) %s", reason, resolved)
-                return False
-            if run is not None:
-                fresh_this_run.add(token)
+        fresh, stale = snapshot_is_fresh(hist_files, run["memo"] if run is not None else None)
+        if not fresh:
+            if debug:
+                logger.debug("[UPSTREAM] Forward prop failed: stale file dependency (%s)", stale)
+            return False
         if memo_key is not None and epoch is not None:
             memo["keys"].add(memo_key)
         return True
@@ -2935,18 +2908,12 @@ class VirtualLineage:
         Each entry is ``{'mtime': ..., 'size': ...}`` — see
         :meth:`_validate_file_freshness`.
         """
-        for fpath, stored in file_deps.items():
-            resolved = resolve_file_dep_path(fpath)
-            if resolved is None:
-                if self.debug:
-                    print(f"[UPSTREAM] Restore failed: Miss file {fpath}")
-                return set(), time_module.time() - start_time, 0.0
-            # Content is authoritative when the size matches.
-            is_fresh, reason = file_dep_is_fresh(resolved, stored)
-            if not is_fresh:
-                if self.debug:
-                    print(f"[UPSTREAM] Restore failed: Stale file ({reason}) {resolved}")
-                return set(), time_module.time() - start_time, 0.0
+        # Content is authoritative when the size matches.
+        fresh, stale = snapshot_is_fresh(file_deps)
+        if not fresh:
+            if self.debug:
+                print(f"[UPSTREAM] Restore failed: stale file dependency ({stale})")
+            return set(), time_module.time() - start_time, 0.0
         return None  # All deps fresh
 
     def _check_lineage_consistency(

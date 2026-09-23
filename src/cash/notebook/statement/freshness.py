@@ -27,13 +27,8 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any
 
-from ...tracking.file_dep_snapshot import (
-    LISTING_MIN_FILES,
-    file_dep_is_fresh,
-    full_hash_max_bytes,
-    stats_from_listings,
-)
-from ...utils import resolve_file_dep_path
+from ...backends._base import ttl_expired
+from ...tracking.file_dep_snapshot import FreshnessMemo, snapshot_is_fresh
 from ..call_refs import resolve_call_refs
 from ._metadata import StatementCacheMetadata
 
@@ -70,8 +65,7 @@ class CacheFreshnessChecker:
         self._backend = backend
         self.debug = debug
         self.last_miss_reason: str | None = None
-        self._checked: dict = {}
-        self._listed: dict = {}
+        self._memo = FreshnessMemo()
         #: Dependency sets verified fresh whole, while the answers above last.
         self._fresh_sets: list[dict] = []
         self._epoch: Any = None
@@ -91,8 +85,7 @@ class CacheFreshnessChecker:
         rewrites mid-cell is seen within that, and a caller outside any cell
         gets one check per lookup, as before.
         """
-        self._checked = {}
-        self._listed = {}
+        self._memo = FreshnessMemo()
         self._fresh_sets = []
         self._epoch = epoch
         self._answered_at = time.monotonic()
@@ -148,44 +141,6 @@ class CacheFreshnessChecker:
     # Private freshness checks
     # ------------------------------------------------------------------
 
-    def _resolve_and_check(self, fpath: str, stored: Any, full_hash_max: int | None):
-        """``(resolved, is_fresh, reason)`` for one dependency, once per lookup."""
-        # A tuple of the snapshot's items, not its repr: the key is built on
-        # every call, answered or not, and a sorted repr was 1 s of r24s4's
-        # 120,000 lookups against 5,000 real checks.
-        try:
-            memo_key = (fpath, tuple(stored.items()) if isinstance(stored, dict) else stored)
-            hash(memo_key)
-        except TypeError:
-            try:
-                memo_key = (fpath, repr(sorted(stored.items())) if isinstance(stored, dict) else repr(stored))
-            except TypeError:
-                memo_key = None
-        checked = getattr(self, "_checked", None)
-        if memo_key is not None and checked is not None and memo_key in checked:
-            return checked[memo_key]
-        answer = None
-        if isinstance(stored, dict) and "size" in stored:
-            # A local snapshot checked where it was recorded first: the stat
-            # that decides freshness also says the file is there, which is all
-            # ``resolve_file_dep_path``'s ``exists`` was asking -- one syscall
-            # per dependency per lookup instead of two (a re-run of statements
-            # derived from 3,000 files made 72,000; round 23). A path that is
-            # not there any more goes through the relocation fallbacks as before.
-            listed = getattr(self, "_listed", None)
-            is_fresh, reason = file_dep_is_fresh(fpath, stored, full_hash_max, listed.get(fpath) if listed else None)
-            if reason != "unreadable":
-                answer = (fpath, is_fresh, reason)
-        if answer is None:
-            resolved = resolve_file_dep_path(fpath)
-            if resolved is None:
-                answer = (None, False, "missing")
-            else:
-                answer = (resolved, *file_dep_is_fresh(resolved, stored, full_hash_max))
-        if memo_key is not None and checked is not None:
-            checked[memo_key] = answer
-        return answer
-
     def _known_fresh(self, deps: dict) -> bool:
         """Was a set equal to *deps* verified fresh while the answers last?
 
@@ -209,12 +164,8 @@ class CacheFreshnessChecker:
         ttl: int,
     ) -> Any:
         """Return None if the cache entry has exceeded *ttl* seconds, else return *cached_data*."""
-        timestamp = metadata.timestamp or 0
-        age = time.time() - timestamp
-        # ttl<=0 means "never fresh", decided without consulting the clock: a
-        # same-tick re-read can measure age == 0.0 on a coarse timer, and
-        # `0.0 > 0` would hand back the entry ttl=0 exists to reject.
-        if ttl <= 0 or age > ttl:
+        if ttl_expired(metadata.timestamp, ttl):
+            age = time.time() - (metadata.timestamp or 0)
             self.last_miss_reason = f"cache TTL expired ({age:.0f}s old, limit {ttl}s)"
             if self.debug:
                 logger.debug("[CACHE DEBUG] Cache expired (TTL)")
@@ -230,36 +181,22 @@ class CacheFreshnessChecker:
         file_deps = metadata.file_dependencies or {}
         if self._known_fresh(file_deps):
             return cached_data
-        full_hash_max = full_hash_max_bytes() if file_deps else None
-        if len(file_deps) >= LISTING_MIN_FILES:
-            # Many files: read their directories once rather than stat each
-            # (see ``stats_from_listings``). Taken at the first lookup that
-            # needs them, as current as the stats they replace.
-            unlisted = [
-                p for p, s in file_deps.items() if isinstance(s, dict) and "size" in s and p not in self._listed
-            ]
-            if len(unlisted) >= LISTING_MIN_FILES:
-                self._listed.update(stats_from_listings(unlisted))
-        for fpath, stored in file_deps.items():
-            # Content is authoritative when the size matches; a bare size/mtime
-            # check both over-invalidates on a touch and misses a
-            # same-size sub-resolution edit. See file_dep_is_fresh.
-            resolved, is_fresh, reason = self._resolve_and_check(fpath, stored, full_hash_max)
-            if resolved is None:
-                self.last_miss_reason = f"file dependency missing: {fpath}"
-                if self.debug:
-                    logger.debug("[CACHE DEBUG] File dependency missing: %s", fpath)
-                return None
-            if not is_fresh:
-                if reason == "unreadable":
-                    self.last_miss_reason = f"file dependency unreadable: {resolved}"
-                elif reason == "size":
-                    self.last_miss_reason = f"file changed (size): {resolved}"
-                else:
-                    self.last_miss_reason = f"file changed: {resolved}"
-                if self.debug:
-                    logger.debug("[CACHE DEBUG] File dependency stale (%s): %s", reason, resolved)
-                return None
+        # Content is authoritative when the size matches; a bare size/mtime
+        # check both over-invalidates on a touch and misses a same-size
+        # sub-resolution edit. See file_dep_is_fresh.
+        fresh, stale = snapshot_is_fresh(file_deps, self._memo)
+        if not fresh:
+            if stale.reason == "missing":
+                self.last_miss_reason = f"file dependency missing: {stale.path}"
+            elif stale.reason == "unreadable":
+                self.last_miss_reason = f"file dependency unreadable: {stale.resolved}"
+            elif stale.reason == "size":
+                self.last_miss_reason = f"file changed (size): {stale.resolved}"
+            else:
+                self.last_miss_reason = f"file changed: {stale.resolved or stale.path}"
+            if self.debug:
+                logger.debug("[CACHE DEBUG] File dependency stale: %s", stale)
+            return None
         self._remember_fresh(file_deps)
         return cached_data
 
@@ -287,7 +224,6 @@ class CacheFreshnessChecker:
         input_var: str,
         fpath: str,
         source_file_deps: dict | None | object = _UNSET,
-        full_hash_max: int | None = None,
     ) -> bool:
         """Return True if *fpath* (a dep of *input_var*) has been modified since it was cached.
 
@@ -312,31 +248,28 @@ class CacheFreshnessChecker:
             source_file_deps = self._source_file_deps(tracking_state, input_var)
         if not source_file_deps or fpath not in source_file_deps:
             return False
-        # Same content-authoritative freshness as the direct-dep check.
-        resolved, is_fresh, reason = self._resolve_and_check(fpath, source_file_deps[fpath], full_hash_max)
-        if resolved is None:
-            self.last_miss_reason = f"input file missing (via {input_var}): {fpath}"
-            if self.debug:
-                logger.debug("[CACHE DEBUG] Input '%s' file dependency missing: %s", input_var, fpath)
-            return True
-        if not is_fresh:
-            size_note = " (size)" if reason == "size" else ""
-            self.last_miss_reason = f"file changed{size_note} via input '{input_var}': {resolved}"
-            if self.debug:
-                logger.debug(
-                    "[CACHE DEBUG] Input '%s' source file stale (%s): %s",
-                    input_var,
-                    reason,
-                    resolved,
-                )
-            return True
-        return False
+        return self._inherited_deps_changed(input_var, {fpath: source_file_deps[fpath]})
+
+    def _inherited_deps_changed(self, input_var: str, deps: dict) -> bool:
+        """True, with the miss reason set, when one of *deps* (inherited through
+        *input_var*) is no longer as its producer recorded it. Same
+        content-authoritative check as the direct dependencies."""
+        fresh, stale = snapshot_is_fresh(deps, self._memo)
+        if fresh:
+            return False
+        if stale.resolved is None:
+            self.last_miss_reason = f"input file missing (via {input_var}): {stale.path}"
+        else:
+            size_note = " (size)" if stale.reason == "size" else ""
+            self.last_miss_reason = f"file changed{size_note} via input '{input_var}': {stale.resolved}"
+        if self.debug:
+            logger.debug("[CACHE DEBUG] Input '%s' source file stale: %s", input_var, stale)
+        return True
 
     def _invalidate_if_input_file_changed(
         self, tracking_state: "TrackingState", inputs: set[str], cached_data: Any
     ) -> Any:
         """Return None if any file dep of an input variable has changed since it was computed."""
-        full_hash_max = None
         for input_var in inputs:
             paths = tracking_state.executed_file_deps.get(input_var, ())
             if not paths:
@@ -344,11 +277,10 @@ class CacheFreshnessChecker:
             source_file_deps = self._source_file_deps(tracking_state, input_var)
             if not source_file_deps or self._known_fresh(source_file_deps):
                 continue
-            if full_hash_max is None:
-                full_hash_max = full_hash_max_bytes()
-            for fpath in paths:
-                if self._input_file_changed(tracking_state, input_var, fpath, source_file_deps, full_hash_max):
-                    return None
+            # Only what the producer's snapshot recorded counts: see _input_file_changed.
+            deps = {p: source_file_deps[p] for p in paths if p in source_file_deps}
+            if self._inherited_deps_changed(input_var, deps):
+                return None
             if paths and len(paths) >= len(source_file_deps) and all(p in paths for p in source_file_deps):
                 self._remember_fresh(source_file_deps)
         return cached_data

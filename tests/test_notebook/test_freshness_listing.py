@@ -42,7 +42,6 @@ def _inputs(tmp_path, n=N):
 
 def _check(paths):
     checker = CacheFreshnessChecker(backend=None)
-    checker._checked, checker._listed = {}, {}
     metadata = types.SimpleNamespace(file_dependencies=snapshot_file_deps(set(paths)))
     return checker, metadata
 
@@ -101,9 +100,6 @@ def test_a_sampled_file_gets_a_stat_of_its_own(tmp_path, monkeypatch, per_file_s
     """Above the full-hash cap the timestamps back up a sampled hash, and a
     listing's timestamps are the one thing that can lag."""
     monkeypatch.setattr(file_dep_snapshot, "full_hash_max_bytes", lambda: 16)
-    import cash.notebook.statement.freshness as freshness
-
-    monkeypatch.setattr(freshness, "full_hash_max_bytes", lambda: 16)
     paths = _inputs(tmp_path)
     checker, metadata = _check(paths)
     per_file_stats.clear()

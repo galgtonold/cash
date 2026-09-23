@@ -46,8 +46,6 @@ _BIG = 2 * 1024 * 1024  # 2 MiB -> sampled regime
 def sampled_regime(monkeypatch):
     """Sampled, without a 65 MiB fixture: the regime is what is under test."""
     monkeypatch.setattr(file_dep_snapshot, "full_hash_max_bytes", lambda: _SAMPLE_ABOVE)
-    # The decorator reads the threshold through its own binding.
-    monkeypatch.setattr("cash.core.full_hash_max_bytes", lambda: _SAMPLE_ABOVE)
 
 
 def _big_file(tmp_path, name="big.bin"):

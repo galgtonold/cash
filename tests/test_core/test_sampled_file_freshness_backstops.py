@@ -53,8 +53,6 @@ _SAMPLE_ABOVE = 1024 * 1024
 def sampled_regime(monkeypatch):
     """Put the fixture files into the sampled regime without growing them."""
     monkeypatch.setattr(file_dep_snapshot, "full_hash_max_bytes", lambda: _SAMPLE_ABOVE)
-    # The decorator reads the threshold through its own binding.
-    monkeypatch.setattr("cash.core.full_hash_max_bytes", lambda: _SAMPLE_ABOVE)
 
 
 def _big_csv(path, mib=9):

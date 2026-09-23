@@ -41,7 +41,7 @@ from .analysis.annotations import parse_annotation_line
 from .analysis.cacheability_decision import identity_coupled_reason
 from .analysis.code_analyzer import CodeAnalyzer
 from .backends import CacheBackend, CacheMetadata, TieredBackend
-from .backends._base import in_multiprocessing_child
+from .backends._base import in_multiprocessing_child, ttl_expired
 from .backends.factory import build_backend_from_config
 from .backends.file_backend import recreate_cache_dir
 from .backends.serialization import get_serializer
@@ -110,10 +110,10 @@ from .source_norm import (
 from .tracking.file_dep_snapshot import (
     ACTIVE_CONFIG,
     attach_code_relative,
+    dep_is_fresh,
     dep_path_for_this_process,
-    file_dep_is_fresh,
-    full_hash_max_bytes,
     snapshot_dependencies,
+    snapshot_is_fresh,
 )
 from .tracking.file_tracker import (
     FileAccessTracker,
@@ -1189,6 +1189,8 @@ _NO_WATCH = object()
 #: `file_dep_is_fresh` reason codes, as the miss reason and explain() say them.
 _STALE_REASON_TEXT = {
     "unreadable": "file missing",
+    "missing": "file missing",
+    "unrecorded": "no usable snapshot of it was recorded",
     "size": "size changed",
     "content": "content changed",
     "mtime": "mtime changed",
@@ -3404,21 +3406,20 @@ class Cash:
 
         # TTL check - the same rule `_try_get_cached` applies.
         ttl = self._entry_ttl(ttl, metadata)
-        if ttl is not None:
+        if ttl_expired(metadata.timestamp, ttl):
             timestamp = metadata.timestamp or 0
             age = time.time() - timestamp
-            if age > ttl:
-                return CacheExplanation(
-                    would_hit=False,
-                    reason=EXPLAIN_TTL_EXPIRED,
-                    func_name=func_name,
-                    cache_key=cache_key,
-                    details={
-                        "ttl_seconds": ttl,
-                        "age_seconds": age,
-                        "cached_at": timestamp,
-                    },
-                )
+            return CacheExplanation(
+                would_hit=False,
+                reason=EXPLAIN_TTL_EXPIRED,
+                func_name=func_name,
+                cache_key=cache_key,
+                details={
+                    "ttl_seconds": ttl,
+                    "age_seconds": age,
+                    "cached_at": timestamp,
+                },
+            )
 
         # Auto-tracked file deps freshness. Routed through the SAME
         # content-authoritative helper a real lookup uses - comparing
@@ -3655,7 +3656,7 @@ class Cash:
                 return MISS_NOT_STORED, outcome["not_stored"]
             written_ttl = outcome.get("ttl")
             age = time.time() - outcome.get("stored_at", 0)
-            if written_ttl is not None and age > written_ttl:
+            if ttl_expired(outcome.get("stored_at", 0), written_ttl):
                 return MISS_TTL, f"written {age:.1f}s ago with ttl={written_ttl}s"
             return MISS_GONE, ("stored earlier in this process and since evicted or cleared")
         previous = self._last_key.get(func_name)
@@ -3665,7 +3666,7 @@ class Cash:
         if cache_key in record:
             stored_at, written_ttl = record[cache_key][:2]
             age = time.time() - stored_at
-            if written_ttl is not None and age > written_ttl:
+            if ttl_expired(stored_at, written_ttl):
                 return MISS_TTL, (f"stored {age:.0f}s ago by an earlier run, with ttl={written_ttl}s")
             return MISS_GONE, ("an earlier run stored it; it has since been evicted or cleared")
         if cache_key in doc["ram_only"]:
@@ -3816,10 +3817,10 @@ class Cash:
             same = _same_file_key(here)
             if same in seen:
                 continue
-            is_fresh, why = file_dep_is_fresh(here, recorded)
+            resolved, is_fresh, why = dep_is_fresh(path, recorded)
             if not is_fresh:
                 seen.add(same)
-                stale[here] = _STALE_REASON_TEXT.get(why or "", "changed")
+                stale[resolved or here] = _STALE_REASON_TEXT.get(why or "", "changed")
         return stale
 
     def _describe_stale_files(self, metadata: CacheMetadata) -> str:
@@ -4259,7 +4260,7 @@ class Cash:
         compute re-reads the file. A path that disappears is also a change.
 
         Freshness is decided by the shared
-        :func:`cash.tracking.file_dep_snapshot.file_dep_is_fresh` - the same
+        :func:`cash.tracking.file_dep_snapshot.snapshot_is_fresh` - the same
         content-authoritative check the notebook path uses, so
         the two subsystems can't drift. ``(mtime, size)`` alone was ambiguous in
         both directions: a touch (identical content, bumped mtime)
@@ -4271,38 +4272,26 @@ class Cash:
         if not snap:
             return True  # nothing to check
 
-        # The full-hash threshold, resolved ONCE for the pass. Reading it per
-        # file costs a config merge each time, and a config merge walks the
-        # directory tree looking for the project marker: profiling a 50-file hit
-        # found 7,000 stat calls and 130 ms in there, three times the checking
-        # it was guarding.
-        full_hash_max = full_hash_max_bytes()
-
         # Remote entries cost a network round trip each to check, so the check
         # itself is worth measuring - see _warn_if_validation_is_expensive.
         #
-        # Local ones are measured too, on their own clock. Hashing is not free
-        # either, and file deps PROPAGATE: an aggregate that calls ten cached
-        # functions inherits their inputs, so a fifty-file pipeline paid for
-        # fifty checks on every one of those hits. Measured at 168 ms a hit
-        # before the digest memo landed, with nothing anywhere to say so -- the
-        # remote channel had a cost warning and the local one, which every user
-        # has, did not.
-        local_seconds = 0.0
-        local_count = 0
+        # Local ones are measured too, as what is left of the pass once the
+        # remote resolutions are taken out. Hashing is not free either, and
+        # file deps PROPAGATE: an aggregate that calls ten cached functions
+        # inherits their inputs, so a fifty-file pipeline paid for fifty checks
+        # on every one of those hits. Measured at 168 ms a hit before the
+        # digest memo landed, with nothing anywhere to say so -- the remote
+        # channel had a cost warning and the local one, which every user has,
+        # did not.
+        started = _perf_counter()
         with measured_validation() as validation:
-            fresh = True
-            for path, recorded in snap.items():
-                is_remote = isinstance(recorded, dict) and recorded.get("remote")
-                started = _perf_counter()
-                is_fresh, reason = file_dep_is_fresh(dep_path_for_this_process(path, recorded), recorded, full_hash_max)
-                if not is_remote:
-                    local_seconds += _perf_counter() - started
-                    local_count += 1
-                if not is_fresh:
-                    logger.debug("[FILE_DEP] stale (%s): %s", reason, path)
-                    fresh = False
-                    break
+            fresh, stale = snapshot_is_fresh(snap)
+        local_seconds = max(0.0, _perf_counter() - started - validation.seconds)
+        local_count = sum(
+            1 for recorded in snap.values() if not (isinstance(recorded, dict) and recorded.get("remote"))
+        )
+        if stale is not None:
+            logger.debug("[FILE_DEP] stale (%s): %s", stale.reason, stale.path)
         Cash._warn_if_validation_is_expensive(validation, metadata)
         self._warn_if_local_validation_is_expensive(local_seconds, local_count, metadata)
         return fresh
@@ -8422,10 +8411,8 @@ class Cash:
         return f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"
 
     def _validate_ttl(self, metadata: CacheMetadata | None, ttl: int | None) -> None:
-        if ttl is not None and metadata:
-            timestamp = metadata.timestamp or 0
-            if time.time() - timestamp > ttl:
-                raise CacheExpiredError("Cache expired")
+        if metadata and ttl_expired(metadata.timestamp, ttl):
+            raise CacheExpiredError("Cache expired")
 
     @staticmethod
     def _lineage_hash(cache_key: str, auto_file_deps: dict | None) -> str:
@@ -10168,8 +10155,7 @@ class Cash:
                 if max_age is not None and age > max_age:
                     return True
 
-                stored_ttl = metadata.ttl
-                return bool(stored_ttl is not None and age > stored_ttl)
+                return ttl_expired(timestamp, metadata.ttl, now)
             except (AttributeError, TypeError, ValueError):
                 return True
 

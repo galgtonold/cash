@@ -13,7 +13,7 @@ from typing import Any
 
 from cash.exceptions import CacheSerializationError
 
-from ._base import CacheBackend, MetadataDict, PendingWrites
+from ._base import CacheBackend, MetadataDict, PendingWrites, ttl_expired
 from .serialization import PickleSerializer, Serializer
 
 logger = logging.getLogger(__name__)
@@ -132,7 +132,7 @@ class SQLiteBackend(CacheBackend):
 
             # Check TTL
             effective_ttl = ttl if ttl is not None else self._default_ttl
-            if effective_ttl is not None and time.time() - created_at > effective_ttl:
+            if ttl_expired(created_at, effective_ttl):
                 # Expired - delete and return None
                 self._conn.execute("DELETE FROM cache_entries WHERE key = ?", (key,))
                 self._conn.commit()
@@ -184,7 +184,7 @@ class SQLiteBackend(CacheBackend):
             return None
 
         effective_ttl = row["ttl"] if row["ttl"] is not None else self._default_ttl
-        if effective_ttl is not None and time.time() - row["created_at"] > effective_ttl:
+        if ttl_expired(row["created_at"], effective_ttl):
             return None
 
         try:
