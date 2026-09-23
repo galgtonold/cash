@@ -520,13 +520,9 @@ def _field_type(name: str, dataclass_type: type = CashConfig) -> Any:
 # TOML loader
 # ---------------------------------------------------------------------------
 
-#: One notice per process. A config file is read on every ``get_config()``.
-_TOML_NOTICE_GIVEN = False
-
-#: ``(code, message)`` pairs already said in this process. A config is
-#: resolved more than once -- the module default, then each ``Cash(...)`` --
-#: and each resolution used to repeat every complaint about it (round 18: the
-#: same bad value, printed twice, as an uncoded log line).
+#: ``(code, message)`` pairs already said in this process: the one dedup for
+#: every config notice. A config is resolved more than once -- the module
+#: default, then each ``Cash(...)`` -- and must not repeat its complaints.
 _CONFIG_NOTICES: set[tuple[str, str]] = set()
 
 
@@ -548,27 +544,19 @@ def _did_you_mean(key: str, valid: Any) -> str:
 
 def _warn_toml_unreadable(path: Path) -> None:
     """Say that a config file was found and is being ignored."""
-    global _TOML_NOTICE_GIVEN
-    if _TOML_NOTICE_GIVEN:
-        return
-    _TOML_NOTICE_GIVEN = True
-    try:
-        warn_diagnostic(
-            CashCacheIneffectiveWarning,
-            "CONFIG-TOML-UNREADABLE",
-            f"cash found {path} but cannot read it: this is Python "
-            f"{sys.version_info.major}.{sys.version_info.minor}, whose standard "
-            f"library has no TOML parser, and `tomli` is not installed. Every "
-            f"setting in that file is being ignored, including cache_dir -- so "
-            f"cash is running on defaults that the file was written to change.",
-            "pip install tomli -- or cash-lib[toml], which `cash-lib[all]` "
-            "includes (cash keeps no required dependencies, so a bare install "
-            "cannot pull one in for you) -- or set the values through CASH_* "
-            "environment variables instead, or run on Python 3.11+ where the "
-            "parser is in the standard library.",
-        )
-    except Exception:  # noqa: BLE001 - a notice must never break a config load
-        logger.debug("Could not emit the unreadable-TOML notice", exc_info=True)
+    _config_notice(
+        "CONFIG-TOML-UNREADABLE",
+        f"cash found {path} but cannot read it: this is Python "
+        f"{sys.version_info.major}.{sys.version_info.minor}, whose standard "
+        f"library has no TOML parser, and `tomli` is not installed. Every "
+        f"setting in that file is being ignored, including cache_dir -- so "
+        f"cash is running on defaults that the file was written to change.",
+        "pip install tomli -- or cash-lib[toml], which `cash-lib[all]` "
+        "includes (cash keeps no required dependencies, so a bare install "
+        "cannot pull one in for you) -- or set the values through CASH_* "
+        "environment variables instead, or run on Python 3.11+ where the "
+        "parser is in the standard library.",
+    )
 
 
 _CASH_SECTION_RE = re.compile(r"^\s*(\[\s*(tool\s*\.\s*)?cash\s*[\].]|tool\s*\.\s*cash\s*\.)", re.MULTILINE)
@@ -1087,27 +1075,45 @@ def _merge(base: dict[str, Any], update: dict[str, Any]) -> None:
             base[k] = v
 
 
+def _build_tiers(entries: list[Any]) -> list[TierConfig]:
+    """The usable tiers of *entries*, naming each one left out (CONFIG-INVALID).
+
+    A tier with no ``type`` is what ``CASH_TIER_<N>_*`` variables leave when no
+    file declares tier N; dropping it without a word changed the stack.
+    """
+    names = {f.name for f in fields(TierConfig)}
+    tiers: list[TierConfig] = []
+    for i, entry in enumerate(entries):
+        if isinstance(entry, TierConfig):
+            tiers.append(entry)
+            continue
+        problem = None
+        if not isinstance(entry, dict):
+            problem = f"is {entry!r}, not a table of tier settings"
+        elif not entry.get("type"):
+            problem = f"has no type ({entry!r})"
+        else:
+            try:
+                tiers.append(TierConfig(**{k: v for k, v in entry.items() if k in names}))
+            except (ValueError, TypeError) as exc:
+                problem = f"cannot be used ({exc})"
+        if problem:
+            _config_notice(
+                "CONFIG-INVALID",
+                f"tiers[{i}] {problem}, so it is left out of the tier stack.",
+                "give every tier a type (memory, file, sqlite, redis or s3); a tier set "
+                "only through CASH_TIER_<N>_* variables needs CASH_TIER_<N>_TYPE.",
+            )
+    return tiers
+
+
 def _build_config(merged: dict[str, Any], source: str) -> CashConfig:
     """Materialise the merged dict into a typed CashConfig instance."""
     cfg = CashConfig()
     valid = {f.name for f in fields(CashConfig) if not f.name.startswith("_")}
     for key, value in merged.items():
         if key == "tiers":
-            tiers: list[TierConfig] = []
-            for entry in value or []:
-                if isinstance(entry, TierConfig):
-                    tiers.append(entry)
-                elif isinstance(entry, dict) and entry.get("type"):
-                    # Filter to known TierConfig fields so unrelated keys
-                    # in the TOML don't blow up __init__.
-                    tier_field_names = {f.name for f in fields(TierConfig)}
-                    clean = {k: v for k, v in entry.items() if k in tier_field_names}
-                    try:
-                        tiers.append(TierConfig(**clean))
-                    except (ValueError, TypeError):
-                        logger.debug("dropping unusable tier %r", clean)
-                # else: malformed entry — silently skip
-            cfg.tiers = tiers
+            cfg.tiers = _build_tiers(value or [])
         elif key in valid:
             setattr(cfg, key, value)
     cfg._source = source

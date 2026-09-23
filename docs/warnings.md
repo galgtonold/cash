@@ -581,7 +581,7 @@ effect and the file or variable it came from, so you can check the result.
 
 ## CONFIG-INVALID {#config-invalid}
 
-<!-- claim: cash/config.py:_validated_layer @ad9630b5, cash/config.py:_warn_toml_malformed @b070e115, cash/config.py:_load_toml_layer @045509b5 -->
+<!-- claim: cash/config.py:_validated_layer @ad9630b5, cash/config.py:_warn_toml_malformed @b070e115, cash/config.py:_load_toml_layer @045509b5, cash/config.py:_build_tiers @d9b42b7d -->
 **What happened.** Cash could not use something in its configuration. One of
 these:
 
@@ -598,6 +598,9 @@ these:
 * **A config file with its settings outside a `[cash]` table.** A file named
   with `Cash(config_path=...)`, or the user config file, keeps its settings
   under `[cash]` (or `[tool.cash]`); top-level keys are not read.
+* **A tier that cannot be built**, left out of the tier stack: one with no
+  `type`, typically set only through `CASH_TIER_<N>_*` variables for a tier no
+  file declares (add `CASH_TIER_<N>_TYPE`), or one that is not a table.
 
 Each problem is reported once per process, however many times the
 configuration is resolved.
@@ -615,7 +618,7 @@ though then the line is better deleted.
 
 ## CONFIG-TOML-UNREADABLE {#config-toml-unreadable}
 
-<!-- claim: cash/config.py:_load_toml_config @9d135d5c, cash/config.py:_warn_toml_unreadable @b8ff032b -->
+<!-- claim: cash/config.py:_load_toml_config @9d135d5c, cash/config.py:_warn_toml_unreadable @b0598e4e -->
 **What happened.** Cash found a config file — `pyproject.toml` with a
 `[tool.cash]` section, or the XDG user config — and has nothing that can parse
 it. A TOML parser entered the standard library in **Python 3.11** (`tomllib`);
@@ -649,8 +652,8 @@ or run on Python 3.11 or newer, where the parser ships with the interpreter.
 
 **When it is safe to ignore.** When the file is not meant for this environment
 — a `pyproject.toml` that carries `[tool.cash]` for a different deployment, say.
-The warning fires once per process, and only when a config file is actually
-there.
+The warning fires once per process for each file, and only when a config
+file is actually there.
 
 ## CONFIG-FILE-MISSING {#config-file-missing}
 

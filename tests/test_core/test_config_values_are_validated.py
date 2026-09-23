@@ -122,3 +122,22 @@ def test_valid_values_of_every_kind_still_pass(tmp_path):
     assert (c.config.max_cache_size, c.config.compress, c.config.flush_interval) == (10**9, True, 3)
     assert c.config.persist_all is False  # 0/1 are ordinary for a flag
     assert c.config.min_cache_savings_pct == 0.0
+
+
+def test_a_tier_left_out_of_the_stack_is_named(monkeypatch):
+    """A tier the environment describes only in part -- no file declares
+    tier 1, so it has no type -- was dropped with a debug line, changing the
+    stack without a word."""
+    import warnings
+
+    from cash import config as cash_config
+
+    monkeypatch.setattr(cash_config, "_CONFIG_NOTICES", set())
+    monkeypatch.setenv("CASH_TIER_0_TYPE", "memory")
+    monkeypatch.setenv("CASH_TIER_1_HOST", "cache.prod")
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        cfg = get_config(user_config_path=None, project_config_path=None)
+    assert [t.type for t in cfg.tiers] == ["memory"]
+    said = [str(w.message) for w in rec if "[CONFIG-INVALID]" in str(w.message)]
+    assert said and "tiers[1]" in said[0] and "CASH_TIER_<N>_TYPE" in said[0], [str(w.message) for w in rec]

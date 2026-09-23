@@ -39,9 +39,7 @@ def no_toml_parser(monkeypatch):
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", blocked)
-    # raising=False so the fails-first control reports the missing WARNING
-    # rather than a missing attribute: an ERROR proves nothing about behaviour.
-    monkeypatch.setattr(config_module, "_TOML_NOTICE_GIVEN", False, raising=False)
+    monkeypatch.setattr(config_module, "_CONFIG_NOTICES", set())
 
 
 def _a_config(tmp_path):
