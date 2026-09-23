@@ -176,7 +176,7 @@ Conditionals work the same way with a different marker: `if`/`elif`/`else` and
 `# control_context:` branch hash, so only the branch that actually ran is
 cached and unused branches never pollute the key space.
 
-<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @0e8f04a6, cash/notebook/control_structures/common.py:get_control_structure_type @a07b3e05 -->
+<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @22090a80, cash/notebook/control_structures/common.py:get_control_structure_type @a07b3e05 -->
 `while` and `with` are the exception — they are executed as a **single cacheable
 unit** through the statement processor rather than decomposed, because neither
 has an enumerable iteration space to key on.

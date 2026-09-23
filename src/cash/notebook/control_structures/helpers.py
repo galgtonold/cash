@@ -344,9 +344,8 @@ def collect_body_input_lineages(
 
     The mutated variable's identity has to answer "did this come from the same
     upstream computation as last time?", and the body's inputs are most of that
-    answer. Without them the only content signal is a sampled hash — see
-    :func:`update_mutated_variable_lineages` for the measurement showing why
-    that is not enough.
+    answer. Without them the only content signal is a sampled hash, which is
+    not enough (see :func:`update_mutated_variable_lineages`).
 
     Excludes the mutated variables themselves (a loop body almost always reads
     what it mutates, and folding that in would just re-add the sampled hash by
@@ -494,66 +493,23 @@ def update_mutated_variable_lineages(
     loop_code: str,
     input_lineages: dict[str, str] | None = None,
 ) -> None:
-    """
-    Update the lineage of variables that were mutated inside a control structure.
+    """Give every variable the control structure mutated a new lineage.
 
-    The new lineage incorporates:
-    1. The control structure code itself
-    2. The variable's current value hash
-    3. The iterable's lineage (for loops)
-    4. The lineage of every OTHER variable the body read (*input_lineages*)
+    The lineage hashes, in order: the structure's code, the value's hash,
+    the variable's lineage before the structure ran (``prev=``), the
+    iterable's lineage (loops), and the lineage of every OTHER variable the
+    body read (*input_lineages*).
 
-    This ensures downstream statements get fresh cache keys when the
-    control structure produces different results.
+    The value hash alone cannot carry this: ``compute_hash`` SAMPLES large
+    objects, so two frames that differ past the sampled region hash equal.
+    The lineage must come from provenance -- what went in -- or the next
+    statement to read the variable restores a stale entry under an unchanged
+    key. The ``prev=`` component is the only one left when the loop source
+    matches and the sampled hash collides: a loop over a frame built two
+    different ways upstream must leave with two different lineages.
 
-    Component 4 is not an optimisation, it is what makes the result correct.
-    Component 2 is ``compute_hash``, which SAMPLES large objects (a DataFrame
-    hashes shape + dtypes + ``head(5)``), so two frames that differ only past
-    the sampled region hash identically and the lineage cannot move. Measured:
-    a 400k-row frame before and after an upstream edit that changed 5,000 rows
-    — sums 14400396.667 vs 14588218.0, ``compute_hash`` equal on both. The loop
-    itself rebuilt the variable correctly; the NEXT statement to read it then
-    restored a stale entry, because its key saw an unchanged lineage.
-
-    ``known-limitations.md`` calls the sampling blind spot latent, "reachable
-    only after provenance is lost". This path is where provenance *was* lost:
-    it re-derived identity from a sampled value instead of from the inputs.
-    ``for_handler`` already records the same lesson one layer out — "a sampled
-    hash is never sound as a key discriminator" — and states that
-    ``variable_lineage`` wants PROVENANCE. *iterable_lineage* was already
-    provenance; this extends the same treatment to the body's other reads.
-
-    Component 5 closes the same hole from the other side.
-    :func:`collect_body_input_lineages` deliberately EXCLUDES the mutated
-    variables, reasoning that a body almost always reads what it
-    mutates and folding that back in would "re-add the sampled hash by another
-    route". That holds only when the receiver's lineage came from THIS path.
-    Usually it did not: it came from whatever built the receiver, and that is
-    provenance worth having.
-
-    A month-end close is the case. A cell built ``status_all``
-    one way on Monday and a different way on Tuesday (a matching fix; 50,000 of
-    300,000 rows changed), and in both versions ran the same loop over it::
-
-        for col, src in (("total_eur", "total"), ("outstanding_eur", "outstanding")):
-            status_all[col] = (status_all[src] * 1.2).round(2)
-
-    Traced, the two runs entered the loop with correctly different lineages and
-    left it with the same one::
-
-        Monday   b2510fa9 -> ... -> f1448c04 -> a538f1d3
-        Tuesday  b3444595 -> ... -> ab41d7fd -> a538f1d3
-
-    The loop source matched, the sampled value hash COLLIDED across two frames
-    differing in 50,000 rows, and the receiver's own history was excluded by
-    design -- so nothing was left to tell them apart. The next statement,
-    ``aged = aged_debt(status_all, CLOSE_DATE)``, read Monday's entry and
-    exported an aged-debt table EUR 2.94M short under a green CACHED badge.
-
-    Re-running an unchanged mutation does not churn on this account: measured,
-    a consumer of a twice-re-run mutating loop stays CACHED (``saved 3.00s``)
-    both times, because the statement restore puts the receiver's pre-loop
-    lineage back before the loop mints the next one.
+    Re-running an unchanged mutation does not churn: the statement restore
+    puts the receiver's pre-loop lineage back before the loop mints the next.
     """
     for var_name in mutated_vars:
         if var_name not in shell.user_ns:
@@ -569,7 +525,7 @@ def update_mutated_variable_lineages(
             loop_code_hash = hashlib.sha256(loop_code.encode()).hexdigest()
             value_hash = statement_processor.compute_hash(val)
 
-            # Component 5: what this variable was before the loop touched it.
+            # `prev=`: what this variable was before the loop touched it.
             # The only component left that discriminates when the loop's source
             # matches and the sampled value hash collides -- see the docstring.
             prior_lineage = statement_processor.variable_lineage.get(var_name)

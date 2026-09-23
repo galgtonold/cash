@@ -1229,43 +1229,20 @@ def warn_stale_randomness(
 def check_and_warn_randomness(
     code: str, detector: RandomnessDetector, suppress_warning: bool = False
 ) -> tuple[list[RandomnessCallInfo], bool]:
-    """
-    Check code for unseeded randomness and issue warnings.
+    """Warn about unseeded randomness in *code*.
 
-    Args:
-        code: Python source code to analyze
-        detector: RandomnessDetector instance (maintains session state)
-        suppress_warning: If True, don't issue warnings (for @cash:allow-random)
+    Returns ``(unseeded calls, has_seed_calls)``; a statement with seed calls
+    must execute to set RNG state, so it is not cached. *suppress_warning*
+    is ``@cash:allow-random``.
 
-    Returns:
-        Tuple of (list of unseeded randomness calls, has_seed_calls)
-        - has_seed_calls: True if the code contains seed function calls
-          (seed statements should not be cached - they must execute to set RNG state)
-
-    Warnings are deduped *once per statement per session* via
-    ``detector.mark_warned``, and raised with :func:`warnings.warn_explicit`
-    (``warn_diagnostic(..., location=...)``) under a literal ``<cash>`` filename. That is a LABEL these warnings pass to
-    ``warn_explicit``, not the name a statement is compiled under: since
-    ``notebook/compiled_source.py`` landed, each statement compiles as
-    ``<cash-{digest}>`` so a traceback can resolve its source, and frame
-    filters match only that ``<cash-`` prefix.
-
-    Two things make that the right call rather than a plain ``warnings.warn``:
-
-    * ``registry=None`` bypasses ``__warningregistry__``'s "once per location"
-      dedupe.  Every randomness warning is raised from this one source line, so
-      the registry would collapse an entire session's worth into a single
-      warning.  ``mark_warned`` supplies the per-statement dedupe we actually
-      want instead.
-    * It still consults the user's filters.  The previous approach —
-      ``catch_warnings()`` + ``simplefilter('always')`` — bought registry-bypass
-      by *overriding* those filters, which silently defeated the blanket
-      ``filterwarnings(..., category=cash.CashWarning)`` recipe that
-      :class:`~cash.exceptions.CashWarning` documents.
-
-    ``stacklevel`` has no useful target here: the statement has not executed yet,
-    so no user frame is on the stack — every candidate is Cash-internal.
-    ``<cash>`` plus the in-message line number attributes it to the statement.
+    Each warning goes out once per statement per session (``mark_warned``),
+    through :func:`warnings.warn_explicit` under the label ``<cash>`` with
+    ``registry=None``. The registry's once-per-location dedupe would collapse
+    a session into one warning, since every one is raised from this line;
+    ``warn_explicit`` still honours the user's filters, which a
+    ``catch_warnings()`` + ``simplefilter('always')`` would override. No
+    ``stacklevel`` fits: the statement has not run, so no user frame is on
+    the stack.
     """
     unseeded_calls, warnings_list, has_seed_calls = detector.analyze_code(code)
 

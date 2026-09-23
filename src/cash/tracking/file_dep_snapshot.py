@@ -151,62 +151,28 @@ _HASH_READ_CHUNK = 1024 * 1024  # 1 MiB streaming chunk
 #: Digests already computed this process, keyed by the file's identity AND its
 #: stat fields: ``(path, st_dev, st_ino, size, mtime_ns, ctime_ns)``.
 #:
-#: Freshness is checked once per cached call, and file dependencies PROPAGATE --
-#: an aggregate that calls ten cached functions inherits their inputs -- so a
-#: pipeline over fifty files re-read and re-hashed all fifty on every one of
-#: those calls. Measured before this memo, warm page cache: 50 files x 2 MiB
-#: cost 168 ms per hit, and 50 x 32 MiB cost 156 ms (per-file overhead
-#: dominates once you have that many). Ten such hits in a run paid it ten times.
-#: With the memo the second and later checks are one ``stat`` each.
+#: File dependencies propagate, so one burst of cached calls checks the same
+#: inputs many times (50 files x 2 MiB cost 168 ms per hit without it); with
+#: the memo later checks are one ``stat`` each. Any write moves ``mtime``, and
+#: on POSIX ``ctime`` too; on Windows a same-size edit that RESTORES the mtime
+#: leaves every key field identical. Three rules bound that (a fully-hashed
+#: file must still catch it: ``test_same_size_edit_under_identical_mtime_
+#: invalidates``):
 #:
-#: What the key buys, and what it does not. Any write moves ``mtime``, so an
-#: ordinary edit re-hashes immediately. On Linux and macOS ``ctime`` moves on
-#: any write whatever the tool does, so the memo cannot be fooled at all. On
-#: Windows a same-size edit that RESTORES the mtime leaves every key field
-#: identical, and the memo would repeat the digest it already has -- the
-#: sampled regime's blind spot (see ``file_dep_is_fresh``), extended to
-#: fully-hashed files.
-#:
-#: Two rules keep that from mattering, and an existing regression test is what
-#: forced them: ``test_same_size_edit_under_identical_mtime_invalidates`` pins
-#: that a fully-hashed file catches exactly this edit, and a memo keyed on stat
-#: fields alone broke it.
-#:
-#: 1. A file is memoized only once it has been UNTOUCHED for a while
-#:    (``_HASH_MEMO_MIN_AGE_SECONDS``). A file written moments ago is the one
-#:    plausibly still being written; an input from this morning is not. This is
-#:    what keeps "write it, then read it twice in one run" honest.
-#: 2. A digest is reused for a few seconds only (``_HASH_MEMO_TTL_SECONDS``),
-#:    which is what the memo is actually for: one burst of related calls -- ten
-#:    aggregates hitting the same fifty inputs, milliseconds apart. A long-lived
-#:    worker re-hashes each file at most once per window, so what the memo
-#:    borrows is bounded to that window rather than the life of the process.
-#:
-#: Five seconds, not one: the timestamp is when the digest was COMPUTED and is
-#: not refreshed on use, so a window shorter than the pass itself expires
-#: entries mid-pass and re-hashes them. Measured with a one-second window, a
-#: 50-file 400 MiB pass fell back to 151 ms from 49 ms.
-#:
-#: The window is a documented limitation, not an oversight (known-limitations:
-#: "an edit that keeps size and timestamps, in a running process"). On
-#: Windows an ``np.memmap`` write, or a write with the mtime put
-#: back, leaves every key field alone, and a call within the window got the
-#: old result in that process -- and closing it was tried: re-hashing on every
-#: call made a loop over a 200 MB input pay ~144 ms per iteration, minutes per
-#: thousand calls, to catch an edit that is seen five seconds later anyway and
-#: never reaches a stored entry (the fingerprint an entry is stored with is
-#: taken when the body reads the file). Reverted.
-#:
-#: 3. In a notebook a digest also holds for the rest of the CELL RUN it was
-#:    computed in (``begin_file_state_epoch``). A cell over thousands of files
-#:    outlasts the five seconds on its own -- one read 5,222 files, and every
-#:    statement derived from them re-hashed all of them on save, lookup and
-#:    upstream simulation: 19-108 s per cell for a notebook that runs in 25 s
-#:    uncached. A new cell run falls back to the window, so the edit
-#:    it was bounding is still seen by the first cell run that starts after
-#:    it. The run ends with the cell (``end_file_state_epoch``): whatever runs
-#:    between cells -- a thread the cell started, a callback -- has the window
-#:    alone, as a script does, which never begins a run at all.
+#: 1. Only a file UNTOUCHED for ``_HASH_MEMO_MIN_AGE_SECONDS`` is memoized --
+#:    a file written moments ago may still be being written.
+#: 2. A digest is reused for ``_HASH_MEMO_TTL_SECONDS`` from when it was
+#:    computed (not refreshed on use; one second expired entries mid-pass).
+#:    Within that window such an edit is not seen -- a documented limitation
+#:    ("an edit that keeps size and timestamps, in a running process"), and
+#:    one that never reaches a stored entry, whose fingerprint is taken when
+#:    the body reads the file. Re-hashing on every call cost ~144 ms per
+#:    iteration of a loop over a 200 MB input.
+#: 3. In a notebook a digest also holds for the rest of the CELL RUN
+#:    (``begin_file_state_epoch`` .. ``end_file_state_epoch``): a cell over
+#:    thousands of files outlasts the window on its own, and re-hashing them
+#:    for every derived statement cost 19-108 s a cell. The next cell run
+#:    falls back to the window; between cells only the window applies.
 _HASH_MEMO: dict[tuple[str, int, int, int, int, int], tuple[float, str, int | None]] = {}
 #: A full memo is cleared, not frozen: frozen, every file past the cap was
 #: re-hashed on every check.

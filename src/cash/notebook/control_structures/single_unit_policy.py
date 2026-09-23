@@ -124,49 +124,25 @@ _FILE_IO_CALLS = frozenset(
 
 
 def should_run_as_single_unit(node: ast.For, iterable: Any, user_ns: dict[str, Any]) -> bool:
-    """
-    Decide whether a for loop should be executed as a single cacheable
-    unit instead of being decomposed per-iteration.
+    """Run this ``for`` loop as one cacheable unit rather than per iteration?
 
-    Per-iteration decomposition adds ~8-10ms of overhead per body
-    statement (AST analysis, cache key computation, mutation detection,
-    side-effect scanning, analytics recording, cache I/O).  For tight
-    numeric loops with many iterations of cheap operations, this overhead
-    can be 100-300× the actual compute time.
+    Decomposition costs ~8 ms per body statement per iteration (key, mutation
+    and side-effect analysis, cache I/O), which can be 100-300x the work of a
+    tight numeric loop. True when ALL hold:
 
-    Heuristic: execute as single unit when ALL of:
-    1. The loop has many iterations (> MIN_ITERATIONS_FOR_SINGLE_UNIT)
-       — small loops always benefit from per-iteration caching since the
-       absolute overhead is small and granular invalidation is valuable.
-    2. The estimated overhead (iterations × body_stmts × per_stmt_cost) is
-       significant (> 1s).
-    3. No body statement performs file I/O — file dependencies need
-       per-iteration tracking.
+    1. More than ``MIN_ITERATIONS_FOR_SINGLE_UNIT`` iterations -- a small
+       loop keeps per-iteration granularity, whose overhead is small.
+    2. Estimated overhead (iterations x body statements x per-statement
+       cost) above ``MIN_OVERHEAD_SEC``.
+    3. No file I/O in the body -- file dependencies need per-iteration
+       tracking.
 
-    Previously there was also a "not nested inside another loop" rule.
-    That was over-defensive: the outer loop in a convergence study
-    benefits from per-iteration caching (and rule 1 keeps it
-    per-iteration if it has few iterations), but a tight inner loop
-    with 200+ trivial iterations costs ~14s of per-statement machinery
-    and gains nothing from per-iteration cache granularity since users
-    rarely edit inner-loop bodies during exploration. The outer loop's
-    per-iteration cache key still correctly invalidates on inner-body
-    changes because the inner loop's single-unit cache key is part of
-    the outer iteration's snapshot.
+    Nested loops qualify too: an outer loop's iteration key still moves when
+    the inner body changes, because the inner unit's key is part of it.
 
-    **Correctness tradeoff**: In fast-loop mode the loop executes as one
-    opaque unit, so per-iteration cache keys are not computed.  This means:
-
-    - Resuming a partial loop (e.g., adding 3 more items to ``range(100)``)
-      re-runs ALL iterations instead of only the new ones.
-    - Variables mutated inside the loop (e.g., ``results.append(x)``) still
-      get correct lineage because ``_update_lineage_after_execution`` tracks
-      the whole-loop output.
-    - File-I/O statements are excluded (rule 3) to preserve per-file mtime
-      invalidation.
-
-    The performance gain (up to 300×) justifies this tradeoff for tight
-    numeric loops where per-iteration staleness detection has no value.
+    The price: a single unit is all-or-nothing, so extending ``range(100)``
+    re-runs every iteration. Mutated variables still get a correct lineage
+    (``update_lineage_after_execution`` covers the whole loop).
     """
     n_iterations = estimated_iterations(node.iter, iterable, user_ns)
     if n_iterations is None:

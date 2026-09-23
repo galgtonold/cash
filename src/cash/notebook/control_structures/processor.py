@@ -80,35 +80,17 @@ def _entry_lineages(
     """What each name this structure reads was worth when it ran.
 
     The runtime's own lineage wherever it has one, and the simulation's where
-    it does not. A name bound in the same cell as ``%cash_on`` is in the
-    second group forever: cash was not listening when that cell started, so
-    nothing recorded what ``DATA = Path(...)`` produced. The simulation reads
-    that cell out of the .ipynb and has a lineage for it like any other.
+    it does not -- a name bound in the ``%cash_on`` cell, say, which ran before
+    cash was listening. The dict must carry every key the simulation carries:
+    ``VirtualLineage._simulate_one_control_unit`` compares it whole, and a
+    short one never matches, so the loop re-runs after every restart.
 
-    Recording the runtime's silence for such a name left this dict SHORT of a
-    key the simulation carries, so ``recorded[0] == input_hashes`` in
-    ``VirtualLineage._simulate_one_control_unit`` was false every time, the
-    loop's recorded outcome was never adopted, and the loop re-ran with
-    everything below it after every restart.
-
-    Filling the gap from the simulation rather than inventing a value is what
-    keeps the comparison honest. Edit that cell and the simulated lineage
-    moves, so the recorded outcome stops matching -- the same way a tracked
-    name behaves, and the reason "just compare on the keys we happen to have"
-    was rejected: that would have trusted the outcome across such an edit.
-
-    The simulated lineage is a WEAKER witness than the runtime's own, which
-    folds in what the statement actually read. It is the same witness the
-    upstream check already trusts for every name it models -- and for these
-    names the alternative is not caution but the wrong answer: with nothing
-    recorded, a loop reading one kept its table when that cell was edited to
-    name a different file (`test_editing_the_cash_on_cell_still_invalidates
-    _the_loop`). Filling the gap is strictly better than leaving it.
-
-    *simulated* may be from an earlier cell if no upstream check ran for this
-    one. Harmless in the direction that matters: a name whose simulated
-    lineage has moved since produces a mismatch, which is what the code did
-    unconditionally before.
+    Filling from the simulation rather than comparing only the shared keys
+    keeps the comparison honest: edit that cell and the simulated lineage
+    moves, so the recorded outcome stops matching. The simulated lineage is a
+    weaker witness than the runtime's, but the one the upstream check already
+    trusts. *simulated* may be from an earlier cell; a lineage that moved
+    since only produces a mismatch.
     """
     entry = {n: lineage[n] for n in reads if n in lineage}
     if simulated:
@@ -172,22 +154,15 @@ class ControlStructureProcessor:
             ttl: Time-to-live for cache entries
             silent: Suppress output
             parent_context: Iteration context from an enclosing loop (for nesting)
-            raw_cell: The cell's original source. Required to honour ``@cash:``
-                directives inside the structure — ``ast.unparse`` drops comments,
-                so a body statement's directive can only be recovered from the
-                original text. ``None`` disables annotation handling,
-                which is the pre-existing behaviour and keeps direct callers
-                (tests constructing handlers with mock deps) working unchanged.
+            raw_cell: The cell's original source, needed for ``@cash:``
+                directives inside the structure (``ast.unparse`` drops
+                comments). ``None`` disables them.
             inherited_annotation: Directives from enclosing structures, already
                 resolved, to merge into everything within this one.
-            prev_node: The immediately-preceding top-level statement in the same
-                cell, or ``None``. Threaded down to ``ForLoopHandler``,
-                which needs the ``out = []`` seed that sits right
-                before the loop to compute ``force_outputs`` for its cost-based
-                single-unit branch — see ``cacheability.cacheable_accumulator_loop``
-                and ``for_handler.py``'s single-unit branch for why. Additive and
-                default-``None`` so nested / direct callers (which have no notion
-                of a preceding sibling) are unchanged.
+            prev_node: The top-level statement just before this one in the
+                cell, or ``None``. The for-loop's single-unit branch needs an
+                ``out = []`` seed there to compute ``force_outputs`` (see
+                ``cacheability.cacheable_accumulator_loop``).
 
         Returns:
             ControlStructureResult with metrics

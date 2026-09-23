@@ -412,39 +412,16 @@ class ForLoopHandler:
                 # arrays that agreed in the sample onto ONE entry - wrong
                 # result on the first run. Hash full content here.
                 full = compute_hash_full(val)
-                # `variable_lineage[name]` and `loop_var_digests[name]`
-                # WANT DIFFERENT THINGS and must not be conflated: `val`'s own
-                # `_cash_lineage_hash`, when present, may itself have been
-                # derived from a SAMPLED hash -- `update_mutated_variable_lineages`
-                # (control_structures/helpers.py) computes a mutated
-                # accumulator's new lineage from `statement_processor.compute_hash(val)`
-                # (the sampling hash) and `LineageStore.record` stamps that
-                # onto `val._cash_lineage_hash`. Two content-different
-                # DataFrames that agree on the sampled portion (a DataFrame's
-                # `compute_hash` samples shape + dtypes + `head(5)` --
-                # `object_hashing.py`'s `_hash_dataframe_or_series` -- so two that
-                # differ only past row 5 hash equal there) then carry the
-                # SAME `_cash_lineage_hash` -- so if this loop
-                # variable is later bound to each of them in turn (`for df in
-                # [df_a, df_b]:`), preferring that attribute for the CALL KEY
-                # would collapse iteration 2 onto iteration 1's cached value.
-                # (`SL2 [1, 1]` instead of `[1, 2]`) -- a sampled hash is
-                # never sound as a key
-                # discriminator, even smuggled in through an attribute rather
-                # than passed directly.
-                #
-                # `variable_lineage` wants PROVENANCE (did this binding come
-                # from the same upstream computation as before?), where
-                # `_cash_lineage_hash` is the right, deliberately-cheaper
-                # answer and has been for as long as this line has existed.
-                # `loop_var_digests` wants CONTENT (are two iterations'
-                # bindings the same VALUE?), which only `compute_hash_full`
-                # can answer soundly -- so it is computed directly from `val`,
-                # never through the attribute. Cost is unchanged: still one
-                # full hash per iteration (not per call, and not per call
-                # multiplied by however many cached calls read this loop
-                # var), just no longer skippable via the attribute shortcut
-                # for THIS consumer specifically.
+                # `variable_lineage[name]` and `loop_var_digests[name]` want
+                # different things. `variable_lineage` wants PROVENANCE, and
+                # `val`'s own `_cash_lineage_hash` is the cheap right answer.
+                # `loop_var_digests` wants CONTENT, the call key's
+                # discriminator: that tag may itself derive from a SAMPLED
+                # hash (`update_mutated_variable_lineages`), so two frames
+                # that differ past the sample carry the same tag, and
+                # `for df in [df_a, df_b]:` would collapse iteration 2 onto
+                # iteration 1's cached value. Only `compute_hash_full` of
+                # `val` answers it soundly -- one full hash per iteration.
                 tag = own_tag(val)
                 h = tag if tag is not None else full
                 self.statement_processor.variable_lineage[name] = h
@@ -479,23 +456,12 @@ class ForLoopHandler:
         # level. ``body_index`` itself is the *innermost* index (the
         # tail of the chain).
         # Pushed once for the WHOLE iteration's body, not per statement: an
-        # intercepted (on by default) sub-call needs the CURRENT
-        # iteration's loop-var values as a key discriminator wherever it sits
-        # -- a plain body statement, or nested inside an `if`/`try` reached via
-        # `_execute_loop_body_nested_control` below -- so one push covering the
-        # whole body loop reaches every statement this iteration executes,
-        # including a nested `for`'s own (further-nested) push on top of it.
-        # `loop_vars_scope`'s `finally` pops even if a body statement raises.
-        #
-        # `getattr(..., None)` guarded rather than called directly: this is
-        # the file where a caching optimisation, if it broke, would break the
-        # USER'S LOOP rather than merely its caching -- a `statement_processor`
-        # without this method would otherwise raise `AttributeError` out of
-        # `process()`, and `cell_executor.py` re-raises that as the user's own
-        # error, so their loop would not run at all. Unreachable today (one
-        # construction site, `magics.py`), but requirement 5 (never let a
-        # caching optimisation be why user code fails) should hold at both
-        # ends of this wire, not just inside `CallUnit`.
+        # intercepted sub-call needs the CURRENT iteration's loop-var values
+        # as a key discriminator wherever it sits, including inside a nested
+        # `if`/`try` or `for`. `loop_vars_scope`'s `finally` pops even if a
+        # body statement raises. Looked up with `getattr`: a processor
+        # without it must cost the loop its call caching, never make the
+        # user's loop fail.
         loop_vars_scope = getattr(self.statement_processor, "loop_vars_scope", None)
         scope = (
             loop_vars_scope(loop_vars, loop_var_digests) if loop_vars_scope is not None else contextlib.nullcontext()
