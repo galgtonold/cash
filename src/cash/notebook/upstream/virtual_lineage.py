@@ -66,9 +66,7 @@ from ..call_refs import resolve_call_refs
 from ..control_structures import extract_target_names, get_control_structure_type, is_control_structure
 from ..lineage_formula import (
     callable_source_component,
-    is_cash_instrumentation,
-    is_module_like,
-    module_read_lineage,
+    input_lineage,
     module_source_component,
     output_lineage,
     statement_environment_component,
@@ -1897,99 +1895,34 @@ class VirtualLineage:
             memo["keys"].add(memo_key)
         return True
 
-    def _resolve_input_lineage(
-        self,
-        inp: str,
-        virtual_lineage: dict[str, str],
-        virtual_modules: set[str],
-    ) -> str | None:
-        """Resolve the lineage hash for a single input variable.
-
-        Priority: virtual_lineage → variable_lineage → hash from user_ns.
-        Returns ``None`` if the input cannot be resolved.
-        """
-        if inp in virtual_lineage:
-            return virtual_lineage[inp]
-        if inp in self.variable_lineage:
-            return self.variable_lineage[inp]
-
-        val = self.shell.user_ns.get(inp)
-        if val is None:
-            return None
-
-        # An untracked module contributes NOTHING, matching the cache-key read
-        # path and the runtime lineage writer. ``virtual_modules`` was accepted
-        # here but never consulted, so the simulation fell through to
-        # ``compute_hash(module)`` -> ``sha256(str(id(module)))``, a per-session
-        # memory address. Runtime and simulation must agree byte for
-        # byte, so this guard has to exist on both sides.
-        if is_cash_instrumentation(val) or is_module_like(inp, val, virtual_modules):
-            return None
-
-        try:
-            if self.compute_hash_fn:
-                return self.compute_hash_fn(val)
-            return hashlib.sha256(str(val).encode("utf-8")).hexdigest()
-        except (TypeError, ValueError):
-            logger.debug("[UPSTREAM] Failed to compute hash for input '%s'", inp)
-            return None
-
     def _resolve_virtual_input_lineages(
         self, stmt_code: str, inputs: set[str], virtual_lineage: dict[str, str], virtual_modules: set[str]
     ) -> list[str]:
-        """Resolve input lineage hashes for all inputs of a statement.
-
-        Returns a list of lineage hashes for all resolved inputs (including modules),
-        matching the order used by _capture_variables at runtime.
-        """
+        """Each input's lineage (``lineage_formula.input_lineage``), with the
+        simulation's own lineages in front of the recorded ones."""
         input_lineages_all = []
-        sorted_inputs = sorted(inputs)
-
-        if self.debug:
-            logger.debug("[LINEAGE_DEBUG] Statement: %s...", stmt_code[:50])
-            logger.debug("[LINEAGE_DEBUG] Detected inputs: %s", sorted_inputs)
-
-        for inp in sorted_inputs:
+        function_tracker = getattr(self, "function_tracker", None)
+        for inp in sorted(inputs):
             if inp in {"get_ipython", "__builtins__"}:
                 continue
-
-            is_module = inp in virtual_modules
-
-            val = None
-            in_user_ns = inp in self.shell.user_ns
-            if in_user_ns:
-                val = self.shell.user_ns[inp]
-
-            if val is not None and not is_module:
-                try:
-                    if (
-                        isinstance(val, types.ModuleType)
-                        or callable(val)
-                        and (inp.startswith("_") or hasattr(val, "__self__"))
-                    ):
-                        is_module = True
-                except (TypeError, AttributeError):
-                    logger.debug("Type check failed for input variable %s", inp)
-
-            # The runtime values a module read by plain attribute access by what
-            # those attributes reach (`lineage_formula.module_read_lineage`);
-            # this must reach the same value from the same arguments, or every
-            # statement reading a module "changed" in the simulation alone.
-            narrowed = module_read_lineage(getattr(self, "function_tracker", None), inp, val, stmt_code)
-            lineage = (
-                narrowed if narrowed is not None else self._resolve_input_lineage(inp, virtual_lineage, virtual_modules)
+            lineage = input_lineage(
+                inp,
+                self.shell.user_ns,
+                (virtual_lineage, self.variable_lineage),
+                compute_hash=self.compute_hash_fn,
+                function_tracker=function_tracker,
+                code=stmt_code,
+                virtual_modules=virtual_modules,
             )
-
             if lineage:
                 input_lineages_all.append(lineage)
-
         if self.debug:
             logger.debug(
-                "[LINEAGE_DEBUG] input_lineages_all (%s): %s",
-                len(input_lineages_all),
+                "[LINEAGE_DEBUG] %s... inputs %s -> %s",
+                stmt_code[:50],
+                sorted(inputs),
                 [ln[:12] + "..." for ln in input_lineages_all],
             )
-
         return input_lineages_all
 
     @staticmethod

@@ -35,9 +35,7 @@ from ...tracking.randomness import hidden_lineage_reads
 from ..cache_key import statement_source_hash
 from ..lineage_formula import (
     callable_source_component,
-    is_cash_instrumentation,
-    is_module_like,
-    module_read_lineage,
+    input_lineage,
     module_source_component,
     output_lineage,
     statement_environment_component,
@@ -238,54 +236,22 @@ class StatementLineageBuilder:
         user_ns: dict,
         code: str | None = None,
     ) -> tuple[list[str], dict[str, str]]:
-        """Build input lineage hashes list and map for a set of input variables.
-
-        Mirrors the cache-key READ path (:func:`lineage_formula.is_module_like`): an
-        untracked module contributes NOTHING. It previously fell through to
-        ``compute_hash(module)``, which cannot pickle a module and so returns
-        ``sha256(str(id(module)))`` -- a memory address, therefore a different
-        value in every kernel. That volatile hash was folded into this
-        statement's OUTPUT lineage, which is an input hash for every downstream
-        statement's cache key, so after a restart the whole chain re-keyed,
-        missed, recomputed, and wrote a duplicate entry.
-        """
+        """Each input's lineage (``lineage_formula.input_lineage``), as a list
+        for the output lineage and as a map for the upstream check."""
         input_lineage_hashes: list[str] = []
         input_lineage_map: dict[str, str] = {}
         for input_var in inputs:
-            # A module read by plain attribute access is valued by what those
-            # attributes reach, as the cache key values it -- see
-            # `lineage_formula.module_read_lineage`. Recorded in the input map
-            # too, which is what the upstream check compares against.
-            narrowed = module_read_lineage(self.function_tracker, input_var, user_ns.get(input_var), code)
-            if narrowed is not None:
-                input_lineage_hashes.append(narrowed)
-                input_lineage_map[input_var] = narrowed
-                continue
-            if input_var in tracking_state.variable_lineage:
-                lineage = tracking_state.variable_lineage[input_var]
+            lineage = input_lineage(
+                input_var,
+                user_ns,
+                (tracking_state.variable_lineage,),
+                compute_hash=self.compute_hash,
+                function_tracker=self.function_tracker,
+                code=code,
+            )
+            if lineage:
                 input_lineage_hashes.append(lineage)
                 input_lineage_map[input_var] = lineage
-            elif user_ns.get(input_var) is not None:
-                # A value of None with no lineage contributes nothing, as in
-                # the cache key and the simulation.
-                val = user_ns[input_var]
-                if is_cash_instrumentation(val):
-                    # cash's own I/O shim (e.g. the patched ``open``). Its
-                    # identity is per-session, and without cash it would not be
-                    # in user_ns at all.
-                    continue
-                if is_module_like(input_var, val, frozenset()):
-                    # No tracked lineage for this module: contribute nothing,
-                    # exactly as the read path does. Hashing it here would bake
-                    # a memory address into a persisted key.
-                    continue
-                try:
-                    lineage = self.compute_hash(val)
-                    input_lineage_hashes.append(lineage)
-                    input_lineage_map[input_var] = lineage
-                except (TypeError, ValueError, AttributeError, pickle.PicklingError) as e:
-                    if self.debug:
-                        logger.warning("Warning: Could not hash input '%s' for lineage: %s", input_var, e)
         return input_lineage_hashes, input_lineage_map
 
     def _apply_granular_module_update(

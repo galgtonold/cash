@@ -4,12 +4,7 @@ The runtime (``statement/lineage.py``) records a variable's lineage when its
 statement runs; the upstream simulator (``upstream/virtual_lineage.py``)
 recomputes it from the code above a cell. Wherever the two disagree, a cell
 reading the variable sees "changed" with nothing changed and re-runs other
-cells' statements to repair it. They used to build the lineage separately, and
-in round 21 they had drifted apart: a name imported from a local module carried
-that module's source hash at runtime and not in the simulation, so every cell
-downstream of ``from helpers import clean`` re-ran statements even in a plain
-top-to-bottom run -- among them a model refit, which made an "accuracy before"
-report use the refitted model.
+cells' statements to repair it, so the two build it from the functions here.
 
 Everything here is a pure function of its arguments. The callers decide which
 ingredients they have; this module decides how they combine.
@@ -21,6 +16,7 @@ import ast
 import hashlib
 import logging
 import os
+import pickle
 import sys
 import types
 from collections.abc import Mapping
@@ -147,6 +143,45 @@ def output_lineage(
         f"{environment}"
     )
     return hashlib.sha256(lineage_str.encode("utf-8")).hexdigest()
+
+
+def input_lineage(
+    name: str,
+    namespace: Mapping[str, Any],
+    lineages: Iterable[Mapping[str, str]],
+    *,
+    compute_hash: Callable[[Any], str] | None,
+    function_tracker: Any,
+    code: str | None,
+    virtual_modules: Iterable[str] = (),
+) -> str | None:
+    """What input *name* contributes to the output lineage of the statement
+    *code*, or None for nothing.
+
+    A module read by plain attribute access is valued by what those
+    attributes reach (:func:`module_read_lineage`). Otherwise the first of
+    *lineages* that knows *name* wins; the runtime passes its recorded
+    lineages, the simulation its own in front of them. A name with neither is
+    valued by its content, unless it is None, cash's instrumentation or
+    module-like (:func:`is_module_like`), which contribute nothing, as in the
+    cache key. *compute_hash* None hashes ``str(value)``, as the key does.
+    """
+    value = namespace.get(name)
+    narrowed = module_read_lineage(function_tracker, name, value, code)
+    if narrowed is not None:
+        return narrowed
+    for known in lineages:
+        if name in known:
+            return known[name]
+    if value is None or is_cash_instrumentation(value) or is_module_like(name, value, virtual_modules):
+        return None
+    try:
+        if compute_hash is None:
+            return hashlib.sha256(str(value).encode("utf-8")).hexdigest()
+        return compute_hash(value)
+    except (TypeError, ValueError, AttributeError, pickle.PicklingError) as exc:
+        logger.debug("Could not hash input %r for its lineage: %s", name, exc)
+        return None
 
 
 #: Spellings a statement must contain to read the environment at all: the

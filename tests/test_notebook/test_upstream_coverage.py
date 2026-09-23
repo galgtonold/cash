@@ -2,7 +2,7 @@
 
 Tests cover:
 - _handle_lineage_mismatch
-- _resolve_input_lineage
+- lineage_formula.input_lineage (as the simulator calls it)
 - _resolve_virtual_input_lineages
 - lineage_formula.module_source_component (the simulator's module component)
 - _resolve_fallback_cache_idx / _reset_advanced_lineages
@@ -123,8 +123,22 @@ class TestHandleLineageMismatch:
 
 
 # ===========================================================================
-# _resolve_input_lineage
+# lineage_formula.input_lineage, as the simulator calls it
 # ===========================================================================
+
+
+def _resolve(checker, name, virtual):
+    from cash.notebook.lineage_formula import input_lineage
+
+    vl = checker.simulator.virtual_lineage
+    return input_lineage(
+        name,
+        vl.shell.user_ns,
+        (virtual, vl.variable_lineage),
+        compute_hash=vl.compute_hash_fn,
+        function_tracker=None,
+        code=None,
+    )
 
 
 class TestResolveInputLineage:
@@ -134,20 +148,20 @@ class TestResolveInputLineage:
         """Virtual lineage should be checked first."""
         checker = _make_checker()
         checker.variable_lineage["x"] = "runtime_hash"
-        result = checker.simulator.virtual_lineage._resolve_input_lineage("x", {"x": "virtual_hash"}, set())
+        result = _resolve(checker, "x", {"x": "virtual_hash"})
         assert result == "virtual_hash"
 
     def test_falls_back_to_variable_lineage(self):
         """Falls back to variable_lineage when not in virtual."""
         checker = _make_checker()
         checker.variable_lineage["x"] = "runtime_hash"
-        result = checker.simulator.virtual_lineage._resolve_input_lineage("x", {}, set())
+        result = _resolve(checker, "x", {})
         assert result == "runtime_hash"
 
     def test_falls_back_to_user_ns_hash(self):
         """Falls back to hashing from user_ns when no lineage exists."""
         checker = _make_checker(user_ns={"x": 42})
-        result = checker.simulator.virtual_lineage._resolve_input_lineage("x", {}, set())
+        result = _resolve(checker, "x", {})
         assert result is not None
         assert len(result) == 64
 
@@ -157,20 +171,27 @@ class TestResolveInputLineage:
             user_ns={"x": 42},
             compute_hash_fn=lambda v: "custom_hash_result",
         )
-        result = checker.simulator.virtual_lineage._resolve_input_lineage("x", {}, set())
+        result = _resolve(checker, "x", {})
         assert result == "custom_hash_result"
 
     def test_returns_none_for_missing_variable(self):
         """Returns None when variable is not in any source."""
         checker = _make_checker()
-        result = checker.simulator.virtual_lineage._resolve_input_lineage("x", {}, set())
+        result = _resolve(checker, "x", {})
         assert result is None
 
     def test_returns_none_for_none_value(self):
         """Returns None when user_ns has None for the variable."""
         checker = _make_checker(user_ns={"x": None})
-        result = checker.simulator.virtual_lineage._resolve_input_lineage("x", {}, set())
+        result = _resolve(checker, "x", {})
         assert result is None
+
+    def test_a_module_with_no_lineage_contributes_nothing(self):
+        """Hashing a module would bake a memory address into the lineage."""
+        checker = _make_checker(user_ns={"x": os})
+        assert _resolve(checker, "x", {}) is None
+        checker.variable_lineage["x"] = "module_lineage"
+        assert _resolve(checker, "x", {}) == "module_lineage"
 
 
 # ===========================================================================
