@@ -88,9 +88,8 @@ def test_anchor_inside_a_fence_is_ignored_but_one_outside_is_found():
     assert anchors[0].targets == (Target("cash/config.py", "CashConfig.compress", None, None),)
 
 
-def test_published_pages_excludes_superpowers_and_unbuilt_adr():
+def test_published_pages_excludes_superpowers():
     rels = {p.relative_to(Path(__file__).resolve().parents[2] / "docs").as_posix() for p in published_pages()}
-    assert "architecture_decisions.md" not in rels
     assert not any(r.startswith("superpowers/") for r in rels)
     assert "index.md" in rels
     assert len(rels) == 62  # +1: warnings.md, +1: testing-your-code.md, +2: split quickstart and deploying.md

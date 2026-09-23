@@ -17,8 +17,8 @@ Distinct from [[Cacheability decision]] (which is the *pre-execution*
 *post-execution* "is the entry we already have still good?" question.
 
 The file-snapshot helper (`snapshot_file_deps`) lives in
-``cash.tracking.file_dep_snapshot``, not here: it has cross-cluster callers
-(ADR-011).
+``cash.tracking.file_dep_snapshot``, not here: it has callers outside the
+notebook package.
 """
 
 from __future__ import annotations

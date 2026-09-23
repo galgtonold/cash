@@ -887,10 +887,10 @@ class CellExecutor:
 
     def _record_executed_cell_hash(self, raw_cell: str) -> None:
         """Remember that this exact cell source ran, so the upstream checker can
-        tell an edited-but-not-rerun seed() cell from one that actually ran
-        (ADR-017). Also snapshot the RNG state around a cell that
+        tell an edited-but-not-rerun seed() cell from one that actually ran.
+        Also snapshot the RNG state around a cell that
         TOUCHED the global RNG so a downstream draw can be restored to its
-        position-correct state (ADR-018), and record which
+        position-correct state, and record which
         modules it changed — which catches draws inside called functions that
         static analysis cannot see.
 

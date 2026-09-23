@@ -581,7 +581,7 @@ def compute_cache_key(
     namespace : str, optional
         Key-space prefix. ``"stmt"`` (default) for statements; ``"call"`` for
         sub-statement call units. Namespacing rather than a second builder
-        keeps ADR-007's single-source-of-truth invariant: one place computes
+        keeps every key built in this one function: one place computes
         the combined hash, and the prefix only decides which space it lands
         in. ``write_provenance_key``'s ``writeprov:`` is the same pattern.
 

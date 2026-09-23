@@ -19,7 +19,6 @@ Read these instead of relying on this file for details:
 
 - `docs/contributing.md`: setup, the directory map, running and writing tests.
 - `docs/how-it-works/`: how keys, lineage, invalidation and storage work.
-- `docs/architecture_decisions.md`: the ADRs (not published on the docs site).
 - `pyproject.toml` (`[tool.pytest.ini_options]`) and `tests/conftest.py`,
   `tests/test_notebook_integration/conftest.py`: test settings, markers and fixtures.
   The kernel runner behind the integration fixtures is the `tests/_nbharness/` package.

@@ -349,12 +349,12 @@ def test_cash_help_unknown_topic_says_so_and_prints_the_card(cash_magics):
 
 
 def test_register_magic_registers_cash_on(mock_shell, cash_instance):
-    """``Cash.register_magic()`` imports ``CashMagics`` from the post-ADR-013
+    """``Cash.register_magic()`` imports ``CashMagics`` from its current
     path and registers it on the active shell.
 
     Regression guard: ``register_magic`` imported ``CashMagics`` from the
     pre-refactor path ``cash.notebook.magics`` (moved to
-    ``cash.notebook.ipython.magics`` by ADR-013) *inside* the method's
+    ``cash.notebook.ipython.magics``) *inside* the method's
     ``except ImportError`` guard. The stale import raised
     ``ModuleNotFoundError`` — a subclass of ``ImportError`` — which the guard
     swallowed as "IPython not available". So ``%load_ext cash`` silently

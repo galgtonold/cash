@@ -1,7 +1,7 @@
 """The single seam for reading and writing variable lineage.
 
-See ``docs/architecture_decisions.md`` ADR-007 for the *cache-key* invariant
-this module extends to *lineage state*.
+Every statement cache key is built in one place (``compute_cache_key``);
+this module applies the same rule to *lineage state*: one place writes it.
 
 Invariants
 ----------

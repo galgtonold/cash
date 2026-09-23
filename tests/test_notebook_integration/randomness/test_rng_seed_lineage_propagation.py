@@ -1,4 +1,4 @@
-"""A seed change must invalidate cached statements DOWNSTREAM of a draw (ADR-018).
+"""A seed change must invalidate cached statements DOWNSTREAM of a draw.
 
 The RNG epoch was folded into a draw's cache key but never into its
 output lineage, so a draw recomputed on a re-seed while its output variable's

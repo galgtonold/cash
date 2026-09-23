@@ -270,7 +270,7 @@ def restore_object_rng_states(
 
 
 def rng_modules_changed(before: dict, after: dict) -> set[str]:
-    """Modules whose captured RNG state differs between *before* and *after* (ADR-018).
+    """Modules whose captured RNG state differs between *before* and *after*.
 
     Used to observe a draw that static analysis cannot see because it happens
     inside a called function. Compares the per-module states from two

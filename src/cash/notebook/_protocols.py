@@ -107,12 +107,12 @@ class TrackingState:
     executed_write_stmt_codes: set[str] = field(default_factory=set)
 
     # sha256 of every whole-cell source that ran this session, to tell an
-    # edited-but-not-rerun seed() cell from one that ran (ADR-017).
+    # edited-but-not-rerun seed() cell from one that ran.
     # W: CellExecutor. R: UpstreamChecker.
     executed_cell_source_hashes: set[str] = field(default_factory=set)
 
     # sha256(cell source) -> the global RNG state after that cell ran, so a
-    # downstream draw can be restored to its position-correct state (ADR-018).
+    # downstream draw can be restored to its position-correct state.
     # W: CellExecutor. R: UpstreamChecker.
     rng_post_states: dict[str, Any] = field(default_factory=dict)
 

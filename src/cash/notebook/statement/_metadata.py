@@ -2,8 +2,8 @@
 
 Sibling to :class:`cash.backends.CacheMetadata` (the decorator-side view).
 Both are dataclass *views* over the same opaque dict channel the backends
-round-trip — see ADR-014 and the ``MetadataDict`` note in
-``cash/backends/_base.py``.
+round-trip: typed dataclasses inside cash, a plain dict into and out of
+every backend -- see the ``MetadataDict`` note in ``cash/backends/_base.py``.
 
 Lives in its own leaf module (imports nothing from the ``statement``
 package) so that both :mod:`processor` and its sibling helpers

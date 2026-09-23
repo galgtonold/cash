@@ -153,7 +153,7 @@ def seed_cells_not_yet_run(
     notebook_cells: "list[str]",
     executed_cell_hashes: set[str],
 ) -> "list[tuple[str, int]]":
-    """Notebook cells that SEED a drawn module but whose source has not run (ADR-017).
+    """Notebook cells that SEED a drawn module but whose source has not run.
 
     The detection core for the bare-``seed()`` edit-without-rerun defect.
     Editing an ``np.random.seed(N)`` cell and running only a downstream draw
@@ -167,8 +167,8 @@ def seed_cells_not_yet_run(
 
     Pure and cell-granular — it matches the checker's view of the notebook and
     takes the executed-hash set as an argument, so it carries no state and is
-    trivially testable. Callers decide what to do with the result (warn now;
-    schedule a re-execution once ADR-017 half 2 lands).
+    trivially testable. The upstream checker re-runs such a seed cell ahead
+    of the draw, since a seed's effect is replayed, never restored.
 
     Parameters
     ----------
