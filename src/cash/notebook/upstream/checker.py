@@ -1649,7 +1649,7 @@ class UpstreamChecker:
                     annotation = get_statement_annotations(clean, node)
                     if annotation.has_directives():
                         found.setdefault(ast.unparse(node), annotation)
-                except Exception:  # noqa: BLE001 - a directive lookup never breaks a repair
+                except (ValueError, RecursionError):  # a directive lookup never breaks a repair
                     continue
         return found
 

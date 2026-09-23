@@ -446,19 +446,24 @@ def _selfref_target_base(target: ast.expr) -> str | None:
     return None
 
 
+#: What ``ast.unparse`` raises on a node it cannot render: a hand-built node
+#: missing a field, or one nested past the recursion limit.
+_UNPARSE_ERRORS = (AttributeError, TypeError, ValueError, RecursionError)
+
+
 def _rhs_reads_target(rhs: ast.expr, target: ast.expr) -> bool:
     """True if *rhs* reads the exact same subscript/attribute expression as *target*
     (e.g. ``df['a']`` appears in the RHS of ``df['a'] = df['a'] * 2``)."""
     try:
         tgt = ast.unparse(target)
-    except Exception:  # noqa: BLE001 — unparse can fail on exotic nodes
+    except _UNPARSE_ERRORS:
         return False
     for sub in ast.walk(rhs):
         if isinstance(sub, (ast.Subscript, ast.Attribute)):
             try:
                 if ast.unparse(sub) == tgt:
                     return True
-            except Exception:  # noqa: BLE001
+            except _UNPARSE_ERRORS:
                 continue
     return False
 
