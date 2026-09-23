@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import Any, NamedTuple
 
 from ._base import CacheBackend, MetadataDict
 from .serialization import PickleSerializer, Serializer
@@ -19,6 +19,16 @@ DEFAULT_MIN_PERSIST_SAVINGS_PCT = 0.20
 logger = logging.getLogger(__name__)
 
 __all__ = ["TieredBackend"]
+
+
+class _TierWrites(NamedTuple):
+    """What one pass over the persistent tiers did (`_write_persistent_tiers`)."""
+
+    stored: list[str]  #: the tiers that took the entry
+    size_refused: bool  #: a tier skipped the entry as too big for its cap
+    refused_size: int  #: the size those caps were compared with
+    refusing_caps: list[int]  #: the caps that refused it
+    errors: list[str]  #: the tiers whose write raised, and what it raised
 
 
 def _cap_list(caps: list[int] | None) -> str:
@@ -534,12 +544,10 @@ class TieredBackend(CacheBackend):
         metadata: MetadataDict,
         serializer: Serializer | None,
         cap_size: int,
-    ) -> tuple[list[str], bool, int, list[int]]:
-        """Write to every tier past RAM that takes an entry this size.
-
-        Returns ``(destinations, size_refused, refused_size, refusing_caps)``.
-        """
+    ) -> _TierWrites:
+        """Write to every tier past RAM that takes an entry this size."""
         stored_destinations: list[str] = []
+        errors: list[str] = []
         size_refused = False  # a tier skipped this object because it's too big
         refusing_caps: list[int] = []  # the caps it was measured against
         refused_size = cap_size  # the size that was actually compared
@@ -592,8 +600,8 @@ class TieredBackend(CacheBackend):
                 # and nothing at all on the default tiered one -- no warning,
                 # and an empty cache_info()['warnings'] (found attacking the
                 # decorator before round 26).
-                self._store_errors.append(f"{type(backend).__name__}: {type(e).__name__}: {e}")
-        return stored_destinations, size_refused, refused_size, refusing_caps
+                errors.append(f"{type(backend).__name__}: {type(e).__name__}: {e}")
+        return _TierWrites(stored_destinations, size_refused, refused_size, refusing_caps, errors)
 
     def persist_from_memory(self, key: str, rebuild_seconds: float) -> bool:
         """Write an entry only the RAM tier holds to the persistent tiers, when
@@ -646,14 +654,12 @@ class TieredBackend(CacheBackend):
             if k not in ("persist_skipped", "source", "storage", "defer_persist")
         }
         metadata["rebuild_time"] = rebuild_seconds
-        stored, size_refused, refused_size, refusing_caps = self._write_persistent_tiers(
-            key, value, metadata, None, stored_metadata.get("size") or size
-        )
-        if not stored:
-            if size_refused:
-                self._warn_oversize_not_persisted(key, refused_size, refusing_caps)
+        writes = self._write_persistent_tiers(key, value, metadata, None, stored_metadata.get("size") or size)
+        if not writes.stored:
+            if writes.size_refused:
+                self._warn_oversize_not_persisted(key, writes.refused_size, writes.refusing_caps)
             return False
-        stored_metadata["storage"] = ["RAM", *stored]
+        stored_metadata["storage"] = ["RAM", *writes.stored]
         stored_metadata.pop("persist_skipped", None)
         return True
 
@@ -666,7 +672,7 @@ class TieredBackend(CacheBackend):
         # Keep a reference to the original dict so we can propagate storage info back
         original_metadata = metadata
         #: What a tier refused to write this call, for the caller to report.
-        self._store_errors: list[str] = []
+        store_errors: list[str] = []
         metadata = dict(metadata) if metadata is not None else {}
         stored_destinations = []
         # A tier's `default_ttl` belongs to the entry, not to that tier: stamped
@@ -696,7 +702,7 @@ class TieredBackend(CacheBackend):
             # And on the entry's metadata, so the caller hears it: the RAM tier
             # refuses a value it cannot copy, and nothing else would say why the
             # call recomputes every time.
-            self._store_errors.append(f"{type(self.backends[0]).__name__}: {type(e).__name__}: {e}")
+            store_errors.append(f"{type(self.backends[0]).__name__}: {type(e).__name__}: {e}")
 
         # Check promotion for subsequent tiers. The promotion decision is
         # made per-tier so a single set() can land in some tiers and skip
@@ -811,12 +817,14 @@ class TieredBackend(CacheBackend):
                         self._warn_not_worth_its_bytes(key, weight, exec_time, code=metadata.get("code"))
                     self._drop_persisted_call_refs(metadata.get("call_refs"))
 
-            stored, size_refused, refused_size, refusing_caps = (
+            writes = (
                 self._write_persistent_tiers(key, value, metadata, serializer, cap_size)
                 if past_compute_floor
-                else ([], False, cap_size, [])
+                else _TierWrites([], False, cap_size, [], [])
             )
-            stored_destinations.extend(stored)
+            stored_destinations.extend(writes.stored)
+            store_errors.extend(writes.errors)
+            size_refused = writes.size_refused
 
             # The value was worth persisting (cleared the compute floor) but
             # every persistent tier refused it as too big for its cap — it will
@@ -824,7 +832,7 @@ class TieredBackend(CacheBackend):
             # no-op beats a treadmill, but the user should know why nothing
             # durable was written and how to fix it.
             if size_refused and not any(d != "RAM" for d in stored_destinations):
-                self._warn_oversize_not_persisted(key, refused_size, refusing_caps)
+                self._warn_oversize_not_persisted(key, writes.refused_size, writes.refusing_caps)
 
         # Update metadata with storage info so UI can see it immediately
         if metadata is not None:
@@ -833,8 +841,8 @@ class TieredBackend(CacheBackend):
         # Propagate storage info back to the caller's original metadata dict
         if original_metadata is not None:
             original_metadata["storage"] = stored_destinations
-            if self._store_errors:
-                original_metadata["store_errors"] = list(self._store_errors)
+            if store_errors:
+                original_metadata["store_errors"] = store_errors
             # And why it went no further, so "why did the next process miss?"
             # has an answer: the compute floor / cost model, or a size cap.
             if len(self.backends) > 1 and not any(d != "RAM" for d in stored_destinations):

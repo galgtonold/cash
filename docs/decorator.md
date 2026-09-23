@@ -1435,7 +1435,7 @@ keyed by path, it was 18× faster.
 
 ### Cheap results are written too
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @60151d9b -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @f6b93cf0 -->
 A decorated result goes to disk whatever it cost to produce. A millisecond
 aggregate over rows another call already parsed is written like anything else,
 because a new process would have to parse that file again to recompute it, and

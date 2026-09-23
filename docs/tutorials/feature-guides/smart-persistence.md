@@ -75,7 +75,7 @@ The rate ceiling exists because the first two gates, on their own, filled round 
 > single-tier persistent backend (`Cash(backend=FileBackend(...))` or
 > `SQLiteBackend`), which writes every entry regardless of compute time.
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor.end_cell_persistence @286a964a, cash/backends/tiered_backend.py:TieredBackend.persist_from_memory @39321076 -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor.end_cell_persistence @286a964a, cash/backends/tiered_backend.py:TieredBackend.persist_from_memory @3e60234a -->
 In a notebook, "cheaper to re-run" is judged once more at the end of each cell.
 A statement is often fast only because its inputs are there: `latest =
 sales['week'].max()` takes milliseconds, but after a restart `sales` is gone too,
@@ -145,7 +145,7 @@ notebook's own promotion gate reads the config live as well.
 
 ## Inspecting where a value actually landed
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @60151d9b, cash/backends/tiered_backend.py:TieredBackend.get @7e6b7128 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @f6b93cf0, cash/backends/tiered_backend.py:TieredBackend.get @7e6b7128 -->
 The `TieredBackend.set` path records which tiers accepted the write in `metadata['storage']`. This is a list of source labels — `"RAM"`, the file backend's `source_label`, etc. On a hit, `metadata['source']` records which tier served the read (set in `TieredBackend.get`).
 
 When it went no further than RAM, `metadata['persist_skipped']` says why: `"size"` (a tier's size cap), `"bytes"` (the bytes-per-second-saved ceiling), `"compute"` (the notebook's compute floor or its cost model), or `"replaced_in_cell"` (a later statement of the same cell writes that name again, so the version the cell leaves is the one written). Only the first can happen to a `@cash.cache` result: decorating a function is the decision to cache it, so neither the floor nor the cost model is consulted on that path.
