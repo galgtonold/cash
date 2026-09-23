@@ -15,6 +15,7 @@ from pathlib import Path
 
 from cash import __version__
 from cash._location import per_user_cache_root
+from cash.backends._base import effective_ttl
 from cash.backends.adaptive_caps import adaptive_disk_cap_for, human_bytes, resolve_ram_cap
 from cash.backends.cache_dir import DB_FILENAME, KEYS_DIRNAME, VERSION_FILENAME, entry_totals, is_cash_file
 from cash.backends.entry_format import ENTRY_SUFFIX
@@ -270,19 +271,6 @@ def _tier_default_ttl() -> int | None:
     return None
 
 
-def _effective_ttl(metadata: dict, tier_default: int | None) -> int | None:
-    """The ttl an entry is served under, by the rule reads apply.
-
-    The decorator's ``ttl=`` as written; otherwise the SHORTER of the ttl it
-    was written with and the tier's ``default_ttl`` as configured now -- so a
-    lowered default shows here as it takes effect.
-    """
-    written = metadata.get("ttl")
-    if metadata.get("ttl_declared") or tier_default is None:
-        return written
-    return tier_default if written is None else min(written, tier_default)
-
-
 def _store(cache_dir: str | os.PathLike) -> FileBackend:
     """The cache directory, opened the way the library opens it.
 
@@ -305,7 +293,7 @@ def _scan_entries(cache_dir: str | os.PathLike) -> list[_Entry]:
 
 def _entry_of(stored: StoredEntry, tier_default: int | None) -> _Entry:
     metadata = stored.metadata
-    ttl = _effective_ttl(metadata, tier_default)
+    ttl = effective_ttl(metadata, tier_default)
     return _Entry(
         stem=stored.id,
         function=_function_of(stored.key, metadata),

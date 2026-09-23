@@ -824,7 +824,7 @@ def stock_price(symbol):
     return requests.get(f"https://api.example.com/{symbol}").json()
 ```
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._entry_expired @c72fd40d, cash/core.py:Cash.cleanup @20df501f -->
+<!-- claim: cash/decorator/runtime.py:RuntimeMixin._entry_expired @c72fd40d, cash/core.py:Cash.cleanup @a259456c -->
 After the TTL elapses, the next call recomputes and replaces the entry.
 Entries whose calls never come back stay on disk until you reclaim them —
 call `cash.cleanup()`, or run `python -m cash clear` from the CLI.

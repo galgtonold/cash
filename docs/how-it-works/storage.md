@@ -6,7 +6,7 @@ on-disk layer, with a promotion policy that decides what's worth writing down.
 
 ## The tiers
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend @ae15f274, cash/backends/memory_backend.py:InMemoryBackend, cash/backends/file_backend.py:FileBackend, cash/backends/sqlite_backend.py:SQLiteBackend, cash/backends/redis_backend.py:RedisBackend, cash/backends/s3_backend.py:S3Backend broad="tier ordering and read-repair are properties of the class as a whole" -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend @03b27eaf, cash/backends/memory_backend.py:InMemoryBackend, cash/backends/file_backend.py:FileBackend, cash/backends/sqlite_backend.py:SQLiteBackend, cash/backends/redis_backend.py:RedisBackend, cash/backends/s3_backend.py:S3Backend broad="tier ordering and read-repair are properties of the class as a whole" -->
 The default `TieredBackend` stacks two layers, fastest first:
 
 | Tier | Backend | Speed | Survives restart? |
@@ -23,6 +23,13 @@ section is about that gate. Cash also ships backends you can swap in or stack â€
 `SQLiteBackend`, `RedisBackend` and `S3Backend`; `Cash(backends=[...])` stacks
 the ones you pass in a `TieredBackend` of their own (see
 [Choosing a Backend](../tutorials/feature-guides/choosing-a-backend.md)).
+
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @231ca6c0, cash/backends/_base.py:effective_ttl @7c55c336 -->
+An entry's ttl is checked on every tier's copy as it is read, so the RAM copy
+expires with the disk copy (the RAM and S3 backends keep no clock of their
+own). It is the ttl a decorator's `ttl=` declared, or else the shorter of the
+one the entry was written with and the tier's `default_ttl` now;
+`cash.cleanup()` and `cash clear --expired` remove by the same rule.
 
 ## What's worth persisting
 

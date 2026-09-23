@@ -9,13 +9,21 @@ import threading
 import time
 import weakref
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, fields
 from typing import Any, TypedDict
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["CacheMetadata", "EntryMetadata", "MetadataDict", "CacheBackend", "ttl_expired"]
+__all__ = [
+    "CacheMetadata",
+    "EntryMetadata",
+    "MetadataDict",
+    "CacheBackend",
+    "effective_ttl",
+    "entry_expired",
+    "ttl_expired",
+]
 
 #: Cost assumed for an entry whose execution time is unknown -- written without
 #: one (raw backend use), or ranked with nothing recorded about it. Small, so an
@@ -71,6 +79,9 @@ class EntryMetadata(TypedDict, total=False):
     size: int
     #: Seconds until it expires; None never expires.
     ttl: float | None
+    #: The ttl is the decorator's ``ttl=``, not a tier's ``default_ttl``
+    #: (`effective_ttl`).
+    ttl_declared: bool
     #: The tier a read was served from (`CacheBackend.source_label`).
     source: str
     #: The tiers a write reached, by `source_label`.
@@ -80,6 +91,8 @@ class EntryMetadata(TypedDict, total=False):
     # From the writer.
     #: Seconds the value took to compute.
     execution_time: float
+    #: When the decorator wrote it; ages an entry that has no ``created_at``.
+    timestamp: float
     #: The `Serializer` class to rebuild the value with.
     serializer_cls: type
     #: Metadata kept without a value (`CacheBackend.set_metadata_only`).
@@ -135,6 +148,30 @@ def ttl_expired(timestamp: float | None, ttl: float | None, now: float | None = 
     if ttl <= 0:
         return True
     return (time.time() if now is None else now) - (timestamp or 0) > ttl
+
+
+def effective_ttl(metadata: Mapping[str, Any], tier_default: float | None) -> float | None:
+    """The ttl a stored entry is served under.
+
+    A ttl the decorator declared (``ttl=``, marked ``ttl_declared``) as
+    written. Otherwise the SHORTER of the ttl the entry was written with and
+    the tier's ``default_ttl`` as configured now, so lowering a tier's default
+    shortens entries already written. `TieredBackend.get`, `Cash.cleanup` and
+    ``cash clear --expired`` all apply this.
+    """
+    written = metadata.get("ttl")
+    if metadata.get("ttl_declared") or tier_default is None:
+        return written
+    return tier_default if written is None else min(written, tier_default)
+
+
+def entry_expired(metadata: Mapping[str, Any], tier_default: float | None, now: float | None = None) -> bool:
+    """Has this stored entry outlived `effective_ttl`? Aged from the backend's
+    ``created_at``, or the decorator's ``timestamp`` when there is none."""
+    written_at = metadata.get("created_at")
+    if written_at is None:
+        written_at = metadata.get("timestamp")
+    return ttl_expired(written_at, effective_ttl(metadata, tier_default), now)
 
 
 @dataclass(frozen=True)

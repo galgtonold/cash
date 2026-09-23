@@ -142,7 +142,7 @@ notebook's own promotion gate reads the config live as well.
 
 ## Inspecting where a value actually landed
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @8f018587, cash/backends/tiered_backend.py:TieredBackend.get @1c90dca6 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @8f018587, cash/backends/tiered_backend.py:TieredBackend.get @231ca6c0 -->
 The `TieredBackend.set` path records which tiers accepted the write in `metadata['storage']`. This is a list of source labels — `"RAM"`, the file backend's `source_label`, etc. On a hit, `metadata['source']` records which tier served the read (set in `TieredBackend.get`).
 
 When it went no further than RAM, `metadata['persist_skipped']` says why: `"size"` (a tier's size cap), `"bytes"` (the bytes-per-second-saved ceiling), `"compute"` (the notebook's compute floor or its cost model), or `"replaced_in_cell"` (a later statement of the same cell writes that name again, so the version the cell leaves is the one written). Only the first can happen to a `@cash.cache` result: decorating a function is the decision to cache it, so neither the floor nor the cost model is consulted on that path.

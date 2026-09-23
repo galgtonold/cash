@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
 
 from . import _log
 from .backends import CacheBackend, CacheMetadata
-from .backends._base import ttl_expired
+from .backends._base import entry_expired
 from .backends._writes import in_multiprocessing_child
 from .backends.factory import build_backend_from_config, build_tiered
 from .config import CashConfig, get_config
@@ -1252,6 +1252,7 @@ class Cash(
             Number of entries removed.
         """
         now = time.time()
+        tier_default = self.backend.default_ttl
 
         def is_expired(raw_metadata):
             try:
@@ -1262,7 +1263,9 @@ class Cash(
                 if max_age is not None and age > max_age:
                     return True
 
-                return ttl_expired(timestamp, metadata.ttl, now)
+                # The rule a read applies (`TieredBackend.get`), so cleanup
+                # removes exactly what would no longer be served.
+                return entry_expired(raw_metadata, tier_default, now)
             except (AttributeError, TypeError, ValueError):
                 return True
 
