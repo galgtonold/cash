@@ -1,327 +1,174 @@
-# Magic Commands
+# Magic commands
 
-Cash registers a small set of IPython magic commands that control caching and
-inspect session state. This page is the canonical
-reference for all **9** magics — each entry lists the exact signature, every
-parsed flag, and a working example. Behaviour is derived directly from
-`src/cash/notebook/ipython/magics.py` and `src/cash/notebook/ipython/admin.py`.
+!!! info "Applies to: notebook"
+    Notebooks with `%cash_on`. The canonical reference for all **9** magics.
 
-<!-- The count above, and the completeness of the table and the per-magic
-     sections below, are checked against the registered decorators by
-     tests/docs/test_doc_claims.py::test_every_registered_magic_is_documented
-     and ::test_magics_page_states_the_right_count. Each section additionally
-     carries a claim anchor pinned to the method that implements it, so a
-     changed signature or flag surfaces in the re-verification queue. -->
+`import cash` registers the magics; `%load_ext cash` also works. `%cash_help`
+lists them in the notebook, and `%cash_help NAME` prints one magic's usage.
 
-## At a glance
+<!-- The count above and the table and sections below are checked against the
+     registered magics by tests/docs/test_doc_claims.py. Each section carries a
+     claim anchor pinned to the method that implements it. -->
 
 | Magic | Purpose |
 |-------|---------|
-| [`%cash_on`](#cash_on) | Enable automatic caching for subsequent cells. |
-| [`%cash_off`](#cash_off) | Disable automatic caching. |
-| [`%cash_persist`](#cash_persist) | Cache *every* statement, bypassing the cost-aware floors. |
-| [`%cash_help`](#cash_help) | List every magic, or print one magic's full usage. |
-| [`%cash_status`](#cash_status) | Inspect the last cell + session as dict / JSON. |
-| [`%cash_badge`](#cash_badge) | Set per-cell badge mode (html/print/off). |
-| [`%cash_stats`](#cash_stats) | Session-wide cache statistics. |
-| [`%cash_debug`](#cash_debug) | Toggle / configure debug logging. |
-| [`%cash_provenance`](#cash_provenance) | Variable computation history. |
+| [`%cash_on`](#cash_on) | Cache every cell from here on. |
+| [`%cash_off`](#cash_off) | Stop caching. |
+| [`%cash_persist`](#cash_persist) | Store every statement on disk, however cheap. |
+| [`%cash_badge`](#cash_badge) | Choose the badge: HTML, text or none. |
+| [`%cash_debug`](#cash_debug) | Log cash's decisions. |
+| [`%cash_stats`](#cash_stats) | Session statistics and time saved. |
+| [`%cash_status`](#cash_status) | The last cell's result as a dict or JSON. |
+| [`%cash_provenance`](#cash_provenance) | How a variable was computed. |
+| [`%cash_help`](#cash_help) | List the magics and annotations. |
 
----
-
-## Enabling and configuring (user-facing)
+## Turning caching on and off
 
 ### `%cash_on`
 <!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @8cbb17b4 -->
 
-Enable automatic caching for every subsequent cell.
+**Usage:** `%cash_on [ttl=N]`
 
-**Signature:** `%cash_on [ttl=N]`
+Caches every cell run after this one. Put it with `import cash`, alone, in the
+first cell: nothing in that cell is cached.
 
-**Arguments:**
+- `ttl=N`: every stored result expires after `N` seconds. A `# @cash:ttl=N` on a
+  statement overrides it. Any other argument, or a value that is not a whole
+  number, prints an error and leaves caching off.
 
-- `ttl=N` — *Optional.* Default TTL in seconds applied to every cached
-  statement. Must be an integer; an invalid value — or any argument other than
-  `ttl` — prints an error and the command returns **without** enabling caching.
-
-With caching disabled (`CASH_DISABLE=1` or `disable=True`), `%cash_on` prints
-that it did nothing and leaves every cell running uncached — see
-[testing your code](tutorials/feature-guides/testing-your-code.md).
-
-**Side effects:**
-
-- Invalidates the notebook-path discovery cache so the current notebook is
-  re-discovered on the next cell (fixes notebook-switch within a kernel).
-- Resets the upstream checker's AST and simulation caches.
-- Drops any cell snapshot cash's JupyterLab extension pushed, for the same
-  reason: a snapshot of the *previous* notebook must not answer the new one's
-  first upstream check.
-- Sets the global TTL (`None` if not supplied) and flips
-  `_auto_cache_enabled = True`.
-- Prints a one-time `[Tip]` about saving before running, **unless** this is
-  Colab or cash's JupyterLab extension is installed in this environment. Those
-  two are the whole gate. A VS Code hot-exit backup is a live reader too and
-  does **not** suppress the tip: whether a usable backup exists is a property of
-  each individual read, not something `%cash_on` can settle up front, so VS Code
-  users still see it. See
-  [editing without saving](known-limitations.md#editing-without-saving).
-
-**Examples:**
+It prints `Cash enabled.`, and `Found existing cache with N entries.` when the
+cache already holds results. Without a live reader for unsaved edits (see
+[Editing without saving](known-limitations.md#editing-without-saving)), it also
+prints a one-time tip to save before running. With `CASH_DISABLE=1` set, it says
+so and does nothing.
 
 ```python
 %cash_on
 %cash_on ttl=3600
 ```
 
-#### Top-level `await` { #top-level-await }
-
-ipykernel dispatches a cell containing top-level `await`
-through `shell.run_cell_async`, not the `pre_run_cell` hook that `%cash_on`
-patches. Cash intercepts that entry point as well, so awaited cells get lineage
-tracking, upstream reset, and result caching — the async pipeline is the
-line-for-line twin of the sync one. A cache hit returns before the coroutine is
-built, so an unchanged re-run skips the `await` rather than re-issuing the call.
-
 ### `%cash_off`
 <!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_off @700a45e0 -->
 
-Disable automatic caching. Subsequent cells run uncached until you call
-`%cash_on` again.
+**Usage:** `%cash_off`
 
-**Signature:** `%cash_off`
-
-**Arguments:** None.
-
-**Side effects:**
-
-- Clears `_auto_cache_enabled` and the global TTL.
-
-**Example:**
-
-```python
-%cash_off
-```
+Cells after this one run uncached until the next `%cash_on`. It also clears the
+default `ttl`.
 
 ### `%cash_persist`
 <!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_persist @6b423b4b -->
 
-Cache *every* statement regardless of how cheap it was to compute — equivalent
-to putting `# @cash:persist` on every statement. It bypasses the cost-aware
-floors (the 10 ms "too cheap to cache" floor and the size-aware skip). Useful
-for reproducibility, benchmarks, and debugging cache behaviour; wasteful for
-trivial statements in normal use.
+**Usage:** `%cash_persist [on|off]`
 
-**Signature:** `%cash_persist [on|off]`
-
-**Arguments:**
-
-- `on` — cache every statement.
-- `off` — restore the default cost-aware policy.
-- *(no argument)* — toggle the current state.
-
-**Example:**
+Stores every statement on disk, as if each carried `# @cash:persist`, skipping
+the [cost model](cost-model.md)'s thresholds. With no argument it toggles.
+Useful for benchmarks and reproducible runs; wasteful for everyday work.
 
 ```python
-%cash_persist on     # every statement is now cached
-%cash_persist off    # back to the cost-aware default
+%cash_persist on
+%cash_persist off
+```
+
+## Seeing what happened
+
+### `%cash_badge`
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_badge @7312ea34 -->
+
+**Usage:** `%cash_badge [html|print|off]`
+
+- `html`: the interactive badge above each cell's output (default).
+- `print`: a plain-text summary after each cell, for headless runs, CI logs and
+  agents.
+- `off`: no badge.
+
+With no argument it prints the current mode. See [Reading the badge](badges.md).
+
+```python
+%cash_badge print
+```
+
+### `%cash_debug`
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @fb6167b9 -->
+
+**Usage:** `%cash_debug [on|off|json|file PATH]`
+
+- `on` / `off`: log cash's decisions as cells run, or stop. With no argument it
+  toggles. `true`/`1`/`enable` and `false`/`0`/`disable` also work.
+- `json`: log each record as a JSON object.
+- `file PATH`: also append each record to `PATH`, one JSON object per line.
+
+What the log lines mean is in [Debugging](tutorials/feature-guides/debugging-and-monitoring.md#2-turn-on-cash_debug).
+
+```python
+%cash_debug on
+%cash_debug file /tmp/cash.log
+```
+
+### `%cash_stats`
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @711be826 -->
+
+**Usage:** `%cash_stats [json|reset]`
+
+Prints this kernel session's statistics: cells run, statements computed,
+restored and skipped, hit rate, compute time, and time saved as gross, overhead
+and **net**. Net counts only savings a measurement backs, so it can be negative.
+A **discarded writes** line appears when a result could not be written.
+
+- `json`: the same numbers as a dict.
+- `reset`: zeroes the counters and forgets the stored measurements behind the
+  net figure. The discarded-writes line stays.
+
+[Debugging](tutorials/feature-guides/debugging-and-monitoring.md#3-check-the-session-with-cash_stats)
+explains each line.
+
+```python
+%cash_stats
+%cash_stats reset
+```
+
+### `%cash_status`
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @0d042233 -->
+
+**Usage:** `%cash_status [dict|json]`
+
+Returns the last cell's statements (status, code, outputs, times), the session's
+variable lineage and whether caching is on. With no argument it prints JSON and
+returns the dict; `dict` returns it without printing; `json` returns a JSON
+string. Statuses use the enum names: `COMPUTED` for the badge's EXECUTED,
+`RESTORED` for CACHED.
+
+```python
+status = %cash_status dict
+```
+
+### `%cash_provenance`
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_provenance @57772837 -->
+
+**Usage:** `%cash_provenance [NAME|--all|--clear] [--graph] [--time] [--json]`
+
+- No argument or `--all`: every tracked variable with its last status
+  (`EXECUTED`, `CACHED` or `SKIPPED`) and number of records.
+- `NAME`: how that variable was computed: code, inputs, duration and history.
+  Add `--graph` for its dependency graph, `--time` for a timeline, or `--json`
+  for JSON instead of text.
+- `--clear`: forget all provenance records.
+
+```python
+%cash_provenance
+%cash_provenance df --graph
 ```
 
 ### `%cash_help`
 <!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_help @6f3ad8e6 -->
 <!-- claim: cash/notebook/ipython/_help.py:help_text @800a29c8 -->
 
-Print every registered magic with the first line of its docstring, a working
-example of each `# @cash:` annotation, and the links for docs, bug reports and
-questions. Pass a magic's name to print its full usage instead.
+**Usage:** `%cash_help [NAME]`
 
-The card is built from the magics IPython actually registered and from their
-docstrings, and each annotation example is checked against the real parser, so
-it lists exactly the magics that exist.
-
-**Signature:** `%cash_help [name]`
-
-**Arguments:**
-
-- *(no argument)* — The full card. See [Annotations](annotations.md) for the
-  full `@cash:` directive reference.
-- `name` — One magic's docstring: its usage and flags. The `%` and `cash_`
-  prefixes are optional, so `badge`, `cash_badge` and `%cash_badge` all work.
-  An unknown name says so and prints the full card.
-
-**Example:**
+With no argument, lists every magic with a one-line summary, one example of each
+`# @cash:` [annotation](annotations.md), and links for docs and bug reports. With
+a name (`badge`, `cash_badge` or `%cash_badge`), prints that magic's full usage.
 
 ```python
 %cash_help
 %cash_help badge
-%cash_help stats
-```
-
-### `%cash_status`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @3d41dc2f -->
-
-Report status of the last cell plus a snapshot of session state (lineage,
-executed-code map, auto-cache flag, and the number of entries in the backend).
-
-**Signature:** `%cash_status [mode]`
-
-**Arguments:**
-
-- *(no argument)* — Pretty-print the status as JSON **and** return the dict.
-- `dict` — Return the status as a Python `dict` (no print).
-- `json` — Return the status as a JSON-serialized string.
-
-**Returns:** dict (default and `dict` mode) or JSON string (`json` mode).
-
-**Example:**
-
-```python
-%cash_status               # prints and returns a dict
-status = %cash_status dict # capture as dict
-blob   = %cash_status json # capture as JSON string
-```
-
-### `%cash_badge`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_badge @016db083 -->
-
-Set the badge display mode for subsequent cached cells. See
-[Reading the Cash Badge](badges.md) for the full anatomy of each mode.
-
-**Signature:** `%cash_badge [mode]`
-
-**Arguments:**
-
-- *(no argument)* — Print the current badge mode and usage hint; no change.
-- `html` — Interactive HTML badges with live progress updates (default).
-- `print` — Text summary printed once after the cell completes.
-- `off` — No badge output at all.
-
-**Example:**
-
-```python
-%cash_badge print
-%cash_badge off
-%cash_badge          # show current mode
-```
-
-### `%cash_stats`
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @711be826 -->
-
-Show cache statistics for this kernel session (a restart resets them; what the
-cache on disk holds is `cash info`'s): counts, hit rate, compute time, and the
-savings broken out as **gross saved**, **cash overhead**, and **net saved**,
-plus tracked variables. The headline net counts only savings backed by a
-measurement, never the full gross, so a stale first-run timing can never
-inflate it. Two kinds of measurement count, and the line says which:
-
-* **verified** — this session recomputed the same statement, so it knows
-  today's cost;
-* **measured** — an earlier kernel on this machine did. The *least* it was
-  ever measured to cost is what gets credited, so a baseline taken on a cold
-  first run cannot be paid out forever.
-
-The second kind is what makes a Restart & Run All readable: a fresh kernel
-recomputes nothing, so before it the net after a restart printed as a range
-whose floor was exactly minus cash's own overhead.
-
-(`gross − overhead` is still reported separately as an upper bound, and a
-cache built on another machine vouches for nothing: there the range remains.)
-Reporting net keeps the headline honest: cash's own overhead is subtracted
-from the recompute it avoided — including the time it spends *inside* a
-statement, keying and hashing the calls it routes, which is charged to cash
-and not to your code — and a session whose overhead outweighs its hits reads
-as a plain "cash cost you Xs this session" rather than a phantom win. The command
-deliberately avoids walking the backend so it stays cheap on large on-disk
-caches.
-
-If any cache write failed, a **discarded writes** line names the count and the
-first cause. Those results were never stored, so they recompute every run —
-and none of the counters above can show it, because a discarded write is not a
-miss but a hit that never got the chance to exist. Nothing raises at the time,
-which is why the rest of the summary can look healthy while the cache is
-quietly doing less than it appears to. `%cash_stats reset` does **not** clear
-them: a counter is something you may choose to forget, an unresolved fault is
-not, and the entries are still missing from disk afterwards.
-
-**Signature:** `%cash_stats [mode]`
-
-**Arguments:**
-
-- *(no argument)* — Human-readable summary printed to stdout.
-- `json` — Pretty-print as JSON (includes `total_overhead`, `net_time_saved`,
-  and `hit_rate_percent`).
-- `reset` — Zero out the in-memory counters (`cells_executed`,
-  `statements_computed`, `statements_restored`, `statements_skipped`,
-  `total_compute_time`, `total_restored_time`, `total_time_saved`,
-  `total_overhead`).
-
-**Example:**
-
-```python
-%cash_stats
-%cash_stats json
-%cash_stats reset
-```
-
-### `%cash_debug`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @fb6167b9 -->
-
-Toggle or configure debug logging. The level is set on the global `cash`
-logger, which the upstream checker and the statement pipeline log through, and
-passed to the core Cash instance.
-
-**Signature:** `%cash_debug [on|off|json|file <path>]`
-
-**Arguments:**
-
-- *(no argument)* — Toggle debug on/off.
-- `on` (aliases: `true`, `1`, `enable`) — Enable debug logging at DEBUG level.
-- `off` (aliases: `false`, `0`, `disable`) — Disable debug logging (INFO level).
-- `json` — Enable DEBUG and print each record as a JSON object.
-- `file <path>` — Enable DEBUG and also append the records to `<path>`, one
-  JSON object per line.
-
-Argument matching is case-insensitive.
-
-**Example:**
-
-```python
-%cash_debug on
-%cash_debug off
-%cash_debug json
-%cash_debug file /tmp/cash.log
-```
-
----
-
-## Inspecting your session
-
-### `%cash_provenance`
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_provenance @efdb75ad -->
-
-Show how a variable was computed: its lineage hash, the cell code that produced
-it, and (optionally) a dependency graph or timeline.
-
-**Signature:** `%cash_provenance [<var>|--all|--clear] [--graph] [--time|--timeline] [--json]`
-
-**Arguments:**
-
-- *(no argument)* / `--all` — List every tracked variable with a status icon
-  (`[C]` computed, `[R]` restored, `[S]` skipped, `[?]` unknown) and the number
-  of records in its history.
-- `--clear` — Clear all provenance records.
-- `<var>` — Detail view for one variable. Combinable flags:
-  - `--graph` — Include the dependency graph.
-  - `--time` / `--timeline` — Include a timeline of computations.
-  - `--json` — Output as JSON (mutually exclusive with the human-readable
-    formatter; if `--json` is set neither `--graph` nor `--time` are honoured).
-
-**Example:**
-
-```python
-%cash_provenance              # list all tracked vars
-%cash_provenance --all
-%cash_provenance df           # detail for `df`
-%cash_provenance df --graph --time
-%cash_provenance df --json
-%cash_provenance --clear
 ```
