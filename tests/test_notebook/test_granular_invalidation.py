@@ -530,16 +530,16 @@ class TestGranularInvalidation:
 
         # Setup: variable 'result' depends on module.compute
         old_lineage = hashlib.sha256(b"old").hexdigest()
-        sp.variable_lineage[module_name] = old_lineage
-        sp.variable_lineage["result"] = "result_hash"
-        sp.executed_cell_codes["result"] = f"result = {module_name}.compute(5)"
-        sp.executed_input_lineages["result"] = {module_name: old_lineage}
+        sp.tracking_state.variable_lineage[module_name] = old_lineage
+        sp.tracking_state.variable_lineage["result"] = "result_hash"
+        sp.tracking_state.executed_cell_codes["result"] = f"result = {module_name}.compute(5)"
+        sp.tracking_state.executed_input_lineages["result"] = {module_name: old_lineage}
         sp.tracking_state.module_attribute_deps["result"] = {module_name: {"compute"}}
 
         # Setup: variable 'version_str' depends on module.VERSION
-        sp.variable_lineage["version_str"] = "version_hash"
-        sp.executed_cell_codes["version_str"] = f"version_str = {module_name}.VERSION"
-        sp.executed_input_lineages["version_str"] = {module_name: old_lineage}
+        sp.tracking_state.variable_lineage["version_str"] = "version_hash"
+        sp.tracking_state.executed_cell_codes["version_str"] = f"version_str = {module_name}.VERSION"
+        sp.tracking_state.executed_input_lineages["version_str"] = {module_name: old_lineage}
         sp.tracking_state.module_attribute_deps["version_str"] = {module_name: {"VERSION"}}
 
         # Only 'compute' changed
@@ -553,13 +553,13 @@ class TestGranularInvalidation:
         )
 
         # 'result' should be invalidated (uses compute)
-        assert "result" not in sp.variable_lineage
-        assert "result" not in sp.executed_cell_codes
+        assert "result" not in sp.tracking_state.variable_lineage
+        assert "result" not in sp.tracking_state.executed_cell_codes
 
         # 'version_str' should be PRESERVED (uses VERSION, which didn't change)
-        assert "version_str" in sp.variable_lineage
-        assert sp.variable_lineage["version_str"] == "version_hash"
-        assert "version_str" in sp.executed_cell_codes
+        assert "version_str" in sp.tracking_state.variable_lineage
+        assert sp.tracking_state.variable_lineage["version_str"] == "version_hash"
+        assert "version_str" in sp.tracking_state.executed_cell_codes
 
     def test_no_granular_info_full_invalidation(self, magics_fixture, temp_module):
         """When per_module_changed_symbols is None, full invalidation happens."""
@@ -568,15 +568,15 @@ class TestGranularInvalidation:
         sp = magics._statement_processor
 
         old_lineage = hashlib.sha256(b"old").hexdigest()
-        sp.variable_lineage[module_name] = old_lineage
-        sp.variable_lineage["result"] = "result_hash"
-        sp.executed_cell_codes["result"] = f"result = {module_name}.compute(5)"
-        sp.executed_input_lineages["result"] = {module_name: old_lineage}
+        sp.tracking_state.variable_lineage[module_name] = old_lineage
+        sp.tracking_state.variable_lineage["result"] = "result_hash"
+        sp.tracking_state.executed_cell_codes["result"] = f"result = {module_name}.compute(5)"
+        sp.tracking_state.executed_input_lineages["result"] = {module_name: old_lineage}
         sp.tracking_state.module_attribute_deps["result"] = {module_name: {"compute"}}
 
-        sp.variable_lineage["version_str"] = "version_hash"
-        sp.executed_cell_codes["version_str"] = f"version_str = {module_name}.VERSION"
-        sp.executed_input_lineages["version_str"] = {module_name: old_lineage}
+        sp.tracking_state.variable_lineage["version_str"] = "version_hash"
+        sp.tracking_state.executed_cell_codes["version_str"] = f"version_str = {module_name}.VERSION"
+        sp.tracking_state.executed_input_lineages["version_str"] = {module_name: old_lineage}
         sp.tracking_state.module_attribute_deps["version_str"] = {module_name: {"VERSION"}}
 
         # No granular info (None)
@@ -590,8 +590,8 @@ class TestGranularInvalidation:
         )
 
         # Both should be invalidated
-        assert "result" not in sp.variable_lineage
-        assert "version_str" not in sp.variable_lineage
+        assert "result" not in sp.tracking_state.variable_lineage
+        assert "version_str" not in sp.tracking_state.variable_lineage
 
     def test_no_attribute_deps_full_invalidation(self, magics_fixture, temp_module):
         """When module_attribute_deps is not set for a var, full invalidation for safety."""
@@ -600,10 +600,10 @@ class TestGranularInvalidation:
         sp = magics._statement_processor
 
         old_lineage = hashlib.sha256(b"old").hexdigest()
-        sp.variable_lineage[module_name] = old_lineage
-        sp.variable_lineage["result"] = "result_hash"
-        sp.executed_cell_codes["result"] = f"result = {module_name}.compute(5)"
-        sp.executed_input_lineages["result"] = {module_name: old_lineage}
+        sp.tracking_state.variable_lineage[module_name] = old_lineage
+        sp.tracking_state.variable_lineage["result"] = "result_hash"
+        sp.tracking_state.executed_cell_codes["result"] = f"result = {module_name}.compute(5)"
+        sp.tracking_state.executed_input_lineages["result"] = {module_name: old_lineage}
         # No module_attribute_deps set for 'result'
 
         changed_modules = {module_name: module_file}
@@ -616,7 +616,7 @@ class TestGranularInvalidation:
         )
 
         # Should still be invalidated (no granular info about which attrs are used)
-        assert "result" not in sp.variable_lineage
+        assert "result" not in sp.tracking_state.variable_lineage
 
     def test_empty_changed_symbols_preserves_all(self, magics_fixture, temp_module):
         """If no symbols actually changed (e.g., whitespace only), preserve all vars."""
@@ -625,10 +625,10 @@ class TestGranularInvalidation:
         sp = magics._statement_processor
 
         old_lineage = hashlib.sha256(b"old").hexdigest()
-        sp.variable_lineage[module_name] = old_lineage
-        sp.variable_lineage["result"] = "result_hash"
-        sp.executed_cell_codes["result"] = f"result = {module_name}.compute(5)"
-        sp.executed_input_lineages["result"] = {module_name: old_lineage}
+        sp.tracking_state.variable_lineage[module_name] = old_lineage
+        sp.tracking_state.variable_lineage["result"] = "result_hash"
+        sp.tracking_state.executed_cell_codes["result"] = f"result = {module_name}.compute(5)"
+        sp.tracking_state.executed_input_lineages["result"] = {module_name: old_lineage}
         sp.tracking_state.module_attribute_deps["result"] = {module_name: {"compute"}}
 
         # Empty set = module mtime changed but no AST-level symbol changes
@@ -642,7 +642,7 @@ class TestGranularInvalidation:
         )
 
         # 'result' should be preserved (nothing actually changed)
-        assert "result" in sp.variable_lineage
+        assert "result" in sp.tracking_state.variable_lineage
 
     def test_backward_compat_without_per_module_symbols(self, magics_fixture, temp_module):
         """Calling without per_module_changed_symbols falls back to full invalidation."""
@@ -651,10 +651,10 @@ class TestGranularInvalidation:
         sp = magics._statement_processor
 
         old_lineage = hashlib.sha256(b"old").hexdigest()
-        sp.variable_lineage[module_name] = old_lineage
-        sp.variable_lineage["result"] = "result_hash"
-        sp.executed_cell_codes["result"] = f"result = {module_name}.compute(5)"
-        sp.executed_input_lineages["result"] = {module_name: old_lineage}
+        sp.tracking_state.variable_lineage[module_name] = old_lineage
+        sp.tracking_state.variable_lineage["result"] = "result_hash"
+        sp.tracking_state.executed_cell_codes["result"] = f"result = {module_name}.compute(5)"
+        sp.tracking_state.executed_input_lineages["result"] = {module_name: old_lineage}
 
         changed_modules = {module_name: module_file}
         # Don't pass per_module_changed_symbols
@@ -664,7 +664,7 @@ class TestGranularInvalidation:
         )
 
         # Should still invalidate (backward compatible)
-        assert "result" not in sp.variable_lineage
+        assert "result" not in sp.tracking_state.variable_lineage
 
     def test_multiple_modules_granular(self, magics_fixture, tmp_path):
         """Granular invalidation works across multiple changed modules."""
@@ -682,25 +682,25 @@ class TestGranularInvalidation:
         old_lineage_a = hashlib.sha256(b"old_a").hexdigest()
         old_lineage_b = hashlib.sha256(b"old_b").hexdigest()
 
-        sp.variable_lineage[mod_a_name] = old_lineage_a
-        sp.variable_lineage[mod_b_name] = old_lineage_b
+        sp.tracking_state.variable_lineage[mod_a_name] = old_lineage_a
+        sp.tracking_state.variable_lineage[mod_b_name] = old_lineage_b
 
         # var_x uses mod_a.func_a
-        sp.variable_lineage["var_x"] = "x_hash"
-        sp.executed_cell_codes["var_x"] = f"var_x = {mod_a_name}.func_a()"
-        sp.executed_input_lineages["var_x"] = {mod_a_name: old_lineage_a}
+        sp.tracking_state.variable_lineage["var_x"] = "x_hash"
+        sp.tracking_state.executed_cell_codes["var_x"] = f"var_x = {mod_a_name}.func_a()"
+        sp.tracking_state.executed_input_lineages["var_x"] = {mod_a_name: old_lineage_a}
         sp.tracking_state.module_attribute_deps["var_x"] = {mod_a_name: {"func_a"}}
 
         # var_y uses mod_a.CONST_A
-        sp.variable_lineage["var_y"] = "y_hash"
-        sp.executed_cell_codes["var_y"] = f"var_y = {mod_a_name}.CONST_A"
-        sp.executed_input_lineages["var_y"] = {mod_a_name: old_lineage_a}
+        sp.tracking_state.variable_lineage["var_y"] = "y_hash"
+        sp.tracking_state.executed_cell_codes["var_y"] = f"var_y = {mod_a_name}.CONST_A"
+        sp.tracking_state.executed_input_lineages["var_y"] = {mod_a_name: old_lineage_a}
         sp.tracking_state.module_attribute_deps["var_y"] = {mod_a_name: {"CONST_A"}}
 
         # var_z uses mod_b.func_b
-        sp.variable_lineage["var_z"] = "z_hash"
-        sp.executed_cell_codes["var_z"] = f"var_z = {mod_b_name}.func_b()"
-        sp.executed_input_lineages["var_z"] = {mod_b_name: old_lineage_b}
+        sp.tracking_state.variable_lineage["var_z"] = "z_hash"
+        sp.tracking_state.executed_cell_codes["var_z"] = f"var_z = {mod_b_name}.func_b()"
+        sp.tracking_state.executed_input_lineages["var_z"] = {mod_b_name: old_lineage_b}
         sp.tracking_state.module_attribute_deps["var_z"] = {mod_b_name: {"func_b"}}
 
         # Only func_a changed in mod_a, only CONST_B changed in mod_b
@@ -720,13 +720,13 @@ class TestGranularInvalidation:
         )
 
         # var_x uses func_a which changed → invalidated
-        assert "var_x" not in sp.variable_lineage
+        assert "var_x" not in sp.tracking_state.variable_lineage
 
         # var_y uses CONST_A which didn't change → preserved
-        assert "var_y" in sp.variable_lineage
+        assert "var_y" in sp.tracking_state.variable_lineage
 
         # var_z uses func_b which didn't change → preserved
-        assert "var_z" in sp.variable_lineage
+        assert "var_z" in sp.tracking_state.variable_lineage
 
 
 # ============================================================================
@@ -944,19 +944,19 @@ class TestGranularEdgeCases:
         sp = magics._statement_processor
 
         old_lineage = hashlib.sha256(b"old").hexdigest()
-        sp.variable_lineage[module_name] = old_lineage
+        sp.tracking_state.variable_lineage[module_name] = old_lineage
 
         # Both a and b use compute
         for var in ["a", "b"]:
-            sp.variable_lineage[var] = f"{var}_hash"
-            sp.executed_cell_codes[var] = f"{var} = {module_name}.compute(1)"
-            sp.executed_input_lineages[var] = {module_name: old_lineage}
+            sp.tracking_state.variable_lineage[var] = f"{var}_hash"
+            sp.tracking_state.executed_cell_codes[var] = f"{var} = {module_name}.compute(1)"
+            sp.tracking_state.executed_input_lineages[var] = {module_name: old_lineage}
             sp.tracking_state.module_attribute_deps[var] = {module_name: {"compute"}}
 
         # c uses format_result (unchanged)
-        sp.variable_lineage["c"] = "c_hash"
-        sp.executed_cell_codes["c"] = f"c = {module_name}.format_result(1)"
-        sp.executed_input_lineages["c"] = {module_name: old_lineage}
+        sp.tracking_state.variable_lineage["c"] = "c_hash"
+        sp.tracking_state.executed_cell_codes["c"] = f"c = {module_name}.format_result(1)"
+        sp.tracking_state.executed_input_lineages["c"] = {module_name: old_lineage}
         sp.tracking_state.module_attribute_deps["c"] = {module_name: {"format_result"}}
 
         changed_modules = {module_name: module_file}
@@ -968,9 +968,9 @@ class TestGranularEdgeCases:
             per_module_changed_symbols,
         )
 
-        assert "a" not in sp.variable_lineage
-        assert "b" not in sp.variable_lineage
-        assert "c" in sp.variable_lineage
+        assert "a" not in sp.tracking_state.variable_lineage
+        assert "b" not in sp.tracking_state.variable_lineage
+        assert "c" in sp.tracking_state.variable_lineage
 
     def test_variable_using_multiple_attrs_including_changed(self, magics_fixture, temp_module):
         """If a variable uses both changed and unchanged attrs, it should be invalidated."""
@@ -979,12 +979,12 @@ class TestGranularEdgeCases:
         sp = magics._statement_processor
 
         old_lineage = hashlib.sha256(b"old").hexdigest()
-        sp.variable_lineage[module_name] = old_lineage
+        sp.tracking_state.variable_lineage[module_name] = old_lineage
 
         # Variable uses both compute AND VERSION
-        sp.variable_lineage["mixed"] = "mixed_hash"
-        sp.executed_cell_codes["mixed"] = f"mixed = {module_name}.compute(int({module_name}.VERSION))"
-        sp.executed_input_lineages["mixed"] = {module_name: old_lineage}
+        sp.tracking_state.variable_lineage["mixed"] = "mixed_hash"
+        sp.tracking_state.executed_cell_codes["mixed"] = f"mixed = {module_name}.compute(int({module_name}.VERSION))"
+        sp.tracking_state.executed_input_lineages["mixed"] = {module_name: old_lineage}
         sp.tracking_state.module_attribute_deps["mixed"] = {module_name: {"compute", "VERSION"}}
 
         # Only compute changed
@@ -998,7 +998,7 @@ class TestGranularEdgeCases:
         )
 
         # Should be invalidated because one of its deps (compute) changed
-        assert "mixed" not in sp.variable_lineage
+        assert "mixed" not in sp.tracking_state.variable_lineage
 
     def test_module_attribute_deps_cleared_on_invalidation(self, magics_fixture, temp_module):
         """module_attribute_deps should be cleared for invalidated variables."""
@@ -1007,10 +1007,10 @@ class TestGranularEdgeCases:
         sp = magics._statement_processor
 
         old_lineage = hashlib.sha256(b"old").hexdigest()
-        sp.variable_lineage[module_name] = old_lineage
-        sp.variable_lineage["result"] = "result_hash"
-        sp.executed_cell_codes["result"] = f"result = {module_name}.compute(5)"
-        sp.executed_input_lineages["result"] = {module_name: old_lineage}
+        sp.tracking_state.variable_lineage[module_name] = old_lineage
+        sp.tracking_state.variable_lineage["result"] = "result_hash"
+        sp.tracking_state.executed_cell_codes["result"] = f"result = {module_name}.compute(5)"
+        sp.tracking_state.executed_input_lineages["result"] = {module_name: old_lineage}
         sp.tracking_state.module_attribute_deps["result"] = {module_name: {"compute"}}
 
         changed_modules = {module_name: module_file}

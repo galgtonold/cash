@@ -74,8 +74,8 @@ class TestMutableInputRestoration(unittest.TestCase):
 
         # Get cache key (we can't easily get it, but we can check if it exists)
         processor = self.magics._statement_processor
-        self.assertIn("df", processor.variable_sources)
-        print(f"Source for df: {processor.variable_sources['df']}")
+        self.assertIn("df", processor.tracking_state.variable_sources)
+        print(f"Source for df: {processor.tracking_state.variable_sources['df']}")
 
         # 3. Simulate state before second run (Reset state)
         self.shell.user_ns["df"] = pd.DataFrame({"A": [1, 2, 3]})
@@ -89,8 +89,8 @@ class TestMutableInputRestoration(unittest.TestCase):
         self.assertEqual(self.shell.user_ns["df"]["B"].tolist(), [2, 4, 6])
 
         # Verify source is still tracked correctly after restore
-        self.assertIn("df", processor.variable_sources)
-        print(f"Source for df after restore: {processor.variable_sources['df']}")
+        self.assertIn("df", processor.tracking_state.variable_sources)
+        print(f"Source for df after restore: {processor.tracking_state.variable_sources['df']}")
 
         print("✓ DataFrame output correctly restored")
 

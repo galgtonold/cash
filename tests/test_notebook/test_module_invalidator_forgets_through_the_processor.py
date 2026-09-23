@@ -23,16 +23,18 @@ from cash.notebook.statement import StatementProcessor
 def processor(tmp_path):
     shell = MagicMock()
     shell.user_ns = {}
-    proc = StatementProcessor(cash_instance=Cash(backend=FileBackend(str(tmp_path)), register_magic=False), shell=shell)
-    proc.set_tracking_state(TrackingState())
-    return proc
+    return StatementProcessor(
+        cash_instance=Cash(backend=FileBackend(str(tmp_path)), register_magic=False),
+        shell=shell,
+        tracking_state=TrackingState(),
+    )
 
 
 def _record(proc, name):
-    proc.variable_lineage[name] = "lin"
-    proc.executed_cell_codes[name] = f"{name} = lib.f()"
-    proc.executed_input_lineages[name] = {"lib": "old"}
-    proc.current_session_hashes[name] = "h"
+    proc.tracking_state.variable_lineage[name] = "lin"
+    proc.tracking_state.executed_cell_codes[name] = f"{name} = lib.f()"
+    proc.tracking_state.executed_input_lineages[name] = {"lib": "old"}
+    proc.tracking_state.current_session_hashes[name] = "h"
     proc.tracking_state.from_import_components[name] = "c"
     proc.tracking_state.module_attribute_deps[name] = {"lib": {"f"}}
 
@@ -40,10 +42,10 @@ def _record(proc, name):
 def _recorded(proc, name):
     state = proc.tracking_state
     return {
-        "variable_lineage": name in proc.variable_lineage,
-        "executed_cell_codes": name in proc.executed_cell_codes,
-        "executed_input_lineages": name in proc.executed_input_lineages,
-        "current_session_hashes": name in proc.current_session_hashes,
+        "variable_lineage": name in state.variable_lineage,
+        "executed_cell_codes": name in state.executed_cell_codes,
+        "executed_input_lineages": name in state.executed_input_lineages,
+        "current_session_hashes": name in state.current_session_hashes,
         "from_import_components": name in state.from_import_components,
         "module_attribute_deps": name in state.module_attribute_deps,
     }

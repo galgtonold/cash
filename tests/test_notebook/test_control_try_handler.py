@@ -40,8 +40,8 @@ def mock_statement_processor():
             "outputs": [],
         }
     )
-    processor.variable_lineage = {}
-    processor.vars_with_mutation_lineage = set()
+    processor.tracking_state.variable_lineage = {}
+    processor.tracking_state.vars_with_mutation_lineage = set()
     processor.compute_hash = MagicMock(return_value="fakehash")
     return processor
 
@@ -142,8 +142,8 @@ def test_exception_bound_to_handler_var(handler, mock_shell, mock_statement_proc
     handler.process(node, None, True)
     assert mock_shell.user_ns.get("e") is err
     # Exception should have a lineage entry recorded through the LineageStore seam
-    mock_statement_processor.lineage.record.assert_called_once()
-    args, kwargs = mock_statement_processor.lineage.record.call_args
+    mock_statement_processor.tracking_state.lineage.record.assert_called_once()
+    args, kwargs = mock_statement_processor.tracking_state.lineage.record.call_args
     assert args[0] == "e"
     assert kwargs.get("value") is err
 

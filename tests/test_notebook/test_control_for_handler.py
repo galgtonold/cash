@@ -42,8 +42,8 @@ def mock_statement_processor():
             "outputs": [],
         }
     )
-    processor.variable_lineage = {}
-    processor.vars_with_mutation_lineage = set()
+    processor.tracking_state.variable_lineage = {}
+    processor.tracking_state.vars_with_mutation_lineage = set()
     processor.compute_hash = MagicMock(return_value="fakehash")
     return processor
 
@@ -136,7 +136,7 @@ def test_loop_target_lineage_set_per_iteration(handler, mock_statement_processor
     node = _parse_for("for i in range(2): x = i")
     handler.process(node, None, True, None)
     # After the loop, 'i' must have a lineage entry (set on each iteration).
-    assert "i" in mock_statement_processor.variable_lineage
+    assert "i" in mock_statement_processor.tracking_state.variable_lineage
 
 
 def test_loop_target_bound_in_user_ns(handler, mock_shell):

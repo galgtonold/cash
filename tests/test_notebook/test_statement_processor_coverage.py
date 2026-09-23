@@ -156,7 +156,7 @@ class TestCheckCache:
 
         # Set up input var's file dependencies — mutate the shared TrackingState
         # dict so the freshness checker (which reads it per-call) sees the update.
-        processor.executed_file_deps["df"] = {str(test_file)}
+        processor.tracking_state.executed_file_deps["df"] = {str(test_file)}
 
         # Store source cache entry for the input variable with OLD mtime
         source_key = "source_cache_key"
@@ -166,7 +166,7 @@ class TestCheckCache:
             "file_dependencies": {str(test_file): {"mtime": current_mtime - 100}},  # Old mtime
         }
         backend.set(source_key, {"variables": {"df": "data"}}, source_meta)
-        processor.variable_sources["df"] = source_key
+        processor.tracking_state.variable_sources["df"] = source_key
 
         # Now store the dependent cache entry (no direct file deps)
         cache_key = "test_input_dep"
@@ -331,18 +331,18 @@ class TestFileDependencyPropagation:
 
         # Simulate that 'df' has file deps — mutate the shared dicts so
         # sibling sub-components (StatementFileDeps) see the update too.
-        processor.executed_file_deps["df"] = {str(test_file)}
+        processor.tracking_state.executed_file_deps["df"] = {str(test_file)}
 
         # Set up 'df' in namespace (as a list to avoid pandas dependency)
         shell.user_ns["df"] = [1, 2, 3]
-        processor.variable_lineage["df"] = "df_lineage"
+        processor.tracking_state.variable_lineage["df"] = "df_lineage"
 
         # Now compute a scalar from df
         processor.process_statement("n = len(df)")
 
         # 'n' is an int (scalar) - should NOT inherit file deps
         assert shell.user_ns.get("n") == 3
-        file_deps = processor.executed_file_deps.get("n", set())
+        file_deps = processor.tracking_state.executed_file_deps.get("n", set())
         assert len(file_deps) == 0
 
     def test_non_scalar_output_inherits_file_deps(self, processor_fixture, tmp_path):
@@ -353,16 +353,16 @@ class TestFileDependencyPropagation:
         test_file.write_text("a,b\n1,2\n")
 
         # Mutate the shared dicts so StatementFileDeps sees the update too.
-        processor.executed_file_deps["data"] = {str(test_file)}
+        processor.tracking_state.executed_file_deps["data"] = {str(test_file)}
 
         shell.user_ns["data"] = [1, 2, 3]
-        processor.variable_lineage["data"] = "data_lineage"
+        processor.tracking_state.variable_lineage["data"] = "data_lineage"
 
         # Create a non-scalar output from data
         processor.process_statement("result = list(data)")
 
         assert shell.user_ns.get("result") == [1, 2, 3]
-        file_deps = processor.executed_file_deps.get("result", set())
+        file_deps = processor.tracking_state.executed_file_deps.get("result", set())
         assert str(test_file) in file_deps
 
 
@@ -381,7 +381,7 @@ class TestModuleLineage:
         # json should be in user_ns but not cached (modules are skipped)
         assert "json" in shell.user_ns
         # Module gets lineage tracking
-        assert "json" in processor.variable_lineage
+        assert "json" in processor.tracking_state.variable_lineage
 
 
 # ============================================================================
@@ -420,8 +420,8 @@ class TestPurityChecks:
         shell.user_ns["add"] = add
         shell.user_ns["x"] = 5
         shell.user_ns["y"] = 3
-        processor.variable_lineage["x"] = "x_lin"
-        processor.variable_lineage["y"] = "y_lin"
+        processor.tracking_state.variable_lineage["x"] = "x_lin"
+        processor.tracking_state.variable_lineage["y"] = "y_lin"
 
         metrics = processor.process_statement("result = add(x, y)")
         assert shell.user_ns.get("result") == 8

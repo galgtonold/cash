@@ -292,11 +292,11 @@ class TryHandler:
         self.shell.user_ns[matched_handler.name] = caught_exception
         try:
             exc_class_name = type(caught_exception).__name__
-            class_lineage = self.statement_processor.variable_lineage.get(exc_class_name, "")
+            class_lineage = self.statement_processor.tracking_state.variable_lineage.get(exc_class_name, "")
             exc_lineage = hashlib.sha256(
                 f"__exception__:{exc_class_name}:{class_lineage}:{caught_exception!s}:{caught_exception!r}".encode()
             ).hexdigest()
-            self.statement_processor.lineage.record(
+            self.statement_processor.tracking_state.lineage.record(
                 matched_handler.name,
                 exc_lineage,
                 value=caught_exception,

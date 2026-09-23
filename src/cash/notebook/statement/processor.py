@@ -734,7 +734,15 @@ class StatementProcessor:
         self._structure_costs: list[tuple[dict[str, float], set[str]]] = []
         self._collapsed = 0  # ancestries summed into one (``_capped``)
 
-        self.set_tracking_state(tracking_state or TrackingState())
+        # The one shared record of lineage and dependency state (see
+        # TrackingState); the processor never aliases its fields.
+        self.tracking_state: TrackingState = tracking_state or TrackingState()
+        # Pre-execution fingerprints of a bare call's arguments, by statement
+        # source hash -- see _classify_method_mutations.
+        self._arg_snapshots: dict[str, dict[str, str]] = {}
+        # Statement code (context markers stripped) whose calls are not worth
+        # routing through the call cache -- see _code_and_tree_for_execution.
+        self._calls_not_worth_wrapping: set[str] = set()
 
         # Cache-freshness checker (TTL / file-dep / input-file invalidation).
         # Stateless w.r.t. tracking state — receives it per call.
@@ -1034,38 +1042,6 @@ class StatementProcessor:
         except (AttributeError, TypeError):  # pragma: no cover - defensive
             return
 
-    def set_tracking_state(self, state: TrackingState) -> None:
-        """Wire all tracking dictionaries from a shared :class:`TrackingState`.
-
-        This is the preferred way to configure tracking state.  All fields
-        are aliases to the same mutable containers so mutations are visible
-        across ``CashMagics``, ``StatementProcessor``, and ``UpstreamChecker``.
-
-        The four sibling sub-components (``_freshness``, ``_file_deps``,
-        ``_stmt_restorer``, ``lineage_builder``) receive ``TrackingState`` as a
-        method parameter and hold no aliased dict references, so no
-        propagation step is required here.
-        """
-
-        self.tracking_state = state
-        self.executed_cell_codes = state.executed_cell_codes
-        self.executed_cell_hashes = state.executed_cell_hashes
-        self.variable_lineage = state.variable_lineage
-        self.lineage = state.lineage
-        self.variable_hashes = state.variable_hashes
-        self.variable_sources = state.variable_sources
-        self.current_session_hashes = state.current_session_hashes
-        self.executed_file_deps = state.executed_file_deps
-        self.vars_with_mutation_lineage = state.vars_with_mutation_lineage
-        self.executed_input_lineages = state.executed_input_lineages
-        self.mutation_verdicts = state.mutation_verdicts
-        # Pre-execution fingerprints of a bare call's arguments, by statement
-        # source hash -- see _classify_method_mutations.
-        self._arg_snapshots: dict[str, dict[str, str]] = {}
-        # Statement code (context markers stripped) whose calls are not worth
-        # routing through the call cache -- see _code_and_tree_for_execution.
-        self._calls_not_worth_wrapping: set[str] = set()
-
     def forget_variable(self, name: str) -> None:
         """Drop everything recorded about how *name* was computed.
 
@@ -1074,10 +1050,10 @@ class StatementProcessor:
         next statement that reads *name* treats it as having no lineage. The
         value in ``user_ns`` is left alone.
         """
-        self.variable_lineage.pop(name, None)
-        self.executed_cell_codes.pop(name, None)
-        self.executed_input_lineages.pop(name, None)
-        self.current_session_hashes.pop(name, None)
+        self.tracking_state.variable_lineage.pop(name, None)
+        self.tracking_state.executed_cell_codes.pop(name, None)
+        self.tracking_state.executed_input_lineages.pop(name, None)
+        self.tracking_state.current_session_hashes.pop(name, None)
         self.tracking_state.from_import_components.pop(name, None)
         self.tracking_state.module_attribute_deps.pop(name, None)
 
@@ -1359,7 +1335,7 @@ class StatementProcessor:
                 annotation=annotation,
                 analysis=statement_analysis,
                 user_ns=self.shell.user_ns,
-                variable_lineage=self.variable_lineage,
+                variable_lineage=self.tracking_state.variable_lineage,
                 is_stateful_call=self._check_callable_stateful,
                 scan_forbidden=CodeAnalyzer.scan_for_forbidden_functions,
             )
@@ -1670,7 +1646,7 @@ class StatementProcessor:
                 annotation=annotation,
                 analysis=statement_analysis,
                 user_ns=self.shell.user_ns,
-                variable_lineage=self.variable_lineage,
+                variable_lineage=self.tracking_state.variable_lineage,
                 is_stateful_call=self._check_callable_stateful,
                 scan_forbidden=CodeAnalyzer.scan_for_forbidden_functions,
             )
@@ -2356,11 +2332,15 @@ class StatementProcessor:
 
     def _lineages_read(self, inputs: set[str]) -> dict[str, str]:
         read = {}
-        for dep in called_function_dependencies(sorted(inputs), self.shell.user_ns, self.variable_lineage, None):
+        for dep in called_function_dependencies(
+            sorted(inputs), self.shell.user_ns, self.tracking_state.variable_lineage, None
+        ):
             name, _, lineage = dep.partition(":")
             if lineage != "ABSENT":
                 read[name] = lineage
-        read.update({n: self.variable_lineage[n] for n in inputs if n in self.variable_lineage})
+        read.update(
+            {n: self.tracking_state.variable_lineage[n] for n in inputs if n in self.tracking_state.variable_lineage}
+        )
         return read
 
     def begin_control_log(self, code: str):
@@ -2673,7 +2653,7 @@ class StatementProcessor:
                         # reason source apply here too, tightening the gate to
                         # the same standard the statement itself is judged by
                         # (CAS-243 review I2).
-                        variable_lineage=self.variable_lineage,
+                        variable_lineage=self.tracking_state.variable_lineage,
                         is_stateful_call=self._check_callable_stateful,
                         scan_forbidden=CodeAnalyzer.scan_for_forbidden_functions,
                         local_names=local,
@@ -2710,7 +2690,7 @@ class StatementProcessor:
                     ttl_provider=self.current_call_ttl,
                     persist_provider=self.current_call_persist,
                     ctx_provider=lambda: CacheKeyContext(
-                        variable_lineage=self.variable_lineage,
+                        variable_lineage=self.tracking_state.variable_lineage,
                         user_ns=self.shell.user_ns,
                         function_tracker=self.function_tracker,
                         compute_hash_fn=self.compute_hash,
@@ -2986,8 +2966,8 @@ class StatementProcessor:
                         "(observed; receiver lineage bumped; statement re-executes)"
                         + self._cache_fit_hint(skip_observed)
                     )
-            self.mutation_verdicts[source_hash] = set(mut_assumed) | newly_mutated
-            self._persist_mutation_verdict(source_hash, self.mutation_verdicts[source_hash])
+            self.tracking_state.mutation_verdicts[source_hash] = set(mut_assumed) | newly_mutated
+            self._persist_mutation_verdict(source_hash, self.tracking_state.mutation_verdicts[source_hash])
 
         # Auto-track newly imported local modules so _capture_variables includes
         # the module source hash in the lineage on first execution.
@@ -3099,7 +3079,7 @@ class StatementProcessor:
         # second pass of AST visitors over the same tree.
         pure_mutations = statement_analysis.all_mutated_vars - outputs
         if pure_mutations:
-            self.vars_with_mutation_lineage.update(pure_mutations)
+            self.tracking_state.vars_with_mutation_lineage.update(pure_mutations)
             if self.debug:
                 logger.debug("%s Detected in-place mutations on: %s", _LOG_MUTATION, pure_mutations)
 
@@ -3354,7 +3334,9 @@ class StatementProcessor:
             if any(p not in file_deps for p in paths):
                 return
             names = set(inputs) | called_function_globals(inputs, self.shell.user_ns)
-            input_lineages = {v: self.variable_lineage[v] for v in names if v in self.variable_lineage}
+            input_lineages = {
+                v: self.tracking_state.variable_lineage[v] for v in names if v in self.tracking_state.variable_lineage
+            }
             record = {
                 "write_provenance": True,
                 "paths": paths,
@@ -3473,7 +3455,7 @@ class StatementProcessor:
           (recorded into the verdict so the simulation reproduces them).
         * ``record_verdict`` — True when this statement's verdict is being learned.
         """
-        verdict = self.mutation_verdicts.get(source_hash)
+        verdict = self.tracking_state.mutation_verdicts.get(source_hash)
         classes = classify_receivers(
             tree, self.shell.user_ns, lambda: verdict, arguments=self._bare_call_arguments(tree, outputs)
         )
@@ -3598,7 +3580,7 @@ class StatementProcessor:
         identity_hash = hashlib.sha256(str(id(val)).encode("utf-8")).hexdigest()
         if after == identity_hash:
             return True  # unpicklable -> identity hash -> mutation undetectable
-        before = self.current_session_hashes.get(base)
+        before = self.tracking_state.current_session_hashes.get(base)
         return before is None or after != before
 
     def _check_callable_stateful(self, name: str) -> bool:
@@ -3637,7 +3619,7 @@ class StatementProcessor:
                     "%s Input lineages used: %s",
                     _LOG_CACHE_HIT,
                     [
-                        (v, self.variable_lineage.get(v, "NONE")[:16] + "...")
+                        (v, self.tracking_state.variable_lineage.get(v, "NONE")[:16] + "...")
                         for v in inputs
                         if v not in ["get_ipython", "__builtins__", "print"]
                     ],
@@ -4198,17 +4180,16 @@ class StatementProcessor:
         # again here. Re-snapshotted per statement, every statement derived from
         # a frame read out of 5,222 files re-read all 5,222 (round 23, r23s4).
         # A later lookup still checks the real file against it.
-        if hasattr(self, "executed_file_deps"):
-            direct = all_file_deps.copy()
-            for input_var in inputs:
-                inherited = self.executed_file_deps.get(input_var)
-                if not inherited:
-                    continue
-                all_file_deps.update(inherited)
-                recorded = self._producer_file_snapshots(input_var)
-                for path in inherited:
-                    if path in recorded and path not in direct:
-                        inherited_snapshots.setdefault(path, recorded[path])
+        direct = all_file_deps.copy()
+        for input_var in inputs:
+            inherited = self.tracking_state.executed_file_deps.get(input_var)
+            if not inherited:
+                continue
+            all_file_deps.update(inherited)
+            recorded = self._producer_file_snapshots(input_var)
+            for path in inherited:
+                if path in recorded and path not in direct:
+                    inherited_snapshots.setdefault(path, recorded[path])
 
         return self._store_in_cache(
             cache_key,
@@ -4919,7 +4900,7 @@ class StatementProcessor:
                 code,
                 key_inputs,
                 ctx=CacheKeyContext(
-                    variable_lineage=self.variable_lineage,
+                    variable_lineage=self.tracking_state.variable_lineage,
                     user_ns=self.shell.user_ns,
                     function_tracker=self.function_tracker,
                     compute_hash_fn=self.compute_hash,
@@ -4949,7 +4930,7 @@ class StatementProcessor:
         entropy_modules = get_entropy_reseed_modules(code)
         entropy_vars = {rng_virtual_var(m) for m in entropy_modules}
         for var in hidden_lineage_writes(code):
-            self.variable_lineage[var] = (
+            self.tracking_state.variable_lineage[var] = (
                 entropy_write_lineage() if var in entropy_vars else hidden_write_lineage(cache_key)
             )
         for module in get_seeding_rng_modules(code):

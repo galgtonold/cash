@@ -1906,7 +1906,7 @@ try:
         _cash_magics.tracking_state.vars_with_mutation_lineage.clear()
         # Clear statement processor's input lineages
         if hasattr(_cash_magics, '_statement_processor'):
-            _cash_magics._statement_processor.executed_input_lineages.clear()
+            _cash_magics._statement_processor.tracking_state.executed_input_lineages.clear()
         # Clear upstream checker's simulation cache
         if hasattr(_cash_magics, '_upstream_checker'):
             _cash_magics._upstream_checker.simulator.cache.reset()

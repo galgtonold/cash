@@ -63,9 +63,9 @@ try:
         _cash_magics.tracking_state.variable_sources.clear()
         _cash_magics.tracking_state.variable_hashes.clear()
         if hasattr(_cash_magics, '_statement_processor'):
-            _cash_magics._statement_processor.variable_lineage.clear()
-            _cash_magics._statement_processor.executed_cell_codes.clear()
-            _cash_magics._statement_processor.executed_cell_hashes.clear()
+            _cash_magics._statement_processor.tracking_state.variable_lineage.clear()
+            _cash_magics._statement_processor.tracking_state.executed_cell_codes.clear()
+            _cash_magics._statement_processor.tracking_state.executed_cell_hashes.clear()
 except Exception:
     pass
 

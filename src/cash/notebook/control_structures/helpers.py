@@ -320,7 +320,7 @@ def inherit_body_file_deps(
     *body_files* is what a per-iteration loop gathered as it ran: a name the
     body rebinds holds only the last iteration's files by now.
     """
-    executed_file_deps = getattr(statement_processor, "executed_file_deps", None)
+    executed_file_deps = statement_processor.tracking_state.executed_file_deps
     if executed_file_deps is None:
         return
     used = {sub.id for body_node in body_nodes for sub in ast.walk(body_node) if isinstance(sub, ast.Name)}
@@ -362,7 +362,7 @@ def collect_body_input_lineages(
                 reads.add(sub.id)
     lineages: dict[str, str] = {}
     for name in reads - exclude:
-        lin = statement_processor.variable_lineage.get(name)
+        lin = statement_processor.tracking_state.variable_lineage.get(name)
         if lin:
             lineages[name] = lin
     return lineages
@@ -391,8 +391,8 @@ def get_expression_iterable_lineage(shell, statement_processor, iter_node: ast.A
         inputs, _ = CodeAnalyzer.analyze_code_block(iter_code)
         lineage_parts = []
         for var_name in sorted(inputs):
-            if var_name in statement_processor.variable_lineage:
-                lineage_parts.append(statement_processor.variable_lineage[var_name])
+            if var_name in statement_processor.tracking_state.variable_lineage:
+                lineage_parts.append(statement_processor.tracking_state.variable_lineage[var_name])
             elif var_name in shell.user_ns:
                 try:
                     lineage_parts.append(statement_processor.compute_hash(shell.user_ns[var_name]))
@@ -411,8 +411,8 @@ def get_iterable_lineage(shell, statement_processor, iter_node: ast.AST) -> str 
     """
     if isinstance(iter_node, ast.Name):
         var_name = iter_node.id
-        if var_name in statement_processor.variable_lineage:
-            return statement_processor.variable_lineage[var_name]
+        if var_name in statement_processor.tracking_state.variable_lineage:
+            return statement_processor.tracking_state.variable_lineage[var_name]
         if var_name in shell.user_ns:
             try:
                 return statement_processor.compute_hash(shell.user_ns[var_name])
@@ -529,7 +529,7 @@ def update_mutated_variable_lineages(
             # `prev=`: what this variable was before the loop touched it.
             # The only component left that discriminates when the loop's source
             # matches and the sampled value hash collides -- see the docstring.
-            prior_lineage = statement_processor.variable_lineage.get(var_name)
+            prior_lineage = statement_processor.tracking_state.variable_lineage.get(var_name)
             lineage_components = [loop_code_hash, value_hash]
             if prior_lineage:
                 lineage_components.append(f"prev={prior_lineage}")
@@ -540,10 +540,9 @@ def update_mutated_variable_lineages(
 
             new_lineage = hashlib.sha256(":".join(lineage_components).encode()).hexdigest()
 
-            statement_processor.lineage.record(var_name, new_lineage, value=val)
+            statement_processor.tracking_state.lineage.record(var_name, new_lineage, value=val)
 
-            if hasattr(statement_processor, "vars_with_mutation_lineage"):
-                statement_processor.vars_with_mutation_lineage.add(var_name)
+            statement_processor.tracking_state.vars_with_mutation_lineage.add(var_name)
 
             logger.debug("[CONTROL] Updated lineage for mutated var '%s': %s...", var_name, new_lineage[:20])
 

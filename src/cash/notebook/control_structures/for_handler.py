@@ -279,7 +279,7 @@ class ForLoopHandler:
             # rebound names: one changed in place (`parts.append(d)`) keeps
             # every file and is read once at the end -- read per iteration, its
             # growing set made the gathering quadratic again.
-            _file_deps = getattr(self.statement_processor, "executed_file_deps", None)
+            _file_deps = self.statement_processor.tracking_state.executed_file_deps
             _body_names = (
                 {
                     n.id
@@ -424,7 +424,7 @@ class ForLoopHandler:
                 # `val` answers it soundly -- one full hash per iteration.
                 tag = own_tag(val)
                 h = tag if tag is not None else full
-                self.statement_processor.variable_lineage[name] = h
+                self.statement_processor.tracking_state.variable_lineage[name] = h
                 loop_var_digests[name] = full
             except (TypeError, ValueError, AttributeError) as exc:
                 logger.debug("[CONTROL] Failed to hash loop variable %s: %s", name, exc)

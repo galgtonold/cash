@@ -31,8 +31,8 @@ class TestLoopCodeCapture(unittest.TestCase):
                 "outputs": [],
             }
         )
-        sp.variable_lineage = {}
-        sp.vars_with_mutation_lineage = set()
+        sp.tracking_state.variable_lineage = {}
+        sp.tracking_state.vars_with_mutation_lineage = set()
         sp.compute_hash = MagicMock(return_value="fakehash")
 
         csp = ControlStructureProcessor(shell, sp)

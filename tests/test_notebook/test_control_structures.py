@@ -84,8 +84,8 @@ class TestControlStructureProcessor:
                 "outputs": [],
             }
         )
-        processor.variable_lineage = {}
-        processor.vars_with_mutation_lineage = set()
+        processor.tracking_state.variable_lineage = {}
+        processor.tracking_state.vars_with_mutation_lineage = set()
         processor.compute_hash = MagicMock(return_value="fakehash")
         return processor
 
@@ -455,8 +455,8 @@ class TestOutputFlushing:
     @pytest.fixture
     def mock_statement_processor(self):
         processor = MagicMock()
-        processor.variable_lineage = {}
-        processor.vars_with_mutation_lineage = set()
+        processor.tracking_state.variable_lineage = {}
+        processor.tracking_state.vars_with_mutation_lineage = set()
         processor.compute_hash = MagicMock(return_value="fakehash")
         return processor
 
@@ -739,8 +739,8 @@ class TestSingleUnitStreamOutput:
     @pytest.fixture
     def mock_statement_processor(self):
         processor = MagicMock()
-        processor.variable_lineage = {}
-        processor.vars_with_mutation_lineage = set()
+        processor.tracking_state.variable_lineage = {}
+        processor.tracking_state.vars_with_mutation_lineage = set()
         processor.compute_hash = MagicMock(return_value="fakehash")
         return processor
 

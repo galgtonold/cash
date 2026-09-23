@@ -127,12 +127,12 @@ class ModuleInvalidator:
             # Why three minimal repros missed it, and why this suite did:
             # they all wrote `import mylib`, where the two names coincide.
             for name in self._names_bound_to(mod_name):
-                old_lineage = processor.variable_lineage.get(name)
+                old_lineage = processor.tracking_state.variable_lineage.get(name)
                 if old_lineage:
                     old_module_lineages[name] = old_lineage
                 lineage = self._lineage_as_imported(name, processor) or new_lineage
                 processor.forget_variable(name)
-                processor.variable_lineage[name] = lineage
+                processor.tracking_state.variable_lineage[name] = lineage
                 logger.debug(
                     "[MODULE_INVALIDATE] Updated lineage for %r: %s... -> %s...",
                     name,
@@ -156,7 +156,7 @@ class ModuleInvalidator:
         restored until a second restart.
         """
 
-        code = processor.executed_cell_codes.get(name)
+        code = processor.tracking_state.executed_cell_codes.get(name)
         value = self._shell.user_ns.get(name)
         if not code or value is None or not import_only(code):
             return None
@@ -262,7 +262,7 @@ class ModuleInvalidator:
         """
         state = processor.tracking_state
         recorded = state.from_import_components.get(var_name)
-        code = processor.executed_cell_codes.get(var_name)
+        code = processor.tracking_state.executed_cell_codes.get(var_name)
         if not recorded or not code:
             return False
         try:
@@ -397,7 +397,7 @@ class ModuleInvalidator:
         processor: StatementProcessor,
     ) -> None:
         """Register a granularly-preserved variable for deferred lineage update."""
-        input_map = processor.executed_input_lineages.get(var_name, {})
+        input_map = processor.tracking_state.executed_input_lineages.get(var_name, {})
         for mod_name_key in old_module_lineages:
             if mod_name_key in input_map:
                 processor.tracking_state.granular_preserved_vars.setdefault(mod_name_key, set()).add(var_name)
@@ -423,7 +423,7 @@ class ModuleInvalidator:
 
         vars_to_invalidate: set[str] = set()
         vars_preserved: set[str] = set()
-        for var_name, input_map in list(processor.executed_input_lineages.items()):
+        for var_name, input_map in list(processor.tracking_state.executed_input_lineages.items()):
             decision = self._classify_var_invalidation(
                 var_name,
                 input_map,

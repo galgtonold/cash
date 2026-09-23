@@ -98,7 +98,7 @@ class TestAlreadyExecutedOptimization:
 
         # Modify input 'a' with different lineage
         shell.user_ns["a"] = 20
-        processor.variable_lineage.pop("a", None)
+        processor.tracking_state.variable_lineage.pop("a", None)
         if hasattr(shell.user_ns.get("a"), "_cash_hash"):
             with contextlib.suppress(AttributeError, TypeError):
                 delattr(shell.user_ns["a"], "_cash_hash")
@@ -133,12 +133,12 @@ class TestAlreadyExecutedOptimization:
 
         shell.user_ns["a"] = 10
         processor.process_statement("x = a + 1")
-        lineage_after_first = processor.variable_lineage.get("x")
+        lineage_after_first = processor.tracking_state.variable_lineage.get("x")
         assert lineage_after_first is not None
 
         # Second run - should skip/restore
         processor.process_statement("x = a + 1")
-        lineage_after_skip = processor.variable_lineage.get("x")
+        lineage_after_skip = processor.tracking_state.variable_lineage.get("x")
 
         # Lineage should be preserved (not cleared or changed)
         assert lineage_after_skip == lineage_after_first
@@ -176,8 +176,8 @@ class TestAlreadyExecutedOptimization:
 
         # Externally modify x - remove its lineage
         shell.user_ns["x"] = 999
-        processor.variable_lineage.pop("x", None)
-        processor.executed_cell_codes.pop("x", None)
+        processor.tracking_state.variable_lineage.pop("x", None)
+        processor.tracking_state.executed_cell_codes.pop("x", None)
 
         # Should re-compute since x was externally modified
         processor.process_statement("x = a + 1")
@@ -199,7 +199,7 @@ class TestAlreadyExecutedOptimization:
         assert shell.user_ns["data"] == [1, 2, 3]
 
         # Verify data has lineage
-        assert "data" in processor.variable_lineage
+        assert "data" in processor.tracking_state.variable_lineage
 
     def test_skip_not_applied_to_loop_iterations(self, processor_fixture):
         """
@@ -218,7 +218,7 @@ class TestAlreadyExecutedOptimization:
 
         # Same base code with different context (different iteration)
         shell.user_ns["item"] = 5
-        processor.variable_lineage.pop("item", None)
+        processor.tracking_state.variable_lineage.pop("item", None)
         code_with_context2 = "# __iteration_context__: def456\nresult = item * 2"
         metrics2 = processor.process_statement(code_with_context2)
         # Should NOT be skipped since it has iteration context
@@ -389,11 +389,11 @@ class TestRedundantImportSkip:
 
         # Remove json from namespace AND all tracking
         del shell.user_ns["json"]
-        processor.variable_lineage.pop("json", None)
-        processor.executed_cell_codes.pop("json", None)
+        processor.tracking_state.variable_lineage.pop("json", None)
+        processor.tracking_state.executed_cell_codes.pop("json", None)
         # Also clear hashes so it can't be found via any path
-        processor.executed_cell_hashes.pop("json", None)
-        processor.current_session_hashes.pop("json", None)
+        processor.tracking_state.executed_cell_hashes.pop("json", None)
+        processor.tracking_state.current_session_hashes.pop("json", None)
         # Clear cache so it can't restore
         backend.clear()
 
@@ -449,10 +449,10 @@ class TestCacheRestorePaths:
         # Clear from namespace to force cache restore
         del shell.user_ns["x"]
         del shell.user_ns["y"]
-        processor.variable_lineage.pop("x", None)
-        processor.variable_lineage.pop("y", None)
-        processor.executed_cell_codes.pop("x", None)
-        processor.executed_cell_codes.pop("y", None)
+        processor.tracking_state.variable_lineage.pop("x", None)
+        processor.tracking_state.variable_lineage.pop("y", None)
+        processor.tracking_state.executed_cell_codes.pop("x", None)
+        processor.tracking_state.executed_cell_codes.pop("y", None)
 
         # Restore from cache
         metrics2 = processor.process_statement("x = 42\ny = 84", annotation=_PERSIST)
@@ -514,8 +514,8 @@ class TestSizeAwareEdgeCases:
         assert metrics["status"] == CacheStatus.COMPUTED
 
         del shell.user_ns["big"]
-        processor.variable_lineage.pop("big", None)
-        processor.executed_cell_codes.pop("big", None)
+        processor.tracking_state.variable_lineage.pop("big", None)
+        processor.tracking_state.executed_cell_codes.pop("big", None)
 
         metrics2 = processor.process_statement("big = list(range(sum(range(5_000_000)) // 12499997500000))")
         assert metrics2["status"] == CacheStatus.RESTORED

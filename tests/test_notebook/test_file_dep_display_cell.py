@@ -117,8 +117,8 @@ def test_display_cell_invalidation_on_file_change(processor_with_pandas):
 
         # Check file dependencies are tracked
         print("\n--- Checking file dependencies ---")
-        print(f"executed_file_deps: {processor.executed_file_deps}")
-        print(f"variable_sources: {processor.variable_sources}")
+        print(f"executed_file_deps: {processor.tracking_state.executed_file_deps}")
+        print(f"variable_sources: {processor.tracking_state.variable_sources}")
 
         # === SECOND RUN: Re-run display cell (should be cached) ===
         print("\n=== SECOND RUN (no file change) ===")

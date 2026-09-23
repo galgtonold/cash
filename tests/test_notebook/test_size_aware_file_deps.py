@@ -277,7 +277,7 @@ class TestReadCsvCachingUnit:
 
         # Check that a cache entry was stored (not skipped)
         sp = magics._statement_processor
-        assert "df" in sp.variable_lineage, "df should have a lineage after caching"
+        assert "df" in sp.tracking_state.variable_lineage, "df should have a lineage after caching"
 
         # The key test: the backend should have a cache entry for read_csv.
         # data_path = '...' is a trivial string assignment — it may be skipped by the

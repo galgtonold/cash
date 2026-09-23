@@ -6,6 +6,8 @@ Verifies that the StatementProcessor class and its TypedDicts can be
 imported and instantiated directly, improving test coverage visibility.
 """
 
+from unittest.mock import MagicMock
+
 from cash.notebook._protocols import TrackingState
 from cash.notebook.statement import (
     ProcessResult,
@@ -74,10 +76,14 @@ class TestStatementProcessorImport:
         for method_name in expected_methods:
             assert hasattr(StatementProcessor, method_name), f"StatementProcessor missing method {method_name}"
 
-    def test_has_set_tracking_state(self):
-        """StatementProcessor should have the new set_tracking_state method."""
-        assert hasattr(StatementProcessor, "set_tracking_state")
-        assert callable(StatementProcessor.set_tracking_state)
+    def test_tracking_state_is_the_one_view_of_shared_state(self):
+        """The processor exposes its shared state once, as ``tracking_state``,
+        and never aliases the state's fields as attributes of its own."""
+        state = TrackingState()
+        processor = StatementProcessor(MagicMock(user_ns={}), None, tracking_state=state)
+        assert processor.tracking_state is state
+        for field_name in ("variable_lineage", "executed_cell_codes", "executed_file_deps", "mutation_verdicts"):
+            assert not hasattr(processor, field_name)
 
 
 class TestTrackingState:

@@ -29,6 +29,7 @@ from traitlets.config import Configurable
 
 from cash.backends import InMemoryBackend
 from cash.core import Cash
+from cash.notebook._protocols import TrackingState
 from cash.notebook.cache_status import CacheStatus
 from cash.notebook.ipython.magics import CashMagics
 from cash.notebook.statement import StatementProcessor
@@ -419,8 +420,7 @@ class _StatementProcessorWithoutLoopVarsScope:
     """
 
     def __init__(self):
-        self.variable_lineage: dict = {}
-        self.vars_with_mutation_lineage: set = set()
+        self.tracking_state = TrackingState()
         self.compute_hash = lambda v: "fakehash"
 
     def process_statement(self, code, ttl, silent, annotation=None, is_last=True):

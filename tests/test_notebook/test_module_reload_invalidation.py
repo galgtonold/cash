@@ -97,7 +97,7 @@ class TestModuleReloadInvalidation:
 
         # Set initial lineage for the module
         old_lineage = hashlib.sha256(b"old_source").hexdigest()
-        sp.variable_lineage[module_name] = old_lineage
+        sp.tracking_state.variable_lineage[module_name] = old_lineage
 
         # Simulate module reload
         changed_modules = {module_name: module_file}
@@ -107,7 +107,7 @@ class TestModuleReloadInvalidation:
         )
 
         # Lineage should have changed
-        new_lineage = sp.variable_lineage[module_name]
+        new_lineage = sp.tracking_state.variable_lineage[module_name]
         assert new_lineage != old_lineage
         # It is the module's source identity, the one an import's lineage carries
         from cash.notebook.lineage_formula import read_module_source_hash
@@ -122,11 +122,11 @@ class TestModuleReloadInvalidation:
 
         # Set up lineage: module has old lineage, result depends on it
         old_module_lineage = hashlib.sha256(b"old_source").hexdigest()
-        sp.variable_lineage[module_name] = old_module_lineage
-        sp.variable_lineage["result"] = "some_hash_for_result"
-        sp.executed_cell_codes["result"] = f"result = {module_name}.increment(5)"
-        sp.executed_input_lineages["result"] = {module_name: old_module_lineage}
-        sp.current_session_hashes["result"] = "some_content_hash"
+        sp.tracking_state.variable_lineage[module_name] = old_module_lineage
+        sp.tracking_state.variable_lineage["result"] = "some_hash_for_result"
+        sp.tracking_state.executed_cell_codes["result"] = f"result = {module_name}.increment(5)"
+        sp.tracking_state.executed_input_lineages["result"] = {module_name: old_module_lineage}
+        sp.tracking_state.current_session_hashes["result"] = "some_content_hash"
 
         # Trigger invalidation
         changed_modules = {module_name: module_file}
@@ -136,10 +136,10 @@ class TestModuleReloadInvalidation:
         )
 
         # Dependent variable 'result' should have been cleared
-        assert "result" not in sp.variable_lineage
-        assert "result" not in sp.executed_cell_codes
-        assert "result" not in sp.executed_input_lineages
-        assert "result" not in sp.current_session_hashes
+        assert "result" not in sp.tracking_state.variable_lineage
+        assert "result" not in sp.tracking_state.executed_cell_codes
+        assert "result" not in sp.tracking_state.executed_input_lineages
+        assert "result" not in sp.tracking_state.current_session_hashes
 
     def test_invalidate_module_lineages_preserves_unrelated_vars(self, magics_fixture, temp_module):
         """Variables NOT depending on the changed module should be preserved."""
@@ -148,11 +148,11 @@ class TestModuleReloadInvalidation:
         sp = magics._statement_processor
 
         old_module_lineage = hashlib.sha256(b"old_source").hexdigest()
-        sp.variable_lineage[module_name] = old_module_lineage
+        sp.tracking_state.variable_lineage[module_name] = old_module_lineage
         # Unrelated variable
-        sp.variable_lineage["unrelated"] = "unrelated_hash"
-        sp.executed_cell_codes["unrelated"] = "unrelated = 42"
-        sp.executed_input_lineages["unrelated"] = {}
+        sp.tracking_state.variable_lineage["unrelated"] = "unrelated_hash"
+        sp.tracking_state.executed_cell_codes["unrelated"] = "unrelated = 42"
+        sp.tracking_state.executed_input_lineages["unrelated"] = {}
 
         changed_modules = {module_name: module_file}
         magics._module_invalidator.invalidate(
@@ -161,8 +161,8 @@ class TestModuleReloadInvalidation:
         )
 
         # Unrelated variable should be preserved
-        assert sp.variable_lineage["unrelated"] == "unrelated_hash"
-        assert sp.executed_cell_codes["unrelated"] == "unrelated = 42"
+        assert sp.tracking_state.variable_lineage["unrelated"] == "unrelated_hash"
+        assert sp.tracking_state.executed_cell_codes["unrelated"] == "unrelated = 42"
 
     def test_recently_reloaded_modules_set(self, magics_fixture, temp_module):
         """After invalidation, recently_reloaded_modules should contain the module name."""
@@ -222,7 +222,7 @@ class TestModuleReloadInvalidation:
         _, _, key1, _, _ = sp._analyze_and_hash(code)
 
         # Now set a module lineage and recompute
-        sp.variable_lineage[module_name] = hashlib.sha256(b"version_1").hexdigest()
+        sp.tracking_state.variable_lineage[module_name] = hashlib.sha256(b"version_1").hexdigest()
         _, _, key2, _, _ = sp._analyze_and_hash(code)
 
         # Keys should differ because module lineage is now included
@@ -240,11 +240,11 @@ class TestModuleReloadInvalidation:
         code = f"result = {module_name}.increment(5)"
 
         # Version 1
-        sp.variable_lineage[module_name] = hashlib.sha256(b"version_1").hexdigest()
+        sp.tracking_state.variable_lineage[module_name] = hashlib.sha256(b"version_1").hexdigest()
         _, _, key_v1, _, _ = sp._analyze_and_hash(code)
 
         # Version 2
-        sp.variable_lineage[module_name] = hashlib.sha256(b"version_2").hexdigest()
+        sp.tracking_state.variable_lineage[module_name] = hashlib.sha256(b"version_2").hexdigest()
         _, _, key_v2, _, _ = sp._analyze_and_hash(code)
 
         assert key_v1 != key_v2
@@ -351,7 +351,7 @@ class TestModuleReloadInvalidation:
         sp = magics._statement_processor
 
         # No prior lineage
-        assert module_name not in sp.variable_lineage
+        assert module_name not in sp.tracking_state.variable_lineage
 
         changed_modules = {module_name: module_file}
         magics._module_invalidator.invalidate(
@@ -360,7 +360,7 @@ class TestModuleReloadInvalidation:
         )
 
         # Should set new lineage regardless
-        assert module_name in sp.variable_lineage
+        assert module_name in sp.tracking_state.variable_lineage
 
     def test_invalidate_with_missing_file(self, magics_fixture):
         """Module invalidation should handle missing file gracefully."""
@@ -375,7 +375,7 @@ class TestModuleReloadInvalidation:
         )
 
         # Should get a random hash as fallback
-        assert "nonexistent_module" in sp.variable_lineage
+        assert "nonexistent_module" in sp.tracking_state.variable_lineage
 
 
 # ============================================================================
@@ -612,7 +612,7 @@ class TestTransitiveDependencyTracking:
 
         # Set initial lineage
         old_lineage = hashlib.sha256(b"initial").hexdigest()
-        sp.variable_lineage["metrics"] = old_lineage
+        sp.tracking_state.variable_lineage["metrics"] = old_lineage
 
         # Invalidate — the new lineage should include helpers.py content
         changed_modules = {"metrics": info["metrics_file"]}
@@ -621,7 +621,7 @@ class TestTransitiveDependencyTracking:
             magics._statement_processor,
         )
 
-        new_lineage = sp.variable_lineage["metrics"]
+        new_lineage = sp.tracking_state.variable_lineage["metrics"]
         assert new_lineage != old_lineage
 
         # Expected: the source identity of metrics.py together with helpers.py
