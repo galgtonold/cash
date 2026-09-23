@@ -1,0 +1,645 @@
+"""One cached call, from its key to its result: build the key, look it up,
+run the body on a miss, and hand back what to return."""
+
+from __future__ import annotations
+
+import concurrent.futures
+import contextlib
+import logging
+import time
+from collections.abc import Callable, Iterator
+from typing import Any
+
+from .._clock import perf_counter as _perf_counter
+from ..backends import CacheMetadata
+from ..backends._base import ttl_expired
+from ..dependency_state import STATE_LEDGER, ledger_note
+from ..exceptions import CacheExpiredError, CashCacheIneffectiveWarning
+from ..tracking.file_tracker import FileAccessTracker
+from .arg_hashing import PLAIN_CENSUS
+from .call_state import (
+    CACHE_MISS,
+    CAPTURE_WATCH,
+    NESTED_CASH_SECONDS,
+    THREADS_IN_CALLS,
+    BodyRun,
+    BuiltKey,
+    Call,
+    CallSpec,
+    KeyBuildFailed,
+    UnhashableArgs,
+    UnhashableDefault,
+    run_to_completion,
+)
+from .explain import MISS_FILE, MISS_INCOMPLETE, MISS_TTL
+from .iterators import ChunkedCachedIterator, StreamingCachedIterator, is_one_shot_iterator
+
+logger = logging.getLogger(__name__)
+
+
+class RuntimeMixin:
+    """The steps of a cached call, shared by the sync and async wrappers."""
+
+    def _resolve_cache_key(
+        self,
+        func: Callable,
+        func_name: str,
+        dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None,
+        args: tuple,
+        kwargs: dict,
+        call_start: float,
+    ) -> Any:
+        """The key for a real call, or the call's result when it has none.
+
+        `_build_key`, with a ledger of what the state segment is made of
+        (`STATE_LEDGER`) and this key's `CAPTURE_WATCH`. Returns
+        ``(resolved, capture_watch)``, where *resolved* is one of:
+
+          - ``(cache_key, state_hash, args_hash)`` - the key was built
+          - ``(CACHE_MISS, result, 'unkeyable')`` - a mocked helper, no code to key
+          - ``(CACHE_MISS, result, 'unhashable')`` - an argument or default could not be hashed
+          - ``(CACHE_MISS, result, 'error')`` - building the key raised
+
+        In the last three, *result* is what ``func(*args, **kwargs)`` returned:
+        the call already ran, uncached, was warned about once and logged. The
+        body's own exceptions propagate.
+        """
+        # Outside the key build below, which turns any exception into "no
+        # key": an exception from the user's own body must not be caught there
+        # and the body run a second time.
+        unkeyable = self._refresh_helper_bindings(func, func_name)
+        if unkeyable is not None:
+            return self._run_uncached(func, func_name, args, kwargs, call_start, "unkeyable", unkeyable), {}
+        ledger: dict = {}
+        ledger_token = STATE_LEDGER.set(ledger)
+        watch: dict = {}
+        watch_token = CAPTURE_WATCH.set(watch)
+        failure: tuple[str, str] | None = None
+        try:
+            built = self._build_key(func, func_name, dynamic_depends_on, args, kwargs)
+        except UnhashableDefault:
+            # `_fold_defaults` has warned: an unhashable default means cash
+            # cannot tell whether it changed, so caching at all risks a stale
+            # result.
+            failure = ("unhashable", "")
+        except UnhashableArgs:
+            self._warn_unhashable_args(func_name, args, kwargs)
+            failure = ("unhashable", "")
+        except KeyBuildFailed as e:
+            self._warn_once(CashCacheIneffectiveWarning, func_name, e.code, e.message, code=e.code, fix=e.fix)
+            failure = ("error", "")
+        except Exception as e:  # noqa: BLE001 - any failure building the key means no key
+            self._warn_key_build_failed(func_name, args, kwargs, e)
+            failure = ("error", "")
+        finally:
+            CAPTURE_WATCH.reset(watch_token)
+            STATE_LEDGER.reset(ledger_token)
+        if failure is not None:
+            return self._run_uncached(func, func_name, args, kwargs, call_start, *failure), watch
+        if ledger:
+            slot = (func_name, built.state_hash)
+            if slot not in self._state_ledgers:
+                self._keep_state_ledger(slot, ledger)
+        return (built.cache_key, built.state_hash, built.args_hash), watch
+
+    def _run_uncached(
+        self,
+        func: Callable,
+        func_name: str,
+        args: tuple,
+        kwargs: dict,
+        call_start: float,
+        why: str,
+        detail: str,
+    ) -> tuple:
+        """Run a call that has no key, log it as a miss, and hand back its result."""
+        result = func(*args, **kwargs)
+        self._log_decorator_call(
+            func_name,
+            cache_hit=False,
+            execution_time=_perf_counter() - call_start,
+            args_hash=why,
+            cache_key="",
+            miss_detail=detail,
+        )
+        return (CACHE_MISS, result, why)
+
+    def _build_key(
+        self,
+        func: Callable,
+        func_name: str,
+        dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None,
+        args: tuple,
+        kwargs: dict,
+    ) -> BuiltKey:
+        """The cache key for calling *func* with these arguments.
+
+        The ONE key build: a real call (`_resolve_cache_key`) and ``explain()``
+        (`_explain_call`) both use it, so the key explain() predicts is the key
+        the call looks up. It used to be written out twice, and the copy in
+        explain() lacked the random-seed epoch and the class members of a
+        method's arguments, so it reported ``no_entry`` for calls that hit.
+
+        Raises when there is no key: `UnhashableDefault`, `UnhashableArgs`,
+        `KeyBuildFailed`, or whatever else a step raised. Never keys the call
+        without a part that failed. Warnings from the steps are silent while
+        `_EXPLAINING` is set.
+        """
+        # One plain-data census per argument, shared across the key
+        # (`plain_census`).
+        previous = getattr(PLAIN_CENSUS, "memo", None)
+        PLAIN_CENSUS.memo = {}
+        try:
+            # The state after each fold, in `_STATE_STAGES` order: when no
+            # named part moved, the first stage whose output did is the one
+            # that changed (`describe_state_change`).
+            chain: list[str] = []
+            ledger_note("@chain", chain)
+            state_hash = self._state_hasher.compute(
+                func_name,
+                own_source_override=self._pin_own_source(func),
+                note=True,
+            )
+            state_hash = self._fold_declared_files(func_name, state_hash)
+            chain.append(state_hash)
+            state_hash = self._fold_closure(func, func_name, state_hash)
+            chain.append(state_hash)
+            folded_defaults = self._fold_defaults(func, func_name, state_hash)
+            if folded_defaults is None:
+                raise UnhashableDefault
+            state_hash = folded_defaults
+            chain.append(state_hash)
+            state_hash = self._fold_bound_self(func, func_name, state_hash)
+            chain.append(state_hash)
+            state_hash = self._fold_read_globals(func, func_name, state_hash)
+            state_hash = self._fold_helper_read_globals(func, func_name, state_hash)
+            state_hash = self._fold_dependency_read_globals(func, func_name, state_hash)
+            chain.append(state_hash)
+            state_hash = self._fold_rng_epoch(func_name, state_hash)
+            chain.append(state_hash)
+            state_hash = self._fold_environment(func_name, state_hash)
+            chain.append(state_hash)
+            state_hash = self._fold_method_class_deps(func, args, state_hash)
+            chain.append(state_hash)
+            # ONE canonicalisation, fed to both the code channel and the value
+            # channel. `_fold_code_args` on the RAW arguments saw a class
+            # passed explicitly but not the identical class arriving as a
+            # parameter DEFAULT, so `build()` and `build(Schema)` -- the same
+            # logical call -- produced two cache keys and two executions.
+            normalized_args = self._normalize_call_args(func_name, args, kwargs)
+            if func_name in self._seed_params:
+                self._warn_if_seed_is_none(func, func_name, args, kwargs)
+            state_hash = self._fold_code_args(*normalized_args, state_hash, func_name=func_name)
+            chain.append(state_hash)
+            dynamic_state_hash = self._resolve_dynamic_dependencies(func_name, dynamic_depends_on, args, kwargs)
+            args_hash = self._serialize_args(func_name, args, kwargs, normalized=normalized_args)
+            self._note_arg_cost(func_name)
+        finally:
+            PLAIN_CENSUS.memo = previous
+        if args_hash is None:
+            raise UnhashableArgs
+        cache_key = self._compute_cache_key(func_name, state_hash, dynamic_state_hash, args_hash)
+        return BuiltKey(cache_key, state_hash, args_hash, normalized_args)
+
+    def _try_get_cached(
+        self,
+        cache_key: str,
+        metadata: CacheMetadata | None,
+        cached_data: Any,
+        call_start: float,
+        args_hash: str,
+        func_name: str,
+        ttl: int | None,
+    ) -> Any:
+        """Return cached_data if valid, else CACHE_MISS sentinel.
+
+        Key-presence is determined by ``metadata is not None`` - the
+        backend contract is that absent keys return ``(None, None)``,
+        so a non-None metadata view with a ``None`` data value still
+        counts as a hit (a function that legitimately returned ``None``).
+
+        Auto-tracked file dependencies stored in
+        ``metadata.auto_file_deps`` are re-checked here; any file whose
+        content differs from what was recorded forces a miss so the
+        function re-reads the changed file.
+        """
+        if metadata is None:
+            self._note_miss(func_name, cache_key, self._absent_entry_reason(func_name, cache_key))
+            return CACHE_MISS
+        ttl = self._entry_ttl(ttl, metadata)
+        try:
+            self._validate_ttl(metadata, ttl)
+            if not self._auto_file_deps_fresh(metadata):
+                self._note_miss(func_name, cache_key, (MISS_FILE, self._describe_stale_files(metadata)))
+                return CACHE_MISS
+            if not self._chunks_are_intact(cache_key, metadata):
+                self._note_miss(func_name, cache_key, (MISS_INCOMPLETE, "a chunk of the stored result is missing"))
+                return CACHE_MISS
+            # If this hit happens *inside* another cached function's
+            # computation, replay the files this entry depends on into the
+            # enclosing tracker, so the outer function records them too.
+            # Without this, a dependency that was already cached before the
+            # consumer's first run hides its file deps behind a cache hit
+            # and the consumer never invalidates when that file changes.
+            self._propagate_file_deps_to_active_tracker(metadata)
+            # Re-attach the lineage hash to the restored value. It's a plain
+            # attribute that doesn't survive pickling, so a value restored
+            # from disk would otherwise lose it - and a downstream cached
+            # function would fall back to content-hashing under a DIFFERENT
+            # key than when the upstream was freshly computed, recomputing
+            # needlessly. The hash is deterministic from (cache_key,
+            # auto_file_deps), both available here.
+            self._attach_lineage(cached_data, cache_key, metadata.auto_file_deps, ttl=ttl, func_name=func_name)
+            self._replay_rng_state(metadata)
+            self._last_key[func_name] = cache_key
+            self._log_decorator_call(
+                func_name,
+                cache_hit=True,
+                execution_time=_perf_counter() - call_start,
+                args_hash=args_hash,
+                cache_key=cache_key,
+                time_saved=(metadata.saves_seconds if metadata.saves_seconds is not None else metadata.execution_time)
+                or 0.0,
+                file_deps=metadata.auto_file_deps,
+            )
+            return cached_data
+        except CacheExpiredError:
+            age = time.time() - (metadata.timestamp or 0)
+            self._note_miss(func_name, cache_key, (MISS_TTL, f"the entry is {age:.1f}s old and ttl={ttl}s"))
+        except (TypeError, KeyError) as e:
+            self._warn_metadata_invalid(func_name, e)
+            self._note_miss(func_name, cache_key, (MISS_INCOMPLETE, "the stored entry's metadata did not validate"))
+        return CACHE_MISS
+
+    def _tier_default_ttl(self) -> int | None:
+        """The ``default_ttl`` of the first tier that has one, as configured now."""
+        return self._backend.default_ttl if self._backend is not None else None
+
+    def _entry_ttl(self, ttl: int | None, metadata: Any) -> int | None:
+        """The ttl a stored entry is judged by.
+
+        The decorator's ``ttl=`` when it has one -- a per-function setting,
+        applied as it stands now, in both directions. Otherwise the SHORTER of
+        the ttl the entry was written with and the tier's ``default_ttl`` as
+        configured now: lowering a tier's default from a day to 5 seconds left
+        every entry written under the day being served (round 19, 3 of 3),
+        while lowering a decorator's ttl took effect at once.
+        """
+        if ttl is not None:
+            return ttl
+        found = [t for t in (getattr(metadata, "ttl", None), self._tier_default_ttl()) if t is not None]
+        return min(found) if found else None
+
+    def _chunks_are_intact(self, cache_key: str, metadata: CacheMetadata) -> bool:
+        """True unless this is a chunked manifest missing some of its chunks.
+
+        A manifest can outlive its chunks -- eviction reaches them separately,
+        and until chunks carried the producer's execution_time the persistence
+        gate dropped them while keeping the manifest. The reader terminates
+        iteration on a missing chunk, so the result of that split was an
+        entry that returned FEWER items than it stored, or none at all,
+        without a word. A truncated answer is worse than a slow one, so the
+        entry is treated as absent and recomputed.
+
+        Metadata-only reads: the point is to check presence, not to load the
+        payload and undo the laziness chunking exists for.
+
+        Scope, because the docs depend on it: BOTH read paths apply this --
+        ``_try_get_cached`` for the default one, and the double-checked re-read
+        inside ``_compute_with_lock`` for ``use_locking=True``. Keep it that
+        way. The locking path skipped it until 2026-09-06 and served a short
+        iterator with no recompute, no error and no warning: measured 3 of 10
+        items when a later chunk was missing, and 0 items when the first one
+        was. Both paths are pinned by
+        ``tests/test_core/test_iterator_caching.py``.
+        """
+        if getattr(metadata, "iterator_storage", None) != "chunked":
+            return True
+        try:
+            for index in range(metadata.n_chunks or 0):
+                if self.backend.get_metadata(f"{cache_key}:chunk_{index}") is None:
+                    logger.debug(
+                        "[CORE] chunk %d of %s is missing; treating the entry "
+                        "as a miss rather than serving a short result",
+                        index,
+                        cache_key,
+                    )
+                    return False
+        except Exception:  # noqa: BLE001 - an integrity check must not break a call
+            return True
+        return True
+
+    def _wrap_iterator_hit(self, call: Call, metadata: CacheMetadata | None, hit: Any) -> Any:
+        """Wrap a cache-hit value in the right iterator class.
+
+        Iterators (including the single-chunk case) are stored under
+        an ``iterator_storage='chunked'`` manifest plus N chunk
+        entries; on hit they're returned as a fresh
+        ``ChunkedCachedIterator``, which recomputes the rest from the
+        function if a chunk is gone. Non-iterator return types live as
+        a single blob and are returned as *hit* directly.
+
+        Every hit path goes through here -- the first lookup, the locked
+        re-read (`_compute_with_lock`) and the async single-flight follower
+        (`_await_leader`) -- and all of them pass the call's `recompute`. The
+        async ones used to leave it out, so a missing chunk raised there
+        instead of recomputing.
+        """
+        if metadata and metadata.iterator_storage == "chunked":
+            n_chunks = metadata.n_chunks or 0
+            return ChunkedCachedIterator(self, call.cache_key, n_chunks, call.recompute)
+        return hit
+
+    def _lookup(self, spec: CallSpec, args: tuple, kwargs: dict, *, async_body: bool) -> Call:
+        """Everything a call does before the body: analysis, key, lookup.
+
+        Returns the call's state. ``call.outcome`` is what the wrapper returns
+        now -- a hit, or the result of a call that has no key -- or
+        ``CACHE_MISS`` when the body has to run.
+        """
+        func, func_name = spec.func, spec.func_name
+        call = Call(args, kwargs)
+        call.call_start = _perf_counter()
+        if func_name not in self._analyzed:
+            # Double-checked under a per-function lock: the key is built
+            # from what this populates, so two threads must not race it.
+            with self._analysis_lock:
+                if func_name not in self._analyzed:
+                    self._analyze_dependencies(func)
+                    self._analyzed.add(func_name)
+        # Inherit the shortest TTL of any TTL'd dependency (computed after
+        # analysis populates the graph).
+        call.ttl = self._effective_ttl(func_name, spec.ttl_decl)
+        if async_body:
+            call.recompute = lambda: run_to_completion(lambda: func(*args, **kwargs))
+        else:
+            call.recompute = lambda: func(*args, **kwargs)
+
+        # Everything from here to the hit/miss verdict is cash's own cost,
+        # not the user's work. Two perf_counter pairs measured at 196ns
+        # against a 25.5us floor for the cheapest possible cached call --
+        # 0.8%, so this is not gated behind a heuristic.
+        overhead_t0 = _perf_counter()
+        key_result, call.capture_watch = self._resolve_cache_key(
+            func, func_name, spec.dynamic_depends_on, args, kwargs, call.call_start
+        )
+        if key_result[0] is CACHE_MISS:
+            call.outcome = key_result[1]
+            return call
+        call.cache_key, call.state_hash, call.args_hash = key_result
+
+        raw_metadata, cached_data = self.backend.get(call.cache_key)
+        call.metadata = CacheMetadata.from_dict(raw_metadata) if raw_metadata is not None else None
+        hit = self._try_get_cached(
+            call.cache_key, call.metadata, cached_data, call.call_start, call.args_hash, func_name, call.ttl
+        )
+        call.cash_overhead = _perf_counter() - overhead_t0
+        if hit is not CACHE_MISS:
+            self._note_effectiveness(
+                func_name,
+                call.cash_overhead,
+                body_seconds=getattr(call.metadata, "body_seconds", None),
+                was_hit=True,
+            )
+            call.outcome = self._wrap_iterator_hit(call, call.metadata, hit)
+        return call
+
+    def _reread(self, spec: CallSpec, call: Call) -> Any:
+        """Look the key up again (another caller may have stored it meanwhile):
+        the hit, wrapped like any other, or ``CACHE_MISS``.
+
+        The SAME validity test as the first lookup, by calling the same
+        function -- not a hand-rolled subset of it. The locked re-read used to
+        re-implement the checks, and it kept losing one: first
+        ``_chunks_are_intact`` (a short iterator came back), then
+        ``_auto_file_deps_fresh`` (under ``use_locking=True`` an edited file
+        was served stale). One function decides whether an entry may be served.
+        """
+        raw_metadata, cached_data = self.backend.get(call.cache_key)
+        if raw_metadata is None:
+            return CACHE_MISS
+        metadata = CacheMetadata.from_dict(raw_metadata)
+        hit = self._try_get_cached(
+            call.cache_key, metadata, cached_data, call.call_start, call.args_hash, spec.func_name, call.ttl
+        )
+        if hit is CACHE_MISS:
+            return CACHE_MISS
+        return self._wrap_iterator_hit(call, metadata, hit)
+
+    @contextlib.contextmanager
+    def _body_scope(self, spec: CallSpec, call: Call) -> Iterator[BodyRun]:
+        """Run the body inside this: file tracking, effect observation, RNG
+        watch and timing, shared by the sync and async wrappers.
+
+        The caller runs the body in the ``with`` block and puts what it
+        returned in ``run.res``; on the way out this measures the body and
+        reads what it drew, still inside the tracker. A body that raises is
+        logged as such and the exception propagates.
+        """
+        # Wrap the function call in FileAccessTracker so any auto-tracked
+        # file reads (pandas/numpy/joblib/open/...) are recorded as implicit
+        # cache dependencies - a later content change forces a recompute.
+        func, func_name, args, kwargs = spec.func, spec.func_name, call.args, call.kwargs
+        run = BodyRun()
+        run.tracker = FileAccessTracker(getattr(func, "__globals__", None), propagate_to_parent=True, hash_on_read=True)
+        # Watch for side effects the STATIC analyzer cannot see, which is
+        # anything happening inside an installed library. Only on this
+        # (missing) path: a hit runs no body, so there is nothing to observe
+        # and nothing to pay for.
+        run.observer = self._make_effect_observer()
+        run.observer.arg_snapshot = self._argument_snapshot(func_name, args, kwargs)
+        run.observer.arg_identities = self._argument_identities(func_name, args, kwargs)
+        # Watch the global RNG across the call: a draw inside the body is an
+        # input the key cannot see statically.
+        run.rng_pre = self._capture_rng_pre_state()
+        with run.tracker, run.observer:
+            threads_at_start = THREADS_IN_CALLS[0]
+            body_t0 = _perf_counter()
+            nested = [0.0]
+            nested_token = NESTED_CASH_SECONDS.set(nested)
+            try:
+                self._track_declared_files(run.tracker, func_name)
+                yield run
+            except Exception as exc:
+                self._log_raised(func_name, exc, call.call_start)
+                raise
+            finally:
+                NESTED_CASH_SECONDS.reset(nested_token)
+            # The user's own work, isolated. Everything cash does sits outside
+            # this pair, which is the whole point: it is the only number that
+            # can answer "did caching pay?".
+            run.body_seconds = max(0.0, _perf_counter() - body_t0 - run.tracker.read_hash_seconds - nested[0])
+            run.saves_seconds = run.body_seconds / max(threads_at_start, THREADS_IN_CALLS[0], 1)
+            run.rng_new = self._note_rng_draw(func_name, run.rng_pre)
+
+    def _finish_miss(self, spec: CallSpec, call: Call, run: BodyRun) -> Any:
+        """Everything a missed call does after its body: check, store, log."""
+        func, func_name, args, kwargs = spec.func, spec.func_name, call.args, call.kwargs
+        res = run.res
+        # A generator is handed straight back, wrapped, and cached only once
+        # the caller has drained it. Draining it here instead meant a streamed
+        # response arrived in one lump after the full latency, so
+        # `@cash.cache` changed how the function behaved. `_stream_and_store`
+        # carries the tracker into each production step so lazy file reads are
+        # still recorded. An async function returning a SYNC generator streams
+        # the same way.
+        if is_one_shot_iterator(res):
+            # Logged HERE, not at exhaustion. `stats_wrapper` counts this
+            # call's entry the moment the wrapper returns, so an entry written
+            # when the caller finishes iterating would never be counted. The
+            # miss is a fact about the LOOKUP, which has already happened. The
+            # produce time still reaches the entry, via the manifest, which is
+            # what a later hit reports as saved.
+            self._log_decorator_call(
+                func_name,
+                cache_hit=False,
+                execution_time=_perf_counter() - call.call_start,
+                args_hash=call.args_hash,
+                cache_key=call.cache_key,
+            )
+            return StreamingCachedIterator(
+                self._stream_and_store(
+                    res,
+                    cache_key=call.cache_key,
+                    func_name=func_name,
+                    tracker=run.tracker,
+                    observer=run.observer,
+                    rng_new=run.rng_new,
+                    args=args,
+                    kwargs=kwargs,
+                    args_hash=call.args_hash,
+                    current_state_hash=call.state_hash,
+                    ttl=call.ttl,
+                    cache_if=spec.cache_if,
+                    chunk_max_items=spec.chunk_max_items,
+                    chunk_max_bytes=spec.chunk_max_bytes,
+                    code_module=func.__module__,
+                )
+            )
+
+        self._check_argument_mutation(func_name, args, kwargs, call.args_hash, run.observer)
+        self._report_observed_effects(func_name, run.observer)
+        self._credit_remembered_reads(func_name, run.tracker, args, kwargs)
+        auto_file_deps = self._snapshot_tracked_deps(run.tracker, func.__module__)
+        execution_time = _perf_counter() - call.call_start
+
+        self._warn_shared_result(func, func_name, res, args, kwargs)
+        refusal = self._store_refusal(
+            func, func_name, res, run.rng_new, spec.cache_if, run.tracker, call.capture_watch, observer=run.observer
+        )
+        if refusal is not None:
+            self._note_not_stored(call.cache_key, refusal)
+        else:
+            # Attach lineage only when the value is actually stored: a lineage
+            # hash points downstream at THIS cache entry, so a cache_if-rejected
+            # (uncached) value must not carry one - it would reference an entry
+            # that was never written.
+            self._attach_lineage(res, call.cache_key, auto_file_deps, ttl=call.ttl, func_name=func_name)
+            self._store_in_cache(
+                call.cache_key,
+                func_name,
+                res,
+                call.metadata,
+                call.ttl,
+                call.state_hash,
+                call.args_hash,
+                execution_time,
+                auto_file_deps=auto_file_deps,
+                body_seconds=run.body_seconds,
+                saves_seconds=run.saves_seconds,
+                rng_replay=self._rng_replay_parts(bool(self._rng_drawing_funcs.get(func_name)), run.rng_pre),
+            )
+        # Everything that was not the body: the key and lookup before it, the
+        # checks and the store after it.
+        miss_overhead = max(call.cash_overhead, _perf_counter() - call.call_start - run.body_seconds)
+        self._log_decorator_call(
+            func_name,
+            cache_hit=False,
+            execution_time=execution_time,
+            args_hash=call.args_hash,
+            cache_key=call.cache_key,
+            body_seconds=run.body_seconds,
+            cash_seconds=miss_overhead,
+        )
+        self._note_effectiveness(func_name, miss_overhead, body_seconds=run.body_seconds, was_hit=False)
+        return res
+
+    async def _single_flight(self, spec: CallSpec, call: Call, compute: Callable[[], Any]) -> Any:
+        """Async single-flight for ``use_locking``: coalesce concurrent awaits
+        of the same key in-process, so an expensive idempotent coroutine (a
+        paid API call, say) under ``asyncio.gather`` computes once instead of
+        N times. The leader computes and stores; followers wait for it and
+        then read the stored result, and compute themselves when it stored
+        nothing (cache_if rejected it, or it raised)."""
+        # Imported HERE, not at module scope: asyncio costs ~76ms of a ~290ms
+        # `import cash`, and a synchronous user never needs it. Inside a
+        # running loop it is necessarily already imported, so this lookup is
+        # free exactly where it is used.
+        import asyncio
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return await compute()
+        with self._async_inflight_lock:
+            existing = self._async_inflight.get(call.cache_key)
+            if existing is None:
+                # Leader: publish the future the followers wait on.
+                leader = concurrent.futures.Future()
+                self._async_inflight[call.cache_key] = leader
+        if existing is not None:
+            # Follower, in this loop or another: wait for the leader, then
+            # read the stored value. The wait is wrapped per follower, so
+            # cancelling one leaves the leader's computation running for the
+            # rest.
+            try:
+                await asyncio.shield(asyncio.wrap_future(existing))
+            except Exception:  # noqa: BLE001 - the leader's failure is its own
+                pass
+            hit = self._reread(spec, call)
+            if hit is not CACHE_MISS:
+                return hit
+            return await compute()
+        try:
+            return await compute()
+        finally:
+            # Signal followers (success or failure) and free the slot.
+            with self._async_inflight_lock:
+                self._async_inflight.pop(call.cache_key, None)
+            if not leader.done():
+                leader.set_result(None)
+
+    def _compute_with_lock(self, spec: CallSpec, call: Call, compute: Callable[[], Any]) -> Any:
+        """Compute with double-checked locking; falls back to unlocked on error.
+
+        Acquiring the lock is best-effort: if *any* backend raises while taking
+        it (a Redis ``LockError`` on contention/timeout, a dropped connection,
+        an OSError on a file lock), we degrade to an unlocked compute rather than
+        crash the user's call. Acquisition, compute, and release are separated so
+        a release failure can't re-run the compute, and a compute exception
+        propagates normally (it is not mistaken for a lock failure). Under the
+        lock the key is looked up again by `_reread`, the same test as the first
+        lookup."""
+        lock_cm = self.backend.lock(call.cache_key)
+        try:
+            lock_cm.__enter__()
+        except Exception as e:  # noqa: BLE001 - any acquisition failure -> unlocked
+            self._warn_lock_failed(spec.func_name, e)
+            return compute()
+        try:
+            hit = self._reread(spec, call)
+            if hit is not CACHE_MISS:
+                return hit
+            return compute()
+        finally:
+            try:
+                lock_cm.__exit__(None, None, None)
+            except Exception:  # noqa: BLE001 - releasing failed; compute already done
+                logger.debug("lock release failed for %s", spec.func_name)
+
+    def _compute_cache_key(self, func_name: str, state_hash: str, dynamic_hash: str, args_hash: str) -> str:
+        return f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"
+
+    def _validate_ttl(self, metadata: CacheMetadata | None, ttl: int | None) -> None:
+        if metadata and ttl_expired(metadata.timestamp, ttl):
+            raise CacheExpiredError("Cache expired")

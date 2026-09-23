@@ -172,7 +172,7 @@ is keyed as the date it equals, so a frozen run and a real one share entries.
 What the frozen clock does reach is TTLs, which follow `time.time()`: an
 entry's age is measured on the clock the test is pretending to.
 
-<!-- claim: cash/effect_observer.py:_hook_mock_calls @70417b4d, cash/core.py:Cash._store_refusal @4e1877c1 -->
+<!-- claim: cash/effect_observer.py:_hook_mock_calls @70417b4d, cash/decorator/store.py:StoreMixin._store_refusal @4e1877c1 -->
 A mock deeper down — `mock.patch("requests.Session.request")`,
 `HTTPAdapter.send`, or a `MagicMock` swapped into a module-level session
 after the function first ran — is not part of the key, so cash cannot tell

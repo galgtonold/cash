@@ -249,7 +249,7 @@ out of the cache is in the cache — which matters a great deal if the predicate
 was there to stop an incomplete or unwanted result being stored, and not at all
 if it was there to save space.
 
-<!-- claim: cash/core.py:Cash._warn_cache_if_bypassed @e7967174 -->
+<!-- claim: cash/decorator/store.py:StoreMixin._warn_cache_if_bypassed @e7967174 -->
 **What to do.** To get the predicate back, the result has to arrive in one
 piece. Either **raise** `chunk_max_items` / `chunk_max_bytes` above the size
 this result actually reaches, or return a list instead of an iterator — a
@@ -271,7 +271,7 @@ exception when Cash called it with the function's return value. The message
 names the exception and its text. Your call itself returned normally — only the
 storing was abandoned.
 
-<!-- claim: cash/core.py:Cash._warn_cache_if_raised @fa0df2cc -->
+<!-- claim: cash/decorator/reporting.py:ReportingMixin._warn_cache_if_raised @fa0df2cc -->
 **Why it matters.** Cash treats a predicate that raises as "do not cache", so
 every call whose *result* makes it raise goes uncached and recomputes. This is
 scoped to the result, not to the function: calls returning a shape the predicate
@@ -740,7 +740,7 @@ row posted to a service, the dict the caller inspects afterwards — the program
 is correct on the run that filled the cache and quietly different on every run
 after it.
 
-<!-- claim: cash/core.py:Cash._store_refusal @4e1877c1, cash/decorator/purity_checks.py:PurityChecksMixin._argument_snapshot @929ba8ad -->
+<!-- claim: cash/decorator/store.py:StoreMixin._store_refusal @4e1877c1, cash/decorator/purity_checks.py:PurityChecksMixin._argument_snapshot @929ba8ad -->
 `argument mutation` is handled differently, because it is the one that caught
 people out: an object the caller still holds would stop being changed. A call
 seen changing an argument is **not stored** — the line names the argument, and
@@ -942,7 +942,7 @@ response than a warning filter, because it leaves the rest of the function
 watched. Do not ignore a `mutable_global` or a `dynamic_pattern` line — those
 two are the stale-result kinds, and nothing else will tell you when they bite.
 
-<!-- claim: cash/core.py:Cash._first_showing @583de56d -->
+<!-- claim: cash/decorator/reporting.py:ReportingMixin._first_showing @583de56d -->
 This warning and [KEY-AMBIENT-READ](#key-ambient-read) are shown **once per
 cache**, not once per process: the next run on the same cache, finding the
 same lines, records them in `f.cache_info()["warnings"]` without printing them
@@ -1072,7 +1072,7 @@ returned its real result; only the caching was skipped. Cash never builds the
 key without the part that failed, because that key could not see a change to
 it.
 
-<!-- claim: cash/core.py:Cash._resolve_cache_key @d2ca567a -->
+<!-- claim: cash/decorator/runtime.py:RuntimeMixin._resolve_cache_key @d2ca567a -->
 **Why it matters.** That call did not cache. Correctness is not at risk — with
 no key, nothing is written and nothing is read, so this cannot produce a stale
 answer — but you are paying full compute every time it happens.
@@ -1126,7 +1126,7 @@ control.
 
 ## KEY-DEPENDS-ON-OPAQUE {#key-depends-on-opaque}
 
-<!-- claim: cash/core.py:Cash._register_declared_callable_dep @65dda02c -->
+<!-- claim: cash/decorator/registry.py:RegistryMixin._register_declared_callable_dep @65dda02c -->
 **What happened.** You named a callable in `depends_on=`, and Cash could not
 read its source to fingerprint it — it is a builtin, or it lives in a compiled
 extension. The declaration was accepted and does nothing.
@@ -1177,7 +1177,7 @@ line then, so the decision is written down where the next reader looks.
 
 ## KEY-DYNAMIC-DEP-FAILED {#key-dynamic-dep-failed}
 
-<!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies @1d703750 -->
+<!-- claim: cash/decorator/registry.py:RegistryMixin._resolve_dynamic_dependencies @1d703750 -->
 **What happened.** A resolver you passed to `dynamic_depends_on=` raised when
 Cash called it to find out which data sources this particular call depends on,
 or returned something that is not a `DataSource` (or a list of them, or
@@ -1442,7 +1442,7 @@ type when it can identify one; when the offending value is nested inside a
 container it says so instead, because it cannot see which element is to blame.
 The call ran and returned normally.
 
-<!-- claim: cash/core.py:Cash._resolve_cache_key @d2ca567a -->
+<!-- claim: cash/decorator/runtime.py:RuntimeMixin._resolve_cache_key @d2ca567a -->
 **Why it matters.** That call did not cache, and calls like it will not cache
 either — this is not first-call warm-up. Every call passing that argument pays
 full compute. Nothing can go stale, because nothing is being stored.
@@ -1956,7 +1956,7 @@ store in chunks, and one of those chunks failed to write. The message names the
 chunk, the backend and the exception. The rest of the entry — including the
 manifest that records how many chunks there should be — was written anyway.
 
-<!-- claim: cash/core.py:Cash._chunks_are_intact @fd3a5c46 -->
+<!-- claim: cash/decorator/runtime.py:RuntimeMixin._chunks_are_intact @fd3a5c46 -->
 **Why it matters.** It costs you the caching, not the correctness. Before
 serving a chunked entry Cash probes every chunk the manifest claims and treats a
 manifest with a hole as *absent*, so the call misses and recomputes — the same
@@ -1967,7 +1967,7 @@ entry. Measured: three calls after the failure ran the body three times and each
 returned all ten items; the call after the write succeeded was the last one to
 run the body.
 
-<!-- claim: cash/core.py:Cash._compute_with_lock @7c213409 -->
+<!-- claim: cash/decorator/runtime.py:RuntimeMixin._compute_with_lock @7c213409 -->
 Both read paths run that probe, including the double-checked re-read taken
 inside the lock when `use_locking=True`. Until 2026-09-06 the locking path
 skipped it and served the broken entry as a *short* iterator — three of ten
@@ -1989,7 +1989,7 @@ failing until you fix its cause.
 
 ## STORE-CODE-CHANGED {#store-code-changed}
 
-<!-- claim: cash/decorator/file_deps.py:FileDepsMixin._code_moved_since_keyed @0f4b33ea, cash/core.py:Cash._code_functions @bbc5e6f3 -->
+<!-- claim: cash/decorator/file_deps.py:FileDepsMixin._code_moved_since_keyed @0f4b33ea, cash/decorator/registry.py:RegistryMixin._code_functions @bbc5e6f3 -->
 **What happened.** The file holding your cached function, a helper it calls, or
 another cached function it depends on changed on disk after this process read
 the code it keys that function by — and the change touched the code this call
@@ -2020,7 +2020,7 @@ not affected: the reloaded code is keyed afresh.
 result to the cache failed. The message names the backend and the exception.
 Nothing was stored.
 
-<!-- claim: cash/core.py:Cash._store_in_cache @604141a6 -->
+<!-- claim: cash/decorator/store.py:StoreMixin._store_in_cache @604141a6 -->
 **Why it matters.** The result you received is correct — the failure is on the
 storage side only, and Cash deliberately reports it rather than raising it into
 your code. If this happens once, it costs one recompute. If it happens on every
@@ -2127,7 +2127,7 @@ bookkeeping stored alongside it — the record holding the timestamp, the TTL an
 which serialiser wrote the value. It treated the entry as absent and
 recomputed. The message names the exception.
 
-<!-- claim: cash/core.py:Cash._warn_metadata_invalid @ccb82f0d -->
+<!-- claim: cash/decorator/reporting.py:ReportingMixin._warn_metadata_invalid @ccb82f0d -->
 **Why it matters.** Mostly it does not, and that is worth saying plainly. The
 fallback is the right one: an unreadable entry is ignored rather than
 half-trusted, so you get a fresh, correct result. What it costs is one

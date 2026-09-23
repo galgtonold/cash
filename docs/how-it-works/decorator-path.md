@@ -28,7 +28,7 @@ four segments:
   </div>
 </div>
 
-<!-- claim: cash/core.py:Cash._compute_cache_key @a3272962 -->
+<!-- claim: cash/decorator/runtime.py:RuntimeMixin._compute_cache_key @a3272962 -->
 The segments are joined with colons, and an unused one is simply empty — a
 function with no `dynamic_depends_on` produces a key with an empty `dynamic`
 segment (`__main__.load:ca32…::0bba…`). Each segment answers a different "did
@@ -144,7 +144,7 @@ flowchart TD
     STMT --> SP --> WRAP --> DRAIN --> MERGE
 ```
 
-<!-- claim: cash/core.py:Cash._log_decorator_call @1746a43f -->
+<!-- claim: cash/decorator/reporting.py:ReportingMixin._log_decorator_call @1746a43f -->
 Every `@cash.cache` call appends an entry to `Cash._decorator_call_log`, which
 keeps the most recent 10,000 (nothing drains it outside a notebook, so it must
 not keep every call of a long-running process). `cache_info()` counts each call

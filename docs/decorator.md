@@ -281,7 +281,7 @@ Worth understanding before any parameter. With a bare `@cash.cache` and nothing
 configured, a cached result is discarded and recomputed when **any** of these
 change:
 
-<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe, cash/core.py:Cash._analyze_dependencies @9de1e072 -->
+<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe, cash/decorator/registry.py:RegistryMixin._analyze_dependencies @9de1e072 -->
 | What changed | How it's detected |
 |---|---|
 | The **arguments** | Hashed by *content* — so DataFrames and arrays work, and two equal-but-distinct objects share one entry |
@@ -341,13 +341,13 @@ def features(x):  return clean(x) + ...
 def pipeline(x):  return features(x)       # ...and pipeline's cache invalidates
 ```
 
-<!-- claim: cash/decorator/code_identity.py:CodeIdentityMixin._hash_callable_source @57867b7d, cash/core.py:Cash._ensure_closure_analyzed @ecd28b28 -->
+<!-- claim: cash/decorator/code_identity.py:CodeIdentityMixin._hash_callable_source @57867b7d, cash/decorator/registry.py:RegistryMixin._ensure_closure_analyzed @ecd28b28 -->
 The analyzer captures helper source hashes and folds them into the cache key, so
 both cross-process edits and in-process redefinitions (notebook cell rerun, REPL)
 are picked up automatically. Overhead is ~3μs *per helper*, paid once for each helper in the
 transitive call graph on every call.
 
-<!-- claim: cash/core.py:Cash._refresh_helper_bindings @b357a2d1 -->
+<!-- claim: cash/decorator/registry.py:RegistryMixin._refresh_helper_bindings @b357a2d1 -->
 Each helper is looked up through the name its *caller* uses — `_sieve` in
 `from sievelib import sieve as _sieve` — at every level of the call graph. So
 rebinding that name at runtime (`monkeypatch.setattr(app, "_sieve", fake)`,
@@ -717,7 +717,7 @@ flowchart TD
     F -->|Yes| G[Return cached value]
 ```
 
-<!-- claim: cash/core.py:Cash._compute_cache_key @a3272962, cash/decorator/code_args.py:CodeArgsMixin._fold_code_args @1945cfc2 -->
+<!-- claim: cash/decorator/runtime.py:RuntimeMixin._compute_cache_key @a3272962, cash/decorator/code_args.py:CodeArgsMixin._fold_code_args @1945cfc2 -->
 The cache key is `f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"`.
 
 - `state_hash` folds in the function's own source hash + every
@@ -824,12 +824,12 @@ def stock_price(symbol):
     return requests.get(f"https://api.example.com/{symbol}").json()
 ```
 
-<!-- claim: cash/core.py:Cash._validate_ttl @95cdd62d, cash/core.py:Cash.cleanup @20df501f -->
+<!-- claim: cash/decorator/runtime.py:RuntimeMixin._validate_ttl @95cdd62d, cash/core.py:Cash.cleanup @20df501f -->
 After the TTL elapses, the next call recomputes and replaces the entry.
 Entries whose calls never come back stay on disk until you reclaim them —
 call `cash.cleanup()`, or run `python -m cash clear` from the CLI.
 
-<!-- claim: cash/core.py:Cash._entry_ttl @4df547f6, cash/decorator/explain.py:ExplainMixin._absent_entry_reason @63fb8844 -->
+<!-- claim: cash/decorator/runtime.py:RuntimeMixin._entry_ttl @4df547f6, cash/decorator/explain.py:ExplainMixin._absent_entry_reason @63fb8844 -->
 An entry remembers the `ttl` it was written with, and the decorator's
 current `ttl` applies too, so the **shorter** of the two wins. Lengthening
 `ttl=60` to `ttl=3600` does not rescue entries already written under 60 s:
@@ -916,7 +916,7 @@ def load_user(user_id):
     return json.load(open(f"/data/users/{user_id}.json"))
 ```
 
-<!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies @1d703750 -->
+<!-- claim: cash/decorator/registry.py:RegistryMixin._resolve_dynamic_dependencies @1d703750 -->
 The resolver runs with the same `args/kwargs` as the function on every call.
 
 !!! warning "A resolver that fails makes the call run uncached"
@@ -958,7 +958,7 @@ business invariants — its job is purely "should this be cached".
 result fits in a single chunk. For multi-chunk results, the predicate
 is bypassed (warning fires) — see the iterator section below.
 
-<!-- claim: cash/core.py:Cash._store_refusal @4e1877c1 -->
+<!-- claim: cash/decorator/store.py:StoreMixin._store_refusal @4e1877c1 -->
 **It decides what is written, not what is served.** `cache_if` is not part of
 the key, so adding it to a function that already has entries changes nothing
 about those entries: a `None` stored before you added

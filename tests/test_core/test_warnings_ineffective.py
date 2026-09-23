@@ -58,7 +58,7 @@ def test_warn_once_default_stacklevel_attributes_to_caller(tmp_path):
     """The default stacklevel=5 attributes warnings emitted from
     `_resolve_cache_key` (via the standard wrapper chain) to the user's
     call site. Here we call `_warn_once` directly from this test, so
-    we expect the warning to be attributed to a frame inside `core.py`
+    we expect the warning to be attributed to a frame inside `cash/decorator/reporting.py`
     (the helper itself is 4 frames above us with the default stacklevel=5).
 
     The point of this test is to lock in the contract: the default
@@ -70,7 +70,7 @@ def test_warn_once_default_stacklevel_attributes_to_caller(tmp_path):
     with warnings.catch_warnings(record=True) as captured:
         warnings.simplefilter("always")
         # Direct call from this test frame: stacklevel=1 → blames the
-        # emit line in core.py (the line inside _warn_once).
+        # emit line in reporting.py (the line inside _warn_once).
         c._warn_once(
             CashCacheIneffectiveWarning,
             "f",
@@ -90,8 +90,8 @@ def test_warn_once_default_stacklevel_attributes_to_caller(tmp_path):
         )
 
     assert len(captured) == 2
-    # First emission: stacklevel=1 → inside cash/core.py
-    assert captured[0].filename.endswith("core.py"), captured[0].filename
+    # First emission: stacklevel=1 → inside cash/decorator/reporting.py
+    assert captured[0].filename.endswith("reporting.py"), captured[0].filename
     # Second emission: stacklevel=2 → this test file
     assert captured[1].filename.endswith("test_warnings_ineffective.py"), captured[1].filename
 
