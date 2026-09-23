@@ -1,11 +1,7 @@
-"""
-Notebook integration test fixtures.
+"""Fixtures for the notebook integration tests.
 
-This module provides fixtures for running notebook integration tests with:
-1. Real notebook files that cash can read naturally (no mocking)
-2. Selective cell execution with kernel state persistence
-3. Kernel pool for parallel test execution
-4. Cell modification support via file updates
+The runner behind them, and every helper a test imports, is in the
+``tests/_nbharness`` package.
 """
 
 import os
@@ -14,7 +10,6 @@ import tempfile
 
 import pytest
 
-from tests._nbharness import kernels
 from tests._nbharness.kernels import DEFAULT_KERNEL_NAME, kernelspec_mismatch
 from tests._nbharness.runner import NotebookTestRunner
 from tests._nbharness.trace import TraceResult
@@ -69,7 +64,7 @@ def nb_runner(tmp_path, request):
     - Uses real notebook files (no mocking)
     - Copies notebooks to tmp_path for isolation
     - Supports cell modification via file rewrites
-    - Uses kernel pool for faster execution (kernels have cash pre-initialized)
+    - Reuses one warm kernel per xdist worker (see ``tests/_nbharness/kernels.py``)
 
     Example:
         def test_example(nb_runner):
@@ -78,7 +73,7 @@ def nb_runner(tmp_path, request):
                 "y = x * 2",
                 "print(f'Result: {y}')"
             ])
-            nb_runner.start_kernel()  # with_cash=True by default (already done by pool)
+            nb_runner.start_kernel()  # with_cash=True by default
             nb_runner.run_all()
             assert "Result: 20" in nb_runner.get_output(3)
 
@@ -87,8 +82,7 @@ def nb_runner(tmp_path, request):
             nb_runner.run_cells([1, 2, 3])
             assert "Result: 200" in nb_runner.get_output(3)
     """
-    # Disable pool for stability - kernel pooling causes hanging issues
-    runner = NotebookTestRunner(work_dir=tmp_path, use_pool=False)
+    runner = NotebookTestRunner(work_dir=tmp_path)
     # A test marked `fresh_kernel` opts OUT of warm-kernel reuse. Under
     # reuse, shutdown()+start_kernel() is a namespace reset on the SAME
     # process -- measured, pid unchanged -- so a test whose subject IS the
@@ -96,27 +90,6 @@ def nb_runner(tmp_path, request):
     runner._force_fresh_kernel = request.node.get_closest_marker("fresh_kernel") is not None
     yield runner
     runner.shutdown()
-
-
-@pytest.fixture
-def nb_runner_no_pool(tmp_path):
-    """
-    Fixture that doesn't use kernel pool (for debugging).
-    """
-    runner = NotebookTestRunner(work_dir=tmp_path, use_pool=False)
-    yield runner
-    runner.shutdown()
-
-
-# Shutdown kernel pool at end of test session
-def pytest_sessionfinish(session, exitstatus):
-    """Cleanup kernel pool at end of test session."""
-    if kernels._kernel_pool is not None:
-        kernels._kernel_pool.shutdown()
-        kernels._kernel_pool = None
-
-
-# =============================================================================
 
 
 @pytest.fixture

@@ -452,7 +452,7 @@ CANARY_SCENARIOS = [
 def _oracle(tmp_path, final_sources, check):
     """Run final_sources top-to-bottom in a fresh cash-OFF kernel."""
     tmp_path.mkdir(parents=True, exist_ok=True)
-    r = NotebookTestRunner(work_dir=tmp_path, use_pool=False)
+    r = NotebookTestRunner(work_dir=tmp_path)
     try:
         r.create_notebook(final_sources)
         r.start_kernel(with_cash=False)
@@ -466,7 +466,7 @@ def _oracle(tmp_path, final_sources, check):
 def _assert_matches_oracle(scenario, tmp_path):
     on_dir = tmp_path / "on"
     on_dir.mkdir(parents=True, exist_ok=True)
-    r = NotebookTestRunner(work_dir=on_dir, use_pool=False)
+    r = NotebookTestRunner(work_dir=on_dir)
     try:
         captured, check = scenario(r)
         final_sources = [c.source for c in r.nb.cells]

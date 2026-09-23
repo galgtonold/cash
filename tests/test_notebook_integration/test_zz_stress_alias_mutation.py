@@ -65,7 +65,7 @@ def test_repeated_under_load(scenario, repeat, tmp_path, monkeypatch):
     monkeypatch.setenv("CASH_TRACE_FILE", str(trace))
     on_dir = tmp_path / "on"
     on_dir.mkdir(parents=True, exist_ok=True)
-    r = NotebookTestRunner(work_dir=on_dir, use_pool=False)
+    r = NotebookTestRunner(work_dir=on_dir)
     try:
         captured, check = scenario(r)
         final_sources = [c.source for c in r.nb.cells]

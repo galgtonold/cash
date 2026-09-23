@@ -188,7 +188,7 @@ def test_computed_rhs_alias_matches_plain_kernel(tmp_path, name, bind, id_expr, 
 
     def _run(work_dir, cells, with_cash, probe_cell):
         work_dir.mkdir(parents=True, exist_ok=True)
-        runner = NotebookTestRunner(work_dir=work_dir, use_pool=False)
+        runner = NotebookTestRunner(work_dir=work_dir)
         try:
             runner.create_notebook(cells)
             runner.start_kernel(with_cash=with_cash)

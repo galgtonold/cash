@@ -13,8 +13,7 @@ import time
 import warnings
 from contextlib import contextmanager
 from pathlib import Path
-from queue import Empty, Queue
-from typing import Any, Dict, List, Optional
+from typing import Optional
 
 # Warm-kernel reuse: each xdist worker keeps ONE long-lived kernel alive and
 # resets its state between tests instead of paying the ~2.3s boot every time.
@@ -334,7 +333,7 @@ def _force_kill_kernel(km) -> None:
             pass
     # Drop the connection file etc. so force-killing thousands of kernels over a
     # full run doesn't litter the Jupyter runtime dir. cleanup_resources() is
-    # sync on a sync KernelManager (pool/warm) but a coroutine on an
+    # sync on a sync KernelManager (warm) but a coroutine on an
     # AsyncKernelManager (fresh path); the process is already dead and there's no
     # live loop to await on here, so just close the coroutine to avoid a
     # "never awaited" warning.
@@ -344,181 +343,6 @@ def _force_kill_kernel(km) -> None:
             res.close()
     except Exception:
         pass
-
-
-# Module-level runner used only by KernelPool (which is rarely used).
-_pool_loop, _pool_run_async = _make_async_runner()
-
-
-def _run_async(coro):
-    """Module-level helper used by KernelPool methods only."""
-    return _pool_run_async(coro)
-
-
-# =============================================================================
-# KERNEL POOL - Pre-create kernels for faster test execution
-# =============================================================================
-
-
-class KernelPool:
-    """
-    A pool of pre-warmed Jupyter kernels for faster test execution.
-
-    Creates kernels asynchronously in the background so tests don't wait
-    for kernel startup.
-    """
-
-    def __init__(self, pool_size: int = 4, kernel_name: str = "python3"):
-        self.pool_size = pool_size
-        self.kernel_name = kernel_name
-        self._pool: Queue = Queue()
-        self._created_kernels: List[Any] = []
-        self._lock = threading.Lock()
-        self._shutdown = False
-        self._fill_thread: Optional[threading.Thread] = None
-
-    def start(self):
-        """Start filling the pool with kernels in background."""
-        self._fill_thread = threading.Thread(target=self._fill_pool, daemon=True)
-        self._fill_thread.start()
-
-    def _fill_pool(self):
-        """Background thread that keeps the pool full."""
-        while not self._shutdown:
-            try:
-                with self._lock:
-                    current_size = self._pool.qsize()
-
-                if current_size < self.pool_size:
-                    kernel = self._create_kernel()
-                    if kernel and not self._shutdown:
-                        self._pool.put(kernel)
-                        with self._lock:
-                            self._created_kernels.append(kernel)
-                else:
-                    # Pool is full, wait a bit
-                    import time
-
-                    time.sleep(0.1)
-            except Exception:
-                pass
-
-    def _create_kernel(self):
-        """Create a new kernel manager and client with cash pre-initialized."""
-        try:
-            from jupyter_client import KernelManager
-
-            km = KernelManager(kernel_name=self.kernel_name)
-            km.start_kernel()
-            kc = km.client()
-            kc.start_channels()
-
-            # Wait for ready
-            async def wait_ready():
-                await kc._async_wait_for_ready(timeout=30)
-
-            _run_async(wait_ready())
-
-            # Pre-initialize cash so it's ready to use
-            self._init_cash_in_kernel(kc)
-
-            return {"km": km, "kc": kc, "cash_initialized": True}
-        except Exception as e:
-            print(f"Error creating kernel: {e}")
-            return None
-
-    def get_kernel(self, timeout: float = 30.0):
-        """
-        Get a kernel from the pool, or create one if pool is empty.
-
-        Returns:
-            Dict with 'km' (KernelManager) and 'kc' (KernelClient)
-        """
-        try:
-            return self._pool.get(timeout=timeout)
-        except Empty:
-            # Pool empty, create on demand
-            return self._create_kernel()
-
-    def return_kernel(self, kernel: Dict):
-        """Return a kernel to the pool for reuse after full restart."""
-        if not self._shutdown and kernel:
-            # Restart kernel completely to get fresh state
-            # This ensures no stale cash state between tests
-            try:
-                kernel["km"].restart_kernel(now=True)
-                kernel["kc"].start_channels()
-
-                async def wait_ready():
-                    await kernel["kc"]._async_wait_for_ready(timeout=10)
-
-                _run_async(wait_ready())
-
-                # Pre-initialize cash in the fresh kernel
-                self._init_cash_in_kernel(kernel["kc"])
-                kernel["cash_initialized"] = True
-
-                self._pool.put(kernel)
-            except Exception:
-                # Kernel is broken, shut it down
-                self._shutdown_kernel(kernel)
-
-    def _init_cash_in_kernel(self, kc):
-        """Initialize cash in a kernel."""
-        cash_setup = """
-%load_ext cash
-from cash import Cash
-%cash_on
-"""
-
-        async def run_setup():
-            return await kc._async_execute_interactive(cash_setup, store_history=False)
-
-        reply = _run_async(run_setup())
-        if reply["content"]["status"] != "ok":
-            raise RuntimeError(f"Failed to init cash: {reply['content'].get('evalue', 'unknown error')}")
-
-    def _shutdown_kernel(self, kernel: Dict):
-        """Shutdown a single kernel."""
-        try:
-            if kernel.get("kc"):
-                kernel["kc"].stop_channels()
-            if kernel.get("km") and kernel["km"].has_kernel:
-                kernel["km"].shutdown_kernel(now=True)
-        except Exception:
-            pass
-
-    def shutdown(self):
-        """Shutdown the pool and all kernels."""
-        self._shutdown = True
-
-        # Drain the pool
-        while True:
-            try:
-                kernel = self._pool.get_nowait()
-                self._shutdown_kernel(kernel)
-            except Empty:
-                break
-
-        # Shutdown any tracked kernels
-        with self._lock:
-            for kernel in self._created_kernels:
-                self._shutdown_kernel(kernel)
-            self._created_kernels.clear()
-
-
-# Global kernel pool instance
-_kernel_pool: Optional[KernelPool] = None
-
-
-def get_kernel_pool() -> KernelPool:
-    """Get or create the global kernel pool."""
-    global _kernel_pool
-    if _kernel_pool is None:
-        _kernel_pool = KernelPool(pool_size=4)
-        _kernel_pool.start()
-        atexit.register(_kernel_pool.shutdown)
-    return _kernel_pool
 
 
 # =============================================================================
@@ -541,8 +365,8 @@ class _WarmKernel:
         self.km = None
         self.kc = None
         # All kernel I/O for this warm kernel runs on its own dedicated loop so
-        # the async kernel client is never driven across event loops (the
-        # likely cause of the old pool's hangs).
+        # the async kernel client is never driven across event loops, which
+        # can hang.
         self.loop, self.run_async = _make_async_runner()
         self._initialized = False
         self._tests_since_boot = 0

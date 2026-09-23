@@ -17,7 +17,6 @@ from tests._nbharness.kernels import (
     _get_warm_kernel,
     _make_async_runner,
     _WarmKernel,
-    get_kernel_pool,
 )
 
 # Pin cash's cost thresholds so a caching DECISION stops depending on how busy
@@ -189,7 +188,6 @@ class NotebookTestRunner:
     1. Uses REAL notebook files - cash reads the file naturally, no mocking
     2. Copies notebooks to work_dir so modifications don't affect originals
     3. Modifies cells by rewriting the file - cash sees the changes
-    4. Optionally uses kernel pool for faster execution
 
     Example:
         runner = NotebookTestRunner(work_dir=tmp_path)
@@ -213,19 +211,16 @@ class NotebookTestRunner:
         work_dir: Path,
         kernel_name: str = "python3",
         timeout: int = 120,
-        use_pool: bool = True,
     ):
         self.work_dir = Path(work_dir)
         self.kernel_name = kernel_name
         self.timeout = timeout
-        self.use_pool = use_pool
 
         self.nb: Optional[nbformat.NotebookNode] = None
         self.nb_path: Optional[Path] = None
         self.client: Optional[NotebookClient] = None
         self._kernel_started = False
         self._cash_initialized = False
-        self._pooled_kernel: Optional[Dict] = None
         self._force_fresh_kernel = False
         self._warm: Optional["_WarmKernel"] = None
         # Each runner gets its own event loop to avoid cross-test contamination.
@@ -284,12 +279,10 @@ class NotebookTestRunner:
         """
         Start the kernel and optionally initialize cash.
 
-        If using the kernel pool, cash is already pre-initialized in pooled kernels.
-
         Args:
             with_cash: install cash + ``%cash_on``. NOTE this records INTENT, not
-                outcome — warm-kernel reuse and the kernel pool can both hand back
-                a kernel that already has cash installed. If your test's
+                outcome — warm-kernel reuse can hand back a kernel that already
+                has cash installed. If your test's
                 conclusion depends on an arm really being cash-off, call
                 :meth:`assert_cash_active` rather than trusting this flag: a
                 cash-ON "control" reports the same warm-count as a genuine hit.
@@ -314,8 +307,6 @@ class NotebookTestRunner:
             kernel_name=self.kernel_name,
             resources={"metadata": {"path": str(self.work_dir)}},
         )
-
-        cash_already_initialized = False
 
         # Warm-kernel reuse (opt-in). Only for the common with_cash=True path;
         # with_cash=False tests want a bare kernel with no cash hooks installed,
@@ -348,20 +339,7 @@ class NotebookTestRunner:
         if self._loop is None:
             self._loop, self._run_async = _make_async_runner()
 
-        if self.use_pool:
-            # Try to get a pre-warmed kernel from the pool
-            pool = get_kernel_pool()
-            self._pooled_kernel = pool.get_kernel(timeout=5.0)
-
-            if self._pooled_kernel:
-                self.client.km = self._pooled_kernel["km"]
-                self.client.kc = self._pooled_kernel["kc"]
-                cash_already_initialized = self._pooled_kernel.get("cash_initialized", False)
-            else:
-                # Fall back to creating new kernel
-                self._start_new_kernel()
-        else:
-            self._start_new_kernel()
+        self._start_new_kernel()
 
         self._kernel_started = True
 
@@ -370,11 +348,8 @@ class NotebookTestRunner:
         if inject_notebook_path:
             self._inject_notebook_path()
 
-        # Only init cash if requested AND not already initialized in pooled kernel
-        if with_cash and not cash_already_initialized:
+        if with_cash:
             self._init_cash()
-        elif cash_already_initialized:
-            self._cash_initialized = True
         else:
             self._force_cash_off()
 
@@ -408,7 +383,7 @@ class NotebookTestRunner:
             pass  # is caught by assert_cash_active, not hidden here
 
     def _start_new_kernel(self) -> None:
-        """Start a new kernel (not from pool), retrying a flaky boot.
+        """Start a new kernel, retrying a flaky boot.
 
         Kernel startup binds several ZMQ ports; under parallel boots two
         kernels can race for the same ephemeral port, leaving one unable to
@@ -455,7 +430,7 @@ class NotebookTestRunner:
 
         OBSERVED by asking the kernel, never inferred from the ``with_cash``
         argument. That distinction is the whole point: ``start_kernel`` records
-        intent, but warm-kernel reuse and the kernel pool can both hand back a
+        intent, but warm-kernel reuse can hand back a
         kernel with cash already installed, so a test that *asked* for
         ``with_cash=False`` may still be running cash-ON. When that happens the
         control arm reports ``warm == 0`` -- byte-identical to a genuine cache
@@ -558,9 +533,6 @@ class NotebookTestRunner:
         except Exception:
             pass
         _force_kill_kernel(self.client.km)
-        # Not handed back to the pool: this runner now owns a kernel of its
-        # own, which shutdown() kills.
-        self._pooled_kernel = None
         self._start_new_kernel()
 
     def _restore_working_directory(self) -> None:
@@ -947,15 +919,7 @@ except Exception:
             # after they have already had a warm one.
             self._force_fresh_kernel = True
             return
-        if self._pooled_kernel and self.use_pool:
-            # Return kernel to pool for reuse
-            try:
-                pool = get_kernel_pool()
-                pool.return_kernel(self._pooled_kernel)
-            except Exception:
-                pass
-            self._pooled_kernel = None
-        elif self.client:
+        if self.client:
             # COVERAGE EXPERIMENT (env-gated, no-op in normal runs):
             # ipykernel exits via os._exit(), which skips the atexit hook that
             # coverage.process_startup() relies on to flush. So we explicitly

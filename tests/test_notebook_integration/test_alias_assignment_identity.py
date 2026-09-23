@@ -148,7 +148,7 @@ def test_alias_output_matches_plain_kernel_ground_truth(tmp_path):
 
     def _run(work_dir, cells, with_cash, probe_cell):
         work_dir.mkdir(parents=True, exist_ok=True)
-        runner = NotebookTestRunner(work_dir=work_dir, use_pool=False)
+        runner = NotebookTestRunner(work_dir=work_dir)
         try:
             runner.create_notebook(cells)
             runner.start_kernel(with_cash=with_cash)
