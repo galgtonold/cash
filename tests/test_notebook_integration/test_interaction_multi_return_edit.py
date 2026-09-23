@@ -1,4 +1,4 @@
-"""Batch 243 – Multiple return value patterns.
+"""Multiple return value patterns.
 
 Tests tuple unpacking from function returns and editing the function.
 """

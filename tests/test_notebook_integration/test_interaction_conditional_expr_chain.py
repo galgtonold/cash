@@ -1,4 +1,4 @@
-"""Batch 373: conditional expression chains and ternary nesting."""
+"""conditional expression chains and ternary nesting."""
 
 import pytest
 

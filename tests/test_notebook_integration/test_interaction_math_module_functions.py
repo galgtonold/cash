@@ -1,4 +1,4 @@
-"""Batch 403: math module functions and constants."""
+"""math module functions and constants."""
 
 import pytest
 

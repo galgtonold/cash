@@ -1,13 +1,13 @@
-"""Derivation / alias edge invalidation (CAS-115 + CAS-89).
+"""Derivation / alias edge invalidation.
 
 Some objects hold a *live* reference to another object that the lineage
 system never models, so a later in-place mutation of one side is invisible
 to a cached consumer of the other:
 
-* **CAS-115 (base -> derived):** ``g = df.groupby('k')`` holds a live
+* **base -> derived:** ``g = df.groupby('k')`` holds a live
   reference to ``df``. A later ``df.iloc[...] = v`` must bump ``g``'s lineage
   so a consumer of ``g['v'].sum()`` recomputes.
-* **CAS-89 (view -> base):** ``v = a[100:200]`` is a numpy view
+* **view -> base:** ``v = a[100:200]`` is a numpy view
   (``v.base is a``). A later ``v[:] = k`` mutates ``a`` in place and must bump
   ``a``'s lineage so a consumer of ``a.sum()`` recomputes.
 
@@ -55,8 +55,8 @@ def _plain_then_cash(nb_runner, cells, edit_idx, edit_src, out_idx):
     return plain_edit, cash_edit
 
 
-def test_cas115_groupby_reflects_post_creation_frame_mutation(nb_runner):
-    """CAS-115: a groupby created before an edit to its source frame must
+def test_groupby_reflects_post_creation_frame_mutation(nb_runner):
+    """A groupby created before an edit to its source frame must
     aggregate the edited frame."""
     cells = [
         "import pandas as pd\ndf = pd.DataFrame({'k': [0, 1] * 500, 'v': list(range(1000))})",
@@ -69,8 +69,8 @@ def test_cas115_groupby_reflects_post_creation_frame_mutation(nb_runner):
     assert plain in cash, f"groupby aggregate stale after frame edit: plain={plain!r} cash={cash!r}"
 
 
-def test_cas89_view_mutation_invalidates_base_consumer(nb_runner):
-    """CAS-89: mutating a numpy view must invalidate a cached consumer of the
+def test_view_mutation_invalidates_base_consumer(nb_runner):
+    """Mutating a numpy view must invalidate a cached consumer of the
     base array."""
     cells = [
         "import numpy as np\na = np.arange(300)",

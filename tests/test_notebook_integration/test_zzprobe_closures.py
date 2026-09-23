@@ -11,7 +11,7 @@ Probes (one mechanism each):
  3. value default arg bound at def time (def f(x, y=base)); edit base, run call site only
  4. function default arg bound at def time (def f(fn=g)); edit g body, run call site only
  5. closure factory arg from upstream global (make_adder(n)); edit n, run call site only
- 6. nonlocal counter closure: isolated re-run idempotence (CAS-68/72 regression check)
+ 6. nonlocal counter closure: isolated re-run idempotence (regression check)
  7. same-name function shadowed across cells; edit FIRST def, run leaf only
  8. mutual recursion; edit second function, run call site only
  9. lambdas stored in a dict; edit dict cell, run call site only

@@ -1,4 +1,4 @@
-"""Batch 344: os.path and pathlib path manipulation edits."""
+"""os.path and pathlib path manipulation edits."""
 
 import pytest
 

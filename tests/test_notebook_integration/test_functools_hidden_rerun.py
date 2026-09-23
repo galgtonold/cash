@@ -1,5 +1,5 @@
 """Hidden mutation through functools.partial (bound mutable arg) or a function
-passed to functools.reduce must reset on isolated re-run (CAS-72)."""
+passed to functools.reduce must reset on isolated re-run."""
 
 import pytest
 

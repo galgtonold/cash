@@ -1,16 +1,16 @@
 """The STALE FILE line judges a file by what its writer recorded when it wrote it.
 
-Round 29 found the line added after round 28 wrong both ways:
+The line was once wrong both ways:
 
-* r29s4 (WRONG, 3/3): a chart drawn inside ``for ax, col in zip(axes, ...)``
+* (3/3) a chart drawn inside ``for ax, col in zip(axes, ...)``
   was never named after an upstream change, while the CSVs were. The line
   asked whether the writer's INPUTS had drifted, and ``fig.savefig`` reads only
   ``fig``, made by ``plt.subplots()``: what was drawn on it came in through the
   loop variable. Drawing on ``axes[0]`` directly was caught.
-* r29s5 (WRONG, 3/3): after a kernel restart no chart was ever named. The
+* (3/3) after a kernel restart no chart was ever named. The
   drift test compared against the runtime lineage, which a new kernel has
   none of.
-* r29s2: ``os.makedirs('report', exist_ok=True)`` was named -- a folder.
+* ``os.makedirs('report', exist_ok=True)`` was named -- a folder.
 
 The writer's own provenance -- the lineages of what it read and, for a
 figure, the history of what was drawn into it, recorded when it wrote --

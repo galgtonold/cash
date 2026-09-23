@@ -1,4 +1,4 @@
-"""Batch 132 – Selective cell execution interaction tests.
+"""Selective cell execution interaction tests.
 
 Tests that exercise running specific cells out of order,
 skipping cells, and running only subsets of cells.

@@ -1,4 +1,4 @@
-"""Reassignment-accumulator loop trust (CAS-120 / CAS-91b).
+"""Reassignment-accumulator loop trust.
 
 A loop that accumulates by *reassignment* (``total = total + b`` or
 ``total += b``) must be trusted on a no-change downstream re-run exactly like an

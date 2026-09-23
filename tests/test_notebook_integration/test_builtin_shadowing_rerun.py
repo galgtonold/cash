@@ -1,5 +1,5 @@
 """A user variable that shadows a builtin name (sum/list/max/id/...) must be
-tracked as a real dependency, not skipped as a builtin (CAS-63).
+tracked as a real dependency, not skipped as a builtin.
 
 The lineage layer skips `_BUILTIN_NAMES` so genuine builtins are never tracked
 as data dependencies. That skip was unconditional, so a user variable named

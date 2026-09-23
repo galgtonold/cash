@@ -1,4 +1,4 @@
-"""Batch 55: Caching meta-patterns — cash caching code that itself caches (lru_cache, memoize)."""
+"""Caching meta-patterns — cash caching code that itself caches (lru_cache, memoize)."""
 
 import textwrap
 

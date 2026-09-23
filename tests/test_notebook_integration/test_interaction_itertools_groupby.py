@@ -1,4 +1,4 @@
-"""Batch 397: itertools.groupby with sorting and key functions."""
+"""itertools.groupby with sorting and key functions."""
 
 import pytest
 

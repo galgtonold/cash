@@ -1,4 +1,4 @@
-"""Batch 265 – Nested function definition edit patterns.
+"""Nested function definition edit patterns.
 
 Tests inner function edits propagating through outer function calls.
 """

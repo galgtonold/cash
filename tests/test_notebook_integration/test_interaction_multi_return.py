@@ -1,4 +1,4 @@
-"""Batch 199 – Multi-return function with unpacking interaction tests.
+"""Multi-return function with unpacking interaction tests.
 
 Tests editing functions that return multiple values and
 various unpacking patterns.

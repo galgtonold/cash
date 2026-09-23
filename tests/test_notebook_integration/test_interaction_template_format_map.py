@@ -1,5 +1,5 @@
 """
-Batch 323: string.Template and format_map patterns with caching.
+string.Template and format_map patterns with caching.
 Tests Template substitution, safe_substitute, format_map, and edit propagation.
 """
 

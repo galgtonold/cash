@@ -1,4 +1,4 @@
-"""Batch 401: collections.OrderedDict behavior."""
+"""collections.OrderedDict behavior."""
 
 import pytest
 

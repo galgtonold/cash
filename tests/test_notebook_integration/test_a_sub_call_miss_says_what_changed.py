@@ -1,9 +1,9 @@
 """A cached call that re-ran says which of its inputs moved.
 
-Round 30, r30s4: after an upstream edit the parameter sweep re-ran all six
+After an upstream edit the parameter sweep re-ran all six
 points. The badge said "Sub-calls: 0/6 hit sweep_point(mg, npc)" and
 "@intercepted 0 of 6 cached" -- "no row says WHY the key changed (no
-'changed:' note)". The tester guessed wrong about the cause and wrote it up
+'changed:' note)". The user guessed wrong about the cause and wrote it up
 as a suspected bug; the re-run was right, and one word on the badge would
 have said so.
 

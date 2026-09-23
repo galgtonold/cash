@@ -1,4 +1,4 @@
-"""Batch 206 – List slicing and indexing interaction tests.
+"""List slicing and indexing interaction tests.
 
 Tests editing list slice operations, negative indexing,
 step slicing, and their propagation.

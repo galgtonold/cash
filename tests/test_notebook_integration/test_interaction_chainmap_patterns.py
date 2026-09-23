@@ -1,4 +1,4 @@
-"""Batch 406: collections.ChainMap usage patterns."""
+"""collections.ChainMap usage patterns."""
 
 import pytest
 

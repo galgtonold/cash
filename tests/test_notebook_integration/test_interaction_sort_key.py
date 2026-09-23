@@ -1,5 +1,5 @@
 """
-Batch 313: Sorting with custom key functions interaction tests.
+Sorting with custom key functions interaction tests.
 Tests that editing sort keys or comparison functions properly
 invalidates sorted outputs downstream.
 """

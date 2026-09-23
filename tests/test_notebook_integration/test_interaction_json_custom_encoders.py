@@ -1,4 +1,4 @@
-"""Batch 425: json serialization with custom encoders."""
+"""json serialization with custom encoders."""
 
 import pytest
 

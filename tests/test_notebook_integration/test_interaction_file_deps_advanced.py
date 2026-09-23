@@ -1,4 +1,4 @@
-"""Batch 133 – File dependency + cell edit advanced interaction tests.
+"""File dependency + cell edit advanced interaction tests.
 
 Tests that exercise file reads (CSV, JSON, text) combined with
 cell edits, verifying that cache invalidation works correctly

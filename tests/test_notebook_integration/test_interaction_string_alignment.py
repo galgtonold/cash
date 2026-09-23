@@ -1,4 +1,4 @@
-"""Batch 395: string ljust/rjust/center and formatting alignment."""
+"""string ljust/rjust/center and formatting alignment."""
 
 import pytest
 

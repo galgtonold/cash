@@ -1,4 +1,4 @@
-"""Batch 216 – State machine interaction tests.
+"""State machine interaction tests.
 
 Tests editing cells that implement state machine logic
 with transitions and verifying correct propagation.

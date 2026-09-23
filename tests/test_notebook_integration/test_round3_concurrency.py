@@ -1,4 +1,4 @@
-"""Batch 62: Concurrency & threading — cash caching with threads, locks, queues."""
+"""Concurrency & threading — cash caching with threads, locks, queues."""
 
 import textwrap
 

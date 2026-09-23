@@ -1,4 +1,4 @@
-"""Batch 500: set operations intersection difference symmetric."""
+"""set operations intersection difference symmetric."""
 
 import pytest
 

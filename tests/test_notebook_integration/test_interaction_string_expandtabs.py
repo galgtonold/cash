@@ -1,4 +1,4 @@
-"""Batch 459: string expandtabs and whitespace handling."""
+"""string expandtabs and whitespace handling."""
 
 import pytest
 

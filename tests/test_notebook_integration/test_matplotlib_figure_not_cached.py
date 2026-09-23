@@ -1,4 +1,4 @@
-"""CAS-144: caching a matplotlib Figure/Axes makes plt.savefig() write a blank image.
+"""Caching a matplotlib Figure/Axes makes plt.savefig() write a blank image.
 
 ``fig, ax = plt.subplots()`` used to be cached like any other assignment.  The
 RAM tier deep-copies every value it stores, and ``Figure.__getstate__`` records
@@ -70,7 +70,7 @@ def test_savefig_writes_the_real_chart_not_a_blank_image(nb_runner, tmp_path):
     assert differing > 0.01, (
         f"plt.savefig() wrote a blank chart under %cash_on: only {differing:.3%} of "
         f"pixels differ from an empty-axes render, so the bars the user drew are "
-        f"missing. Cash detached pyplot's current figure from the user's (CAS-144)."
+        f"missing. Cash detached pyplot's current figure from the user's."
     )
 
 
@@ -125,7 +125,7 @@ def test_ordinary_statements_still_cache_alongside_a_figure(nb_runner):
     nb_runner.run_cells([3])
     output = nb_runner.get_output(3)
     assert shows_cached(output), (
-        f"An ordinary cached statement stopped caching -- the CAS-144 rule over-reached. Got:\n{output}"
+        f"An ordinary cached statement stopped caching -- the figure rule over-reached. Got:\n{output}"
     )
 
 
@@ -148,7 +148,7 @@ def test_badge_tells_the_truth_about_the_refused_figure(nb_runner):
 
 @pytest.mark.timeout(90)
 def test_subplot_mosaic_dict_is_not_cached(nb_runner):
-    """CAS-155: ``plt.subplot_mosaic(...)`` returns ``dict[str, Axes]`` and binds
+    """``plt.subplot_mosaic(...)`` returns ``dict[str, Axes]`` and binds
     ONLY that dict -- no bare Figure/Axes co-occurs as a statement output. The
     original one-level container scan didn't descend into dict values, so the
     dict was cached, its Axes detached from pyplot's current figure on the
@@ -172,7 +172,6 @@ def test_subplot_mosaic_dict_is_not_cached(nb_runner):
 
     output = nb_runner.get_output(2)
     assert "IS_GCF: True" in output, (
-        f"subplot_mosaic's axes detached from plt.gcf() under %cash_on -- the dict "
-        f"of Axes was cached (CAS-155). Got:\n{output}"
+        f"subplot_mosaic's axes detached from plt.gcf() under %cash_on -- the dict of Axes was cached. Got:\n{output}"
     )
     assert "LINES: 1" in output, f"pyplot's current figure lost the user's data. Got:\n{output}"

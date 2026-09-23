@@ -1,4 +1,4 @@
-"""Batch 219 – Partial application interaction tests.
+"""Partial application interaction tests.
 
 Tests editing cells with functools.partial, closures,
 and currying patterns.

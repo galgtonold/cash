@@ -1,4 +1,4 @@
-"""Batch 460: generator send and close protocol."""
+"""generator send and close protocol."""
 
 import pytest
 

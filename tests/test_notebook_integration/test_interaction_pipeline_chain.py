@@ -1,4 +1,4 @@
-"""Batch 221 – Data pipeline chain interaction tests.
+"""Data pipeline chain interaction tests.
 
 Tests editing cells in multi-stage data pipelines
 where each stage transforms the data.

@@ -1,4 +1,4 @@
-"""CAS-176 verification probe: N cells that write files never reach a stable
+"""Verification probe: N cells that write files never reach a stable
 state -- and the ticket's stated discriminator (SHARING one state file) is not
 the cause.
 
@@ -55,7 +55,7 @@ def _measure(nb_runner, paths, label):
     nb_runner.create_notebook([SETUP] + [_cell(k, p) for k, p in paths.items()])
     nb_runner.start_kernel()
 
-    print(f"\n=== CAS-176 {label} ===")
+    print(f"\n=== shared state file {label} ===")
     history = []
     for n in range(1, RUNS + 1):
         nb_runner.run_all()
@@ -90,7 +90,7 @@ def test_four_cells_with_separate_files_run_once_each(nb_runner, tmp_path):
     """The falsifier used to show four private files amplifying exactly like one
     shared file. A writer is now re-run only for a cell that depends on what it
     wrote, so with private files every cell runs once per run_all, as in a
-    plain kernel (round 24, r24s1). The shared file still amplifies: each cell
+    plain kernel. The shared file still amplifies: each cell
     reads the file the one before it wrote."""
     per_run = _measure(
         nb_runner,

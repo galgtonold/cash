@@ -1,4 +1,4 @@
-"""Batch 404: set operations - union, intersection, symmetric_difference."""
+"""set operations - union, intersection, symmetric_difference."""
 
 import pytest
 

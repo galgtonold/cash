@@ -1,4 +1,4 @@
-"""Batch 231 – Multiple cell chain edit interaction tests.
+"""Multiple cell chain edit interaction tests.
 
 Tests editing a cell in the middle of a multi-cell pipeline to
 verify both upstream restoration and downstream propagation work.

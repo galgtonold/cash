@@ -1,5 +1,5 @@
 """
-Batch 292: Weakref interaction tests.
+Weakref interaction tests.
 Tests that editing objects tracked via weakrefs properly invalidates
 downstream computations.
 """

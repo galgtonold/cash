@@ -1,4 +1,4 @@
-"""Batch 342: string methods chain and text processing edits."""
+"""string methods chain and text processing edits."""
 
 import pytest
 

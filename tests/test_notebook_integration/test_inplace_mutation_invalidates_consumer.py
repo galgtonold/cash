@@ -1,6 +1,6 @@
 """What an in-place mutation does to a cached consumer, in both directions.
 
-Round-14 gate finding, adjudicated. The report was that mutating a variable in
+A reported bug, adjudicated. The report was that mutating a variable in
 place left a cached consumer serving a pre-mutation value, contradicting
 `README.md`'s "Mutation-aware. `df.append(...)` and `+=` are detected, so you
 don't get stale reads."
@@ -20,7 +20,7 @@ Measured, the picture is split by CELL ORDER, and only one half is a defect:
 The second case is characterised rather than asserted-against, because it is a
 deliberate model and not a bug. What IS wrong is the README sentence, which
 promises unconditionally what only holds in the first case; the surprise it
-caused a docs-only tester is the evidence.
+caused a reader who only had the docs is the evidence.
 
 The genuinely awkward part, worth keeping visible: cash does not revert the
 object. `s.iloc[0]` still reads 1e9 in the kernel while `summarize(s)` returns
@@ -87,7 +87,7 @@ def test_a_consumer_above_a_mutation_keeps_top_to_bottom_semantics(nb_runner):
     Re-running a cell that sits ABOVE an in-place mutation answers as a clean
     top-to-bottom run would -- i.e. without the mutation. Plain Jupyter would
     answer with the live object instead. Pinned so that if this ever changes it
-    is a decision someone made, not a drift; a docs-only tester read it as a
+    is a decision someone made, not a drift; a reader who only had the docs read it as a
     wrong answer, which is why the README sentence needs qualifying.
     """
     nb_runner.create_notebook([SETUP, MAKE, CONSUME, "s.iloc[0] = 1e9\n"])

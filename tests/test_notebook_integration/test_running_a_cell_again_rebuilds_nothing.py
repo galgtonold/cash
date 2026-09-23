@@ -1,6 +1,6 @@
 """Running a cell again with nothing changed rebuilds nothing upstream.
 
-Round 25 (r25s1): after an upstream edit and one run of the report cell, every
+After an upstream edit and one run of the report cell, every
 further run of it re-ran ``results = {}``, ``comparison`` and both figure
 builds. Two causes: a figure the cell saved (``fig.savefig``) read as changed
 downstream of its producer, and a loop the repair re-ran compared its recorded

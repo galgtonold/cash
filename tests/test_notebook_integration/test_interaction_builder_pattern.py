@@ -1,4 +1,4 @@
-"""Batch 198 – Builder / fluent API pattern interaction tests.
+"""Builder / fluent API pattern interaction tests.
 
 Tests editing builder-style method chains and fluent interfaces.
 """

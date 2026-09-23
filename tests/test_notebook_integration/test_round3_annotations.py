@@ -1,5 +1,5 @@
 """
-Batch 22: Cash annotation directives (@cash: no-cache, @cash: ttl, etc.)
+Cash annotation directives (@cash: no-cache, @cash: ttl, etc.)
 and debug mode behavior.
 
 Tests the special comment-based directives that control caching behavior

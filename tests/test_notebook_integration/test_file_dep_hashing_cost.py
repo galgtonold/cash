@@ -2,13 +2,13 @@
 
 Counted, not timed: content digests taken in the live kernel while one cell
 runs (``hashlib.sha256`` inside ``file_dep_snapshot``, so a memo hit does not
-count). Round 23's profile (2026-09-14) put most of cash's notebook overhead
+count). A profile of real notebooks put most of cash's notebook overhead
 here:
 
-* r23s2 read a folder in a loop, ``d = pd.read_csv(f)``. ``d``'s recorded files
+* One notebook read a folder in a loop, ``d = pd.read_csv(f)``. ``d``'s recorded files
   were merged across iterations, so iteration k snapshotted all k files so far:
   865,265 hashes for 1,312 files in one cell.
-* r23s4 read 5,222 files into ``docs``; each statement derived from it
+* Another read 5,222 files into ``docs``; each statement derived from it
   re-snapshotted all 5,222 when it was saved, and re-checked them all again in
   the upstream simulation.
 
@@ -31,8 +31,8 @@ N = 80
 
 #: Counts lookups (``file_content_hash`` calls) and digests (``sha256``) per
 #: cell run, and closes the 5 s reuse window: 80 small files are checked in
-#: well under five seconds, where r23s4's 5,222 were not -- without this the
-#: fixture is served from the window and passes on code that re-hashed r23s4
+#: well under five seconds, where 5,222 were not -- without this the
+#: fixture is served from the window and passes on code that re-hashed 5,222 files
 #: for minutes.
 #:
 #: Per cell run, because the claim is per cell run -- a new one looks at the

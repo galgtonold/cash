@@ -1,6 +1,6 @@
 """A long, cheap inner loop over ``frame["col"].items()`` runs as one unit.
 
-Round 30, r30s4: building a gene_id -> symbol dict took 243 s under cash and
+Building a gene_id -> symbol dict took 243 s under cash and
 3.8 s without it (64x), on every cold run:
 
     for r, a in raw.items():

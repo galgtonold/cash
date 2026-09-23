@@ -1,5 +1,5 @@
 """
-Batch 20: NumPy integration patterns and numerical computing workflows.
+NumPy integration patterns and numerical computing workflows.
 
 Tests how cash handles numpy arrays, matrix operations, random number
 generation, and numerical computation pipelines across cells.

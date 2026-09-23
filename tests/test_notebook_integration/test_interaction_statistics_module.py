@@ -1,4 +1,4 @@
-"""Batch 367: statistics module operations and edits."""
+"""statistics module operations and edits."""
 
 import pytest
 

@@ -1,4 +1,4 @@
-"""Batch 408: string partition and rsplit operations."""
+"""string partition and rsplit operations."""
 
 import pytest
 

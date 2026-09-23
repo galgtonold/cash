@@ -1,4 +1,4 @@
-"""Batch 273 – Async/await patterns with edits.
+"""Async/await patterns with edits.
 
 Tests asyncio-based patterns in notebook cells.
 """

@@ -1,4 +1,4 @@
-"""Batch 155 – Numeric precision and math interaction tests.
+"""Numeric precision and math interaction tests.
 
 Tests with floating point, integer overflow, precision changes,
 and mathematical operations combined with cell edits.

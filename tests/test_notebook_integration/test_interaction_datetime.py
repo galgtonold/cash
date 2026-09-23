@@ -1,4 +1,4 @@
-"""Batch 191 – Datetime / time-based computation interaction tests.
+"""Datetime / time-based computation interaction tests.
 
 Tests editing datetime computations, timedelta operations,
 and formatting.

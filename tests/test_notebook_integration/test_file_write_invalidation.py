@@ -1,10 +1,10 @@
-"""CAS-81/82: file writes participate in upstream re-execution.
+"""File writes participate in upstream re-execution.
 
 File writes have no variable edge, so the backward scan never scheduled
 them: editing a writer cell and re-running only the reader served the stale
-pre-edit file (CAS-81), and even when the writer's sibling statements DID
+pre-edit file, and even when the writer's sibling statements DID
 re-run, the side-effect-only write statement was skipped and the reader's
-freshness stayed decided against the pre-run file state (CAS-82).
+freshness stayed decided against the pre-run file state.
 """
 
 import pytest
@@ -62,7 +62,7 @@ def test_bare_tocsv_writer_edit_isolated_downstream(nb_runner, tmp_path):
 
 
 def test_midrun_write_reader_freshness_post_write(nb_runner, tmp_path):
-    """CAS-82: the re-executed writer must actually write, and the reader's
+    """The re-executed writer must actually write, and the reader's
     freshness must be decided AFTER that write — no impossible namespace."""
     p = _p(tmp_path / "both.pkl")
     writer_v1 = (
@@ -169,7 +169,7 @@ def test_unrelated_edit_does_not_rerun_writer(nb_runner, tmp_path):
 
 
 def test_writer_input_restored_after_kernel_restart(nb_runner, tmp_path):
-    """CAS-153: after a REAL kernel restart, running only a downstream file
+    """After a REAL kernel restart, running only a downstream file
     reader must not crash.
 
     Post-restart ``executed_write_stmt_codes`` is empty, so the bare
@@ -218,7 +218,7 @@ def _restart_kernel(nb_runner):
 
 
 def test_append_writer_not_refired_after_restart(nb_runner, tmp_path):
-    """CAS-153 round-3 (headline correctness gate): a non-idempotent append-mode
+    """Headline correctness gate: a non-idempotent append-mode
     writer, run once, must NOT re-fire when only a downstream reader runs after a
     kernel restart.
 

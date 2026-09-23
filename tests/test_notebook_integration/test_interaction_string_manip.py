@@ -1,4 +1,4 @@
-"""Batch 232 – String manipulation and formatting edit tests.
+"""String manipulation and formatting edit tests.
 
 Tests editing cells with string formatting, regex, and text
 processing patterns.

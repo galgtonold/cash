@@ -1,5 +1,5 @@
 """
-Batch 106 — Mutation tracking under re-execution & cell edits.
+Mutation tracking under re-execution & cell edits.
 
 Tests that in-place mutations (list.append, dict update, etc.) are correctly
 handled when cells are re-run or edited. Mutation detection must not allow

@@ -1,4 +1,4 @@
-"""Batch 94 – pathlib and file system operations."""
+"""pathlib and file system operations."""
 
 import textwrap
 

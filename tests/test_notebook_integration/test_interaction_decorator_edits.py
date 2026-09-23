@@ -1,4 +1,4 @@
-"""Batch 157 – Decorator pattern interaction tests.
+"""Decorator pattern interaction tests.
 
 Tests where decorators are defined in one cell, applied to functions
 in another, and edits to either the decorator or the function

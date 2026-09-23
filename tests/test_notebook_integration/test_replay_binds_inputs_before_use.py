@@ -1,13 +1,13 @@
 """After a restart, a replayed statement finds every name it reads already bound.
 
-Round 22: two testers were refused with ``UpstreamStateError: name '...' is
+Two users were refused with ``UpstreamStateError: name '...' is
 not defined`` on the first jump after a restart.
 
-* r22s3: ``import glob`` in cell 2 and again in cell 3. The replay resolved
+* ``import glob`` in cell 2 and again in cell 3. The replay resolved
   ``glob`` to its last producer, cell 3's import, which runs after cell 2's
   ``files = glob.glob(...)``. Every jump downstream was refused until the
   imports were merged into one cell.
-* r22s4: a feature cell of cheap statements (``keys = ...drop_duplicates()``
+* A feature cell of cheap statements (``keys = ...drop_duplicates()``
   then ``panel = keys.merge(...)``): nothing was persisted, and the replay ran
   the merge without the line above it that binds ``keys``.
 """
@@ -52,7 +52,7 @@ def test_an_import_repeated_in_a_later_cell(nb_runner):
     assert "N 2 1" in _stdout(nb_runner, 5), nb_runner.get_raw_output(5)[-800:]
 
 
-#: r22s4's feature cell, as the tester wrote it. The size matters: smaller,
+#: The feature cell, as the user wrote it. The size matters: smaller,
 #: the frames are not persisted and the whole cell simply re-runs.
 _DATA = """import numpy as np
 import pandas as pd

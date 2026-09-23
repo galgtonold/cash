@@ -1,6 +1,6 @@
 """What an upstream statement prints when the repair re-runs it is shown.
 
-Round 29, r29s3 (CONFUSING): their new ``repair_missed_splits()`` printed what
+Reported as confusing: a user's new ``repair_missed_splits()`` printed what
 it repaired, to stderr. Run from a cell below after an edit, the repair re-ran
 it -- and the message appeared nowhere, so its false positive (a real -50%
 day read as a missed split) showed only in their no-cash oracle's log. The

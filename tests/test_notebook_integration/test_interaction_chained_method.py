@@ -1,4 +1,4 @@
-"""Batch 212 – Method chaining interaction tests.
+"""Method chaining interaction tests.
 
 Tests editing cells that use method chaining patterns
 (string chains, list chains, custom fluent APIs).

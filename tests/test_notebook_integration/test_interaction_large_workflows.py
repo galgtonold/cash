@@ -1,4 +1,4 @@
-"""Batch 120 – Large notebook workflow interaction tests.
+"""Large notebook workflow interaction tests.
 
 Tests that exercise 8+ cell notebooks with complex dependency
 graphs, simulating real-world data analysis workflows.

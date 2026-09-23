@@ -1,4 +1,4 @@
-"""Batch 355: collections.ChainMap and MappingProxyType patterns."""
+"""collections.ChainMap and MappingProxyType patterns."""
 
 import pytest
 

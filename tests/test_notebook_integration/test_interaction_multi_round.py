@@ -1,4 +1,4 @@
-"""Batch 275 – Multi-round iterative refinement patterns.
+"""Multi-round iterative refinement patterns.
 
 Tests multiple sequential edits to same cell, verifying each round.
 """
@@ -23,27 +23,27 @@ class TestMultiRoundRefinement:
         nb_runner.run_all()
         assert "result = 10" in nb_runner.get_output(2)
 
-        # Round 1: add 5
+        # Edit 1: add 5
         nb_runner.set_cell_source(2, "result = x + 5\nprint(f'result = {result}')")
         nb_runner.run_all()
         assert "result = 15" in nb_runner.get_output(2)
 
-        # Round 2: multiply
+        # Edit 2: multiply
         nb_runner.set_cell_source(2, "result = x * 3\nprint(f'result = {result}')")
         nb_runner.run_all()
         assert "result = 30" in nb_runner.get_output(2)
 
-        # Round 3: power
+        # Edit 3: power
         nb_runner.set_cell_source(2, "result = x ** 2\nprint(f'result = {result}')")
         nb_runner.run_all()
         assert "result = 100" in nb_runner.get_output(2)
 
-        # Round 4: floor div
+        # Edit 4: floor div
         nb_runner.set_cell_source(2, "result = x // 3\nprint(f'result = {result}')")
         nb_runner.run_all()
         assert "result = 3" in nb_runner.get_output(2)
 
-        # Round 5: complex expression
+        # Edit 5: complex expression
         nb_runner.set_cell_source(2, "result = (x + 1) * (x - 1)\nprint(f'result = {result}')")
         nb_runner.run_all()
         assert "result = 99" in nb_runner.get_output(2)

@@ -1,4 +1,4 @@
-"""Batch 161 – Dataclass and namedtuple interaction tests.
+"""Dataclass and namedtuple interaction tests.
 
 Tests editing dataclass/namedtuple definitions, field changes,
 and downstream usage after modifications.

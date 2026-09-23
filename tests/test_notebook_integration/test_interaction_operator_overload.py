@@ -1,5 +1,5 @@
 """
-Batch 294: Operator overloading interaction tests.
+Operator overloading interaction tests.
 Tests that editing classes with overloaded operators properly invalidates
 downstream computations using those operators.
 """

@@ -1,5 +1,5 @@
-"""Hidden-state mutation through a called function must reset on isolated re-run
-(CAS-68). A cell calls a function that mutates state NOT passed as an argument
+"""Hidden-state mutation through a called function must reset on isolated re-run.
+A cell calls a function that mutates state NOT passed as an argument
 (a module global, a mutable default arg, a closure cell, a class variable, or a
 function attribute); on isolated re-run the state accumulates because the
 long-lived object created by an upstream cell is reused.

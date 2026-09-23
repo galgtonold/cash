@@ -1,4 +1,4 @@
-"""Batch 385: dataclass ordering and comparison methods."""
+"""dataclass ordering and comparison methods."""
 
 import pytest
 

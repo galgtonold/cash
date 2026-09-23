@@ -1,4 +1,4 @@
-"""Batch 474: heapq nlargest nsmallest merge."""
+"""heapq nlargest nsmallest merge."""
 
 import pytest
 

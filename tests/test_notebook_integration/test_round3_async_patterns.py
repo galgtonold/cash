@@ -1,4 +1,4 @@
-"""Batch 44: Async/coroutine patterns — cash caching with asyncio code."""
+"""Async/coroutine patterns — cash caching with asyncio code."""
 
 import textwrap
 

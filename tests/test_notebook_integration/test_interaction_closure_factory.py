@@ -1,4 +1,4 @@
-"""Batch 228 – Closure factory and scope capture interaction tests.
+"""Closure factory and scope capture interaction tests.
 
 Tests editing cells with closure factories, captured variables,
 and function composition patterns.

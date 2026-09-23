@@ -1,4 +1,4 @@
-"""Batch 234 – Error handling interaction edit tests.
+"""Error handling interaction edit tests.
 
 Tests editing cells that change error-handling behavior: adding/removing
 try/except blocks, changing raised exceptions, etc.

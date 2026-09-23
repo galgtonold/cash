@@ -1,4 +1,4 @@
-"""Batch 111 – Long cascade workflow interaction tests.
+"""Long cascade workflow interaction tests.
 
 Tests that exercise multi-cell workflows with cascading edits,
 partial reruns, and complex dependency chains.
@@ -161,17 +161,17 @@ class TestMultiRoundWorkflows:
         nb_runner.run_all()
         assert "y = 2" in nb_runner.get_output(2)
 
-        # Round 1
+        # Edit 1
         nb_runner.set_cell_source(1, "x = 10")
         nb_runner.run_all()
         assert "y = 11" in nb_runner.get_output(2)
 
-        # Round 2
+        # Edit 2
         nb_runner.set_cell_source(1, "x = 100")
         nb_runner.run_all()
         assert "y = 101" in nb_runner.get_output(2)
 
-        # Round 3
+        # Edit 3
         nb_runner.set_cell_source(1, "x = 1000")
         nb_runner.run_all()
         assert "y = 1001" in nb_runner.get_output(2)

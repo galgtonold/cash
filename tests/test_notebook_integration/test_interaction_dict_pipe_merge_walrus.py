@@ -1,4 +1,4 @@
-"""Batch 476: dict pipe merge and walrus loop filtering."""
+"""dict pipe merge and walrus loop filtering."""
 
 import pytest
 

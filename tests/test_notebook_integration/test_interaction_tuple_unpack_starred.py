@@ -1,4 +1,4 @@
-"""Batch 471: tuple unpacking and starred assignment."""
+"""tuple unpacking and starred assignment."""
 
 import pytest
 

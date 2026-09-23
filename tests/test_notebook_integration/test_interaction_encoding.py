@@ -1,4 +1,4 @@
-"""Batch 205 – String encoding and bytes conversion interaction tests.
+"""String encoding and bytes conversion interaction tests.
 
 Tests editing string/bytes conversions, encoding schemes,
 and byte manipulation patterns.

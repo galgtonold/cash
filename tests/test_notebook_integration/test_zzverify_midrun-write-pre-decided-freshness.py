@@ -50,7 +50,7 @@ def test_reexecuted_writer_midrun_reader_still_restores_stale(nb_runner, tmp_pat
     assert "combo = 6 3" in nb_runner.get_output(3)
 
     # Edit ONLY the payload literal (different length -> different pickle size,
-    # so CAS-10 mtime/size granularity is not in play).
+    # so mtime/size granularity is not in play).
     writer_v2 = writer_v1.replace("[1, 2, 3]", "[10, 20, 30, 40]")
     nb_runner.set_cell_source(1, writer_v2)
 

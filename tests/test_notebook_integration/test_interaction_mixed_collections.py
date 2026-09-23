@@ -1,4 +1,4 @@
-"""Batch 200 – Mixed-type collection operation interaction tests.
+"""Mixed-type collection operation interaction tests.
 
 Tests editing operations on collections containing mixed types
 (lists of dicts, dicts of lists, nested structures).

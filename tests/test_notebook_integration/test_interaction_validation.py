@@ -1,5 +1,5 @@
 """
-Batch 311: Assertion and validation interaction tests.
+Assertion and validation interaction tests.
 Tests that editing validation logic or asserted conditions
 properly invalidates downstream cells.
 """

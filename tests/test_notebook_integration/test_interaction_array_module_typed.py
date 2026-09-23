@@ -1,4 +1,4 @@
-"""Batch 488: array module typed numeric arrays."""
+"""array module typed numeric arrays."""
 
 import pytest
 

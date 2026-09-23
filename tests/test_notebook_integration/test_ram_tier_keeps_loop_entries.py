@@ -1,6 +1,6 @@
 """A folder loop's per-file frames survive a later cell that overflows the RAM tier.
 
-Round 23, r23s2 (2026-09-14): ``for f in files: d = pd.read_csv(f)`` over 1,312
+Seen in a user's notebook: ``for f in files: d = pd.read_csv(f)`` over 1,312
 files, then a cleaning cell that cached a few full-table copies of the result.
 The copies pushed the RAM tier past its byte cap, and the cap evicted least
 recently used first -- every per-file frame, since the loop ran earlier. Those

@@ -1,4 +1,4 @@
-"""Batch 72: Advanced enum patterns — cash caching with Enum, Flag, IntEnum."""
+"""Advanced enum patterns — cash caching with Enum, Flag, IntEnum."""
 
 import textwrap
 

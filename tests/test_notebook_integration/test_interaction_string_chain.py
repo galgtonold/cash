@@ -1,4 +1,4 @@
-"""Batch 171 – String manipulation chain interaction tests.
+"""String manipulation chain interaction tests.
 
 Tests editing string processing pipelines across cells
 with transformations, formatting, and parsing.

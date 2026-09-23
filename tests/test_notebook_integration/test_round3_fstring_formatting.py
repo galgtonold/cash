@@ -1,4 +1,4 @@
-"""Batch 70: Complex f-strings & string formatting — cash caching with advanced formatting."""
+"""Complex f-strings & string formatting — cash caching with advanced formatting."""
 
 import textwrap
 

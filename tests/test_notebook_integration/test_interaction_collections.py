@@ -1,5 +1,5 @@
 """
-Batch 291: Collections module interaction tests (Counter, OrderedDict, defaultdict, namedtuple).
+Collections module interaction tests (Counter, OrderedDict, defaultdict, namedtuple).
 Tests that editing data fed into collections types properly invalidates downstream.
 """
 

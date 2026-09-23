@@ -1,12 +1,12 @@
-"""Round 21: in a plain top-to-bottom run the two lineage engines must agree.
+"""In a plain top-to-bottom run the two lineage engines must agree.
 
 The runtime records each variable's lineage as the statement runs; the upstream
 simulator recomputes it from the code above a cell. Wherever the two disagree,
 the next cell that reads the variable sees "changed" with nothing changed, and
-re-runs other cells' statements to "repair" it. In round 21 that re-ran a
+re-runs other cells' statements to "repair" it. That once re-ran a
 ``savefig`` without its plotting calls (a blank chart) and recomputed an
 ``auc_before`` against the refitted model (a wrong report), and made both
-notebook testers' projects slower with cash than without it.
+real projects slower with cash than without it.
 
 The notebook below is an ordinary project rather than an edge case: a CSV with
 a text column, a local helper module, pandas, a matplotlib chart saved to disk,
@@ -65,7 +65,7 @@ CELLS = [
     "def score(frame):\n"
     "    return float((frame['spend'] > THRESHOLD).mean())\n"
     # the result is named after an attribute the helper uses (`m.forecast(h)`
-    # assigned to `forecast` in a round-21 notebook)
+    # assigned to `forecast` in a real notebook)
     "def top_spend(frame):\n"
     "    return frame.spend.nlargest(3)\n"
     "spend = top_spend(df)\n"

@@ -1,8 +1,8 @@
-"""Replay what the round-22 and round-24 testers did, step by step, against a plain run.
+"""Replay real user sessions, step by step, against a plain run.
 
 See ``session_harness`` for the steps and what is checked after each, and
 ``sessions_r22`` for the sessions. Each session runs twice: with cash's
-defaults, and with every result persisted -- several round-22 bugs appeared
+defaults, and with every result persisted -- several bugs appeared
 only once a value was big or slow enough to reach the disk, which a small
 dataset alone never makes happen.
 """

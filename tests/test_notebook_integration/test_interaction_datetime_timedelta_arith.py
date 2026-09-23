@@ -1,4 +1,4 @@
-"""Batch 509: datetime timedelta and date arithmetic."""
+"""datetime timedelta and date arithmetic."""
 
 import pytest
 

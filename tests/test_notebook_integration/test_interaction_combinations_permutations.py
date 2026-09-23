@@ -1,4 +1,4 @@
-"""Batch 524: itertools combinations permutations."""
+"""itertools combinations permutations."""
 
 import pytest
 

@@ -1,4 +1,4 @@
-"""Batch 493: json dumps loads with custom encoder."""
+"""json dumps loads with custom encoder."""
 
 import pytest
 

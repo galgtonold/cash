@@ -1,4 +1,4 @@
-"""Batch 268 – Long chain dependency propagation (5+ cells).
+"""Long chain dependency propagation (5+ cells).
 
 Tests editing early cell in long chain, verifying final cell updates.
 """

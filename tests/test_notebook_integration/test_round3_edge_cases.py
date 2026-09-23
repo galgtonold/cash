@@ -1,5 +1,5 @@
 """
-Round 3 Batch 7: Extreme edge cases, working directory changes, pickling,
+Extreme edge cases, working directory changes, pickling,
 subprocess interactions, time-sensitive patterns, and multi-cell class hierarchies.
 
 These tests target the deepest corners of the caching system.

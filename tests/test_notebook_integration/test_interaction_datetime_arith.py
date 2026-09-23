@@ -1,6 +1,6 @@
 """
-Batch 298: Datetime arithmetic and formatting interaction tests.
-Tests editing datetime operations (different from batch 267's basic datetime test).
+Datetime arithmetic and formatting interaction tests.
+Tests editing datetime operations (beyond the basic datetime edit test).
 Focus on timedelta chains and date range generation.
 """
 

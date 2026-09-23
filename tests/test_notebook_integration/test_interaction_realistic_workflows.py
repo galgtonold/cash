@@ -1,4 +1,4 @@
-"""Batch 136 – Complex realistic interaction scenarios.
+"""Complex realistic interaction scenarios.
 
 End-to-end scenarios mimicking real data science workflows
 where users iterate on their analysis, changing parameters,

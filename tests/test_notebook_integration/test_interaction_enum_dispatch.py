@@ -1,4 +1,4 @@
-"""Batch 256 – Enum member editing and dispatch patterns.
+"""Enum member editing and dispatch patterns.
 
 Tests enum-based dispatch/mapping with edits.
 """

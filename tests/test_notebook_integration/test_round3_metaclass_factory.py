@@ -1,4 +1,4 @@
-"""Batch 89 – metaclass and class factory patterns."""
+"""metaclass and class factory patterns."""
 
 import textwrap
 

@@ -1,4 +1,4 @@
-"""Batch 65: Typing module & Protocol patterns — cash caching with type annotations."""
+"""Typing module & Protocol patterns — cash caching with type annotations."""
 
 import textwrap
 

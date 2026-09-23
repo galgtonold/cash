@@ -1,4 +1,4 @@
-"""Batch 181 – Property and descriptor pattern interaction tests.
+"""Property and descriptor pattern interaction tests.
 
 Tests editing property definitions, getters/setters,
 and descriptor protocols across cells.

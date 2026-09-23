@@ -1,4 +1,4 @@
-"""Batch 186 – Type conversion / coercion chain interaction tests.
+"""Type conversion / coercion chain interaction tests.
 
 Tests editing type conversions (int→str→float, etc.),
 serialization round-trips, and format changes.

@@ -81,7 +81,7 @@ class TestSamplingRerunIdempotence:
 
     def test_dataframe_tail_iloc_augment_rerun_idempotent(self, nb_runner):
         # DataFrame of 1000 rows: hashed as shape+dtypes+head(5); row 500 unsampled.
-        # CAS-54/55/56 fixed .loc self-writes -- this is the sampled-tail variant.
+        # Earlier fixes covered .loc self-writes -- this is the sampled-tail variant.
         _rerun_probe(
             nb_runner,
             "import pandas as pd\ndf = pd.DataFrame({'a': list(range(1000))})",

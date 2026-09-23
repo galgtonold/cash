@@ -1,28 +1,28 @@
-"""Round-24 testers' sessions, shrunk to a small dataset.
+"""More real user sessions, shrunk to a small dataset.
 
-``machine_alerts`` is r24s3's: hourly sensor files per machine, a cleaning cell
+``machine_alerts``: hourly sensor files per machine, a cleaning cell
 that blanks the hours after each maintenance event (``BLANK_AFTER_H``), a
 detector fitted per machine, a sweep over windows and thresholds built with
 ``sweep_rows.append`` (its scorer reads ``clean_h`` as a global), the best
 setting picked in the next cell, and an analysis of the alarm episodes below
 it. The blanking window is widened, the cleaning cell and the sweep are re-run,
-and the analysis is looked at without running the pick in between (r24s3
-WRONG: the analysis kept the pre-edit episodes, silently).
+and the analysis is looked at without running the pick in between (the
+analysis once kept the pre-edit episodes, silently).
 
-``region_pack`` is r24s2's: weekly sales per region, the house style set once
+``region_pack``: weekly sales per region, the house style set once
 with ``plt.rcParams.update``, one chart per region saved into a pack folder.
 Next morning the kernel is restarted and the charts are redrawn directly
-(r24s2 WRONG: every chart came out in matplotlib's default style), the style is
+(every chart once came out in matplotlib's default style), the style is
 changed, and the pack is rebuilt from an emptied folder.
 
-``doc_export`` is r24s4's: a folder of documents, a sample limit while
+``doc_export``: a folder of documents, a sample limit while
 developing, token counts exported per document with the file sizes printed
 through ``p.stat().st_size``. The sample limit is lifted and the export
-re-run (r24s4 WRONG: the printed sizes were the sample run's), a document is
+re-run (the printed sizes were once the sample run's), a document is
 re-delivered, and Restart & Run All.
 
 The expensive functions sleep past the 0.1 s persistence floor and log their
-calls, so what is cached in the tester's notebook is cached here too.
+calls, so what is cached in the original notebook is cached here too.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ SETUP = "import cash\n%cash_on"
 
 
 # ---------------------------------------------------------------------------
-# r24s3 -- machine failure alerts
+# machine failure alerts
 # ---------------------------------------------------------------------------
 
 
@@ -130,14 +130,14 @@ ALERTS = (
 )
 
 MACHINE_ALERTS = Session(
-    name="r24s3 machine alerts",
+    name="machine_alerts",
     cells=ALERTS,
     files=ALERT_FILES,
     steps=(
         RunAll(),
         # Widen the blanking window, re-run the cleaning and the sweep, then
         # look at the analysis without running the pick in between
-        # (r24s3 WRONG: the analysis showed the pre-edit episodes).
+        # (the analysis once showed the pre-edit episodes).
         Edit("clean", lambda s: s.replace("BLANK_AFTER_H = 24", "BLANK_AFTER_H = 60")),
         Run("clean"),
         Run("sweep"),
@@ -153,7 +153,7 @@ MACHINE_ALERTS = Session(
 
 
 # ---------------------------------------------------------------------------
-# r24s2 -- regional sales pack
+# regional sales pack
 # ---------------------------------------------------------------------------
 
 
@@ -212,13 +212,13 @@ PACK = (
 )
 
 REGION_PACK = Session(
-    name="r24s2 region pack",
+    name="region_pack",
     cells=PACK,
     files=(("sales.csv", _sales()),),
     steps=(
         RunAll(),
         # Next morning: restart and redraw the charts directly
-        # (r24s2 WRONG: every chart came out in the default style).
+        # (every chart once came out in the default style).
         Restart(),
         Run("charts", calls={"vs_plan": 0}),
         # The style is changed; redraw.
@@ -233,7 +233,7 @@ REGION_PACK = Session(
 
 
 # ---------------------------------------------------------------------------
-# r24s4 -- document export
+# document export
 # ---------------------------------------------------------------------------
 
 _WORDS = ("invoice", "delivery", "contract", "payment", "late", "refund", "order", "account")
@@ -282,13 +282,13 @@ EXPORT = (
 )
 
 DOC_EXPORT = Session(
-    name="r24s4 doc export",
+    name="doc_export",
     cells=EXPORT,
     files=DOC_FILES,
     steps=(
         RunAll(),
         # Lift the sample limit and export again
-        # (r24s4 WRONG: the printed sizes were the sample run's).
+        # (the printed sizes were once the sample run's).
         Edit("load", lambda s: s.replace("SAMPLE = 3", "SAMPLE = None")),
         Run("load"),
         Run("export"),

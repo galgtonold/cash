@@ -1,5 +1,5 @@
 """
-Batch 34: Tricky multi-cell variable shadowing, reassignment, deletion,
+Tricky multi-cell variable shadowing, reassignment, deletion,
 and scope interactions that stress the lineage tracker.
 """
 

@@ -1,4 +1,4 @@
-"""Batch 453: class __repr__ and __str__ methods."""
+"""class __repr__ and __str__ methods."""
 
 import pytest
 

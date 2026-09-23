@@ -1,4 +1,4 @@
-"""Batch 201 – Assertion and debugging print interaction tests.
+"""Assertion and debugging print interaction tests.
 
 Tests editing assert statements, debug prints, and
 conditional debugging output.

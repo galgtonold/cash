@@ -1,10 +1,10 @@
 """Integration tests for caching top-level-await (autoawait) cell results.
 
-CAS-116 (CAS-92 stage 2): a cell that runs ``x = await slow()`` through
+Stage 2: a cell that runs ``x = await slow()`` through
 IPython's autoawait path must CACHE the awaited result, so an identical second
 run is a cache HIT that skips the await entirely — not a recompute.
 
-Stage 1 (CAS-92) only restored *correctness* (upstream reconstruction +
+Stage 1 only restored *correctness* (upstream reconstruction +
 self-modifying-reassignment reset) for these cells while still recomputing on
 every run.  These tests pin the stage-2 behaviour:
 

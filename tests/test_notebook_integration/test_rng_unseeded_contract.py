@@ -1,4 +1,4 @@
-"""The full contract for an UNSEEDED draw across re-runs (CAS-229).
+"""The full contract for an UNSEEDED draw across re-runs.
 
 Re-running an unseeded draw reprints the SAME number. That is deliberate — the
 documented "non-determinism is frozen, not blocked" rule — because unseeded
@@ -60,7 +60,7 @@ def test_frozen_draw_tells_the_user(nb_runner):
 
     It lands on the FIRST run and is then deduped — once per statement per
     session, deliberately, so a re-run is not flooded with a warning class users
-    would learn to filter wholesale (CAS-114). Note a cheap draw never produces
+    would learn to filter wholesale. Note a cheap draw never produces
     the *replay* warning, which is gated on an actual cache restore: it is under
     the persistence floor and re-executes instead. The compute-time warning is
     the only one it gets, which is why this pins that one.

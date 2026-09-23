@@ -1,4 +1,4 @@
-"""Batch 491: copy deepcopy nested mutable objects."""
+"""copy deepcopy nested mutable objects."""
 
 import pytest
 

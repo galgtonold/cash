@@ -1,4 +1,4 @@
-"""Batch 188 – Import alias and module-level function interaction tests.
+"""Import alias and module-level function interaction tests.
 
 Tests editing import aliases, switching between import styles,
 and using module-level functions with edits.

@@ -1,4 +1,4 @@
-"""Batch 446: string removeprefix and removesuffix (3.9+)."""
+"""string removeprefix and removesuffix (3.9+)."""
 
 import pytest
 

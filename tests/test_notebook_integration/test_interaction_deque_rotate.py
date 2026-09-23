@@ -1,5 +1,5 @@
 """
-Batch 318: collections.deque rotation and operation patterns with caching.
+collections.deque rotation and operation patterns with caching.
 Tests deque creation, rotate, appendleft, and edit propagation.
 """
 

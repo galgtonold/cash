@@ -1,4 +1,4 @@
-"""Batch 431: class inheritance and method resolution order."""
+"""class inheritance and method resolution order."""
 
 import pytest
 

@@ -1,4 +1,4 @@
-"""Batch 107 – Function & class redefinition interaction tests.
+"""Function & class redefinition interaction tests.
 
 Tests that exercise function/class redefinition across cells,
 combined with cell edits, reruns, and kernel restarts.

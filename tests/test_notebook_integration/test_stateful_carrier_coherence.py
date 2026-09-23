@@ -1,4 +1,4 @@
-"""CAS-175 / CAS-178: the sim must never re-execute a SUBSET of a carrier's history.
+"""The sim must never re-execute a SUBSET of a carrier's history.
 
 Both tickets are one defect. The dependency model tracks **value lineage**; a
 statement can depend on a predecessor through an object's *internal* state --
@@ -19,7 +19,7 @@ chart corruption is only observable by reading the PNG from outside the kernel.
 
 Note on scope. Carrier-history completion only ever fires for a write the plan
 ALREADY schedules, and reconstruction is scoped to files a relevant consumer
-reads (CAS-193/196/200) -- a writer whose output nothing reads is a terminal
+reads -- a writer whose output nothing reads is a terminal
 side effect and is never re-fired. So the chart tests below come in a pair: one
 drives the redraw through a genuine reader of the PNG, the other pins that an
 unrelated cell leaves the artifact alone even after an upstream edit. Demanding
@@ -36,7 +36,7 @@ pytestmark = [pytest.mark.upstream, pytest.mark.timeout(120)]
 
 
 # ----------------------------------------------------------------------
-# CAS-178 -- seeded RNG redrawn from an already-advanced generator
+# Seeded RNG redrawn from an already-advanced generator
 # ----------------------------------------------------------------------
 
 
@@ -115,7 +115,7 @@ def test_seeded_rng_unedited_notebook_is_not_disturbed(nb_runner):
 
 
 # ----------------------------------------------------------------------
-# CAS-175 -- builder rebuilt + re-saved without the statements that fill it
+# Builder rebuilt + re-saved without the statements that fill it
 # ----------------------------------------------------------------------
 
 
@@ -180,9 +180,7 @@ def test_builder_chart_on_disk_survives_an_unrelated_cell(nb_runner, tmp_path):
     # THE assertion: an unrelated cell must not touch the user's artifact.
     nb_runner.run_cell(4)
     after_unrelated = hashlib.md5(chart.read_bytes()).hexdigest()
-    assert after_unrelated != truth_blank, (
-        "running an UNRELATED cell silently overwrote the chart with a blank image (CAS-175)"
-    )
+    assert after_unrelated != truth_blank, "running an UNRELATED cell silently overwrote the chart with a blank image"
     assert after_unrelated == after_runall, "running an unrelated cell changed the chart on disk"
 
 
@@ -196,8 +194,8 @@ def test_builder_edit_redraws_coherently_when_the_chart_is_consumed(nb_runner, t
     [3, 5, 2] bars on disk and still pass a "not blank" check.
 
     The consuming cell READS the chart, which is what puts the write in scope.
-    Reconstruction is scoped to files a relevant consumer actually reads
-    (CAS-193/196/200): a writer whose output nothing reads is a terminal side
+    Reconstruction is scoped to files a relevant consumer actually reads:
+    a writer whose output nothing reads is a terminal side
     effect and is deliberately never re-fired, so an *unrelated* cell cannot
     reach this path at all -- see the companion test below, which pins that.
     Asserting the redraw through a genuine reader is therefore the only way to
@@ -233,7 +231,7 @@ def test_builder_edit_redraws_coherently_when_the_chart_is_consumed(nb_runner, t
     redrawn = hashlib.md5(chart.read_bytes()).hexdigest()
     assert redrawn != truth_blank, (
         "the re-derived chart is BLANK: fig.savefig was re-executed without the "
-        "ax.bar/ax.set_title that fill the figure (CAS-175)"
+        "ax.bar/ax.set_title that fill the figure"
     )
     assert redrawn == truth_new, (
         "the re-derived chart does not reflect the edited data -- the carrier's history was re-executed incoherently"
@@ -250,7 +248,7 @@ def test_unrelated_cell_leaves_the_chart_alone_even_after_an_edit(nb_runner, tmp
     notebook sense -- the user re-runs the plot cell -- rather than silently
     rewritten behind their back.
 
-    This is the direction CAS-193/196/200 settled, and it is not merely
+    This is the direction the reconstruction-scope fixes settled, and it is not merely
     stylistic: re-firing out-of-scope writers duplicates a line in a
     ``mode='a'`` audit log, which corrupts a file rather than staling one.
     """
@@ -278,7 +276,7 @@ def test_unrelated_cell_leaves_the_chart_alone_even_after_an_edit(nb_runner, tmp
     assert chart.read_bytes() == before, (
         "running an unrelated cell rewrote the user's chart after an upstream "
         "edit; reconstruction must not re-fire a write no consumer reads "
-        "(CAS-193/196/200)"
+        "(see test_reconstruction_scope.py)"
     )
     # Suppressing the out-of-scope WRITE must not suppress the value the cell
     # genuinely depends on: the edit still has to reach grand_total.

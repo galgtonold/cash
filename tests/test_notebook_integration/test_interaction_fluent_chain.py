@@ -1,4 +1,4 @@
-"""Batch 257 – Chained method calls and fluent interface patterns.
+"""Chained method calls and fluent interface patterns.
 
 Tests method chaining / builder patterns with edits.
 """

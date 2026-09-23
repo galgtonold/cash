@@ -1,4 +1,4 @@
-"""Batch 495: collections deque maxlen and rotate."""
+"""collections deque maxlen and rotate."""
 
 import pytest
 

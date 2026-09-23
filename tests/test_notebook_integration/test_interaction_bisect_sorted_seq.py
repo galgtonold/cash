@@ -1,4 +1,4 @@
-"""Batch 420: bisect module for sorted sequence operations."""
+"""bisect module for sorted sequence operations."""
 
 import pytest
 

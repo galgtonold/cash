@@ -1,4 +1,4 @@
-"""Batch 370: object copying (copy, deepcopy) with modifications."""
+"""object copying (copy, deepcopy) with modifications."""
 
 import pytest
 

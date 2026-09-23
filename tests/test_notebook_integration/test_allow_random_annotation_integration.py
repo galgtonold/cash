@@ -1,6 +1,6 @@
 """Real-kernel coverage for unseeded-randomness warnings / ``# @cash:allow-random``.
 
-CAS-114. The unit twin (``tests/test_notebook/test_allow_random_annotation.py``)
+The unit twin (``tests/test_notebook/test_allow_random_annotation.py``)
 asserts on the warning object via ``pytest.warns``. This file asserts the thing a
 user actually experiences: that the warning **reaches the notebook's cell output**
 through a real kernel, and that the directive silences it there.

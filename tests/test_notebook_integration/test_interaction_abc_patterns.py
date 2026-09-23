@@ -1,4 +1,4 @@
-"""Batch 248 – Abstract base class patterns.
+"""Abstract base class patterns.
 
 Tests ABC with concrete implementations, edit propagation.
 """

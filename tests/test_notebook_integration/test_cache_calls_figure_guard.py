@@ -1,4 +1,4 @@
-"""A cached call must not hijack pyplot's current figure (CAS-243).
+"""A cached call must not hijack pyplot's current figure.
 
 Found by adversarial probing, and it wrote a genuinely wrong PNG.
 

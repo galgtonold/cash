@@ -1,4 +1,4 @@
-"""Batch 376: multiple exception handling with else and chained raises."""
+"""multiple exception handling with else and chained raises."""
 
 import pytest
 

@@ -1,4 +1,4 @@
-"""Batch 348: nested function definitions and closures with edits."""
+"""nested function definitions and closures with edits."""
 
 import pytest
 

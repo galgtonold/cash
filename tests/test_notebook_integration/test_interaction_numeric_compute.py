@@ -1,4 +1,4 @@
-"""Batch 236 – Numeric computation and math pattern edit tests.
+"""Numeric computation and math pattern edit tests.
 
 Tests editing cells with numeric computations, math operations,
 and scientific-style calculations.

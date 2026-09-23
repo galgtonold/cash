@@ -1,4 +1,4 @@
-"""Batch 241 – Recursive function edit propagation.
+"""Recursive function edit propagation.
 
 Tests editing recursive functions and verifying downstream re-evaluation.
 """

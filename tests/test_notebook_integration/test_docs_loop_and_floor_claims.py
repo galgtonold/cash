@@ -67,7 +67,7 @@ def _recomputed_after(nb_runner, tmp_path, tag, edited, directive=""):
 def test_reuse_is_a_prefix_property_by_default(nb_runner, tmp_path):
     """The table on notebook-path.md, row for row -- the CURRENT default.
 
-    Call-level caching (on by default, CAS-243) makes ``compute(ticker)``
+    Call-level caching (on by default) makes ``compute(ticker)``
     hit regardless of which iteration it's attached to, even though the
     STATEMENT itself (keyed on the dict as previous iterations left it) still
     re-executes for every iteration from the edit onward. So editing the

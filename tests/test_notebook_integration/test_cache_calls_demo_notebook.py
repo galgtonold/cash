@@ -1,4 +1,4 @@
-"""examples/cache_calls_demo.ipynb must behave the way its prose says (CAS-243).
+"""examples/cache_calls_demo.ipynb must behave the way its prose says.
 
 Call-level caching is on by DEFAULT now (task 10); the notebook was rewritten
 to demonstrate that, with ``# @cash:no-cache-calls`` as the escape hatch shown
@@ -71,7 +71,7 @@ def _sub_calls(out: str) -> list[tuple[int, int]]:
     """The badge's ``sub-call compute(x): n/1 hit`` rows, as (hits, total).
 
     This is the notebook's work signal, and it replaced ``len(CALLS)``.
-    ``CALLS`` is a global written from inside ``compute``'s body, so CAS-260/265
+    ``CALLS`` is a global written from inside ``compute``'s body, so cash
     captures it per call and restores it on a hit: a served call reproduces its
     append without executing. That is the feature working -- the observable
     state matches an uncached run either way -- and it means the counter cannot
@@ -95,7 +95,7 @@ def _sub_calls(out: str) -> list[tuple[int, int]]:
         stripped = line.lstrip()
         # Any row line marks a new owner -- including an uncacheable one,
         # whose label is "NOT CACHED:" and which "CACHED:" deliberately
-        # matches. Before CAS-272 renamed the labels, such a row said
+        # matches. Before the labels were renamed, such a row said
         # COMPUTED and was caught by the same scan.
         if "EXECUTED:" in stripped or "CACHED:" in stripped:
             owner_is_upstream = stripped.startswith("^")

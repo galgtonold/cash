@@ -1,6 +1,6 @@
 """A value a later statement of the same cell replaces stays in RAM.
 
-Round 24's r24s2 cleaned ``sales`` in one cell, rebuilding the ~500 MB frame
+A user cleaned ``sales`` in one cell, rebuilding the ~500 MB frame
 statement by statement (drop duplicates, parse timestamps, fix a till clock,
 merge two lookups). Each version that cleared the persistence floor was
 pickled to disk as it was made -- 3.8 s of a cold run -- though the next

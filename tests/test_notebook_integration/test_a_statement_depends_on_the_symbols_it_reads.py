@@ -1,7 +1,6 @@
 """Editing one function in a module re-runs only what reads that function.
 
-Round 27, r27s2 (ANNOYING, measured 2.8x then 9.1x): editing one helper in
-their project module re-read all 10,000 ticket files after a restart, because
+Measured 2.8x then 9.1x: editing one helper in a user's project module re-read all 10,000 ticket files after a restart, because
 the load statement -- `corpus = tl.load_corpus(ROOT, MONTH)` -- was keyed on
 the WHOLE module, and the module had changed. The load function had not.
 
@@ -281,7 +280,7 @@ class TestAcrossARestart:
 
     @LOAD_SENSITIVE
     def test_an_unrelated_edit_across_a_restart_is_still_free(self, nb_runner, tmp_path):
-        """r27s2's actual sequence: edit a helper, next session, jump down."""
+        """The reported sequence: edit a helper, next session, jump down."""
         path = _notebook(nb_runner, tmp_path, "symrs2", "import symrs2 as r2", "r2")
 
         nb_runner.restart()

@@ -1,4 +1,4 @@
-"""Batch 517: context manager class enter exit pattern."""
+"""context manager class enter exit pattern."""
 
 import pytest
 

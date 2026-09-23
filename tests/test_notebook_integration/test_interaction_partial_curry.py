@@ -1,5 +1,5 @@
 """
-Batch 305: Partial application and currying interaction tests.
+Partial application and currying interaction tests.
 Tests that editing partial functions and curried arguments properly
 invalidates downstream computations.
 """

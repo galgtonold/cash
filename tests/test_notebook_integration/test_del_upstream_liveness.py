@@ -1,4 +1,4 @@
-"""CAS-94: position-aware liveness for ``del`` in upstream reconstruction.
+"""position-aware liveness for ``del`` in upstream reconstruction.
 
 ``del x`` is invisible to cash's AST-output analysis (it produces no Store
 target) and removes ``x`` from the live namespace while leaving a stale
@@ -71,7 +71,7 @@ def test_consumer_below_del_stays_dead(nb_runner):
     Covers both run_all and an isolated re-run of the below-del cell. The del
     sits ABOVE the consumer, so cash must leave the name dead in both — never
     over-resurrect. The NameError surfaces in the raised CellExecutionError
-    (matching the CAS-62 sibling's assertion style, which does not rely on
+    (matching the sibling test's assertion style, which does not rely on
     error text being captured into the cell's structured outputs).
     """
     nb_runner.create_notebook(

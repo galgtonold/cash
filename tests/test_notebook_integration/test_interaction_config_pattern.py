@@ -1,4 +1,4 @@
-"""Batch 197 – Global config pattern interaction tests.
+"""Global config pattern interaction tests.
 
 Tests editing a global config dict and verifying that
 downstream cells that depend on it update correctly.

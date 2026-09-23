@@ -1,5 +1,5 @@
 """
-Batch 317: bytes encoding and decoding patterns with caching.
+bytes encoding and decoding patterns with caching.
 Tests str.encode, bytes.decode, hex conversion, and edit propagation.
 """
 

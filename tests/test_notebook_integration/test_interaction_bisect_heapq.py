@@ -1,5 +1,5 @@
 """
-Batch 285: Bisect/heapq interaction tests.
+Bisect/heapq interaction tests.
 Tests that editing sorted data or heap structures properly invalidates
 downstream lookups and extractions.
 """

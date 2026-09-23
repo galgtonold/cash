@@ -1,4 +1,4 @@
-"""Batch 86 – decimal and fractions precision arithmetic."""
+"""decimal and fractions precision arithmetic."""
 
 import textwrap
 

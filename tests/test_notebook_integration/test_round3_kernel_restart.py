@@ -1,5 +1,5 @@
 """
-Round 3 - Batch 8: Kernel restart, disk restore, and complex upstream patterns.
+Kernel restart, disk restore, and complex upstream patterns.
 
 Tests focusing on:
 1. Kernel restart with disk-backed caching (persist annotation)

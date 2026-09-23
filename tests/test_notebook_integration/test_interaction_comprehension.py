@@ -1,5 +1,5 @@
 """
-Batch 301: Comprehension variants interaction tests.
+Comprehension variants interaction tests.
 Tests dict comprehension, set comprehension, and nested comprehension
 patterns with cache invalidation.
 """

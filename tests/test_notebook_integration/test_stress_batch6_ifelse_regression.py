@@ -1,5 +1,5 @@
 """
-Stress Test Batch 6: If/Else Branch Regression Tests (166-180)
+Stress tests: If/Else Branch Regression Tests (166-180)
 
 These specifically test the if/else branch switch bug that was found and fixed
 in _simulate_if in upstream.py. The bug was that the upstream simulation evaluated

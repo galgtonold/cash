@@ -1,4 +1,4 @@
-"""Batch 195 – Multi-cell class composition (has-a) interaction tests.
+"""Multi-cell class composition (has-a) interaction tests.
 
 Tests where one class has another class as a member,
 and edits propagate through the composition.

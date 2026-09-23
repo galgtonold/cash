@@ -1,4 +1,4 @@
-"""Batch 166 – Try/except/finally interaction tests.
+"""Try/except/finally interaction tests.
 
 Tests editing code within try/except blocks, changing exception
 types, and modifying finally clauses.

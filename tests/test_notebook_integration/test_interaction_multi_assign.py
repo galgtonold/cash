@@ -1,4 +1,4 @@
-"""Batch 187 – Multi-assignment & augmented assignment interaction tests.
+"""Multi-assignment & augmented assignment interaction tests.
 
 Tests editing multi-target assignments, augmented assignments (+=, *=),
 and walrus operator patterns.

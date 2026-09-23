@@ -1,5 +1,5 @@
 """Mutating an upstream object through a bare ``y = x`` alias must reset the
-upstream holder on an isolated re-run, not accumulate (CAS-60).
+upstream holder on an isolated re-run, not accumulate.
 
 `y = x` shares x's object, so `y.append(99)` also mutates x. The mutation was
 attributed to the in-cell alias `y` (which has no producer to restore from), so
@@ -51,7 +51,7 @@ def test_tuple_unpack_alias(nb_runner):
 
 
 def test_alias_bound_in_for_body(nb_runner):
-    # Alias formed AND mutated inside a loop body (CAS-61) — scanned via the
+    # Alias formed AND mutated inside a loop body — scanned via the
     # cell-wide alias map that descends into control bodies.
     _rerun(nb_runner, "x = [1, 2, 3]", "for _ in range(1):\n    y = x\n    y.append(99)\nprint(x)", "[1, 2, 3, 99]")
 
@@ -76,7 +76,7 @@ def test_copy_is_not_alias_preserved(nb_runner):
 
 
 # --- lineage-carrying (DataFrame) aliases: the source must join the selfref /
-# method-receiver sets so the CAS-54/57 force-reset fires through the alias ----
+# method-receiver sets so the force-reset fires through the alias -------------
 
 _DF = "import pandas as pd\ndf = pd.DataFrame({'a': [1, 2, 3]})"
 
@@ -99,6 +99,6 @@ def test_df_alias_inplace_method_nonidempotent(nb_runner):
 
 
 def test_df_alias_newcol_preserved(nb_runner):
-    """CAS-42 via alias: a new column derived from OTHER columns through an alias
+    """Via an alias: a new column derived from OTHER columns through an alias
     is not self-referential and stays correct on re-run."""
     _rerun(nb_runner, _DF, "df2 = df\ndf2['b'] = df2['a'] + 1\nprint(df['b'].tolist())", "[2, 3, 4]")

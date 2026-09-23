@@ -1,4 +1,4 @@
-"""Batch 382: recursive data structures (trees, nested dicts)."""
+"""recursive data structures (trees, nested dicts)."""
 
 import pytest
 

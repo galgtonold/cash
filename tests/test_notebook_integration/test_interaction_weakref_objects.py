@@ -1,4 +1,4 @@
-"""Batch 486: weakref and weak references to objects."""
+"""weakref and weak references to objects."""
 
 import pytest
 

@@ -1,4 +1,4 @@
-"""Batch 137 – Nested function and closure interaction tests.
+"""Nested function and closure interaction tests.
 
 Tests where users define functions in one cell and call them in another,
 then modify the function definition and verify downstream cells update.

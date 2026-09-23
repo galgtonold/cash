@@ -1,6 +1,6 @@
 """A call whose callee uses a library function is still keyed on what it receives.
 
-Round 25's r25s4: adding a column to ``docs`` (``docs["topic"] = ...``) or
+Adding a column to ``docs`` (``docs["topic"] = ...``) or
 fixing the titles re-ran the vectorise cell, as it should -- ``docs`` changed --
 but ``fit_vectors(docs['text'], SEED)`` re-fitted TF-IDF and SVD on byte-
 identical text (``0/1 hit``), and every ``cluster_k(Z, k, SEED)`` after it.

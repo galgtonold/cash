@@ -1,6 +1,6 @@
 """An upstream edit reaches a cell that writes into the same frame in place.
 
-Round 23 (r23s4, silent WRONG, 3/3). ``docs`` is loaded in cell 1 and cleaned
+A silent wrong result, reproduced 3/3. ``docs`` is loaded in cell 1 and cleaned
 in cell 2; cell 3 adds a column in place (``docs["n_chars"] = ...``). After
 cell 2 was edited -- a filter, or a changed cleaning step -- running cell 3
 printed the pre-edit frame: cell 2 was never replayed. A cell 3 that does not

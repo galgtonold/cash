@@ -1,5 +1,5 @@
 """
-Batch 102 — Out-of-order execution & re-execution patterns.
+Out-of-order execution & re-execution patterns.
 
 Tests that exercise:
 - Running cells in non-sequential order

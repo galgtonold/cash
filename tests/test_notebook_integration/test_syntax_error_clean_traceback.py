@@ -1,4 +1,4 @@
-"""CAS-156: a user error under %cash_on must show a CLEAN traceback.
+"""A user error under %cash_on must show a CLEAN traceback.
 
 When a cell has a plain ``SyntaxError`` (or an upstream cell fails at runtime),
 cash used to inject its OWN internal frames (``analysis.py``,
@@ -87,7 +87,7 @@ def test_syntax_error_after_upstream_resolution_is_clean(nb_runner):
 
 
 def test_upstream_failure_keeps_intentional_cause_but_not_accidental_chain(nb_runner):
-    """Regression for the deliberate CAS-87 / CAS-153 path.
+    """Regression for the deliberate upstream-failure path.
 
     An upstream edit that makes a downstream cell fail must STILL surface both
     ``UpstreamStateError`` and the real underlying cause (the undefined name) —

@@ -1,4 +1,4 @@
-"""Batch 115 – Multi-statement cell interaction tests.
+"""Multi-statement cell interaction tests.
 
 Tests that exercise cells with multiple statements, where edits
 modify only some statements within a cell.

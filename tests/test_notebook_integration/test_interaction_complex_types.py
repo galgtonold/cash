@@ -1,4 +1,4 @@
-"""Batch 118 – Complex data types + cell edit interaction tests.
+"""Complex data types + cell edit interaction tests.
 
 Tests that exercise cache behavior with complex data types:
 dicts, lists, nested structures, sets, tuples, etc.

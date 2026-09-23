@@ -1,4 +1,4 @@
-"""Batch 174 – Out-of-order execution interaction tests.
+"""Out-of-order execution interaction tests.
 
 Tests executing cells in non-sequential order and verifying
 that cash correctly handles the dependency tracking.

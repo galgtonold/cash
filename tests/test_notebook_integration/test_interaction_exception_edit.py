@@ -1,4 +1,4 @@
-"""Batch 250 – Exception hierarchy and error handling edits.
+"""Exception hierarchy and error handling edits.
 
 Tests custom exception classes and try/except flow with edits.
 """

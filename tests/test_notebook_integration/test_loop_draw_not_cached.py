@@ -1,6 +1,6 @@
-"""CAS-220 blast-radius guard: fixing in-loop draws must not stop loops caching.
+"""Blast-radius guard: fixing in-loop draws must not stop loops caching.
 
-The CAS-220 defect itself (a chart drawn inside a ``for`` body is silently
+The in-loop draw defect itself (a chart drawn inside a ``for`` body is silently
 written blank on warm re-runs) is NOT covered here, and deliberately so: this
 suite drives ``NotebookClient``, which does not reproduce it. A test written
 here passes with and without the fix and would be pure decoration. The bug's
@@ -8,7 +8,7 @@ oracle is the real-jupyter-server reproducer (`repro_blank_charts_min3.py`);
 the mechanism is pinned by unit tests in
 ``tests/test_notebook/test_loop_draw_receiver_routing.py``.
 
-What this file DOES cover is the other side of the fix. CAS-220 is repaired by
+What this file DOES cover is the other side of the fix. The defect is repaired by
 routing in-loop method calls to skip-cache when the receiver is a live
 Figure/Axes. If that condition were drawn any wider it would disable
 per-iteration caching for ordinary loop bodies -- trading a correctness bug for
@@ -60,7 +60,7 @@ def test_a_loop_calling_a_dataframe_method_still_caches(nb_runner):
 
     ``df.head()`` is a genuinely receiver-pure call. The identity-coupled
     predicate must return False for a DataFrame, so this loop is untouched by
-    the fix -- the same discriminator CAS-194 used to tell ``ax.hist()`` (draws)
+    the fix -- the same discriminator used to tell ``ax.hist()`` (draws)
     apart from ``df.hist()`` (pure).
     """
     pytest.importorskip("pandas")

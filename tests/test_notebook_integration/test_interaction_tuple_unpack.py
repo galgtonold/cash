@@ -1,4 +1,4 @@
-"""Batch 178 – Tuple unpacking and multi-return interaction tests.
+"""Tuple unpacking and multi-return interaction tests.
 
 Tests editing functions that return tuples, and editing
 unpacking patterns in downstream cells.

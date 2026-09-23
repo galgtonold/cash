@@ -4,8 +4,8 @@ The quickstart's first cell is ``import cash`` then ``%cash_on``, and nearly
 everyone puts their imports and paths there too. Cash was not listening when
 that cell started, so nothing recorded what ``DATA = Path(...)`` produced: the
 name had no lineage, and the first statement to read it was refused as
-``NOT CACHED ... - Input variable missing lineage``. Round 27: r27s1's two
-loads cached NOTHING until the tester split cell 0 in two; r27s4 got the same
+``NOT CACHED ... - Input variable missing lineage``. One notebook's two loads
+cached NOTHING until its author split cell 0 in two; another got the same
 reason on two statements and could not act on it.
 
 Measured 2026-09-21 on the round's build: the first reader of ``DATA`` / ``N``

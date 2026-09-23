@@ -1,4 +1,4 @@
-"""CAS-147: prove the kernelspec guard actually fires.
+"""Prove the kernelspec guard actually fires.
 
 Every runner in this package boots ``kernel_name='python3'``, resolved by
 KernelSpecManager from the user/system Jupyter paths rather than from

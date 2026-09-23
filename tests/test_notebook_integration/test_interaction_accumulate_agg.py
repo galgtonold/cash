@@ -1,4 +1,4 @@
-"""Batch 272 – List accumulation and cross-cell aggregation.
+"""List accumulation and cross-cell aggregation.
 
 Tests patterns where data is built across multiple cells then aggregated.
 """

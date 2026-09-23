@@ -1,5 +1,5 @@
-"""Hidden mutation through the descriptor protocol must reset on isolated re-run
-(CAS-77, extends CAS-70). An attribute ASSIGN (``c.x = v``) or attribute LOAD
+"""Hidden mutation through the descriptor protocol must reset on isolated re-run.
+An attribute ASSIGN (``c.x = v``) or attribute LOAD
 (``v = m.now``) dispatches to a user ``@property`` setter/getter or a
 data-descriptor ``__set__`` / ``__get__`` whose body mutates hidden state; on an
 isolated re-run it accumulates.

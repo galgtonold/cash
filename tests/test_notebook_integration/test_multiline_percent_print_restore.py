@@ -1,4 +1,4 @@
-"""CAS-163: a multi-line ``%``-format ``print(...)`` in a cell must not disable
+"""A multi-line ``%``-format ``print(...)`` in a cell must not disable
 cache restore for that cell.
 
 The magic-stripper used by the upstream simulator dropped any physical line
@@ -55,9 +55,7 @@ def test_multiline_percent_print_cell_restores(nb_runner):
     # Isolated re-run: inputs unchanged -> must be a cache hit.
     nb_runner.run_cell(3)
     out = nb_runner.get_output(3)
-    assert shows_cached(out), (
-        f"cell with a multi-line %-format print did not restore from cache (CAS-163). Badge output:\n{out}"
-    )
+    assert shows_cached(out), f"cell with a multi-line %-format print did not restore from cache. Badge output:\n{out}"
     # And the formatted output is still produced.
     assert "Asian call =" in out
 

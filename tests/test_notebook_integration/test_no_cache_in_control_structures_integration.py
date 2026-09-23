@@ -1,6 +1,6 @@
 """Real-kernel coverage for ``@cash:`` annotations inside control structures.
 
-CAS-135 hole 3. ``# @cash:no-cache`` is the documented escape hatch for the
+``# @cash:no-cache`` is the documented escape hatch for the
 deliberate "unseeded randomness is cached" policy (badges.md: *"If you want it to
 re-run every time, say so explicitly"*). It worked on a top-level statement and
 was **silently ignored** inside a loop body — no error, no warning, no badge

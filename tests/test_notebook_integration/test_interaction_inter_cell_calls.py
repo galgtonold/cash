@@ -1,4 +1,4 @@
-"""Batch 184 – Inter-cell function call interaction tests.
+"""Inter-cell function call interaction tests.
 
 Tests with functions defined in one cell that call functions
 from another cell, with edits at various levels.

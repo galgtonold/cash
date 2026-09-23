@@ -1,4 +1,4 @@
-"""Batch 442: list slicing advanced patterns."""
+"""list slicing advanced patterns."""
 
 import pytest
 

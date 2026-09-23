@@ -1,4 +1,4 @@
-"""Batch 263 – Boolean logic and condition edits.
+"""Boolean logic and condition edits.
 
 Tests boolean operations, conditions, short-circuit edits.
 """

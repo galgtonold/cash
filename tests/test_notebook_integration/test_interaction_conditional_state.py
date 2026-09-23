@@ -1,4 +1,4 @@
-"""Batch 172 – Multi-cell conditional branching with shared state.
+"""Multi-cell conditional branching with shared state.
 
 Tests where conditional logic spans multiple cells, with shared
 state that changes based on which branch was taken, and edits

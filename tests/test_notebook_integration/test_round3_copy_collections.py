@@ -1,5 +1,5 @@
 """
-Batch 40: Weakref, copy, and memory management patterns across cells.
+Weakref, copy, and memory management patterns across cells.
 """
 
 import textwrap

@@ -1,4 +1,4 @@
-"""Batch 80: State machine patterns — cash caching with FSM implementations."""
+"""State machine patterns — cash caching with FSM implementations."""
 
 import textwrap
 

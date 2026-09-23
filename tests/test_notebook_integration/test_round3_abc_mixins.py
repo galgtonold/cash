@@ -1,4 +1,4 @@
-"""Batch 66: Abstract base classes & mixins — cash caching with ABC patterns."""
+"""Abstract base classes & mixins — cash caching with ABC patterns."""
 
 import textwrap
 

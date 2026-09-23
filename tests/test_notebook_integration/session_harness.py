@@ -1,9 +1,9 @@
-"""Replay a tester's working session on a small notebook, checking every step.
+"""Replay a user's working session on a small notebook, checking every step.
 
-A round of human-style testers found what the regression suite could not:
+Human-style testing found what the regression suite could not:
 bugs that need a SEQUENCE -- edit a cell, look at another one first, restart,
 a file re-delivered overnight -- or two conditions at once (a read inside a
-helper AND a morning restore). Each session here scripts what one tester did
+helper AND a morning restore). Each session here scripts what one user did
 on their real project, shrunk to a small dataset, as a list of steps:
 
     Run("export")                  run one cell, the way a user jumps to it

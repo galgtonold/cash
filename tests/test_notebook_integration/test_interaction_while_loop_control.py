@@ -1,4 +1,4 @@
-"""Batch 357: while loop with break/continue and state accumulation."""
+"""while loop with break/continue and state accumulation."""
 
 import pytest
 

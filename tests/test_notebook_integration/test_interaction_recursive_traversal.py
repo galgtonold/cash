@@ -1,5 +1,5 @@
 """
-Batch 303: Recursive data structure traversal interaction tests.
+Recursive data structure traversal interaction tests.
 Tests tree, linked list, and nested dict traversal with cache invalidation.
 """
 

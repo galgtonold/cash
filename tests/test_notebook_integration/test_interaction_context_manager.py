@@ -1,4 +1,4 @@
-"""Batch 182 – Context manager pattern interaction tests.
+"""Context manager pattern interaction tests.
 
 Tests editing context manager definitions, with-statements,
 and resource management patterns.

@@ -1,5 +1,5 @@
 """
-Batch 295: String formatting and template interaction tests.
+String formatting and template interaction tests.
 Tests various string formatting patterns (f-strings, format(), Template)
 with cache invalidation when underlying data changes.
 """

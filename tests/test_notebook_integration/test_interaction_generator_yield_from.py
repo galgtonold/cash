@@ -1,4 +1,4 @@
-"""Batch 508: generator expressions and yield from."""
+"""generator expressions and yield from."""
 
 import pytest
 

@@ -1,5 +1,5 @@
 """
-Batch 104 — Kernel restart + cell edit interactions.
+Kernel restart + cell edit interactions.
 
 Tests that exercise the most fragile path: editing cells after a kernel restart.
 After restart, cash must:

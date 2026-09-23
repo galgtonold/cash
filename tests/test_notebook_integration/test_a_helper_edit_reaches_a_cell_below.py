@@ -1,12 +1,11 @@
 """Editing a helper module reaches a cell that never names it.
 
-Round 28, r28s5, WRONG, 2/2 in their board pack and 5/5 in their minimal repro
-(``r28s5/repro/repro_helper_edit.py``): edit a function in the project's own
-helper module, then run a cell BELOW the one that calls it -- the way the brief
-tells testers to work. The badge said MODULE RELOADED, and the cell printed,
+A wrong answer, 2/2 in a real board pack and 5/5 in a minimal repro: edit a
+function in the project's own helper module, then run a cell BELOW the one
+that calls it -- the ordinary way to work. The badge said MODULE RELOADED, and the cell printed,
 and exported, the value built by the pre-edit helper.
 
-Round 27's alias fix (9785293) and its tests all ran the cell that CALLS the
+The alias fix (9785293) and its tests all ran the cell that CALLS the
 helper, which does recompute. Here the reader only sees ``tbl``; whether
 ``tbl`` is stale is the upstream check's call, and it has to know that the
 statement that built it read a module that changed.
@@ -61,7 +60,7 @@ def test_a_from_import(nb_runner, tmp_path):
 
 
 def test_two_cells_below_through_a_value_built_from_it(nb_runner, tmp_path):
-    """r28s5's real notebook: the exported commentary was built from the
+    """The real notebook: the exported commentary was built from the
     helper's output one more step down, not read from it directly."""
     mod = tmp_path / "helpertwo.py"
     mod.write_text(_module("sum"), encoding="utf-8")
@@ -112,8 +111,8 @@ def test_a_module_that_cannot_be_narrowed(nb_runner, tmp_path):
 
 
 def test_after_a_restart_and_a_jump(nb_runner, tmp_path):
-    """Round 28, r28s1, WRONG, 2/2 in their fleet notebook and 4/4 in
-    ``r28s1/repro/rerun_after_repair`` (``module`` mode): restart, jump to
+    """A wrong answer, 2/2 in a real fleet notebook and 4/4 in a repro
+    (``module`` mode): restart, jump to
     the last cell (everything restores), edit the helper, run the last cell
     again. The badge said MODULE RELOADED and ``by_road_class.csv`` was
     exported with the pre-edit numbers. The same edit WITHOUT a restart was
@@ -147,7 +146,7 @@ def test_after_a_restart_and_a_jump(nb_runner, tmp_path):
 
 
 def test_the_text_badge_for_a_reload_is_ascii(nb_runner, tmp_path):
-    """r28s1: the module-reload row carried a U+1F504 glyph, and their cp1252
+    """The module-reload row carried a U+1F504 glyph, and their cp1252
     console client crashed reading the badge. `%cash_badge print` is for
     exactly that reader, and the docs promise it plain ASCII."""
     _out, raw = _play(nb_runner, tmp_path, "helperascii", "import helperascii", "helperascii.summary")
@@ -164,7 +163,7 @@ def test_the_text_badge_for_a_reload_is_ascii(nb_runner, tmp_path):
     ],
 )
 def test_a_loop_that_calls_the_helper(nb_runner, tmp_path, import_line, prefix):
-    """r28s5's board pack builds its regional table in a loop. A loop's
+    """The board pack builds its regional table in a loop. A loop's
     recorded outcome is reused when what it read still matches, and after the
     edit the module name still carried its pre-edit lineage in the simulation,
     so the stale table was adopted (their repro, 2/2 with the loop variants)."""
@@ -195,7 +194,7 @@ def test_a_loop_that_calls_the_helper(nb_runner, tmp_path, import_line, prefix):
 
 
 def test_a_loop_through_a_helper_that_cannot_be_narrowed(nb_runner, tmp_path):
-    """r28s5's repro exactly: the helper draws from a seeded generator, which
+    """The repro exactly: the helper draws from a seeded generator, which
     keeps it from being narrowed to its symbols, and a loop builds the dict a
     later statement turns into the table. Both lose their lineage on the edit,
     and re-running only the table's statement rebuilt it from the stale dict."""
@@ -229,8 +228,8 @@ def test_a_loop_through_a_helper_that_cannot_be_narrowed(nb_runner, tmp_path):
 
 @pytest.mark.parametrize("restart", [False, True])
 def test_a_helper_imported_in_the_cash_on_cell(nb_runner, tmp_path, restart):
-    """Round 28, r28s4, WRONG, 1/1 real + 3/3 alias + 3/3 plain
-    (``r28s4/repro/helper_edit_stale``), and it survived Restart & Run All.
+    """A wrong answer, 1/1 real + 3/3 alias + 3/3 plain, and it survived
+    Restart & Run All.
 
     Their first cell is `import cash`, `%cash_on`, then their imports -- the
     layout the quickstart now says is fine. Cash tracks a local module when a

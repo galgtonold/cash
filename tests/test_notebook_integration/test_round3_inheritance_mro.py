@@ -1,4 +1,4 @@
-"""Batch 47: Complex inheritance & MRO patterns — diamond, mixin, super() chains."""
+"""Complex inheritance & MRO patterns — diamond, mixin, super() chains."""
 
 import textwrap
 

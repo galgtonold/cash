@@ -1,5 +1,5 @@
 """
-Batch 332: struct pack/unpack patterns with caching.
+struct pack/unpack patterns with caching.
 Tests struct.pack, struct.unpack, calcsize, and edit propagation.
 """
 

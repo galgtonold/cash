@@ -1,4 +1,4 @@
-"""CAS-261 step 2: a cheap many-iteration loop is learned and then split.
+"""A cheap many-iteration loop is learned and then split.
 
 The band, measured on HEAD before this landed (n=124, warm rerun, wall clock
 against a cash-off arm):
@@ -100,7 +100,7 @@ def _loop(n=_N):
     # Items start at 1, never 0: compute(0) returns `0 * 10`, which CPython
     # interns to the argument object itself and trips the call unit's
     # arg-identity refusal -- one permanently-uncached call that mimics a
-    # caching bug (CAS-263).
+    # caching bug.
     return f"for t in list(range(1, {n + 1})):\n    out.append(compute(t))\nprint('OUT', len(out))"
 
 
@@ -305,7 +305,7 @@ def test_a_dependency_edit_still_recomputes(nb_runner, tmp_path):
 
 @LOAD_SENSITIVE
 def test_an_expensive_body_is_never_split(nb_runner, tmp_path):
-    """The gate protecting CAS-259's incremental reuse.
+    """The gate protecting per-call incremental reuse.
 
     A loop whose calls clear the cost floor is served by per-call caching,
     which gives INCREMENTAL reuse -- append one item, re-run one call. A
@@ -329,7 +329,7 @@ def test_an_expensive_body_is_never_split(nb_runner, tmp_path):
     warm = _n(counter) - cold
     assert warm == 1, (
         f"append re-ran {warm}/{n + 1} calls, expected 1. An expensive-bodied "
-        "loop must keep per-call incremental reuse (CAS-259) rather than "
+        "loop must keep per-call incremental reuse rather than "
         f"being split into an all-or-nothing tail. [{_why(tmp_path)}]"
     )
 

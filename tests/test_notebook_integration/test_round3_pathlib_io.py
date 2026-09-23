@@ -1,4 +1,4 @@
-"""Batch 59: Pathlib & IO patterns — cash caching with pathlib, io, tempfile."""
+"""Pathlib & IO patterns — cash caching with pathlib, io, tempfile."""
 
 import textwrap
 

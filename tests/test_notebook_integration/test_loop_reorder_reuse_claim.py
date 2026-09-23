@@ -1,7 +1,7 @@
 """Guard for the loop-reuse claims in ``docs/known-limitations.md``.
 
 Both behaviours below are guarded with ``# @cash:no-cache-calls`` on the loop
-header. That is deliberate, not incidental: call-level caching (CAS-243) is
+header. That is deliberate, not incidental: call-level caching is
 on by DEFAULT now (task 10), and it is precisely the fix for both documented
 limitations here -- an intercepted ``compute(x)`` is order-independent, so a
 reordered accumulator fold no longer re-runs the tail, and an intercepted
@@ -105,7 +105,7 @@ def test_accumulator_fold_reordering_is_free_by_default(nb_runner, tmp_path):
 
     Matches known-limitations.md's NEW headline table: append still costs
     one call (a genuinely new value), but every reorder after that costs
-    ZERO -- call-level caching (on by default, CAS-243) makes ``compute(x)``
+    ZERO -- call-level caching (on by default) makes ``compute(x)``
     order-independent, even though the *statement*'s own prefix-keyed cache
     entry still misses on every one of these edits. Without this test,
     known-limitations.md's new table and quickstart's rewritten claim that

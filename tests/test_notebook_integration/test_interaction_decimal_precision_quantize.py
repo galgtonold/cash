@@ -1,4 +1,4 @@
-"""Batch 490: decimal precision and quantize operations."""
+"""decimal precision and quantize operations."""
 
 import pytest
 

@@ -1,4 +1,4 @@
-"""CAS-209 step 0: does the REAL restart path lose queued writes?
+"""Does the REAL restart path lose queued writes?
 
 The harness kills with `shutdown_kernel(now=True)`. JupyterLab's restart button
 goes through `restart_kernel()`, which by default sends a graceful
@@ -6,7 +6,7 @@ goes through `restart_kernel()`, which by default sends a graceful
 write queue.
 
 If graceful drains, the data-loss window is crashes / OOM / force-quit only,
-not the ordinary restart every user performs, and CAS-209 is a much smaller
+not the ordinary restart every user performs, and the loss of queued writes is a much smaller
 problem than the hard-kill measurement suggests.
 
 Run with the ATOMIC write applied (git checkout 2fce7ea -- src/cash/backends/

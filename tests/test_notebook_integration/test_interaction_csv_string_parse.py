@@ -1,4 +1,4 @@
-"""Batch 378: csv-like string parsing without file I/O."""
+"""csv-like string parsing without file I/O."""
 
 import pytest
 

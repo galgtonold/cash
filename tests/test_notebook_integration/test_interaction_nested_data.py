@@ -1,4 +1,4 @@
-"""Batch 160 – Nested data structure interaction tests.
+"""Nested data structure interaction tests.
 
 Tests where nested dicts, lists, and objects are modified
 across cells and dependencies must propagate correctly.

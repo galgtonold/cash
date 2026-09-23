@@ -3,7 +3,7 @@
 The cell that turns cash on runs before cash is on, so its imports bind names
 with no lineage. The upstream simulation fills those in: simulating an import
 gives each name it binds the import's lineage, if the runtime holds none --
-and it held on to the FIRST. Round 23 (r23s3, 2026-09-15): the enabling cell
+and it held on to the FIRST. In one real notebook the enabling cell
 said ``import os, sys``, the next one ``import sys`` again. After a restart the
 second import never ran (``sys`` was bound), and the simulation left ``sys``
 with the first import's lineage while it keyed everything below with the
@@ -76,7 +76,7 @@ def _restart_and_run(nb_runner, cell: int) -> list[tuple[str, bool]]:
 @pytest.mark.parametrize(
     "first, second",
     [
-        ("import os, sys", "import sys\nimport time"),  # r23s3's two cells
+        ("import os, sys", "import sys\nimport time"),  # the reported two cells
         ("import sys", "import os, sys\nimport time"),
     ],
 )

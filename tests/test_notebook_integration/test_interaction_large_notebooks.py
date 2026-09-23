@@ -1,4 +1,4 @@
-"""Batch 148 – Large notebook (10+ cells) interaction tests.
+"""Large notebook (10+ cells) interaction tests.
 
 Tests with larger notebooks that simulate real-world scenarios
 with many cells, edits at various positions, and full run-through.

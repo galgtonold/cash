@@ -1,6 +1,6 @@
 """Running a cell re-runs only what that cell needs, not everything stale above it.
 
-Round 24's r24s1 edited the fold count above a model comparison, ran the
+A user edited the fold count above a model comparison, ran the
 comparison, and then added a sanity-check cell at the bottom that reads only
 the loaded frame. That cell took 309 s: the fits, permutation importances, the
 grid search and the calibration below the edit all ran again, and the report

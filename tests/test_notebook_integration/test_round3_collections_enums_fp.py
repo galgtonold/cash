@@ -1,5 +1,5 @@
 """
-Batch 15: Collections patterns, enum usage, protocol/structural typing,
+Collections patterns, enum usage, protocol/structural typing,
 __slots__, and complex comprehension patterns.
 
 Tests how cash handles specialized collection types, enums across cells,

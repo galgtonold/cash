@@ -1,8 +1,8 @@
-"""`# @cash:persist` must reach a call entry, not just the statement (CAS-269).
+"""`# @cash:persist` must reach a call entry, not just the statement.
 
 `persist` forces disk persistence for entries that would otherwise stay in RAM
 (below the ~0.1s persistence floor). It reached the STATEMENT entry only. When
-the statement cannot cache -- the CAS-260 shape, where the callee writes a
+the statement cannot cache -- the shape where the callee writes a
 global so the statement is skip-cached and re-executes -- the call entry is the
 only thing cached, and the annotation acted on nothing.
 
@@ -43,7 +43,7 @@ BODY_S = 0.02
 def _defs(ticks, *, writes_global):
     """Callee definitions. `writes_global` picks the row of the table.
 
-    The global write is what makes the enclosing statement skip-cache (CAS-260),
+    The global write is what makes the enclosing statement skip-cache,
     leaving the call entry as the only thing cached -- the shape where `persist`
     had nothing to act on.
     """

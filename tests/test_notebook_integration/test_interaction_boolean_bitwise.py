@@ -1,4 +1,4 @@
-"""Batch 389: boolean and bitwise operations across cells."""
+"""boolean and bitwise operations across cells."""
 
 import pytest
 

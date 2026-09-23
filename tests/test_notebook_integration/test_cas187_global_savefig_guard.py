@@ -1,8 +1,8 @@
-"""CAS-187: the sim must never re-save pyplot's current figure orphaned from its producer.
+"""The sim must never re-save pyplot's current figure orphaned from its producer.
 
 ``plt.savefig(path)`` writes pyplot's process-global current figure; its only
 variable input is the module ``plt``, so -- unlike the receiver-bound
-``fig.savefig(path)`` that CAS-175 defends -- there is NO value-level edge for
+``fig.savefig(path)`` that chart-coherence re-derivation defends -- there is NO value-level edge for
 the planner to follow to the figure. If the plan ever schedules the write while
 the ``plt.subplots()`` that registered the current figure is NOT scheduled,
 re-running the write makes ``plt.gcf()`` invent a blank default figure and flush
@@ -11,7 +11,7 @@ collapsing from the user's 960x540 to matplotlib's 640x480 default).
 
 The defect is LATENT on main -- the file-writer scheduling pass' provenance
 guard keeps a plain re-run from orphaning the write -- but it is one unrelated
-change away (CAS-174 induced it by accident). This guard bounds the consequence:
+change away (one change induced it by accident). This guard bounds the consequence:
 refuse the orphaned write and warn, rather than write a figure the user did not
 draw. The oracle is the PNG geometry on disk; the corruption is invisible from
 inside the kernel.
@@ -55,7 +55,7 @@ _CHART_DIR = "C:/Temp" if sys.platform == "win32" else tempfile.gettempdir().rep
 def _chart_path(tmp_path):
     # Unique name per test.
     os.makedirs(_CHART_DIR, exist_ok=True)
-    p = f"{_CHART_DIR}/cas187_{os.getpid()}_{id(tmp_path) & 0xFFFF}.png"
+    p = f"{_CHART_DIR}/savefig_guard_{os.getpid()}_{id(tmp_path) & 0xFFFF}.png"
     if os.path.exists(p):
         os.remove(p)
     return p
@@ -120,6 +120,6 @@ def test_orphaned_plt_savefig_is_refused_not_blanked(nb_runner, tmp_path):
     assert _png_geometry(chart) == (960, 540), (
         "cash silently overwrote the user's chart with a blank 640x480 default "
         "figure: the sim scheduled plt.savefig() without the plt.subplots() that "
-        "registered the current figure (CAS-187). The guard must refuse the write."
+        "registered the current figure. The guard must refuse the write."
     )
     os.remove(chart)

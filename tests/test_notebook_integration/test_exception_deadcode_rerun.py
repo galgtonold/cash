@@ -1,6 +1,6 @@
 """A statement after a raise / failing assert must NOT execute when the upstream
 simulation reconstructs a variable — the cell halts at the raise like a real
-kernel, so dead post-raise code does not run (CAS-64).
+kernel, so dead post-raise code does not run.
 """
 
 import pytest
@@ -36,8 +36,7 @@ def test_post_raise_list_mutation(nb_runner):
 
 
 @pytest.mark.xfail(
-    reason="CAS-64: a failing assert is runtime-dependent; the "
-    "pure simulation can't know it aborts without evaluating it",
+    reason="a failing assert is runtime-dependent; the pure simulation can't know it aborts without evaluating it",
     strict=False,
 )
 def test_post_assert_failure_variable(nb_runner):

@@ -1,5 +1,5 @@
 """
-Batch 33: Type system and typing patterns — type hints, TypeVar, Generic,
+Type system and typing patterns — type hints, TypeVar, Generic,
 Protocol, Union, Optional, Literal across cells.
 """
 

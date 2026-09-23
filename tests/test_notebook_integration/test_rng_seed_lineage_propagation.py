@@ -1,6 +1,6 @@
 """A seed change must invalidate cached statements DOWNSTREAM of a draw (ADR-018).
 
-The RNG epoch (CAS-223) was folded into a draw's cache key but never into its
+The RNG epoch was folded into a draw's cache key but never into its
 output lineage, so a draw recomputed on a re-seed while its output variable's
 lineage stayed constant — every cached consumer keyed on the unchanged lineage
 and served a stale value, even on a full Run-All. Modelling the RNG as a hidden

@@ -1,5 +1,5 @@
 """
-Batch 42: Large data operations — tests with bigger datasets to stress
+Large data operations — tests with bigger datasets to stress
 the caching/hashing system with non-trivial data sizes.
 """
 

@@ -1,4 +1,4 @@
-"""Batch 242 – Global/nonlocal scope interaction patterns.
+"""Global/nonlocal scope interaction patterns.
 
 Tests editing variables that are used inside functions via closures or global scope.
 """

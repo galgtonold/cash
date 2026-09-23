@@ -1,4 +1,4 @@
-"""Batch 506: string encode decode and bytes operations."""
+"""string encode decode and bytes operations."""
 
 import pytest
 

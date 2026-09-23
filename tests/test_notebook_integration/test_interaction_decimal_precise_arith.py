@@ -1,4 +1,4 @@
-"""Batch 415: decimal module for precise arithmetic."""
+"""decimal module for precise arithmetic."""
 
 import pytest
 

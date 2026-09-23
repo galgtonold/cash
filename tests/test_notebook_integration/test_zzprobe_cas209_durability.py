@@ -1,4 +1,4 @@
-"""CAS-209 probe: does the cold kernel's cache survive shutdown?
+"""Probe: does the cold kernel's cache survive shutdown?
 
 Hypothesis under test: the atomic write is not WRONG, it is SLOWER (mkstemp +
 write + replace vs one open+write), and the kernel shutdown does not drain

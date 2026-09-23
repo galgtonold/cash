@@ -1,6 +1,6 @@
 """An upstream edit must propagate through a loop that assigns columns.
 
-Round-14 gate finding (BLOCKING). A cell of the shape
+A blocking bug. A cell of the shape
 
     for c in COLS:
         feat[c] = raw[c] * 2

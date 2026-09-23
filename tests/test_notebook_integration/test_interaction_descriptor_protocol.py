@@ -1,4 +1,4 @@
-"""Batch 521: descriptor protocol __get__ __set__."""
+"""descriptor protocol __get__ __set__."""
 
 import pytest
 

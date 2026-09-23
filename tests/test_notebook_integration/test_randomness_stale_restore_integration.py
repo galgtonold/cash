@@ -1,6 +1,6 @@
 """Real-kernel coverage for announcing a *replayed* unseeded random value.
 
-CAS-135 hole 2. CAS-114's warning fired on the COLD run — the run where the
+The first randomness warning fired on the COLD run — the run where the
 value is freshly computed and correct — and went silent on every restore after
 it, which is precisely when the number on screen is a frozen replay. The alarm
 was quiet exactly when the house was on fire.
@@ -60,7 +60,7 @@ def test_replayed_unseeded_value_is_announced_on_restore(nb_runner):
 
 
 def test_replay_warning_does_not_repeat_on_further_reruns(nb_runner):
-    """CAS-114 deliberately avoided per-run spam; that must survive this fix.
+    """The first warning deliberately avoided per-run spam; that must survive this fix.
 
     The fact does not change between run 2 and run 20 — say it once.
     """
@@ -137,7 +137,7 @@ def test_allow_random_suppresses_the_replay_warning(nb_runner):
 def test_replayed_default_rng_value_is_announced(nb_runner):
     """H1 + H2 together: the modern API, frozen and served from cache.
 
-    This is the CAS-135 report's actual shape — the combination that produced a
+    This is the original report's actual shape — the combination that produced a
     wrong number with no warning anywhere.
     """
     nb_runner.create_notebook(

@@ -1,4 +1,4 @@
-"""Batch 458: hash() and equality protocol."""
+"""hash() and equality protocol."""
 
 import pytest
 

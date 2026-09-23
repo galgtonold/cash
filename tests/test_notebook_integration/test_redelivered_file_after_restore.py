@@ -1,6 +1,6 @@
 """A file read inside a helper, restored after a restart, then re-delivered.
 
-Round 22 (r22s1): the morning restore replayed the reading statement from the
+The morning restore replayed the reading statement from the
 statement cache. The simulation that planned the replay ran before anything
 was live, found no cache entry for the statement and so recorded no file
 behind it; that snapshot was reused afterwards, and a CSV replaced under the

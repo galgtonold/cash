@@ -1,4 +1,4 @@
-"""Batch 226 – Property/classmethod/staticmethod interaction tests.
+"""Property/classmethod/staticmethod interaction tests.
 
 Tests editing cells containing class features like properties,
 classmethods, and staticmethods to verify cache invalidation.

@@ -1,4 +1,4 @@
-"""Batch 454: collections.deque as ring buffer pattern."""
+"""collections.deque as ring buffer pattern."""
 
 import pytest
 

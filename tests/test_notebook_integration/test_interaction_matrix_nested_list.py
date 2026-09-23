@@ -1,4 +1,4 @@
-"""Batch 379: matrix operations with nested lists and edits."""
+"""matrix operations with nested lists and edits."""
 
 import pytest
 

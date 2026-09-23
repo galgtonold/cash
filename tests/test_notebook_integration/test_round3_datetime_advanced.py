@@ -1,4 +1,4 @@
-"""Batch 95 – datetime and time complex patterns."""
+"""datetime and time complex patterns."""
 
 import textwrap
 

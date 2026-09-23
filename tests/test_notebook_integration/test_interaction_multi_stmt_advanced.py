@@ -1,4 +1,4 @@
-"""Batch 130 – Multi-statement cell interaction tests (advanced).
+"""Multi-statement cell interaction tests (advanced).
 
 Tests that exercise cells with multiple statements and complex
 interactions between statements within the same cell.

@@ -1,4 +1,4 @@
-"""Batch 354: class inheritance with super() and MRO edits."""
+"""class inheritance with super() and MRO edits."""
 
 import pytest
 

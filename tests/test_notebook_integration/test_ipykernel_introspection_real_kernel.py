@@ -1,4 +1,4 @@
-"""CAS-134 in a real kernel: cash must not lie to ipykernel's introspection.
+"""Introspection in a real kernel: cash must not lie to ipykernel's introspection.
 
 Companion to ``tests/test_notebook/test_ipykernel_signature_introspection.py``.
 That one proves the property against stubs in-process; this one proves it inside
@@ -9,7 +9,7 @@ Two independent assertions, neither of which trusts the badge:
 
 1.  The cell's work is verified by an **out-of-band side effect** — the cell
     writes a file, and we assert the file exists. The badge is not evidence:
-    CAS-134 shipped precisely because the badge reported ``EXECUTED`` for cells
+    The introspection bug shipped precisely because the badge reported ``EXECUTED`` for cells
     that never ran.
 2.  Introspection **parity** is computed *inside the kernel*, against the true
     original that cash stashes on ``shell._cash_hooks``. That is what fails on
@@ -88,7 +88,7 @@ def test_patched_hooks_do_not_lie_to_ipykernel_in_a_real_kernel(nb_runner, tmp_p
     assert side_effect.exists(), (
         "the magic-containing cell never actually executed — no file was written. "
         "(Do not relax this into a badge/output check: the badge reports EXECUTED "
-        "for cells that never ran, which is how CAS-134 shipped.)"
+        "for cells that never ran, which is how this bug shipped.)"
     )
     assert side_effect.read_text() == "RAN"
 

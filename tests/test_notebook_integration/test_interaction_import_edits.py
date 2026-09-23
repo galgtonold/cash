@@ -1,4 +1,4 @@
-"""Batch 108 – Import statement interaction tests.
+"""Import statement interaction tests.
 
 Tests that exercise import statements combined with cell edits,
 module reloads, and kernel restarts.

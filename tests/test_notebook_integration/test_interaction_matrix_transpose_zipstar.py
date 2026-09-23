@@ -1,4 +1,4 @@
-"""Batch 451: matrix transpose and zip star pattern."""
+"""matrix transpose and zip star pattern."""
 
 import pytest
 

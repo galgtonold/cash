@@ -1,4 +1,4 @@
-"""Batch 140 – Multi-cell dependency chain stress tests.
+"""Multi-cell dependency chain stress tests.
 
 Tests with longer dependency chains (5-8 cells) where edits
 at various points in the chain verify cache propagation.

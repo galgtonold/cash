@@ -1,4 +1,4 @@
-"""Batch 185 – Dictionary manipulation pattern interaction tests.
+"""Dictionary manipulation pattern interaction tests.
 
 Tests editing dict comprehensions, merges, nested dicts,
 defaultdict patterns across cells.

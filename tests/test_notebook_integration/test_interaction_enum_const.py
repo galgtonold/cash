@@ -1,4 +1,4 @@
-"""Batch 233 – Enum definition and constant map edit tests.
+"""Enum definition and constant map edit tests.
 
 Tests editing enum definitions, constant maps, and named values
 used in downstream calculations.

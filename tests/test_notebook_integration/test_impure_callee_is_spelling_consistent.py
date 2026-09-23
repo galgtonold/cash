@@ -1,18 +1,18 @@
-"""An impure callee freezes the SAME WAY in both spellings (CAS-246).
+"""An impure callee freezes the SAME WAY in both spellings.
 
 This is NOT an endorsement of the freeze. Whether an unseeded, globally
 mutating function like ``next_seq()`` *should* be frozen by caching at all is
-an open question tracked as CAS-246 -- this test takes no position on it.
+an open question -- this test takes no position on it.
 What it pins is narrower and not up for debate: whichever way that question
 is eventually answered, a plain assignment (``a = next_seq()``, the ordinary
 statement-cache path) and the same call made through a mutation
-(``seen.append(next_seq())``, the call-unit path CAS-243 added) must agree.
+(``seen.append(next_seq())``, the call-interception path) must agree.
 
 That equivalence matters because the failure mode it guards against has
 already happened twice on related tickets: someone observes the freeze
 through one spelling, misdiagnoses it as specific to whichever caching
 mechanism handled that spelling, and re-files it as a new bug against the
-*other* mechanism. Before CAS-243, ``seen.append(next_seq())`` was
+*other* mechanism. Before call interception, ``seen.append(next_seq())`` was
 skip-cached outright (a mutation gets zero reuse), so the two spellings could
 never have been compared this way -- interception is what makes the append
 form cacheable at all, and hence what makes this comparison possible, and
@@ -68,8 +68,7 @@ def test_both_spellings_agree(nb_runner):
         nb_runner.run_cells([3, 5])
         assert nb_runner.get_output(3) == first_a, "assignment spelling did not freeze"
         assert nb_runner.get_output(5) == first_b, (
-            "append spelling must freeze the SAME WAY as the assignment "
-            "spelling now that the call is cached -- see CAS-246"
+            "append spelling must freeze the SAME WAY as the assignment spelling now that the call is cached"
         )
 
 

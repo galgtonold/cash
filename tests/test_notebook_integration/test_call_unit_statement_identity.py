@@ -1,5 +1,5 @@
 """Real-kernel proof that a call unit's key is scoped to its ENCLOSING
-STATEMENT, not just the call text (CAS-256).
+STATEMENT, not just the call text.
 
 **The bug.** ``call_cache_key``'s base key is built from the call's own
 source and free names (``call_unit.py``), which says nothing about which
@@ -19,7 +19,7 @@ the first's cached values::
 Wrong on the FIRST run, no pre-existing cache required. The fix folds the
 enclosing statement's identity (``ast.unparse`` of the statement, not its raw
 source text -- see ``CallSite.stmt_identity``'s docstring for why the raw text
-is a trap, CAS-242) into the call's key.
+is a trap) into the call's key.
 
 This file is the real-kernel arm. ``tests/test_notebook/test_call_unit_key.py``
 and ``tests/test_notebook/test_call_interception_rewrite.py`` cover the same
@@ -61,7 +61,7 @@ def _n(log):
 
 
 def test_two_statements_same_call_text_get_independent_call_caches(nb_runner, tmp_path):
-    """The CAS-256 bug, reproduced live, with a cash-off oracle.
+    """The cross-statement collision, reproduced live, with a cash-off oracle.
 
     With cash off (or before this fix), ``fetch_next`` runs 6 times total and
     the second loop reads its OWN 3 values, ``[('a', 4), ('b', 5), ('c', 6)]``
@@ -100,7 +100,7 @@ def test_two_statements_same_call_text_get_independent_call_caches(nb_runner, tm
 
 def test_reorder_within_one_statement_still_reuses_cached_calls(nb_runner, tmp_path):
     """Negative #1: folding in the statement's identity must not reintroduce
-    CAS-242 (order-dependence) for the statement it now discriminates.
+    order-dependence for the statement it now discriminates.
 
     Reordering the SAME loop's items must still reuse every item's cached
     call -- the whole selling point of per-call, loop-var-keyed caching.
@@ -126,7 +126,7 @@ def test_reorder_within_one_statement_still_reuses_cached_calls(nb_runner, tmp_p
                    reordered [('a',6), ('b',5), ('c',4)]   every value changes
 
     Asserting zero re-runs with that callee therefore pinned a wrong answer,
-    which only looked right while cash was blind to ``state`` (CAS-265).
+    which only looked right while cash was blind to ``state``.
     Order-independence is a real and valuable property, but only for a callee
     whose value genuinely depends on its arguments -- so it is tested with one.
     The stateful counterpart is the test below.
@@ -167,7 +167,7 @@ def test_reorder_re_runs_a_stateful_callee_and_matches_the_oracle(nb_runner, tmp
 
     ``fetch_next`` returns ``state['n']`` after incrementing, so reordering
     genuinely changes every item's value. Cash sees the mutation of ``state``
-    (CAS-265) and keys each call on that global's pre-call state, so the
+    and keys each call on that global's pre-call state, so the
     reordered run misses and recomputes instead of replaying a mapping that
     never existed.
 

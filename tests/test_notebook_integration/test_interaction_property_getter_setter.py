@@ -1,4 +1,4 @@
-"""Batch 466: property decorators getters and setters."""
+"""property decorators getters and setters."""
 
 import pytest
 

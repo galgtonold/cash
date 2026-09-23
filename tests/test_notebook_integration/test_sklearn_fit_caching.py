@@ -1,8 +1,8 @@
-"""CAS-170 / CAS-138 / CAS-137: how cash treats sklearn's estimator.fit().
+"""How cash treats sklearn's estimator.fit().
 
 Ground-truth probes for the design decision:
-  * bare ``model.fit(X, y)``       -> NOT cached by default; re-executes (CAS-170)
-  * ``# @cash:cache-fit`` + bare fit -> caches + restores in place (CAS-138, opt-in)
+  * bare ``model.fit(X, y)``       -> NOT cached by default; re-executes
+  * ``# @cash:cache-fit`` + bare fit -> caches + restores in place (opt-in)
   * ``model = model.fit(X, y)``    -> caches (pure reassignment shape)
   * ``m = Model().fit(X, y)``      -> caches; restores across a real restart
 
@@ -11,16 +11,16 @@ rather than a restored copy. Skipping the cache is also net-NEUTRAL rather than
 net-negative: the model is never serialised, so a perpetually-missing fit cannot
 cost more than it saves.
 
-**Withdrawn (CAS-184):** this file used to claim that a re-executing fit made
+**Withdrawn:** this file used to claim that a re-executing fit made
 aliases "correct BY CONSTRUCTION". It does not. ``backup = clf`` is an ORDINARY
 assignment, so cash cached *that statement* and restored ``backup`` to a
 deserialised copy taken before the fit -- the alias broke at a statement the fit
-has no bearing on. The fit was innocent. CAS-184 fixes it by refusing to cache a
+has no bearing on. The fit was innocent. The fix is to refuse to cache a
 bare alias bind at all; ``test_bare_fit_alias_survives_warm_reruns`` below is the
 guard, and it only fails from the SECOND warm re-run, which is how the original
 one-repetition test came to confirm the wrong belief.
 
-``# @cash:cache-fit`` opts back in to the CAS-138 machinery for users who want it.
+``# @cash:cache-fit`` opts back in to fit caching for users who want it.
 """
 
 import pytest
@@ -46,7 +46,7 @@ def _restart(nb_runner):
     """Restart the kernel in place and re-inject the notebook path.
 
     Delegates to the runner rather than driving the KernelManager directly.
-    CAS-190 added ``nb_runner.restart()`` precisely because nine files had
+    ``nb_runner.restart()`` exists precisely because nine files had
     hand-rolled this and each was free to get the after-care wrong; this was
     one of them. A restart puts the kernel back at the cwd its PROCESS was
     launched with, and under CASH_TEST_REUSE_KERNEL=1 that is the repo root,
@@ -65,9 +65,9 @@ def _restart(nb_runner):
 
 
 def test_bare_fit_not_cached_by_default(nb_runner):
-    """CAS-170: a bare ``clf.fit(X, y)`` is NOT CACHED and re-executes every run.
+    """A bare ``clf.fit(X, y)`` is NOT CACHED and re-executes every run.
 
-    The inverse of the old ``test_bare_fit_now_caches``. CAS-138 routed a bare fit
+    The inverse of the old ``test_bare_fit_now_caches``. A bare fit used to be routed
     to caching by default; four rounds of user testing found the correctness
     surface exceeds what per-statement restore can guarantee (stale aliases) and
     that the canonical paths perpetually MISS -- re-serialising the model every run
@@ -109,13 +109,13 @@ def test_bare_fit_not_cached_by_default(nb_runner):
 
 
 def test_bare_fit_alias_survives_warm_reruns(nb_runner):
-    """THE WRONG-result guard, in the shape a user-tester actually hit (CAS-184).
+    """THE WRONG-result guard, in the shape a user actually hit.
 
     ``backup = clf`` aliases the estimator, then the bare fit mutates the shared
     object. A plain kernel gives ``backup is clf`` -> True and a fitted backup on
     every run. Cash must agree.
 
-    This is the REAL-WORLD half of the CAS-184 guard (the mechanism is pinned
+    This is the REAL-WORLD half of the alias-bind guard (the mechanism is pinned
     deterministically in ``test_alias_assignment_identity.py``): a fitted
     RandomForest is slow enough to hash that the alias bind's measured time clears
     the 10ms ``min_execution_time_to_cache_seconds`` floor, so cash writes a cache
@@ -165,19 +165,18 @@ def test_bare_fit_alias_survives_warm_reruns(nb_runner):
         assert "clf_fit True" in out, f"rep {rep}: {out!r}"
         # THE assertions: identity is preserved and the alias is fitted.
         assert "same True" in out, (
-            f"rep {rep}: `backup = clf` restored a copy, so the alias is no longer "
-            f"the fitted estimator (CAS-184): {out!r}"
+            f"rep {rep}: `backup = clf` restored a copy, so the alias is no longer the fitted estimator: {out!r}"
         )
-        assert "backup_fit True" in out, f"rep {rep}: alias left stale/unfitted (CAS-184): {out!r}"
+        assert "backup_fit True" in out, f"rep {rep}: alias left stale/unfitted: {out!r}"
 
 
 # ----------------------------------------------------------------------
-# The OPT-IN: # @cash:cache-fit restores the CAS-138 behaviour
+# The OPT-IN: # @cash:cache-fit restores fit caching
 # ----------------------------------------------------------------------
 
 
 def test_cache_fit_annotation_opts_in(nb_runner):
-    """``# @cash:cache-fit`` turns the CAS-138 path back on for one statement.
+    """``# @cash:cache-fit`` turns fit caching back on for one statement.
 
     The twin of ``test_bare_fit_not_cached_by_default``: the same notebook with
     the directive added must land a cache HIT on an isolated re-run. The receiver
@@ -202,7 +201,7 @@ def test_cache_fit_annotation_opts_in(nb_runner):
 
 
 def test_cache_fit_restores_in_place_when_receiver_is_live(nb_runner):
-    """CAS-138 GATE (opt-in): the ``cache-fit`` hit transfers state onto the
+    """GATE (opt-in): the ``cache-fit`` hit transfers state onto the
     EXISTING receiver rather than rebinding, so a live alias sees the fit.
 
     This is the in-place restore doing its job in the case it CAN handle: the
@@ -257,15 +256,15 @@ def test_cache_fit_restores_in_place_when_receiver_is_live(nb_runner):
 
 
 def test_cache_fit_pandas_input_restores_repeatedly(nb_runner):
-    """CAS-165 (opt-in): a ``cache-fit`` bare fit on a PANDAS DataFrame input is a
+    """Opt-in: a ``cache-fit`` bare fit on a PANDAS DataFrame input is a
     CLEAN cache hit on every warm re-run -- no upstream churn.
 
-    CAS-138's self-referential key (the receiver is both input and output) drifts
+    The fit's self-referential key (the receiver is both input and output) drifts
     after the fit bumps the receiver's lineage L0->L1. The only thing that recovers
     the pre-fit key otherwise is the upstream checker re-deriving the receiver: it
     marks the receiver a "read-only" mismatch and RE-EXECUTES the constructor
     upstream on *every* warm re-run (cell badge ``EXECUTED`` + an ``Upstream:``
-    section). That incidental cascade is the CAS-165/166 waste. The fix resets the
+    section). That incidental cascade is the waste. The fix resets the
     receiver's lineage to the virtual (constructor) lineage directly, so the re-run
     is a pure cache HIT with no upstream re-execution.
 
@@ -300,23 +299,23 @@ def test_cache_fit_pandas_input_restores_repeatedly(nb_runner):
 
 
 def test_cache_fit_make_classification_split_restores_repeatedly(nb_runner):
-    """CAS-171: the canonical beginner ML chain warm-re-runs as a CLEAN cache hit.
+    """The canonical beginner ML chain warm-re-runs as a CLEAN cache hit.
 
     ``make_classification`` -> ``pd.DataFrame`` -> ``train_test_split`` -> bare
-    ``cache-fit``: the shape a user-tester reported as a perpetual MISS, blamed on
+    ``cache-fit``: the shape a user reported as a perpetual MISS, blamed on
     ``make_classification`` specifically (an rng-derived control cached, so the
     data SOURCE looked like the discriminator).
 
     Measurement says otherwise: the source is irrelevant. Swapping
     ``make_classification`` for ``rng.standard_normal`` or a local function
     produces byte-identical caching behaviour in every configuration. What this
-    chain actually exercises is CAS-165/166's self-referential fit key, and the
+    chain actually exercises is the self-referential fit key, and the
     discriminator is the ``Upstream:`` cascade, not the callable: with the
     fit-receiver lineage reset disabled, ALL sources re-derive the whole upstream
     chain on every warm re-run; with it, all of them land a clean hit.
 
     So this is not a ``make_classification`` regression test -- it is the
-    CAS-165/166 guard extended along the axis the tester's report actually
+    self-referential-key guard extended along the axis the report actually
     covered and ``test_cache_fit_pandas_input_restores_repeatedly`` does not: a
     multi-output ``train_test_split`` between the frame and the fit, whose four
     unpacked outputs each carry lineage into the self-referential key.
@@ -326,7 +325,7 @@ def test_cache_fit_make_classification_split_restores_repeatedly(nb_runner):
         [
             SETUP,
             "import pandas as pd\nfrom sklearn.model_selection import train_test_split",
-            # >8 MiB so the fit inputs take compute_hash's sampling path (CAS-166).
+            # >8 MiB so the fit inputs take compute_hash's sampling path.
             "X, y = make_classification(n_samples=60000, n_features=20, random_state=42)",
             "df = pd.DataFrame(X, columns=[f'f{i}' for i in range(20)])",
             "X_train, X_test, y_train, y_test = train_test_split(df, y, random_state=42)",
@@ -340,9 +339,7 @@ def test_cache_fit_make_classification_split_restores_repeatedly(nb_runner):
     for i in range(3):
         nb_runner.run_cell(7)  # isolated warm re-run -- must be a clean cache hit
         out = nb_runner.get_output(7)
-        assert shows_cached(out), (
-            f"make_classification cache-fit warm re-run #{i + 1} did not restore (CAS-171): {out!r}"
-        )
+        assert shows_cached(out), f"make_classification cache-fit warm re-run #{i + 1} did not restore: {out!r}"
         # THE discriminator, and the half a plain shows_cached() check would miss: a
         # full upstream re-derivation restores too, so without this a silent
         # re-run of the whole make_classification -> split chain every warm
@@ -386,7 +383,7 @@ def test_cache_fit_constructor_edit_invalidates_cached_fit(nb_runner):
 
 
 def test_cache_fit_large_numpy_restores_after_restart(nb_runner):
-    """CAS-166 (opt-in): a >8 MiB numpy ``cache-fit`` bare fit RESTORES from disk
+    """Opt-in: a >8 MiB numpy ``cache-fit`` bare fit RESTORES from disk
     after a real restart.
 
     Inputs over ~8 MiB take ``compute_hash``'s sampling path, and the drifting
@@ -418,7 +415,7 @@ def test_cache_fit_large_numpy_restores_after_restart(nb_runner):
 
     nb_runner.run_cell(4)
     out = nb_runner.get_output(4)
-    assert shows_cached(out), f"large cache-fit did not restore from disk after restart (CAS-166): {out!r}"
+    assert shows_cached(out), f"large cache-fit did not restore from disk after restart: {out!r}"
     assert "fitted 12" in out
 
 
@@ -432,7 +429,7 @@ def test_reassign_fit_caches(nb_runner):
 
     An ordinary ``Assign`` -- no bare-Expr receiver, so the estimator-fit gate and
     the in-place-mutation classifier are both irrelevant. It must keep caching
-    WITHOUT any directive: the CAS-170 demotion is scoped to the bare-Expr form.
+    WITHOUT any directive: the demotion is scoped to the bare-Expr form.
     """
     nb_runner.create_notebook(
         [
@@ -451,7 +448,7 @@ def test_reassign_fit_caches(nb_runner):
 
 
 def test_construct_fit_assign_restores_after_restart(nb_runner):
-    """Form 3 + CAS-137: ``m = Model().fit(X, y)`` restores after a REAL restart.
+    """Form 3: ``m = Model().fit(X, y)`` restores after a REAL restart.
 
     Also an ordinary ``Assign`` (the receiver is a temporary, never a name), so it
     caches with no directive. Forced to disk with ``# @cash:persist`` so the test
@@ -477,12 +474,12 @@ def test_construct_fit_assign_restores_after_restart(nb_runner):
 
     nb_runner.run_cell(3)
     out = nb_runner.get_output(3)
-    assert shows_cached(out), f"fitted estimator did not restore after restart (CAS-137): {out!r}"
+    assert shows_cached(out), f"fitted estimator did not restore after restart: {out!r}"
     assert "n = 160" in out
 
 
 # ----------------------------------------------------------------------
-# Gate tightness + lineage plumbing (unchanged by CAS-170)
+# Gate tightness + lineage plumbing (unchanged by the bare-fit demotion)
 # ----------------------------------------------------------------------
 
 

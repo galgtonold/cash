@@ -1,4 +1,4 @@
-"""Batch 356: custom __repr__, __str__, __eq__ dunder methods."""
+"""custom __repr__, __str__, __eq__ dunder methods."""
 
 import pytest
 

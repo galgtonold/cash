@@ -1,4 +1,4 @@
-"""Batch 225 – Cache status validation tests.
+"""Cache status validation tests.
 
 Verifies that statements are correctly cached (RESTORED/SKIPPED)
 when re-run without changes, and correctly COMPUTED when changes occur.

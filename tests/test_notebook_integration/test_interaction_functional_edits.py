@@ -1,4 +1,4 @@
-"""Batch 183 – Map/filter/reduce pattern interaction tests.
+"""Map/filter/reduce pattern interaction tests.
 
 Tests editing functional programming patterns like map, filter,
 reduce, and their combinations.

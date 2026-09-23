@@ -1,5 +1,5 @@
 """
-Batch 13: Complex dependency chains, decorator stacking, context managers,
+Complex dependency chains, decorator stacking, context managers,
 class inheritance MRO, and namespace/scope edge cases.
 
 Tests deep multi-cell dependency propagation, complex decorator interactions,

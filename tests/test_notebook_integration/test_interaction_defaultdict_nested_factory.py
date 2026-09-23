@@ -1,4 +1,4 @@
-"""Batch 516: defaultdict nested and lambda factories."""
+"""defaultdict nested and lambda factories."""
 
 import pytest
 

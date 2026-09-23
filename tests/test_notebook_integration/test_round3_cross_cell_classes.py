@@ -1,4 +1,4 @@
-"""Batch 99 – complex class interactions across multiple cells."""
+"""complex class interactions across multiple cells."""
 
 import textwrap
 

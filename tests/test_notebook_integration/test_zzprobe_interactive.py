@@ -7,7 +7,7 @@ Each test attacks one distinct mechanism:
 2.  test_reset_magic_no_phantom_restore -- %reset -f in a mid cell; downstream
     re-runs must not resurrect pre-reset cached values as phantom vars.
 3.  test_del_upstream_then_isolated_rerun_consumer -- del x in a later cell,
-    then isolated re-run of an x-consumer (interactive variant of CAS-62).
+    then isolated re-run of an x-consumer (interactive variant of the un-definition case).
 4.  test_cash_off_edit_cash_on_run_all -- %cash_off, edit + run while off,
     %cash_on, run_all: tracking must be coherent after the gap (no stale).
 5.  test_cash_cellmagic_fresh_value_and_ttl -- %%cash on a fresh notebook,

@@ -1,5 +1,5 @@
 """
-Batch 309: Global registry and config patterns interaction tests.
+Global registry and config patterns interaction tests.
 Tests editing shared state objects that downstream cells depend on.
 """
 

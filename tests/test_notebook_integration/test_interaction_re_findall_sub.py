@@ -1,4 +1,4 @@
-"""Batch 423: re module findall and sub patterns."""
+"""re module findall and sub patterns."""
 
 import pytest
 

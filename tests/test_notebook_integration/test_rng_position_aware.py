@@ -1,4 +1,4 @@
-"""CAS-226 + CAS-227 (ADR-018): the global RNG is restored to its position-correct
+"""ADR-018: the global RNG is restored to its position-correct
 state before a re-executed draw.
 
 Both are symptoms of the RNG being tracked by a time-ordered side-channel rather
@@ -34,7 +34,7 @@ def _v(runner, n, tag):
 
 
 @pytest.mark.timeout(180)
-def test_cas227_edited_draw_rerun_uses_position_state(nb_runner):
+def test_edited_draw_rerun_uses_position_state(nb_runner):
     """Editing the 2nd draw and re-running it must give position-1's value."""
     nb_runner.create_notebook([C_ON, C_SEED0, C_DRAW_A, C_DRAW_B])
     nb_runner.start_kernel()
@@ -49,7 +49,7 @@ def test_cas227_edited_draw_rerun_uses_position_state(nb_runner):
 
 
 @pytest.mark.timeout(180)
-def test_cas226_draw_above_a_later_seed_keys_on_its_own_seed(nb_runner):
+def test_draw_above_a_later_seed_keys_on_its_own_seed(nb_runner):
     """A draw governed by an upstream seed, re-run out of order with a LATER seed
     present, must give the upstream seed's value — not the later seed's."""
     nb_runner.create_notebook([C_ON, C_SEED0, C_DRAW_A, C_SEED1])

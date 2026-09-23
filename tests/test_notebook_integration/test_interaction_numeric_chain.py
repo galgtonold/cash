@@ -1,4 +1,4 @@
-"""Batch 194 – Numeric / math computation chain interaction tests.
+"""Numeric / math computation chain interaction tests.
 
 Tests editing numeric computations including arithmetic chains,
 math functions, and statistical calculations.

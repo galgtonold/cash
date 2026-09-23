@@ -158,7 +158,7 @@ def _extract_cpu_time(output: str, fallback: float) -> float:
     competing workers each booting Jupyter kernels, and they do not get
     comparable CPU. ``time.process_time()`` counts only this kernel's own CPU,
     so contention cancels out and the difference is the caching overhead we
-    actually mean to measure (CAS-212).
+    actually mean to measure.
     """
     match = re.search(r"Simulation CPU time (\d+\.\d+)s", output)
     return float(match.group(1)) if match else fallback
@@ -227,7 +227,7 @@ def test_cfd_loop_overhead(nb_runner):
     asserts the overhead is <20 % or <1 s absolute.
 
     TIMING IS ASSERTED ONLY IN A SERIAL RUN. ``time.process_time()`` was
-    adopted (CAS-212) on the theory that counting the kernel's own CPU made
+    adopted on the theory that counting the kernel's own CPU made
     this load-independent. Measurement disproved that: on 2026-08-24 the same
     test read 139% overhead inside a ``-n 16`` sweep and 1.1-5.6% isolated,
     six times running. Process CPU is *less* wall-sensitive, not insensitive --
@@ -354,7 +354,7 @@ def test_cfd_loop_rerun_no_regression(nb_runner):
     print(f"  CPU delta:  {cpu2 - cpu1:.2f}s")
     print(f"{'=' * 60}")
 
-    # Compared in CPU time for the same reason as the overhead test (CAS-212):
+    # Compared in CPU time for the same reason as the overhead test:
     # both runs share this kernel, but under -n 16 they do not share the same
     # external load, so a wall-clock ratio drifts with whatever else is running.
     assert cpu2 < cpu1 * 1.5 + 1.0, f"Second run regressed: {cpu2:.2f}s cpu vs first {cpu1:.2f}s cpu"

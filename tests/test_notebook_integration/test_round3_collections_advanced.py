@@ -1,4 +1,4 @@
-"""Batch 85 – collections advanced: defaultdict, ChainMap, deque, Counter."""
+"""collections advanced: defaultdict, ChainMap, deque, Counter."""
 
 import textwrap
 

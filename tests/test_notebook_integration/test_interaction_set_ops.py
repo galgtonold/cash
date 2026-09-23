@@ -1,4 +1,4 @@
-"""Batch 190 – Set operation interaction tests.
+"""Set operation interaction tests.
 
 Tests editing set operations: union, intersection, difference,
 symmetric difference, with propagation.

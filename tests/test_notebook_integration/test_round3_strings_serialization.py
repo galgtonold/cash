@@ -1,5 +1,5 @@
 """
-Batch 29: String formatting, regex, serialization, and I/O patterns
+String formatting, regex, serialization, and I/O patterns
 across notebook cells.
 """
 

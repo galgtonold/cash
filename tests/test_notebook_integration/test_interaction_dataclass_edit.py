@@ -1,4 +1,4 @@
-"""Batch 259 – Dataclass and structured data edit patterns.
+"""Dataclass and structured data edit patterns.
 
 Tests dataclass definitions and instances with edits.
 """

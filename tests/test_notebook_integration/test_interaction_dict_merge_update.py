@@ -1,4 +1,4 @@
-"""Batch 438: dict merge operators and update patterns."""
+"""dict merge operators and update patterns."""
 
 import pytest
 

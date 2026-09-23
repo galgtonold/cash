@@ -1,4 +1,4 @@
-"""Batch 180 – Mixed computation and display pattern tests.
+"""Mixed computation and display pattern tests.
 
 Tests combining computation cells with display/print cells,
 editing either the computation or the display logic.

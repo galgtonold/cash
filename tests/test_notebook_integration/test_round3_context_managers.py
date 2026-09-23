@@ -1,4 +1,4 @@
-"""Batch 68: Context managers & resource management — cash caching with with-statements."""
+"""Context managers & resource management — cash caching with with-statements."""
 
 import textwrap
 

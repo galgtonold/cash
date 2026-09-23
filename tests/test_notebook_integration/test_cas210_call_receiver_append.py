@@ -1,4 +1,4 @@
-"""CAS-210: a call-expression receiver must not make an append re-fire.
+"""A call-expression receiver must not make an append re-fire.
 
 ``open(p, 'a').write(x)`` spells its receiver as a Call, not a name. Receiver
 resolution walked through the Call to the CALLEE and returned ``open``, so the
@@ -8,7 +8,7 @@ during upstream reconstruction, and because the write is a ``mode='a'`` append,
 re-execution appended the line a SECOND time. The file on disk diverged from
 what a plain kernel produces, and the damage is not recoverable by restarting.
 
-The scope gate (CAS-193/196/200) does not catch this: it keys on *relevance*
+The reconstruction scope gate does not catch this: it keys on *relevance*
 ("does any relevant consumer read this file?"), not on *repeatability* ("is
 re-running this write safe?"). Here the file IS read, so the gate steps aside.
 

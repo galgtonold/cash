@@ -1,4 +1,4 @@
-"""Batch 278 – Ternary and inline conditional edit propagation.
+"""Ternary and inline conditional edit propagation.
 
 Tests ternary expressions and inline conditionals.
 """

@@ -1,4 +1,4 @@
-"""Batch 88 – regex and string processing patterns."""
+"""regex and string processing patterns."""
 
 import textwrap
 

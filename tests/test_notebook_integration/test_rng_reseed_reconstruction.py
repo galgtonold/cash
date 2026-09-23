@@ -1,4 +1,4 @@
-"""CAS-225 / ADR-017: editing a bare seed() cell without re-running it must
+"""ADR-017: editing a bare seed() cell without re-running it must
 still give the draw its correct top-to-bottom value.
 
 nb_runner reaches this bug (it writes a real .ipynb and `set_cell_source`
@@ -70,7 +70,7 @@ def test_reseed_rerun_still_correct_and_warm_draw_unaffected(nb_runner):
     """Guard: the fix must not break the cases that already work.
 
     (a) A clean warm re-run (no edit) restores the draw — caching still works.
-    (b) Editing AND re-running the seed cell gives the new value (CAS-223 path).
+    (b) Editing AND re-running the seed cell gives the new value (the seed-epoch path).
     """
     seed0 = _oracle([C_SEED0, C_DRAW])
     seed1 = _oracle([C_SEED1, C_DRAW])
@@ -94,7 +94,7 @@ def test_editing_a_downstream_seed_cell_does_not_reach_an_upstream_draw(nb_runne
     after the draw) without running it must leave the cell-3 draw exactly as it
     was — the fix must not pull the edited downstream seed into the draw's
     upstream. (Asserted as stability across the edit, independent of the
-    separate CAS-223 epoch-position behaviour.)
+    separate seed-epoch position behaviour.)
     """
     seed999 = _oracle(["import numpy as np\nnp.random.seed(999)", C_DRAW])
     nb_runner.create_notebook([C_ON, C_SEED0, C_DRAW, C_SEED1])
@@ -106,7 +106,7 @@ def test_editing_a_downstream_seed_cell_does_not_reach_an_upstream_draw(nb_runne
     # The one thing the fix must guarantee: it re-runs only UPSTREAM seed cells.
     # If it wrongly pulled in the edited downstream seed(999), the draw would be
     # seed999's value. (The draw's exact value is otherwise governed by the
-    # separate CAS-223 global-epoch behaviour, which this test does not pin.)
+    # separate global seed-epoch behaviour, which this test does not pin.)
     assert after != pytest.approx(seed999, abs=1e-9), (
         "the upstream draw took the DOWNSTREAM seed's value — the fix over-reached"
     )

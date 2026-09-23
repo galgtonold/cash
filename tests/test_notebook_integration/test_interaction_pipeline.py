@@ -1,5 +1,5 @@
 """
-Batch 297: Multi-cell data pipeline interaction tests.
+Multi-cell data pipeline interaction tests.
 Tests complex data transformations spanning multiple cells where
 edits at different pipeline stages propagate correctly.
 """

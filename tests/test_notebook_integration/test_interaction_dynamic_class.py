@@ -1,4 +1,4 @@
-"""Batch 208 – Dynamic class creation interaction tests.
+"""Dynamic class creation interaction tests.
 
 Tests editing dynamic class creation with type(),
 class factories, and mixin patterns.

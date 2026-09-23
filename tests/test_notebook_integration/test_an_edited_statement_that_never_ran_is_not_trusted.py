@@ -1,6 +1,6 @@
 """An edited statement that has not run yet is run before its value is used.
 
-Round 24's r24s5 changed ``models = {k: fit_series(g, params_for(k[1])) ...}``
+A user changed ``models = {k: fit_series(g, params_for(k[1])) ...}``
 to ``models = {k: fit_series(g, PARAMS, cutoff) ...}`` in cell 7, together
 with ``def fit_series``, then ran a cell further down that needed only the
 function, and then the export, whose back-test loop reads ``models``. The

@@ -1,4 +1,4 @@
-"""Batch 116 – Error handling + cell edit interaction tests.
+"""Error handling + cell edit interaction tests.
 
 Tests that exercise error scenarios: syntax errors, runtime errors,
 exception recovery, and cell edits to fix errors.

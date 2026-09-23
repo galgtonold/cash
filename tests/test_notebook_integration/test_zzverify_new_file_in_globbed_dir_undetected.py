@@ -34,7 +34,7 @@ def test_new_file_in_globbed_dir_invalidates(nb_runner, tmp_path):
     nb_runner.run_all()
     assert "vals = [1, 2]" in nb_runner.get_output(1)
 
-    # Generous gap rules out any CAS-10-style mtime-granularity timing excuse.
+    # Generous gap rules out any mtime-granularity timing excuse.
     time.sleep(1.1)
     (gdir / "d3.num").write_text("30")
     nb_runner.run_all()

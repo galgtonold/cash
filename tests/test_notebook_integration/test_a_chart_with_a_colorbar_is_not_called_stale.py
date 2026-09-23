@@ -1,10 +1,10 @@
 """A figure's own artists are not data, so a colorbar chart is not "stale".
 
-Round 30, r30s1 and r30s5 (3 occurrences each): running a cell printed
+Seen three times in two notebooks: running a cell printed
 "^STALE FILE: report/chart_...png not rewritten, though its data changed
 upstream" for a chart whose data had not changed -- compared against a
 freshly drawn one it was identical. "The kind of warning that trains me to
-ignore the real ones" (r30s5).
+ignore the real ones".
 
 A figure is vouched for by its history: the statements from
 ``fig, ax = plt.subplots()`` to the write, each with the lineages of what it

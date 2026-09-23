@@ -26,14 +26,14 @@ expressed in Python syntax that cash's AST analysis might mis-model:
 12. immediately-invoked lambda mutating an upstream list -> idempotence
     (object-protocol reset family, lambda channel).
 13. `global` statement inside a function defined AND called in the same cell
-    -> idempotence (regression variant of the CAS-68..80 family).
+    -> idempotence (regression variant of the object-protocol reset family).
 14. very long cell (60 sequential statements) -> statement-splitting
     integrity, cache stability on unchanged re-run, edit propagation.
 15. backslash line continuations inside an expression -> edit invalidation.
 
-Known limitations deliberately NOT re-filed: multi-target swap a,b = b,a
-(CAS-43), walrus-as-receiver / attribute / container-element / ternary alias
-(CAS-61), exhausted generators (CAS-50).
+Known limitations deliberately NOT re-filed: multi-target swap a,b = b,a,
+walrus-as-receiver / attribute / container-element / ternary alias,
+exhausted generators.
 """
 
 import sys

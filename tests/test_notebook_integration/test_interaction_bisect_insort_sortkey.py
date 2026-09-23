@@ -1,4 +1,4 @@
-"""Batch 472: bisect insort and sorted key functions."""
+"""bisect insort and sorted key functions."""
 
 import pytest
 

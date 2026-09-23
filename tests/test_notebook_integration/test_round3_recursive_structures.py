@@ -1,5 +1,5 @@
 """
-Batch 36: Recursive data structures, tree/graph traversal, and
+Recursive data structures, tree/graph traversal, and
 nested container patterns across cells.
 """
 

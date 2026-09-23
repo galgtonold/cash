@@ -1,4 +1,4 @@
-"""Batch 218 – Protocol/interface interaction tests.
+"""Protocol/interface interaction tests.
 
 Tests editing cells with abstract base class and protocol
 patterns and verifying downstream propagation.

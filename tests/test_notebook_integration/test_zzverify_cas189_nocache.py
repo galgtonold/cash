@@ -1,4 +1,4 @@
-"""CAS-189 verification: does a leading ``# @cash:no-cache`` cover the WHOLE cell?
+"""Verification: does a leading ``# @cash:no-cache`` cover the WHOLE cell?
 
 Empirical, external-counter based. Each statement in the annotated cell calls
 ``bump(tag)``, which appends a line to a file on disk. The file is read from the
@@ -89,4 +89,4 @@ def test_statement_adjacent_no_cache_still_scoped(nb_runner, tmp_path):
     got = _tags(sink)
     # Record whatever actually happens; s2 must at minimum re-fire.
     assert "s2" in got[3:], f"the statement-adjacent no-cache statement did not re-execute: {got}"
-    print(f"[CAS-189 control] after warm re-run, sink = {got}")
+    print(f"[no-cache control] after warm re-run, sink = {got}")

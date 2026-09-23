@@ -1,5 +1,5 @@
 """
-Stress Test Batch 4: File Dependencies, Badge Accuracy, Complex Interactions (Scenarios 96-130)
+Stress tests: File Dependencies, Badge Accuracy, Complex Interactions (Scenarios 96-130)
 
 Tests file dependency tracking, badge/metrics accuracy, complex multi-cell
 interactions, forbidden functions, randomness handling, and more.

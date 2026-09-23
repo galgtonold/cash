@@ -1,5 +1,5 @@
 """
-Batch 333: generator/iterator protocol patterns with caching.
+generator/iterator protocol patterns with caching.
 Tests generator functions, iter/next, StopIteration, and edit propagation.
 """
 

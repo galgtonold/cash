@@ -1,4 +1,4 @@
-"""Batch 254 – Decorator patterns with edits.
+"""Decorator patterns with edits.
 
 Tests custom decorators being edited and downstream function behavior.
 """

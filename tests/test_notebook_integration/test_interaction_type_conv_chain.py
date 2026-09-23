@@ -1,5 +1,5 @@
 """
-Batch 306: Type conversion chain interaction tests.
+Type conversion chain interaction tests.
 Tests str→int, list→tuple→set, and dict→items→sorted conversion chains.
 """
 

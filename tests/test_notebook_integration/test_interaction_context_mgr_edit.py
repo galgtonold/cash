@@ -1,4 +1,4 @@
-"""Batch 270 – Context manager pattern edits.
+"""Context manager pattern edits.
 
 Tests custom context managers with edits.
 """

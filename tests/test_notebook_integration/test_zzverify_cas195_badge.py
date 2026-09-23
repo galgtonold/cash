@@ -1,4 +1,4 @@
-"""CAS-195: ``%cash_badge print`` crashes on a NESTED control cell.
+"""``%cash_badge print`` crashes on a NESTED control cell.
 
 CONFIRMED on the working tree (post-6dc2540), with two corrections to the
 ticket:
@@ -78,7 +78,7 @@ def test_for_nested_in_if_badge_print_crashes(nb_runner):
     nb_runner.run_all()
 
     out = _check(nb_runner, "for-in-if", 2)
-    assert CRASH not in out, f"CAS-195 reproduced (for-in-if):\n{_ascii(out)}"
+    assert CRASH not in out, f"nested-block badge crash reproduced (for-in-if):\n{_ascii(out)}"
 
 
 def test_nested_if_in_if_badge_print(nb_runner):
@@ -95,7 +95,7 @@ def test_nested_if_in_if_badge_print(nb_runner):
     nb_runner.run_all()
 
     out = _check(nb_runner, "if-in-if", 2)
-    assert CRASH not in out, f"CAS-195 reproduced (if-in-if):\n{_ascii(out)}"
+    assert CRASH not in out, f"nested-block badge crash reproduced (if-in-if):\n{_ascii(out)}"
 
 
 # ---------------------------------------------------------------------------

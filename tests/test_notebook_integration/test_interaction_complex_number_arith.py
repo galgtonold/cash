@@ -1,4 +1,4 @@
-"""Batch 414: complex number arithmetic."""
+"""complex number arithmetic."""
 
 import pytest
 

@@ -1,4 +1,4 @@
-"""Batch 527: struct pack unpack binary format."""
+"""struct pack unpack binary format."""
 
 import pytest
 

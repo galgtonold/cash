@@ -1,7 +1,7 @@
-"""CAS-173: one SyntaxError in an upstream cell must not silently disable
+"""One SyntaxError in an upstream cell must not silently disable
 caching for the whole notebook.
 
-Two testers (P3, P5) independently hit this: SAVING (not even running) a
+Two people independently hit this: SAVING (not even running) a
 half-written upstream cell made every downstream cell recompute, with no
 message reaching the user. cash detected the parse failure precisely
 (``[UPSTREAM] Syntax error in cell N``) and swallowed it, while the badge and
@@ -16,10 +16,9 @@ The fix has two parts:
 These tests drive a REAL kernel via ``nb_runner`` and exercise the
 SAVE-not-run trigger: the broken cell is only written to disk, never executed.
 
-Distinct from CAS-163 (VALID multi-line ``%``-format code falsely rejected):
+Distinct from VALID multi-line ``%``-format code being falsely rejected:
 here the code is GENUINELY broken and must be reported, not swallowed - while
-a valid cell must still cache (the ``control`` test pins that CAS-163 stays
-fixed).
+a valid cell must still cache (the ``control`` test pins that).
 """
 
 import pytest
@@ -41,7 +40,7 @@ EXPENSIVE = (
 
 def test_broken_upstream_cell_keeps_independent_downstream_cache(nb_runner):
     """A/B/A: breaking an unrelated upstream cell (save-only) must not evict the
-    cache of a downstream cell that does not depend on it (CAS-173 CONTAIN)."""
+    cache of a downstream cell that does not depend on it (CONTAIN)."""
     nb_runner.create_notebook([SETUP, "y = 1", EXPENSIVE])
     nb_runner.start_kernel()
     nb_runner.run_all()
@@ -58,7 +57,7 @@ def test_broken_upstream_cell_keeps_independent_downstream_cache(nb_runner):
     out_b = nb_runner.get_output(3)
     assert shows_cached(out_b), (
         "A downstream cell that does NOT depend on the broken cell lost its "
-        "cache when an unrelated upstream cell had a SyntaxError (CAS-173).\n"
+        "cache when an unrelated upstream cell had a SyntaxError.\n"
         f"{out_b}"
     )
 
@@ -95,12 +94,12 @@ def test_dependent_downstream_cell_never_serves_wrong_value(nb_runner):
     out = nb_runner.get_output(3)
     assert "derived= 101" in out, (
         "a downstream cell that depends on the broken cell served a wrong value "
-        f"after the upstream cell was skipped (CAS-173 correctness).\n{out}"
+        f"after the upstream cell was skipped.\n{out}"
     )
 
 
 def test_valid_upstream_cell_still_caches_control(nb_runner):
-    """Control (CAS-163 guard): with a perfectly VALID upstream cell, the
+    """Control: with a perfectly VALID upstream cell, the
     downstream cell still restores. If the containment logic were too eager and
     treated valid cells as broken, this would regress."""
     nb_runner.create_notebook([SETUP, "y = 1", EXPENSIVE])

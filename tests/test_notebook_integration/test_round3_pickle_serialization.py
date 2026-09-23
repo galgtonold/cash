@@ -1,4 +1,4 @@
-"""Batch 46: Pickle/serialization edge cases — cash caching with pickle, struct, json."""
+"""Pickle/serialization edge cases — cash caching with pickle, struct, json."""
 
 import textwrap
 

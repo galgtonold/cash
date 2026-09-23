@@ -1,4 +1,4 @@
-"""Batch 388: functools.wraps and decorator metadata preservation."""
+"""functools.wraps and decorator metadata preservation."""
 
 import pytest
 

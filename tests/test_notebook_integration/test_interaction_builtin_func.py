@@ -1,4 +1,4 @@
-"""Batch 280 – Built-in function patterns with edits.
+"""Built-in function patterns with edits.
 
 Tests map, filter, reduce with function/data edits.
 """

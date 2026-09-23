@@ -1,4 +1,4 @@
-"""Batch 359: operator module and itemgetter/attrgetter patterns."""
+"""operator module and itemgetter/attrgetter patterns."""
 
 import pytest
 

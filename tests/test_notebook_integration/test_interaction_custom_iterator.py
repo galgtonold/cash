@@ -1,4 +1,4 @@
-"""Batch 375: custom iterator protocol (__iter__, __next__)."""
+"""custom iterator protocol (__iter__, __next__)."""
 
 import pytest
 

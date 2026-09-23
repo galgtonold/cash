@@ -1,5 +1,5 @@
 """
-Batch 25: Large-scale notebook simulation — 15-20 cell notebooks with
+Large-scale notebook simulation — 15-20 cell notebooks with
 realistic data science workflows testing end-to-end caching behavior.
 
 These tests simulate real notebooks that users would write, with realistic

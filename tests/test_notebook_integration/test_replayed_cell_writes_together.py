@@ -1,6 +1,6 @@
 """A cell replayed for a later cell writes all of its files, or none.
 
-Round 23 (r23s1's churn report). The report cell rebuilt ``report/`` with
+Seen in a churn-report notebook. The report cell rebuilt ``report/`` with
 ``shutil.rmtree``, wrote a chart per kind through a helper, and wrote a
 metrics file. Running a cell further down replayed the report cell for it,
 and the replay re-ran only the writes it could see in the statement text:
@@ -91,7 +91,7 @@ PACK_CELLS = [
 
 
 def test_after_a_restart_a_guarded_rmtree_is_replayed_with_its_mkdir(nb_runner):
-    """r23s2: `if PACK.exists(): shutil.rmtree(PACK)` binds nothing, so the
+    """`if PACK.exists(): shutil.rmtree(PACK)` binds nothing, so the
     simulation gave it no trace entry, and the replay after a restart ran the
     cell's `PACK.mkdir()` alone -- FileExistsError, reported as a broken
     upstream cell."""

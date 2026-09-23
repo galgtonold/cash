@@ -1,4 +1,4 @@
-"""Batch 366: multi-cell class evolution with method additions."""
+"""multi-cell class evolution with method additions."""
 
 import pytest
 

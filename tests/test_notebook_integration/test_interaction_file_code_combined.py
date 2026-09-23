@@ -1,4 +1,4 @@
-"""Batch 179 – File dependency combined with cell edit tests.
+"""File dependency combined with cell edit tests.
 
 Tests where both file content AND code change, verifying
 that cache correctly invalidates on either trigger.

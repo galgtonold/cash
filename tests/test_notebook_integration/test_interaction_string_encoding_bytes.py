@@ -1,4 +1,4 @@
-"""Batch 402: string encoding and byte operations."""
+"""string encoding and byte operations."""
 
 import pytest
 

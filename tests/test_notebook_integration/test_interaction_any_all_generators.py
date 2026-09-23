@@ -1,4 +1,4 @@
-"""Batch 436: any() and all() with generator expressions."""
+"""any() and all() with generator expressions."""
 
 import pytest
 

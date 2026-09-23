@@ -1,4 +1,4 @@
-"""Batch 512: fractions module exact rational arithmetic."""
+"""fractions module exact rational arithmetic."""
 
 import pytest
 

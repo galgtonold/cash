@@ -1,4 +1,4 @@
-"""Integration test for CAS-141: large, expensive results reach the disk tier.
+"""Integration test: large, expensive results reach the disk tier.
 
 Before the fix, the tiered backend's promotion policy modelled raw byte-I/O at a
 hardcoded 100 MB/s with zero serialization cost, so the ``io_time`` grew with

@@ -1,4 +1,4 @@
-"""Batch 245 – Complex lambda and higher-order function patterns.
+"""Complex lambda and higher-order function patterns.
 
 Tests lambdas, map/filter/reduce with edits.
 """

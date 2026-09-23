@@ -1,4 +1,4 @@
-"""Batch 383: hashlib hashing and digest comparison."""
+"""hashlib hashing and digest comparison."""
 
 import pytest
 

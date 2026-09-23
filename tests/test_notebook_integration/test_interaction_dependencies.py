@@ -1,4 +1,4 @@
-"""Batch 128 – Cross-cell data dependency interaction tests.
+"""Cross-cell data dependency interaction tests.
 
 Tests that exercise complex cross-cell data flows, transitive
 dependencies, diamond dependencies, and dependency chain changes.

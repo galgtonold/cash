@@ -1,7 +1,7 @@
 """A file rewritten by a statement is checked again by the statements after it.
 
 The statements of one cell share the answer for a file they depend on
-(``CacheFreshnessChecker.forget_file_answers``): r24s4 re-checked 10,000
+(``CacheFreshnessChecker.forget_file_answers``): one notebook re-checked 10,000
 documents per statement lookup. That sharing must end when a statement
 changes the file. Here the first and last statements recorded the same state
 of ``data.csv``; the statement between them rewrites it through a helper, only

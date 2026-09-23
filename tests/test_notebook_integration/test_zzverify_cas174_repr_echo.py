@@ -1,4 +1,4 @@
-"""CAS-174 verification: does %cash_on echo EVERY statement's repr?
+"""Verification: does %cash_on echo EVERY statement's repr?
 
 The claim: with cash on, every bare expression statement in a cell has its repr
 echoed, where plain IPython echoes only the cell's LAST expression. Ground truth
@@ -35,11 +35,11 @@ def test_cash_on_repr_echo_matches_cash_off(nb_runner):
 
     # Plain IPython echoes only the final expression -> "4".
     assert off == "4", f"baseline (cash off) is not plain-IPython semantics: {off!r}"
-    assert on == off, f"CAS-174 reproduces: cash on echoed {on!r}, cash off echoed {off!r}"
+    assert on == off, f"every-statement echo reproduces: cash on echoed {on!r}, cash off echoed {off!r}"
 
 
 def test_trailing_semicolon_suppresses_echo_under_cash(nb_runner):
-    """CAS-96 adjacent: a trailing ';' must suppress the final echo, with cash on."""
+    """A trailing ';' must suppress the final echo, with cash on."""
     nb_runner.create_notebook(
         [
             "import cash\n%cash_on",
@@ -80,4 +80,4 @@ def test_mixed_print_and_expressions(nb_runner):
     print(f"\ncash ON  (mixed) output: {on!r}")
     print(f"cash OFF (mixed) output: {off!r}")
 
-    assert on == off, f"CAS-174 reproduces (mixed cell): on={on!r} off={off!r}"
+    assert on == off, f"every-statement echo reproduces (mixed cell): on={on!r} off={off!r}"

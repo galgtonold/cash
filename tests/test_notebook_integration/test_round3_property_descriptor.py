@@ -1,4 +1,4 @@
-"""Batch 81: Property & descriptor patterns — cash caching with properties and descriptors."""
+"""Property & descriptor patterns — cash caching with properties and descriptors."""
 
 import textwrap
 

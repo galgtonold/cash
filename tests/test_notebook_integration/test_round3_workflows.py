@@ -1,5 +1,5 @@
 """
-Round 3 - Batch 9: Real-world workflows, error recovery, and complex patterns.
+Real-world workflows, error recovery, and complex patterns.
 
 Tests focusing on:
 1. Real-world data science workflows (sklearn, scipy, datetime)

@@ -1,4 +1,4 @@
-"""Batch 501: list slicing and slice object usage."""
+"""list slicing and slice object usage."""
 
 import pytest
 

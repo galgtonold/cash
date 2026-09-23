@@ -1,6 +1,6 @@
 """A timezone file read once per process does not change a load's lineage.
 
-Round 30, r30s1 (2/2): after editing a setup constant and re-running, the
+Reproduced 2/2: after editing a setup constant and re-running, the
 first restart re-ran the whole chain below the load. The load's lineage
 carried the files it read, and on the first load in a process that included
 ``tzdata/zoneinfo/UTC`` -- ``zoneinfo`` reads a zone once and keeps it for the

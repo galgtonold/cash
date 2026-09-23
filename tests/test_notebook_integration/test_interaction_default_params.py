@@ -1,4 +1,4 @@
-"""Batch 269 – Default parameter and keyword argument edit patterns.
+"""Default parameter and keyword argument edit patterns.
 
 Tests functions with default/keyword args, editing defaults.
 """

@@ -1,4 +1,4 @@
-"""Batch 252 – String template and formatting edit patterns.
+"""String template and formatting edit patterns.
 
 Tests various string formatting approaches with edits.
 """

@@ -1,4 +1,4 @@
-"""Batch 135 – Type conversion + structural change interaction tests.
+"""Type conversion + structural change interaction tests.
 
 Tests that exercise patterns where variable types change between
 runs (int→str, list→dict, etc.) and structural changes that

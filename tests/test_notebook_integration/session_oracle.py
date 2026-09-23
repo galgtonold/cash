@@ -1,4 +1,4 @@
-"""Run notebook cells top to bottom in plain Python -- the tester sessions' oracle.
+"""Run notebook cells top to bottom in plain Python -- the replayed sessions' oracle.
 
 ``python session_oracle.py <spec.json> <result.json>``. The spec names a work
 directory (already holding the session's input files) and the cell sources,

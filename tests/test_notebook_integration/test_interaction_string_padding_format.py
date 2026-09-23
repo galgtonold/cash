@@ -1,4 +1,4 @@
-"""Batch 518: string ljust rjust center zfill formatting."""
+"""string ljust rjust center zfill formatting."""
 
 import pytest
 

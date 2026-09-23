@@ -1,7 +1,7 @@
 """A helper that is slow to import is imported again after an edit, not restored.
 
 The intermittent ``test_a_helper_edit_reaches_a_cell_below::test_a_from_import``
-failure (sweep9, 2026-09-21; once in round 28), caught with a trace while the
+failure, caught with a trace while the
 machine was out of memory: the simulation found ``tbl`` stale after the helper
 edit, exactly as in a passing run, but the plan RESTORED
 ``from helperfrom import summary`` from the cache instead of re-running it. A

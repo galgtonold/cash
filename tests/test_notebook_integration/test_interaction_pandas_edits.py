@@ -1,4 +1,4 @@
-"""Batch 149 – Pandas DataFrame interaction tests.
+"""Pandas DataFrame interaction tests.
 
 Tests with pandas DataFrames across cells — loading, filtering,
 transforming, and editing operations while verifying caching.

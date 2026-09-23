@@ -1,4 +1,4 @@
-"""Batch 177 – Enum and constant pattern interaction tests.
+"""Enum and constant pattern interaction tests.
 
 Tests editing enum definitions, constant values, and
 patterns that use them across cells.

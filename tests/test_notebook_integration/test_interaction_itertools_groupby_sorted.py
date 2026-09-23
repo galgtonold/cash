@@ -1,4 +1,4 @@
-"""Batch 503: itertools groupby with sorted data."""
+"""itertools groupby with sorted data."""
 
 import pytest
 

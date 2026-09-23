@@ -1,4 +1,4 @@
-"""Batch 419: string maketrans and translate."""
+"""string maketrans and translate."""
 
 import pytest
 

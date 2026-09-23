@@ -1,4 +1,4 @@
-"""Batch 203 – Object identity and equality interaction tests.
+"""Object identity and equality interaction tests.
 
 Tests editing equality vs identity checks, hash-based
 comparisons, and their cache implications.

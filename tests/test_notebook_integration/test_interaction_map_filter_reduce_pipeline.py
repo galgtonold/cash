@@ -1,4 +1,4 @@
-"""Batch 464: map/filter/reduce pipeline composition."""
+"""map/filter/reduce pipeline composition."""
 
 import pytest
 

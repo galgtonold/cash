@@ -1,4 +1,4 @@
-"""Batch 53: Iterator & custom container patterns — __iter__, __getitem__, __contains__."""
+"""Iterator & custom container patterns — __iter__, __getitem__, __contains__."""
 
 import textwrap
 

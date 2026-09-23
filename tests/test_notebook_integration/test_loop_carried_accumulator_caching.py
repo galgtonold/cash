@@ -1,9 +1,9 @@
 """Loop-carried accumulator recurrences skip their expensive work on a warm
-re-run (CAS-204 — investigated, found already correct, pinned here).
+re-run (investigated, found already correct, pinned here).
 
-CAS-204 was filed off a round-8 gate report that the "running-balance equity
+A bug report claimed that the "running-balance equity
 accumulator" (``acc = acc + work(e); curve.append(acc)``) was *not cached*, and
-proposed widening the CAS-145 ``cacheable_accumulator_loop`` shape gate to admit
+proposed widening the ``cacheable_accumulator_loop`` shape gate to admit
 it. Measured against the real-kernel oracle with an EXTERNAL call counter, that
 premise did not hold: the recurrence already caches in every arrangement tried
 (seeds as two statements, as a tuple assign, in a previous cell, with a
@@ -18,7 +18,7 @@ What actually happens, per the ``%cash_badge print`` output:
 The expensive recurrence statement is cached per-iteration, so the work is
 skipped; the cheap ``curve.append(acc)`` re-executes because it is an in-place
 mutation that must rebuild the list (restoring it instead would be the alias
-hazard CAS-184 covers). Reading that per-statement "in-place mutation" badge as
+hazard the alias guard covers). Reading that per-statement "in-place mutation" badge as
 "the loop is not cached" is what produced the report.
 
 So the gate was NOT widened — doing so would have added risk to a load-bearing
@@ -54,7 +54,7 @@ def _cold_warm_calls(nb_runner, tmp_path, loop_src, tail, loop_idx=4):
 
 
 def test_append_accumulator_skips_work_on_rerun(nb_runner, tmp_path):
-    """CAS-145 control: the plain append accumulator."""
+    """Control: the plain append accumulator."""
     cold, warm, tail = _cold_warm_calls(
         nb_runner, tmp_path, "out = []\nfor e in items:\n    out.append(slow(e))", "print(f'out={out}')"
     )
@@ -81,7 +81,7 @@ def test_scalar_reduction_augassign_skips_work_on_rerun(nb_runner, tmp_path):
 
 
 def test_equity_curve_recurrence_skips_work_on_rerun(nb_runner, tmp_path):
-    """THE CAS-204 shape: a running balance appended to a curve each iteration.
+    """The reported shape: a running balance appended to a curve each iteration.
 
     Values are asserted element-wise too — a recurrence restored out of order
     would corrupt the running total, not just the final sum.

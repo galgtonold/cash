@@ -1,5 +1,5 @@
 """
-Round 3 Batch 5: State mutation patterns, global state, class method chains,
+State mutation patterns, global state, class method chains,
 decorator patterns, generator exhaustion, context managers, and timing-sensitive patterns.
 
 These tests focus on tricky mutation/stateful patterns that stress the caching system.

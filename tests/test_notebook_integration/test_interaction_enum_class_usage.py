@@ -1,4 +1,4 @@
-"""Batch 409: enum class definitions and usage."""
+"""enum class definitions and usage."""
 
 import pytest
 

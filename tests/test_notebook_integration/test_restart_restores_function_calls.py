@@ -1,6 +1,6 @@
 """After a restart, a statement that calls a notebook function is restored, not re-run.
 
-Round 23 (r23s3, 2026-09-14): a restart and one run of the last cell re-ran the
+Seen in a user's notebook: a restart and one run of the last cell re-ran the
 whole notebook -- 350 s against 370 s uncached. The upstream simulation meets
 ``summary = slow_summary(raw)`` before ``def slow_summary`` has run again, so
 the function is not in ``user_ns``, and the two key components that come from
@@ -48,7 +48,7 @@ _RAN = "__import__('cash.notebook.statement.processor', fromlist=['_']).Statemen
 
 #: ``load`` is quick, so ``raw`` lives in RAM only and is gone after the
 #: restart -- the shape that makes a re-run expensive: rebuilding an input
-#: the restored statement never needed (in r23s2, a loop over 1,312 files).
+#: the restored statement never needed (in one notebook, a loop over 1,312 files).
 SETUP = (
     "import time\n"
     "SCALE = 3\n"
@@ -106,7 +106,7 @@ def test_a_call_on_a_module_does_not_change_it_after_a_restart(nb_runner, _teed)
     ``pd``'s lineage alone. After a restart ``pd`` was not imported yet and the
     runtime's verdict on the call was gone, so the simulation read it as an
     unknown method that mutates its receiver and bumped ``pd`` -- the key of
-    every statement reading ``pd`` moved, and nothing restored (r23s2)."""
+    every statement reading ``pd`` moved, and nothing restored."""
     pytest.importorskip("pandas")
     cells = [
         "import cash\n%cash_on",
@@ -155,7 +155,7 @@ def test_a_value_built_by_an_imported_class_is_restored_after_a_restart(nb_runne
     """``DATA = Path(...)``: the runtime folds ``Path``'s source digest into
     ``DATA``'s lineage. After a restart ``Path`` was not imported yet, the
     simulation left the digest out, and nothing built from ``DATA`` restored
-    (r23s2: ``EXPORTS``, and so every table in the notebook)."""
+    (in the user's notebook: ``EXPORTS``, and so every table in the notebook)."""
     ran = _restores_only_the_report(
         nb_runner,
         ["import cash\n%cash_on", SLOW_LEN, "DATA = Path('data_dir')", "total = slow_len(DATA)", "print('T', total)"],
@@ -164,7 +164,7 @@ def test_a_value_built_by_an_imported_class_is_restored_after_a_restart(nb_runne
 
 
 def test_a_path_a_directory_is_made_from_is_restored_after_a_restart(nb_runner, _teed):
-    """r23s2's ``PACK = Path('pack'); PACK.mkdir(exist_ok=True)``: ``Path``'s
+    """A user's ``PACK = Path('pack'); PACK.mkdir(exist_ok=True)``: ``Path``'s
     digest in ``OUT``'s lineage, and a method called on ``OUT`` that is decided
     without a verdict (it writes the filesystem, not the object)."""
     ran = _restores_only_the_report(
@@ -186,7 +186,7 @@ def test_names_from_a_module_not_loaded_yet_are_restored_after_a_restart(nb_runn
     the def's lineage; after a restart neither module is loaded when the
     simulation meets the import, so it took both for modules, had no digest,
     and every call of the helper got a lineage the runtime never gave it
-    (r23s2: ``from statsmodels... import ExponentialSmoothing``, a 45 s cell)."""
+    (in the user's notebook: ``from statsmodels... import ExponentialSmoothing``, a 45 s cell)."""
     cells = [
         "import cash\n%cash_on",
         "import time\nfrom zipapp import get_interpreter\nfrom wave import Wave_read, Wave_write\n"

@@ -1,4 +1,4 @@
-"""Batch 54: Logging & debug patterns — cash caching with logging, warnings, traceback."""
+"""Logging & debug patterns — cash caching with logging, warnings, traceback."""
 
 import textwrap
 

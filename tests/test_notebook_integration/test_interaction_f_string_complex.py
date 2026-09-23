@@ -1,4 +1,4 @@
-"""Batch 211 – Complex f-string interaction tests.
+"""Complex f-string interaction tests.
 
 Tests editing cells that contain complex f-string
 expressions and verifying proper output propagation.

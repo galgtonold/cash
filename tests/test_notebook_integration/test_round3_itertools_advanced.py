@@ -1,4 +1,4 @@
-"""Batch 79: Itertools advanced — cash caching with itertools combinatorial patterns."""
+"""Itertools advanced — cash caching with itertools combinatorial patterns."""
 
 import textwrap
 

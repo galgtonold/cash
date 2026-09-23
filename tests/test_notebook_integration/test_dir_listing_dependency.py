@@ -1,4 +1,4 @@
-"""CAS-85: a directory listing (glob/os.listdir) is a tracked dependency.
+"""A directory listing (glob/os.listdir) is a tracked dependency.
 
 A cell that enumerates a directory and reads the matches used to get file-deps
 only for the files READ on the first run, so a NEW matching file was invisible
@@ -27,7 +27,7 @@ def test_new_file_in_globbed_dir_invalidates(nb_runner, tmp_path):
     nb_runner.run_all()
     assert "vals = [1, 2]" in nb_runner.get_output(1)
 
-    time.sleep(1.1)  # rule out mtime-granularity timing (CAS-10)
+    time.sleep(1.1)  # rule out mtime-granularity timing
     (gdir / "d3.num").write_text("30")
     nb_runner.run_all()
     assert "vals = [1, 2, 30]" in nb_runner.get_output(1), nb_runner.get_output(1)
@@ -59,7 +59,7 @@ def test_unchanged_globbed_dir_stays_cached(nb_runner, tmp_path):
 
 @pytest.mark.parametrize("listing", ["glob('*.num')", "rglob('*.num')", "iterdir()"])
 def test_new_file_in_pathlib_listed_dir_invalidates(nb_runner, tmp_path, listing):
-    """Round 22: ``Path.glob`` lists through a captured ``os.scandir`` on 3.13
+    """``Path.glob`` lists through a captured ``os.scandir`` on 3.13
     (and pathlib's accessor on 3.10) -- a new month's file was never seen."""
     pdir = tmp_path / "pdir"
     pdir.mkdir()

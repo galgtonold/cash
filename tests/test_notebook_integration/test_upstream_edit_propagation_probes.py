@@ -1,4 +1,4 @@
-"""Bug-hunt round 2: upstream-edit propagation (cash's core value prop).
+"""Bug hunt: upstream-edit propagation (cash's core value prop).
 
 Edit an upstream cell, then run a DOWNSTREAM cell only; cash must auto-re-execute
 the changed upstream and propagate the new value. Devious edge cases.

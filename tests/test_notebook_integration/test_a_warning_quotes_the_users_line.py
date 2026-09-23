@@ -1,6 +1,6 @@
 """A warning raised from a cached call quotes the line the user wrote.
 
-Round 25's r25s5: a pandas warning quoted ``__cash_call__(fit_series, 0)(g,
+A pandas warning quoted ``__cash_call__(fit_series, 0)(g,
 ...)`` as the offending source line. Python prints that line from the source
 cash registers for the statement it compiled, and with calls routed through
 the cache that was the rewritten statement.

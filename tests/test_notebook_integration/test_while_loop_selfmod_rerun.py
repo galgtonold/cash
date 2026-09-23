@@ -1,5 +1,5 @@
 """A while/with loop that self-modifies no-lineage body variables must recompute
-from its cell-entry base on an isolated re-run, not accumulate (CAS-59).
+from its cell-entry base on an isolated re-run, not accumulate.
 
 `while n < 5: n += 1; total += n` re-run in isolation previously gave a
 nondeterministic 0 / 15 / 30: the loop runs as a single opaque unit, so on
@@ -74,7 +74,7 @@ def test_while_nested_in_if(nb_runner):
 
 
 def test_while_new_var_preserved(nb_runner):
-    """CAS-42 guard: a while loop that builds a fresh list (not read at entry)
+    """Guard: a while loop that builds a fresh list (not read at entry)
     is idempotent and must keep producing the right value on re-run."""
     _rerun(
         nb_runner,

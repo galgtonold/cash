@@ -1,4 +1,4 @@
-"""Batch 525: hashlib sha256 md5 hexdigest computation."""
+"""hashlib sha256 md5 hexdigest computation."""
 
 import pytest
 

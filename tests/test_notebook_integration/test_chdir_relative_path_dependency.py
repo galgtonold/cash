@@ -1,4 +1,4 @@
-"""CAS-84: os.chdir + relative-path reads must re-resolve against the live cwd.
+"""os.chdir + relative-path reads must re-resolve against the live cwd.
 
 A relative-path read (``pd.read_csv('data.csv')``) recorded only the realpath
 resolved at first execution, frozen to that cwd. After editing an ``os.chdir``

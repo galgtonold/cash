@@ -1,4 +1,4 @@
-"""CAS-158: the `@cash.cache` DECORATOR must warn about unseeded randomness,
+"""The `@cash.cache` DECORATOR must warn about unseeded randomness,
 the same way the notebook path already does.
 
 Before the fix the decorator performed NO randomness detection at all: it would
@@ -46,7 +46,7 @@ def _randomness_warnings(records):
 
 
 # ---------------------------------------------------------------------------
-# Notebook path: the protection CAS-135 shipped. The reference the decorator is
+# Notebook path: the protection the notebook warning ships. The reference the decorator is
 # compared against -- kept intact so a regression here is attributed correctly.
 # ---------------------------------------------------------------------------
 
@@ -93,7 +93,7 @@ def _unseeded_generator():
     ],
 )
 def test_decorator_warns_on_unseeded_randomness(fn, label):
-    """CAS-158: the decorator is no longer silent about an unseeded draw."""
+    """The decorator is no longer silent about an unseeded draw."""
     c = _fresh_cash()
 
     with warnings.catch_warnings(record=True) as at_decoration:
@@ -101,7 +101,7 @@ def test_decorator_warns_on_unseeded_randomness(fn, label):
         cached = c.cache(fn)
 
     decoration_msgs = _randomness_warnings(at_decoration)
-    assert decoration_msgs, f"{label}: decorator did not warn (CAS-158 regressed)"
+    assert decoration_msgs, f"{label}: decorator did not warn (regressed)"
     assert COLD_TEXT in decoration_msgs[0], (
         f"{label}: message diverged from the notebook path's wording: {decoration_msgs[0]!r}"
     )
@@ -149,7 +149,7 @@ def test_decorator_warning_is_discoverable_via_cache_info():
 # ---------------------------------------------------------------------------
 # The other direction: a SEEDED draw is reproducible and must stay silent.
 # This is the whole point of the seed-tracking the notebook path already does
-# (CAS-154/167) -- a detector that warns on everything is useless.
+# -- a detector that warns on everything is useless.
 # ---------------------------------------------------------------------------
 
 
@@ -257,18 +257,18 @@ def test_decorator_silent_when_source_unavailable():
 
 
 def test_decorator_silent_on_unseeded_sklearn_fit():
-    """OUT OF SCOPE for CAS-158's source-based check: randomness inside `.fit()`.
+    """OUT OF SCOPE for the decorator's source-based check: randomness inside `.fit()`.
 
     An unseeded estimator is a real freeze hazard, but the randomness lives in
     sklearn's compiled `.fit()` -- bootstrap sampling, weight init -- not in any
     Python call an AST can see. The notebook path catches this via a separate
-    RUNTIME channel (CAS-167) that inspects the live estimator
+    RUNTIME channel that inspects the live estimator
     (`get_params()['random_state'] is None`).
 
     That channel cannot be lifted to decoration time: it needs the estimator
     OBJECT, which only exists once the function runs. Porting it would mean a
-    per-call check, which CAS-158 explicitly rules out. Recorded here as a known,
-    deliberate gap so it is not mistaken for the bug CAS-158 fixed.
+    per-call check, which the decorator check explicitly rules out. Recorded here as a known,
+    deliberate gap so it is not mistaken for the bug the decorator check fixed.
     """
     sk = pytest.importorskip("sklearn.ensemble")
     c = _fresh_cash()
@@ -288,6 +288,6 @@ def test_decorator_silent_on_unseeded_sklearn_fit():
     assert fit_model(5) == fit_model(5), "fit was not frozen"
     # Documents the gap; flip this if the runtime channel is ever ported.
     assert not _randomness_warnings(rec), (
-        "decorator now warns on unseeded fit -- the CAS-167 runtime channel "
+        "decorator now warns on unseeded fit -- the notebook's runtime channel "
         "appears to have been ported; update this test to assert the new behaviour"
     )

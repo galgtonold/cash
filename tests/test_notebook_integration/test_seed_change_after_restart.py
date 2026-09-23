@@ -1,6 +1,6 @@
 """Changing a seed must not serve the previous seed's result after a restart.
 
-The failing shape, found by an adversarial tester sweep against the 0.1.0
+The failing shape, found by an adversarial sweep against the 0.1.0
 wheel and reproduced against a real Jupyter server:
 
     SEED = 12345 -> accuracy 0.94140000000000001

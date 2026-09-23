@@ -1,4 +1,4 @@
-"""Batch 437: walrus operator and conditional expressions."""
+"""walrus operator and conditional expressions."""
 
 import pytest
 

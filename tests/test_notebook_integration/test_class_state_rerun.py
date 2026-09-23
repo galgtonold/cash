@@ -1,5 +1,5 @@
 """Hidden mutation of shared class state via a constructor or instance method must
-reset on isolated re-run (CAS-73, extends CAS-68). Constructing an object or
+reset on isolated re-run. Constructing an object or
 calling an instance method mutates a class variable (``Reg.registry``,
 ``Shared.data``) or an instance attribute reached through a method whose body
 cash does not analyse; on an isolated re-run the state accumulates.
@@ -53,7 +53,7 @@ def test_instance_method_appends_and_returns(nb_runner):
 
 
 @pytest.mark.xfail(
-    reason="CAS-75: cross-cell class-var accumulator needs a "
+    reason="cross-cell class-var accumulator needs a "
     "per-cell snapshot; class-def re-run is suppressed to "
     "avoid clobbering the upstream cell's contribution",
     strict=False,
@@ -61,7 +61,7 @@ def test_instance_method_appends_and_returns(nb_runner):
 def test_init_increments_class_counter(nb_runner):
     # A class counter incremented by an UPSTREAM cell (w0) AND this cell (w): the
     # class-def reset is suppressed (it would clobber w0), so the re-run still
-    # accumulates. See CAS-75.
+    # accumulates.
     _rerun(
         nb_runner,
         "class Widget:\n    count = 0\n    def __init__(self):\n        Widget.count += 1\nw0 = Widget()",

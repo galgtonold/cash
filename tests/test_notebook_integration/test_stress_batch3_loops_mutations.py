@@ -1,5 +1,5 @@
 """
-Stress Test Batch 3: Loops, Mutations, Control Structures (Scenarios 66-95)
+Stress tests: Loops, Mutations, Control Structures (Scenarios 66-95)
 
 Tests loop caching (empty, single, break, continue, nested), mutation detection,
 while loops, if/else branches, and side effect handling.

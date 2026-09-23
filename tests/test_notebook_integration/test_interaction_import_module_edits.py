@@ -1,4 +1,4 @@
-"""Batch 139 – Import and module interaction tests.
+"""Import and module interaction tests.
 
 Tests where users import modules, edit imports, change which
 modules are used, and verify caching handles module changes.

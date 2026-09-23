@@ -1,4 +1,4 @@
-"""Batch 258 – Partial application and functools patterns.
+"""Partial application and functools patterns.
 
 Tests functools.partial, lru_cache, and related patterns with edits.
 """

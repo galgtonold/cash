@@ -1,4 +1,4 @@
-"""Batch 410: closure scope and nonlocal variable capture."""
+"""closure scope and nonlocal variable capture."""
 
 import pytest
 

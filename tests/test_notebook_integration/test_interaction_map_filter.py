@@ -1,5 +1,5 @@
 """
-Batch 308: Mapping and filtering with functions interaction tests.
+Mapping and filtering with functions interaction tests.
 Tests that editing filter/map functions or data properly invalidates downstream.
 """
 

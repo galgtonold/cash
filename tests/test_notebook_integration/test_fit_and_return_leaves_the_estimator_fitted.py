@@ -1,6 +1,6 @@
 """``X = vec.fit_transform(texts)`` leaves ``vec`` fitted on every run.
 
-Round 23 (r23s4). The statement returns ``X`` AND fits ``vec`` in place; it
+The statement returns ``X`` AND fits ``vec`` in place; it
 was cached with ``X`` as its only output, so a hit restored ``X`` and left the
 freshly constructed ``vec`` unfitted -- silent in the same kernel,
 ``NotFittedError`` after a restart. The same in a loop:

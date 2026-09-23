@@ -1,6 +1,6 @@
-"""CAS-199: a draw whose return is CAPTURED must still re-execute on a warm run.
+"""A draw whose return is CAPTURED must still re-execute on a warm run.
 
-CAS-194 fixed the bare form ``ax.hist(data)`` -- a method call on a live Axes
+The bare form ``ax.hist(data)`` was fixed first -- a method call on a live Axes
 draws on it whatever it returns, so it is re-executed, not cached. But the
 classifier only inspected bare-``Expr`` method calls, so the far more common
 CAPTURED form ::
@@ -30,14 +30,14 @@ SETUP = "import matplotlib.pyplot as plt\nimport numpy as np\nimport cash\n%cash
 def test_captured_hist_survives_figure_reconstruction(nb_runner, tmp_path):
     """``counts, bins, patches = ax.hist(...)`` must redraw on reconstruction.
 
-    Same reconstruction trigger as the CAS-194 bare-form test, but with the
+    Same reconstruction trigger as the bare-form test, but with the
     return CAPTURED into an assignment. The saver cell consumes only ``axh``
     (via ``len(axh.patches)``), NOT the captured tuple -- so nothing forces the
     hist to re-run by data-dependency; the figure's reconstruction must redraw
     it from its receiver-mutation lineage. Under the bug the captured hist was
     cached, never part of that lineage, so editing the data and re-saving left
     the rebuilt Axes empty (PATCH: 0) -- a blank histogram with a green badge.
-    The bare control ``axp.plot(...)`` (CAS-194) is the survivor comparison.
+    The bare control ``axp.plot(...)`` is the survivor comparison.
     """
     chart = (tmp_path / "panel.png").as_posix()
     blank = (tmp_path / "blank.png").as_posix()
@@ -46,7 +46,7 @@ def test_captured_hist_survives_figure_reconstruction(nb_runner, tmp_path):
             SETUP,
             "data = np.arange(500) % 11",
             "fig, (axp, axh) = plt.subplots(1, 2, figsize=(8, 3), dpi=100)",
-            "axp.plot(range(20), [i * i for i in range(20)])",  # artist-return control (CAS-194)
+            "axp.plot(range(20), [i * i for i in range(20)])",  # artist-return control
             "counts, bins, patches = axh.hist(data, bins=11)",  # CAPTURED data-tuple return
             f"fig.savefig('{chart}')\nprint('LINES:', len(axp.lines), 'PATCH:', len(axh.patches))",
             # A same-geometry blank baseline for the pixel check.
@@ -67,7 +67,7 @@ def test_captured_hist_survives_figure_reconstruction(nb_runner, tmp_path):
     assert "PATCH: 11" in out, (
         f"the captured-return histogram blanked on reconstruction: "
         f"`counts, bins, _ = ax.hist(...)` was cached and its draw skipped "
-        f"(CAS-199). Got:\n{out}"
+        f"Got:\n{out}"
     )
     assert "LINES: 1" in out, f"control .plot() panel also blanked. Got:\n{out}"
 
@@ -80,7 +80,7 @@ def test_captured_hist_survives_figure_reconstruction(nb_runner, tmp_path):
     differing = float((np.abs(chart_px - blank_px) > 0.01).any(axis=-1).mean())
     assert differing > 0.01, (
         f"fig.savefig() wrote a blank chart on the warm re-run: only "
-        f"{differing:.3%} of pixels differ from an empty two-axes render (CAS-199)."
+        f"{differing:.3%} of pixels differ from an empty two-axes render."
     )
 
 
@@ -114,7 +114,7 @@ def test_captured_pie_sibling_survives_reconstruction(nb_runner, tmp_path):
     out = nb_runner.get_output(5)
     assert "WEDGES: 4" in out, (
         f"the captured-return pie blanked on reconstruction: `wedges, texts = "
-        f"ax.pie(...)` was cached and its wedges never redrawn (CAS-199). Got:\n{out}"
+        f"ax.pie(...)` was cached and its wedges never redrawn. Got:\n{out}"
     )
 
 
@@ -142,10 +142,10 @@ def test_pure_capture_on_ordinary_receiver_still_caches(nb_runner):
     nb_runner.run_cells([3])
     out = nb_runner.get_output(3)
     assert shows_cached(out), (
-        f"a captured pure read `m = df.corr()` stopped caching -- the CAS-199 "
+        f"a captured pure read `m = df.corr()` stopped caching -- the captured-"
         f"draw rule over-reached onto an ordinary (non-Axes) receiver. Got:\n{out}"
     )
     assert "In-place mutation" not in out, (
         f"`m = df.corr()` was wrongly routed to skip-cache as a mutation -- the "
-        f"CAS-199 rule must fire ONLY for identity-coupled receivers. Got:\n{out}"
+        f"captured-draw rule must fire ONLY for identity-coupled receivers. Got:\n{out}"
     )

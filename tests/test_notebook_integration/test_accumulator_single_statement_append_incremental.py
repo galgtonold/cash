@@ -1,14 +1,14 @@
 """Append to a single-statement accumulator loop; count real executions
-against a cash-off oracle (CAS-259).
+against a cash-off oracle.
 
 Regression guard for the removed ``cacheable_accumulator_loop`` fast path
-(``control_structures/processor.py``, deleted with CAS-259). That mechanism
+(``control_structures/processor.py``, since deleted). That mechanism
 matched the NARROW shape ``out = []`` immediately followed, in the SAME
 cell with no intervening statement, by ``for t in xs: out.append(compute(t))``
 -- and routed the WHOLE loop through the statement cache as ONE unit. The
 unit's cache key includes the iterable's lineage, so appending a single item
 to ``xs`` invalidated the whole unit and re-ran EVERY ``compute()`` call --
-exactly as expensive as no caching at all (CAS-259's measured "Arm A").
+exactly as expensive as no caching at all (measured).
 
 No existing test caught this. Every prior test of this shape either:
 

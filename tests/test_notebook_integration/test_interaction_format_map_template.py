@@ -1,4 +1,4 @@
-"""Batch 489: string formatting with format_map and template."""
+"""string formatting with format_map and template."""
 
 import pytest
 

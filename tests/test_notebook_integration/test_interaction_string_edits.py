@@ -1,4 +1,4 @@
-"""Batch 142 – String operations and formatting interaction tests.
+"""String operations and formatting interaction tests.
 
 Tests where users perform string operations across cells,
 edit string content and formatting, and verify caching

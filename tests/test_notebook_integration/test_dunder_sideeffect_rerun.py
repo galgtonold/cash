@@ -1,5 +1,5 @@
-"""Hidden mutation through a custom dunder method must reset on isolated re-run
-(CAS-70). An operation that implicitly invokes a user-defined
+"""Hidden mutation through a custom dunder method must reset on isolated re-run.
+An operation that implicitly invokes a user-defined
 ``__setitem__`` / ``__delitem__`` / ``__getitem__`` / ``__call__`` whose body
 mutates hidden state (a module free variable or ``self``) accumulates on an
 isolated re-run, because cash treats the operation as a builtin-container op or

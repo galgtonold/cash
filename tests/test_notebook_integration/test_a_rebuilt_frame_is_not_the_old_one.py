@@ -1,7 +1,6 @@
 """A frame rebuilt differently is a different frame, whatever the loop over it says.
 
-Round 26, the month-end close (r26s2), and the only wrong number the round put
-in a deliverable. A cell built ``status_all`` one way, then looped over it
+A month-end close, and a wrong number that reached a deliverable. A cell built ``status_all`` one way, then looped over it
 writing columns in place::
 
     status_all = pd.concat([...])                     # Monday

@@ -1,4 +1,4 @@
-"""Batch 229 – Comprehension filter and transform edit tests.
+"""Comprehension filter and transform edit tests.
 
 Tests editing filter conditions and transformations in various
 comprehension expressions.

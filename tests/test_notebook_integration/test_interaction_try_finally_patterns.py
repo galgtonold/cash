@@ -1,4 +1,4 @@
-"""Batch 341: try/except/finally patterns with cell edits."""
+"""try/except/finally patterns with cell edits."""
 
 import pytest
 

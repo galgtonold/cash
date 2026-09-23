@@ -1,4 +1,4 @@
-"""Batch 365: list slicing with step and negative indices."""
+"""list slicing with step and negative indices."""
 
 import pytest
 

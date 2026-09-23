@@ -1,4 +1,4 @@
-"""Batch 513: functools wraps and decorator chaining."""
+"""functools wraps and decorator chaining."""
 
 import pytest
 

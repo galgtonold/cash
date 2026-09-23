@@ -1,5 +1,5 @@
 """
-Batch 28: Exception handling, try/except, custom exceptions, error propagation,
+Exception handling, try/except, custom exceptions, error propagation,
 and conditional error recovery across cells.
 """
 

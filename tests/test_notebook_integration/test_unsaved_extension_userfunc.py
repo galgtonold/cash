@@ -1,4 +1,4 @@
-"""CAS-88: an unsaved cell edit whose new code routes through a user function
+"""An unsaved cell edit whose new code routes through a user function
 must be accepted as the current truth, not discarded in favour of a stale cache.
 
 The bug had two layers: (1) ``_is_valid_extension`` hand-rolled the lineage

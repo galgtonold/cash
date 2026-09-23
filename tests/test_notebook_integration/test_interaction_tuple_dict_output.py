@@ -1,5 +1,5 @@
 """
-Batch 310: Tuple/dict function output patterns interaction tests.
+Tuple/dict function output patterns interaction tests.
 Tests multiple return value patterns with cache invalidation.
 """
 

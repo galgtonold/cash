@@ -1,4 +1,4 @@
-"""Batch 443: namedtuple _replace and _asdict methods."""
+"""namedtuple _replace and _asdict methods."""
 
 import pytest
 

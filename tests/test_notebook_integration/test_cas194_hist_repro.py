@@ -1,4 +1,4 @@
-"""CAS-194: ax.hist() must be treated as an in-place Axes draw, not cached.
+"""ax.hist() must be treated as an in-place Axes draw, not cached.
 
 ``.hist()`` returns a ``(counts, bins, BarContainer)`` data tuple, so it used to
 slip the receiver-mutation classifier (which keyed on the return type) and was
@@ -46,7 +46,7 @@ def test_hist_panel_survives_figure_reconstruction(nb_runner, tmp_path):
     out = nb_runner.get_output(6)
     assert "PATCH: 11" in out, (
         f"the histogram panel blanked on reconstruction: ax.hist() was not "
-        f"re-executed with the rebuilt figure (CAS-194). Got:\n{out}"
+        f"re-executed with the rebuilt figure. Got:\n{out}"
     )
     assert "LINES: 1" in out, f"control .plot() panel also blanked. Got:\n{out}"
 
@@ -59,5 +59,5 @@ def test_hist_panel_survives_figure_reconstruction(nb_runner, tmp_path):
     differing = float((np.abs(chart_px - blank_px) > 0.01).any(axis=-1).mean())
     assert differing > 0.01, (
         f"fig.savefig() wrote a blank chart after reconstruction: only "
-        f"{differing:.3%} of pixels differ from an empty two-axes render (CAS-194)."
+        f"{differing:.3%} of pixels differ from an empty two-axes render."
     )

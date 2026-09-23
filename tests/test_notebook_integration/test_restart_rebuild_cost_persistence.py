@@ -3,7 +3,7 @@
 A statement is written to disk when its own compute time clears the floor
 (0.1 s), so ``latest = int(raw['v'].max())`` -- milliseconds -- lived in RAM
 only. After a restart the next cell that needed it rebuilt ``raw`` and
-everything behind it: in round 23's r23s2, 49 statements and a 1,200-file
+everything behind it: in one user's notebook, 49 statements and a 1,200-file
 folder read again (35 s) for a table cell whose inputs were a few KB. Each
 read there was under the floor too, so nothing in the chain was on disk.
 
@@ -26,7 +26,7 @@ SETUP = (
     "import glob\nimport time\nimport pandas as pd\ndef slow_read(f):\n    time.sleep(0.06)\n    return pd.read_csv(f)"
 )
 # Every read is under the persistence floor on its own; together they are not.
-# A body of several statements, as r23s2's: cached per iteration, in RAM.
+# A body of several statements, as the user's was: cached per iteration, in RAM.
 LOAD = (
     "files = sorted(glob.glob('exports/*.csv'))\n"
     "parts = []\n"

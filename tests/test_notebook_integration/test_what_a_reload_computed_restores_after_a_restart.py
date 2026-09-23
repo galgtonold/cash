@@ -1,7 +1,7 @@
 """What was computed after a helper reload restores in the next kernel.
 
-Round 29, r29s1 (2/2 in ``repro/repro_restart_after_reload.py``, and their
-Wednesday morning: 0 hits with nothing changed since Tuesday) and r29s3 (2/2):
+Seen by two users (2/2 in a standalone repro, and one user's
+Wednesday morning: 0 hits with nothing changed since Tuesday; 2/2 for the other):
 edit your helper module, let cash reload it and recompute, restart the next
 morning -- nothing restores. Restart once more and everything does. The
 entries the session wrote after the reload were keyed differently from what a
@@ -82,7 +82,7 @@ def test_the_next_kernel_restores_what_the_reload_computed(nb_runner, tmp_path, 
     ids=["aliased", "from_import"],
 )
 def test_an_unrelated_edit_to_a_timed_helper_re_runs_nothing(nb_runner, tmp_path, import_line, call):
-    """r29s1 (8/8 edits) and r29s3: a helper that times its own steps was keyed
+    """Seen by two users (8/8 edits for one): a helper that times its own steps was keyed
     whole, so appending an unrelated function re-ran everything built on it
     -- the 60-day load and the map-match, 57 s + 100 s per edit."""
     name = "helpertimed_" + ("a" if " as " in import_line else "f")

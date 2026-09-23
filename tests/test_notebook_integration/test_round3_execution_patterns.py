@@ -1,5 +1,5 @@
 """
-Batch 39: Out-of-order execution, selective cell runs, and re-execution
+Out-of-order execution, selective cell runs, and re-execution
 patterns that stress the upstream simulation system.
 """
 

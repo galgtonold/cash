@@ -1,4 +1,4 @@
-"""Real-kernel proof that `loop_vars` reaches an intercepted call (CAS-243).
+"""Real-kernel proof that `loop_vars` reaches an intercepted call.
 
 The wiring under test: ``ForLoopHandler._process_one_iteration`` pushes the
 current iteration's loop vars onto ``StatementProcessor``'s stack
@@ -60,7 +60,7 @@ _LOOP = (
 def test_hidden_state_call_is_correct_on_the_first_run(nb_runner, tmp_path):
     """No pre-existing cache: each iteration must still get its own value.
 
-    This is the CAS-243 bug reproduced live: ``conn``'s lineage is constant
+    This is the call-interception bug reproduced live: ``conn``'s lineage is constant
     across all three iterations and ``fetch_next`` takes no other argument,
     so pre-``loop_vars`` all three iterations keyed identically and
     iterations 2/3 served iteration 1's cached ``1`` -- ``RESULTS
@@ -141,7 +141,7 @@ def _sampling_defs(log):
 # eligible for `cacheable_accumulator_loop`'s dispatch
 # (`control_structures/processor.py`), which routed the whole loop through
 # ONE cache entry REGARDLESS of size and never reached per-iteration
-# decomposition. CAS-259 (2026-07-31) removed that dispatch; the shape is now
+# decomposition. That dispatch is gone; the shape is now
 # only consulted from inside `ForLoopHandler`'s cost-based single-unit
 # branch, and this loop (2 iterations, `[A, B]`) is far under the
 # ~50-iteration threshold that branch requires -- so even a same-cell seed
@@ -430,7 +430,7 @@ def test_sampled_cash_lineage_hash_on_loop_var_matches_the_no_cash_oracle(nb_run
     assert "SL2 [1, 2]" in nb_runner.get_output(3)
 
 
-# --------------------------------------------------------- reused name, call INSIDE the reuse (CAS-257 defect 1)
+# --------------------------------------------------------- reused name, call INSIDE the reuse
 #
 # A THIRD variant of the reused-name shape, distinct from both sections
 # above: there, the call sits AFTER the inner loop that reuses the outer

@@ -1,4 +1,4 @@
-"""Batch 119 – Duplicate/similar code + cell interaction tests.
+"""Duplicate/similar code + cell interaction tests.
 
 Tests that exercise identical or similar code patterns in multiple cells,
 testing occurrence_index, cache key disambiguation, and the ambiguity

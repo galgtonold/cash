@@ -1,4 +1,4 @@
-"""Batch 390: collections.Counter most_common and arithmetic."""
+"""collections.Counter most_common and arithmetic."""
 
 import pytest
 

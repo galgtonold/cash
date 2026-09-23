@@ -1,5 +1,5 @@
 """
-Batch 287: Descriptor protocol interaction tests.
+Descriptor protocol interaction tests.
 Tests that editing descriptor-based attribute access logic
 properly invalidates downstream cells.
 """

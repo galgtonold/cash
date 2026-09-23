@@ -1,4 +1,4 @@
-"""CAS-260: a global written INSIDE a cached callee is captured and restored,
+"""A global written INSIDE a cached callee is captured and restored,
 the same way the identical write is when the user spells it inline.
 
     CALLS = []
@@ -202,7 +202,7 @@ def test_a_same_session_rerun_neither_freezes_nor_accumulates(nb_runner, tmp_pat
     ],
 )
 def test_every_spelling_of_the_call_behaves_the_same(nb_runner, tmp_path, spelling, source):
-    """CAS-145: a rule that fires for one spelling and not another is a defect
+    """A rule that fires for one spelling and not another is a defect
     this project has already paid for. ``function_global_mutations`` only ever
     walked top-level bare-``Expr`` calls, so every spelling here except a bare
     ``bump()`` was invisible to it.
@@ -226,7 +226,7 @@ def test_the_statement_stops_caching_but_the_work_does_not(nb_runner, tmp_path):
     A statement whose callee writes a global is SKIP-CACHED -- it re-executes
     every run, so the write really happens, exactly as the inline spelling of
     the same mutation does. That would be an unacceptable trade if it meant the
-    expensive work re-ran too. It does not: sub-statement caching (CAS-243)
+    expensive work re-ran too. It does not: sub-statement caching
     still serves every call inside the statement, so what re-executes is the
     glue.
 
@@ -387,7 +387,7 @@ def test_a_loop_over_a_hidden_state_callee_replays_on_a_rerun(nb_runner):
 
 
 def test_a_loop_body_captures_the_callee_global_too(nb_runner, tmp_path):
-    """CAS-265: the callee's write survives a hit inside a loop body too.
+    """The callee's write survives a hit inside a loop body too.
 
     Was a strict xfail. Passes now that the mutation is propagated into the
     shared analysis (so the loop declares the global and reconstruction has a

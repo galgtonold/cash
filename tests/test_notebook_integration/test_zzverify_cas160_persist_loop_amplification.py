@@ -1,13 +1,13 @@
-"""CAS-160 regression: `# @cash:persist` on a loop that incrementally builds a
+"""Regression: `# @cash:persist` on a loop that incrementally builds a
 frame must NOT snapshot every intermediate column-width without bound.
 
 Before the fix, 200k rows x 25 column-adds wrote 520,221,515 B across 53 files
 for a 40 MB final frame -- 13.01x amplification, no warning, and a per-iteration
 cost climbing 0.04s -> 0.16s as each iteration re-serialised an ever-wider
-frame. CAS-142's caps could not see it: its per-object refusal compares ONE
+frame. The disk-tier caps could not see it: its per-object refusal compares ONE
 value against half the tier cap (40 MB vs >=4 GiB) and its evict-after-write
 warning needs the total to exceed the cap (520 MB vs >=8 GiB), so neither ever
-fired. The guard added for CAS-160 tracks the missing dimension -- cumulative
+fired. The guard added for this tracks the missing dimension -- cumulative
 writes for ONE statement -- and stops value-persisting once that total is out of
 proportion to the value, warning once.
 
@@ -73,7 +73,7 @@ def test_persist_on_incremental_frame_loop_cache_size(nb_runner, tmp_path):
     total, files = _cache_bytes(tmp_path)
     raw5 = _ascii(nb_runner.get_raw_output(5))
 
-    print("\n=== CAS-160 measurement ===")
+    print("\n=== persist-loop amplification measurement ===")
     print(f"final frame bytes      : {FINAL_BYTES:,}")
     print(f"if every add snapshots : {ALL_SNAPSHOT_BYTES:,}")
     print(f"on-disk cache bytes    : {total:,}  ({files} files)")
@@ -83,14 +83,14 @@ def test_persist_on_incremental_frame_loop_cache_size(nb_runner, tmp_path):
 
     # Negative control: at the TOP of the cell the directive binds only to the
     # first statement (the empty-frame seed), so nothing amplifies here.
-    # (Statement scoping is deliberate -- CAS-189 keeps `persist` bound to one
+    # (Statement scoping is deliberate -- cash keeps `persist` bound to one
     # statement precisely so it cannot spread this amplification cell-wide.)
     # The final frame may be on disk ONCE: the cell below reads `df`, and after
     # a restart rebuilding it re-runs all 25 slow columns, so the end-of-cell
     # rule (`end_cell_persistence`) writes it as the cell leaves it. A snapshot
-    # per add -- what CAS-160 is about -- would be 13x.
+    # per add -- the amplification this file is about -- would be 13x.
     assert total < 2 * FINAL_BYTES, f"cell-top persist amplified the frame: {total:,} bytes"
-    # Nothing amplified, so the CAS-160 guard must stay silent. This is the
+    # Nothing amplified, so the amplification guard must stay silent. This is the
     # false-positive side of the guard: it must not shout at a healthy notebook.
     assert "runs in a loop and has already cached" not in raw5, (
         f"amplification warning fired with no amplification:\n{raw5[:3000]}"
@@ -114,7 +114,7 @@ def _run_variant(nb_runner, tmp_path, loop_cell, label):
 
     total, files = _cache_bytes(tmp_path)
     raw5 = _ascii(nb_runner.get_raw_output(5))
-    print(f"\n=== CAS-160 {label} ===")
+    print(f"\n=== persist-loop amplification {label} ===")
     print(f"final frame bytes      : {FINAL_BYTES:,}")
     print(f"if every add snapshots : {ALL_SNAPSHOT_BYTES:,}")
     print(f"on-disk cache bytes    : {total:,}  ({files} files)")
@@ -124,7 +124,7 @@ def _run_variant(nb_runner, tmp_path, loop_cell, label):
 
 
 def _assert_bounded_and_warned(total, raw, label):
-    """The two things CAS-160 promises: the cache stays proportional to the
+    """The two things the guard promises: the cache stays proportional to the
     final value, and the user is told once why persisting stopped."""
     # Bounded. The guard lets the loop run until one statement has written its
     # floor (64 MiB) and that total dwarfs the current value, then latches off,
@@ -135,7 +135,7 @@ def _assert_bounded_and_warned(total, raw, label):
         f"{label}: persist still amplifies -- {total:,} B "
         f"({total / FINAL_BYTES:.2f}x the {FINAL_BYTES:,} B final frame)"
     )
-    # ...and loudly, once. Silence here is the actual CAS-160 bug: the user's
+    # ...and loudly, once. Silence here is the actual bug: the user's
     # disk filled with no signal at all.
     assert "runs in a loop and has already cached" in raw, (
         f"{label}: cache was bounded but the user was never told why. Cell output:\n{raw[:3000]}"

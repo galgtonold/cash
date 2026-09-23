@@ -1,4 +1,4 @@
-"""Batch 69: Hashlib, secrets & crypto patterns — cash caching with hashing/security."""
+"""Hashlib, secrets & crypto patterns — cash caching with hashing/security."""
 
 import textwrap
 

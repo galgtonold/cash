@@ -1,4 +1,4 @@
-"""Batch 162 – Global variable and side-effect interaction tests.
+"""Global variable and side-effect interaction tests.
 
 Tests editing cells that mutate global state, counters, accumulators,
 and side-effects to verify cache consistency.

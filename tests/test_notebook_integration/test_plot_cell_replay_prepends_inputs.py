@@ -1,6 +1,6 @@
 """Replaying a plot cell must bring the assignment its statements read.
 
-Round-14 gate finding (BLOCKING). A throwaway matplotlib cell has one cached
+A blocking bug. A throwaway matplotlib cell has one cached
 assignment surrounded by statements cash deliberately does not cache -- a
 Figure is identity-coupled, and `ax.plot(...)` mutates `ax` in place:
 

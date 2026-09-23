@@ -1,4 +1,4 @@
-"""Batch 167 – Class hierarchy interaction tests.
+"""Class hierarchy interaction tests.
 
 Tests editing base classes, overriding methods, adding/removing
 inheritance, and multiple inheritance scenarios.

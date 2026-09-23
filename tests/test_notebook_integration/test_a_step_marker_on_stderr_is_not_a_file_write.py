@@ -1,6 +1,6 @@
 """A helper that writes a step marker to stderr does not make its callers file writers.
 
-Round 24's r24s1 marked each step with ``os.write(2, f"FDRUN {step} ...")``
+One user marked each step with ``os.write(2, f"FDRUN {step} ...")``
 inside a ``mark()`` helper, called from the loader, the feature builder and
 every fit. After a restart, a sanity-check cell at the bottom that reads only
 the loaded frame ran 70 statements, every fit among them, in 19 s where the

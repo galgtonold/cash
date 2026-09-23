@@ -1,5 +1,5 @@
 """
-Batch 314: Aggregation with groupby interaction tests.
+Aggregation with groupby interaction tests.
 Tests that editing groupby logic or data properly invalidates
 aggregated results downstream.
 """

@@ -1,5 +1,5 @@
 """
-Round 3 - Batch 12: Advanced edge cases and uncommon Python patterns.
+Advanced edge cases and uncommon Python patterns.
 
 Tests focusing on:
 1. Global/nonlocal keyword interactions

@@ -1,4 +1,4 @@
-"""Batch 48: Metaclass patterns — cash caching with metaclasses and class hooks."""
+"""Metaclass patterns — cash caching with metaclasses and class hooks."""
 
 import textwrap
 

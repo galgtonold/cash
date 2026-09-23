@@ -59,7 +59,7 @@ atexit.register(shutil.rmtree, _IPYTHON_DIR, ignore_errors=True)
 
 @pytest.fixture(scope="session", autouse=True)
 def assert_kernelspec_is_this_interpreter():
-    """Fail loudly if the kernelspec is not the interpreter under test (CAS-147).
+    """Fail loudly if the kernelspec is not the interpreter under test.
 
     Every runner here boots ``kernel_name='python3'``, which
     :class:`KernelSpecManager` resolves from the user/system Jupyter search
@@ -90,7 +90,7 @@ def assert_kernelspec_is_this_interpreter():
 
 
 def kernelspec_mismatch(argv, executable) -> str | None:
-    """The CAS-147 comparison, split out so it is directly testable.
+    """The kernelspec comparison, split out so it is directly testable.
 
     Returns an explanatory message when *argv* provably launches an interpreter
     other than *executable*, else ``None``. Split from the fixture because a
@@ -165,7 +165,7 @@ _BOOT_CAP = int(os.environ.get("CASH_TEST_BOOT_THROTTLE", "8"))
 # must keep the real one.
 # Badge vocabulary, as asserted by the integration tests.
 #
-# CAS-272 (342185c) unified the badge on ONE word per state: the row labels
+# Commit 342185c unified the badge on ONE word per state: the row labels
 # `RESTORED` / `COMPUTED` became `CACHED` / `EXECUTED`, matching the header.
 # The tests below were not updated with it, which is how 22 of them came to
 # assert a word the renderer no longer emits.
@@ -1304,7 +1304,7 @@ class NotebookTestRunner:
                 papermill / nbconvert runs have no such variable, and because the
                 suite always injected it, cash's no-path branch was never
                 exercised and shipped an uncaught IndexError that disabled
-                caching and printed an internal error on every cell (CAS-205).
+                caching and printed an internal error on every cell.
                 Pass False to test that environment.
         """
         if self.nb is None:
@@ -1328,7 +1328,7 @@ class NotebookTestRunner:
         # fresh boot below. Likewise skipped when the caller asked for NO path
         # injection: prepare_for_test() always defines __vsc_ipynb_file__, which
         # would silently defeat the no-path environment the test is trying to
-        # reproduce (CAS-205).
+        # reproduce.
         if _REUSE_KERNEL and with_cash and inject_notebook_path and not self._force_fresh_kernel:
             wk = _get_warm_kernel(self.kernel_name)
             self._warm = wk
@@ -1526,8 +1526,8 @@ class NotebookTestRunner:
     def restart(self) -> "NotebookTestRunner":
         """Restart the kernel in place, preserving the runner's wiring.
 
-        Restart behaviour is a whole class of bug the suite was blind to
-        (CAS-190): nb_runner shipped no restart, so every test that needed one
+        Restart behaviour is a whole class of bug the suite was blind to:
+        nb_runner shipped no restart, so every test that needed one
         hand-rolled ``km._async_restart_kernel`` -- 9 copies across the suite,
         each free to get the re-injection wrong. Re-injects the notebook path
         afterwards ONLY if this runner was started with injection, so a
@@ -1730,7 +1730,7 @@ from cash import Cash
         conflating them is the bug. A cached statement's stdout is REPLAYED on
         a hit, so reading state through a printed cell reports what was on
         screen when the entry was written, not what the variable holds now.
-        Measured during CAS-260: ``print('C', compute_c(1), CALLS_C)`` reported
+        Measured once: ``print('C', compute_c(1), CALLS_C)`` reported
         ``[1]`` after a restart while the live value was ``[]``. The printed
         reading made a broken arm look correct and sent one round of that
         investigation down a false trail.

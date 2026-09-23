@@ -1,4 +1,4 @@
-"""Batch 412: frozenset operations as dict keys and set algebra."""
+"""frozenset operations as dict keys and set algebra."""
 
 import pytest
 

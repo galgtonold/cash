@@ -1,4 +1,4 @@
-"""Batch 394: unpacking generalization (**kwargs, *args) across cells."""
+"""unpacking generalization (**kwargs, *args) across cells."""
 
 import pytest
 

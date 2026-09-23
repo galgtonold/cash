@@ -1,4 +1,4 @@
-"""Batch 429: functools.lru_cache and cache usage."""
+"""functools.lru_cache and cache usage."""
 
 import pytest
 

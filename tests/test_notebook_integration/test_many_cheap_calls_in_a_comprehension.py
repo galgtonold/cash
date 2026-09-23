@@ -1,6 +1,6 @@
 """A comprehension of many cheap calls is not slowed down by caching each one.
 
-r23s4 read a folder with ``docs = pd.DataFrame([read_doc(p) for p in paths])``:
+A user read a folder with ``docs = pd.DataFrame([read_doc(p) for p in paths])``:
 5,030 calls of a function reading one small file. Cached one by one -- a key,
 a lookup, a store and a file tracker each, ~14 ms a call around ~1.6 ms of
 work -- the cell went from 8.4 s to 71.6 s. Past 50 calls the site's calls

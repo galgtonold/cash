@@ -1,4 +1,4 @@
-"""Batch 371: multi-step data pipeline with intermediate transforms."""
+"""multi-step data pipeline with intermediate transforms."""
 
 import pytest
 

@@ -1,6 +1,6 @@
 """Removing/renaming an upstream variable definition invalidates cached
 downstream consumers (fresh-kernel semantics), raising NameError instead of
-serving a stale value (CAS-62).
+serving a stale value.
 
 When a definition is removed, commented out, or renamed, the variable is
 orphaned — no cell produces it anymore — so cash evicts it and its transitive

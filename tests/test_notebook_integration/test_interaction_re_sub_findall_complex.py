@@ -1,4 +1,4 @@
-"""Batch 483: re.sub and re.findall complex patterns."""
+"""re.sub and re.findall complex patterns."""
 
 import pytest
 

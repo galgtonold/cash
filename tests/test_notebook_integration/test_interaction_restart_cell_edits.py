@@ -1,4 +1,4 @@
-"""Batch 141 – Kernel restart + cell edit combined interaction tests.
+"""Kernel restart + cell edit combined interaction tests.
 
 Tests where users restart the kernel (via shutdown + start_kernel)
 combined with cell edits before/after restart, verifying disk
@@ -113,7 +113,7 @@ class TestMultipleRestartsWithEdits:
         nb_runner.run_all()
         assert "result = 100" in nb_runner.get_output(2)
 
-        # Round 1
+        # Edit 1
         nb_runner.set_cell_source(1, "n = 2")
         nb_runner.run_all()
         assert "result = 200" in nb_runner.get_output(2)
@@ -122,7 +122,7 @@ class TestMultipleRestartsWithEdits:
         nb_runner.run_all()
         assert "result = 200" in nb_runner.get_output(2)
 
-        # Round 2
+        # Edit 2
         nb_runner.set_cell_source(1, "n = 5")
         nb_runner.run_all()
         assert "result = 500" in nb_runner.get_output(2)

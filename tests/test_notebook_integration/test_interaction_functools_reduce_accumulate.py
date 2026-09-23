@@ -1,4 +1,4 @@
-"""Batch 400: functools.reduce and accumulate patterns."""
+"""functools.reduce and accumulate patterns."""
 
 import pytest
 

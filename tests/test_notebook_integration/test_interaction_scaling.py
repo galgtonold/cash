@@ -1,4 +1,4 @@
-"""Batch 131 – Notebook size scaling interaction tests.
+"""Notebook size scaling interaction tests.
 
 Tests that exercise notebooks with 10-20 cells simulating
 real-world data science workflows with multiple phases.

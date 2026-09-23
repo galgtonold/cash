@@ -1,4 +1,4 @@
-"""Batch 90 – advanced closure, nonlocal, and scope edge cases."""
+"""advanced closure, nonlocal, and scope edge cases."""
 
 import textwrap
 

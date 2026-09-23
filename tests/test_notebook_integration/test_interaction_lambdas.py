@@ -1,4 +1,4 @@
-"""Batch 129 – Lambda & higher-order function interaction tests.
+"""Lambda & higher-order function interaction tests.
 
 Tests that exercise lambda expressions, map/filter/reduce, and
 higher-order function patterns with cell edits.

@@ -1,4 +1,4 @@
-"""Batch 511: zip unzip and enumerate patterns."""
+"""zip unzip and enumerate patterns."""
 
 import pytest
 

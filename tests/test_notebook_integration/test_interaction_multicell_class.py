@@ -1,4 +1,4 @@
-"""Batch 262 – Multi-cell class instantiation with method edits.
+"""Multi-cell class instantiation with method edits.
 
 Tests class defined in one cell, instantiated in another, method called in third.
 """

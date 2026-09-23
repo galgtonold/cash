@@ -1,4 +1,4 @@
-"""Batch 213 – Map/reduce/filter interaction tests.
+"""Map/reduce/filter interaction tests.
 
 Tests editing cells that use functional programming patterns
 (map, filter, reduce) and verifying cache invalidation.

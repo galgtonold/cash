@@ -1,5 +1,5 @@
 """
-Stress Test Batch 1: Skip Logic & Lineage Edge Cases (Scenarios 1-30)
+Stress tests: Skip Logic & Lineage Edge Cases (Scenarios 1-30)
 
 Tests the skip optimization, cache key computation, lineage tracking,
 and various edge cases around when statements should/shouldn't be skipped.

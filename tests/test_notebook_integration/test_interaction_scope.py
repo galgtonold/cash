@@ -1,5 +1,5 @@
 """
-Batch 290: Module-level vs local scope interaction tests.
+Module-level vs local scope interaction tests.
 Tests that editing module-level constants/variables and local function
 variables properly invalidates downstream cells.
 """

@@ -1,13 +1,13 @@
-"""CAS-188: computed-RHS aliases (``b = a.attr`` / ``b = h[k]`` / ``b = f(a)``)
-restore a stale COPY on a warm re-run — the half CAS-184 left open.
+"""computed-RHS aliases (``b = a.attr`` / ``b = h[k]`` / ``b = f(a)``)
+restore a stale COPY on a warm re-run — the half the bare-alias fix left open.
 
-CAS-184 fixed the *bare* alias bind (``b = a``) by refusing to cache it. Every
+An earlier fix handled the *bare* alias bind (``b = a``) by refusing to cache it. Every
 other binding that also aliases a live mutable object is still cached, and on a
 warm re-run cash rebinds the name to a DESERIALISED COPY taken before any later
 mutation of the shared object. Identity with the source breaks and the mutation
 becomes invisible through the alias.
 
-Harness constraints inherited from CAS-184 — each one, left out, makes the probe
+Harness constraints inherited from the bare-alias probe — each one, left out, makes the probe
 lie:
 
 1. ``# @cash:persist`` on the bind. A pointer copy executes in ~0ms, under the
@@ -28,7 +28,7 @@ the containers still hold the original. Measured on the subscript form:
     rep 1 (warm, bind RESTORED): same False / same_holder False / holder_is_obj True
 
 Rep 0 is the upstream-simulation desync (``b`` still IS ``holder['k']``; it is
-``obj`` that got replaced). Rep 1 is CAS-188 proper (the containers agree again,
+``obj`` that got replaced). Rep 1 is the computed-alias bug proper (the containers agree again,
 but ``b`` is now a deserialised copy of neither). The failure messages below tag
 each rep with the bind cell's state so the two never get conflated.
 """
@@ -56,40 +56,49 @@ BUILD = (
 MUTATE = "obj.inner.append(42)\nobj.tag = 'mutated'"
 
 # (id, bind statement, identity expression, value expression, expected value)
-# CAS-206 blocks the container-mediated forms, and it is a DIFFERENT defect from
-# CAS-188 (see the module docstring). The CAS-188 half — "the bind must not be
+# Upstream re-derivation blocks the container-mediated forms, and it is a DIFFERENT defect from
+# this one (see the module docstring). The computed-alias half — "the bind must not be
 # restored from cache" — is asserted separately and unconditionally below, and
 # passes for every form; these xfails cover only the end-to-end identity, which
-# additionally needs CAS-206. Non-strict so they flip to XPASS the moment CAS-206
+# additionally needs the re-derivation fix. Non-strict so they flip to XPASS the moment it
 # lands rather than silently masking it.
-_CAS206 = pytest.mark.xfail(
-    reason="CAS-206: upstream re-derivation swaps live `obj` while the container "
+_REDERIVE_SWAPS_OBJ = pytest.mark.xfail(
+    reason="upstream re-derivation swaps live `obj` while the container "
     "keeps the original, so identity breaks on the COLD run too "
-    "(bind cell reports 'executed', not 'RESTORED' — CAS-188's half is fixed)",
+    "(bind cell reports 'executed', not 'RESTORED' — the computed-alias half is fixed)",
     strict=False,
 )
 # `b = list(lst)` aliases one level DOWN (`b[0] is lst[0]` while `b is not lst`).
 # Refusing to cache the binding would not fix that, and `list(...)` is a call that
-# can do real work, so it is deliberately outside the CAS-188 fix.
+# can do real work, so it is deliberately outside the computed-alias fix.
 _ELEMENT_ALIAS = pytest.mark.xfail(
     reason="element-level aliasing through a freshly-built container; the binding "
-    "itself is not the alias, so the CAS-188 refusal does not apply",
+    "itself is not the alias, so the computed-alias refusal does not apply",
     strict=False,
 )
 
 FORMS = [
     ("attr", "b = obj.inner", "b is obj.inner", "b", "[42]"),
-    pytest.param("subscript", "b = holder['k']", "b is obj", "getattr(b, 'tag', 'MISSING')", "mutated", marks=_CAS206),
-    pytest.param("index", "b = lst[0]", "b is obj", "getattr(b, 'tag', 'MISSING')", "mutated", marks=_CAS206),
+    pytest.param(
+        "subscript", "b = holder['k']", "b is obj", "getattr(b, 'tag', 'MISSING')", "mutated", marks=_REDERIVE_SWAPS_OBJ
+    ),
+    pytest.param(
+        "index", "b = lst[0]", "b is obj", "getattr(b, 'tag', 'MISSING')", "mutated", marks=_REDERIVE_SWAPS_OBJ
+    ),
     pytest.param(
         "call", "b = list(lst)", "b[0] is obj", "getattr(b[0], 'tag', 'MISSING')", "mutated", marks=_ELEMENT_ALIAS
     ),
     pytest.param(
-        "ternary", "b = obj if True else None", "b is obj", "getattr(b, 'tag', 'MISSING')", "mutated", marks=_CAS206
+        "ternary",
+        "b = obj if True else None",
+        "b is obj",
+        "getattr(b, 'tag', 'MISSING')",
+        "mutated",
+        marks=_REDERIVE_SWAPS_OBJ,
     ),
 ]
 
-# Every form, unmarked: this is the CAS-188 property proper.
+# Every form, unmarked: this is the computed-alias property proper.
 BIND_FORMS = [
     ("attr", "b = obj.inner"),
     ("subscript", "b = holder['k']"),
@@ -100,13 +109,13 @@ BIND_FORMS = [
 
 @pytest.mark.parametrize("name,bind", BIND_FORMS)
 def test_reference_bind_is_never_restored_from_cache(nb_runner, name, bind):
-    """CAS-188 proper: a pure-dereference bind must re-execute, never restore.
+    """A pure-dereference bind must re-execute, never restore.
 
     Restoring rebinds the target to a deserialised COPY, so the identity Python
     guarantees silently stops holding. A deref is free to re-run, so refusing to
-    cache it is also strictly cheaper — both halves of the CAS-184 argument.
+    cache it is also strictly cheaper — both halves of the bare-alias argument.
 
-    This is asserted for every form and does NOT depend on CAS-206: it is a
+    This is asserted for every form and does NOT depend on the re-derivation fix: it is a
     property of the bind statement alone.
     """
     nb_runner.create_notebook(_cells(bind, "b is obj", "getattr(b, 'tag', 'MISSING')"))
@@ -169,7 +178,7 @@ def test_computed_rhs_alias_identity_holds(nb_runner, name, bind, id_expr, val_e
                     f"(bind cell: {'RESTORED' if 'RESTORED' in bind_out else 'executed'})"
                 )
 
-    assert not failures, "CAS-188 REPRODUCES:\n" + "\n".join(failures)
+    assert not failures, "computed alias REPRODUCES:\n" + "\n".join(failures)
 
 
 @pytest.mark.parametrize("name,bind,id_expr,val_expr,expected", FORMS)
@@ -228,4 +237,4 @@ def test_computed_rhs_alias_identity_after_restart(nb_runner):
         if "same True" not in out or f"val {expected}" not in out:
             failures.append(f"post-restart rep {rep}: {out.splitlines()[:2]!r}")
 
-    assert not failures, "CAS-188 REPRODUCES after a kernel restart:\n" + "\n".join(failures)
+    assert not failures, "computed alias REPRODUCES after a kernel restart:\n" + "\n".join(failures)

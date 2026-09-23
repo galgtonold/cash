@@ -1,4 +1,4 @@
-"""Batch 150 – Variable shadowing and scope interaction tests.
+"""Variable shadowing and scope interaction tests.
 
 Tests where variables are overwritten in later cells,
 edits change which version of a variable is used, and

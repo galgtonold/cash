@@ -1,5 +1,5 @@
 """
-Round 3 Batch 2: File dependency, kernel restart, and module tests.
+File dependency, kernel restart, and module tests.
 
 Tests:
 - Complex file dependency patterns (multiple files, JSON, Parquet, cross-cell)

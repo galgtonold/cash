@@ -1,4 +1,4 @@
-"""Batch 152 – Exception handling code interaction tests.
+"""Exception handling code interaction tests.
 
 Tests where try/except blocks are edited, error paths change,
 and caching handles exception-related code modifications.

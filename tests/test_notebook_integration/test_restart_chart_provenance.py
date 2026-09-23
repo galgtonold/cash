@@ -5,7 +5,7 @@ compared with the simulation's after a restart. A figure's lineage cannot take
 part: the runtime advances ``fig`` through live Axes -> Figure edges
 (``ax.bar(...)``) that a restarted kernel does not have, so the simulation
 never arrived at the same lineage, and every ``fig.savefig`` re-fired with
-everything the chart reads. Round 23's r23s2 re-read 1,200 exports that way,
+everything the chart reads. One user's notebook re-read 1,200 exports that way,
 84 s, to run a table cell below two charts.
 
 The record now carries the figure's drawing history instead -- the statements

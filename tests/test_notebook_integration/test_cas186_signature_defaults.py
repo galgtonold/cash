@@ -1,6 +1,6 @@
-"""CAS-186: does the NOTEBOOK path share CAS-183's parameter-defaults blind spot?
+"""Does the NOTEBOOK path share the decorator's old parameter-defaults blind spot?
 
-CAS-183 was a decorator-path bug: a parameter default lives on the function
+That was a decorator-path bug: a parameter default lives on the function
 OBJECT (``__defaults__`` / ``__kwdefaults__``), not in the code object, so the
 ``@cash.cache`` fingerprint (built from code-object fields) could not see it.
 Editing ``n_estimators=300`` -> ``400`` returned the 300-tree model on an instant
@@ -25,7 +25,7 @@ Each leak test is self-proving: it first does an UNCHANGED re-run and asserts th
 consumer RESTORES (a cache HIT -- proving the statement genuinely caches, so a stale
 result was on the table), THEN changes the default and asserts the consumer
 RECOMPUTES to the fresh value. Had the default change been invisible, the second
-re-run would have RESTORED the stale value -- the exact CAS-183 failure.
+re-run would have RESTORED the stale value -- the exact decorator failure.
 
 The oracle is the real kernel (``nb_runner``); the discriminator is a value-based
 ``@cash:no-cache`` probe that reads the LIVE namespace, so a stale cache HIT on the
@@ -50,8 +50,8 @@ def test_plain_literal_default_edit_recomputes_consumer(nb_runner):
 
     Editing the literal changes the ``def`` cell's SOURCE TEXT, so the statement's
     ``source_hash`` changes, ``f``'s lineage changes, and the consumer's key
-    changes. This is the ordinary case CAS-186 predicted the statement-text hash
-    would mask -- confirm it does.
+    changes. This is the ordinary case the statement-text hash was predicted
+    to mask -- confirm it does.
     """
     nb_runner.create_notebook(
         [
@@ -68,7 +68,7 @@ def test_plain_literal_default_edit_recomputes_consumer(nb_runner):
 
     # Unchanged re-run: the consumer must HIT. This proves the statement genuinely
     # caches, so had the following edit been invisible it would RESTORE the stale
-    # 110 -- the CAS-183 failure mode. run_all also rebinds `f` (cell 2 re-executes),
+    # 110 -- the decorator's old failure mode. run_all also rebinds `f` (cell 2 re-executes),
     # so the only thing that can make cell 3 recompute below is a changed key.
     nb_runner.run_all()
     assert shows_cached(nb_runner.get_output(3)), nb_runner.get_output(3)
@@ -80,19 +80,19 @@ def test_plain_literal_default_edit_recomputes_consumer(nb_runner):
     consumer = nb_runner.get_output(3)
     out = nb_runner.get_output(4)
     assert not shows_cached(consumer), (
-        f"consumer served the literal-default result from cache (CAS-186 leak): {consumer!r}"
+        f"consumer served the literal-default result from cache (defaults leak): {consumer!r}"
     )
-    assert "R 210" in out, f"consumer served a STALE literal-default result (CAS-186 leak): {out!r}"
+    assert "R 210" in out, f"consumer served a STALE literal-default result (defaults leak): {out!r}"
 
 
 def test_enclosing_value_default_change_recomputes_consumer(nb_runner):
-    """Shape 2 -- THE CAS-183 twin: default is an enclosing NAME whose VALUE changes
+    """Shape 2 -- THE decorator bug's twin: default is an enclosing NAME whose VALUE changes
     while the ``def`` cell's source text stays byte-identical.
 
     ``t=THRESHOLD`` is evaluated at def-time in the enclosing scope, so ``THRESHOLD``
     is NOT in ``f``'s body ``co_names`` (the read-globals channel misses it) and the
     ``def`` text does not change (the func_source_hash channel misses it). If those
-    were the only channels, the consumer would HIT stale -- the exact CAS-183
+    were the only channels, the consumer would HIT stale -- the decorator's old
     failure. The masking channel under test: the analyzer counts ``THRESHOLD`` as an
     input of the ``def`` statement, so ``f``'s output lineage folds it in.
     """
@@ -121,11 +121,9 @@ def test_enclosing_value_default_change_recomputes_consumer(nb_runner):
     consumer = nb_runner.get_output(4)
     out = nb_runner.get_output(5)
     assert not shows_cached(consumer), (
-        f"consumer served the enclosing-value default from cache (CAS-186 leak, the CAS-183 twin): {consumer!r}"
+        f"consumer served the enclosing-value default from cache (defaults leak): {consumer!r}"
     )
-    assert "R 110.0" in out, (
-        f"consumer served a STALE enclosing-value default (CAS-186 leak, the CAS-183 twin): {out!r}"
-    )
+    assert "R 110.0" in out, f"consumer served a STALE enclosing-value default (defaults leak): {out!r}"
 
 
 def test_unchanged_default_still_hits(nb_runner):

@@ -1,5 +1,5 @@
 """
-Batch 289: Protocol / structural subtyping interaction tests.
+Protocol / structural subtyping interaction tests.
 Tests that editing classes implementing protocols properly invalidates
 downstream cells that use protocol-based operations.
 """

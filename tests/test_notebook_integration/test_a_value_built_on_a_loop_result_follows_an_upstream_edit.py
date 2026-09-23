@@ -1,6 +1,6 @@
 """A value built on a loop's result is rebuilt when the loop re-ran on new data.
 
-Round 24's r24s3 swept settings in a loop (``sweep_rows.append(...)``), picked
+A user swept settings in a loop (``sweep_rows.append(...)``), picked
 the best row in the next cell (``best``, ``BEST_W``, ``best_scores``) and read
 those in a later analysis cell. After editing a constant above the sweep and
 re-running that cell and the sweep, the analysis cell printed the old episode

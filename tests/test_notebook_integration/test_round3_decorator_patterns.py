@@ -1,5 +1,5 @@
 """
-Batch 38: Decorator patterns — function decorators, class decorators,
+Decorator patterns — function decorators, class decorators,
 decorator with arguments, stacked decorators, method decorators.
 """
 

@@ -1,5 +1,5 @@
 """
-Batch 30: Global state, singleton, registry, and mutable default argument patterns.
+Global state, singleton, registry, and mutable default argument patterns.
 Tests tricky Python patterns that interact with caching in subtle ways.
 """
 

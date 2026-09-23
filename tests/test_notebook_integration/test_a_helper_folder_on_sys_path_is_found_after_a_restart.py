@@ -1,6 +1,6 @@
 """A helper folder added with ``sys.path.insert`` is found after a restart.
 
-Round 29, r29s3 (ANNOYING, 2/2): new day, fresh kernel, ``%cash_on``, then
+Reproduced 2/2: new day, fresh kernel, ``%cash_on``, then
 straight to a cell far down -- which the quickstart says works. The repair
 re-ran ``import bt`` but not the ``sys.path.insert(0, lib)`` right above it,
 and stopped with ``UpstreamStateError: ... No module named 'bt'``. The insert

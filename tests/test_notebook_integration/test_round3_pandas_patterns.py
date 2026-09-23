@@ -1,5 +1,5 @@
 """
-Batch 16: Pandas integration patterns - DataFrame creation, transformation,
+Pandas integration patterns - DataFrame creation, transformation,
 aggregation, merge/join, and file I/O caching behavior.
 
 Tests real-world pandas workflows that are the primary use case for notebook

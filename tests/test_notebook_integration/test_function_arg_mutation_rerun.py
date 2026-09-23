@@ -1,5 +1,5 @@
 """In-place mutation of a function-call ARGUMENT must not accumulate on an
-isolated re-run (CAS-58).
+isolated re-run.
 
 A user-defined helper that mutates its parameter in place (``def add(x):
 x.append(1)``) called as a bare statement (``add(data)``) mutates the caller's
@@ -9,7 +9,7 @@ source from the notebook cells, statically detects which parameters it mutates
 an isolated re-run. A pure helper passed the same variable is NOT a mutation and
 must keep its cache (no over-invalidation).
 
-Distinct from the CAS-49 hidden-state limitations (globals / default args /
+Distinct from the known hidden-state limitations (globals / default args /
 generators) where the mutated state is not visible in the cell.
 """
 
@@ -84,7 +84,7 @@ def test_reassigning_helper_not_a_mutation(nb_runner):
 
 def test_depth2_mutation_via_nested_helper(nb_runner):
     """outer(y) mutates y only by calling inner(y); the interprocedural analysis
-    propagates the mutation back through the nested call (CAS-61)."""
+    propagates the mutation back through the nested call."""
     _rerun(
         nb_runner,
         "data = [1]\ndef inner(z):\n    z.append(9)\ndef outer(y):\n    inner(y)",

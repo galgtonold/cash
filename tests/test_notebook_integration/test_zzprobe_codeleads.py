@@ -29,7 +29,7 @@ One probe per static-review lead:
 13. test_np_generator_state_diverges_after_edit
     np.random.Generator state untracked -> edited cell draws from wrong state.
 14. test_receiver_reset_suppressed_by_name_collision
-    CAS-75 suppression keyed by NAME, flow-insensitive -> rebound receiver
+    Receiver-reset suppression keyed by NAME, flow-insensitive -> rebound receiver
     accumulates on isolated re-runs.
 """
 
@@ -197,7 +197,7 @@ def test_unsaved_extension_with_user_function_rejected(nb_runner):
 
 
 def test_unrelated_upstream_edit_reruns_loop(nb_runner):
-    """CAS-262, fixed in round 21: an unrelated upstream edit re-planned a
+    """Fixed: an unrelated upstream edit re-planned a
     decomposed loop, because the simulation modelled the loop's outputs with a
     formula the runtime never used, so they always disagreed. It now reuses the
     lineages the runtime recorded (``TrackingState.control_outcomes``)."""

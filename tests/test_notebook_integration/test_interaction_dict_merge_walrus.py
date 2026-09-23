@@ -1,5 +1,5 @@
 """
-Batch 336: dict merge and walrus operator patterns with caching.
+dict merge and walrus operator patterns with caching.
 Tests dict merge (|), walrus operator (:=), and edit propagation.
 """
 

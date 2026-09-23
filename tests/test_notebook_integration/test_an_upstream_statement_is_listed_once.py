@@ -1,6 +1,6 @@
 """An upstream statement the repair re-runs is listed once in the badge.
 
-Round 25 (r25s5, r25s1): ``^CACHED: models = {}`` and ``^CACHED: weekly = ...``
+``^CACHED: models = {}`` and ``^CACHED: weekly = ...``
 twice in a row in the Upstream list. The backward scan restored the statement
 and a later planner pass scheduled it to run as well; the badge showed the
 restore and the run's cache hit.

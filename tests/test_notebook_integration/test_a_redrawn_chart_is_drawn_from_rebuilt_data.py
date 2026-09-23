@@ -1,7 +1,6 @@
 """A loop that only reuses a variable's name is not re-run with its producer.
 
-Round 29, r29s4 (BLOCKING, 1/1 replaying their notebook, reproduced on HEAD
-with a trace): after an upstream fix that dropped some rows, the export cell's
+Blocking, 1/1 replaying the user's notebook, reproduced with a trace: after an upstream fix that dropped some rows, the export cell's
 repair re-ran ``for r in sorted(obs.run.unique()): ...`` -- it builds the run
 summary the export writes. A later producer of ``r`` then had to run too
 (``_complete_later_producers``, there for ``results = {}`` followed by the loop

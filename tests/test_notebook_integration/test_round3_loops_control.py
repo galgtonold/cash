@@ -1,5 +1,5 @@
 """
-Batch 23: Loop and control structure caching patterns.
+Loop and control structure caching patterns.
 
 Tests how cash handles for loops, while loops, if/else branches, nested
 control structures, and their caching/invalidation behavior across cells.

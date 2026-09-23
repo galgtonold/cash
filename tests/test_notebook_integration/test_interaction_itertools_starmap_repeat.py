@@ -1,4 +1,4 @@
-"""Batch 455: itertools.starmap and repeat patterns."""
+"""itertools.starmap and repeat patterns."""
 
 import pytest
 

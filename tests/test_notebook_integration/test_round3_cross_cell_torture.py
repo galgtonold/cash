@@ -1,5 +1,5 @@
 """
-Batch 24: Advanced cross-cell interaction torture tests.
+Advanced cross-cell interaction torture tests.
 
 Tests that combine multiple features simultaneously: function definitions
 referencing external variables, class hierarchies with file dependencies,

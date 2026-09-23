@@ -1,4 +1,4 @@
-"""Batch 381: contextlib.suppress and contextlib patterns."""
+"""contextlib.suppress and contextlib patterns."""
 
 import pytest
 

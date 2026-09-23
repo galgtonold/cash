@@ -1,4 +1,4 @@
-"""Batch 337: heapq priority queue operations and edits."""
+"""heapq priority queue operations and edits."""
 
 import pytest
 

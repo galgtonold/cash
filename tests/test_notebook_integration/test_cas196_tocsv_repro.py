@@ -1,4 +1,4 @@
-"""CAS-196: df.to_csv() must not bump df's lineage (no re-fired audit append).
+"""df.to_csv() must not bump df's lineage (no re-fired audit append).
 
 ``df.to_csv(path)`` READS the frame and writes a file; it does not mutate ``df``.
 The receiver-mutation classifier used to assume-mutate a DataFrame receiver
@@ -56,6 +56,6 @@ def test_tocsv_append_not_refired_by_downstream_reader(nb_runner, tmp_path):
     assert _rows(audit) == 3, (
         f"downstream reader re-fired the df.to_csv append during reconstruction: "
         f"audit grew to {_rows(audit)} rows (expected 3). df.to_csv bumped df's "
-        f"lineage and became a spurious producer of df (CAS-196). Badge:\n{out}"
+        f"lineage and became a spurious producer of df. Badge:\n{out}"
     )
     assert "SUM: 6" in out, f"reader served wrong data after reconstruction: {out}"

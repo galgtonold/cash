@@ -1,4 +1,4 @@
-"""Batch 249 – Generator and iterator pipeline patterns.
+"""Generator and iterator pipeline patterns.
 
 Tests generator functions, chaining, and edit propagation.
 """

@@ -1,4 +1,4 @@
-"""Batch 274 – Class __repr__/__str__ edit propagation.
+"""Class __repr__/__str__ edit propagation.
 
 Tests editing dunder methods on classes.
 """

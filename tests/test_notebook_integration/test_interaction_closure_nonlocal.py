@@ -1,5 +1,5 @@
 """
-Batch 307: Closure and nonlocal interaction tests.
+Closure and nonlocal interaction tests.
 Tests that editing closures with nonlocal variables properly
 invalidates downstream computations.
 """

@@ -1,12 +1,12 @@
-"""Root-cause discriminator for the CAS-86 groupby channel.
+"""Root-cause discriminator for the groupby tail-mutation channel.
 
 Same structure as test_groupby_across_cells_tail_mutation_matches_plain but
 the mutated row sits INSIDE compute_hash's head-5 sample window. Outcomes:
 
 - in-sample PASSES while out-of-sample fails  -> sampling is the broken link
-  (CAS-86 attribution correct).
+  (the sampling attribution is correct).
 - in-sample ALSO FAILS -> the df->g derived-object edge is missing and
-  sampling is irrelevant (channel belongs to the CAS-89 aliasing family).
+  sampling is irrelevant (channel belongs to the view-aliasing family).
 """
 
 import pytest
@@ -48,5 +48,7 @@ def test_mutation_inside_sample_window(nb_runner):
 
 
 def test_mutation_outside_sample_window(nb_runner):
-    truth, got = _run_variant(nb_runner, row=999)  # reproduces the CAS-86 repro
-    assert truth in got, f"out-of-sample mutation stale (expected, matches CAS-86 repro). plain={truth!r} cash={got!r}"
+    truth, got = _run_variant(nb_runner, row=999)  # reproduces the original repro
+    assert truth in got, (
+        f"out-of-sample mutation stale (expected, matches the original repro). plain={truth!r} cash={got!r}"
+    )

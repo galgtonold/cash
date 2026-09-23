@@ -1,4 +1,4 @@
-"""A sub-unit hit must not erase the statement's file dependency (CAS-243 Task 7).
+"""A sub-unit hit must not erase the statement's file dependency.
 
 The call runs inside the statement's ambient ``FileAccessTracker`` -- the
 same one ``@cash.cache`` already defends via ``core.py``'s

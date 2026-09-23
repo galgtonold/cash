@@ -1,12 +1,12 @@
 """A loop over ``df.itertuples()`` restores its iterations.
 
-Round 28, two testers:
+Two reports:
 
-* r28s1: `for d in depots.itertuples():` never restored -- every run
+* `for d in depots.itertuples():` never restored -- every run
   re-ran all six iterations and stored six more entries that could never
   be hit. Found only with ``%cash_debug on``; 3/3, and the same loop over
   ``zip(...)`` restored.
-* r28s3: a 631-iteration membership loop over ``uni.itertuples()`` re-ran
+* a 631-iteration membership loop over ``uni.itertuples()`` re-ran
   about half its iterations on every run of an unchanged cell (the badge:
   "613/1262 cached", then "632/1262").
 

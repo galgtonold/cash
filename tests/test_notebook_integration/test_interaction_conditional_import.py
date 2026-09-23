@@ -1,5 +1,5 @@
 """
-Batch 302: Conditional import and lazy loading interaction tests.
+Conditional import and lazy loading interaction tests.
 Tests that editing code with conditional imports and lazy attribute
 access properly invalidates downstream cells.
 """

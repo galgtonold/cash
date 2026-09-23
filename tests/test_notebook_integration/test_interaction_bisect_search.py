@@ -1,4 +1,4 @@
-"""Batch 380: bisect insert and binary search patterns."""
+"""bisect insert and binary search patterns."""
 
 import pytest
 

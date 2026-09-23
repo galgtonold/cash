@@ -57,7 +57,7 @@ def test_writer_edit_run_all_reader_fresh(nb_runner, tmp_path):
     nb_runner.run_all()
     assert "body = a|1|2" in nb_runner.get_output(2)
 
-    # Edit the writer: different rows, DIFFERENT byte size (avoids CAS-10).
+    # Edit the writer: different rows, DIFFERENT byte size (avoids mtime/size granularity).
     writer_v2 = f"rows = 'a\\n7\\n8\\n9\\n'\nwith open('{p}', 'w') as f:\n    f.write(rows)\nprint('wrote', len(rows))"
     nb_runner.set_cell_source(1, writer_v2)
     nb_runner.run_all()

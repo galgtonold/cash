@@ -1,4 +1,4 @@
-"""Batch 514: collections Counter most_common subtract."""
+"""collections Counter most_common subtract."""
 
 import pytest
 

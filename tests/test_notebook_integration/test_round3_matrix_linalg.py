@@ -1,4 +1,4 @@
-"""Batch 61: Matrix/linear algebra — pure Python matrix operations with cash."""
+"""Matrix/linear algebra — pure Python matrix operations with cash."""
 
 import textwrap
 

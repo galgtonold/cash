@@ -1,23 +1,23 @@
-"""Accumulator-loop caching (CAS-145 fast path; superseded by CAS-259).
+"""Accumulator-loop caching (the old whole-loop fast path, and what replaced it).
 
 A *pure* accumulator loop — ``out = []`` then ``for e in it: out.append(f(e))``
 — is byte-identical to the comprehension ``out = [f(e) for e in it]`` yet used
 to be refused caching entirely, because the ``append`` reads as an in-place
-mutation ("In-place mutation on: out"; 1.0x). CAS-145 fixed that by matching
+mutation ("In-place mutation on: out"; 1.0x). A fast path fixed that by matching
 the narrow shape and routing the WHOLE loop through the statement cache as
 ONE unit, capturing BOTH the accumulator AND the leaked loop variable as
 outputs.
 
-**CAS-259 removed that fast path.** Its cache key included the iterable's
+**That fast path is gone.** Its cache key included the iterable's
 lineage, so appending a SINGLE item invalidated the whole unit and re-ran
 EVERY call — as expensive as no caching at all (see
 ``test_accumulator_single_statement_append_incremental.py`` for that
 regression guard). The shape now decomposes per-iteration like any other
 loop: ``out.append(slow(e))`` is still an in-place mutation and still
-re-executes every run, but CAS-243's call interception now caches ``slow(e)``
+re-executes every run, but call interception now caches ``slow(e)``
 itself, so the real work is still skipped on an unchanged rerun.
 
-The correctness gates this file pins, post-CAS-259:
+The correctness gates this file pins, now that the fast path is gone:
   * #1 the call is cached (interception hit, counted from OUTSIDE the
     kernel), result byte-identical to a no-cash run;
   * #2 / #3 a REAL kernel restart — and here the picture genuinely changed,
@@ -40,7 +40,7 @@ The correctness gates this file pins, post-CAS-259:
     **The follow-up question this file used to pose — "should ``persist``, TTL
     and the size model propagate from the statement path down into
     ``CallUnit``?" — has since been answered "yes" for two of the three:** TTL
-    in CAS-268, ``persist`` in CAS-269. So the pair of restart tests below now
+    and ``persist`` both propagate now. So the pair of restart tests below now
     pins the propagating behaviour (``persist`` → restored, no directive →
     fully recomputed), with the no-directive arm as the control that keeps the
     other honest about ``slow`` staying below the generic floor. The RESULT is
@@ -48,10 +48,10 @@ The correctness gates this file pins, post-CAS-259:
     for in the first place. The size/cost model still does not propagate;
 
   * #4 a loop with a genuine side effect is NOT cached and re-fires every run
-    (the wrong-result guard — unaffected by CAS-259, side effects still
+    (the wrong-result guard — unaffected by the fast path's removal, side effects still
     refuse via the normal per-statement pipeline);
   * #5 a pre-seeded / non-empty accumulator's prefix is not dropped or
-    doubled (unaffected by CAS-259 — there is no shape-match to lose);
+    doubled (unaffected by the fast path's removal — there is no shape-match to lose);
   * #6 / #7 an upstream edit of the iterable / body function invalidates.
 
 ``slow`` lives in its OWN cell (not the ``%cash_on`` setup cell) so cash tracks
@@ -113,9 +113,9 @@ def test_accumulator_loop_caches(nb_runner, tmp_path):
     # Byte-identical to a plain kernel: slow(e) == e*10.
     assert "out=[10, 20, 30, 40, 50]" in nb_runner.get_output(5), nb_runner.get_output(5)
 
-    # Isolated re-run of the loop cell must skip ALL real work. Post-CAS-259
-    # the whole-loop `CACHED` badge is gone — `out.append(slow(e))` is a
-    # genuine in-place mutation and re-executes every run — but CAS-243 call
+    # Isolated re-run of the loop cell must skip ALL real work. Without the
+    # fast path the whole-loop `CACHED` badge is gone — `out.append(slow(e))` is a
+    # genuine in-place mutation and re-executes every run — but call
     # interception must still cache `slow()` itself, in RAM, per iteration.
     # Real work is counted from OUTSIDE the kernel so a badge-text change
     # alone can't fake this passing.
@@ -134,13 +134,12 @@ def test_accumulator_loop_caches(nb_runner, tmp_path):
 #     cost check's own single-unit threshold (>50 iterations, >1s estimated
 #     overhead), decomposition never runs at all -- so caching for this shape
 #     depends ENTIRELY on the chosen single-unit branch itself being
-#     cacheable. CAS-259 originally shipped without wiring ``force_outputs``
+#     cacheable. Removing the fast path originally shipped without wiring ``force_outputs``
 #     back into that branch (``for_handler.py``'s single-unit branch), so
 #     every large/cheap accumulator loop was refused outright by the
 #     in-place-mutation detector and got ZERO caching from EITHER mechanism
-#     -- strictly worse than the pre-CAS-259 baseline, which cached it fine.
-#     This test's absence is the entire reason that shipped; see the CAS-259
-#     task report for the measured before/after.
+#     -- strictly worse than the fast-path baseline, which cached it fine.
+#     This test's absence is the entire reason that shipped.
 # ---------------------------------------------------------------------------
 
 
@@ -183,7 +182,7 @@ def test_large_accumulator_loop_single_unit_still_caches(nb_runner, tmp_path):
 
 # ---------------------------------------------------------------------------
 # #2 A REAL kernel restart, both arms. ``persist`` propagates into
-#    ``CallUnit`` since CAS-269, so the annotated arm is CACHED and the
+#    ``CallUnit``, so the annotated arm is CACHED and the
 #    bare arm is fully recomputed -- and the bare arm is what proves the
 #    annotated one is measuring the annotation rather than the backend's
 #    generic compute floor. What must NOT regress either way is correctness:
@@ -233,12 +232,12 @@ def _restart_and_rerun_loop(nb_runner, tmp_path, annotation):
 
 
 def test_persist_makes_a_cheap_accumulator_loop_survive_a_restart(nb_runner, tmp_path):
-    """``# @cash:persist`` now reaches the call entry (CAS-269).
+    """``# @cash:persist`` now reaches the call entry.
 
     This assertion used to read ``warm == 5``, pinning the opposite. That was
     not a mistake at the time -- it snapshotted a real gap, deliberately, with
     a note that "a future change that silently alters this either direction
-    gets caught rather than passing unnoticed". CAS-269 is that change, so the
+    gets caught rather than passing unnoticed". Propagating ``persist`` is that change, so the
     snapshot is now the thing to update rather than defend.
 
     Why the annotation is load-bearing HERE and nowhere else in this file:
@@ -272,8 +271,8 @@ def test_without_persist_a_cheap_accumulator_loop_recomputes(nb_runner, tmp_path
 
 # ---------------------------------------------------------------------------
 # #3 Loop-var-leak guard: the leaked loop variable ``e`` must end up correct
-#    (equal to the LAST item) after a restart, NOT stale or missing. Before
-#    CAS-259 this was verified via a cache HIT restoring it; post-CAS-259
+#    (equal to the LAST item) after a restart, NOT stale or missing. With the
+#    fast path this was verified via a cache HIT restoring it; now
 #    this shape fully recomputes after a restart (see test #2 above), so the
 #    guard now verifies the same thing via a correct per-iteration REBIND
 #    instead — ``bind_target_values`` runs on every iteration regardless of

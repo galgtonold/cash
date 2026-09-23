@@ -1,4 +1,4 @@
-"""Batch 112 – Complex combined interaction tests.
+"""Complex combined interaction tests.
 
 Tests that combine multiple features: functions + files, imports + edits + restart,
 loops + mutations + edits, etc. These simulate real-world notebook workflows.

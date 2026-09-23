@@ -1,7 +1,7 @@
 """After a restart, what a loop built is restored downstream, not rebuilt by replaying the loop.
 
-Round 23 (r23s2, r23s3, 2026-09-14): a restart and one run of the last cell
-replayed every loop above it -- r23s2 re-read a 1,312-file folder, r23s3 re-ran
+Seen in two users' notebooks: a restart and one run of the last cell
+replayed every loop above it -- one re-read a 1,312-file folder, the other re-ran
 a 263 s parameter sweep. A loop's outputs get lineages the runtime derives
 from the VALUES it built; the simulation cannot derive them from code, and the
 session's record of them (``TrackingState.control_outcomes``) died with the

@@ -1,5 +1,5 @@
 """Hidden mutation through a custom in-place operator dunder must reset on
-isolated re-run (CAS-78). An augmented assignment ``obj <op>= x`` on a custom
+isolated re-run. An augmented assignment ``obj <op>= x`` on a custom
 instance dispatches to ``__iadd__`` / ``__isub__`` / ``__imul__`` (or falls back
 to ``__add__`` etc.) whose body mutates hidden state; on an isolated re-run it
 accumulates.

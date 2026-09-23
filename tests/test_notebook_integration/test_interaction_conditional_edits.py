@@ -1,4 +1,4 @@
-"""Batch 144 – Conditional logic and boolean pattern interaction tests.
+"""Conditional logic and boolean pattern interaction tests.
 
 Tests where users edit conditional logic (if/elif/else),
 boolean variables, and branch selection patterns.

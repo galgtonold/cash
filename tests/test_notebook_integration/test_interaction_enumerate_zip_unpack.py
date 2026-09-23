@@ -1,4 +1,4 @@
-"""Batch 372: enumerate with start, zip with strict, and unpacking."""
+"""enumerate with start, zip with strict, and unpacking."""
 
 import pytest
 

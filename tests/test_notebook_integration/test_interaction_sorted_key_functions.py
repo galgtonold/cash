@@ -1,4 +1,4 @@
-"""Batch 444: built-in sorted with key functions."""
+"""built-in sorted with key functions."""
 
 import pytest
 

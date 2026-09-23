@@ -1,5 +1,5 @@
 """
-Batch 37: Datetime, time, and scheduling patterns across cells.
+Datetime, time, and scheduling patterns across cells.
 """
 
 import textwrap

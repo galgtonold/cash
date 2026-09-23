@@ -1,4 +1,4 @@
-"""Object-held RNG state must be replayed across a cache hit (CAS-90).
+"""Object-held RNG state must be replayed across a cache hit.
 
 ``capture_rng_state`` / ``restore_rng_state`` replay the RNG *module globals*
 (``random``, ``np.random``, ``torch``) across a cache hit.  They cannot see a
@@ -156,7 +156,7 @@ def test_non_rng_input_is_not_captured(nb_runner):
     Doubles as the end-to-end backward-compat proof: because the payload key is
     omitted when a statement reads no RNG carriers, the hit on cell 3 below
     exercises the *missing-key* restore branch on a real kernel — the same code
-    path an entry written before CAS-90 takes.
+    path an entry written before object-RNG replay takes.
     """
     nb_runner.create_notebook(
         [
@@ -253,7 +253,7 @@ def test_foreign_and_unpicklable_carriers_are_skipped():
 
 
 def test_payload_without_object_rng_field_restores_cleanly():
-    """Entries written before CAS-90 lack the field and must load unchanged."""
+    """Entries written before object-RNG replay lack the field and must load unchanged."""
     import numpy as np
 
     from cash.notebook.randomness import restore_object_rng_states

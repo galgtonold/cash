@@ -1,6 +1,6 @@
 """A cached call inside a comprehension is keyed by each element's value.
 
-Round 22, found by the tester-session tests (r22s2's notebook): a grid
+Found by the session-replay tests (the ticket classifier): a grid
 search per model, ``models = {name: fit_full(s, X, y) for name, s in
 searches.items()}``, handed the SVM the logistic regression. The call key
 resolved the comprehension's variable ``s`` by NAME -- finding nothing, or an
@@ -83,7 +83,7 @@ def test_a_call_in_a_comprehension_is_cached_with_no_global_of_its_name(nb_runne
     """The comprehension's variable has no lineage, and the key holds its
     value; counted as an input needing one, it refused the call -- which was
     then cached only when a global of the same name happened to exist
-    (r23s1's per-model CV never was)."""
+    (a real per-model CV never was)."""
     nb_runner.create_notebook(["import cash\n%cash_on", COUNTED, cell])
     nb_runner.start_kernel()
     nb_runner.run_all()
@@ -97,13 +97,13 @@ def test_a_call_in_a_comprehension_is_cached_with_no_global_of_its_name(nb_runne
 
 
 def test_an_argument_built_from_the_element_is_keyed_by_all_of_it(nb_runner):
-    """``fit_score(make_features(cleaned[mid], W)) for mid in ids`` (r23s3):
+    """``fit_score(make_features(cleaned[mid], W)) for mid in ids``:
     the argument is computed from the element, and only its value tells the
     elements apart. That value was hashed from a sample -- a frame's shape,
     dtypes and first five rows -- and rolling-window features all begin with
     the same empty rows: two elements, one key, the second served the first's
     result on a first run -- with a global named like the variable around, as
-    r23s3 had from an earlier ``for`` loop, which was then what let the call
+    one real notebook had from an earlier ``for`` loop, which was then what let the call
     be cached at all."""
     nb_runner.create_notebook(
         [

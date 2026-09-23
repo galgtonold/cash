@@ -1,4 +1,4 @@
-"""Batch 353: itertools.chain, product, starmap combinations."""
+"""itertools.chain, product, starmap combinations."""
 
 import pytest
 

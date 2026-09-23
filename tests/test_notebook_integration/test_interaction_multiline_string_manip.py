@@ -1,4 +1,4 @@
-"""Batch 413: multi-line string manipulation and triple quotes."""
+"""multi-line string manipulation and triple quotes."""
 
 import pytest
 

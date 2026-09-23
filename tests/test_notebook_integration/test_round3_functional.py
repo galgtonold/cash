@@ -1,4 +1,4 @@
-"""Batch 60: Functional programming patterns — compose, pipe, curry, partial application."""
+"""Functional programming patterns — compose, pipe, curry, partial application."""
 
 import textwrap
 

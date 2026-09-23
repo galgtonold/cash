@@ -1,5 +1,5 @@
 """
-Batch 283: Pathlib / os.path interaction tests.
+Pathlib / os.path interaction tests.
 Tests that editing path construction logic properly invalidates
 downstream cells that use the constructed paths.
 """

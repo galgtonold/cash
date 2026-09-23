@@ -1,4 +1,4 @@
-"""Batch 165 – Comprehension interaction tests.
+"""Comprehension interaction tests.
 
 Tests editing list, dict, set, and generator comprehensions
 and verifying cache invalidation and recomputation.

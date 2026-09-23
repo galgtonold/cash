@@ -10,12 +10,12 @@ or re-ran what produced it:
   re-run does not apply it twice. The check compared the value with what the
   *last statement that wrote it* had read -- the cell's starting state only if
   that statement is in this cell. When it is in a cell above, a plain first
-  run looked stale: round 23's r23s4 restored its 5,030-article frame this way
+  run looked stale: one notebook restored its 5,030-article frame this way
   on every Run All.
 * A cell that adds a column to a frame from above (``docs['topic'] = ...``)
   leaves that frame ahead of the simulation. Re-running the cell read this as
   an unsaved edit upstream and rebuilt everything derived from the frame
-  (r23s4: the model and vocabulary behind its topic table).
+  (in that notebook: the model and vocabulary behind its topic table).
 
 Observed with a mark set on the live value from outside the notebook: a value
 rebuilt by cash is a different object and does not carry it.

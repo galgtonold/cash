@@ -1,8 +1,9 @@
 """Loop shape x edit-kind matrix: measures INCREMENTAL REUSE and INVALIDATION
 PRECISION, not restore.
 
-CAS-259, CAS-261 and CAS-262 all survived a fully green 832-file suite for the
-same structural reason: every existing test of a loop shape asserted only an
+Three loop bugs (per-iteration reuse lost on an append, a loop too cheap per
+call to cache at all, and an unrelated edit re-running a loop) all survived a
+fully green 832-file suite for the same structural reason: every existing test of a loop shape asserted only an
 *unchanged* rerun costs zero real calls. That proves restore works. It says
 nothing about whether appending one item recomputes only that item, whether
 reordering leaves an unrelated cell alone, or whether an edit to a cell the
@@ -15,12 +16,11 @@ Instrument, not endorsement
 ----------------------------
 ``compute()`` appends one byte to an external counter file every time it
 actually runs. That file is the ONLY thing any assertion here reads to decide
-"did real work happen." This is deliberately the same technique CAS-259's own
+"did real work happen." This is deliberately the same technique the append
 regression guard uses (``test_accumulator_single_statement_append_incremental.
 py``), and it is a side effect the callee performs purely to serve as this
-suite's instrument -- CAS-260 is the record that a callee's own side effects
-are not, in general, something cash's caching is obliged to preserve on a
-cache hit. Using one here to COUNT executions is not an endorsement of that
+suite's instrument -- a callee's own side effects are not, in general,
+something cash's caching is obliged to preserve on a cache hit. Using one here to COUNT executions is not an endorsement of that
 gap; it is the least-invasive way to get a ground truth number that survives
 being read by a value-blind cache.
 
@@ -56,32 +56,32 @@ Edits, per shape
 
 Size variant (shape A only)
 -----------------------------
-CAS-259 (fixed on this branch, commit 61d920d) and CAS-261 (still open) sit on
-opposite sides of one boundary: ``for_handler._should_execute_loop_as_single_
+Two loop-size bugs sit on opposite sides of one boundary: ``for_handler._should_execute_loop_as_single_
 unit`` treats a loop as one big cacheable unit once ``n * body_stmts * 0.008s
 >= 1.0s`` (n >= 125 for a 1-statement body); below that it decomposes, and
 ``call_unit._COST_FLOOR_S`` only *stores* a call that individually took that
 long. A loop can be under BOTH floors at once -- decomposed (so no whole-unit
 caching) yet each call too cheap to store individually (so no per-call caching
-either) -- while its aggregate cost is well worth caching. CAS-261's own
-measured reproduction is n=124 iterations at 5ms/call (0.62s total): 0 warm
-calls before CAS-259 touched anything, 124 warm calls after.
+either) -- while its aggregate cost is well worth caching. The measured
+reproduction was n=124 iterations at 5ms/call (0.62s total): 0 warm calls
+while every loop was routed as one unit, 124 warm calls once small loops were
+decomposed (commit 61d920d).
 
-**Status: CAS-261 step 1 landed.** ``_COST_FLOOR_S`` was 10ms -- inherited
+**Status: the first step landed.** ``_COST_FLOOR_S`` was 10ms -- inherited
 from the statement path's floor rather than measured -- and is now **3ms**,
 derived from end-to-end measurement (store ~0.7ms/call, hit ~1.2ms/call, so
 break-even is a ~1.2ms body). The four shape-A-large cases below were
-``xfail(strict=True)`` against CAS-261 and now pass outright: the n=100 at
+``xfail(strict=True)`` against that band and now pass outright: the n=100 at
 5ms band went from 100 warm calls to 0. What remains open is the band BELOW
 the break-even (many iterations of a sub-millisecond body), where per-call
 caching cannot pay for itself at any N and the fix is promotion to a
-whole-loop unit -- CAS-261 step 2, designed but not built.
+whole-loop unit -- designed but not built.
 
 The task brief suggested "large (150 items, cheap body)" for this variant.
 Measured directly: n=150 at 5ms/call clears the single-unit threshold
 (n >= 125) and 61d920d's fix (restoring ``force_outputs`` for that branch)
 already covers its unchanged-rerun case cleanly (0 warm calls) -- it is NOT
-CAS-261's gap. This module instead uses **n=100** at 5ms/call: solidly inside
+the sub-floor gap. This module instead uses **n=100** at 5ms/call: solidly inside
 the (50, 125) sub-floor band on BOTH the baseline count and after an append
 (100 -> 101 stays inside the band; 124 -> 125 would have crossed the
 single-unit threshold mid-test and confounded the append measurement with the
@@ -92,16 +92,18 @@ but a full recompute on append/reorder because the single-unit's cache key
 still keys on the whole iterable, and a CLEAN pass on the unrelated-edit case
 -- is reported in the task report rather than pinned here, to keep this
 module's shape list matching the brief's four-shapes-plus-one-size-variant
-structure; see the report for the numbers and why they matter for CAS-262.)
+structure; see the report for the numbers and why they matter for the
+unrelated-edit case.)
 
-CAS-262 confound, found while calibrating this module
----------------------------------------------------------
-The probe for CAS-262 (``test_zzprobe_codeleads.py::
-test_unrelated_upstream_edit_reruns_loop``) uses a bare-expression loop body
-(``results.append(i * i)``, no function call). Every unrelated-edit case in
-this module measures 0 real calls, so none of them reproduces CAS-262.
+Unrelated-edit confound, found while calibrating this module
+-------------------------------------------------------------
+The probe for an unrelated upstream edit re-running a loop
+(``test_zzprobe_codeleads.py::test_unrelated_upstream_edit_reruns_loop``) uses
+a bare-expression loop body (``results.append(i * i)``, no function call).
+Every unrelated-edit case in this module measures 0 real calls, so none of
+them reproduces it.
 
-An earlier reading attributed that to call-level caching (CAS-243) absorbing
+An earlier reading attributed that to call-level caching absorbing
 the re-execution whenever the callee is cacheable. **That mechanism is
 wrong.** Re-measured with a monotonic counter: a loop whose callee is BELOW
 ``_COST_FLOOR_S`` -- never stored at the call level, so call caching cannot
@@ -109,12 +111,12 @@ be helping -- still shows 0 recomputation after an unrelated upstream edit
 (6 real calls cold, 6 after the edit; had the body re-executed it would read
 12). Statement-level restore is what absorbs it.
 
-CAS-262 was real: it was over-invalidation at the PLANNING level, detected by
+The bug was real: it was over-invalidation at the PLANNING level, detected by
 inspecting ``UPSTREAM_DEBUG`` output. This module counts WORK. Both
 instruments are valid and they answer different questions -- which is
-precisely how CAS-262 came to be filed at a severity ("an edit to an
-unrelated cell costs a full loop re-run") that measurement does not support.
-It was fixed in round 21, when the simulation began reusing the lineages the
+precisely how it came to be filed at a severity ("an edit to an unrelated
+cell costs a full loop re-run") that measurement does not support. It was
+fixed when the simulation began reusing the lineages the
 runtime recorded for the loop (``TrackingState.control_outcomes``) instead of
 a formula the runtime never used; the probe is an ordinary test now.
 
@@ -125,8 +127,8 @@ a plain, failing assertion -- not xfailed, not silenced, not "fixed" here. A
 matrix of tests that cannot fail is worse than no matrix, and an unattributed
 red test is the flag that sends the next investigation to the right place
 instead of requiring another hand audit. There are currently no xfails in
-this module: the four that recorded CAS-261's band were lifted when step 1
-landed.
+this module: the four that recorded the sub-floor band were lifted when the
+first step landed.
 
 ``get_output`` / ``run_cell`` on ``nb_runner`` are 1-based cell indices.
 """
@@ -138,7 +140,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.loops]
 # Well above call_unit._COST_FLOOR_S so shapes A-small/B/C/D exercise real
 # per-call caching rather than the "too cheap to store" floor.
 _SLEEP_SMALL = 0.3
-# 5ms: CAS-261's reported band. Under the 10ms floor this stored nothing (100
+# 5ms: the reported sub-floor band. Under the 10ms floor this stored nothing (100
 # warm calls); under the measured 3ms floor it caches (0 warm calls). n=100
 # also stays below the single-unit threshold (n>=125 for a 1-stmt body), so
 # this exercises per-CALL caching, not whole-loop caching -- including after
@@ -287,8 +289,8 @@ def _adjacent_cell(counter, items_expr, setup=SETUP):
     """SETUP(1) / UNRELATED(2) / compute def(3) / seed+loop(4).
 
     Shape A's large variant deliberately keeps the seed ADJACENT (same cell,
-    immediately preceding the `for`) -- that adjacency is part of what CAS-259
-    and CAS-261 are about, not a confounder to avoid here.
+    immediately preceding the `for`) -- that adjacency is part of what the two
+    loop-size bugs are about, not a confounder to avoid here.
     """
     return [setup, UNRELATED, _compute_def(counter, _SLEEP_LARGE), f"out = []\n{_a_body(items_expr)}"]
 
@@ -322,7 +324,7 @@ def test_shape_a_small_unchanged_rerun(nb_runner, tmp_path):
 
 def test_shape_a_small_append(nb_runner, tmp_path):
     """Mutation: in call_unit.py, make the discriminator ignore the call's
-    argument value (CAS-259's own mutation) -- this must jump from 1 to 3+."""
+    argument value -- this must jump from 1 to 3+."""
     counter = tmp_path / "calls.log"
     nb_runner.create_notebook(_hoisted_cells(counter, "out = []", _a_body(SMALL_BASE)))
     nb_runner.start_kernel()
@@ -359,7 +361,7 @@ def test_shape_a_small_reorder(nb_runner, tmp_path):
 def test_shape_a_small_unrelated_edit(nb_runner, tmp_path):
     """Mutation: in the upstream lineage simulation, make ANY upstream cell
     edit mark every downstream loop stale regardless of dependency -- if this
-    is already broken (CAS-262) that mutation is invisible; measured here as
+    is already broken that mutation is invisible; measured here as
     a clean pass (0 real calls), though the seed cell's OWN statement is
     still needlessly (harmlessly) re-executed -- see the report."""
     counter = tmp_path / "calls.log"
@@ -417,7 +419,7 @@ def test_shape_a_small_oracle_no_caching(nb_runner, tmp_path):
 
 
 # ===========================================================================
-# Shape A, LARGE (n=100, 5ms/call, ADJACENT seed) -- CAS-261's uncached band
+# Shape A, LARGE (n=100, 5ms/call, ADJACENT seed) -- the sub-floor band
 # ===========================================================================
 
 
@@ -425,8 +427,8 @@ def test_shape_a_small_oracle_no_caching(nb_runner, tmp_path):
 def test_shape_a_large_unchanged_rerun(nb_runner, tmp_path):
     """Mutation: raising call_unit._COST_FLOOR_S above 5ms would make this
     fail even harder (more of the small-shape tests would join it);
-    lowering it below 5ms, or aligning the two floors per CAS-261's own
-    recommended fix, would flip this to a genuine pass."""
+    lowering it below 5ms, or aligning the two floors, would flip this to a
+    genuine pass."""
     counter = tmp_path / "calls.log"
     nb_runner.create_notebook(_adjacent_cell(counter, LARGE_BASE))
     nb_runner.start_kernel()
@@ -497,7 +499,7 @@ def test_shape_a_large_unrelated_edit(nb_runner, tmp_path):
 
 
 def test_shape_a_large_dependency_edit(nb_runner, tmp_path):
-    """Negative control -- must pass regardless of CAS-261: a real dependency
+    """Negative control -- must pass regardless of the floor: a real dependency
     change has to recompute even in the uncached band."""
     counter = tmp_path / "calls.log"
     nb_runner.create_notebook(_adjacent_cell(counter, LARGE_BASE))
@@ -574,8 +576,8 @@ def test_shape_b_reorder(nb_runner, tmp_path):
 
 
 def test_shape_b_unrelated_edit(nb_runner, tmp_path):
-    """CAS-262's own ticket cites the TWO-statement spelling as already
-    broken on `main`, independent of this branch -- but that ticket's own
+    """The original report cites the TWO-statement spelling as already
+    broken on `main`, independent of this branch -- but that report's own
     repro has no function call in the body. Measured here (with a call):
     clean pass."""
     counter = tmp_path / "calls.log"
@@ -805,8 +807,8 @@ _N_TINY = 60
 def test_sub_break_even_calls_are_not_stored_individually(nb_runner, tmp_path):
     """A call cheaper than the break-even must NOT be cached per-call.
 
-    This is the guard the suite never had, and its absence is why CAS-261's
-    proposed fix looked right on paper. That fix was "if a site is hit N times
+    This is the guard the suite never had, and its absence is why the first
+    proposed fix for the sub-floor band looked right on paper. That fix was "if a site is hit N times
     and N x elapsed clears a floor, store it, even when each call is
     individually sub-floor." It cannot work: storing N calls saves N x body
     but costs N x hit, so the ratio is PER CALL and aggregate size never
@@ -823,7 +825,7 @@ def test_sub_break_even_calls_are_not_stored_individually(nb_runner, tmp_path):
     would false-fail under parallel load the way ``test_cfd_loop_overhead``
     does, and would be measuring the machine rather than the policy.
 
-    NOTE for CAS-261 step 2: whole-loop promotion will legitimately turn this
+    NOTE for whole-loop promotion: it will legitimately turn this
     into 0 warm calls, restored as ONE unit -- that is the correct fix for
     this band, and it does not contradict this test's point. When it lands,
     change the assertion to "restored as a single unit"; do NOT simply delete

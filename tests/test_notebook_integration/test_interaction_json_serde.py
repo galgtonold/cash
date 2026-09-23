@@ -1,5 +1,5 @@
 """
-Batch 282: JSON serialization/deserialization interaction tests.
+JSON serialization/deserialization interaction tests.
 Tests that editing data that gets serialized to JSON and then deserialized
 properly invalidates downstream cells.
 """

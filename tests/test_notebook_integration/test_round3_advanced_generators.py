@@ -1,4 +1,4 @@
-"""Batch 84 – advanced generators: send(), throw(), close(), yield from."""
+"""advanced generators: send(), throw(), close(), yield from."""
 
 import textwrap
 

@@ -1,4 +1,4 @@
-"""Batch 456: type checking with isinstance and issubclass."""
+"""type checking with isinstance and issubclass."""
 
 import pytest
 

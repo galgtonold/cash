@@ -1,4 +1,4 @@
-"""Batch 207 – Exception hierarchy and custom exception interaction tests.
+"""Exception hierarchy and custom exception interaction tests.
 
 Tests editing custom exception classes, raise patterns,
 and exception handling hierarchies.

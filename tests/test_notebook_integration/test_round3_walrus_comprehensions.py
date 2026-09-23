@@ -1,4 +1,4 @@
-"""Batch 64: Walrus operator (:=) & complex comprehensions — cash caching."""
+"""Walrus operator (:=) & complex comprehensions — cash caching."""
 
 import textwrap
 

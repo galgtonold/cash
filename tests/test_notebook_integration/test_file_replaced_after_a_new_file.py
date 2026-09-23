@@ -1,6 +1,6 @@
 """A file replaced in place is seen, even after a new file arrived before it.
 
-Round 23 (r23s2, 4/4, also on Restart & Run All). A folder of CSVs is read in
+Reproduced 4/4, also on Restart & Run All. A folder of CSVs is read in
 a loop into ``raw``; the next cell derives ``sales``. Session 2: a new file
 lands. Session 3: an existing file is rewritten in place. ``raw`` had the new
 rows, but ``sales`` was restored with session 2's entry -- the old content.

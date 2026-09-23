@@ -1,4 +1,4 @@
-"""Batch 57: Multi-file module system — complex module interdependencies with cash."""
+"""Multi-file module system — complex module interdependencies with cash."""
 
 import textwrap
 

@@ -1,4 +1,4 @@
-"""Batch 480: statistics module mean median stdev."""
+"""statistics module mean median stdev."""
 
 import pytest
 

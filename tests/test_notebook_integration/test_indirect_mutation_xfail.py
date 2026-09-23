@@ -1,8 +1,8 @@
-"""Known indirect-mutation channels not yet reset on isolated re-run (CAS-61).
+"""Known indirect-mutation channels not yet reset on isolated re-run.
 
-Same root family as CAS-58/CAS-60: an object reachable from an upstream variable
+Same root family as the alias-reset fixes: an object reachable from an upstream variable
 is mutated in the cell, but the mutation is attributed to a different name, so
-the upstream holder is never reset and the value doubles on re-run. CAS-60 fixed
+the upstream holder is never reset and the value doubles on re-run. A fix covered
 the bare `Name = Name` alias channel (incl. DataFrame aliases). These four remain
 as tracked limitations; each xfail flips to XPASS when its channel is fixed.
 """
@@ -21,7 +21,7 @@ def _rerun(nb_runner, setup, cell, expect):
     assert expect in nb_runner.get_output(2), f"re-run: {nb_runner.get_output(2)!r}"
 
 
-@pytest.mark.xfail(reason="CAS-61: attribute-store alias not tracked", strict=False)
+@pytest.mark.xfail(reason="attribute-store alias not tracked", strict=False)
 def test_alias_via_attribute(nb_runner):
     _rerun(
         nb_runner,
@@ -31,18 +31,18 @@ def test_alias_via_attribute(nb_runner):
     )
 
 
-@pytest.mark.xfail(reason="CAS-61: container-element aliasing not tracked", strict=False)
+@pytest.mark.xfail(reason="container-element aliasing not tracked", strict=False)
 def test_tuple_holds_mutable(nb_runner):
     _rerun(nb_runner, "lst = [1, 2]", "t = (lst,)\nt[0].append(3)\nprint(lst)", "[1, 2, 3]")
 
 
-@pytest.mark.xfail(reason="CAS-61: walrus-as-method-receiver not attributed", strict=False)
+@pytest.mark.xfail(reason="walrus-as-method-receiver not attributed", strict=False)
 def test_walrus_alias_mutate(nb_runner):
     # (y := x).append(..) — the NamedExpr receiver is not surfaced as a mutated
     # name, so the alias y->x is never resolved.
     _rerun(nb_runner, "x = [1, 2]", "(y := x).append(3)\nprint(x)", "[1, 2, 3]")
 
 
-@pytest.mark.xfail(reason="CAS-61: ternary alias is flow-sensitive (two sources)", strict=False)
+@pytest.mark.xfail(reason="ternary alias is flow-sensitive (two sources)", strict=False)
 def test_conditional_alias(nb_runner):
     _rerun(nb_runner, "x = [1, 2]\nz = [9]", "y = x if True else z\ny.append(3)\nprint(x)", "[1, 2, 3]")

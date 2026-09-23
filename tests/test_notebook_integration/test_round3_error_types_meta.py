@@ -1,5 +1,5 @@
 """
-Batch 14: Error handling patterns, type annotations, abstract classes,
+Error handling patterns, type annotations, abstract classes,
 metaclass interactions, and exception flow caching.
 
 Tests how cash handles try/except, custom exceptions, type-annotated code,

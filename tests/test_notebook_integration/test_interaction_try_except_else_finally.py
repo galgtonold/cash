@@ -1,4 +1,4 @@
-"""Batch 510: try except else finally patterns."""
+"""try except else finally patterns."""
 
 import pytest
 

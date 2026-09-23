@@ -1,5 +1,5 @@
 """
-Stress Test Batch 5: Devious Scenarios (131-165)
+Stress tests: Devious Scenarios (131-165)
 
 These are specifically designed to break the caching system based on
 code analysis findings. They target:

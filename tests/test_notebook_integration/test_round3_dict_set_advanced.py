@@ -1,4 +1,4 @@
-"""Batch 93 – complex dict and set operations."""
+"""complex dict and set operations."""
 
 import textwrap
 

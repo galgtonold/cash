@@ -1,23 +1,22 @@
-"""CAS-167: warn when caching an UNSEEDED estimator fit as a frozen replay.
+"""Warn when caching an UNSEEDED estimator fit as a frozen replay.
 
-``# @cash:cache-fit`` makes a bare ``estimator.fit(X, y)`` cacheable (CAS-138,
-opt-in since CAS-170). But cash's AST randomness detector cannot see the
+``# @cash:cache-fit`` makes a bare ``estimator.fit(X, y)`` cacheable (opt-in). But cash's AST randomness detector cannot see the
 randomness inside sklearn's compiled ``.fit()`` (bootstrap sampling, feature
 subsampling, weight init). An estimator built WITHOUT a ``random_state`` therefore
 gets cached and frozen on re-run with no warning of any kind -- the notebook-path
-analogue of the inline unseeded-randomness hazard CAS-135 warns about (and of the
-object-cache hazard CAS-158 covers on the decorator path). Two genuine fits
+analogue of the inline unseeded-randomness hazard cash already warns about (and of the
+object-cache hazard the unseeded-randomness check covers on the decorator path). Two genuine fits
 differ; the cached fit is a replay.
 
 The fix is advisory only -- it does NOT change cacheability. An opted-in unseeded
 fit still caches, it just announces that the cached fit is frozen: at COMPUTE time
 ("Unseeded randomness detected ... frozen replay") and, on a cache hit, at RESTORE
 time ("restored from cache ... a replay"), through the SAME
-``CashRandomnessWarning`` path CAS-135 uses so existing filters catch it.
+``CashRandomnessWarning`` path the inline warning uses so existing filters catch it.
 
 Every notebook here carries ``# @cash:cache-fit``: the warning is about a FROZEN
 cached fit, so it is scoped to the path that actually freezes one. A bare fit
-without the directive re-executes every run (CAS-170) -- nothing is replayed, so
+without the directive re-executes every run -- nothing is replayed, so
 there is nothing to warn about (``test_default_bare_fit_does_not_warn``).
 
 Real-kernel end of the contract: the warning must reach the notebook's cell
@@ -52,7 +51,7 @@ def test_unseeded_estimator_fit_warns(nb_runner):
     """An opted-in ``clf.fit(X, y)`` on an UNSEEDED estimator warns at compute
     time, and the isolated re-run's restore announces the replay.
 
-    Fails WITHOUT the CAS-167 fix (the cache-fit path caches the fit silently);
+    Fails WITHOUT the fix (the cache-fit path caches the fit silently);
     passes with it. ``RandomForestClassifier(n_estimators=160)`` carries no
     ``random_state``, so ``get_params()['random_state']`` is ``None`` -> unseeded.
     """
@@ -156,7 +155,7 @@ def test_allow_random_suppresses_unseeded_estimator_fit(nb_runner):
 
 
 def test_default_bare_fit_does_not_warn(nb_runner):
-    """Control (CAS-170): WITHOUT ``# @cash:cache-fit`` an unseeded bare fit is not
+    """Control: WITHOUT ``# @cash:cache-fit`` an unseeded bare fit is not
     cached, so there is no frozen replay to warn about.
 
     The identical notebook to ``test_unseeded_estimator_fit_warns`` minus the

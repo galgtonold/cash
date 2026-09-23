@@ -1,4 +1,4 @@
-"""Batch 87 – complex multi-cell data pipelines with many dependencies."""
+"""complex multi-cell data pipelines with many dependencies."""
 
 import textwrap
 

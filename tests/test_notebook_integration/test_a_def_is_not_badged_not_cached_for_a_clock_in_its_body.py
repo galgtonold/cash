@@ -1,6 +1,6 @@
 """A ``def`` is not refused for what its body does when CALLED.
 
-Round 30, r30s1: "every ``def`` whose body calls time.time() shows
+"every ``def`` whose body calls time.time() shows
 ``NOT CACHED: def f(...)  (0.00s) - time.time``. A def is never something I
 wanted cached; the row reads as if cash refuses to cache my function. The
 calls to that function ARE cached. Noise, one row per def per cell."

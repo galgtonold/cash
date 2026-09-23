@@ -1,4 +1,4 @@
-"""Batch 528: walrus operator in while and comprehension."""
+"""walrus operator in while and comprehension."""
 
 import pytest
 

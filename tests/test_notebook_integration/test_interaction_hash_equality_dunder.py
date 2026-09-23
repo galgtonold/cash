@@ -1,4 +1,4 @@
-"""Batch 504: hash and equality dunder methods."""
+"""hash and equality dunder methods."""
 
 import pytest
 

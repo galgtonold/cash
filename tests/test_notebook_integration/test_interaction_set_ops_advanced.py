@@ -1,4 +1,4 @@
-"""Batch 362: set operations (union, intersection, difference, symmetric_difference)."""
+"""set operations (union, intersection, difference, symmetric_difference)."""
 
 import pytest
 

@@ -1,4 +1,4 @@
-"""Batch 445: custom exception classes with attributes."""
+"""custom exception classes with attributes."""
 
 import pytest
 

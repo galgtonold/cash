@@ -1,5 +1,5 @@
 """
-Batch 327: enum patterns with caching.
+enum patterns with caching.
 Tests Enum, IntEnum, Flag operations, and edit propagation.
 """
 

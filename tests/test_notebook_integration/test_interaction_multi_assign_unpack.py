@@ -1,5 +1,5 @@
 """
-Batch 334: multiple assignment / unpacking patterns with caching.
+multiple assignment / unpacking patterns with caching.
 Tests tuple unpacking, star expressions, swap, and edit propagation.
 """
 

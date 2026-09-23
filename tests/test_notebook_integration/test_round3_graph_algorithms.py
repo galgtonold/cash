@@ -1,4 +1,4 @@
-"""Batch 97 – graph algorithms: BFS, DFS, shortest path."""
+"""graph algorithms: BFS, DFS, shortest path."""
 
 import textwrap
 

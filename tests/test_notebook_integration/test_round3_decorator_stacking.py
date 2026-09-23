@@ -1,4 +1,4 @@
-"""Batch 92 – decorator stacking and parameterized decorators."""
+"""decorator stacking and parameterized decorators."""
 
 import textwrap
 

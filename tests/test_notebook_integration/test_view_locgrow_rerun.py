@@ -1,5 +1,5 @@
 """In-place mutation through a numpy slice-VIEW or a pandas df.loc row-append
-must reset on isolated re-run instead of accumulating (CAS-74)."""
+must reset on isolated re-run instead of accumulating."""
 
 import pytest
 

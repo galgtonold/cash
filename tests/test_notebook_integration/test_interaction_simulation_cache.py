@@ -1,5 +1,5 @@
 """
-Batch 103 — Simulation cache coherence under edits.
+Simulation cache coherence under edits.
 
 The simulation cache stores (cell_hash, virtual_lineage, ...) for each cell.
 These tests probe whether the simulation cache is correctly invalidated when:

@@ -1,4 +1,4 @@
-"""Batch 158 – Complex real-world simulation: data science pipeline.
+"""Complex real-world simulation: data science pipeline.
 
 Full end-to-end data science workflow: load data, clean,
 feature engineer, model (simple), evaluate — with edits

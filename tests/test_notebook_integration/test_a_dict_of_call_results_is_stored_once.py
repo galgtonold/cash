@@ -1,7 +1,7 @@
 """A dict gathered from cached calls is stored once, and restores after a restart.
 
-Round 25: ``holdout_models = {key: fit_series(g, ...) for ...}`` stored ~120 MiB
-per version on top of the same fits under their call keys (r25s5), and every
+``holdout_models = {key: fit_series(g, ...) for ...}`` stored ~120 MiB
+per version on top of the same fits under their call keys, and every
 project's cache grew 1.5 GB a day. The statement's entry now refers to the call
 entries. It must still restore on its own after a restart -- that entry is what
 spares rebuilding the calls' arguments.

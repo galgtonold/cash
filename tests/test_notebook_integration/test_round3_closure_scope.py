@@ -1,4 +1,4 @@
-"""Batch 49: Closure & scope edge cases — closures, nonlocal, late binding."""
+"""Closure & scope edge cases — closures, nonlocal, late binding."""
 
 import textwrap
 

@@ -1,4 +1,4 @@
-"""Batch 266 – Slice and index pattern edits.
+"""Slice and index pattern edits.
 
 Tests list slicing, indexing operations with edits.
 """

@@ -1,4 +1,4 @@
-"""Batch 159 – Print and display output interaction tests.
+"""Print and display output interaction tests.
 
 Tests where print/display formatting changes, output cells
 are edited, and print modes are toggled.

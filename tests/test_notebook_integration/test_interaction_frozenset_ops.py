@@ -1,5 +1,5 @@
 """
-Batch 319: frozenset operations with caching.
+frozenset operations with caching.
 Tests frozenset creation, set operations (union, intersection, difference), and edit propagation.
 """
 

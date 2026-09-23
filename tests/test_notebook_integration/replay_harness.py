@@ -1,6 +1,6 @@
 """Edit one cell, run a later one: does cash give what a plain top-to-bottom run gives?
 
-The acceptance harness for upstream replay (round 21, Phase 2). A scenario is a
+The acceptance harness for upstream replay. A scenario is a
 notebook, an edit a user would make, and the cell they run next. The oracle is
 the same notebook, edited, executed top to bottom without cash in a fresh
 process. Two properties are checked:
@@ -11,7 +11,7 @@ process. Two properties are checked:
   the oracle wrote. A file cash did not touch may legitimately be older: a
   write nothing reads is a terminal side effect that replay does not re-fire
   (the reconstruction scope gate). A file cash writes must never hold
-  something no real run would produce -- that is round 21's blank chart.
+  something no real run would produce -- such as a blank chart.
 
 What was re-run for other cells is recorded, not asserted: it is the cost
 side, reported next to the correctness verdict.
@@ -75,7 +75,7 @@ class Scenario:
     restart: bool = False  # restart + run cell 1 before the edit
     # Cells run after the edit and before the target: the user looks at
     # another cell first. Its replay refreshes part of what the target needs
-    # and must not make the rest look fresh (round 22, r22s1).
+    # and must not make the rest look fresh.
     first: tuple[int, ...] = ()
 
     @property

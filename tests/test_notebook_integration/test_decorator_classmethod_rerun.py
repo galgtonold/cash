@@ -1,5 +1,5 @@
 """Hidden mutation through a decorator wrapper or a no-arg classmethod must reset
-on isolated re-run (CAS-71, extends CAS-68). Calling a decorated function runs
+on isolated re-run. Calling a decorated function runs
 the wrapper (not the resolved original ``def``), whose captured-var mutation is
 missed; a no-arg classmethod mutating a class variable slips through the
 method-receiver path.
@@ -65,7 +65,7 @@ def test_pure_decorator_not_over_invalidated(nb_runner):
 
 
 def test_classmethod_with_arg_still_resets(nb_runner):
-    # the existing passing form (CAS-68) — guard against regression.
+    # the existing passing form — guard against regression.
     _rerun(
         nb_runner,
         "class Reg:\n    items = []\n    @classmethod\n    def add(cls, x):\n        cls.items.append(x)",

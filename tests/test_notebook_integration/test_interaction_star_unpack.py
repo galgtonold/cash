@@ -1,4 +1,4 @@
-"""Batch 279 – Star unpacking and extended iterable unpacking.
+"""Star unpacking and extended iterable unpacking.
 
 Tests *args, **kwargs, and extended unpacking with edits.
 """

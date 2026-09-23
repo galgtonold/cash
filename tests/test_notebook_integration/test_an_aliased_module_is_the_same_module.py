@@ -1,12 +1,12 @@
 """Editing a module invalidates work done with it, whatever the cell called it.
 
-Round 27, r27s2, reported 3/3 from an empty cache: a fix to a function in a
+Reported 3/3 from an empty cache: a fix to a function in a
 project module had no effect in a live kernel -- the cell re-ran and returned
 the PRE-fix answer, with the badge saying
 
     EXECUTED: parsed = tl.parse_headers(corpus) (0.00s, saved 0.68s by cached calls)
 
-The tester exported `per_category.csv` and `confusion_matrix.png` from that
+The user exported `per_category.csv` and `confusion_matrix.png` from that
 value. Only a kernel restart fixed it. Their notebook says
 
     import tickets_lib as tl
@@ -48,7 +48,7 @@ def _play(nb_runner, tmp_path, name, import_line, callee):
 
 
 def test_an_aliased_module_edit_reaches_the_call(nb_runner, tmp_path):
-    """r27s2's shape: `import lib as x`, then `x.f(...)`."""
+    """The reported shape: `import lib as x`, then `x.f(...)`."""
     out, raw = _play(nb_runner, tmp_path, "aliaslib", "import aliaslib as al", "al.parse_headers")
     assert "R a_NEW" in out, (
         "the module was edited and the call returned the pre-edit value; "
@@ -59,7 +59,7 @@ def test_an_aliased_module_edit_reaches_the_call(nb_runner, tmp_path):
 def test_the_same_module_without_an_alias(nb_runner, tmp_path):
     """The control, and why three minimal repros missed this.
 
-    All three of the tester's minimisations wrote `import mylib`, and so does
+    All three of the reporter's minimisations wrote `import mylib`, and so does
     every module-reload test in this suite.
     """
     out, raw = _play(nb_runner, tmp_path, "plainlib", "import plainlib", "plainlib.parse_headers")

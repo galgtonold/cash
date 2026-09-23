@@ -1,5 +1,5 @@
 """
-Batch 330: abstract base class patterns with caching.
+abstract base class patterns with caching.
 Tests ABC, abstractmethod, and edit propagation.
 """
 

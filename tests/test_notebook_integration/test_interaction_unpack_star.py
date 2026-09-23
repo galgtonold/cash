@@ -1,4 +1,4 @@
-"""Batch 240 – Unpacking and star expression edit tests.
+"""Unpacking and star expression edit tests.
 
 Tests editing cells with tuple unpacking, star expressions,
 and chained assignments.

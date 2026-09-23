@@ -1,4 +1,4 @@
-"""Batch 441: functools.partial and partialmethod."""
+"""functools.partial and partialmethod."""
 
 import pytest
 

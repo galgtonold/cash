@@ -1,6 +1,6 @@
 """A library call seen changing its argument is replayed after a restart.
 
-Round 30, r30s4 (BLOCKING, 3/3 + 1/1 with no edit at all): after a kernel
+Blocking, 3/3 + 1/1 with no edit at all: after a kernel
 restart, a cell below ``sc.pp.calculate_qc_metrics(adata, inplace=True)``
 stopped with ``KeyError: 'n_genes_by_counts'``. The repair restored ``adata``
 from ``adata = make()`` and never re-ran the QC call. The runtime had seen that

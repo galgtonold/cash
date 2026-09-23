@@ -1,4 +1,4 @@
-"""Batch 339: chain of comprehensions and transformations across cells."""
+"""chain of comprehensions and transformations across cells."""
 
 import pytest
 

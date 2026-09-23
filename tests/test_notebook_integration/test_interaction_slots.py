@@ -1,5 +1,5 @@
 """
-Batch 288: Slots and __slots__ interaction tests.
+Slots and __slots__ interaction tests.
 Tests that editing classes with __slots__ and their instances
 properly invalidates downstream cells.
 """

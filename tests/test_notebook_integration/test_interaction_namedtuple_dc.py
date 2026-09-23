@@ -1,5 +1,5 @@
 """
-Batch 325: namedtuple and dataclass patterns with caching.
+namedtuple and dataclass patterns with caching.
 Tests namedtuple creation, dataclass fields, and edit propagation.
 """
 

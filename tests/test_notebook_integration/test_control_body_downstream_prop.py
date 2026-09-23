@@ -1,5 +1,5 @@
 """An in-place mutation inside a control-structure body (if/with) must propagate
-to a downstream cell that reads the mutated container (CAS-66)."""
+to a downstream cell that reads the mutated container."""
 
 import pytest
 

@@ -1,4 +1,4 @@
-"""Batch 209 – Zip and enumerate interaction tests.
+"""Zip and enumerate interaction tests.
 
 Tests editing cells with zip, enumerate, and itertools
 patterns and verifying cache invalidation.

@@ -1,4 +1,4 @@
-"""Batch 91 – JSON/CSV data processing chains."""
+"""JSON/CSV data processing chains."""
 
 import textwrap
 

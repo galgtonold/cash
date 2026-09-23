@@ -1,4 +1,4 @@
-"""Batch 396: class __contains__, __len__, __getitem__ protocol."""
+"""class __contains__, __len__, __getitem__ protocol."""
 
 import pytest
 

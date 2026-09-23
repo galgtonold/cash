@@ -1,5 +1,5 @@
 """
-Stress Test Batch 2: Upstream Simulation & Cell Ordering (Scenarios 31-65)
+Stress tests: Upstream Simulation & Cell Ordering (Scenarios 31-65)
 
 Tests upstream simulation, fresh kernel restoration, cell reordering,
 out-of-order execution, and complex re-execution patterns.

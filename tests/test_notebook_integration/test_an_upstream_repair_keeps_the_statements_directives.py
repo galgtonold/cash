@@ -1,6 +1,6 @@
 """A statement re-run as an upstream repair keeps its ``# @cash:`` directives.
 
-Round 25's r25s4 put ``# @cash:no-cache-calls`` on a comprehension. Run
+A user put ``# @cash:no-cache-calls`` on a comprehension. Run
 directly, its calls were not cached. Re-run as an Upstream repair (edit the cell
 above, run the cell below), they were: the repair executed the statement's code
 with no annotation at all, so the directive only held for direct runs. Values
@@ -25,7 +25,7 @@ WORK = (
     "    time.sleep(0.06)\n"
     "    return i * i"
 )
-# The tester's layout: the directive mid-cell, under the function it calls.
+# The reported layout: the directive mid-cell, under the function it calls.
 COMPREHENSION = WORK + "\n\n# @cash:no-cache-calls\nvals = [work(i) for i in range(N)]"
 
 

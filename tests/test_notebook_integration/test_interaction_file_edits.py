@@ -1,5 +1,5 @@
 """
-Batch 105 — File dependency + cell edit interactions.
+File dependency + cell edit interactions.
 
 Tests the interaction between:
 - Editing cells that read files

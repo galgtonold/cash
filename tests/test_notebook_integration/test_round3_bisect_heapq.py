@@ -1,4 +1,4 @@
-"""Batch 67: Bisect, heapq & algorithm patterns — cash caching with stdlib algorithms."""
+"""Bisect, heapq & algorithm patterns — cash caching with stdlib algorithms."""
 
 import textwrap
 

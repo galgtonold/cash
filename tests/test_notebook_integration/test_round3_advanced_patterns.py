@@ -1,5 +1,5 @@
 """
-Round 3 Batch 6: Multi-file dependencies, disk restore after restart,
+Multi-file dependencies, disk restore after restart,
 complex module patterns, nested loops, dynamic imports, and advanced caching.
 
 These tests push the boundaries of the caching system with intricate patterns.

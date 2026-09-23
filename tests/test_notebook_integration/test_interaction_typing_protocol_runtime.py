@@ -1,4 +1,4 @@
-"""Batch 484: typing protocol and runtime checkable."""
+"""typing protocol and runtime checkable."""
 
 import pytest
 

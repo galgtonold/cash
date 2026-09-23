@@ -1,6 +1,6 @@
-"""Round-22 testers' sessions, shrunk to a small dataset.
+"""Real user sessions, shrunk to a small dataset.
 
-``finance_deck`` is r22s3's: a monthly management deck from one ledger file
+``finance_deck``: a monthly management deck from one ledger file
 per month (listed with ``Path.glob``), charts saved through a ``save(fig,
 name)`` helper, ``import glob`` in two cells, a slow per-cost-centre forecast.
 The month arrives, the charts are restyled, a renamed cost centre is fixed
@@ -8,21 +8,21 @@ upstream while looking at a chart first, the next month and a corrected
 re-delivery arrive after a restart, and the deck is rebuilt with Restart & Run
 All into an emptied output folder.
 
-``demand_forecast`` is r22s4's: daily sales per region in a folder of parts,
+``demand_forecast``: daily sales per region in a folder of parts,
 a feature cell of column assignments over a cross-joined panel, a model per
 region, a rolling-origin backtest built with ``rows.append`` over cut-offs and
 a grid, the best parameter picked from it. Holidays are fixed, the grid is
 widened in the middle, a lookahead leak is fixed, a weather feature is added,
 the late region's missing week arrives as a new file, and Restart & Run All.
 
-``ab_readout`` is r22s1's: an A/B test from assignments, a folder of daily
+``ab_readout``: an A/B test from assignments, a folder of daily
 event files read through a helper, and orders; a bootstrap used by the
 overall, CUPED and per-segment estimates; forest charts and a summary export.
 Bots and a double-fired day are filtered upstream, the charts are looked at
 before the summary, the PM redefines conversion, a segment is added, two days
 of events are re-delivered after a morning restart, and Restart & Run All.
 
-``ticket_classifier`` is r22s2's: monthly ticket files, regex cleaning through
+``ticket_classifier``: monthly ticket files, regex cleaning through
 a helper, a time split, word + char TF-IDF, a grid search per model in a dict
 comprehension, a confusion matrix labelled in a nested ``ax.text`` loop, error
 analysis and a model card. The merged queue is mapped upstream, a leaking
@@ -30,7 +30,7 @@ signature is cleaned out, the grid is widened, QA relabels old tickets after
 a restart, a new month arrives, and Restart & Run All.
 
 The expensive functions sleep past the 0.1 s persistence floor and log their
-calls, so what is cached in the tester's notebook is cached here too.
+calls, so what is cached in the original notebook is cached here too.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ SETUP = "import cash\n%cash_on"
 
 
 # ---------------------------------------------------------------------------
-# r22s3 -- finance deck
+# finance deck
 # ---------------------------------------------------------------------------
 
 
@@ -184,7 +184,7 @@ DECK = (
 )
 
 FINANCE_DECK = Session(
-    name="r22s3 finance deck",
+    name="finance_deck",
     cells=DECK,
     files=DECK_FILES,
     steps=(
@@ -197,20 +197,20 @@ FINANCE_DECK = Session(
         Edit("charts", lambda s: s.replace("'P&L by line'", "'P&L by line, EUR'")),
         Run("charts", calls={"forecast": 0}),
         # -- then fix the renamed cost centre upstream, look at a chart first,
-        # then export (r22s3 F10: the forecast beside the chart went stale).
+        # then export (the forecast beside the chart once went stale here).
         Edit("mapping", lambda s: s.replace("RENAMES = {}", "RENAMES = {'CC40': 'CC41'}")),
         Run("charts"),
         Run("export"),
         Run("summary"),
         # Session C, next morning: restart, another month plus a corrected
         # re-delivery of April under the same name, jump to the summary
-        # (r22s3 F6: `import glob` in two cells refused the jump).
+        # (`import glob` in two cells once refused the jump).
         Restart(),
         AddFile("ledger/gl_2026-08.csv", _gl_month(8)),
         ReplaceFile("ledger/gl_2026-04.csv", _gl_month(4, bump=7.5)),
         Run("summary"),
         # The deck goes out: an emptied output folder, Restart & Run All
-        # (r22s3 F2: charts saved through the helper were not written).
+        # (charts saved through the helper were once not written).
         ClearDir("out"),
         RestartAndRunAll(),
         RunAll(calls={"forecast": 0}),
@@ -219,7 +219,7 @@ FINANCE_DECK = Session(
 
 
 # ---------------------------------------------------------------------------
-# r22s4 -- demand forecast per region
+# demand forecast per region
 # ---------------------------------------------------------------------------
 
 _DATES = [np.datetime64("2026-01-01") + np.timedelta64(i, "D") for i in range(120)]
@@ -371,7 +371,7 @@ _REGIONAL_HOLIDAYS = (
 )
 
 DEMAND_FORECAST = Session(
-    name="r22s4 demand forecast",
+    name="demand_forecast",
     cells=FORECAST,
     files=FORECAST_FILES,
     steps=(
@@ -380,7 +380,7 @@ DEMAND_FORECAST = Session(
         # (the call sits in rows.append(dict(..., wape=backtest_one(...)))).
         Run("backtest", calls={"backtest": 0}),
         # A new day: restart and jump straight to the metrics
-        # (r22s4 BLOCKING: every restart-then-jump was refused).
+        # (every restart-then-jump was once refused).
         Restart(),
         Run("metrics"),
         # Tuesday: the holiday feature ignored regional holidays; fix it
@@ -403,7 +403,7 @@ DEMAND_FORECAST = Session(
         Run("forecast"),
         Run("metrics"),
         # Wednesday: the late region's missing week lands as a new file
-        # (r22s4 WRONG: the forecast used the parameter tuned on old data).
+        # (the forecast once used the parameter tuned on old data).
         AddFile("sales/part_2.csv", _sales(late=True)),
         Run("forecast"),
         Run("metrics"),
@@ -414,7 +414,7 @@ DEMAND_FORECAST = Session(
 )
 
 # ---------------------------------------------------------------------------
-# r22s1 -- A/B-test readout
+# A/B-test readout
 # ---------------------------------------------------------------------------
 
 _AB_START = np.datetime64("2026-08-03")
@@ -641,14 +641,14 @@ _BOT_AND_DOUBLE_FIRE = (
 )
 
 AB_READOUT = Session(
-    name="r22s1 ab readout",
+    name="ab_readout",
     cells=READOUT,
     files=READOUT_FILES,
     steps=(
         RunAll(),
         # Tuesday: bots and the double-fired day distort revenue; filter them
-        # upstream, look at the charts, then the summary (r22s1 WRONG #1:
-        # the summary exported the bootstrap from before the filter).
+        # upstream, look at the charts, then the summary (the summary once
+        # exported the bootstrap from before the filter).
         Edit("metrics", lambda s: s.replace("events = events_raw\n", _BOT_AND_DOUBLE_FIRE)),
         Run("charts"),
         Run("summary"),
@@ -675,8 +675,8 @@ AB_READOUT = Session(
         ),
         Run("charts"),
         # Wednesday: the morning restore, then two days of events re-delivered
-        # under the same names (r22s1 WRONG #2: read inside read_events, after
-        # a restore, the old files' result was served).
+        # under the same names (read inside read_events, after a restore, the
+        # old files' result was once served).
         Restart(),
         Run("summary"),
         ReplaceFile("data/events/events_2026-08-05.csv", _events_day(2, fix=True)),
@@ -691,7 +691,7 @@ AB_READOUT = Session(
 
 
 # ---------------------------------------------------------------------------
-# r22s2 -- support-ticket queue classifier
+# support-ticket queue classifier
 # ---------------------------------------------------------------------------
 
 _VOCAB = {
@@ -903,7 +903,7 @@ _MERGE = (
 _QUOTED = "QUOTED = re.compile(r'^-{3,}\\s*original message\\s*-{3,}', re.I | re.M)\n"
 
 TICKET_CLASSIFIER = Session(
-    name="r22s2 ticket classifier",
+    name="ticket_classifier",
     cells=TICKETS,
     files=TICKET_FILES,
     steps=(

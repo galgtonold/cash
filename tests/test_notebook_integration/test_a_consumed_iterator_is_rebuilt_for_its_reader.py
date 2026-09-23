@@ -4,7 +4,7 @@ Cell A opens a handle (``fh = open(p)``), cell B consumes it. On a second Run
 All, plain Jupyter re-runs A and B reads the file again. Cash skipped A --
 nothing about it changed -- so B, when it re-ran, iterated a handle already at
 EOF and printed ``[]``. That stayed hidden while B itself was restored from
-the cache; in round 28 a change that stopped storing such a cheap reader
+the cache; a change that stopped storing such a cheap reader
 exposed it (test_file_handle_iteration_second_run_all). Here B is forced to
 re-run, so caching cannot hide it.
 """

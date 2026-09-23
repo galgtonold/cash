@@ -1,4 +1,4 @@
-"""Batch 224 – String template/formatting interaction tests.
+"""String template/formatting interaction tests.
 
 Tests editing cells with various string formatting
 approaches and verifying correct output.

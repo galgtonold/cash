@@ -1,7 +1,7 @@
 """Showing a frame rounded or summarised does not count as changing it.
 
-Round 23: ``comparison.round(4)`` (r23s1) and ``feat_demo.describe().round(3)``
-(r23s3), each the last line of a cell, were badged "In-place mutation on:
+``comparison.round(4)`` and ``feat_demo.describe().round(3)``,
+each the last line of a cell, were badged "In-place mutation on:
 comparison (receiver lineage bumped; statement re-executes)". A method not
 known to be pure, called on a DataFrame, is assumed to mutate it -- a frame's
 content hash is a sample and cannot prove otherwise -- and the frame's lineage
@@ -9,11 +9,11 @@ was bumped: every cached result built from it after that missed.
 
 ``round`` and the common aggregations are now known pure. A chain counts by
 its last method unless something inside it is known to mutate:
-``df.sort_values('b').head()`` is pure (r23s2 shows two of them; asking every
+``df.sort_values('b').head()`` is pure (a real notebook had two of them; asking every
 inner method to be listed made them mutations and a restart rebuilt the frame
 from 1,312 files), ``df.pop('b').round(2)`` still changes ``df``.
 
-Round 30 (r30s1): ``dwells[dwells.kind == 'bay'].groupby('hour').size()``
+``dwells[dwells.kind == 'bay'].groupby('hour').size()``
 was a mutation of ``dwells``, although ``size`` is called on the GroupBy that
 ``groupby`` made. A chain that passes through a known-pure method acts on a
 new object from there on.
@@ -87,7 +87,7 @@ BIG = SETUP.replace("range(1000), 'b': [0.123] * 1000", "range(300_000), 'b': [0
     ],
 )
 def test_a_method_on_a_grouping_leaves_the_frame_alone(nb_runner, shown, edited):
-    """Round 30 (r30s1): the last method is called on the GroupBy.
+    """The last method is called on the GroupBy.
 
     A frame over the 1 MiB up to which a call keys on its argument's value,
     so a bump of ``df``'s lineage would show."""

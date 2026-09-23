@@ -1,4 +1,4 @@
-"""Batch 475: contextlib suppress and redirect to stringio."""
+"""contextlib suppress and redirect to stringio."""
 
 import pytest
 

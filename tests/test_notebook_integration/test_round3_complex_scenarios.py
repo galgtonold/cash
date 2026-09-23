@@ -1,5 +1,5 @@
 """
-Round 3: Complex scenario integration tests.
+Complex scenario integration tests.
 
 Tests progressively complex caching interactions including:
 - Deep dependency chains (5+ cells)

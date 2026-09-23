@@ -1,4 +1,4 @@
-"""Batch 277 – Zip and enumerate patterns with edits.
+"""Zip and enumerate patterns with edits.
 
 Tests zip, enumerate, and parallel iteration with data edits.
 """

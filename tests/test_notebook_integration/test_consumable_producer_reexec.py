@@ -5,7 +5,7 @@ IN PLACE and cannot be faithfully snapshot-restored — the cache store falls ba
 to keeping a reference, so "restoring" it hands back the already-drained object.
 On an ISOLATED re-run of the consumer cell the producer does not re-run, so the
 cell reads leftovers from its own previous run: ``got=[]`` instead of
-``got=[0, 1, 2]`` (CAS-118), ``total=0`` instead of ``total=55`` (CAS-50).
+``got=[0, 1, 2]``, ``total=0`` instead of ``total=55``.
 
 ``run_all`` is already correct for both because the producer cell re-runs first.
 The fix makes an isolated re-run do the same, so the oracle throughout is:
@@ -29,7 +29,7 @@ pytestmark = [pytest.mark.timeout(90)]
 
 
 def test_drained_queue_consumed_isolated_rerun(nb_runner):
-    """CAS-118: the drain cell re-run alone must refill from the producer."""
+    """The drain cell re-run alone must refill from the producer."""
     nb_runner.create_notebook(
         [
             textwrap.dedent("""\
@@ -64,7 +64,7 @@ def test_drained_queue_consumed_isolated_rerun(nb_runner):
 
 
 def test_exhausted_generator_consumed_isolated_rerun(nb_runner):
-    """CAS-50: a generator stored in a var (not an inline genexpr, which is
+    """A generator stored in a var (not an inline genexpr, which is
     re-evaluated fresh and already worked) must be re-produced."""
     nb_runner.create_notebook(
         [

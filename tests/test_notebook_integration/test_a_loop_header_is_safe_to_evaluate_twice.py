@@ -3,14 +3,14 @@
 A cheap loop with many iterations runs as one unit, because decomposing it
 per iteration costs ~8 ms per body statement per iteration. Doing that means
 evaluating the header twice, so the question of WHEN it is allowed is the
-whole feature. Round 27 found it wrong in both directions.
+whole feature. It was once wrong in both directions.
 
-Measured on r27s3's own cell, 627 iterations of four cheap numpy statements:
+Measured on a real notebook's cell, 627 iterations of four cheap numpy statements:
 
     range(0, len(frame), STEP)   first 2.52 s   re-run 4.51 s   decomposed
     range(0, NROWS, STEP)        first 0.06 s   re-run 0.05 s   one unit
 
--- `len` was not on the list of builtins trusted in a header. The tester saw
+-- `len` was not on the list of builtins trusted in a header. The user saw
 16.9 s cached against 1.0 s uncached, a re-run slower than the first, and
 called it BLOCKING. And the other way: `for x in sorted(g):` over a 400-item
 generator ran zero times, because the check for one-shot iterators looked
@@ -32,7 +32,7 @@ STEP = 5
 TOPN = 50
 """
 
-# r27s3/repro/loop_cell.py, unchanged.
+# The reported loop cell, unchanged.
 LOOP = """M = frame.to_numpy()
 share = []
 for t in range(0, len(frame), STEP):
@@ -46,7 +46,7 @@ print("iterations=" + str(len(share)))
 
 
 def test_a_loop_bounded_by_len_runs_as_one_unit(nb_runner):
-    """r27s3's cell. Structural, not timed: which path did it take?"""
+    """The reported cell. Structural, not timed: which path did it take?"""
     nb_runner.create_notebook(["import cash\n%cash_on\n%cash_badge print", SETUP, LOOP])
     nb_runner.start_kernel()
     nb_runner.run_all()

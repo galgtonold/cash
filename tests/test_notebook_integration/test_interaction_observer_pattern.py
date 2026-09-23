@@ -1,4 +1,4 @@
-"""Batch 223 – Observer/event pattern interaction tests.
+"""Observer/event pattern interaction tests.
 
 Tests editing cells with event handling, callback patterns,
 and verifying that edits propagate correctly.

@@ -1,4 +1,4 @@
-"""Batch 507: dict comprehension with conditional logic."""
+"""dict comprehension with conditional logic."""
 
 import pytest
 

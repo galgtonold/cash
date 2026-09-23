@@ -1,4 +1,4 @@
-"""Batch 492: math ceil floor log gcd lcm."""
+"""math ceil floor log gcd lcm."""
 
 import pytest
 

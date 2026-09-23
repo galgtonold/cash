@@ -1,4 +1,4 @@
-"""Batch 74: Functools advanced — partial, lru_cache, reduce, singledispatch across cells."""
+"""Functools advanced — partial, lru_cache, reduce, singledispatch across cells."""
 
 import textwrap
 

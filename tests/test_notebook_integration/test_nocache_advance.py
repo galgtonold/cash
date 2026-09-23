@@ -1,12 +1,12 @@
 """``# @cash: no-cache`` makes a statement behave as if cash weren't installed:
 re-running ADVANCES state (like plain Jupyter), for both reassignment and
 in-place mutation. Previously the in-place case was wrongly reset to its
-cell-entry base (CAS-51).
+cell-entry base.
 
 Root cause (found with the upstream-trace harness): a no-cache statement still
 bumps its var's runtime lineage, so pass 2 of the simulation flagged the var
 stale (runtime lineage advanced past the simulation's) and re-executed its
-producer -- resetting it. CAS-47's no-cache exclusion only covered the
+producer -- resetting it. The no-cache exclusion only covered the
 stale-value guard's self-write sets, not the pass-2 lineage mismatch. The fix
 drops no-cache-written vars from ``broken_vars`` before producer scheduling.
 """

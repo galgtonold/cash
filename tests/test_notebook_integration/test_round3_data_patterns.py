@@ -1,5 +1,5 @@
 """
-Round 3 Batch 4: Real-world data science patterns, kernel restart scenarios,
+Real-world data science patterns, kernel restart scenarios,
 out-of-order execution, annotation directives, and complex mutation patterns.
 
 These tests focus on realistic notebook workflows that data scientists

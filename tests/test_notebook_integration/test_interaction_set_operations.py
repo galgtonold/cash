@@ -1,4 +1,4 @@
-"""Batch 253 – Set operations and edit propagation.
+"""Set operations and edit propagation.
 
 Tests set unions, intersections, differences with edits.
 """

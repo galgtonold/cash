@@ -1,4 +1,4 @@
-"""CAS-83: pathlib write methods must be recognized as file-write side
+"""Pathlib write methods must be recognized as file-write side
 effects, so a write-only cell re-executes instead of being served from cache
 (which would silently skip creating the file)."""
 

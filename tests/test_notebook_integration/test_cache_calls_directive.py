@@ -1,4 +1,4 @@
-"""End-to-end sub-expression caching, default-on with an opt-out (CAS-243).
+"""End-to-end sub-expression caching, default-on with an opt-out.
 
 The two shapes the feature exists for, both of which statement-level caching
 cannot help with:

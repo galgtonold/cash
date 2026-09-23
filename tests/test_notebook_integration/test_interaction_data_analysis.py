@@ -1,4 +1,4 @@
-"""Batch 176 – Complex real-world data analysis simulation tests.
+"""Complex real-world data analysis simulation tests.
 
 Tests simulating real data analysis workflows with multiple
 edit cycles, variable reuse, and result verification.

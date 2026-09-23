@@ -1,6 +1,6 @@
 """The iterator-collapse guard, end to end, on the DEFAULT (no-directive) path.
 
-CAS-243's acceptance table (produced by hand-decorating ``compute``) has two
+Call interception's acceptance table (produced by hand-decorating ``compute``) has two
 halves, and both are already pinned elsewhere with assertions on call counts,
 not wall-clock:
 
@@ -15,7 +15,7 @@ not wall-clock:
 Duplicating either here would be exactly the "fourth near-duplicate" this
 task was warned against, so this file does not re-assert them.
 
-What is genuinely NOT pinned anywhere with an assertion: the CAS-243 §1a
+What is genuinely NOT pinned anywhere with an assertion: the
 "iterator collapse" scenario end to end, through the real per-iteration
 ``CallUnit`` key-building wiring (``arg_digests`` discriminating a computed
 argument by its evaluated VALUE, not a hidden object's id-stable lineage), on
@@ -68,7 +68,7 @@ def compute(v):
 # view rather than a running total.
 #
 # It is NOT a count of real executions, and must not be read as one. `CALLS`
-# is a global written from inside `compute`'s body, so CAS-260/265 captures it
+# is a global written from inside `compute`'s body, so cash captures it
 # per call and restores it on a hit: a served call reproduces its append
 # without executing. That is the point of the feature -- the observable state
 # matches the uncached oracle either way -- and it means an execution count
@@ -133,7 +133,8 @@ def test_loop_carried_hidden_state_reuses_on_an_unchanged_rerun(nb_runner, tmp_p
 
     Reuse is proven by a counter OUTSIDE the cached region, not by ``CALLS``.
     This test previously asserted ``CALLS []`` on the rerun, reading "the
-    callee's append is missing" as "the callee did not run". CAS-260/265 makes
+    callee's append is missing" as "the callee did not run". Capturing a
+    callee's global writes makes
     that inference invalid in the direction of correctness: a served call now
     restores the global its body wrote, so ``CALLS`` reads ``[0, 1, 2]`` on a
     rerun -- byte-identical to the uncached oracle pinned by

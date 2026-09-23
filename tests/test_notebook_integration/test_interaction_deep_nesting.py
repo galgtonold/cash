@@ -1,4 +1,4 @@
-"""Batch 227 – Deep nesting and complex structure edit tests.
+"""Deep nesting and complex structure edit tests.
 
 Tests editing cells with deeply nested data structures, mixed types,
 and complex data patterns to verify proper cache invalidation.

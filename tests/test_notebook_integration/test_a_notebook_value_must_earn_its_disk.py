@@ -8,17 +8,18 @@ A notebook statement sets ``defer_persist``, so ``TieredBackend.set`` skips its
 whole promotion block for it and the value reaches disk later, from the
 end-of-cell pass (``persist_from_memory``). A ceiling placed only in ``set``
 therefore governs the decorator and direct callers -- and misses every notebook
-statement, which is the entire population that filled round 26's caches: s4's
-9.7 GB of loop iterations and s3's 15.3 GB of frames are notebook statements.
+statement, which is the entire population that filled the measured caches:
+9.7 GB of loop iterations in one and 15.3 GB of frames in another are notebook
+statements.
 It looked like it worked, because the pure predicate was right and the
 backend-level tests passed.
 
 Two arms, on the real notebook path:
 
   * a large value that is cheap to rebuild does not reach disk
-  * a large value that is expensive to rebuild still does (the control; CAS-141
-    is the standing regression test for refusing those, and it must keep
-    passing)
+  * a large value that is expensive to rebuild still does (the control;
+    ``test_large_frame_reaches_disk.py`` is the standing regression test for refusing
+    those, and it must keep passing)
 """
 
 import pytest
@@ -44,7 +45,7 @@ REPORT = (
 def test_a_big_value_that_rebuilds_quickly_does_not_reach_disk(nb_runner):
     """~48 MB built in 0.05 s: about 300 MiB per compute-second.
 
-    r26s4's shape -- 48 MiB entries whose recorded compute was 0.00 s, 72 of
+    The reported shape -- 48 MiB entries whose recorded compute was 0.00 s, 72 of
     them, 3.5 GB. Nothing this cheap is worth that much disk.
     """
     nb_runner.create_notebook(
@@ -64,7 +65,7 @@ def test_a_big_value_that_rebuilds_quickly_does_not_reach_disk(nb_runner):
 
 def test_a_big_value_that_is_expensive_still_reaches_disk(nb_runner):
     """The control. The ceiling must not simply refuse everything large --
-    that is the bug CAS-141 fixed, and re-creating it would be worse than the
+    that was a bug once, and re-creating it would be worse than the
     disk it saves."""
     nb_runner.create_notebook(
         [

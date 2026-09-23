@@ -1,4 +1,4 @@
-"""Batch 343: functools.lru_cache, partial application, and caching interaction."""
+"""functools.lru_cache, partial application, and caching interaction."""
 
 import pytest
 

@@ -1,4 +1,4 @@
-"""Batch 523: dataclass inheritance and frozen."""
+"""dataclass inheritance and frozen."""
 
 import pytest
 

@@ -1,4 +1,4 @@
-"""Batch 124 – Mixed assignment types + cell edit interaction tests.
+"""Mixed assignment types + cell edit interaction tests.
 
 Tests that exercise augmented assignments, tuple/list unpacking,
 walrus operator, global/nonlocal, and compound assignments.

@@ -1,6 +1,6 @@
 """A Restart & Run All reports what it saved, not a range around zero.
 
-Round 30, r30s5: "%cash_stats after a restart: 'Net time saved: at least
+"%cash_stats after a restart: 'Net time saved: at least
 -10.3s, at best 1.3min' ... My pair measured 80.2s saved, so the upper bound
 was the right one; the lower bound tells me nothing."
 

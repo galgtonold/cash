@@ -64,7 +64,7 @@ def _cell_status_words(cell) -> set[str]:
     prose in the body -- the visible summary pill uses a DIFFERENT,
     deliberately-relabelled vocabulary (CACHED/EXECUTED/SKIPPED, chosen so
     the cell header and the row underneath never disagree on wording; see
-    ``badge_renderer/theme.py``'s ``_LABELS`` and its CAS-272 comment) --
+    ``badge_renderer/theme.py``'s ``_LABELS`` and its comment) --
     but each individual statement row carries the real, structural signal
     directly: ``data-status="restored"`` / ``"computed"`` / ``"skipped"``,
     the literal ``BadgeStatus`` enum value. That's what we read here,

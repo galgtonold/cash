@@ -1,4 +1,4 @@
-"""Batch 467: itertools chain from iterable and product repeat."""
+"""itertools chain from iterable and product repeat."""
 
 import pytest
 

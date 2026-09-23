@@ -1,4 +1,4 @@
-"""CAS-96: a trailing ``;`` suppresses the repr, on first run and cached re-run.
+"""A trailing ``;`` suppresses the repr, on first run and cached re-run.
 
 ``ast.unparse`` drops the trailing semicolon, so cash used to display (and cache)
 the last expression's repr regardless — a phantom repr on cached re-runs. The

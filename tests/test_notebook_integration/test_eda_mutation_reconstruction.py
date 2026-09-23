@@ -298,8 +298,8 @@ def scen_hidden_global_mutation(r):
     with a clean top-to-bottom run.
 
     Was a documented-limitation canary (cash re-executed and read an
-    already-advanced global, printing 2 where top-to-bottom says 1). CAS-260
-    closed it at cell level: ``c`` is now surfaced as an output of ``res =
+    already-advanced global, printing 2 where top-to-bottom says 1). Tracking
+    callee global writes closed it at cell level: ``c`` is now surfaced as an output of ``res =
     tick()``, so its pre-state pins the key and its post-state is restored on a
     hit. Kept in the passing set as the regression guard for that."""
     _start(
@@ -429,7 +429,7 @@ SCENARIOS = [
     scen_alias_reflects_upstream_edit,
     scen_expensive_consumer_upstream_edit,
     # Promoted from CANARY_SCENARIOS: a callee's write to a global is captured
-    # and restored at cell level now (CAS-260), so this matches the oracle
+    # and restored at cell level now, so this matches the oracle
     # rather than diverging from it. The loop-body half of that limitation is
     # still open and is pinned by
     # ``test_callee_global_capture.py::test_a_loop_body_captures_the_callee_global_too``.

@@ -1,4 +1,4 @@
-"""Batch 117 – Rapid-fire edit interaction tests.
+"""Rapid-fire edit interaction tests.
 
 Tests that exercise many rapid successive edits to the same cell(s),
 verifying cache coherence under high edit frequency.

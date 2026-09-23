@@ -1,4 +1,4 @@
-"""Batch 351: global/nonlocal keyword scoping with edits."""
+"""global/nonlocal keyword scoping with edits."""
 
 import pytest
 

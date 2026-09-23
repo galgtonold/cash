@@ -1,4 +1,4 @@
-"""Batch 246 – Class composition patterns.
+"""Class composition patterns.
 
 Tests composition (has-a) relationships with edits.
 """

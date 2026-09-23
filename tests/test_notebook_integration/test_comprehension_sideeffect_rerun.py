@@ -1,6 +1,6 @@
 """A mutating call hidden inside a comprehension / generator expression / f-string
 must be attributed to its receiver, so the receiver resets on isolated re-run
-instead of accumulating (CAS-67).
+instead of accumulating.
 
 Each cell appends a FIXED number of items (range(2), independent of the list) so
 the correct value is identical on the first run and every re-run.

@@ -1,4 +1,4 @@
-"""Batch 424: defaultdict with lambda and complex nesting."""
+"""defaultdict with lambda and complex nesting."""
 
 import pytest
 

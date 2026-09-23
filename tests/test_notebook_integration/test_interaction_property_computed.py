@@ -1,5 +1,5 @@
 """
-Batch 331: property decorator and computed attribute patterns with caching.
+property decorator and computed attribute patterns with caching.
 Tests @property, computed fields, and edit propagation.
 """
 

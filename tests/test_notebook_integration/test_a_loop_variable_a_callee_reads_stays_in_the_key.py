@@ -1,6 +1,6 @@
 """A loop variable the callee reads as a global stays in a content-keyed call's key.
 
-Round 25 (r25s3) let a content-keyed call drop the enclosing loop's variables
+A content-keyed call may drop the enclosing loop's variables
 from its key when its arguments already carry them, so the chosen setting could
 be served from the sweep. A loop variable the callee -- or a method of a class
 it uses -- reads as a global is not in the arguments, and must stay.

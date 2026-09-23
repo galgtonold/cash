@@ -1,5 +1,5 @@
 """
-Round 3 - Batch 11: Combined complex patterns stressing multiple subsystems.
+Combined complex patterns stressing multiple subsystems.
 
 Tests focusing on:
 1. File deps + upstream simulation combined

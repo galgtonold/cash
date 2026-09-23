@@ -1,4 +1,4 @@
-"""Batch 63: Operator overloading & dunder methods — cash caching with custom operators."""
+"""Operator overloading & dunder methods — cash caching with custom operators."""
 
 import textwrap
 

@@ -11,12 +11,11 @@ Three instrument failures, each of which has already cost real work:
 2. The runner always injected ``__vsc_ipynb_file__``, so cash's no-path branch
    was never exercised by the suite. It shipped an uncaught IndexError that
    disabled caching and printed an internal error on every cell under
-   papermill/nbconvert (CAS-205) while thousands of integration tests stayed
+   papermill/nbconvert while thousands of integration tests stayed
    green.
 3. There was no ``restart()``, so every restart test hand-rolled
    ``km._async_restart_kernel`` — 9 copies, each free to get the re-injection
-   wrong. Restart behaviour is a whole bug class the suite was blind to
-   (CAS-190).
+   wrong. Restart behaviour is a whole bug class the suite was blind to.
 
 These tests pin the instruments themselves. If they fail, every conclusion drawn
 with the harness is suspect.
@@ -62,7 +61,7 @@ def test_notebook_path_injection_can_be_disabled(nb_runner):
     """The papermill/nbconvert environment must be reachable from the suite.
 
     With injection off, ``__vsc_ipynb_file__`` must genuinely be absent — that
-    absence is the whole point, and it is what CAS-205 needed to reproduce.
+    absence is the whole point, and it is what reproducing a no-path bug needs.
     """
     nb_runner.create_notebook(
         [

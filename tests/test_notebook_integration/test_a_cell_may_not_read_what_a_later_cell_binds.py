@@ -1,6 +1,6 @@
 """A notebook that only works because you ran the cells out of order is broken.
 
-Round 26, r26s5: a cell read a variable that only a cell BELOW it binds. Under
+A cell read a variable that only a cell BELOW it binds. Under
 cash the notebook worked, because the later cell had been run at some point and
 the name was still in the namespace. A clean in-order run died with
 ``NameError``, and only the uncached oracle caught it -- cash reported success
@@ -25,7 +25,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(240)]
 
 
 def test_reading_a_name_only_a_later_cell_binds_fails(nb_runner):
-    """r26s5's shape: run the later binding first, then the earlier reader."""
+    """The reported shape: run the later binding first, then the earlier reader."""
     nb_runner.create_notebook(
         [
             "import cash\n%cash_on",

@@ -1,4 +1,4 @@
-"""Batch 502: namedtuple _asdict _replace operations."""
+"""namedtuple _asdict _replace operations."""
 
 import pytest
 

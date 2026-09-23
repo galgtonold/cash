@@ -1,4 +1,4 @@
-"""Batch 276 – Feature flag and conditional logic edits.
+"""Feature flag and conditional logic edits.
 
 Tests feature flags that control behavior in downstream cells.
 """

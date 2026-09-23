@@ -1,4 +1,4 @@
-"""Batch 421: heapq operations for priority queue patterns."""
+"""heapq operations for priority queue patterns."""
 
 import pytest
 

@@ -1,4 +1,4 @@
-"""CAS-176 mechanism probe: WHY do N writer cells cost N(N+1)/2 executions?
+"""Mechanism probe: WHY do N writer cells cost N(N+1)/2 executions?
 
 STATUS: mechanism NOT yet identified. This file records what it is NOT, and
 the measurement problem that makes it hard to see.
@@ -112,7 +112,7 @@ def _measure(nb_runner, cells, counters, label):
     nb_runner.create_notebook([_setup(counters)] + cells)
     nb_runner.start_kernel()
 
-    print(f"\n=== CAS-176 mechanism: {label} ===")
+    print(f"\n=== Shared-state-file mechanism: {label} ===")
     for n in range(1, RUNS + 1):
         nb_runner.run_all()
         print(f"  after run_all #{n}: { {k: _count(c) for k, c in counters.items()} }")
@@ -195,7 +195,7 @@ def test_write_only(nb_runner, tmp_path, counters):
 
 
 # ---------------------------------------------------------------------------
-# The remaining difference from the original CAS-176 probe: it annotated every
+# The remaining difference from the original shared-state-file probe: it annotated every
 # cell `# @cash:persist`. Everything above is unannotated and every shape is
 # flat, so persist is the last ingredient left standing.
 # ---------------------------------------------------------------------------
@@ -283,7 +283,7 @@ def test_per_statement_execution_profile(nb_runner, tmp_path):
     for _ in range(RUNS):
         nb_runner.run_all()
 
-    print("\n=== CAS-176 per-statement execution profile (per run_all) ===")
+    print("\n=== Per-statement execution profile (per run_all) ===")
     print(f"  {'cell':<6}" + "".join(f"{p:>9}" for p in POSITIONS))
     for k in KEYS:
         row = "".join(f"{_count(fds[(k, pos)]) / RUNS:>9.2f}" for pos in POSITIONS)
@@ -339,7 +339,7 @@ def test_fused_witness_execution_profile(nb_runner, tmp_path):
     for _ in range(RUNS):
         nb_runner.run_all()
 
-    print("\n=== CAS-176 FUSED-witness profile (executions per run_all) ===")
+    print("\n=== FUSED-witness profile (executions per run_all) ===")
     print(f"  {'cell':<6}{'incr':>9}{'write':>9}{'file':>9}")
     import json as _json
 
@@ -354,8 +354,8 @@ def test_inplace_vs_rebind_with_identical_file_write(nb_runner, tmp_path):
     """The last variable. Both arms below do the SAME inline file write; they
     differ only in whether the dict is mutated in place or rebound.
 
-    If only the in-place arm amplifies, CAS-176 is not a file-writing defect at
-    all — it is the in-place-mutation rebuild rule (the CAS-206 family) being
+    If only the in-place arm amplifies, the amplification is not a file-writing defect at
+    all — it is the in-place-mutation rebuild rule being
     charged once per downstream cell.
     """
     import json as _json
@@ -386,6 +386,6 @@ def test_inplace_vs_rebind_with_identical_file_write(nb_runner, tmp_path):
             nb_runner.run_all()
         results[label] = {k: _json.load(open(p)).get(k, 0) / RUNS for k, p in state.items()}
 
-    print("\n=== CAS-176 in-place vs rebind (identical file write) ===")
+    print("\n=== In-place vs rebind (identical file write) ===")
     for label, per_run in results.items():
         print(f"  {label:<26} {per_run}")

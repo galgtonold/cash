@@ -1,4 +1,4 @@
-"""Batch 146 – Error handling and recovery interaction tests.
+"""Error handling and recovery interaction tests.
 
 Tests where code errors occur, user fixes them, and caching
 should properly handle the error-recovery workflow.

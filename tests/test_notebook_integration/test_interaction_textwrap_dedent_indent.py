@@ -1,4 +1,4 @@
-"""Batch 498: textwrap dedent indent and fill wrapping."""
+"""textwrap dedent indent and fill wrapping."""
 
 import pytest
 

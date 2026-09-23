@@ -1,4 +1,4 @@
-"""Batch 349: typing module usage patterns and class annotations."""
+"""typing module usage patterns and class annotations."""
 
 import pytest
 

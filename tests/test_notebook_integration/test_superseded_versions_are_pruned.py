@@ -1,7 +1,7 @@
 """A statement re-run on new inputs does not leave every old version on disk.
 
-Round 24: r24s1's cache held nine versions of ``X_all = build_features(labelled)``
-(~700 MB each, 1.4 s to build) and r24s2 five to seven of each cleaning frame
+One user's cache held nine versions of ``X_all = build_features(labelled)``
+(~700 MB each, 1.4 s to build) and another's five to seven of each cleaning frame
 -- 10 GB for 200 MB of input. The disk tier now prunes a statement's superseded
 versions as the new one is written: a big value cheap to rebuild keeps one
 older version, for an undo; a small one that took long keeps many.

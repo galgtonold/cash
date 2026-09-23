@@ -1,5 +1,5 @@
 """
-Batch 43: Simulation and numerical computation patterns —
+Simulation and numerical computation patterns —
 Monte Carlo, optimization, statistical tests, and numerical methods.
 """
 

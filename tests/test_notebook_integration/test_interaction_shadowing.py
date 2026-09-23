@@ -1,4 +1,4 @@
-"""Batch 196 – Variable shadowing and scope interaction tests.
+"""Variable shadowing and scope interaction tests.
 
 Tests editing code that involves variable shadowing between
 function scope, global scope, and comprehension scope.

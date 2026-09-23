@@ -1,6 +1,6 @@
 """The alias / in-place mutation scenarios, many times at once, under load.
 
-Round 28's sweep saw ``scen_alias_downstream_consumer`` print a total from the
+A stress sweep saw ``scen_alias_downstream_consumer`` print a total from the
 pre-edit lineage once (342 instead of 642) -- a wrong answer -- and it never
 came back in 72 repeats run alone. A failure that shows only when the machine
 is busy needs the machine busy, and needs its evidence kept the one time it

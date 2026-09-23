@@ -1,4 +1,4 @@
-"""Batch 168 – Closure and scope interaction tests.
+"""Closure and scope interaction tests.
 
 Tests editing closures, nonlocal variables, nested function scopes,
 and variable capture patterns.

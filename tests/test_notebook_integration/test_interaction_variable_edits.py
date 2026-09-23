@@ -1,4 +1,4 @@
-"""Batch 110 – Variable shadowing, deletion, and scope interaction tests.
+"""Variable shadowing, deletion, and scope interaction tests.
 
 Tests that exercise variable shadowing, overwriting, deletion,
 and scope changes combined with cell edits and reruns.

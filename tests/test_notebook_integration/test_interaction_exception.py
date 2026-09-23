@@ -1,5 +1,5 @@
 """
-Batch 299: Error handling and exception propagation interaction tests.
+Error handling and exception propagation interaction tests.
 Tests that editing code that raises/catches exceptions properly
 invalidates downstream cells.
 """

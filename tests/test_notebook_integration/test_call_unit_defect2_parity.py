@@ -1,4 +1,4 @@
-"""CAS-257 defect 2: pins that the call-unit spelling and the ordinary
+"""Pins that the call-unit spelling and the ordinary
 statement spelling agree on a loop-var-mutated-before-use case.
 
 The shape (see ``docs/known-limitations.md``, "A loop variable mutated
@@ -11,11 +11,11 @@ statement path's ``__iteration_context__`` hash and the call unit's
 the mutating one) runs -- so neither channel can see a mutation that
 happens later in the same iteration's body.
 
-That is exactly the finding of task 10c's investigation (CAS-257 defect 2):
+That is exactly what investigating it found:
 the call unit does not introduce a new class of defect here, it inherits an
 existing property of ``build_iteration_context`` that the plain statement
 path already has. Filing this again as a call-path-specific bug (it
-already happened twice on the adjacent impure-callee question, CAS-246)
+already happened twice on the adjacent impure-callee question)
 would be a re-diagnosis, not a new bug -- this test is the guard against
 that.
 
@@ -97,7 +97,8 @@ def test_with_cash_both_spellings_collapse_identically(tag, code, nb_runner, tmp
     """cash ON: pin that BOTH spellings agree, and that they agree with the
     cash-off oracle.
 
-    This asserted the COLLAPSE (`OUT [1, 1]`, one real call) until CAS-265, and
+    This asserted the COLLAPSE (`OUT [1, 1]`, one real call) until callee
+    global mutations were tracked, and
     the file's docstring recorded that as a known-wrong shared answer: "Today
     both are wrong relative to a cash-off oracle (both give [1, 1] where the
     oracle gives [1, 2])".
@@ -109,7 +110,7 @@ def test_with_cash_both_spellings_collapse_identically(tag, code, nb_runner, tmp
 
     What this test guards is unchanged and is NOT the specific value: the two
     spellings must move together. A future change that alters one and not the
-    other reintroduces the CAS-145 asymmetry this file exists to catch, and
+    other reintroduces the asymmetry this file exists to catch, and
     that is what a failure here means.
 
     A real-execution count (via the file-write log `pull()` makes on every

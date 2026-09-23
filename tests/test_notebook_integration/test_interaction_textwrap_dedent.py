@@ -1,4 +1,4 @@
-"""Batch 360: textwrap, dedent, and multi-line string formatting."""
+"""textwrap, dedent, and multi-line string formatting."""
 
 import pytest
 

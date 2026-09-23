@@ -1,5 +1,5 @@
 """
-Batch 326: functools.reduce and accumulate patterns with caching.
+functools.reduce and accumulate patterns with caching.
 Tests reduce, accumulate, and edit propagation.
 """
 

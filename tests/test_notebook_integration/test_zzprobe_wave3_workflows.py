@@ -1,4 +1,4 @@
-"""Adversarial probes, wave 3 (2026-07-02): realistic discipline workflows.
+"""Adversarial probes: realistic discipline workflows.
 
 End-to-end multi-cell pipelines with hand-computable expected values.
 Each test asserts (a) correctness after a mid-pipeline edit and (b) where

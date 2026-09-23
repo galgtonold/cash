@@ -1,4 +1,4 @@
-"""Batch 497: itertools accumulate and takewhile."""
+"""itertools accumulate and takewhile."""
 
 import pytest
 

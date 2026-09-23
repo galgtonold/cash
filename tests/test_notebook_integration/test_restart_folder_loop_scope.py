@@ -6,7 +6,7 @@ reconstruction reads. ``for f in files: parts.append(pd.read_csv(f))`` names
 no path a reader can resolve, and after a restart nothing recorded what it
 read, so the read set was unknown, nothing could be ruled out, and running a
 table cell re-drew the report above it: ``rmtree`` of the report folder, every
-chart, and everything the charts read (round 23, r23s2: 84 s, the 1,200-file
+chart, and everything the charts read (in one user's notebook: 84 s, the 1,200-file
 folder read again). A loop keeps what it read now, as a statement does.
 
 Observed on disk: the report folder and its chart keep their ``st_mtime_ns``.

@@ -1,5 +1,5 @@
 """
-Batch 324: counter/statistics patterns with caching.
+counter/statistics patterns with caching.
 Tests collections.Counter, statistics module, and edit propagation.
 """
 

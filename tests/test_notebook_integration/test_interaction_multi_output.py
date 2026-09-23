@@ -1,4 +1,4 @@
-"""Batch 154 – Multi-output cell interaction tests.
+"""Multi-output cell interaction tests.
 
 Tests where cells produce multiple outputs, some used by
 different downstream cells, with edits that affect

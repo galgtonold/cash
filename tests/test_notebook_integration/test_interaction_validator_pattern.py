@@ -1,4 +1,4 @@
-"""Batch 222 – Validator pattern interaction tests.
+"""Validator pattern interaction tests.
 
 Tests editing cells with input validation patterns
 and verifying correct error/success propagation.

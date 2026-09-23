@@ -334,7 +334,7 @@ def test_display_cell_correct_after_alternating_out_of_order(nb_runner, tmp_path
     # Step 3: Run cell 3 (upstream display) — should NOT show SMA
     nb_runner.run_cell(3)
     output_3a = nb_runner.get_output(3)
-    assert "SMA" not in output_3a, f"Round 1: Cell 3 shows SMA! Output: {output_3a}"
+    assert "SMA" not in output_3a, f"Pass 1: Cell 3 shows SMA! Output: {output_3a}"
 
     # Step 4: Run cell 5 again — should still show SMA
     nb_runner.run_cell(5)
@@ -343,6 +343,6 @@ def test_display_cell_correct_after_alternating_out_of_order(nb_runner, tmp_path
     # Step 5: Run cell 3 again — should still NOT show SMA
     nb_runner.run_cell(3)
     output_3b = nb_runner.get_output(3)
-    assert "SMA" not in output_3b, f"Round 2: Cell 3 shows SMA! Output: {output_3b}"
+    assert "SMA" not in output_3b, f"Pass 2: Cell 3 shows SMA! Output: {output_3b}"
 
     print("[PASS] Alternating out-of-order execution works correctly")

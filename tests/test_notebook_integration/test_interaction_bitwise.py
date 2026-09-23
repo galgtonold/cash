@@ -1,4 +1,4 @@
-"""Batch 202 – Bit manipulation and bitwise operation interaction tests.
+"""Bit manipulation and bitwise operation interaction tests.
 
 Tests editing bitwise operations (AND, OR, XOR, shifts)
 and their propagation.

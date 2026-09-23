@@ -1,6 +1,6 @@
 """After a restart, a cleaning cell rebuilt for a cell below it runs every write it needs.
 
-Round 25's r25s2 built a weekly pack from till exports. After a kernel restart
+A user built a weekly pack from till exports. After a kernel restart
 they ran only the export cell; cash rebuilt the cleaning cell but left out
 ``sales["refund"] = is_refund.astype(int)``, and the head-office summary showed
 0 refunds for the three stores that book refunds as negative quantities (51, 62
@@ -9,7 +9,7 @@ and 119 in a plain run). No warning.
 The planner gave each scheduled statement a producer of its inputs, and took
 ANY earlier scheduled producer as enough: ``sales['timestamp'] = ...`` stood in
 for the ``sales['refund'] = ...`` between it and the statement reading ``sales``.
-This shape did not reach that state here (the tester's 3-million-row data did);
+This shape did not reach that state here (the user's 3-million-row data did);
 it guards the rebuild, and ``test_notebook/test_latest_producer_is_scheduled.py``
 pins the planner step.
 """

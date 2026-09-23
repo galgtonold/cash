@@ -1,4 +1,4 @@
-"""Batch 204 – Decorator stacking / chaining interaction tests.
+"""Decorator stacking / chaining interaction tests.
 
 Tests editing stacked decorators and their ordering effects.
 """

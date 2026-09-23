@@ -1,4 +1,4 @@
-"""Batch 113 – Skip optimization edge cases.
+"""Skip optimization edge cases.
 
 Tests that exercise the 'already executed' skip optimization
 in combination with external modifications, reruns, and edits.

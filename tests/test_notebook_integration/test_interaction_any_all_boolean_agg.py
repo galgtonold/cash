@@ -1,4 +1,4 @@
-"""Batch 520: any all and boolean aggregate checks."""
+"""any all and boolean aggregate checks."""
 
 import pytest
 

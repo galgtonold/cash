@@ -1,4 +1,4 @@
-"""Batch 244 – Walrus operator and assignment expression patterns.
+"""Walrus operator and assignment expression patterns.
 
 Tests := operator in various contexts with edits.
 """

@@ -1,4 +1,4 @@
-"""Batch 58: Design patterns — Observer, Strategy, Builder, State with cash caching."""
+"""Design patterns — Observer, Strategy, Builder, State with cash caching."""
 
 import textwrap
 

@@ -1,4 +1,4 @@
-"""Batch 77: Complex data transformations — cash caching with multi-step reshaping."""
+"""Complex data transformations — cash caching with multi-step reshaping."""
 
 import textwrap
 

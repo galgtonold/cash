@@ -1,5 +1,5 @@
 """
-Batch 27: Descriptor, property, slots, dataclass, and protocol patterns.
+Descriptor, property, slots, dataclass, and protocol patterns.
 """
 
 import textwrap

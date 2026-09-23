@@ -1,7 +1,7 @@
 """Adversarial probes: generators, iterators & lazy objects crossing cells.
 
-Known limitation NOT re-filed: CAS-50 (exhausted generator/stateful iterator on
-plain ISOLATED re-run of the consumer cell). These probes attack adjacent
+Known limitation NOT re-filed: the exhausted generator/stateful iterator on
+plain ISOLATED re-run of the consumer cell. These probes attack adjacent
 mechanisms instead:
 
  1. test_genexpr_cross_cell_second_run_all      — gen in A, consumed in B, run_all twice
@@ -20,7 +20,7 @@ mechanisms instead:
 13. test_genfunc_downstream_instance_edit       — gen FUNCTION edited; instance made in a
                                                   separate cell from consumption
 14. test_half_consumed_iterator_isolated_rerun_persist — half in B, rest in C, isolated
-                                                  re-run of C under persist (CAS-50-adjacent:
+                                                  re-run of C under persist (exhausted-generator-adjacent:
                                                   does the statement cache rescue it?)
 
 Oracle: cash promises run_all() twice -> identical outputs (plain Python agrees
@@ -316,7 +316,7 @@ def test_genfunc_downstream_instance_edit(nb_runner):
 
 def test_half_consumed_iterator_isolated_rerun_persist(nb_runner):
     """Half of the iterator consumed in B, rest in C; ISOLATED re-run of C
-    under persist. CAS-50-adjacent: with the statement cached (persist on),
+    under persist. Exhausted-generator-adjacent: with the statement cached (persist on),
     can cash serve rest=[3, 4, 5] instead of re-executing on the exhausted
     iterator?"""
     nb_runner.create_notebook(

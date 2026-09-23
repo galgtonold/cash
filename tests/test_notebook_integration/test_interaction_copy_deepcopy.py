@@ -1,5 +1,5 @@
 """
-Batch 281: Copy/deepcopy interaction tests.
+Copy/deepcopy interaction tests.
 Tests that cache invalidation works correctly when objects are copied
 and the original is modified vs when the copy is modified.
 """

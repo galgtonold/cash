@@ -1,4 +1,4 @@
-"""Batch 214 – Counter and accumulator interaction tests.
+"""Counter and accumulator interaction tests.
 
 Tests editing cells that use Counter, defaultdict,
 and accumulator patterns.

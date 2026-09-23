@@ -1,5 +1,5 @@
 """
-Batch 320: textwrap and string formatting patterns with caching.
+textwrap and string formatting patterns with caching.
 Tests textwrap.dedent, textwrap.fill, indent, and edit propagation.
 """
 

@@ -1,4 +1,4 @@
-"""Batch 374: string encode/decode, base64, and bytes operations."""
+"""string encode/decode, base64, and bytes operations."""
 
 import pytest
 

@@ -1,4 +1,4 @@
-"""Batch 522: base64 encode decode and hex conversions."""
+"""base64 encode decode and hex conversions."""
 
 import pytest
 

@@ -1,4 +1,4 @@
-"""Batch 193 – Sorting and ordering pattern interaction tests.
+"""Sorting and ordering pattern interaction tests.
 
 Tests editing sort keys, reverse flags, custom comparators,
 and sorted data propagation.

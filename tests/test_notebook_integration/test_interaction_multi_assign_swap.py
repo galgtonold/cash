@@ -1,4 +1,4 @@
-"""Batch 267 – Multiple variable assignment and swap patterns.
+"""Multiple variable assignment and swap patterns.
 
 Tests tuple assignment, swap, augmented assignment with edits.
 """

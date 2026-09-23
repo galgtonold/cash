@@ -1,4 +1,4 @@
-"""Batch 422: dataclass with field defaults and post_init."""
+"""dataclass with field defaults and post_init."""
 
 import pytest
 

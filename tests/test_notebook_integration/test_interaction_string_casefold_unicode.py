@@ -1,4 +1,4 @@
-"""Batch 428: string casefold and unicode normalization."""
+"""string casefold and unicode normalization."""
 
 import pytest
 

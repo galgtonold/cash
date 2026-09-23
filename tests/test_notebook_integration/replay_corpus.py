@@ -1,10 +1,10 @@
-"""Project-shaped notebooks and the edits people made to them (round 21).
+"""Project-shaped notebooks and the edits people made to them.
 
-Shapes, not copies: ``sales`` follows r21s2's forecasting notebook (weekly CSVs
+Shapes, not copies: ``sales`` follows a real forecasting notebook (weekly CSVs
 in a folder, a two-panel chart drawn through ``ax=`` and saved, a backtest
-loop, an export), ``churn`` follows r21s1's model notebook (text-column CSVs, a
+loop, an export), ``churn`` follows a real model notebook (text-column CSVs, a
 cleaning chain, an optional region filter, an evaluate-refit-report cell, an
-importance chart). The edits are the ones the testers made: a corrected
+importance chart). The edits are the ones people made: a corrected
 re-delivery, a new weekly file, a parameter, a leak fix, a chart tweak.
 
 Every notebook also has an unedited ``control`` scenario: if that one fails,
@@ -20,7 +20,7 @@ SETUP = "import cash\n%cash_on\n"
 
 
 # ---------------------------------------------------------------------------
-# sales -- r21s2's shape
+# sales
 # ---------------------------------------------------------------------------
 
 
@@ -113,7 +113,7 @@ SALES = (
     "table = forecast.groupby('sku')['forecast'].sum().to_frame('fc').join(bt_metrics).round(4)\n"
     "table.to_csv(OUT / 'table.csv')\n"
     "print(table.to_string())\n",
-    # 10 -- a summary that reads only the cleaned file cell 4 saved (r21s2's
+    # 10 -- a summary that reads only the cleaned file cell 4 saved (the
     # doubled backtest: once that writer was scheduled, every later statement
     # carrying a file dependency was re-run with it)
     "clean_file = pd.read_csv(OUT / 'weekly_clean.csv')\n"
@@ -136,7 +136,7 @@ SALES_TARGETS = {
     # (8, 9): look at the forecast first, then the export. The forecast's
     # replay refreshes the series but not the backtest above it, which the
     # forecast does not read; the export does, so the backtest computed from
-    # the old series must still be recomputed (round 22, r22s1). (10, 9): the
+    # the old series must still be recomputed. (10, 9): the
     # summary re-writes the cleaned file, then the export needs both models.
     "corrected_file": (9, 5, 7, 10, (8, 9), (10, 9)),
     "new_week": (9, 10),
@@ -147,7 +147,7 @@ SALES_TARGETS = {
 
 
 # ---------------------------------------------------------------------------
-# churn -- r21s1's shape
+# churn
 # ---------------------------------------------------------------------------
 
 
@@ -217,7 +217,7 @@ CHURN = (
     "data = cust.merge(counts, left_on='customer_id', right_index=True)\n"
     "data['churn'] = ((data['support'] > 1) & (data['login'] < 5)).astype(int)\n"
     "print('features', data.shape, int(data['churn'].sum()))\n",
-    # 6 -- evaluate, refit, report (the round-21 refit shape: the same model
+    # 6 -- evaluate, refit, report (the refit shape: the same model
     # object scored on a hold-out before and after it is refitted in place)
     "X, y = data[FEATURES].to_numpy(), data['churn'].to_numpy()\n"
     "half = len(data) // 2\n"
@@ -239,7 +239,7 @@ CHURN = (
     "plt.close(fig)\n",
     # 8 -- summary for the one-pager
     "top = imp.iloc[-1]['feature']\nprint('summary', report, 'top driver:', top, 'rows:', len(data))\n",
-    # 9 -- a second chart that REBINDS fig/ax (r21s1's last cell: re-running it
+    # 9 -- a second chart that REBINDS fig/ax (the notebook's last cell: re-running it
     # alone re-ran 9 statements of other cells)
     "fig, ax = plt.subplots(figsize=(4, 3))\n"
     "data.groupby('region')['churn'].mean().plot.bar(ax=ax)\n"
@@ -257,7 +257,7 @@ CHURN_EDITS = {
     "max_iter": Edit(cell=6, source=CHURN[5].replace("max_iter=500", "max_iter=500, C=0.3")),
     "chart_title": Edit(cell=7, source=CHURN[6].replace("What drives churn", "Churn drivers")),
     # Only the hold-out changes, not what the model is fitted on: the "before"
-    # score must come from the model as it was BEFORE the refit (round 21, r21s1).
+    # score must come from the model as it was BEFORE the refit.
     "eval_rows": Edit(cell=2, source=CHURN[1].replace("EVAL_ROWS = 40", "EVAL_ROWS = 70")),
 }
 CHURN_TARGETS = {
@@ -278,9 +278,9 @@ def expected_recompute(scenario) -> list[str]:
     """The expensive steps a scenario NEEDS to recompute -- no more.
 
     Cost is asserted, not just reported: re-running the backtest for a cell
-    that reads only the cleaned file (r21s2's doubled backtest) or after a
+    that reads only the cleaned file (the doubled backtest) or after a
     restart for a chart nothing reads is exactly the kind of waste that made
-    the notebook path slower than no cache in round 21.
+    the notebook path slower than no cache once.
     """
     if scenario.notebook == "churn":
         return []  # the events file never changes

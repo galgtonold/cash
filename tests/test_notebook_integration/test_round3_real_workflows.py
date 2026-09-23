@@ -1,5 +1,5 @@
 """
-Batch 21: Real-world workflow simulations — data science, ML preprocessing,
+Real-world workflow simulations — data science, ML preprocessing,
 report generation, and multi-phase analysis patterns.
 
 Tests complete realistic notebook workflows that combine multiple features:

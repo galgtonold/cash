@@ -1,4 +1,4 @@
-"""Batch 363: string partition, join patterns, and format_map."""
+"""string partition, join patterns, and format_map."""
 
 import pytest
 

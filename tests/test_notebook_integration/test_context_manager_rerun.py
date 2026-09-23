@@ -1,5 +1,5 @@
 """Hidden mutation through a context manager (``with``) must reset on isolated
-re-run (CAS-69). A ``with`` statement invokes ``__enter__`` / ``__exit__`` (or a
+re-run. A ``with`` statement invokes ``__enter__`` / ``__exit__`` (or a
 ``@contextlib.contextmanager`` generator) whose body mutates hidden state (a
 captured free variable or the context-manager object itself); on an isolated
 re-run the mutation accumulates because nothing in the cell text names it.
@@ -69,7 +69,7 @@ def test_pure_context_object_not_over_invalidated(nb_runner):
 
 
 def test_suppress_body_mutation_still_resets(nb_runner):
-    # contextlib.suppress with a mutating BODY already resets (CAS-57/66) — guard.
+    # contextlib.suppress with a mutating BODY already resets — guard.
     _rerun(
         nb_runner,
         "import contextlib\ndata = []",

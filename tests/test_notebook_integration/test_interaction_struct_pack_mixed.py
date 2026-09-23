@@ -1,4 +1,4 @@
-"""Batch 482: struct pack unpack mixed binary formats."""
+"""struct pack unpack mixed binary formats."""
 
 import pytest
 

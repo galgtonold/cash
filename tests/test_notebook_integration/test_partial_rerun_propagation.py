@@ -1,7 +1,7 @@
 """Editing an upstream cell's DATA then re-running only a downstream cell (not
 the edited one) must reflect the new upstream value — "a cell == running from
 the start". These all pass (data-edit propagation is robust); the un-definition
-counterpart is tracked separately under CAS-62.
+counterpart is tracked separately.
 """
 
 import pytest

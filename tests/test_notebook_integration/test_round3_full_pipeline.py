@@ -1,4 +1,4 @@
-"""Batch 100 – Grand finale: full end-to-end data science pipeline stress test."""
+"""Grand finale: full end-to-end data science pipeline stress test."""
 
 import textwrap
 

@@ -1,4 +1,4 @@
-"""Cached results must be on disk by the time a cell reports done (CAS-209).
+"""Cached results must be on disk by the time a cell reports done.
 
 Cache writes are asynchronous, and nothing drains the queue when a kernel is
 *killed* rather than shut down — a crash, an OOM, a force-quit, or a tool that

@@ -1,6 +1,6 @@
 """A SEEDED expensive random draw must restore from disk across a restart.
 
-The seed-change work (CAS-234) established that changing a seed invalidates,
+The seed-change work established that changing a seed invalidates,
 and that an unseeded draw is frozen. The other half of the contract is that a
 *seeded* draw persisted to disk is genuinely RESTORED after a kernel restart --
 not recomputed. Verified here directly, because the seed work touches exactly

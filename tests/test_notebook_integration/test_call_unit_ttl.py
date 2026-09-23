@@ -1,15 +1,15 @@
-"""A statement's `ttl` governs the calls inside it, not just the statement (CAS-268).
+"""A statement's `ttl` governs the calls inside it, not just the statement.
 
 `call_unit.py` contained no reference to `ttl` at all, so call entries never
-expired. Once call interception became the default (CAS-243) that quietly
+expired. Once call interception became the default that quietly
 hollowed out the annotation: the STATEMENT would expire and re-execute while
 the expensive call inside it was still served from an entry with no expiry.
 Measured on `# @cash:ttl=0` -- the spelling the docs give for data that must
 never be served stale -- the work did not re-run at all until
 `# @cash:no-cache-calls` was added too.
 
-This is the same failure direction that made CAS-221 a P1 ("your fresh data is
-not fresh, silently"), one layer down.
+This is the same failure direction as the statement-layer TTL bug ("your fresh
+data is not fresh, silently"), one layer down.
 
 **The instrument is the hard part here, and it is easy to get backwards.** A
 counter written INSIDE the callee measures whether the CALL ran; a counter

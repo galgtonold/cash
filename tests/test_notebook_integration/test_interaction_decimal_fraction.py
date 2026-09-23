@@ -1,5 +1,5 @@
 """
-Batch 321: decimal/fractions precision arithmetic with caching.
+decimal/fractions precision arithmetic with caching.
 Tests Decimal, Fraction operations, and edit propagation for precise math.
 """
 

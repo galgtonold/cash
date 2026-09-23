@@ -1,4 +1,4 @@
-"""Batch 169 – Recursive function interaction tests.
+"""Recursive function interaction tests.
 
 Tests editing recursive function definitions, base cases,
 and recursive steps, verifying correct recomputation.

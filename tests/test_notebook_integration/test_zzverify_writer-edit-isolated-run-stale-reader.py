@@ -27,7 +27,7 @@ def test_writer_edit_then_isolated_reader_rerun_serves_stale_file(nb_runner, tmp
     nb_runner.run_all()
     assert "body = 1,2,3" in nb_runner.get_output(2)
 
-    # Edit the writer: different content AND byte size (rules out CAS-10
+    # Edit the writer: different content AND byte size (rules out
     # mtime-granularity timing entirely -- the file is simply never rewritten).
     writer_v2 = f"with open('{p}', 'w') as f:\n    f.write('10,20,30,40')\nprint('wrote v2')"
     nb_runner.set_cell_source(1, writer_v2)

@@ -1,4 +1,4 @@
-"""Batch 238 – Conditional logic and branching edit tests.
+"""Conditional logic and branching edit tests.
 
 Tests editing cells with conditional logic to switch between
 branches and verify cache handles the change correctly.

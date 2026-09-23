@@ -1,4 +1,4 @@
-"""Batch 210 – Walrus operator interaction tests.
+"""Walrus operator interaction tests.
 
 Tests editing cells that use the walrus operator (:=)
 in various contexts and verifying cache propagation.

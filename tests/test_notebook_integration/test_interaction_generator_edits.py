@@ -1,4 +1,4 @@
-"""Batch 156 – Generator, iterator, and lazy evaluation interaction tests.
+"""Generator, iterator, and lazy evaluation interaction tests.
 
 Tests where generators and iterators are created in cells,
 consumed downstream, and cell edits affect the generation logic.

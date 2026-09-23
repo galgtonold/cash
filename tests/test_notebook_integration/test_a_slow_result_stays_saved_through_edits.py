@@ -4,7 +4,7 @@ The perpetual-miss guard stops writing a statement whose cache key has
 changed on five runs in a row without a hit: such a key usually hashes
 something unstable, and writing a large value every run then only costs.
 But five edits upstream in a row is an ordinary morning of model tuning.
-Round 23's r23s1 edited one model at a time; after the fifth the
+One user edited one model at a time; after the fifth the
 cross-validation -- the slowest step in the notebook, its value a few
 numbers -- was no longer saved, and the next morning's restart ran every CV
 again although nothing had changed since the evening.
@@ -32,7 +32,7 @@ SETUP = (
     "    return seed * 1.5"
 )
 # The statement's own entry is what the guard governs; the call inside it has
-# a cache of its own, which r23s1's comprehension did not get (#225).
+# a cache of its own, which the reported comprehension did not get.
 SCORE = "# @cash:no-cache-calls\nscore = slow_score(SEED)\nprint('SCORE', score)"
 
 

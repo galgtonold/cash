@@ -1,4 +1,4 @@
-"""Batch 430: multiple return values and tuple unpacking."""
+"""multiple return values and tuple unpacking."""
 
 import pytest
 

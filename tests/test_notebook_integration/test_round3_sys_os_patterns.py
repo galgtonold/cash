@@ -1,4 +1,4 @@
-"""Batch 50: Sys/OS interaction — cash caching with sys, os, platform operations."""
+"""Sys/OS interaction — cash caching with sys, os, platform operations."""
 
 import textwrap
 

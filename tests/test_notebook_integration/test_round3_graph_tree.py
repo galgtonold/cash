@@ -1,4 +1,4 @@
-"""Batch 56: Graph & tree data structures — cash caching with graph algorithms."""
+"""Graph & tree data structures — cash caching with graph algorithms."""
 
 import textwrap
 

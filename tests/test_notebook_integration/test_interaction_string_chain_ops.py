@@ -1,5 +1,5 @@
 """
-Batch 312: String chain operations interaction tests.
+String chain operations interaction tests.
 Tests split→join, replace→strip chains with cache invalidation.
 """
 

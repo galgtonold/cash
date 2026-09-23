@@ -1,4 +1,4 @@
-"""Batch 369: multiple inheritance diamond pattern and MRO."""
+"""multiple inheritance diamond pattern and MRO."""
 
 import pytest
 

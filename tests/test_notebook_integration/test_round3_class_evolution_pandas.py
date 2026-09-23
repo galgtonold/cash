@@ -1,5 +1,5 @@
 """
-Batch 17: Multi-cell class evolution and refactoring patterns, complex
+Multi-cell class evolution and refactoring patterns, complex
 re-execution scenarios, out-of-order execution, and selective cell re-runs.
 
 Tests patterns where users iteratively develop and refine code across cells,

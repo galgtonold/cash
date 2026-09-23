@@ -1,4 +1,4 @@
-"""Batch 345: re (regex) pattern matching with cell edits."""
+"""re (regex) pattern matching with cell edits."""
 
 import pytest
 

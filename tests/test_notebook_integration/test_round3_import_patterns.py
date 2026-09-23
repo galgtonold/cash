@@ -1,5 +1,5 @@
 """
-Batch 32: Import patterns — dynamic imports, conditional imports, importlib,
+Import patterns — dynamic imports, conditional imports, importlib,
 sys.path manipulation, and star imports across cells.
 """
 

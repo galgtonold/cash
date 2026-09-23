@@ -102,7 +102,7 @@ class TestIsolatedRerunGaps:
 
     # ---- primitives / builtin containers (no _cash_lineage_hash attribute) ----
 
-    # FIXED (CAS-43, first channel) as fallout of the 2026-07-03 fix batch:
+    # FIXED (first channel) as fallout of the 2026-07-03 fix batch:
     # the multi-target swap now restores the pair correctly on isolated
     # re-run (verified deterministic across repeated --runxfail runs).
     def test_primitive_tuple_swap(self, nb_runner):

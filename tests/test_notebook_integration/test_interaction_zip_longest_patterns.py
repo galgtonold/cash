@@ -1,4 +1,4 @@
-"""Batch 405: zip with unequal lengths and zip_longest."""
+"""zip with unequal lengths and zip_longest."""
 
 import pytest
 

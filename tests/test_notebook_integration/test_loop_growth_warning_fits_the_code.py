@@ -1,6 +1,6 @@
 """CACHE-LOOP-GROWTH fires only on growth, and its advice fits the code.
 
-Round 25's r25s3, twice: the warning told them to "move `# @cash:persist` off
+Seen twice in one user's notebook: the warning told them to "move `# @cash:persist` off
 the loop" in a notebook with no annotation at all, and it fired on a sweep that
 REBINDS a same-sized dict per window (``sc = {mid: ... for mid in clean}``) --
 nothing grows, each pass stores a different result. The guard summed every

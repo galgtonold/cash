@@ -1,4 +1,4 @@
-"""CAS-87: a failing upstream statement must fail the user's cell loudly.
+"""A failing upstream statement must fail the user's cell loudly.
 
 Before the fix, exceptions during upstream auto-re-execution were logged and
 swallowed; the downstream cell then computed against the STALE pre-edit value

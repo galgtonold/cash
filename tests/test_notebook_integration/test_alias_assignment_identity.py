@@ -1,4 +1,4 @@
-"""CAS-184: a bare alias bind (``b = a``) must never restore from cache.
+"""A bare alias bind (``b = a``) must never restore from cache.
 
 ``b = a`` is an ordinary assignment, so cash used to cache *that statement* and,
 on a warm re-run, rebind ``b`` to a DESERIALISED COPY taken before any later
@@ -11,7 +11,7 @@ test here into one that passes while proving nothing:
 
 1. **>=3 warm re-runs.** The bug does not appear on the first warm re-run; that
    one still re-executes. A one-repetition test reports this shape as working,
-   which is how CAS-170 came to assert -- wrongly -- that aliases were "correct
+   which is how an earlier change came to assert -- wrongly -- that aliases were "correct
    by construction".
 2. **``# @cash:persist`` on the alias bind.** A pointer copy executes in ~0ms,
    under the 10ms ``min_execution_time_to_cache_seconds`` floor, so cash normally
@@ -59,7 +59,7 @@ def _live(*lines: str) -> str:
 
 
 def test_alias_identity_holds_across_warm_reruns(nb_runner):
-    """THE CAS-184 guard: ``backup = obj`` keeps ``backup is obj`` on every re-run.
+    """THE alias guard: ``backup = obj`` keeps ``backup is obj`` on every re-run.
 
     The object is mutated AFTER the alias bind, so a restored pre-mutation copy is
     detectable two ways: identity breaks and the mutation is invisible through
@@ -87,9 +87,7 @@ def test_alias_identity_holds_across_warm_reruns(nb_runner):
             f"rep {rep}: the probe cell replayed from cache, so it is not reading "
             f"the live namespace -- this probe is invalid, not passing: {out!r}"
         )
-        assert "same True" in out, (
-            f"rep {rep}: alias identity broken -- `backup = obj` restored a copy (CAS-184): {out!r}"
-        )
+        assert "same True" in out, f"rep {rep}: alias identity broken -- `backup = obj` restored a copy: {out!r}"
         assert "backup_tag fitted" in out, (
             f"rep {rep}: mutation through `obj` invisible via `backup` -- the alias "
             f"is a stale pre-mutation copy: {out!r}"
@@ -213,7 +211,7 @@ def test_alias_after_restart_reconstructs_source(nb_runner):
         out3 = nb_runner.get_output(3)
         assert "NameError" not in out3, (
             f"rep {rep}: re-executing the alias bind NameError'd -- the upstream "
-            f"simulation did not reconstruct its source (CAS-184 regression): {out3!r}"
+            f"simulation did not reconstruct its source (alias-guard regression): {out3!r}"
         )
         nb_runner.run_cell(4)
         out4 = nb_runner.get_output(4)
@@ -225,7 +223,7 @@ def test_alias_bind_is_reported_not_cached(nb_runner):
 
     ``# @cash:persist`` asks for caching; identity is not the user's to trade away
     by asking for a perf knob, so a correctness gate outranks it -- the same way
-    CAS-144 refuses a matplotlib Figure. This is also the net-neutrality proof:
+    cash refuses to cache a matplotlib Figure. This is also the net-neutrality proof:
     ``skip_cache`` gates ``_save_to_cache``, so a refused alias bind never
     serialises the object at all. Refusing to cache a pointer copy cannot cost
     anything -- there is no work to save.
@@ -289,17 +287,17 @@ def test_computed_rhs_still_caches(nb_runner):
     """The refusal stays NARROW: a CALL on the RHS still caches.
 
     ``b = a.copy()`` / ``c = list(a)`` can be arbitrarily expensive, so the cost
-    half of the CAS-184 argument does not transfer and they keep their cache.
+    half of the alias argument does not transfer and they keep their cache.
     This is the anchor that stops the rule quietly growing into "never cache an
     assignment whose RHS mentions a variable", which would gut the cache.
 
-    NOTE — the boundary moved under CAS-188. This test originally also asserted
+    NOTE — the boundary has moved since. This test originally also asserted
     that ``d = a[0]`` keeps its cache, on the same "can be arbitrarily expensive"
     reasoning. That reasoning is sound for a call but NOT for a literal-key
     subscript, which is an O(1) dereference: measured against a ``%cash_off``
     kernel, ``b = lst[0]`` restored a stale pre-mutation COPY and diverged on the
     first warm re-run. A deref is free to re-run, so refusing it satisfies BOTH
-    halves of the CAS-184 argument exactly as ``b = a`` does. Literal-key
+    halves of the alias argument exactly as ``b = a`` does. Literal-key
     subscripts, attribute chains and ternaries over them are therefore refused
     now; see ``reference_alias_targets``. Computed-key subscripts (``a[i]``,
     ``df[mask]``) remain cached — those can be real filters.

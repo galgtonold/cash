@@ -1,4 +1,4 @@
-"""Batch 143 – Loop and iteration pattern interaction tests.
+"""Loop and iteration pattern interaction tests.
 
 Tests where users write loops across cells, edit loop bounds,
 body, and iteration patterns, verifying cache consistency.

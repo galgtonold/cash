@@ -1,5 +1,5 @@
 """
-Batch 286: Custom __hash__/__eq__ interaction tests.
+Custom __hash__/__eq__ interaction tests.
 Tests that objects with custom hashing/equality properly interact
 with cash's caching when their definitions or data change.
 """

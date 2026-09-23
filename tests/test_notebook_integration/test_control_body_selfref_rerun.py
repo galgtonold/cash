@@ -1,5 +1,5 @@
 """Self-referential in-place mutation nested in a control structure must not
-accumulate on an isolated re-run (CAS-57).
+accumulate on an isolated re-run.
 
 `if cond: df['a'] = df['a']*2` (also for/while/with bodies) re-run in isolation
 previously DOUBLED again: the simulator treats a control structure as an opaque
@@ -8,7 +8,7 @@ to the cell-entry base, so the stale-value guard saw base == current and decline
 to reset. The fix compares the live VALUE's `_cash_lineage_hash` (which survives
 the `reset_to` collapse) against the cell-entry base, so the receiver is restored.
 A new column derived in a control body (`if c: df['b'] = df['a']+1`) is idempotent
-and keeps its per-statement cache (CAS-42 preserved).
+and keeps its per-statement cache.
 """
 
 import pytest
@@ -73,7 +73,7 @@ def test_conditional_del_column(nb_runner):
 
 
 def test_conditional_new_column_preserved(nb_runner):
-    """CAS-42 guard: a new column derived in a conditional is idempotent and must
+    """Guard: a new column derived in a conditional is idempotent and must
     keep working (not over-reset)."""
     _rerun(nb_runner, DF, "if True:\n    df['b'] = df['a'] + 1\nprint(df['b'].tolist())", "[2, 3, 4]")
 

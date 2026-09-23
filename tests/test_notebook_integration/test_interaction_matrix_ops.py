@@ -1,4 +1,4 @@
-"""Batch 215 – Matrix operations interaction tests.
+"""Matrix operations interaction tests.
 
 Tests editing cells with nested list matrix operations
 (transpose, multiply, etc.) and verifying propagation.

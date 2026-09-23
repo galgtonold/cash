@@ -1,4 +1,4 @@
-"""Batch 462: class __slots__ for memory efficiency."""
+"""class __slots__ for memory efficiency."""
 
 import pytest
 

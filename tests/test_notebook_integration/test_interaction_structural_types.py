@@ -1,4 +1,4 @@
-"""Batch 235 – Dataclass and namedtuple structural change tests.
+"""Dataclass and namedtuple structural change tests.
 
 Tests editing dataclass field definitions and namedtuple structures
 to verify changes propagate through the cache.

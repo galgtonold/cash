@@ -1,4 +1,4 @@
-"""Batch 432: contextlib suppress and redirect_stdout."""
+"""contextlib suppress and redirect_stdout."""
 
 import pytest
 

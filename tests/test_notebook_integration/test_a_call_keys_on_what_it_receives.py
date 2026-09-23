@@ -1,6 +1,6 @@
 """A cached call is keyed on the values it receives, not on where they came from.
 
-Round 23's r23s3 fitted one model per machine and window::
+One user fitted one model per machine and window::
 
     for W in WINDOWS:
         sc = {mid: fit_score(make_features(cleaned[mid], W)) for mid in ids}
@@ -13,7 +13,7 @@ scores re-fitted all 180 of them.
 
 A call whose inputs are all plain data now keys on the features it receives
 and leaves the statement out, as long as nothing it reads can change while
-its key stays put (CAS-256's ``fetch_next(conn)`` keeps its statement).
+its key stays put (``fetch_next(conn)`` keeps its statement).
 Written here as a ``for`` loop; the comprehension form keys the same way.
 Counted with ``os.write``: a cached
 callee's own writes to a variable would be restored on a hit and count the
@@ -121,7 +121,7 @@ def test_the_same_call_in_another_cell_is_served(nb_runner):
     assert "CHECK" in nb_runner.get_output(6), nb_runner.get_output(6)
 
 
-# Round 24's r24s5 fitted a forecast per store and item:
+# Another fitted a forecast per store and item:
 #     cutoff = work["date"].max() - pd.Timedelta(days=28)
 #     models = {key: fit_series(g, PARAMS, cutoff) for key, g in work.groupby(...)}
 # Fixing ONE store's data re-fitted all 360. ``cutoff`` and ``PARAMS`` are
@@ -181,7 +181,7 @@ def test_a_setting_passed_by_name_still_refits_when_its_value_changes(nb_runner)
     assert _fits(nb_runner) - 6 == 6
 
 
-# Round 25's r25s3 swept windows in a loop -- `for win in WINDOWS: sc = {mid:
+# Another swept windows in a loop -- `for win in WINDOWS: sc = {mid:
 # fit_score(make_features(cleaned[mid], win)) ...}` -- then scored every machine
 # with the chosen window in the next cell, `{... make_features(cleaned[mid],
 # BEST_WIN) ...}`: all 200 fits ran again. The sweep's keys carried the loop's

@@ -1,4 +1,4 @@
-"""Batch 76: Statistics & random distributions — cash caching with statistical computations."""
+"""Statistics & random distributions — cash caching with statistical computations."""
 
 import textwrap
 

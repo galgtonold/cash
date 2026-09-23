@@ -1,4 +1,4 @@
-"""Batch 478: collections ChainMap and OrderedDict move."""
+"""collections ChainMap and OrderedDict move."""
 
 import pytest
 

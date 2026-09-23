@@ -1,4 +1,4 @@
-"""Batch 463: static methods and class methods."""
+"""static methods and class methods."""
 
 import pytest
 

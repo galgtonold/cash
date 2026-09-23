@@ -1,4 +1,4 @@
-"""Batch 340: math module functions and numeric transformations."""
+"""math module functions and numeric transformations."""
 
 import pytest
 

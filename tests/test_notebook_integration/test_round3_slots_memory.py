@@ -1,4 +1,4 @@
-"""Batch 75: __slots__, memory optimization & class patterns — cash caching."""
+"""__slots__, memory optimization & class patterns — cash caching."""
 
 import textwrap
 

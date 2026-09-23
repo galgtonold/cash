@@ -1,4 +1,4 @@
-"""Batch 114 – Virtual restore + cell edit interaction tests.
+"""Virtual restore + cell edit interaction tests.
 
 Tests that exercise virtual restore from disk cache after kernel restart,
 combined with cell edits and dependency changes.

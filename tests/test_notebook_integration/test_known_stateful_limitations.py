@@ -14,11 +14,11 @@ Still failing (non-strict xfail):
 
 Fixed, kept as regression tests:
 
-* ``test_exhausted_generator_rerun`` — CAS-118 / CAS-50: producers of consumed
+* ``test_exhausted_generator_rerun`` — producers of consumed
   unrestorable inputs are re-executed on an isolated re-run, so the generator is
   re-seeded instead of being observed empty.
 * ``test_global_keyword_mutation_rerun`` and ``test_mutable_default_arg_rerun`` —
-  CAS-49 family via CAS-93: definition statements always re-execute.
+  Hidden state in function definitions: definition statements always re-execute.
 """
 
 import pytest
@@ -50,7 +50,7 @@ def test_function_hidden_global_mutation_rerun(nb_runner):
     assert nb_runner.get_output(2).strip().endswith("1"), nb_runner.get_output(2)
 
 
-# FIXED (CAS-118, CAS-50): an upstream generator is exhausted after first
+# FIXED: an upstream generator is exhausted after first
 # consumption and cannot be pickled/restored — so cash now re-executes the
 # PRODUCER of a consumed unrestorable input on an isolated re-run. `g` is
 # re-seeded and `list(g)` sees the full sequence again instead of an empty
@@ -69,7 +69,7 @@ def test_exhausted_generator_rerun(nb_runner):
     assert "[0, 1, 2]" in nb_runner.get_output(2), nb_runner.get_output(2)
 
 
-# FIXED (CAS-49 family, via CAS-93): definition statements always re-execute
+# FIXED: definition statements always re-execute
 # now, so the isolated re-run re-runs `def inc()` and the upstream chain
 # re-seeds `g` — the hidden global mutation no longer accumulates.
 def test_global_keyword_mutation_rerun(nb_runner):
@@ -86,7 +86,7 @@ def test_global_keyword_mutation_rerun(nb_runner):
     assert nb_runner.get_output(2).strip().endswith("1"), nb_runner.get_output(2)
 
 
-# FIXED (CAS-49 family, via CAS-93): definition statements always re-execute
+# FIXED: definition statements always re-execute
 # now, so the isolated re-run recreates the function object — and with it a
 # FRESH mutable default — instead of reusing the accumulated one.
 def test_mutable_default_arg_rerun(nb_runner):

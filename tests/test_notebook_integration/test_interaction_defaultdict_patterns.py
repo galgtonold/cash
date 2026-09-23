@@ -1,5 +1,5 @@
 """
-Batch 328: defaultdict patterns with caching.
+defaultdict patterns with caching.
 Tests defaultdict(list), defaultdict(int), nested defaultdict, and edit propagation.
 """
 

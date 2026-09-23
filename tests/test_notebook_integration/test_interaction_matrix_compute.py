@@ -1,4 +1,4 @@
-"""Batch 255 – Matrix/nested list computation patterns.
+"""Matrix/nested list computation patterns.
 
 Tests 2D list operations with edits.
 """

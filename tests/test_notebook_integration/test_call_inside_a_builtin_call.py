@@ -1,6 +1,6 @@
 """An expensive call wrapped in a builtin or a class is still call-cached.
 
-Round 22 (r22s4, found again by the tester-session tests): a backtest built
+Found again by the session-replay tests: a backtest built
 its table with ``rows.append(dict(cutoff=c, alpha=a, wape=score(df, c, a)))``.
 ``dict(...)`` was taken as the outermost call to cache, a class is never
 wrapped at runtime, and ``score`` inside it was never considered -- so an

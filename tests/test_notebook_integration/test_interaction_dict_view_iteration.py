@@ -1,4 +1,4 @@
-"""Batch 364: dictionary view objects and iteration edits."""
+"""dictionary view objects and iteration edits."""
 
 import pytest
 

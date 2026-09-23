@@ -1,4 +1,4 @@
-"""CAS-86: per-iteration loop caching must discriminate iterations by FULL
+"""per-iteration loop caching must discriminate iterations by FULL
 content — a sampled hash keyed two iterations over arrays that agreed in the
 sample onto one entry, producing a wrong result on the very first run."""
 

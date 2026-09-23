@@ -1,4 +1,4 @@
-"""Batch 82 – match/case (structural pattern matching, Python 3.10+)."""
+"""match/case (structural pattern matching, Python 3.10+)."""
 
 import textwrap
 

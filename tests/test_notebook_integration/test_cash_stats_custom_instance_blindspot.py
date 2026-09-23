@@ -1,4 +1,4 @@
-"""`%cash_stats` cannot see decorator hits on a custom Cash instance (CAS-222).
+"""`%cash_stats` cannot see decorator hits on a custom Cash instance.
 
 `_get_cash_instance` drains the notebook's own `Cash` or the module-level
 `cash._global_cash` singleton, and `Cash._decorator_call_log` is a per-instance
@@ -57,7 +57,7 @@ def test_global_decorator_is_credited(nb_runner):
     assert hits == 1, f"the second call was not a cache hit ({hits})"
     assert saved > _SLEEP / 2, f"cache_info recorded no real saving ({saved})"
     assert gross > _SLEEP / 2, (
-        f"%cash_stats did not credit a GLOBAL decorator hit ({gross}); the CAS-222 fix has regressed"
+        f"%cash_stats did not credit a GLOBAL decorator hit ({gross}); the global-decorator credit has regressed"
     )
 
 

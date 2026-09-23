@@ -1,9 +1,5 @@
 """User testing findings captured as integration tests.
 
-Covers findings from both rounds of user testing:
-- Round 1 (examples/large_scale_projects/USER_TESTING_FINDINGS_MAY2026.md)
-- Round 2 (examples/user_testing_round2/USER_TESTING_FINDINGS_ROUND2.md)
-
 Tests validate caching correctness: no stale data, proper invalidation,
 upstream change detection, and expected caching behavior.
 """
@@ -14,12 +10,12 @@ pytestmark = [pytest.mark.core, pytest.mark.timeout(30)]
 
 
 # =============================================================================
-# Round 1 Finding NB4/NB5/NB6 + Round 2 F1/F2: Caching correctness
+# Caching correctness
 # =============================================================================
 
 
 class TestUnchangedCellsRestored:
-    """Round 2 F1: Re-running unchanged cells should restore from cache."""
+    """Re-running unchanged cells should restore from cache."""
 
     def test_unchanged_cell_all_restored(self, nb_runner):
         """Simple cell: all statements RESTORED on re-run."""
@@ -56,7 +52,7 @@ class TestUnchangedCellsRestored:
 
 
 class TestUpstreamChangeDetection:
-    """Round 1 NB4 + Round 2 F2: Upstream changes trigger downstream recompute."""
+    """Upstream changes trigger downstream recompute."""
 
     def test_edit_root_cell_downstream_recompute(self, nb_runner):
         """Edit cell 1, verify cells 2 and 3 recompute."""
@@ -96,7 +92,7 @@ class TestUpstreamChangeDetection:
         assert "z = 1042" in nb_runner.get_output(3)
 
     def test_add_feature_upstream_model_retrains(self, nb_runner):
-        """Round 2 F7: Adding feature in upstream cell triggers model retrain."""
+        """Adding feature in upstream cell triggers model retrain."""
         nb_runner.create_notebook(
             [
                 "a = [1, 2, 3, 4, 5]",
@@ -114,7 +110,7 @@ class TestUpstreamChangeDetection:
         assert "total = 42" in nb_runner.get_output(3)
 
     def test_multi_cell_cascade_all_recompute(self, nb_runner):
-        """Round 2 F8: 3+ cell downstream cascade all recomputes correctly."""
+        """3+ cell downstream cascade all recomputes correctly."""
         nb_runner.create_notebook(
             [
                 "raw = [1, -2, 3, -4, 5, -6]",
@@ -136,7 +132,7 @@ class TestUpstreamChangeDetection:
 
 
 class TestNoStaleData:
-    """Round 2 F9: Upstream changes must produce correct new values."""
+    """Upstream changes must produce correct new values."""
 
     def test_filter_change_updates_aggregates(self, nb_runner):
         """Changing a filter condition must update aggregates."""
@@ -159,12 +155,12 @@ class TestNoStaleData:
 
 
 # =============================================================================
-# Round 1 NB5: Conditional branching
+# Conditional branching
 # =============================================================================
 
 
 class TestConditionalBranching:
-    """Round 1 NB5: Conditional (if/else) caching."""
+    """Conditional (if/else) caching."""
 
     def test_if_else_caches_correctly(self, nb_runner):
         """If/else branch cache hit on re-run."""
@@ -199,12 +195,12 @@ class TestConditionalBranching:
 
 
 # =============================================================================
-# Round 1 NB6 + Round 2 F6: Loop caching
+# Loop caching
 # =============================================================================
 
 
 class TestLoopCaching:
-    """Round 1 NB6 + Round 2 F6: Loop caching behavior."""
+    """Loop caching behavior."""
 
     def test_pure_loop_caches_correctly(self, nb_runner):
         """A loop without mutation should cache and restore."""
@@ -256,12 +252,12 @@ class TestLoopCaching:
 
 
 # =============================================================================
-# Round 1 NB1: DataFrame column assignment caching
+# DataFrame column assignment caching
 # =============================================================================
 
 
 class TestDataFrameColumnAssignment:
-    """Round 1 NB1: DataFrame self-assignment always re-computes (Known Issue 13)."""
+    """DataFrame self-assignment always re-computes."""
 
     def test_column_assignment_detected_as_mutation(self, nb_runner):
         """df['col'] = ... is treated as mutation, may not cache.
@@ -287,12 +283,12 @@ class TestDataFrameColumnAssignment:
 
 
 # =============================================================================
-# Round 1 NB2: Loop mutation detection
+# Loop mutation detection
 # =============================================================================
 
 
 class TestLoopMutationDetection:
-    """Round 1 NB2: Loop mutation iterations detected correctly."""
+    """Loop mutation iterations detected correctly."""
 
     def test_append_loop_detected_as_mutation(self, nb_runner):
         """List append in loop is detected as mutation.
@@ -330,15 +326,15 @@ class TestLoopMutationDetection:
 
 
 # =============================================================================
-# Round 1 NB3 + Round 2 F3: sklearn model caching
+# sklearn model caching
 # =============================================================================
 
 
 class TestModelCaching:
-    """Round 1 NB3 + Round 2 F3: ML model caching behavior.
+    """ML model caching behavior.
 
     Note: sklearn model objects with separate fit() calls in multi-cell
-    workflows have a known issue (Round 1 NB3) where the fit() mutation
+    workflows have a known issue where the fit() mutation
     is not properly tracked across cell boundaries. Single-cell and
     non-mutating workflows are fine.
     """

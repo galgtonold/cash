@@ -1,4 +1,4 @@
-"""Batch 45: Weakref & memory patterns — cash caching with weak references and GC."""
+"""Weakref & memory patterns — cash caching with weak references and GC."""
 
 import textwrap
 

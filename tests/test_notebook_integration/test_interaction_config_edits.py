@@ -1,4 +1,4 @@
-"""Batch 153 – Global constant and config pattern interaction tests.
+"""Global constant and config pattern interaction tests.
 
 Tests where shared constants/config are defined in an early cell
 and used by many downstream cells. Edit the config and verify

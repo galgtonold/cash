@@ -1,6 +1,6 @@
 """Calls inside a loop cached as one unit are still cached per call.
 
-Round 25's r25s5 fitted one model per store and department in the loop they
+A user fitted one model per store and department in the loop they
 would naturally write::
 
     for (store, dept), g in feats.groupby(['store', 'department']):
@@ -32,7 +32,7 @@ SETUP = (
     "    fd = os.open('fits.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND)\n"
     "    os.write(fd, b'fit|')\n"
     "    os.close(fd)\n"
-    # Above the many-cheap-calls guard's 50 ms, as the tester's fits were:
+    # Above the many-cheap-calls guard's 50 ms, as the user's fits were:
     # below it a few calls are timed plain, by design.
     "    time.sleep(0.06)\n"
     "    return round(sum(values) / len(values), 6)"

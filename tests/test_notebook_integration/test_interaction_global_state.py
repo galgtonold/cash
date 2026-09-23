@@ -1,4 +1,4 @@
-"""Batch 125 – Global state & side-effect interaction tests.
+"""Global state & side-effect interaction tests.
 
 Tests that exercise global variables, print statements, accumulation
 patterns, and other side-effecting code with cell edits.

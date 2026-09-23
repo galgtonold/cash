@@ -1,4 +1,4 @@
-"""Batch 164 – Edge case interaction tests.
+"""Edge case interaction tests.
 
 Tests empty cells, whitespace-only changes, very large output,
 cell reordering scenarios, and other boundary conditions.

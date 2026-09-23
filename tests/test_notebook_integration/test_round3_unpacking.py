@@ -1,4 +1,4 @@
-"""Batch 98 – multiple assignment, unpacking, and star expressions."""
+"""multiple assignment, unpacking, and star expressions."""
 
 import textwrap
 

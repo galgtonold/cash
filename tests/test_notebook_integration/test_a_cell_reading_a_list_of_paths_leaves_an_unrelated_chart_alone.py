@@ -1,6 +1,6 @@
 """A cell reading files through a list of paths leaves an unrelated chart alone.
 
-Round 30, r30s5 (3/3 in a repro): after an upstream edit a chart above was out
+Reproduced 3/3: after an upstream edit a chart above was out
 of date, and the badge said so with a STALE FILE line -- as documented, a
 writer whose file the cell you run does not read is left alone. Then a new
 cell below it, ``TF = [Path('other.csv')]`` and

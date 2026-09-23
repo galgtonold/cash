@@ -1,5 +1,5 @@
 """
-Batch 335: class method / static method patterns with caching.
+class method / static method patterns with caching.
 Tests @classmethod, @staticmethod, and edit propagation.
 """
 

@@ -1,4 +1,4 @@
-"""Batch 239 – Class inheritance chain edit tests.
+"""Class inheritance chain edit tests.
 
 Tests editing base/parent classes and verifying that changes
 propagate through inheritance hierarchies.

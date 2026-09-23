@@ -1,4 +1,4 @@
-"""Batch 347: multiple return values across cells with edits."""
+"""multiple return values across cells with edits."""
 
 import pytest
 

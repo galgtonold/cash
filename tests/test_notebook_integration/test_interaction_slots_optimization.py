@@ -1,4 +1,4 @@
-"""Batch 384: class slots optimization and attribute access."""
+"""class slots optimization and attribute access."""
 
 import pytest
 

@@ -1,4 +1,4 @@
-"""Batch 377: collections.deque as stack/queue with maxlen."""
+"""collections.deque as stack/queue with maxlen."""
 
 import pytest
 

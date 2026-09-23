@@ -1,4 +1,4 @@
-"""First-run correctness for one-shot loop iterables in the fast-loop path (CAS-121).
+"""First-run correctness for one-shot loop iterables in the fast-loop path.
 
 The single-unit fast-loop optimisation caches a large loop as one opaque unit by
 re-executing it *from source* — which evaluates the loop header a SECOND time
@@ -15,7 +15,7 @@ that calls a bare non-builtin name is routed to the per-iteration path (driven
 from the single, already-evaluated iterator), while re-iterable containers keep
 the byte-identical single-unit fast path.
 
-Companion to CAS-120 (``test_reassign_accumulator_loop_trust.py``), which fixed
+Companion to the accumulator-trust tests (``test_reassign_accumulator_loop_trust.py``), which fixed
 the *separate* downstream-read re-drain.  This file covers the *within-first-run*
 double evaluation.
 """
@@ -216,9 +216,9 @@ def test_reiterable_range_still_correct_both_runs(nb_runner):
 
 
 # ---------------------------------------------------------------------------
-# 4. End-to-end with CAS-120: a reassignment accumulator over a one-shot
-#    consumable is correct on the first run (CAS-121: header evaluated once) AND
-#    survives a plain downstream re-run (CAS-120: the trusted accumulator is not
+# 4. End-to-end with accumulator trust: a reassignment accumulator over a one-shot
+#    consumable is correct on the first run (header evaluated once) AND
+#    survives a plain downstream re-run (the trusted accumulator is not
 #    re-computed, so ``drain()`` is not called a second time and the source is
 #    not re-drained).
 # ---------------------------------------------------------------------------

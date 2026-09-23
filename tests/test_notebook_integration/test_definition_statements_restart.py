@@ -1,4 +1,4 @@
-"""CAS-93: def/class statements are never value-restored.
+"""def/class statements are never value-restored.
 
 Functions and classes pickle BY REFERENCE to the binding they create, so a
 persisted entry is a dangling pointer after a kernel restart: restoring it
@@ -39,7 +39,7 @@ def test_class_cell_survives_restart_with_persist(nb_runner):
 
 
 def test_def_plus_unpicklable_user_survives_restart(nb_runner):
-    """The original CAS-93 repro: a cell defining a function and handing it
+    """The original repro: a cell defining a function and handing it
     to an unpicklable stateful object must re-execute cleanly post-restart."""
     nb_runner.create_notebook(
         [

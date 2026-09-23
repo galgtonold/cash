@@ -1,5 +1,5 @@
-"""Hidden mutation reached through INHERITANCE must reset on isolated re-run
-(CAS-76, extends the object-protocol engine / CAS-73). A mutation performed by an
+"""Hidden mutation reached through INHERITANCE must reset on isolated re-run.
+A mutation performed by an
 inherited ``__init__`` / method / ``__enter__``, or on a class variable owned by a
 base class, is invisible to the receiver's own class body; on an isolated re-run
 it accumulates.

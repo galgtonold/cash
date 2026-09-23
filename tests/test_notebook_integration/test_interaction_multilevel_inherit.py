@@ -1,5 +1,5 @@
 """
-Batch 304: Multi-level inheritance and mixin interaction tests.
+Multi-level inheritance and mixin interaction tests.
 Tests base/derived class method changes with 3-level inheritance and mixins.
 """
 

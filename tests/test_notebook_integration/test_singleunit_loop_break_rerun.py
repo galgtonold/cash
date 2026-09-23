@@ -2,7 +2,7 @@
 unit (for-loops with break/continue) and instance-method self-mutation.
 
 These take the `_execute_as_single_unit` path (like while/with), so they are
-regression coverage for the CAS-59 family — confirmed correct, no fix needed.
+regression coverage for the single-unit path — confirmed correct, no fix needed.
 """
 
 import pytest

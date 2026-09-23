@@ -1,5 +1,5 @@
 """
-Batch 284: Regex compilation interaction tests.
+Regex compilation interaction tests.
 Tests that editing regex patterns properly invalidates match results downstream.
 """
 

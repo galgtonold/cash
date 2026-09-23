@@ -1,10 +1,10 @@
-"""Content-hash fallback for file-dependency freshness (CAS-98, CAS-10).
+"""Content-hash fallback for file-dependency freshness.
 
 The (mtime, size)-only freshness check fails two opposite ways:
 
-* **CAS-98 (over-invalidation):** a touch-only change (identical content and
+* **Over-invalidation:** a touch-only change (identical content and
   size, only mtime bumped) makes the reader RECOMPUTE — it should stay a HIT.
-* **CAS-10 (under-invalidation):** a real edit with the SAME size and a mtime
+* **Under-invalidation:** a real edit with the SAME size and a mtime
   the coarse check can't distinguish (sub-resolution / same-second edit) is
   MISSED — it should invalidate.
 
@@ -54,8 +54,8 @@ def _reader_notebook(nb_runner, csv_str):
     nb_runner.enable_debug()
 
 
-def test_cas98_touch_only_stays_cache_hit(nb_runner, tmp_path):
-    """CAS-98: bumping only the mtime (identical content + size) must NOT
+def test_touch_only_stays_cache_hit(nb_runner, tmp_path):
+    """Bumping only the mtime (identical content + size) must NOT
     invalidate — the reader restores from cache instead of recomputing."""
     csv = tmp_path / "data.csv"
     csv.write_bytes(_CONTENT_A)
@@ -77,8 +77,8 @@ def test_cas98_touch_only_stays_cache_hit(nb_runner, tmp_path):
     )
 
 
-def test_cas10_same_size_quick_edit_invalidates(nb_runner, tmp_path):
-    """CAS-10: a same-size edit under an mtime the coarse check can't tell
+def test_same_size_quick_edit_invalidates(nb_runner, tmp_path):
+    """A same-size edit under an mtime the coarse check can't tell
     apart must still invalidate — the reader re-executes with the new data."""
     csv = tmp_path / "data.csv"
     csv.write_bytes(_CONTENT_A)
@@ -91,7 +91,7 @@ def test_cas10_same_size_quick_edit_invalidates(nb_runner, tmp_path):
     # Same-size overwrite, then force the mtime back to what the snapshot
     # recorded so (mtime, size) is provably ambiguous — content is the only
     # signal that distinguishes the two files. This deterministically stages
-    # the sub-resolution / same-second edit CAS-10 describes.
+    # the sub-resolution / same-second edit described above.
     snapshot_mtime = os.stat(csv).st_mtime
     csv.write_bytes(_CONTENT_B)
     assert os.stat(csv).st_size == len(_CONTENT_A)  # same byte length

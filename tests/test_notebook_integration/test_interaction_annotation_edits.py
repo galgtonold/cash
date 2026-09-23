@@ -1,4 +1,4 @@
-"""Batch 151 – Annotation interaction tests.
+"""Annotation interaction tests.
 
 Tests combining @cash: annotations (no-cache, ttl, persist)
 with cell edits to verify annotation handling during edits.

@@ -1,6 +1,6 @@
 """A cell cash runs sees what IPython puts into builtins while it runs a cell.
 
-Round 25's r25s1: with cash on, ``pd.get_option("display.max_columns")`` was 0
+With cash on, ``pd.get_option("display.max_columns")`` was 0
 instead of 20, so tables printed differently from the uncached kernel. pandas
 decides at import whether it is in a terminal by calling ``get_ipython()``; IPython
 puts that into ``builtins`` only while it runs a cell (its builtin trap), and cash

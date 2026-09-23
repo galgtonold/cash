@@ -1,4 +1,4 @@
-"""Batch 435: string zfill and numeric formatting."""
+"""string zfill and numeric formatting."""
 
 import pytest
 

@@ -1,4 +1,4 @@
-"""Batch 393: map with multiple iterables and starmap patterns."""
+"""map with multiple iterables and starmap patterns."""
 
 import pytest
 

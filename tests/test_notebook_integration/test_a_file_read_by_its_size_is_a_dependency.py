@@ -1,6 +1,6 @@
 """A statement that looks at a file's size or timestamps depends on that file.
 
-Round 24's r24s4 ended its export cell with
+A user's notebook ended its export cell with
 ``print({p.name: p.stat().st_size for p in sorted(OUT.glob("*.csv"))})``.
 When the exports above it were rewritten, that line was served from the cache
 and showed the sample run's sizes: the folder's listing is a dependency, and

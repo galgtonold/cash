@@ -1,4 +1,4 @@
-"""Batch 260 – Itertools patterns with edits.
+"""Itertools patterns with edits.
 
 Tests itertools functions with data/function edits.
 """

@@ -1,5 +1,5 @@
 """
-Batch 101 — Multi-round cell editing & cache coherence.
+Multi-round cell editing & cache coherence.
 
 Tests that exercise the trickiest interaction patterns:
 - Editing the same cell multiple times in succession

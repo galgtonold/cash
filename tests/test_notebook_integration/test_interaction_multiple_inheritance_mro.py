@@ -1,4 +1,4 @@
-"""Batch 505: multiple inheritance and MRO resolution."""
+"""multiple inheritance and MRO resolution."""
 
 import pytest
 

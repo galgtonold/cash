@@ -1,13 +1,13 @@
 """A file read in a loop's header is a dependency of what the loop builds.
 
-Round 27, r27s4. A gene-alias table was built the way most people write one::
+A gene-alias table was built the way most people write one::
 
     ALIAS = {}
     for line in DATA.read_text().splitlines()[1:]:
         o, n = line.split("\\t")
         ALIAS[o] = n
 
-The tester regenerated their input data and carried on working further down
+A user regenerated their input data and carried on working further down
 the notebook -- the move the quickstart says cash exists to make safe. Every
 exported file was then computed from the old table: 19,610 genes instead of
 19,850, 13 clusters instead of 12, different markers for every cluster.
@@ -31,8 +31,8 @@ input_hashes`` said the input lineages still matched. A name bound in the same
 cell as ``%cash_on`` has no runtime lineage (cash was not listening when that
 cell started) while the simulation, which reads that cell from the file, has
 one. So the recorded entry lacked a key the simulation carried, equality was
-false forever, and neither branch ran. That is r27s4's cell 0, and the
-quickstart's. The file check now runs whether or not the inputs match, which
+false forever, and neither branch ran. That is the reported notebook's cell 0,
+and the quickstart's. The file check now runs whether or not the inputs match, which
 is why this file tests BOTH cell layouts.
 
 The single-assignment spellings work precisely because one statement both
@@ -40,13 +40,13 @@ reads the file and binds the name::
 
     ALIAS = dict(l.split("\\t") for l in DATA.read_text().splitlines()[1:])
 
-which is why this survived four rounds: it needs the reading half and the
-binding half to be different statements. r27s4's notebook carries a comment
-above that line saying the tester had already worked this out and written
-around it.
+which is why this survived so long: it needs the reading half and the
+binding half to be different statements. The reported notebook carries a
+comment above that line saying its author had already worked this out and
+written around it.
 
-Pre-existing since 2026-05-29 at the latest; reproduced on the round-24, -25
-and -26 builds as well as this one.
+Pre-existing since 2026-05-29 at the latest; reproduced on three earlier
+builds as well as this one.
 """
 
 import pytest
@@ -63,10 +63,10 @@ def _write(path, third):
 
 
 def test_a_for_loop_header_read_invalidates_what_the_loop_built(nb_runner, tmp_path):
-    """r27s4's shape: change the file, run a cell BELOW, get the new value.
+    """The reported shape: change the file, run a cell BELOW, get the new value.
 
     ``DATA`` is bound in the same cell as ``%cash_on``, exactly as the
-    tester's notebook and the quickstart do it, so this is also the case
+    reported notebook and the quickstart do it, so this is also the case
     where the recorded input lineages do NOT match the simulated ones.
     """
     data = tmp_path / "alias.tsv"

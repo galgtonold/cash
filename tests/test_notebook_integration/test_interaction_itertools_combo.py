@@ -1,5 +1,5 @@
 """
-Batch 322: itertools combinatorial patterns with caching.
+itertools combinatorial patterns with caching.
 Tests combinations, permutations, product, chain, and edit propagation.
 """
 

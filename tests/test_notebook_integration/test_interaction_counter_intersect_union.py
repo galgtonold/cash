@@ -1,4 +1,4 @@
-"""Batch 417: Counter intersection and union operations."""
+"""Counter intersection and union operations."""
 
 import pytest
 

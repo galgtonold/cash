@@ -1,4 +1,4 @@
-"""Batch 461: dict setdefault and get with defaults."""
+"""dict setdefault and get with defaults."""
 
 import pytest
 

@@ -1,4 +1,4 @@
-"""Batch 477: functools reduce and operator module."""
+"""functools reduce and operator module."""
 
 import pytest
 

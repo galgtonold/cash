@@ -1,5 +1,5 @@
 """Hidden mutation in a ``@dataclass`` ``__post_init__`` must reset on isolated
-re-run (CAS-79, extends CAS-73). The dataclass decorator synthesises ``__init__``
+re-run. The dataclass decorator synthesises ``__init__``
 and calls the user's ``__post_init__``; a mutation there (a module list or a
 ``ClassVar``) is invisible to the construction site and accumulates on re-run.
 

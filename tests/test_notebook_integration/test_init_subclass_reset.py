@@ -1,5 +1,5 @@
 """A subclass def that triggers a base ``__init_subclass__`` registry side effect
-must reset on isolated re-run (CAS-103).
+must reset on isolated re-run.
 
 ``class Sub(Base): pass`` runs ``Base.__init_subclass__(cls, ...)`` during CLASS
 CREATION — before any statement in the cell body executes — so the mutation is
@@ -7,7 +7,7 @@ invisible to the object-protocol executable-node walk. When that hook appends th
 subclass to a module list (``registry.append(cls.__name__)``), an isolated re-run
 of the subclass cell re-registers and the registry doubles. The fix analyses the
 base hook's body like a constructor and routes the free-var mutation to the
-self-protecting CAS-68A reset channel.
+self-protecting reset channel used for constructors.
 
 Each subclass def registers ONCE, so the correct registry is identical on the
 first run and every re-run.
@@ -85,8 +85,7 @@ def test_second_distinct_subclass_still_registers(nb_runner):
 
 
 def test_cross_cell_class_var_accumulator_not_corrupted(nb_runner):
-    """CONTROL (c): a legitimate cross-cell class-VAR accumulator (CAS-75 shape:
-    ``Base.count`` bumped by an upstream cell AND this cell) must keep the plain
+    """CONTROL (c): a legitimate cross-cell class-VAR accumulator (``Base.count`` bumped by an upstream cell AND this cell) must keep the plain
     run_all value — the class-def reset is suppressed by the cross-cell guard, so
     the mutation is not clobbered.
 

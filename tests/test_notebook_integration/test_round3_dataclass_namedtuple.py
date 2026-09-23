@@ -1,4 +1,4 @@
-"""Batch 52: Dataclass & NamedTuple advanced patterns — cash caching with typed data."""
+"""Dataclass & NamedTuple advanced patterns — cash caching with typed data."""
 
 import textwrap
 

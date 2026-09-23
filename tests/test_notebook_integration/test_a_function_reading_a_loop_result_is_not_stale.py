@@ -1,11 +1,11 @@
 """A function that reads a loop's result is not rebuilt when the loop's cell re-runs.
 
-Round 25's r25s1 (BLOCKING, no edit): run the model-comparison cell again
+With no edit at all: run the model-comparison cell again
 (``results = {}`` filled by a loop over model families), then the report cell
 that saves a figure drawn by functions reading ``results``. Cash raised
 ``UpstreamStateError: 'logreg'`` and left ``results`` empty.
 
-The round-24 check for values built on an older input counted a ``def`` as
+The check for values built on an older input counted a ``def`` as
 built on ``results``: a function records the globals it reads among its
 inputs. It holds no copy of them -- it reads them when called -- but the
 functions were rebuilt, and with them ``results = {}`` without the loop.

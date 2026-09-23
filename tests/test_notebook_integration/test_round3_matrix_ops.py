@@ -1,4 +1,4 @@
-"""Batch 96 – matrix/linear algebra with pure Python lists."""
+"""matrix/linear algebra with pure Python lists."""
 
 import textwrap
 

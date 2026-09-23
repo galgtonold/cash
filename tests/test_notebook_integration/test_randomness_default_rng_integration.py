@@ -1,9 +1,9 @@
 """Real-kernel coverage for unseeded ``np.random.default_rng()`` detection.
 
-CAS-135 hole 1. CAS-114 wired up ``CashRandomnessWarning``, but the detector is
+The first randomness warning wired up ``CashRandomnessWarning``, but the detector is
 rooted at RNG *module* names, so it only ever saw numpy's **legacy global** API
 (``np.random.rand``). ``np.random.default_rng()`` — what numpy's own docs have
-told everyone to use since 1.17, and what CAS-90 already replays state for — was
+told everyone to use since 1.17, and what cash already replays state for — was
 invisible. An unseeded Monte Carlo written against the modern API got cached and
 replayed bit-identical forever with no warning of any kind.
 
@@ -65,7 +65,7 @@ def test_seeded_default_rng_draw_does_not_warn(nb_runner):
 
 
 def test_legacy_global_api_still_warns(nb_runner):
-    """Control: do not regress CAS-114's original legacy-global detection."""
+    """Control: do not regress the original legacy-global detection."""
     nb_runner.create_notebook(
         [
             "import numpy as np",
@@ -83,7 +83,7 @@ def test_legacy_global_api_still_warns(nb_runner):
 
 
 def test_generator_built_inside_function_body_warns(nb_runner):
-    """The exact shape from the CAS-135 report: the RNG is a function *local*.
+    """The exact shape from the original report: the RNG is a function *local*.
 
     ``g`` never reaches ``user_ns``, so no live-value classifier can see it — the
     detection has to come off the AST of the ``def`` statement itself.
@@ -107,7 +107,7 @@ def test_np_random_seed_does_not_quiet_a_default_rng_draw(nb_runner):
 
     A ``default_rng()`` Generator is independent of it, so the module-level seed
     ledger must not be allowed to suppress the Generator's warning — that would
-    trade a false negative for exactly the silence CAS-135 is about.
+    trade a false negative for exactly the silence this file is about.
     """
     nb_runner.create_notebook(
         [
@@ -142,7 +142,7 @@ def test_allow_random_suppresses_default_rng_warning(nb_runner):
 
 
 def test_pure_function_param_does_not_warn_against_stale_global(nb_runner):
-    """CAS-154 Symptom B: a def whose parameter shadows a stale same-named
+    """False positive: a def whose parameter shadows a stale same-named
     unseeded global must NOT warn — the parameter is a different variable.
 
     Before lexical scoping the def-only cell fired a spurious warning purely
@@ -166,7 +166,7 @@ def test_pure_function_param_does_not_warn_against_stale_global(nb_runner):
 
 
 def test_unseeded_rng_argument_at_call_site_warns(nb_runner):
-    """CAS-154 Symptom A: handing an unseeded generator to a function that draws
+    """Missed warning: handing an unseeded generator to a function that draws
     off that parameter must warn at the CALL site.
 
     This is the idiomatic Monte-Carlo shape that cached and froze in silence
@@ -212,9 +212,9 @@ def test_seeded_rng_argument_at_call_site_does_not_warn(nb_runner):
 
 
 def test_unseeded_rng_positional_argument_at_call_site_warns(nb_runner):
-    """CAS-154 round 4: the POSITIONAL spelling of the call-site flow.
+    """The POSITIONAL spelling of the call-site flow.
 
-    CAS-154 shipped the keyword form only, so the way the idiomatic Monte Carlo
+    The first fix covered the keyword form only, so the way the idiomatic Monte Carlo
     is actually written — ``price_asian(np.random.default_rng(), S0, K, ...)`` —
     stayed silent, and a "converged" price was really a frozen replay of one old
     draw. Naming the slot needs the callee's live signature, which only exists in

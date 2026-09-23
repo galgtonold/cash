@@ -1,4 +1,4 @@
-"""Batch 109 – Control structure + cell edit interaction tests.
+"""Control structure + cell edit interaction tests.
 
 Tests that exercise loops and conditionals combined with cell edits,
 out-of-order execution, and kernel restarts.

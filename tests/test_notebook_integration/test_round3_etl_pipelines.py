@@ -1,5 +1,5 @@
 """
-Batch 31: Multi-step data transformation pipelines — realistic ETL-like workflows
+Multi-step data transformation pipelines — realistic ETL-like workflows
 with many intermediate variables and complex data flow.
 """
 

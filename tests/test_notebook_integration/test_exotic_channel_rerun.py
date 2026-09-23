@@ -1,5 +1,5 @@
 """Hidden mutation reached through the harder / indirect object-protocol channels
-must reset on isolated re-run (CAS-80). Each needs a bespoke resolver: an
+must reset on isolated re-run. Each needs a bespoke resolver: an
 ExitStack.enter_context, a context-manager FACTORY binding, an aliased or
 class-based decorator, a functools memoizer, or the iterator protocol.
 

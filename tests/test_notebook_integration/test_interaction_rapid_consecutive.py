@@ -1,4 +1,4 @@
-"""Batch 175 – Multiple rapid consecutive edits interaction tests.
+"""Multiple rapid consecutive edits interaction tests.
 
 Tests making multiple rapid edits to the same cell and verifying
 that each edit is properly picked up.

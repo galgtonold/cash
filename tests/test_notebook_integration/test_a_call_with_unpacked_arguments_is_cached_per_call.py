@@ -1,6 +1,6 @@
 """A call whose arguments are unpacked (`f(g, **TUNED.get(k, {}))`) is cached per call.
 
-Round 25's r25s5 fitted one model per store and department, with per-department
+One user fitted one model per store and department, with per-department
 settings::
 
     models = {key: fit_series(g, **TUNED.get(key[1], {})) for key, g in series.items()}
@@ -8,8 +8,8 @@ settings::
 Growing the slice from 6 groups to 7 re-fitted all 7, with no sub-call line in
 the badge; spelled ``fit_series(g, max_depth=3)`` it served 6 of 7. A call with
 ``*``/``**`` unpacking was refused outright, since its argument positions are
-not known before it runs (CAS-243: ``compute(*pair())`` had keyed only the
-first of two values). Keyed on what it receives, the call hashes what did
+not known before it runs (``compute(*pair())`` had keyed only the first of
+two values). Keyed on what it receives, the call hashes what did
 arrive -- every positional value, and every keyword with its name.
 """
 

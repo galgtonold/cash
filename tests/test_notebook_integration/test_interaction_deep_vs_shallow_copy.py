@@ -1,4 +1,4 @@
-"""Batch 447: copy.deepcopy vs shallow copy behaviors."""
+"""copy.deepcopy vs shallow copy behaviors."""
 
 import pytest
 

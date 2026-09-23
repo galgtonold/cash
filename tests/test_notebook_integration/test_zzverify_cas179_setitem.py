@@ -1,4 +1,4 @@
-"""CAS-179 verification: is ``df['col'] = expensive(...)`` uncacheable while
+"""Verification: is ``df['col'] = expensive(...)`` uncacheable while
 ``df = df.assign(col=expensive(...))`` caches?
 
 Oracle = the real kernel + an EXTERNAL call counter read from outside it (the
@@ -91,7 +91,7 @@ def test_setitem_caches_across_12_unchanged_runalls(nb_runner, tmp_path):
     assert EXPECT in tail, tail
     assert cold == 1, f"cold={cold}"
     assert warm == 0, (
-        f"CAS-179 REPRODUCES: df['b'] = ... recomputed {warm} times over 12 "
+        f"setitem REPRODUCES: df['b'] = ... recomputed {warm} times over 12 "
         f"unchanged run_alls (cold={cold})\nbadge: {badge!r}"
     )
 
@@ -111,7 +111,7 @@ def test_assign_caches_across_12_unchanged_runalls(nb_runner, tmp_path):
 
 
 def test_setitem_isolated_rerun(nb_runner, tmp_path):
-    """CAS-179's narrow surviving half -- FIXED, marker lifted 2026-08-02.
+    """The narrow surviving half -- FIXED, marker lifted 2026-08-02.
 
     This was xfail: an in-place setitem onto a frame created in an UPSTREAM
     cell re-ran its RHS on an isolated single-cell re-run, where the
@@ -119,7 +119,7 @@ def test_setitem_isolated_rerun(nb_runner, tmp_path):
     built in the SAME cell always cached fine, so setitem was never itself
     uncacheable -- the trigger was mutating an upstream object.
 
-    Closed incidentally by the CAS-243 call-unit work, not by a targeted fix.
+    Closed incidentally by the call-interception work, not by a targeted fix.
     Attribution was measured by swapping only ``src/``: xpassed at the branch
     head, xfailed on the pre-merge ``main``. Verified stable over three
     consecutive runs before the marker came off.

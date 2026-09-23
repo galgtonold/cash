@@ -1,4 +1,4 @@
-"""Batch 126 – Annotation/directive interaction tests.
+"""Annotation/directive interaction tests.
 
 Tests that exercise @cash: directives (no-cache, ttl, persist)
 combined with cell edits to verify correct behavior.

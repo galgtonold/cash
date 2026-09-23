@@ -1,4 +1,4 @@
-"""Batch 411: textwrap module dedent and fill."""
+"""textwrap module dedent and fill."""
 
 import pytest
 

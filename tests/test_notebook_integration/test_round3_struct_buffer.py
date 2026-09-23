@@ -1,4 +1,4 @@
-"""Batch 71: Struct, memoryview & buffer patterns — cash caching with binary data."""
+"""Struct, memoryview & buffer patterns — cash caching with binary data."""
 
 import textwrap
 

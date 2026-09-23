@@ -5,7 +5,7 @@ restart unless the writer's provenance -- the files it produced and their
 state -- shows its effect is already there. Provenance came from the paths
 the code names, so a writer whose paths live in a helper
 (``save(k, v)`` writing ``OUT / f'f{k}.txt'``), or a loop over such calls,
-had none: round 23's r23s3 re-ran a 263 s sweep after a restart to redraw
+had none: one user's notebook re-ran a 263 s sweep after a restart to redraw
 charts that were on disk. The writes are observed as they happen now
 (``write_observer``) and recorded for the loop as a whole.
 

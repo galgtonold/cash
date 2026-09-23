@@ -1,4 +1,4 @@
-"""Batch 457: weakref and weak references."""
+"""weakref and weak references."""
 
 import pytest
 

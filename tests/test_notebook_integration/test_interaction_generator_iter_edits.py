@@ -1,4 +1,4 @@
-"""Batch 170 – Generator and iterator interaction tests.
+"""Generator and iterator interaction tests.
 
 Tests editing generator functions, iterator protocols,
 and lazy evaluation patterns.

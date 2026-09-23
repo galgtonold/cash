@@ -1,4 +1,4 @@
-"""Batch 350: chained attribute access and method chains with edits."""
+"""chained attribute access and method chains with edits."""
 
 import pytest
 

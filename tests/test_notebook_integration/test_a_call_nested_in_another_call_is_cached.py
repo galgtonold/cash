@@ -1,6 +1,6 @@
 """An expensive call handed to another call is cached on its own.
 
-Round 30, r30s3: ``Wy = weights_from_scores(fit_predict(feats, yr), px.columns,
+``Wy = weights_from_scores(fit_predict(feats, yr), px.columns,
 rebal_every=5).shift(1).fillna(0.0)`` re-ran all nine fits (19 s), although the
 same ``fit_predict(feats, yr)`` restored when written on its own line. "Written
 on its own line they restore; nested as an argument they don't."

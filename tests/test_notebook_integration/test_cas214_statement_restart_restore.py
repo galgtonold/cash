@@ -1,10 +1,10 @@
-"""CAS-214: a notebook STATEMENT's cache must survive a kernel restart.
+"""A notebook STATEMENT's cache must survive a kernel restart.
 
-Round-9 gate finding, hit independently by 4 of 5 testers. The value is written
+Hit independently by 4 of 5 people testing cash. The value is written
 to disk and the cache directory is found on the next session -- but the
 cross-restart LOOKUP misses, so every expensive statement recomputes and is
 written again under a new key. `.cash/` accumulates a fresh copy per restart
-(one tester reached 12 GB for a 736 MB input) and the user gets none of the
+(one user reached 12 GB for a 736 MB input) and the user gets none of the
 headline benefit.
 
 The `@cash.cache` DECORATOR path survives restarts correctly, which is exactly
@@ -56,7 +56,7 @@ def test_statement_cache_survives_a_kernel_restart(nb_runner, tmp_path):
     nb_runner.run_cell(2)
     warm = _calls(counter)
     assert warm == cold, (
-        f"warm re-run in the SAME session recomputed: {cold} -> {warm}. If this fails the bug is broader than CAS-214."
+        f"warm re-run in the SAME session recomputed: {cold} -> {warm}. If this fails the bug is broader than restart."
     )
 
     # The real test: a kernel restart. cash is disabled by a restart, so the

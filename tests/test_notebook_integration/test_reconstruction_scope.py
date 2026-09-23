@@ -1,19 +1,19 @@
-"""CAS-193/196/200: upstream reconstruction is scoped to the current cell.
+"""Upstream reconstruction is scoped to the current cell.
 
 One root cause: cash re-fired an upstream file-writing statement during another
 cell's reconstruction even though the current cell reads neither the writer's
 output file nor any variable it produces. Manifestations:
 
-* CAS-196 (WRONG): a downstream cell re-fired ``df.to_csv('audit.log', mode='a')``
+* Wrong result: a downstream cell re-fired ``df.to_csv('audit.log', mode='a')``
   -> a duplicated non-idempotent append -> corrupted file.
-* CAS-200/193 (BLOCKING): a cell BELOW a plot cell re-fired the plot's
+* Blocking: a cell BELOW a plot cell re-fired the plot's
   ``fig.savefig(...)`` (and, with an evicted RAM-only intermediate, raised
   ``UpstreamStateError``), wedging the notebook tail.
 
 The scope gate: a file-writer whose output no consumer relevant to the current
 cell reads is an unrelated / terminal side-effect and must never be re-fired
 during reconstruction. It still re-runs when a reader that actually reads the
-file (CAS-81/82) or the writer's own cell runs.
+file or the writer's own cell runs.
 """
 
 import pytest
@@ -41,7 +41,7 @@ def _restart(nb_runner):
 
 
 def test_runall_does_not_double_a_loop_fed_audit_append(nb_runner, tmp_path):
-    """CAS-196 within-session: a run-all must append the audit log exactly once.
+    """Within one session: a run-all must append the audit log exactly once.
 
     The audit writer's payload (``audit_row``) derives from a LOOP-computed
     ``slopes``/``worst``. The loop makes the simulated and runtime lineages of
@@ -81,7 +81,7 @@ def test_runall_does_not_double_a_loop_fed_audit_append(nb_runner, tmp_path):
 
 
 def test_restart_reader_does_not_refire_co_produced_writer(nb_runner, tmp_path):
-    """CAS-196 post-restart: a reader depending on a var co-produced with the
+    """After a restart: a reader depending on a var co-produced with the
     writer must reconstruct that var without re-firing the write.
 
     ``receipt`` is produced in the same cell as the ``to_csv`` append. After a
@@ -114,7 +114,7 @@ def test_restart_reader_does_not_refire_co_produced_writer(nb_runner, tmp_path):
 
 
 def test_plot_writer_not_refired_by_unrelated_cell_after_restart(nb_runner, tmp_path):
-    """CAS-200/193: after a restart, a cell below a plot cell that shares no
+    """After a restart, a cell below a plot cell that shares no
     variable with it must not re-fire the plot's savefig nor UpstreamStateError.
     """
     pytest.importorskip("matplotlib")
@@ -151,6 +151,5 @@ def test_plot_writer_not_refired_by_unrelated_cell_after_restart(nb_runner, tmp_
     assert "UpstreamStateError" not in out, f"unrelated cell wedged on the plot: {out}"
     assert "GRAND_TOTAL 150" in out, f"tail cell produced wrong value: {out}"
     assert not chart.exists(), (
-        "reconstructing an unrelated cell re-fired the plot writer (fig.savefig): "
-        "the deleted chart.png was re-created (CAS-200/193)"
+        "reconstructing an unrelated cell re-fired the plot writer (fig.savefig): the deleted chart.png was re-created"
     )

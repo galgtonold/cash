@@ -1,10 +1,10 @@
-"""Adversarial probes, wave 6 (2026-07-02): @stateful marker.
+"""Adversarial probes: @stateful marker.
 
  1. test_stateful_marker_forces_reexecution — a @stateful-marked function's
         call cell must re-execute on an unchanged run_all (plain-kernel
         semantics: the hidden counter increments).
 
-(A %cash_clear probe was removed: no such magic exists — noted on CAS-32.)
+(A %cash_clear probe was removed: no such magic exists.)
 """
 
 import pytest

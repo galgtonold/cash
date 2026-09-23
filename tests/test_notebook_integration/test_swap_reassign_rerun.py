@@ -1,7 +1,6 @@
 """A cell that reassigns variables from each other (swap / rotate / temp-swap)
 must be idempotent on isolated re-run — the read-and-written names reset to
-their cell-entry base first, instead of composing on the already-swapped state
-(CAS-65).
+their cell-entry base first, instead of composing on the already-swapped state.
 """
 
 import pytest

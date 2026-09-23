@@ -1,5 +1,5 @@
 """
-Batch 19: Complex multi-file module dependency patterns.
+Complex multi-file module dependency patterns.
 
 Tests how cash handles user-defined modules written to disk, imported across
 cells, modified during a session, and reloaded. These are the most challenging

@@ -1,4 +1,4 @@
-"""Batch 122 – Decorator patterns + cell edit interaction tests.
+"""Decorator patterns + cell edit interaction tests.
 
 Tests that exercise decorated functions and how cash handles
 changes to decorators, decorated functions, and decorator arguments.

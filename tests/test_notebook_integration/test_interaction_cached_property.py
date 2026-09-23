@@ -1,4 +1,4 @@
-"""Batch 220 – Cached property and memoization interaction tests.
+"""Cached property and memoization interaction tests.
 
 Tests editing cells with memoization patterns
 and verifying correct cache invalidation.

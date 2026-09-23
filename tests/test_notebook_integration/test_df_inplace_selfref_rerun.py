@@ -1,14 +1,13 @@
 """Self-referential in-place DataFrame mutation must not accumulate on an
-isolated re-run (CAS-54).
+isolated re-run.
 
 `df['a'] = df['a'] * 2` (or `df['a'] += 1`, `df.iloc[i,j] += x`) re-run in
 isolation -- especially when the mutation and its display are in the SAME cell --
 previously DOUBLED again because in-place-mutated lineage-carrying receivers were
-excluded from the cell-entry reset (to preserve per-statement cache, the CAS-42
-design). The fix detects SELF-REFERENTIAL subscript/attr writes (target also read
-in the RHS) and routes them through the same reset used for method receivers
-(CAS-53). A write to a NEW column read from OTHER columns (`df['VolAdj'] =
-df.groupby('Close')...`) is NOT self-referential and keeps its cache (CAS-42).
+excluded from the cell-entry reset (to preserve per-statement cache for
+idempotent new-column writes). The fix detects SELF-REFERENTIAL subscript/attr writes (target also read
+in the RHS) and routes them through the same reset used for method receivers. A write to a NEW column read from OTHER columns (`df['VolAdj'] =
+df.groupby('Close')...`) is NOT self-referential and keeps its cache.
 """
 
 import pytest
@@ -66,18 +65,18 @@ def test_loc_scalar_self_ref_same_cell(nb_runner):
 
 
 def test_loc_masked_self_ref_same_cell(nb_runner):
-    """CAS-55: masked .loc write reads the SAME column spelled differently than the
+    """Masked .loc write reads the SAME column spelled differently than the
     target (df.loc[mask,'a'] = df['a']*2). Self-referential -> must not double."""
     _rerun_one_cell(nb_runner, DF100, "df.loc[df['a'] >= 50, 'a'] = df['a'] * 2\nprint(df['a'].iloc[50])", "100")
 
 
 def test_loc_masked_augmented_same_cell(nb_runner):
-    """CAS-55 control: masked .loc AugAssign df.loc[mask,'a'] += 1000."""
+    """Control: masked .loc AugAssign df.loc[mask,'a'] += 1000."""
     _rerun_one_cell(nb_runner, DF100, "df.loc[df['a'] >= 50, 'a'] += 1000\nprint(df['a'].iloc[50])", "1050")
 
 
 def test_loc_masked_new_column_preserved(nb_runner):
-    """CAS-42 guard: a masked write to a DIFFERENT column read from another is
+    """Guard: a masked write to a DIFFERENT column read from another is
     idempotent and must keep working (not over-reset)."""
     _rerun_one_cell(
         nb_runner,
@@ -88,7 +87,7 @@ def test_loc_masked_new_column_preserved(nb_runner):
 
 
 def test_new_column_from_other_columns_preserved(nb_runner):
-    """CAS-42 guard: a NEW column read from OTHER columns is idempotent and must
+    """Guard: a NEW column read from OTHER columns is idempotent and must
     keep working (not over-reset, not broken)."""
     _rerun_one_cell(
         nb_runner,
@@ -99,7 +98,7 @@ def test_new_column_from_other_columns_preserved(nb_runner):
 
 
 def test_tuple_unpack_column_swap_same_cell(nb_runner):
-    """CAS-56: df['a'], df['b'] = df['b'], df['a'] (column swap). A Tuple target
+    """df['a'], df['b'] = df['b'], df['a'] (column swap). A Tuple target
     with subscript writes reads & writes overlapping columns -> non-idempotent
     (re-run swaps back). Must reset so an isolated re-run swaps exactly once."""
     _rerun_one_cell(
@@ -111,7 +110,7 @@ def test_tuple_unpack_column_swap_same_cell(nb_runner):
 
 
 def test_tuple_unpack_self_scale_same_cell(nb_runner):
-    """CAS-56: df['a'], df['b'] = df['a']*2, df['b']*2 -- both self-referential."""
+    """df['a'], df['b'] = df['a']*2, df['b']*2 -- both self-referential."""
     _rerun_one_cell(
         nb_runner,
         "import pandas as pd\ndf = pd.DataFrame({'a': [1, 2, 3], 'b': [10, 20, 30]})",
@@ -121,7 +120,7 @@ def test_tuple_unpack_self_scale_same_cell(nb_runner):
 
 
 def test_tuple_unpack_new_columns_preserved(nb_runner):
-    """CAS-42 guard: new columns c,d derived from existing a,b are idempotent."""
+    """Guard: new columns c,d derived from existing a,b are idempotent."""
     _rerun_one_cell(
         nb_runner,
         "import pandas as pd\ndf = pd.DataFrame({'a': [1, 2, 3], 'b': [10, 20, 30]})",
@@ -131,7 +130,7 @@ def test_tuple_unpack_new_columns_preserved(nb_runner):
 
 
 def test_del_column_same_cell(nb_runner):
-    """CAS-56: del df['b'] + display in one cell. A second del KeyErrors, so df
+    """``del df['b']`` + display in one cell. A second del KeyErrors, so df
     must reset on isolated re-run (the column is present again at cell entry)."""
     nb_runner.create_notebook(
         [

@@ -1,4 +1,4 @@
-"""Batch 391: class property setter/deleter and computed attrs."""
+"""class property setter/deleter and computed attrs."""
 
 import pytest
 

@@ -1,4 +1,4 @@
-"""Batch 173 – Kernel restart with dirty state interaction tests.
+"""Kernel restart with dirty state interaction tests.
 
 Tests that establish cached state, restart the kernel, and verify
 that cache restoration works correctly after restart.

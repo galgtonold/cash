@@ -1,5 +1,5 @@
 """
-Batch 35: Multi-output cell patterns, display vs return, print ordering,
+Multi-output cell patterns, display vs return, print ordering,
 and assignment expression (walrus) patterns.
 """
 

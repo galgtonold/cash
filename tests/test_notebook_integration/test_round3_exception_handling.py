@@ -1,4 +1,4 @@
-"""Batch 78: Exception handling & custom exceptions — cash caching with error patterns."""
+"""Exception handling & custom exceptions — cash caching with error patterns."""
 
 import textwrap
 

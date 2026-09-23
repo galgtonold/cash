@@ -1,4 +1,4 @@
-"""Batch 121 – Class/OOP + cell edit interaction tests.
+"""Class/OOP + cell edit interaction tests.
 
 Tests that exercise class definitions, inheritance, method changes,
 and how cash tracks class-related dependencies through cell edits.

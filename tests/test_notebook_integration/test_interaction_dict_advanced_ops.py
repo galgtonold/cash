@@ -1,4 +1,4 @@
-"""Batch 346: dict.setdefault, dict.update, and chained dict ops."""
+"""dict.setdefault, dict.update, and chained dict ops."""
 
 import pytest
 

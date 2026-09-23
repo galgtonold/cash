@@ -1,5 +1,5 @@
 """
-Round 3 Batch 3: Cross-cell patterns, class instances, generators,
+Cross-cell patterns, class instances, generators,
 exception recovery, partial re-runs, multi-module cascades.
 
 Tests focus on complex real-world usage patterns that span multiple cells

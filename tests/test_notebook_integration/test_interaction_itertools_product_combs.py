@@ -1,4 +1,4 @@
-"""Batch 418: itertools.product and combinations_with_replacement."""
+"""itertools.product and combinations_with_replacement."""
 
 import pytest
 

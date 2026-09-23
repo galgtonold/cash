@@ -1,4 +1,4 @@
-"""Batch 399: datetime arithmetic and timedelta operations."""
+"""datetime arithmetic and timedelta operations."""
 
 import pytest
 

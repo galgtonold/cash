@@ -1,4 +1,4 @@
-"""Batch 247 – Dict merge/update operator patterns.
+"""Dict merge/update operator patterns.
 
 Tests dict union (|), update, merge patterns with edits.
 """

@@ -1,5 +1,5 @@
 """
-Batch 26: Generator, iterator, and functional patterns — yield, send/throw,
+Generator, iterator, and functional patterns — yield, send/throw,
 itertools, functools, closures, higher-order functions.
 """
 

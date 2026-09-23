@@ -1,7 +1,6 @@
 """When re-running a user's block fails, say whose failure it is.
 
-Found in the round-26 dress rehearsal (r25s2 replayed without openpyxl
-installed): a cell doing
+Found by replaying a real session without openpyxl installed: a cell doing
 
     with pd.ExcelWriter(path) as xw:
         summary.to_excel(xw, sheet_name="stores")
@@ -12,7 +11,7 @@ raised ModuleNotFoundError, and the NEXT cell then warned
     ModuleNotFoundError: No module named 'openpyxl' ... Nothing in your code
     caused this and re-running is safe ... Please report it
 
-A tester reads that and files a bug against cash. What actually happened: the
+A user reads that and files a bug against cash. What actually happened: the
 next cell needed upstream state, cash replayed the ``with`` block to rebuild it,
 and the block failed again for the same reason as the first time -- a package
 the environment does not have.

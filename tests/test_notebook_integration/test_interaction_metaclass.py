@@ -1,5 +1,5 @@
 """
-Batch 293: Metaclass interaction tests.
+Metaclass interaction tests.
 Tests that editing classes using metaclasses properly invalidates
 downstream cells.
 """

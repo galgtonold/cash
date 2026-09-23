@@ -1,4 +1,4 @@
-"""Batch 264 – Numeric precision and math computation edits.
+"""Numeric precision and math computation edits.
 
 Tests math operations, rounding, precision with edits.
 """

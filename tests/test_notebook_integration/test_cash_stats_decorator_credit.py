@@ -1,6 +1,6 @@
-"""CAS-222: %cash_stats must credit @cash.cache hits, not report them as a cost.
+"""%cash_stats must credit @cash.cache hits, not report them as a cost.
 
-P2's round-10 finding: in an ML session (expensive work behind the decorator,
+In an ML session (expensive work behind the decorator,
 which is the docs' own recommendation), a warm pass that avoided a 30s fit via a
 decorator hit made %cash_stats print "cash cost you 27.3s" — the exact inverse
 of cash's value — while `cache_info()` and `explain()` were both correct.
@@ -12,8 +12,8 @@ came from the decorator, so the wrapping statement only did a fast lookup and
 read as cheap COMPUTED work.
 
 (The *dramatic* -27s magnitude also needed ~29s of phantom overhead, which a
-controlled mock never reproduces and which P2's session had via the CAS-218
-discovery thrash — now fixed. This suite pins the reporting gap, which is the
+controlled mock never reproduces and which the reported session had via a
+notebook-discovery thrash — now fixed. This suite pins the reporting gap, which is the
 part reproducible in-process.)
 
 Compute cost is mocked with ``time.sleep`` so the numbers are deterministic; the
@@ -47,7 +47,7 @@ def test_decorator_hit_credited_and_verified_in_one_session(nb_runner):
     the result -- the value crosses the second call only through the decorator,
     which is exactly the case the old accounting could not see. The first call
     measures the compute this session, so the second (a hit) is creditable as
-    verified under the CAS-157 rule, and the headline net is a real win.
+    verified under the verified-savings rule, and the headline net is a real win.
     """
     nb_runner.create_notebook(
         [

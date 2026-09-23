@@ -1,4 +1,4 @@
-"""Batch 496: operator itemgetter attrgetter sort patterns."""
+"""operator itemgetter attrgetter sort patterns."""
 
 import pytest
 

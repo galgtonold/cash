@@ -1,4 +1,4 @@
-"""Batch 387: dict inversion and bidirectional mapping."""
+"""dict inversion and bidirectional mapping."""
 
 import pytest
 

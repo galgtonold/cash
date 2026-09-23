@@ -1,4 +1,4 @@
-"""Batch 251 – Type annotation and typed data patterns.
+"""Type annotation and typed data patterns.
 
 Tests typed function signatures with edits, verifying runtime behavior.
 """

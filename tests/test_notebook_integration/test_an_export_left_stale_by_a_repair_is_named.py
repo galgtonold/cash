@@ -1,6 +1,6 @@
 """A repair that rebuilds an export's input says the export is now out of date.
 
-Round 28 (r28s3, r28s5): an upstream edit, then a run of a cell further down.
+An upstream edit, then a run of a cell further down.
 The repair rebuilt ``sweep`` for that cell, but not ``sweep.to_csv(...)`` in
 the cell between -- nothing the run needs reads the file, and a plain kernel
 leaves a cell the user did not run alone too. The file kept the pre-edit

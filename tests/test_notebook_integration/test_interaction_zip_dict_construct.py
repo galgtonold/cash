@@ -1,5 +1,5 @@
 """
-Batch 315: zip-to-dict construction patterns with caching.
+zip-to-dict construction patterns with caching.
 Tests zip pairing, dict construction, key/value extraction, and edit propagation.
 """
 

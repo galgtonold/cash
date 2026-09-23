@@ -1,4 +1,4 @@
-"""Batch 481: abstract base class with abc module."""
+"""abstract base class with abc module."""
 
 import pytest
 

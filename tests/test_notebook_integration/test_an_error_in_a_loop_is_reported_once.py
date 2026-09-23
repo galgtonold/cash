@@ -1,6 +1,6 @@
 """An error raised in a loop body is reported once, as the user's own.
 
-Round 25's r25s3 and r25s2: one KeyError printed a ~100-line traceback three
+One KeyError printed a ~100-line traceback three
 times, through cash's internals (for_handler.py, call_unit.py). The control
 structure handlers logged the exception they then hand back to the cell at
 ERROR level with its traceback; the cell raises it and IPython prints it

@@ -1,7 +1,7 @@
 """A function that changes its argument in place is not "restored" as a no-op.
 
-Round 28, r28s4, WRONG and BLOCKING for scanpy, 4/4 plain + 4/4 scanpy +
-1/1 in their pipeline (``r28s4/repro/restart_inplace``). All of scanpy is
+A wrong answer that blocked scanpy use, 4/4 plain + 4/4 scanpy + 1/1 in a
+real pipeline. All of scanpy is
 written this way -- ``sc.pp.calculate_qc_metrics(adata, inplace=True)``,
 ``sc.tl.leiden(hv)`` -- and so is a project helper like
 
@@ -22,7 +22,7 @@ import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 
-#: r28s4's module and cells exactly (``r28s4/repro/restart_inplace``). Two
+#: The reported module and cells exactly. Two
 #: simpler versions of this file passed on the broken build.
 MODULE = (
     "import numpy as np\n"

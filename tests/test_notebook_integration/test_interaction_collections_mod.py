@@ -1,4 +1,4 @@
-"""Batch 237 – Collections module interaction tests.
+"""Collections module interaction tests.
 
 Tests editing cells using collections types like defaultdict,
 Counter, OrderedDict, deque.

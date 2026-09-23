@@ -1,6 +1,6 @@
 """A helper that saves a chart runs every time, as the inline savefig does.
 
-Round 22 (r22s3): ``save(fig, "suspect.png")`` -- a notebook helper doing
+``save(fig, "suspect.png")`` -- a notebook helper doing
 ``fig.tight_layout(); fig.savefig(...); plt.close(fig)`` -- was served from
 the statement cache on a warm Restart & Run All, so the deck went out
 without the chart, 3/3. Whether it happened depended on whether the save

@@ -1,4 +1,4 @@
-"""Batch 83 – complex inheritance: diamonds, MRO, super() chains."""
+"""complex inheritance: diamonds, MRO, super() chains."""
 
 import textwrap
 

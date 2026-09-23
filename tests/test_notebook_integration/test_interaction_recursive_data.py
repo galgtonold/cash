@@ -1,4 +1,4 @@
-"""Batch 217 – Recursive data structure interaction tests.
+"""Recursive data structure interaction tests.
 
 Tests editing cells with recursive data structures
 (trees, linked lists) and verifying propagation.

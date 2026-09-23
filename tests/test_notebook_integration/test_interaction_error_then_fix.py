@@ -1,4 +1,4 @@
-"""Batch 192 – Error-then-fix pattern interaction tests.
+"""Error-then-fix pattern interaction tests.
 
 Tests where cells produce errors, then are fixed, and
 the cache correctly handles the recovery.

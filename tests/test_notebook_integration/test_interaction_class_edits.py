@@ -1,4 +1,4 @@
-"""Batch 145 – Class and OOP interaction tests.
+"""Class and OOP interaction tests.
 
 Tests where users define classes in cells, edit methods/attributes,
 instantiate objects, and verify caching tracks OOP changes.

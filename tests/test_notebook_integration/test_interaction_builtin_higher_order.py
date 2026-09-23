@@ -1,4 +1,4 @@
-"""Batch 368: any/all/filter/map builtins with lambdas and edits."""
+"""any/all/filter/map builtins with lambdas and edits."""
 
 import pytest
 

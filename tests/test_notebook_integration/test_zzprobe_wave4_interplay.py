@@ -1,4 +1,4 @@
-"""Adversarial probes, wave 4 (2026-07-02): decorator <-> notebook interplay.
+"""Adversarial probes: decorator <-> notebook interplay.
 
 The decorator's arg hash prefers a ``_cash_lineage_hash`` attribute over
 content (core.py get_arg_hash). Inside a cash-enabled notebook the lineage

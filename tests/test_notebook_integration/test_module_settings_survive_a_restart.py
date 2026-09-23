@@ -1,6 +1,6 @@
 """A setting made on a module above is in force when a cell below runs after a restart.
 
-Round 24's r24s2 styled every chart with ``plt.rcParams.update({...})`` in a
+A user styled every chart with ``plt.rcParams.update({...})`` in a
 setup cell. After a kernel restart, running the chart cell first rebuilt what
 it needed -- the data, the imports -- and drew all eight pages in matplotlib's
 default style: the statement setting the style produces no variable, so

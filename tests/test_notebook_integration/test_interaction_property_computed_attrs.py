@@ -1,4 +1,4 @@
-"""Batch 407: property decorators and computed attributes."""
+"""property decorators and computed attributes."""
 
 import pytest
 

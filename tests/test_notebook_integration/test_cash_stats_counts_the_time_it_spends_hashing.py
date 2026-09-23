@@ -1,6 +1,6 @@
 """Time cash spends keying a call is reported as overhead, not as your compute.
 
-Round 30, r30s4: a paired Restart & Run All measured cash 370 s slower than
+A paired Restart & Run All measured cash 370 s slower than
 plain Jupyter while ``%cash_stats`` reported 210 s of overhead. Their loop
 called a helper with a ~1 GB argument, and keying it hashes that argument --
 inside the statement, so it counted as the user's own compute and cancelled

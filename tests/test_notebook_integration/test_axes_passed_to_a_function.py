@@ -1,6 +1,6 @@
 """An Axes handed to a plain function is drawn on, so that call always runs.
 
-Round 22 (tester-session tests, r22s1's readout): a forest plot drawn through
+Found by the session-replay tests (the A/B readout): a forest plot drawn through
 ``forest(axes[0], df, title)`` was served from the cache on a warm re-run --
 the rule that routes an Axes argument as drawn-on sat behind an early return
 for statements without a method call -- and the saved chart had an empty
@@ -47,7 +47,7 @@ def test_a_warm_rerun_draws_the_same_chart(nb_runner):
     assert hashlib.sha256(png.read_bytes()).hexdigest() == first, "the warm run drew a different chart"
 
 
-# Round 23 (r23s1): the same helper called inside a loop, one figure per item.
+# The same helper called inside a loop, one figure per item.
 # A loop body is decomposed per iteration and its calls are call-cached, which
 # the fix above never reached -- the call cache served `draw(ax, ...)` and the
 # re-run saved blank charts.

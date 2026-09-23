@@ -1,5 +1,5 @@
 """
-Batch 316: math module chain operations with caching and edit propagation.
+math module chain operations with caching and edit propagation.
 Tests math.sqrt, math.pow, math.log chains and invalidation on edit.
 """
 

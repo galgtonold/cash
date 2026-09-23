@@ -1,6 +1,6 @@
 """A loop over data that changed is not trusted -- and neither is what it picked.
 
-Round 22 (r22s4): a backtest built its table with ``rows.append(...)`` over a
+A backtest built its table with ``rows.append(...)`` over a
 grid and chose ``BEST_K`` from it. A new file landed in the globbed folder;
 the forecast cell re-read the data but was served the ``BEST_K`` tuned on the
 old data, and the metrics cell printed the old backtest into a fresh file.

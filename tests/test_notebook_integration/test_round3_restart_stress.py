@@ -1,5 +1,5 @@
 """
-Batch 18: Kernel restart + disk restore stress tests.
+Kernel restart + disk restore stress tests.
 
 These tests focus on the most fragile part of the caching system: restoring
 cached results after a kernel restart. Tests verify that:

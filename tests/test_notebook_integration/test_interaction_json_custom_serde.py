@@ -1,4 +1,4 @@
-"""Batch 358: json serialization/deserialization with custom objects."""
+"""json serialization/deserialization with custom objects."""
 
 import pytest
 

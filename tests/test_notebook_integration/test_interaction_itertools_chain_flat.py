@@ -1,4 +1,4 @@
-"""Batch 427: itertools.chain and chain.from_iterable."""
+"""itertools.chain and chain.from_iterable."""
 
 import pytest
 

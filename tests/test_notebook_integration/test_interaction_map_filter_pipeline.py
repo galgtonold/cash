@@ -1,4 +1,4 @@
-"""Batch 515: map filter reduce functional pipeline."""
+"""map filter reduce functional pipeline."""
 
 import pytest
 

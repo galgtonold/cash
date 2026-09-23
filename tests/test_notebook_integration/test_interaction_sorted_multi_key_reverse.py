@@ -1,4 +1,4 @@
-"""Batch 526: sorted with multiple keys and reverse."""
+"""sorted with multiple keys and reverse."""
 
 import pytest
 

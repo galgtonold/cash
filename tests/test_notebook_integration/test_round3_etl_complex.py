@@ -1,4 +1,4 @@
-"""Batch 73: Complex multi-cell ETL pipeline — cash caching with realistic data transforms."""
+"""Complex multi-cell ETL pipeline — cash caching with realistic data transforms."""
 
 import textwrap
 

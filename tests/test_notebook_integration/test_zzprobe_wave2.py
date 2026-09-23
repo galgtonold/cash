@@ -1,4 +1,4 @@
-"""Adversarial probes, wave 2 (2026-07-02): channels no prior sweep covered.
+"""Adversarial probes: channels no prior sweep covered.
 
 Process-global state, function-object rebinding via patching, control-flow
 definitions, script deps, statement-level skip effectiveness, restart+persist
@@ -34,7 +34,7 @@ Each test = one mechanism:
         promise; editing the print in a two-statement cell must not recompute
         the expensive first statement.
 14. test_user_class_instances_restart_persist   — restart+persist with __main__
-        class instances: correct values, no AttributeError (CAS-93 family).
+        class instances: correct values, no AttributeError.
 15. test_lambda_crossing_cells_restart_persist  — lambda-valued var + restart
         with persist: graceful re-execution, correct value.
 """

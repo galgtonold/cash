@@ -1,4 +1,4 @@
-"""Batch 261 – Complex multi-step data pipeline patterns.
+"""Complex multi-step data pipeline patterns.
 
 Tests multi-cell data transformation pipelines with edits at different stages.
 """

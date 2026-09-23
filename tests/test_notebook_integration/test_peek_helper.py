@@ -1,10 +1,10 @@
-"""`NotebookTestRunner.peek` reads LIVE kernel state (CAS-267).
+"""`NotebookTestRunner.peek` reads LIVE kernel state.
 
 Integration tests assert on `get_output`, which is the right instrument for
 "what does the user see" and the wrong one for "what does the kernel hold". A
 cached statement's stdout is **replayed on a hit**, so reading state through a
 printed cell reports what was on screen when the entry was written. Measured
-during CAS-260, that made a broken arm look correct and cost a round of the
+while fixing callee global writes, that made a broken arm look correct and cost a round of the
 investigation.
 
 `peek` was hand-rolled identically in nine probe files before it moved here,
@@ -26,7 +26,7 @@ a notebook cell. That was the third naive version tried, and it passes
 everything here -- `test_peek_leaves_the_notebook_untouched` catches the cell
 being *recorded*, but a cell run with `store_history=False` would slip through.
 The reason no test pins it is that the divergence it would cause needs a served
-statement whose printed state is stale, and CAS-260 removed that shape by
+statement whose printed state is stale, and the callee-global-write fix removed that shape by
 skip-caching exactly those statements. Worth knowing before trusting this file
 to catch a rewrite of the evaluation path.
 """
@@ -48,7 +48,7 @@ def test_get_output_is_a_recording_and_peek_is_live(nb_runner):
 
     The first draft of this test used a cached statement whose callee mutates a
     global, on the theory that a served re-run would leave the printed text
-    ahead of the live value. It does not: CAS-260 skip-caches exactly that
+    ahead of the live value. It does not: cash skip-caches exactly that
     statement so it re-executes, and the two agree. The stale-reading trap this
     helper exists for is a property of *recorded output*, which is what this
     asserts.

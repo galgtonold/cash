@@ -1,4 +1,4 @@
-"""Batch 361: zip_longest, pairwise, and batched iteration patterns."""
+"""zip_longest, pairwise, and batched iteration patterns."""
 
 import pytest
 

@@ -1,6 +1,6 @@
 """The badge's Upstream list is in the order the statements stand in the notebook.
 
-Round 25 (r25s1): ``^CACHED: results[name] = evaluate(...)`` x4 above
+``^CACHED: results[name] = evaluate(...)`` x4 above
 ``^EXECUTED: results = {}`` -- restores were listed first and re-runs after
 them, an order nothing ran in, which made the report hard to read.
 """

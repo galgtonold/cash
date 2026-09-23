@@ -1,5 +1,5 @@
 """
-Batch 300: Deep caching status verification tests.
+Deep caching status verification tests.
 Verify RESTORED/COMPUTED/SKIPPED status is correct across scenarios.
 """
 

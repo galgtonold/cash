@@ -1,5 +1,5 @@
 """
-Batch 329: OrderedDict patterns with caching.
+OrderedDict patterns with caching.
 Tests OrderedDict operations, move_to_end, and edit propagation.
 """
 

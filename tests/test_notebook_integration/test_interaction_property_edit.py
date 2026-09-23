@@ -1,4 +1,4 @@
-"""Batch 271 – Property and descriptor edit patterns.
+"""Property and descriptor edit patterns.
 
 Tests @property, computed properties with class edits.
 """

@@ -3,7 +3,7 @@
 ``ControlStructureProcessor`` records what a loop left behind together with
 the lineages of everything it read, and ``VirtualLineage`` adopts that record
 when those lineages still hold. Adopting it is what stops a loop, and
-everything below it, re-running after a restart (round 23).
+everything below it, re-running after a restart.
 
 The record was built from ``TrackingState.variable_lineage`` alone, which has
 no entry for a name bound in the same cell as ``%cash_on`` -- cash was not
@@ -18,8 +18,8 @@ bottom cell: 0.93 s re-running the whole chain with ``DATA`` bound in the
 data, same everything else.
 
 Rare but not hypothetical: zero occurrences in ~490 recorded comparisons
-across 1,515 loop / restart / upstream tests, and round-27 tester s4's
-notebook, whose cell 0 is
+across 1,515 loop / restart / upstream tests, and one real notebook, whose
+cell 0 is
 
     import cash
     %cash_on

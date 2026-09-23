@@ -1,4 +1,4 @@
-"""Batch 338: dataclass field defaults, post_init, and frozen edits."""
+"""dataclass field defaults, post_init, and frozen edits."""
 
 import pytest
 

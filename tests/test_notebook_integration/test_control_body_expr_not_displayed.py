@@ -1,6 +1,6 @@
 """A bare expression inside a for/if/try body is not displayed -- as in Jupyter.
 
-Round 22 (r22s2): a chart cell labelling bars with ``ax.text(...)`` in a
+A chart cell labelling bars with ``ax.text(...)`` in a
 nested loop showed 151 ``Text(0, 0, '2582')`` reprs above the table. Jupyter
 displays only a cell's LAST top-level expression; cash processes each body
 statement on its own and treated every one as the last.

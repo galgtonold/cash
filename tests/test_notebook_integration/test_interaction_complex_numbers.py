@@ -1,4 +1,4 @@
-"""Batch 352: complex number operations and cmath."""
+"""complex number operations and cmath."""
 
 import pytest
 

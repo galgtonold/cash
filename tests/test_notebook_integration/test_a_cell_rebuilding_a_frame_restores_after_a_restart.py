@@ -1,6 +1,6 @@
 """A cell that rebuilds one frame in steps restores after a restart, not re-runs.
 
-Round 25 (r25s2): the cleaning cell rebuilds ``sales`` through a dozen
+The cleaning cell rebuilds ``sales`` through a dozen
 ``sales[...] = ...`` steps. Only the last version is written to disk -- the
 others would be copies of a 500 MB frame nothing restores -- and after a
 restart Run All re-ran all of them: 6.6-8 s, "saved 0.33s". The cell now jumps

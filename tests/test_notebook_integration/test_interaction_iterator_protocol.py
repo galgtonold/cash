@@ -1,4 +1,4 @@
-"""Batch 230 – Iterator and protocol interaction tests.
+"""Iterator and protocol interaction tests.
 
 Tests editing cells with custom iterators, context managers,
 and protocol-based patterns.

@@ -1,4 +1,4 @@
-"""Batch 127 – Real-world workflow simulation interaction tests.
+"""Real-world workflow simulation interaction tests.
 
 Tests that simulate realistic data analysis workflows with multiple
 rounds of exploration, parameter tuning, and iterative refinement.
@@ -118,12 +118,12 @@ class TestExploratoryAnalysis:
         nb_runner.run_all()
         assert "result = 55" in nb_runner.get_output(2)
 
-        # Round 2: average
+        # Edit 2: average
         nb_runner.set_cell_source(2, "# Analysis\nresult = sum(nums) / len(nums)\nprint(f'result = {result}')")
         nb_runner.run_all()
         assert "result = 11.0" in nb_runner.get_output(2)
 
-        # Round 3: max - min range
+        # Edit 3: max - min range
         nb_runner.set_cell_source(2, "# Analysis\nresult = max(nums) - min(nums)\nprint(f'result = {result}')")
         nb_runner.run_all()
         assert "result = 24" in nb_runner.get_output(2)

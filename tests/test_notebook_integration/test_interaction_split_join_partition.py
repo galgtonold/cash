@@ -1,4 +1,4 @@
-"""Batch 469: string split join partition operations."""
+"""string split join partition operations."""
 
 import pytest
 

@@ -1,4 +1,4 @@
-"""Batch 147 – Selective cell execution interaction tests.
+"""Selective cell execution interaction tests.
 
 Tests where users run cells out of order, skip cells,
 run subsets of cells, and verify cache consistency.

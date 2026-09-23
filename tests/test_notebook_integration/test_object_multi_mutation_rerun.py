@@ -1,14 +1,14 @@
-"""Isolated re-run of an object mutated by a no-output method call (CAS-53).
+"""Isolated re-run of an object mutated by a no-output method call.
 
 A lineage-carrying object mutated in place by a bare method call
 (``b.items.append(..)``) skips the per-statement cache (no output), so on an
-isolated re-run it would accumulate. The CAS-8 method-mutation lineage bump makes
+isolated re-run it would accumulate. The method-mutation lineage bump makes
 the receiver lineage-carrying, diverting it from the no-lineage accumulation
 guard; the fix routes such METHOD receivers back through that guard so the
 receiver is restored to its cell-entry base.
 
 Scoped to method receivers, so subscript/attribute in-place writes
-(``df['col']=..``) keep their per-statement cache (the CAS-42 design) — covered
+(``df['col']=..``) keep their per-statement cache (by design) — covered
 by ``test_df_subscript_self_scale_not_over_reset`` below and the voladj suite.
 """
 
@@ -56,7 +56,7 @@ def test_single_method_append_still_ok(nb_runner):
 
 
 def test_df_subscript_self_scale_not_over_reset(nb_runner):
-    """CAS-42 guard: a subscript in-place write is NOT a method receiver, so it
+    """Guard: a subscript in-place write is NOT a method receiver, so it
     keeps its per-statement cache and still re-runs idempotently (not doubled)."""
     _rerun(
         nb_runner,

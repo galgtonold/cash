@@ -1,6 +1,6 @@
 """A value restored from cache still has to notice its inputs were rebuilt.
 
-Round 26's second wrong number (r26s4, support-ticket triage). A cell fitted a
+A wrong number in a support-ticket triage notebook. A cell fitted a
 model per queue in a loop and derived a table from the appended rows::
 
     per_queue, rows = {}, []
@@ -35,7 +35,7 @@ In the same run `per_queue` reached the comparison, was found mismatched, and
 was rebuilt. The difference was the missing provenance, not the trust rule.
 
 The recipe needs all four of these, which is why four minimised versions by the
-tester and five by the maintainer all came out clean:
+reporter and five by the maintainer all came out clean:
 
 1. the derived statement must be expensive enough to be CACHED,
 2. a kernel restart, so it is RESTORED rather than executed,

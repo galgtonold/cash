@@ -1,4 +1,4 @@
-"""Batch 439: itertools.islice and takewhile/dropwhile."""
+"""itertools.islice and takewhile/dropwhile."""
 
 import pytest
 

@@ -1,5 +1,5 @@
 """
-Batch 296: Chained method calls and builder pattern interaction tests.
+Chained method calls and builder pattern interaction tests.
 Tests that editing builder/fluent API patterns properly invalidates
 the final built object downstream.
 """

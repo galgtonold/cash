@@ -1,4 +1,4 @@
-"""Batch 485: zip_longest and starmap from itertools."""
+"""zip_longest and starmap from itertools."""
 
 import pytest
 

@@ -1,4 +1,4 @@
-"""Batch 473: enum auto and custom value methods."""
+"""enum auto and custom value methods."""
 
 import pytest
 

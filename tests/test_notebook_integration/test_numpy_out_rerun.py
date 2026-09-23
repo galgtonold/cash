@@ -1,4 +1,4 @@
-"""numpy ufunc ``out=`` in-place mutation correctness (CAS-52).
+"""numpy ufunc ``out=`` in-place mutation correctness.
 
 ``np.add(a, x, out=a)`` writes ``a`` in place via the out= kwarg. Detection was
 added in two symmetric places: the mutation analyzer (all_mutated_vars -> the

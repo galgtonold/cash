@@ -1,4 +1,4 @@
-"""Batch 452: string isdigit/isalpha/isalnum validation."""
+"""string isdigit/isalpha/isalnum validation."""
 
 import pytest
 

@@ -1,4 +1,4 @@
-"""Batch 134 – Simulation cache edge case interaction tests (advanced).
+"""Simulation cache edge case interaction tests (advanced).
 
 Tests that specifically stress the simulation cache and upstream
 detection logic with tricky patterns that could cause divergence.

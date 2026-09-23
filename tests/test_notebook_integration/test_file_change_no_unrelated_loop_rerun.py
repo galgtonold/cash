@@ -1,4 +1,4 @@
-"""Integration tests for CAS-99: file-dep staleness must not disable loop trust.
+"""Integration tests: file-dep staleness must not disable loop trust.
 
 A changed (or merely mtime-touched) file dependency used to set a GLOBAL
 "cache had a hash mismatch" flag, conflating file staleness with code

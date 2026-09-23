@@ -1,4 +1,4 @@
-"""Batch 433: tuple operations immutability and named access."""
+"""tuple operations immutability and named access."""
 
 import pytest
 

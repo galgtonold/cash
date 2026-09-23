@@ -1,4 +1,4 @@
-"""Batch 189 – Regex and string method chain interaction tests.
+"""Regex and string method chain interaction tests.
 
 Tests editing regex patterns, substitutions, and chained
 string method calls.

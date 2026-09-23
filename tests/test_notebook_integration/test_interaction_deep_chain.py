@@ -1,4 +1,4 @@
-"""Batch 163 – Deep dependency chain interaction tests.
+"""Deep dependency chain interaction tests.
 
 Tests with long chains of cells (5+ cells) where a change at any
 point in the chain must properly propagate through all downstream cells.

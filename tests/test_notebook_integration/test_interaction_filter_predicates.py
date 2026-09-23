@@ -1,4 +1,4 @@
-"""Batch 450: filter with None and lambda predicates."""
+"""filter with None and lambda predicates."""
 
 import pytest
 

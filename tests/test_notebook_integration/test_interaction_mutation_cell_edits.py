@@ -1,4 +1,4 @@
-"""Batch 138 – Container/collection mutation + cell edit interaction tests.
+"""Container/collection mutation + cell edit interaction tests.
 
 Tests that exercise list/dict/set mutations across cells,
 combined with cell edits to verify correct cache behavior

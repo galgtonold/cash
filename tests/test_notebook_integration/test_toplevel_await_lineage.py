@@ -1,6 +1,6 @@
 """Top-level-await (IPython autoawait) cells participate in cash's pipeline.
 
-Regression for CAS-92 stage 1 (correctness only — caching the awaited result
+Regression for stage 1 (correctness only — caching the awaited result
 is stage 2 and deliberately out of scope here).
 
 ipykernel dispatches cells containing top-level ``await`` through

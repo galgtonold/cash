@@ -1,5 +1,5 @@
 """
-Batch 41: Config file patterns, environment variables, and dynamic settings
+Config file patterns, environment variables, and dynamic settings
 across notebook cells — common patterns in data science notebooks.
 """
 

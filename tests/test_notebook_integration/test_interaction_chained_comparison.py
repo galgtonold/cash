@@ -1,4 +1,4 @@
-"""Batch 392: chained comparison and identity operators."""
+"""chained comparison and identity operators."""
 
 import pytest
 

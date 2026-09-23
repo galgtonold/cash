@@ -1,4 +1,4 @@
-"""Batch 51: Regex & text processing — cash caching with re, textwrap, string ops."""
+"""Regex & text processing — cash caching with re, textwrap, string ops."""
 
 import textwrap
 

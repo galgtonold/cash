@@ -1,4 +1,4 @@
-"""Batch 123 – Exception handling code + cell edit interaction tests.
+"""Exception handling code + cell edit interaction tests.
 
 Tests that exercise try/except blocks, error recovery code paths,
 and how cash handles errors and recovers across cell edits.

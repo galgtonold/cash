@@ -1,4 +1,4 @@
-"""Batch 398: custom __add__, __mul__ operator overloading."""
+"""custom __add__, __mul__ operator overloading."""
 
 import pytest
 
