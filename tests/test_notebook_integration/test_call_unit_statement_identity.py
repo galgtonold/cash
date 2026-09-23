@@ -79,14 +79,12 @@ def test_two_statements_same_call_text_get_independent_call_caches(nb_runner, tm
     log = tmp_path / "calls.log"
     first = (
         "vals = {}\n"
-        "# @cash:cache-calls\n"
         "for step in ['a', 'b', 'c']:\n"
         "    vals[step] = fetch_next(conn)\n"
         "print('FIRST', sorted(vals.items()))\n"
     )
     second = (
         "other = {}\n"
-        "# @cash:cache-calls\n"
         "for step in ['a', 'b', 'c']:\n"
         "    other[step] = fetch_next(conn)\n"
         "print('SECOND', sorted(other.items()))\n"
@@ -144,11 +142,7 @@ def test_reorder_within_one_statement_still_reuses_cached_calls(nb_runner, tmp_p
         "    return step * 2\n"
     )
     loop_code = (
-        "vals = {{}}\n"
-        "# @cash:cache-calls\n"
-        "for step in {order}:\n"
-        "    vals[step] = fetch_pure(step)\n"
-        "print('OUT', sorted(vals.items()))\n"
+        "vals = {{}}\nfor step in {order}:\n    vals[step] = fetch_pure(step)\nprint('OUT', sorted(vals.items()))\n"
     )
     nb_runner.create_notebook([pure_defs, loop_code.format(order=[1, 2, 3])])
     nb_runner.start_kernel()
@@ -191,11 +185,7 @@ def test_reorder_re_runs_a_stateful_callee_and_matches_the_oracle(nb_runner, tmp
     """
     log = tmp_path / "calls.log"
     loop_code = (
-        "vals = {{}}\n"
-        "# @cash:cache-calls\n"
-        "for step in {order}:\n"
-        "    vals[step] = fetch_next(conn)\n"
-        "print('OUT', sorted(vals.items()))\n"
+        "vals = {{}}\nfor step in {order}:\n    vals[step] = fetch_next(conn)\nprint('OUT', sorted(vals.items()))\n"
     )
     nb_runner.create_notebook([_defs(log), loop_code.format(order=["a", "b", "c"])])
     nb_runner.start_kernel()

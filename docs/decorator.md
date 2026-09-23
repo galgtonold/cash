@@ -1085,7 +1085,7 @@ def jitter():
     return np.random.randn()
 ```
 
-The notebook's [`# @cash:allow-random`](annotations.md#cashallow-random-alias-allowrandom)
+The notebook's [`# @cash:allow-random`](annotations.md#cashallow-random)
 comment is also honoured inside a decorated function's body.
 
 !!! note

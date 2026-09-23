@@ -32,11 +32,12 @@ class TestAnnotationParsing(unittest.TestCase):
         self.assertTrue(ann.no_cache)
         self.assertFalse(ann.persist)
 
-    def test_parse_nocache_without_hyphen(self):
-        """@cash:nocache (without hyphen) should also work."""
-        ann = parse_annotation_line("# @cash:nocache")
-        self.assertIsNotNone(ann)
-        self.assertTrue(ann.no_cache)
+    def test_only_canonical_spellings_parse(self):
+        """Run-together spellings and the retired ``cache-calls`` are unknown
+        directives, so they parse to nothing."""
+        for word in ("nocache", "allowrandom", "cachefit", "nocachecalls", "cache-calls"):
+            with self.subTest(word=word):
+                self.assertIsNone(parse_annotation_line(f"# @cash:{word}"))
 
     def test_parse_nocache_space_after_colon(self):
         """A space after the colon (`@cash: no-cache`) must still parse -- the

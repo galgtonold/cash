@@ -5,11 +5,6 @@ and ``tests/test_notebook_integration/test_cache_calls_directive.py`` for the
 behavioural flip). This is the escape hatch: it disables interception for a
 single statement, or -- from a cell's leading comment block, alongside
 ``no-cache`` -- for every statement in the cell.
-
-``# @cash:cache-calls`` (the old opt-in) is kept parseable so notebooks
-written under the opt-in era don't error; ``test_cache_calls_annotation.py``
-already covers that it still sets ``cache_calls`` (now inert). What's new
-here is ``no_cache_calls`` itself.
 """
 
 import unittest
@@ -24,11 +19,6 @@ class TestNoCacheCallsAnnotation(unittest.TestCase):
         self.assertTrue(ann.no_cache_calls)
         self.assertFalse(ann.no_cache, "must not disable the statement cache too")
 
-    def test_hyphenless_spelling_is_accepted(self):
-        ann = parse_annotation_line("# @cash:nocachecalls")
-        self.assertIsNotNone(ann)
-        self.assertTrue(ann.no_cache_calls)
-
     def test_space_after_colon_is_tolerated(self):
         """The spaced form users actually write must not be silently ignored,
         matching the precedent already set for every other directive."""
@@ -38,7 +28,7 @@ class TestNoCacheCallsAnnotation(unittest.TestCase):
 
     def test_default_is_off(self):
         """Absent the directive, the opt-out is not engaged -- interception
-        proceeds (this is the flip: cache_calls used to gate it IN)."""
+        proceeds."""
         self.assertFalse(CacheAnnotation().no_cache_calls)
 
     def test_has_directives_reports_it(self):
@@ -65,14 +55,6 @@ class TestNoCacheCallsAnnotation(unittest.TestCase):
         both = only_calls.merge(only_stmt)
         self.assertTrue(both.no_cache_calls)
         self.assertTrue(both.no_cache)
-
-    def test_cache_calls_directive_still_parses_as_a_noop(self):
-        """Old notebooks carrying the opt-in directive must not error; it
-        just does nothing now, and must not imply the opt-out either."""
-        ann = parse_annotation_line("# @cash:cache-calls")
-        self.assertIsNotNone(ann)
-        self.assertTrue(ann.cache_calls)
-        self.assertFalse(ann.no_cache_calls)
 
     def test_propagates_from_the_cell_header(self):
         """Like no-cache, no-cache-calls reaches every top-level statement in

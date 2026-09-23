@@ -4,15 +4,14 @@ Annotations are `#`-comment directives that tweak Cash's per-statement caching d
 
 ## At a glance
 
-| Directive | Aliases | Takes value | Effect |
-|---|---|---|---|
-| `# @cash:persist` | — | no | Force-cache this statement, even if the cost model would skip it. |
-| `# @cash:no-cache` | `nocache` | no | Never cache this statement. Wins over `persist`. |
-| `# @cash:ttl=N` | — | non-negative int (seconds) | Override the default TTL for this statement. |
-| `# @cash:allow-random` | `allowrandom` | no | Suppress the unseeded-randomness warning for this statement. Advisory only — see [below](#cashallow-random-alias-allowrandom). |
-| `# @cash:cache-fit` | `cachefit` | no | Opt an in-place estimator fit — `estimator.fit(X, y)`, or `X2 = estimator.fit_transform(X)` — in to caching. Off by default — see [below](#cashcache-fit-alias-cachefit). |
-| `# @cash:no-cache-calls` | `nocachecalls` | no | Turn off caching the expensive **call inside** a statement. **On by default** — see [below](#call-level-caching-default-and-cashno-cache-calls-alias-nocachecalls). |
-| `# @cash:cache-calls` | `cachecalls` | no | Legacy. Parses without error but does nothing — call-level caching no longer needs opting in. |
+| Directive | Takes value | Effect |
+|---|---|---|
+| `# @cash:persist` | no | Force-cache this statement, even if the cost model would skip it. |
+| `# @cash:no-cache` | no | Never cache this statement. Wins over `persist`. |
+| `# @cash:ttl=N` | non-negative int (seconds) | Override the default TTL for this statement. |
+| `# @cash:allow-random` | no | Suppress the unseeded-randomness warning for this statement. Advisory only — see [below](#cashallow-random). |
+| `# @cash:cache-fit` | no | Opt an in-place estimator fit — `estimator.fit(X, y)`, or `X2 = estimator.fit_transform(X)` — in to caching. Off by default — see [below](#cashcache-fit). |
+| `# @cash:no-cache-calls` | no | Turn off caching the expensive **call inside** a statement. **On by default** — see [below](#call-level-caching-default-and-cashno-cache-calls). |
 
 !!! note "`# @cash:assume-safe` belongs to the other path"
     Every directive above is read by the **notebook statement** processor.
@@ -70,7 +69,7 @@ name. A `\d+` group would simply not match the bad part — `ttl=5m` would captu
 
 A few details that bite people:
 
-<!-- claim: cash/notebook/annotations.py:ANNOTATION_PATTERN @412c3ce1, cash/notebook/annotations.py:parse_annotation_line @4e940712 -->
+<!-- claim: cash/notebook/annotations.py:ANNOTATION_PATTERN @412c3ce1, cash/notebook/annotations.py:parse_annotation_line @c743e92c -->
 - **`@cash:` is case-sensitive.** `# @Cash:persist` is silently ignored. Only the directive *name* after the colon is lower-cased ([`annotations.py` — `ANNOTATION_PATTERN`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)), so `# @cash:PERSIST` works.
 - **A space after the colon is fine.** `# @cash: persist` and `# @cash:persist` both match (the pattern allows `\s*` after the colon), as does spacing around `=` — `# @cash:ttl = 60` works.
 - **Whitespace before `@cash:` is fine.** `#@cash:persist`, `# @cash:persist`, and `#   @cash:persist` all match.
@@ -92,14 +91,14 @@ Forces a statement to be cached on disk even when the cost model would normally 
 cheap_constant = compute_constants()    # would normally be skipped; now forced
 ```
 
-<!-- claim: cash/notebook/annotations.py:parse_annotation_line @4e940712, cash/notebook/statement/processor.py:StatementProcessor._parse_annotation @70e15ddd -->
+<!-- claim: cash/notebook/annotations.py:parse_annotation_line @c743e92c, cash/notebook/statement/processor.py:StatementProcessor._parse_annotation @70e15ddd -->
 Behind the scenes: the parser sets `CacheAnnotation(persist=True)` ([`annotations.py` — `parse_annotation_line`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)), and `_parse_annotation` in the statement processor turns that into `force_persist=True` ([`statement/processor.py` — `StatementProcessor._parse_annotation`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py)), which bypasses the cost-model skip logic downstream.
 
 If both `persist` and `no-cache` apply to the same statement, **`no-cache` wins** (see [Merging](#merging-multiple-annotations)).
 
 See [Cost model and smart persistence](cost-model.md) for the full explanation of the persistence decision.
 
-### `# @cash:no-cache` (alias: `nocache`)
+### `# @cash:no-cache`
 
 Disables caching entirely for a statement. The statement still executes; its result simply isn't stored, and on the next run it executes again.
 
@@ -136,10 +135,10 @@ Notes:
 - If multiple `ttl=` annotations apply to the same statement, **the last one wins** (see [Merging](#merging-multiple-annotations)).
 - TTL only governs *cache freshness*. A statement with `no-cache` won't be cached at all, so its `ttl=` is irrelevant.
 
-<!-- claim: cash/notebook/annotations.py:parse_annotation_line @4e940712 -->
+<!-- claim: cash/notebook/annotations.py:parse_annotation_line @c743e92c -->
 Behind the scenes: the annotation sets `CacheAnnotation.ttl` ([`annotations.py` — `parse_annotation_line`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)), which `_parse_annotation` reads and uses as `effective_ttl` ([`statement/processor.py` — `StatementProcessor._parse_annotation`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py)).
 
-### `# @cash:allow-random` (alias: `allowrandom`)
+### `# @cash:allow-random`
 
 When a statement draws from an RNG that hasn't been seeded, Cash raises a
 `CashRandomnessWarning` telling you the cached value may not be reproducible:
@@ -169,9 +168,9 @@ noise = np.random.rand(1000)   # no warning
     that is deliberate, and the annotation only tells Cash you already know.
 
     If you want the statement to re-run every time, that's a different
-    directive: [`# @cash:no-cache`](#cashno-cache-alias-nocache).
+    directive: [`# @cash:no-cache`](#cashno-cache).
 
-### `# @cash:cache-fit` (alias: `cachefit`)
+### `# @cash:cache-fit`
 
 Opts a statement that fits an estimator in place in to caching: a bare
 `estimator.fit(X, y)`, and `X2 = estimator.fit_transform(X)` or
@@ -251,9 +250,9 @@ model = train_model(X_train, y_train)
 
 An unseeded opted-in fit warns that the cached model is a frozen replay (the
 `.fit()`'s internal randomness is invisible to the AST scanner);
-[`# @cash:allow-random`](#cashallow-random-alias-allowrandom) suppresses it.
+[`# @cash:allow-random`](#cashallow-random) suppresses it.
 
-### Call-level caching (default) and `# @cash:no-cache-calls` (alias: `nocachecalls`)
+### Call-level caching (default) and `# @cash:no-cache-calls`
 
 Cash caches **below the statement** by default, not just the statement
 itself: the expensive call inside it, and an expensive call handed to another
@@ -271,12 +270,6 @@ its own line is no longer the difference between cached and not.
 for x in items:
     results.append(compute(x))     # compute(x) is cached; the append re-runs
 ```
-
-No annotation appears above that loop. Prior to this being the default, the
-same effect required an explicit `# @cash:cache-calls` on the header; that
-spelling still parses (so an old notebook doesn't error) but does nothing —
-see [Common mistakes](#common-mistakes) if you're migrating a notebook that
-still has it lying around and wondering why it's a no-op now.
 
 If you need to turn this off — for a statement whose callee has side effects
 the analyzer can't see, or while debugging a caching-related surprise —
@@ -416,7 +409,7 @@ for x in items:
 
 It also propagates from a cell's **leading comment block** — the very first
 lines of the cell, before any code — to every top-level statement in that
-cell, the same way [`# @cash:no-cache`](#cashno-cache-alias-nocache) does.
+cell, the same way [`# @cash:no-cache`](#cashno-cache) does.
 That matters more now than it used to: under the old opt-in directive,
 forgetting it just meant a statement missed out on a speed-up. Under
 default-on, the failure direction inverts — forgetting the *opt-out* on one
@@ -570,7 +563,7 @@ generator instead.
     argument landing in `*args`, or anything after a `*unpacking`. Each of those
     is a missing warning, never a false one.
 
-    Seed explicitly, or use [`# @cash:no-cache`](#cashno-cache-alias-nocache)
+    Seed explicitly, or use [`# @cash:no-cache`](#cashno-cache)
     on a line of its own, when a statement must genuinely re-run every time. The warning is advisory —
     it never changes what gets cached.
 
@@ -674,7 +667,7 @@ That's a perfectly valid placement. Don't overuse it — the multi-line form abo
 
 ## Merging multiple annotations
 
-<!-- claim: cash/notebook/annotations.py:CacheAnnotation.merge @dd1153cd -->
+<!-- claim: cash/notebook/annotations.py:CacheAnnotation.merge @150e9620 -->
 When several annotations apply to a single statement (stacked above, on the line, or inside a compound body), Cash merges them with `CacheAnnotation.merge` ([`annotations.py` — `CacheAnnotation.merge`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)):
 
 | Field | Merge rule |
@@ -683,7 +676,6 @@ When several annotations apply to a single statement (stacked above, on the line
 | `no_cache` | logical OR |
 | `allow_random` | logical OR |
 | `cache_fit` | logical OR |
-| `cache_calls` | logical OR (parsed but inert — see [above](#call-level-caching-default-and-cashno-cache-calls-alias-nocachecalls)) |
 | `no_cache_calls` | logical OR |
 | `ttl` | "other wins if set" — order-sensitive |
 
@@ -772,25 +764,6 @@ model = train()
 ```
 
 The parser walks backward from the statement looking for annotations *above* it (and forward into compound-statement bodies). An annotation on a sibling line *below* a top-level statement binds to the next statement, not the one above it.
-
-### `# @cash:cache-calls` left over from before this feature was default-on
-
-<!-- test:skip reason="illustrative: `compute`, `out`, `x` are the reader's own" -->
-```python
-# @cash:cache-calls
-out.append(compute(x))   # NOT wrong, but not doing anything either
-```
-
-This parses fine — it isn't a typo, and it doesn't error. It just doesn't do
-anything: call-level caching is unconditional now (see [Call-level
-caching](#call-level-caching-default-and-cashno-cache-calls-alias-nocachecalls)),
-so the directive that used to switch it on has nothing left to switch. If a
-notebook written before this changed still has it lying around, it's
-harmless and safe to leave, or delete — either way `compute(x)` above is
-still cached, with or without the comment. This is the one directive on this
-page whose presence or absence provably makes **no difference** to behavior;
-every other entry in this section is a case where the annotation you wrote
-silently isn't the one that took effect.
 
 ### Blank line between annotation and statement
 

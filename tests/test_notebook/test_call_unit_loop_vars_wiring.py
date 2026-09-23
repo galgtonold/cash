@@ -95,7 +95,6 @@ results = {}
 """
 
 _LOOP_CELL = """
-# @cash:cache-calls
 for t in [1, 2, 3]:
     results[t] = fetch_next(conn)
 """

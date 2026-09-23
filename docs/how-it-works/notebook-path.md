@@ -136,7 +136,7 @@ That's still true, and it always will be — a prefix chain is what a fold
 *is*. What's no longer true is that a changed statement key means a repeated
 `compute()` call. By default, cash also caches the **call inside** the
 statement (`compute(ticker)` here, not the assignment around it — see [Call-level
-caching](../annotations.md#call-level-caching-default-and-cashno-cache-calls-alias-nocachecalls)),
+caching](../annotations.md#call-level-caching-default-and-cashno-cache-calls)),
 and a call cache keys on arguments, not on execution history. So a re-executed
 statement whose call has already been made with the same argument resolves
 that call from cache instead of actually running it. Measured on this exact

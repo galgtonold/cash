@@ -40,7 +40,7 @@ Five details of that formula are load-bearing:
   simulation computes it with the same function. Otherwise the key would hit while
   everything built on the result still missed.
 - **The namespace is a parameter, not a constant.** It is `stmt` for a statement
-  and `call` for a [sub-statement call unit](../annotations.md#call-level-caching-default-and-cashno-cache-calls-alias-nocachecalls),
+  and `call` for a [sub-statement call unit](../annotations.md#call-level-caching-default-and-cashno-cache-calls),
   which is why the two live in separate key spaces while sharing one builder.
   Namespacing rather than a second builder is what keeps the single-source-of-truth
   invariant below true for calls as well as statements.

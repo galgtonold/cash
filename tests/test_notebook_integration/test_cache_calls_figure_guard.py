@@ -53,7 +53,7 @@ def test_intercepted_figure_call_does_not_hijack_pyplot(nb_runner, tmp_path):
     same, out = _run(
         nb_runner,
         tmp_path,
-        "# @cash:cache-calls\nfor n in [1]:\n    holder.append(new_fig(n))",
+        "for n in [1]:\n    holder.append(new_fig(n))",
         "directive",
     )
     assert "IS_CURRENT True" in out, (

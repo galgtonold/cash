@@ -347,7 +347,7 @@ _HIDDEN_STATE_DEFS = (
     "results = {}\n"
 )
 
-_HIDDEN_STATE_LOOP = "# @cash:cache-calls\nfor t in [1, 2, 3]:\n    results[t] = fetch_next(conn)\n"
+_HIDDEN_STATE_LOOP = "for t in [1, 2, 3]:\n    results[t] = fetch_next(conn)\n"
 
 
 def test_a_loop_over_a_hidden_state_callee_replays_on_a_rerun(nb_runner):

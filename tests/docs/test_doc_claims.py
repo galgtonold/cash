@@ -575,12 +575,9 @@ def test_every_cited_test_name_exists() -> None:
 # The same completeness argument as the magics gate: a page that says "that's
 # the whole language" is making a claim about a SET, and a set claim goes stale
 # the moment the set grows. controlling-cache-behavior.md -- titled "this guide
-# covers every knob" -- never mentioned `# @cash:cache-calls` after it shipped.
-#
-# Canonical names only (the `nocache` / `cachefit` run-together spellings are
-# aliases the parser accepts, not directives a page has to advertise).
+# covers every knob" -- once went stale when a new directive shipped.
 
-_DIRECTIVE_RE = re.compile(r"directive == '([a-z][a-z-]+)'")
+_DIRECTIVE_RE = re.compile(r"directive == [\"']([a-z][a-z-]+)[\"']")
 _ANNOTATIONS_SRC = Path(__file__).resolve().parents[2] / "src" / "cash" / "notebook" / "annotations.py"
 # Pages that claim to cover the directive set, and so must cover all of it.
 _DIRECTIVE_PAGES = (
@@ -591,9 +588,7 @@ _DIRECTIVE_PAGES = (
 
 def _parsed_directives() -> set[str]:
     src = _ANNOTATIONS_SRC.read_text(encoding="utf-8")
-    found = set(_DIRECTIVE_RE.findall(src))
-    # Aliases are the run-together spelling of a canonical name already found.
-    return {d for d in found if "-" in d or not any(d == c.replace("-", "") for c in found)}
+    return set(_DIRECTIVE_RE.findall(src))
 
 
 def test_every_annotation_directive_is_documented() -> None:

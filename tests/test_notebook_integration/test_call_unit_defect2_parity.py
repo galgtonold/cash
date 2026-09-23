@@ -58,17 +58,12 @@ def _runs(log):
 # Call-unit spelling: `pull(handle)` is intercepted and cached as its own
 # sub-unit, keyed (in part) on the frozen `loop_var_digests` entry for `q`.
 _CALL_UNIT = (
-    "accm = []\n"
-    "# @cash:cache-calls\n"
-    "for q in [[1], [1]]:\n"
-    "    q.append(len(accm))\n"
-    "    accm.append(pull(handle))\n"
-    "print('OUT', accm)\n"
+    "accm = []\nfor q in [[1], [1]]:\n    q.append(len(accm))\n    accm.append(pull(handle))\nprint('OUT', accm)\n"
 )
 
-# Statement spelling: no `# @cash:cache-calls` at all. `v = pull(handle)` is
-# an ordinary, non-mutating per-iteration cached statement, keyed (in part)
-# on the frozen `__iteration_context__` hash for the same `q`.
+# Statement spelling: `v = pull(handle)` is an ordinary, non-mutating
+# per-iteration cached statement, keyed (in part) on the frozen
+# `__iteration_context__` hash for the same `q`.
 # `accm.append(v)` mirrors `q.append(...)`: an always-executing mutation,
 # structurally inert for this question (same role as `q.append` above).
 _STATEMENT = (

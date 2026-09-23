@@ -37,7 +37,7 @@ For the class hierarchy, see [Exceptions & warnings](api/exceptions.md).
 
 ## ANNOT-TTL-INVALID {#annot-ttl-invalid}
 
-<!-- claim: cash/notebook/annotations.py:parse_annotation_line @4e940712 -->
+<!-- claim: cash/notebook/annotations.py:parse_annotation_line @c743e92c -->
 **What happened.** You put `# @cash:ttl=` on a statement in a notebook and the
 value after the `=` is not a whole number of seconds, so Cash ignored that
 annotation entirely and the statement keeps whatever caching it would have had
@@ -58,7 +58,7 @@ works. Two things can still expire it, and neither is what you wrote: a
 session-wide TTL from `%cash_on ttl=N`, and a `default_ttl` set on a backend
 tier, which stamps every entry that arrives without one of its own.
 
-<!-- claim: cash/notebook/annotations.py:ANNOTATION_PATTERN @412c3ce1, cash/notebook/annotations.py:parse_annotation_line @4e940712 -->
+<!-- claim: cash/notebook/annotations.py:ANNOTATION_PATTERN @412c3ce1, cash/notebook/annotations.py:parse_annotation_line @c743e92c -->
 **What to do.** Rewrite the value as a bare count of seconds: `# @cash:ttl=300`
 for five minutes, `3600` for an hour, `86400` for a day. Annotations on *other*
 lines were parsed normally and still apply — a `# @cash:persist` above the

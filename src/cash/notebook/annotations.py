@@ -29,7 +29,6 @@ class CacheAnnotation:
     ttl: int | None = None  # Override TTL in seconds
     allow_random: bool = False  # Suppress randomness warnings
     cache_fit: bool = False  # Opt in to caching a bare ``estimator.fit(X, y)``
-    cache_calls: bool = False  # No-op: call-interception is the default (CAS-243)
     no_cache_calls: bool = False  # Opt OUT of caching CALLS inside the statement
 
     def merge(self, other: CacheAnnotation) -> CacheAnnotation:
@@ -40,7 +39,6 @@ class CacheAnnotation:
             ttl=other.ttl if other.ttl is not None else self.ttl,
             allow_random=self.allow_random or other.allow_random,
             cache_fit=self.cache_fit or other.cache_fit,
-            cache_calls=self.cache_calls or other.cache_calls,
             no_cache_calls=self.no_cache_calls or other.no_cache_calls,
         )
 
@@ -52,7 +50,6 @@ class CacheAnnotation:
             or self.ttl is not None
             or self.allow_random
             or self.cache_fit
-            or self.cache_calls
             or self.no_cache_calls
         )
 
@@ -88,18 +85,13 @@ def parse_annotation_line(line: str) -> CacheAnnotation | None:
 
     if directive == "persist":
         return CacheAnnotation(persist=True)
-    if directive == "no-cache" or directive == "nocache":
+    if directive == "no-cache":
         return CacheAnnotation(no_cache=True)
-    if directive == "allow-random" or directive == "allowrandom":
+    if directive == "allow-random":
         return CacheAnnotation(allow_random=True)
-    if directive == "cache-fit" or directive == "cachefit":
+    if directive == "cache-fit":
         return CacheAnnotation(cache_fit=True)
-    if directive == "cache-calls" or directive == "cachecalls":
-        # Call-interception is the default now (CAS-243); this directive is
-        # kept parseable so notebooks written under the opt-in era don't
-        # error, but it has no effect.
-        return CacheAnnotation(cache_calls=True)
-    if directive == "no-cache-calls" or directive == "nocachecalls":
+    if directive == "no-cache-calls":
         return CacheAnnotation(no_cache_calls=True)
     if directive == "ttl" and value is not None:
         # ``isascii`` as well as ``isdigit``: the latter is True for characters

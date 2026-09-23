@@ -168,7 +168,7 @@ A row labelled **NOT CACHED** (ochre rail) ran but Cash refused to store the res
 
 !!! note "Unseeded randomness is *not* one of them"
     A statement that draws from an unseeded RNG is still cached — Cash warns
-    ([`CashRandomnessWarning`](annotations.md#cashallow-random-alias-allowrandom))
+    ([`CashRandomnessWarning`](annotations.md#cashallow-random))
     but does not refuse to store it. If you want it to re-run every time, say so
     explicitly with `# @cash:no-cache`.
 
@@ -183,7 +183,7 @@ A row labelled **NOT CACHED** (ochre rail) ran but Cash refused to store the res
 
     By default Cash still caches an expensive **call inside** such a statement
     — see [Call-level
-    caching](annotations.md#call-level-caching-default-and-cashno-cache-calls-alias-nocachecalls).
+    caching](annotations.md#call-level-caching-default-and-cashno-cache-calls).
     A call's stdout is captured and replayed on a hit, files it reads are
     tracked as dependencies, and globals its body writes are captured and
     restored with it (which is also why a statement calling such a helper is

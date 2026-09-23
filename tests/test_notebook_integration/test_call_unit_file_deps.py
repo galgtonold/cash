@@ -72,7 +72,7 @@ def load_and_scale(k):
 
 
 def _cell(total_init: int) -> str:
-    return f"total = {total_init}\n# @cash:cache-calls\ntotal += load_and_scale(k)\nprint('TOTAL', total)"
+    return f"total = {total_init}\ntotal += load_and_scale(k)\nprint('TOTAL', total)"
 
 
 def test_sub_unit_hit_preserves_the_statements_file_dep(nb_runner, tmp_path):

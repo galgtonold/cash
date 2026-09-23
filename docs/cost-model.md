@@ -170,7 +170,7 @@ every statement in the session.
 
 Opts out *earlier* than the cost model — the statement is never even considered
 for caching. `no-cache` wins over `persist` when both are present. See
-[Annotations](annotations.md#cashno-cache-alias-nocache).
+[Annotations](annotations.md#cashno-cache).
 
 ### File-reading statements always cache
 

@@ -357,10 +357,10 @@ bindable via a `CASH_*` env var or a TOML file — see the
   restart and partial-recompute payoff is largest.
 - ✅ Enable [`%cash_debug on`](magics.md#cash_debug) when a cache decision
   surprises you.
-- ✅ Use [`# @cash:no-cache`](annotations.md#cashno-cache-alias-nocache) for
+- ✅ Use [`# @cash:no-cache`](annotations.md#cashno-cache) for
   statements with side effects that must run every time (API writes, `datetime.now()`).
 - ✅ Seed your RNG (`np.random.seed(...)`) for reproducible cached draws, or
-  acknowledge the freeze with [`# @cash:allow-random`](annotations.md#cashallow-random-alias-allowrandom).
+  acknowledge the freeze with [`# @cash:allow-random`](annotations.md#cashallow-random).
 
 **Don't**
 

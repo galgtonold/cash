@@ -136,7 +136,7 @@ def test_a_gate_exception_fails_closed_instead_of_crashing_the_cell(magics_fixtu
 
     # Must not raise -- a caching optimisation must never be why user code
     # fails, and the statement must still actually run.
-    magics.cash("", "# @cash:cache-calls\nout.append(compute(x))")
+    magics.cash("", "out.append(compute(x))")
     assert shell.user_ns["out"] == [2], "the statement did not run to completion"
 
 
@@ -165,7 +165,7 @@ def test_the_gate_is_given_variable_lineage(magics_fixture, monkeypatch):
 
     magics, shell, _, _ = magics_fixture
     magics.cash("", "def compute(x):\n    return x + 1\nout = []\nx = 1")
-    magics.cash("", "# @cash:cache-calls\nout.append(compute(x))")
+    magics.cash("", "out.append(compute(x))")
 
     assert "variable_lineage" in captured_kwargs, (
         "the gate never passes variable_lineage, even though a real lineage table is in scope at this call site"

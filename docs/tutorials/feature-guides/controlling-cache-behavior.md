@@ -11,7 +11,7 @@ The notebook layer makes a verdict on every statement: cache it, refuse to cache
 - The 200 MB model you just trained should hit disk, even though the smart-persistence policy would normally leave it in RAM.
 - The `np.random.randn` call is intentional and you don't need a warning every cell run.
 
-Four general-purpose comment annotations and a magic-level TTL cover all of those cases. Two more specialised directives are covered elsewhere: the ML-specific [`# @cash:cache-fit`](../../annotations.md#cashcache-fit-alias-cachefit), and [`# @cash:no-cache-calls`](../../annotations.md#call-level-caching-default-and-cashno-cache-calls-alias-nocachecalls), the opt-out for cash's default behavior of caching the *calls inside* a statement instead of just the statement itself — the fix for an accumulator loop that can never cache as a whole. (`# @cash:cache-calls` is the old opt-in spelling of that same feature; it still parses, but does nothing now that the behavior is on by default.) They live as `# @cash:<directive>` comments on or immediately above the statement, and they're picked up by the same parser regardless of whether you came in via `%cash_on` or `%%cash`.
+Four general-purpose comment annotations and a magic-level TTL cover all of those cases. Two more specialised directives are covered elsewhere: the ML-specific [`# @cash:cache-fit`](../../annotations.md#cashcache-fit), and [`# @cash:no-cache-calls`](../../annotations.md#call-level-caching-default-and-cashno-cache-calls), the opt-out for cash's default behavior of caching the *calls inside* a statement instead of just the statement itself — the fix for an accumulator loop that can never cache as a whole. They live as `# @cash:<directive>` comments on or immediately above the statement, and they're picked up by the same parser regardless of whether you came in via `%cash_on` or `%%cash`.
 
 ## Quick start
 
@@ -32,7 +32,7 @@ model = train_xgb(X, y)         # 12 min to fit — force to disk
 noise = np.random.rand(1000)    # we know it's unseeded; don't warn us
 ```
 
-<!-- claim: cash/notebook/annotations.py:parse_annotation_line @4e940712, cash/notebook/annotations.py:ANNOTATION_PATTERN @412c3ce1 -->
+<!-- claim: cash/notebook/annotations.py:parse_annotation_line @c743e92c, cash/notebook/annotations.py:ANNOTATION_PATTERN @412c3ce1 -->
 That's the everyday language — six directives in total, counting the two specialised ones above. Stack annotations on consecutive lines above a statement (Cash walks backwards through comment lines until it hits a blank or a non-comment).
 
 ## The four annotations
@@ -236,7 +236,7 @@ The first source that triggers wins; later sources are not consulted.
 
 For the annotations that *don't* skip caching:
 
-<!-- claim: cash/notebook/annotations.py:CacheAnnotation.merge @dd1153cd -->
+<!-- claim: cash/notebook/annotations.py:CacheAnnotation.merge @150e9620 -->
 - `@cash:persist` + `@cash:ttl=N` compose freely — a statement can be both forced-to-disk and time-limited. `CacheAnnotation.merge` ORs the persist flags and overrides the TTL, so stacking on consecutive lines works:
 
   ```python { .nb-cell }
@@ -255,10 +255,10 @@ For the annotations that *don't* skip caching:
 
 | Annotation | Triggers (regex `#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\S*))?`) | Effect |
 |---|---|---|
-| `# @cash:no-cache` | directive=`no-cache` (alias `nocache`) | Sets `CacheAnnotation.no_cache=True`. Short-circuits `decide_cacheability` to return `(False, ['@cash:no-cache annotation'])`. |
+| `# @cash:no-cache` | directive=`no-cache` | Sets `CacheAnnotation.no_cache=True`. Short-circuits `decide_cacheability` to return `(False, ['@cash:no-cache annotation'])`. |
 | `# @cash:ttl=N` | directive=`ttl`, value=`N` (captured wide, then required to be ASCII digits) | Sets `CacheAnnotation.ttl=N`. Overrides global `_global_ttl` for this statement. Checked at lookup time by `_validate_ttl`. |
 | `# @cash:persist` | directive=`persist` | Sets `CacheAnnotation.persist=True`. Forces tiered-backend promotion to the persistent tier regardless of the smart-persistence policy. |
-| `# @cash:allow-random` | directive=`allow-random` (alias `allowrandom`) | Sets `CacheAnnotation.allow_random=True`. `check_and_warn_randomness` suppresses `CashRandomnessWarning` for the statement. |
+| `# @cash:allow-random` | directive=`allow-random` | Sets `CacheAnnotation.allow_random=True`. `check_and_warn_randomness` suppresses `CashRandomnessWarning` for the statement. |
 | `%cash_on ttl=N` | line-magic flag | Sets `self._global_ttl` on the magic. Applies to every statement unless overridden by `@cash:ttl=...`. |
 | `%%cash ttl=N` | cell-magic flag | Swaps `_global_ttl` in for the duration of the cell, then restores it. |
 | `@c.cache(ttl=N)` | decorator kwarg | Same TTL semantics, applied to function-level caching. |

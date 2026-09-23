@@ -1,6 +1,6 @@
 """Sub-calls are grouped by call SITE, not by callee (CAS-243 task 9).
 
-A call-unit ("``# @cash:cache-calls``") intercepted call is a cache line of
+An intercepted call (a call unit) is a cache line of
 its own, keyed by where it's called from -- the same callee invoked from two
 different statements (or twice in one statement) can have completely
 different hit histories and cache keys. Grouping by ``func_name`` alone
@@ -378,7 +378,6 @@ def compute(x):
     return x + 1
 
 results = {}
-# @cash:cache-calls
 for t in [1, 2, 3]:
     results[t] = compute(t)
 """

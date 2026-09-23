@@ -53,11 +53,7 @@ def _n(log):
 # instead of real per-iteration decomposition; the assignment shape forces
 # the per-iteration path that pushes/pops `loop_vars`.
 _LOOP = (
-    "results = {}\n"
-    "# @cash:cache-calls\n"
-    "for t in [1, 2, 3]:\n"
-    "    results[t] = fetch_next(conn)\n"
-    "print('RESULTS', sorted(results.items()))\n"
+    "results = {}\nfor t in [1, 2, 3]:\n    results[t] = fetch_next(conn)\nprint('RESULTS', sorted(results.items()))\n"
 )
 
 
@@ -156,7 +152,7 @@ def _sampling_defs(log):
 # (small ints hash trivially, no sampling involved) and mask the exact bug
 # under test.
 _SAMPLING_SEED = "results = []\n"
-_SAMPLING_LOOP = "# @cash:cache-calls\nfor t in [A, B]:\n    results.append(fetch_next(conn))\nprint('OUT', results)\n"
+_SAMPLING_LOOP = "for t in [A, B]:\n    results.append(fetch_next(conn))\nprint('OUT', results)\n"
 
 
 def test_sampled_equal_loop_var_values_still_get_distinct_keys(nb_runner, tmp_path):
@@ -228,7 +224,6 @@ def _reused_name_defs(log):
 # of whether the seed sits in the same cell.
 _NESTED_REUSE_LOOP = (
     "outer_results = []\n"
-    "# @cash:cache-calls\n"
     "for t in ['A', 'B']:\n"
     "    for t in [1, 2]:\n"
     "        pass\n"
@@ -284,7 +279,6 @@ def test_nested_loop_reusing_the_target_name_matches_the_no_cash_oracle(nb_runne
 # last value (`hash(20)`) rather than the outer loop's current one.
 _SIBLING_REUSE_LOOP = (
     "sibling_results = []\n"
-    "# @cash:cache-calls\n"
     "for t in ['A', 'B']:\n"
     "    for t in [1, 2]:\n"
     "        pass\n"
@@ -386,7 +380,6 @@ _MUTATE_BOTH_DATAFRAMES = (
 # `cacheable_accumulator_loop`'s single-unit fast path.
 _SAMPLED_LINEAGE_LOOP = (
     "SL2 = []\n"
-    "# @cash:cache-calls\n"
     "for df in [df_a, df_b]:\n"
     "    n = len(df)\n"
     "    SL2.append(fetch_next(conn))\n"
@@ -454,7 +447,6 @@ def test_sampled_cash_lineage_hash_on_loop_var_matches_the_no_cash_oracle(nb_run
 # distinct (outer, inner) pairs onto 2 keys.
 _NESTED_REUSE_INSIDE_LOOP = (
     "acc_inside = []\n"
-    "# @cash:cache-calls\n"
     "for q in ['p', 'r']:\n"
     "    for q in [7, 8]:\n"
     "        acc_inside.append(fetch_next(conn))\n"

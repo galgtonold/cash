@@ -190,7 +190,7 @@ class TestTheMemo:
         "# @cash:no-cache",
         "# @cash:assume-safe",
         "# @cash: allow-random",
-        "# @cash:nocache",
+        "# @cash:no-cache-calls",
     ],
 )
 def test_every_spelling_of_a_directive_counts(directive):

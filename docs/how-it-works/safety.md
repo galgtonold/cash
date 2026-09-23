@@ -155,7 +155,7 @@ a draw on a live `Axes`/`Figure` (including one handed to a helper,
     Cash caches the expensive **call inside** it (`slow(e)`, not the `append`
     around it), so re-running the loop reuses every element it has already
     computed. See [Call-level
-    caching](../annotations.md#call-level-caching-default-and-cashno-cache-calls-alias-nocachecalls).
+    caching](../annotations.md#call-level-caching-default-and-cashno-cache-calls).
 
     Cash says so in the badge and points at the rewrite that caches the loop
     as a whole: `out = [slow(e) for e in it]` assigns its result, so it has an

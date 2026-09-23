@@ -1954,9 +1954,8 @@ def _skipped_bucket_html(sb: SkippedBucket, max_time: float) -> str:
 #: on by default), as opposed to one the user decorated with ``@cash.cache``.
 #: Same cache, but the reader needs to know which mechanism put it there.
 #:
-#: Deliberately NOT named after a directive: interception is unconditional
-#: (no ``# @cash:cache-calls`` needed to make this label appear), and a tag
-#: spelling ``cache-calls`` would also substring-match the opt-out
+#: Deliberately NOT named after a directive: interception is on unless opted
+#: out, and a tag spelling ``cache-calls`` would substring-match the opt-out
 #: ``# @cash:no-cache-calls`` in any test or log scrape that greps for it.
 _INTERCEPTED_TAG = "@intercepted"
 _INTERCEPTED_TITLE = "cached automatically via call interception -- disable with @cash:no-cache-calls"

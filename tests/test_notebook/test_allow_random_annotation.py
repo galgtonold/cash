@@ -188,15 +188,6 @@ class TestSuppression:
         )
         assert caught == []
 
-    def test_allowrandom_alias_suppresses_warning(self, magics_fixture):
-        """The no-hyphen alias parses (annotations.py) and must suppress too."""
-        magics, _shell, _backend, _cash = magics_fixture
-        caught = _run_capturing_warnings(
-            magics,
-            "import numpy as np\n# @cash:allowrandom\nx = np.random.rand(1000)",
-        )
-        assert caught == []
-
     def test_suppression_is_scoped_to_the_annotated_statement(self, magics_fixture):
         """The directive must not leak onto a neighbouring random statement."""
         magics, _shell, _backend, _cash = magics_fixture

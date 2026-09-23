@@ -7,10 +7,8 @@ introspection, purity-registry lookup, annotation parsing — it belongs
 in ``cacheability_decision.py``, not here.  That sibling module owns
 the merge of AST findings with runtime context.
 
-Folds ``mutation_detector.py`` and ``side_effects.py`` into one module.
-Both AST-visitor classes and their supporting dataclasses live here;
-their names are re-exported for any existing import sites that reference
-them directly.
+Holds both the in-place mutation visitor and the side-effect (file write,
+network call) visitor, with their supporting dataclasses.
 """
 
 from __future__ import annotations
@@ -60,10 +58,7 @@ __all__ = [
     "crossref_reassigned_vars",
     "consumed_input_names",
     "subscript_view_bindings",
-    # Re-exported dataclasses (moved from mutation_detector / side_effects)
-    "MutationInfo",
-    "SideEffectInfo",
-    # Constants re-exported for external consumers
+    # Method-name tables shared with the decorator path
     "MUTATING_METHODS",
     "PANDAS_INPLACE_METHODS",
     "KNOWN_PURE_METHODS",
