@@ -313,7 +313,7 @@ def test_call_hit_replays_stdout_reconstructing_interleaving(call_unit_harness, 
     assert out2 == "before2\ninside=5\nafter2\n", "the callee's stdout was not replayed on a cache hit"
 
 
-def test_forwarding_tee_records_writelines_not_just_write():
+def test_the_tee_records_writelines_not_just_write():
     """Minor (coordinator review): ``__getattr__`` used to delegate
     ``writelines`` straight to the real stream, bypassing ``_chunks`` -- a
     callee using ``sys.stdout.writelines([...])`` produced empty replay text
@@ -326,10 +326,10 @@ def test_forwarding_tee_records_writelines_not_just_write():
     """
     import io
 
-    from cash.notebook.call_unit import _ForwardingTee
+    from cash.notebook._tee import TeeWriter
 
     real = io.StringIO()
-    tee = _ForwardingTee(real)
+    tee = TeeWriter(real)
     tee.writelines(["a", "b"])
     assert tee.getvalue() == "ab"
     assert real.getvalue() == "ab"

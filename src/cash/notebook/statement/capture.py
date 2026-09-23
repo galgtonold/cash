@@ -11,11 +11,12 @@ from __future__ import annotations
 import contextlib
 import logging
 import sys
-import time
 from collections.abc import Generator
 from contextlib import contextmanager
 from io import StringIO
 from typing import TYPE_CHECKING, Any
+
+from .._tee import TeeWriter
 
 if TYPE_CHECKING:
     from cash.notebook.statement.results import ProcessResult
@@ -40,55 +41,6 @@ class NoCapture:
         self.stdout = ""
         self.stderr = ""
         self.outputs: list = []
-
-
-class TeeWriter:
-    """A writer that sends output to both a real stream and a list buffer.
-
-    Output is forwarded to the real stream (e.g. Jupyter's IOPub) in batches
-    controlled by a time-based flush policy.  This avoids the O(n²) behaviour
-    of flushing after every single ``write()`` call — which, in Jupyter, sends
-    one ZMQ message per flush, causing extreme slowdown for tight loops with
-    many print calls.
-
-    Instead we:
-    * Always call ``self._real.write(s)`` so the data enters the kernel's
-      output buffer immediately.
-    * Only call ``self._real.flush()`` if ≥ ``_FLUSH_INTERVAL_S`` seconds
-      have elapsed since the last flush.  Jupyter's own ``OutStream`` uses a
-      similar strategy (~200 ms batching).
-    * Accumulate text in a plain Python list (O(1) append) and join once at
-      the end for the metrics/cache record.
-    """
-
-    _FLUSH_INTERVAL_S = 0.1  # seconds – matches ipykernel's default batch interval
-
-    def __init__(self, real_stream: Any, chunks: list[str]) -> None:
-        self._real = real_stream
-        self._chunks = chunks
-        self._last_flush = time.monotonic()
-
-    def write(self, s: str) -> int:
-        self._real.write(s)
-        self._chunks.append(s)
-        now = time.monotonic()
-        if now - self._last_flush >= self._FLUSH_INTERVAL_S:
-            self._real.flush()
-            self._last_flush = now
-        return len(s)
-
-    def flush(self) -> None:
-        self._real.flush()
-        self._last_flush = time.monotonic()
-
-    def getvalue(self) -> str:
-        """Return all accumulated text."""
-        return "".join(self._chunks)
-
-    # Forward attribute access (encoding, fileno, etc.) to the real stream
-    # so libraries that introspect the stream object still work.
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._real, name)
 
 
 @contextmanager
