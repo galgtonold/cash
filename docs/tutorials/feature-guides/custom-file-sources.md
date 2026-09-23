@@ -396,7 +396,7 @@ The tracker records full absolute paths and stats them on every lookup. There's 
 | `c.register_file_handler(module, func, factory)` | `Cash` method | Register a wrapper factory for an additional reader. Catches every subsequent call to `module.func` from cached code. Glob wildcard supported in *func*. |
 | `cash.FileDataSource(path)` | Public class | mtime-based change detection for a single file. Use in `depends_on=[...]` for advanced cases or subclass for content-hashing. |
 | `f.explain(*args).reason == 'file_changed'` | Diagnostic | Explanation reason emitted when one or more recorded files changed. `details['changed_files']` maps each path to `'content changed'`, `'size changed'`, or `'file missing'`. |
-| `FileAccessTracker` | Internal | Context manager that drives the monkey-patch. Auto-installed by `_compute_and_store`; not intended for direct use. |
+| `FileAccessTracker` | Internal | Context manager that drives the monkey-patch. Auto-installed around the body by `Cash._body_scope`; not intended for direct use. |
 | `FileDependencyRegistry` | Internal | Singleton holding the registered handler factories. Accessed through `register_file_handler`; direct use is unsupported. |
 
 ## Related

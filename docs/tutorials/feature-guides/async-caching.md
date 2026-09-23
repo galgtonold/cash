@@ -6,8 +6,8 @@ Cash caches `async def` functions with the same TTL, file-dependency tracking, p
 
 The natural cached unit for `async def` is the *awaited result*, not the coroutine object. A naive `functools.cache` on a coroutine function would return the same exhausted coroutine on every hit — awaitable exactly once. Cash unwraps the await inside the wrapper, stores the awaited value under the same cache-key scheme used for sync functions, and on a hit returns the value directly so the caller's `await` resolves immediately without re-running the coroutine body.
 
-<!-- claim: cash/core.py:Cash._make_async_wrapper @05dd49ac, cash/core.py:Cash._make_wrapper @e2645acd -->
-The dispatch happens at decoration time: `inspect.iscoroutinefunction(func)` selects `_make_async_wrapper`, everything else falls through to `_make_wrapper`. Both wrappers share the helpers (`_resolve_cache_key`, `_try_get_cached`, `_store_in_cache`, `_wrap_iterator_hit`, `_stream_and_store`), so the storage layout and metadata shape are identical.
+<!-- claim: cash/core.py:Cash._make_wrapper @026ed223 -->
+The dispatch happens at decoration time: `_make_wrapper` builds an `async def` wrapper when `inspect.iscoroutinefunction(func)`, and a plain one otherwise. The two differ only in whether they await the body: the lookup before it (`_lookup`), the tracked, timed body scope (`_body_scope`) and the check-and-store after it (`_finish_miss`) are the same code for both, so the storage layout, metadata shape and every hit path are identical.
 
 ## Quick start
 
@@ -61,8 +61,8 @@ The pattern matches `test_async_function_caches` and `test_async_cache_info` in 
 
 ## What works on async wrappers
 
-<!-- claim: cash/core.py:Cash._make_async_wrapper @05dd49ac broad="the parity list is a claim about the whole async wrapper body" -->
-The async wrapper mirrors the sync wrapper feature-for-feature with the following confirmed parity:
+<!-- claim: cash/core.py:Cash._make_wrapper @026ed223 -->
+The async wrapper shares the sync wrapper's code around the body, so it matches it feature for feature:
 
 - **TTL and freshness.** `_validate_ttl` on the hit path is shared between wrappers; `ttl=` works identically.
 - **Static and dynamic dependencies.** `depends_on=` and `dynamic_depends_on=` go through `_resolve_cache_key`, which is the same call the sync wrapper uses.
@@ -80,6 +80,7 @@ The async wrapper mirrors the sync wrapper feature-for-feature with the followin
     list(await make_iter(4))   # [0, 1, 2, 3] — first call materialises + chunks
     list(await make_iter(4))   # [0, 1, 2, 3] — second call replays from chunks
     ```
+- **A chunk lost while reading.** If a stored chunk disappears while the caller is still iterating a hit (another process cleared the entry, the RAM tier evicted it), the rest is recomputed from the function, as on the sync side. The iterator is read synchronously, so the coroutine is run to completion on a thread of its own with a fresh event loop.
 - **Introspection API.** `cache_info()`, `cache_clear()`, and `explain()` are attached by `_wrap_with_stats` for both wrapper kinds. `explain()` is synchronous even on async-wrapped functions — it inspects the next call's outcome without awaiting anything.
 - **Lineage attachment.** `_attach_lineage(res, cache_key)` runs after the await on non-iterator returns, so a cached pandas DataFrame returned from an `async def` gets its `_cash_lineage_hash` attribute and can short-circuit downstream args-hashing the same as a sync return.
 
@@ -87,7 +88,7 @@ The async wrapper mirrors the sync wrapper feature-for-feature with the followin
 
 One path is explicitly opted out on the async side:
 
-<!-- claim: cash/core.py:Cash.cache @5f39ebf4 -->
+<!-- claim: cash/core.py:Cash.cache @032d5ef1 -->
 - **Async generators (`async def` with `yield`).** Detected at `src/cash/core.py` *before* the async/sync wrapper split. The decorator emits a one-shot `CashCacheIneffectiveWarning` ("[CACHE-ASYNC-GENERATOR] … async generators are not cached in this release, so the function was returned unwrapped.") and returns the bare async generator function. The user can still iterate it; nothing is cached. Test reference: `test_async_generator_emits_warning_and_returns_unwrapped` in `tests/test_core/test_async_generator_warns.py`. The escape hatch when you need the chunked-cache treatment is to write `async def f(): return (... for ... in ...)` (return a sync generator from the coroutine) — that path *is* supported, see the iterator bullet above.
 
 **Single-flight coalescing is supported on the async side**, enabled by constructing your Cash instance with `Cash(use_locking=True)` — it is a *constructor* option, **not** a decorator keyword (`@cash.cache(use_locking=True)` raises `TypeError`). Concurrent awaits of the same key then coalesce so the function computes once. The first awaiter (the *leader*) registers a future, computes, and stores; other awaiters of the same key (the *followers*) wait on the future and then read the stored result. If the leader stored nothing (e.g. `cache_if` rejected the value), followers fall through and compute themselves, so correctness is never sacrificed for the optimization. This is *in-process* coalescing — it dedupes an `asyncio.gather` within one process (across event loops too, since the future is a thread-safe `concurrent.futures.Future`), not across processes (use a distributed lock for that). Test reference: `tests/test_core/test_async_single_flight.py`.
