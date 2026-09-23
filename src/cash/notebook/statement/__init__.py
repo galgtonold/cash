@@ -30,15 +30,10 @@ from __future__ import annotations
 # (e.g. ``from cash.notebook.statement import TeeWriter``). The ones missing
 # from ``__all__`` are not part of the public surface, but co-locating the
 # re-export here keeps test paths stable.
-from .processor import (  # noqa: F401
-    DecoratorCallMetric,
-    ProcessResult,
-    ProcessResultRequired,
-    StatementCacheMetadata,
-    StatementProcessor,
-    TeeWriter,
-    tee_output,
-)
+from ._metadata import StatementCacheMetadata
+from .capture import TeeWriter, tee_output  # noqa: F401
+from .processor import StatementProcessor
+from .results import DecoratorCallMetric, ProcessResult, ProcessResultRequired  # noqa: F401
 
 __all__ = [
     "DecoratorCallMetric",

@@ -29,7 +29,7 @@ pytest.importorskip("IPython")
 
 from IPython.core.displaypub import DisplayPublisher
 
-from cash.notebook.statement.processor import StatementProcessor
+from cash.notebook.statement.capture import make_capture_ctx
 
 
 class _RecordingPublisher(DisplayPublisher):
@@ -68,7 +68,7 @@ def test_set_parent_during_capture_does_not_raise(shell_with_recording_pub):
     shell, real = shell_with_recording_pub
     parent = {"header": {"msg_id": "abc", "msg_type": "execute_request"}}
 
-    with StatementProcessor._make_capture_ctx(stream_output=False, skip_capture=False):
+    with make_capture_ctx(stream_output=False, skip_capture=False):
         shell.display_pub.set_parent(parent)
 
 
@@ -79,7 +79,7 @@ def test_set_parent_during_capture_reaches_the_real_publisher(shell_with_recordi
     shell, real = shell_with_recording_pub
     parent = {"header": {"msg_id": "abc", "msg_type": "execute_request"}}
 
-    with StatementProcessor._make_capture_ctx(stream_output=False, skip_capture=False):
+    with make_capture_ctx(stream_output=False, skip_capture=False):
         shell.display_pub.set_parent(parent)
 
     assert real.parents == [parent], "the parent set during capture never reached the real publisher"
@@ -93,7 +93,7 @@ def test_display_hooks_survive_capture(shell_with_recording_pub):
     def hook(msg):
         return msg
 
-    with StatementProcessor._make_capture_ctx(stream_output=False, skip_capture=False):
+    with make_capture_ctx(stream_output=False, skip_capture=False):
         shell.display_pub.register_hook(hook)
         shell.display_pub.unregister_hook(hook)
 
@@ -107,7 +107,7 @@ def test_capture_still_captures(shell_with_recording_pub):
     from IPython.display import display
 
     shell, real = shell_with_recording_pub
-    with StatementProcessor._make_capture_ctx(stream_output=False, skip_capture=False) as captured:
+    with make_capture_ctx(stream_output=False, skip_capture=False) as captured:
         print("to stdout")
         display({"text/plain": "rich"}, raw=True)
 

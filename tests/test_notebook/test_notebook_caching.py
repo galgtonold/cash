@@ -65,7 +65,7 @@ def test_cache_unpicklable_object_in_memory(notebook_caching_magics):
     magics.tracking_state.lineage.record("LocalClass", "mock_class_hash")
 
     # Mock capture_output context manager
-    with patch("cash.notebook.statement.processor.capture_output") as mock_capture:
+    with patch("cash.notebook.statement.capture.capture_output") as mock_capture:
         mock_context = MagicMock()
         mock_capture.return_value = mock_context
         mock_context.__enter__.return_value = mock_context

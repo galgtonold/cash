@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from cash.notebook.compiled_source import register_cell_source
+from cash.notebook.statement.capture import NoCapture
 
 if TYPE_CHECKING:
     import types
@@ -22,18 +23,9 @@ if TYPE_CHECKING:
     from cash.analysis.annotations import CacheAnnotation
     from cash.analysis.cacheability import StatementAnalysis
     from cash.notebook.cache_status import ExecutionResult
-    from cash.notebook.statement.processor import ProcessResult
+    from cash.notebook.statement.results import ProcessResult
 
-__all__ = ["CodeRunner", "NoCapture", "StatementExecution", "StatementRun"]
-
-
-class NoCapture:
-    """The captured output of a run that captured nothing."""
-
-    def __init__(self) -> None:
-        self.stdout = ""
-        self.stderr = ""
-        self.outputs: list = []
+__all__ = ["CodeRunner", "StatementExecution", "StatementRun"]
 
 
 @dataclass

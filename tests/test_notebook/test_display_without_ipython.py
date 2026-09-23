@@ -62,18 +62,15 @@ _SCRIPT = textwrap.dedent(
         raise AssertionError("blocker failed to block IPython")
 
     # --- Phase 1: both modules must still IMPORT (bare install) ----------
-    from cash.notebook.statement.processor import StatementProcessor
+    from cash.notebook.statement.capture import publish_rich_outputs
+    from cash.notebook.statement.processor import StatementProcessor  # noqa: F401 - the import is the check
     from cash.notebook.statement.restore import StatementRestorer
 
     print("PHASE1_IMPORT_OK")
 
     # --- Phase 2: processor's rich-output replay must RAISE, not no-op ---
-    # Unbound call: _publish_rich_outputs touches no instance state, so `None`
-    # for `self` keeps this about the import and nothing else.
     try:
-        StatementProcessor._publish_rich_outputs(
-            None, [{"data": {"text/plain": "should not vanish"}}]
-        )
+        publish_rich_outputs([{"data": {"text/plain": "should not vanish"}}])
     except ImportError as e:
         print("PHASE2_PROCESSOR_RAISED", type(e).__name__, str(e))
     else:
@@ -92,7 +89,7 @@ _SCRIPT = textwrap.dedent(
     # --- Phase 4: NO rich output => no import => must not raise ----------
     # The `if not outputs` guard keeps the hot path off IPython entirely; a
     # statement that produced no rich output is not a display attempt.
-    StatementProcessor._publish_rich_outputs(None, [])
+    publish_rich_outputs([])
     StatementRestorer._replay_cached_outputs(None, "", "", [])
     print("PHASE4_EMPTY_OK")
     '''
@@ -130,7 +127,7 @@ def test_statement_modules_import_without_ipython(no_ipython_run):
 def test_processor_rich_output_raises_without_ipython(no_ipython_run):
     """Rule 2: a real display attempt raises — it must never silently vanish."""
     assert "PHASE2_PROCESSOR_SILENT" not in no_ipython_run.stdout, (
-        "processor._publish_rich_outputs silently dropped rich output instead "
+        "capture.publish_rich_outputs silently dropped rich output instead "
         "of raising — the no-op stub is back:\n" + no_ipython_run.stdout
     )
     line = next(line for line in no_ipython_run.stdout.splitlines() if line.startswith("PHASE2_PROCESSOR_RAISED"))

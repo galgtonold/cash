@@ -257,7 +257,7 @@ final_value = result * multiplier
         # it resolves through IPython.display at call time -- patch it at the
         # source. magics.py binds the name at import time, so it needs its own.
         with (
-            patch("cash.notebook.statement.processor.capture_output") as mock_capture,
+            patch("cash.notebook.statement.capture.capture_output") as mock_capture,
             patch("IPython.display.publish_display_data"),
             patch("cash.notebook.ipython.magics.publish_display_data"),
         ):
