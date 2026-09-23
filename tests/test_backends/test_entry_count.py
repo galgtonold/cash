@@ -2,8 +2,8 @@
 
 ``%cash_on`` prints how many entries the cache holds, and used to get the
 number from ``list_entries``, which opens every entry file to read its
-metadata. Re-running r23s2's first cell (``%cash_on``) took 22.7 s for that on
-a cache of a few thousand entries (round 23, 2026-09-14).
+metadata. Re-running a notebook's first cell (``%cash_on``) took 22.7 s for
+that on a cache of a few thousand entries.
 """
 
 from __future__ import annotations

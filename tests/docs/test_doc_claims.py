@@ -397,7 +397,7 @@ def test_magics_page_states_the_right_count() -> None:
 # Prefer a symbol even then; reach for the commit form only when the claim is
 # genuinely about a historical state (an ADR, a post-mortem, a CHANGELOG note).
 #
-# CAS-126 filed this idea; annotations.md is the proof it was worth doing.
+# annotations.md is the proof this idea was worth doing.
 
 # Both separators, because the docs used both. thread-safety.md carried
 # ``core.py,526`` and ``core.py,526,1503-1504`` -- comma-delimited, so a

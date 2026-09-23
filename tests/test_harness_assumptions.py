@@ -1,6 +1,6 @@
 """The cash internals the TEST INFRASTRUCTURE reaches into must actually exist.
 
-Three separate harness mechanisms were found dead on 2026-07-26 (CAS-238), all
+Three separate harness mechanisms were found dead on 2026-07-26, all
 the same shape: a ``hasattr`` / ``getattr`` guard, or an env var, naming
 something cash does not define. Each degraded silently instead of failing, so
 the mechanism still *looked* present:
@@ -39,7 +39,7 @@ def test_reset_session_exists():
     assert callable(getattr(cash, "reset_session", None)), (
         "the docs suite resets cash state between pages with reset_session(); "
         "if it is renamed, every page silently inherits the previous test's "
-        "global config (CAS-238)"
+        "global config"
     )
 
 
@@ -65,7 +65,7 @@ def test_auto_cache_flag_exists_on_the_magics():
         "the integration suite's cash-off control arms are validated by reading "
         "_auto_cache_enabled off the registered CashMagics instance; if it is "
         "renamed the probe reports 'off' for every kernel and stops catching a "
-        "control that is secretly cash-ON (CAS-238)"
+        "control that is secretly cash-ON"
     )
 
 
@@ -104,5 +104,5 @@ def test_config_fields_used_by_fixtures_are_real(field):
     names = {f.name for f in dataclasses.fields(CashConfig)}
     assert field in names, (
         f"{field!r} is not a CashConfig field, so CASH_{field.upper()} is "
-        f"ignored silently and anything relying on it does nothing (CAS-238)"
+        f"ignored silently and anything relying on it does nothing"
     )

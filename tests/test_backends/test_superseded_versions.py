@@ -1,6 +1,6 @@
 """A statement's superseded versions are pruned by what they are worth.
 
-Round 24: r24s1 held nine ~700 MB versions of one 1.4 s feature build, r24s2
+One notebook held nine ~700 MB versions of one 1.4 s feature build, another
 five to seven of each ~500 MB cleaning frame -- 10 GB for 200 MB of input,
 none of it evicted, because the byte cap is a quarter of the free disk. The
 integration arm is
@@ -31,7 +31,7 @@ def _versions(n, size, cost):
 
 
 def test_a_big_cheap_value_keeps_only_the_newest_superseded_version():
-    # r24s1's X_all: 700 MB for 1.4 s of compute, nine versions
+    # A feature frame: 700 MB for 1.4 s of compute, nine versions
     versions = _versions(9, 700 * MB, 1.4)
     assert sorted(superseded_to_drop(versions, "k8")) == [f"k{i}" for i in range(7)]
 

@@ -5,13 +5,12 @@ until the machine fell under the target, which never happens when the
 pressure is someone else's: one check emptied the tier, and every later check
 emptied it again.
 
-Round 27 ran five testers on one box, each with a cash kernel and an uncached
-oracle kernel over its full dataset. r27s3's parameter sweep went 13.4 s ->
+Five people once shared one box, each with a cash kernel and an uncached
+oracle kernel over its full dataset. One parameter sweep went 13.4 s ->
 ~100 s and stayed there through reruns, and through reverting the edit they
 blamed for it, while the uncached kernel beside it barely moved; its
 `cached=` count fell from 601 to ~170 and never recovered. A clean replay of
-the same seven steps on a quiet machine stays at 9-12 s throughout
-(C:/Temp/cashut/r27s3/repro/repro_sweep_flip.py).
+the same seven steps on a quiet machine stays at 9-12 s throughout.
 
 Every reading here carries ``total``, as psutil's always does; a reading
 without one takes the old path, and ``test_memory_eviction.py`` covers that.

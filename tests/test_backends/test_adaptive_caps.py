@@ -1,4 +1,4 @@
-"""Machine-scaled cache caps (CAS-142).
+"""Machine-scaled cache caps.
 
 A single 1 GiB ``max_cache_size`` used to cap *every* tier, so the disk tier
 was pinned at one medium DataFrame and persist-heavy workloads thrashed
@@ -110,7 +110,7 @@ class TestResolvers:
         assert ac.resolve_ram_cap() == int(0.20 * 16 * _GIB)
 
     def test_resolve_ram_cap_psutil_import_absent(self, monkeypatch):
-        # Simulate psutil being unimportable (bare install, CAS-129).
+        # Simulate psutil being unimportable (a bare install).
         import builtins
 
         real_import = builtins.__import__

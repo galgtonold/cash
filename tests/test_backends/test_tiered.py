@@ -125,8 +125,8 @@ class TestPromotionPolicy:
         assert "RAM" in stored_meta["storage"]
 
 
-class TestCAS141LargeFramePersistence:
-    """Headline CAS-141 acceptance: a big, expensive frame is now PROMOTED to
+class TestLargeFramePersistence:
+    """A big, expensive frame is PROMOTED to
     disk by the serialization-aware cost model and RESTORES from the disk tier
     after a simulated restart — the exact case the inverted bandwidth model
     left RAM-only (a 0.68 GB / 7 s workload whose ``.cash`` held only 393 KB).

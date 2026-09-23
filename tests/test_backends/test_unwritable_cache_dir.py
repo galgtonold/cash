@@ -1,6 +1,6 @@
 """An unwritable cache directory must cost a recompute, never the process.
 
-Round-15 gate finding (BLOCKING). Point the cache at a directory the process
+Point the cache at a directory the process
 may read but not write and the job ran to completion, printed its result, and
 then never exited: **28.7s writable, still running at 150s, 200s and -- the
 first, accidental observation -- eleven minutes.** A minimal case was still

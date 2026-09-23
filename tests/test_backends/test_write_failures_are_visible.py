@@ -8,7 +8,7 @@ with a bare ``pass``.
 
 The result was a failure mode with no evidence anywhere: a write fails, the
 entry is permanently absent, and the user sees only unexplained cache misses.
-Whatever else is decided about durability (CAS-209), a failure must leave a
+Whatever else is decided about durability, a failure must leave a
 trace.
 """
 

@@ -454,7 +454,7 @@ def test_decorator_doc_ambient_read_bullet_actually_fires(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# Round-18 docs sweep: each test executes one sentence the docs now make.     #
+# Docs sweep: each test executes one sentence the docs now make.              #
 # --------------------------------------------------------------------------- #
 
 

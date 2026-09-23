@@ -1,6 +1,6 @@
 """A damaged entry is a miss, not a wrong value.
 
-Found while attacking the decorator before round 26: entries carried no
+Found while stress-testing the decorator: entries carried no
 integrity check, so a single flipped byte inside a stored payload came back as
 data. Measured: a cached ``{"payload": "yyy..."}`` returned ``"yyyyZyyy..."``
 with no warning. Truncation was already handled; corruption that leaves the

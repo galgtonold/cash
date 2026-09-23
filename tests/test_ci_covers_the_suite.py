@@ -1,9 +1,9 @@
-"""CI must run the suite by EXCLUSION, never by enumeration (CAS-152).
+"""CI must run the suite by EXCLUSION, never by enumeration.
 
 The unit-test step used to name the handful of files it ran. That silently
 omitted 18 top-level test files and four of the five test directories — and,
 worse, anything added afterwards. The cost was concrete: a tracked regression
-test for an Urgent correctness bug (CAS-175, upstream simulation corrupting a
+test for an urgent correctness bug (upstream simulation corrupting a
 saved chart) sat red on ``main`` for weeks because CI never executed the file it
 lived in. The suite was green and the gate was blind.
 
@@ -68,7 +68,7 @@ class TestCiTargetsTheWholeTree:
         assert re.search(r"pytest\s+tests/\s*(\\|\n|$)", unit_step), (
             "The unit-test step must invoke `pytest tests/` so new tests are "
             "picked up automatically. Naming individual files re-creates the "
-            "CAS-152 blind spot.\nStep body was:\n" + unit_step
+            "blind spot this test guards.\nStep body was:\n" + unit_step
         )
 
     def test_unit_step_does_not_enumerate_individual_files(self, unit_step):
@@ -135,7 +135,7 @@ class TestExclusionsAreHonest:
     def test_every_test_directory_is_accounted_for(self, unit_step):
         """A new test directory is either run, or explicitly excluded.
 
-        This is the test that would have caught CAS-152: it fails the moment a
+        This is the test that would have caught the unrun file: it fails the moment a
         directory exists that CI neither runs nor names.
         """
         on_disk = {p.name for p in TESTS_DIR.iterdir() if p.is_dir() and not p.name.startswith("__")}

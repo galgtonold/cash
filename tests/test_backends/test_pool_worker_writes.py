@@ -1,6 +1,6 @@
 """A multiprocessing worker's cache writes survive the pool that ran it.
 
-CAS-124, round-17 tester r17s4 (F22). `with multiprocessing.Pool() as pool:`
+`with multiprocessing.Pool() as pool:`
 -- the stdlib idiom -- calls `terminate()` on exit. Cache writes run on
 daemon threads, so each worker's LAST write was still in flight when it was
 killed, and those tasks recomputed on every later run: two of six, forever,

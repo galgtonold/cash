@@ -327,7 +327,7 @@ def _compute_something_small():
 
 
 class _FakeGenerator:
-    """Stub for a ``np.random.default_rng()`` Generator (CAS-135)."""
+    """Stub for a ``np.random.default_rng()`` Generator."""
 
     @staticmethod
     def standard_normal(*args):
@@ -469,7 +469,7 @@ _DOC_NAMESPACES: dict[str, dict] = {
     },
     "controlling-cache-behavior": {
         "df": _make_large_stub_df(),
-        # The @cash:allow-random fences draw from np.random (CAS-114): the
+        # The @cash:allow-random fences draw from np.random: the
         # directive only fires for calls rooted at a known RNG module, so the
         # examples must use one.
         "np": _make_numpy_stub(),

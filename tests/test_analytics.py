@@ -124,7 +124,7 @@ class TestAnalyticsManager:
 
 
 class TestCorruptDbSelfHeal:
-    """CAS-203: a corrupt / oversized analytics db must self-heal silently, not
+    """A corrupt / oversized analytics db must self-heal silently, not
     surface a raw sqlite error to the user on every ``import cash``."""
 
     def test_corrupt_db_is_recreated_not_warned(self, tmp_path, caplog):
@@ -132,7 +132,7 @@ class TestCorruptDbSelfHeal:
         and NO user-facing warning is logged (analytics is best-effort)."""
         db_path = tmp_path / "analytics.db"
         # A valid SQLite header followed by garbage -> SQLITE_NOTADB on read,
-        # exactly the 2.8 GB file CAS-203 saw (just small).
+        # like the 2.8 GB file seen in the wild (just small).
         db_path.write_bytes(b"SQLite format 3\x00" + b"\xde\xad\xbe\xef" * 4096)
 
         with caplog.at_level(logging.WARNING, logger="cash.analytics"):
@@ -143,7 +143,7 @@ class TestCorruptDbSelfHeal:
 
         assert stats["total_events"] == 1
         assert am._disabled is False
-        # The whole point of CAS-203: no WARNING (or worse) reaches the user.
+        # The whole point: no WARNING (or worse) reaches the user.
         assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
 
     def test_oversized_db_is_recreated(self, tmp_path):

@@ -1,6 +1,6 @@
 r"""``cash clear`` removes cash's own files, never a user's.
 
-Found while attacking the decorator before round 26: a project whose
+Found while stress-testing the decorator: a project whose
 ``[tool.cash] cache_dir`` points at a directory holding data --
 ``cache_dir = "../shared_data"`` -- lost that data. cash writes its
 ``CACHE_VERSION`` stamp into whatever directory it is pointed at, so the

@@ -1,13 +1,13 @@
 """Setting `max_cache_size` must bound the cache, not switch it off.
 
-Round-15 gate finding. `CASH_MAX_CACHE_SIZE=500MB` on a nightly job whose
+`CASH_MAX_CACHE_SIZE=500MB` on a nightly job whose
 working set is 263 MB cached **nothing**: three of four stages recomputed every
 run, the cache directory held 29 KB, and the operator's reading of their own
 setting -- "I capped it, so it is evicting" -- was the opposite of what
 happened. 10/10 on the probe sweep, 5/5 on the real job.
 
-The cause was a per-entry refusal threshold of HALF the cap (CAS-142's guard
-against one big entry leaving less than half the cache for everything else).
+The cause was a per-entry refusal threshold of HALF the cap (a guard against
+one big entry leaving less than half the cache for everything else).
 The threshold is now the whole cap: an entry that fits is stored and LRU does
 its job, and only an entry that cannot fit at all is refused. The treadmill
 that motivated the old threshold is still caught when it actually happens, by
@@ -97,7 +97,7 @@ def test_the_cap_is_compared_against_the_size_it_governs(tmp_path):
     """The other half of the report: two sizes, and the wrong one was used.
 
     The size gate compared the value's IN-MEMORY footprint against a DISK cap,
-    while `cash inspect` reports serialized bytes -- so a tester saw a 160 MB
+    while `cash inspect` reports serialized bytes -- so a user saw a 160 MB
     entry refused by a 500 MB cap, with no number anywhere that explained it.
     A list of distinct short strings has the same shape at test scale: about
     3x larger in memory than pickled.

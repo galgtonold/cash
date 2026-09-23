@@ -1,4 +1,4 @@
-"""Cache-cap safety behaviors (CAS-142, second half of the ticket).
+"""Cache-cap safety behaviors.
 
 Two guards keep a too-small cap from silently making cash *slower* than no
 cache (the write-and-evict treadmill from the friction log):
@@ -34,7 +34,7 @@ class TestOversizeRefusal:
     """The threshold is the WHOLE cap, and it moved there deliberately.
 
     It was half the cap, so that one big entry could not leave less than half
-    the cache for everything else. A round-15 tester measured what that costs:
+    the cache for everything else. What that costs, measured:
     ``CASH_MAX_CACHE_SIZE=500MB`` on a job with a 263 MB working set cached
     nothing at all -- three of four stages recomputed every night and the
     directory held 29 KB. Their reading of their own setting ("cap it, so it
@@ -77,7 +77,7 @@ class TestOversizeRefusal:
     def test_an_object_over_half_the_cap_now_persists(self, tmp_path):
         """The reported case, scaled down: it fits, so it is stored.
 
-        This arm asserted the opposite until a tester showed a 500 MB cap
+        This arm asserted the opposite until a 500 MB cap was seen
         caching nothing for a 263 MB working set.
         """
         disk = FileBackend(str(tmp_path / "c"), max_size_bytes=8000, flush_interval=0)

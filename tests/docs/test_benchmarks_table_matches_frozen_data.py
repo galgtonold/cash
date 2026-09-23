@@ -5,7 +5,7 @@ actually determines — restore cost — instead of a quoted "N x faster". That
 only works if the printed numbers really are the measured ones, so this reads
 both and compares.
 
-Previously this page carried tester figures (~190x, ~4-5.5x, ~1.2x) that
+Previously this page carried hand-measured figures (~190x, ~4-5.5x, ~1.2x) that
 matched nothing in the repo, and an archived result set whose runs had errored
 partway. Numbers with no traceable source are what this test exists to stop
 coming back.

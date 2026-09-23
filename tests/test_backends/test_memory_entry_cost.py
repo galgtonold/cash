@@ -1,15 +1,15 @@
 """A notebook entry in the RAM tier costs what its values cost, not what is
 walked around them.
 
-Round 23's profile (2026-09-14):
+A profile of real notebooks showed:
 
 * Every entry a notebook statement stores is a dict that carries the RNG state,
   and ``random.getstate()`` is a tuple of 625 ints. Sizing it recursed once per
-  int, and so did the deepcopy of the entry: in r23s2's loop over 1,312 files,
+  int, and so did the deepcopy of the entry: in a loop over 1,312 files,
   2,629 stores made 1.7M sizing calls and 2.3M deepcopy calls.
 * The upstream simulation reads entries' METADATA, and the RAM tier had no
   metadata read: the base class's ``get()`` deep-copied the value to throw it
-  away -- 5.3 s of one r23s1 cell's 6 s.
+  away -- 5.3 s of one cell's 6 s.
 """
 
 from __future__ import annotations

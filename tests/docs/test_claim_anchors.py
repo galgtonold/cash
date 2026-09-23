@@ -2,9 +2,9 @@
 
 ``test_tutorials.py`` executes python fences; ``test_doc_claims.py`` lints
 structured claims (env vars, anchors, config tables). Neither reads prose, and
-prose is where every doc failure in this repo has lived: CAS-114 documented a
-warning that never emitted, and thread-safety.md's central thesis was inverted
-by CAS-112 — both with a green suite throughout.
+prose is where every doc failure in this repo has lived: the docs described a
+randomness warning that was never emitted, and thread-safety.md's central thesis
+was once inverted — both with a green suite throughout.
 
 A claim anchor links a prose claim to the source that decides it:
 

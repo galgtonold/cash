@@ -1,6 +1,6 @@
 """A cache directory that cannot be USED must not take the program with it.
 
-Round-16 gate finding (BLOCKING), the sibling of the unwritable-directory hang.
+The sibling of the unwritable-directory hang.
 That one was about a directory cash could create and not write to; this is about
 one it cannot create at all, and the failure was worse: ``os.makedirs`` raised
 straight out of ``get()``, so the caller's program died — **exit 1, no result,
@@ -13,7 +13,7 @@ shapes, 3/3:
   this boot)
 * a path that is a FILE (a typo, or someone's leftover)
 
-The tester reached it with no configuration at all: an installed CLI whose cache
+It is reachable with no configuration at all: an installed CLI whose cache
 follows the working directory, run from a directory the user cannot write to.
 "cash cannot cache" became "your job does not run", from a component whose whole
 contract is best-effort.

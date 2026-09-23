@@ -1,6 +1,6 @@
 """The RAM tier shares a pandas frame instead of copying it, when that is safe.
 
-Measured after round 28 (cash's own first-run cost): 20 statements each
+Measured on cash's own first-run cost: 20 statements each
 producing a 1M-row frame took 0.44 s under cash against 0.09 s plain, and
 0.28 s of it was the RAM tier deep-copying every frame on store -- and again on
 every restore (0.125 s of the warm run). The copy exists so that a later

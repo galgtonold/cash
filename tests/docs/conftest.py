@@ -24,7 +24,7 @@ def reset_cash_state(tmp_path, monkeypatch):
       field names (``CASH_BACKEND``), and unknown ``CASH_*`` vars are ignored
       by design, so setting it did nothing.
 
-    The consequence was not theoretical (CAS-238): `test_configure_runtime`
+    The consequence was not theoretical: `test_configure_runtime`
     calls ``cash.configure(backend="redis", persist_all=True)`` and never
     restores it, so a doc page landing on that xdist worker afterwards tried to
     write **every** statement to a Redis that isn't running. That is a 30 s

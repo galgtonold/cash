@@ -86,7 +86,7 @@ def test_clear_preserves_version_marker(tmp_path):
     assert (tmp_path / VERSION_FILENAME).read_text().strip() == str(CACHE_FORMAT_VERSION)
 
 
-# -- CAS-125: a cache cleared under a live process ---------------------------
+# -- a cache cleared under a live process -----------------------------------
 
 
 def test_a_directory_recreated_by_a_live_backend_is_stamped(tmp_path):

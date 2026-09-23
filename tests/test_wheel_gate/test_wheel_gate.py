@@ -1,10 +1,10 @@
-"""CI shim for the CAS-190 wheel-gate harness (``scripts/wheel_gate.py``).
+"""CI shim for the wheel-gate harness (``scripts/wheel_gate.py``).
 
 This test is SKIPPED by default. The harness it wraps builds a wheel, provisions
 a FRESH venv on a short path, and drives a REAL Jupyter server + kernel restarts
 -- minutes of work, deliberately kept out of the fast suite (which is
 structurally blind to exactly the restart / wheel-venv bugs this catches; that
-blindness is the CAS-190 finding).
+blindness is why the harness exists).
 
 Run it explicitly::
 
@@ -19,8 +19,8 @@ Run it explicitly::
 The harness exits 0 iff the observed RED/GREEN matrix matches the baseline
 recorded in ``scripts/wheel_gate.py``. As of 2026-07-20 that baseline is
 **all six scenarios GREEN** (S1-S6), confirmed on the ``0.1.0`` wheel: the bugs
-S1/S2/S5 were written to catch (CAS-202 restart-retrain, CAS-196 to_csv
-re-fire, CAS-200/193 unrelated-cell plot re-fire) are all fixed, and S3/S4/S6
+S1/S2/S5 were written to catch (restart retrain, to_csv re-fire,
+unrelated-cell plot re-fire) are all fixed, and S3/S4/S6
 are controls.
 
 This test asserts that exit code, so a scenario flipping either way fails CI:

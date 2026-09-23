@@ -1,6 +1,6 @@
 """The cap a user is shown must be the cap the cache is keeping to.
 
-Round 26, r26s4, after two days on one notebook::
+A user, after two days on one notebook::
 
     Holds:      908 entries, 21.19 GiB
     Max size:   auto -- disk 12.0 GiB, RAM 4.0 GiB
@@ -22,7 +22,7 @@ readings exactly:
    print ``Holds``, so it has ``own`` in hand and discards it.
 
 2. The backend derives its cap ONCE, on the first write of the process, and
-   never again. r26s4's kernel opened when the machine had ~118 GB free
+   never again. That user's kernel opened when the machine had ~118 GB free
    (0.25 * 118 GiB = 29.5 GiB) and was still enforcing that number two days
    later with 48 GB free. 21.19 GiB was under ITS cap and over every cap the
    machine would have derived that afternoon. The restart re-derived
@@ -74,7 +74,7 @@ def _backend(cache, adaptive=True, cap=None):
 
 
 def test_a_long_lived_kernel_does_not_keep_a_two_day_old_cap(volume):
-    """r26s4's kernel, in miniature: the disk fills under a live backend."""
+    """A long-lived kernel, in miniature: the disk fills under a live backend."""
     cache, state = volume
 
     b = _backend(cache)
@@ -165,9 +165,9 @@ def test_the_re_derivation_is_throttled(volume):
 
 
 def test_cash_info_prints_the_cap_the_backend_would_enforce(volume, capsys, monkeypatch):
-    """The number on screen is the number in force -- r26s4's actual complaint.
+    """The number on screen is the number in force -- the user's actual complaint.
 
-    r26s4's exact readings: 21.19 GiB held on a volume with 48 GB free. The
+    The exact readings: 21.19 GiB held on a volume with 48 GB free. The
     old answer was 12.0 GiB (f(free)) and looked like a cap already blown by
     77%; the enforced one is 17.3 GiB (f(free + own)) and is not blown at all.
     """

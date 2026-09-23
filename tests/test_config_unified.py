@@ -35,7 +35,7 @@ class TestCashConfigStructure:
         assert c.compress is False
         # max_cache_size defaults to None = "auto": the factory scales the
         # disk cap to free disk and the RAM cap to system memory, instead of
-        # the old flat 1 GiB that capped every tier and thrashed (CAS-142).
+        # the old flat 1 GiB that capped every tier and thrashed.
         assert c.max_cache_size is None
         # Cost-aware policy unchanged.
         assert c.smart_persistence is True
@@ -217,7 +217,7 @@ class TestPrecedence:
         user.write_text('[cash]\ncache_dir = "from_user"\n', encoding="utf-8")
         cfg = get_config(user_config_path=user, project_config_path=None)
         # Resolved against the config file that names it -- the ordinary rule
-        # for a relative path in a config file, and the fix for CAS-99.
+        # for a relative path in a config file.
         assert cfg.cache_dir == str(tmp_path / "from_user")
 
     def test_project_overrides_user(self, tmp_path, monkeypatch):

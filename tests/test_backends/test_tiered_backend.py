@@ -55,7 +55,7 @@ class TestTieredBackend:
 
     def test_large_object_promotion_prevention(self, tmp_path):
         """Objects whose predicted restore exceeds their recompute cost aren't
-        promoted to disk (CAS-141).
+        promoted to disk.
 
         The fitted cost model — not a size-scaled bandwidth guess — decides:
         a 1 GB result that took only 1.5 s to compute restores in ~2.1 s, so

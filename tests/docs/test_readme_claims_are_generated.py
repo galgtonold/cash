@@ -5,7 +5,7 @@ before: the badge was *described* ("Cash shows a badge above each cell"), one
 link away from ever being seen, and the page carried no measured number at all.
 
 Showing them is better -- but sample output is exactly the kind of thing that
-rots silently, and the badge vocabulary has churned before (the CAS-272
+rots silently, and the badge vocabulary has churned before (the
 restored/computed -> CACHED/EXECUTED rename left 22 stale assertions behind).
 So neither is hand-written:
 

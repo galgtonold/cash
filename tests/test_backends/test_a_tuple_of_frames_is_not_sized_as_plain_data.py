@@ -1,6 +1,6 @@
 """Sizing gives up on a tuple of non-plain values before asking them their size.
 
-Measured before round 29 (r28s5's own cells, pandas 2.3): storing
+Measured on a user's own cells (pandas 2.3): storing
 ``n_w, inside_w, _ = net_returns(orders, 12)`` in the RAM tier spent 4.3 s of
 a 12 s statement -- the call itself took 3.2 s -- in pandas' deep
 ``memory_usage``, walking 3.7 million strings. The plain-data sizer summed

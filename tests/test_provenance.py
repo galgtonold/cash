@@ -235,10 +235,10 @@ class TestCashProvenanceMagic:
 
 
 class TestFileDepsDisplayHygiene:
-    """Round-8 gate (P2): %cash_provenance dumped 100+ phantom venv
+    """%cash_provenance dumped 100+ phantom venv
     entry_points.txt paths into "File deps", so a variable looked like it
     depended on all of site-packages. Those are importlib.metadata probes for
-    files that never existed — already ignored for freshness (CAS-185), but they
+    files that never existed — already ignored for freshness, but they
     leaked into the display."""
 
     def _tracker(self):

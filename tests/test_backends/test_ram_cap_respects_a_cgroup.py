@@ -1,6 +1,6 @@
 """The RAM tier's cap must be sized from memory this process may actually use.
 
-Round-15 S2 watched a long-lived worker's RSS climb 141 MB -> 1502 MB over 300
+A user watched a long-lived worker's RSS climb 141 MB -> 1502 MB over 300
 keys and read it as a leak. It was not: the RAM tier is bounded by default (a
 fifth of memory, clamped to [512 MiB, 4 GiB]) and was doing exactly what it
 says. What survived the adjudication is narrower and sharper:

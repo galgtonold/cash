@@ -70,7 +70,7 @@ class TestCLIInfo:
         assert "Cache dir" in captured.out
 
     def test_info_shows_what_this_projects_cache_holds(self, tmp_path, capsys, monkeypatch):
-        """Round 25: `cash info` named the cache dir but not how big it is --
+        """`cash info` named the cache dir but not how big it is --
         the number a user asks for when deciding whether to clear it."""
         from cash.config import get_config
 
@@ -129,8 +129,8 @@ class TestCLIClear:
         """Clear should remove a cache directory named explicitly.
 
         It needs to LOOK like one (a CACHE_VERSION stamp, as every real cache
-        has): an explicit path used to go straight to rmtree, and round 17 ran
-        `cash clear .` in a project and lost its files (CAS-107).
+        has): an explicit path used to go straight to rmtree, and a user ran
+        `cash clear .` in a project and lost its files.
         """
         cache_dir = tmp_path / "to_clear"
         cache_dir.mkdir()
@@ -170,7 +170,7 @@ class TestCLIClear:
 
         The message names the directory now, because `--all` no longer means
         "./.cash" -- it means whatever the config resolved to, which the user
-        may not be standing in (CAS-83).
+        may not be standing in.
         """
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("CASH_CACHE_DIR", str(tmp_path / ".cash"))
@@ -180,7 +180,7 @@ class TestCLIClear:
         captured = capsys.readouterr()
         assert "Nothing cleared: no cache at" in captured.out
         assert str(tmp_path) in captured.out
-        # Round 18: where a running program's cache is when it is not here.
+        # Where a running program's cache is when it is not here.
         assert "beside the script" in captured.out
 
     def test_clear_nonexistent_path(self, capsys):
@@ -495,7 +495,7 @@ class TestCLIAutoloadOff:
 class TestInspectNamesWhatItWasGiven:
     """``cash inspect <path>`` reports THAT path, or says it is not there.
 
-    Found while attacking the decorator before round 26: a path that does not
+    Found while stress-testing the decorator: a path that does not
     exist fell through to the configured cache, so `cash inspect ./nope` (or a
     mistyped notebook name) printed a full, plausible report about an unrelated
     cache and exited 0. `cash clear` already refuses the same input.
@@ -527,7 +527,7 @@ class TestInspectNamesWhatItWasGiven:
 class TestTheCliSeesASqliteCache:
     """A sqlite cache is a database file, not a directory of entries.
 
-    Found while attacking the decorator before round 26: `cash info` said
+    Found while stress-testing the decorator: `cash info` said
     "nothing yet (no cache written here)" and `cash inspect` said "No cache
     found" while a working sqlite cache sat in the directory, because both
     count `*.entry` files.

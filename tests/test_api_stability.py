@@ -16,7 +16,7 @@ def test_core_exports_stable():
         "configure",
         "cleanup",
         "help",  # public since d30849a (orientation summary, aimed at coding agents)
-        "disabled",  # public since round 19 (a no-cache block that restores CASH_DISABLE)
+        "disabled",  # a no-cache block that restores CASH_DISABLE
         # Purity declarations
         "pure",
         "stateful",
@@ -36,7 +36,7 @@ def test_core_exports_stable():
         # Data sources
         "DataSource",
         "FileDataSource",
-        "RemoteFileDataSource",  # public since CAS-236 (track s3://, gs://, http(s):// objects)
+        "RemoteFileDataSource",  # track s3://, gs://, http(s):// objects
         # Exception hierarchy
         "CashError",
         "CacheBackendError",
@@ -45,7 +45,7 @@ def test_core_exports_stable():
         "DependencyNotFoundError",
         "AmbiguousCellError",
         "UpstreamStateError",
-        # public since the round-26 forward-reference fix: a cell that
+        # public since the forward-reference fix: a cell that
         # reads a name only a LATER cell binds now fails instead of
         # caching against a namespace an in-order run cannot rebuild.
         "ForwardReferenceError",
@@ -56,8 +56,8 @@ def test_core_exports_stable():
         "CashCacheIneffectiveWarning",
         "CashCacheStoreFailedWarning",
         "CashImpurityWarning",
-        "CashRandomnessWarning",  # public since CAS-114 (users filter on it)
-        "CashUpstreamSyntaxWarning",  # public since CAS-173 (users filter on it)
+        "CashRandomnessWarning",  # users filter on it
+        "CashUpstreamSyntaxWarning",  # users filter on it
     }
     actual = set(cash.__all__)
     assert actual == expected_stable

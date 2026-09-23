@@ -95,7 +95,7 @@ def test_non_plain_data_takes_the_old_paths():
 
 
 def test_dict_rows_come_back_as_new_dicts_every_time():
-    """Round 20 (r20s2 F10): a list of dicts was deep-copied on every RAM hit;
+    """A list of dicts was deep-copied on every RAM hit;
     with immutable values a new dict per row is the whole copy."""
     b = InMemoryBackend()
     rows = [{"id": i, "city": "x"} for i in range(1000)]

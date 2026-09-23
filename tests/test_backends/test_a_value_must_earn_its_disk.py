@@ -1,19 +1,19 @@
 """Bytes are only worth spending if they buy compute back.
 
-Round 26's five caches held 58 GiB for 61-360 MB of input data. The
+Five user-testing caches held 58 GiB for 61-360 MB of input data. The
 adjudication recorded the mechanism as "version retention across ordinary
 edits"; reading the entries showed three different mechanisms, none of them
 edits, and one thing in common -- every one of them is a population
 ``cash.backends.versions`` cannot ration:
 
-* s5, 14.1 GB, all ``call:`` entries: seven ``build_features(lags=...)``
+* One cache, 14.1 GB, all ``call:`` entries: seven ``build_features(lags=...)``
   frames, 1.3 GB each for 5.0 s of compute. Call entries carry no
   ``version_slot``, so pruning never applied. **263 MiB per second saved.**
-* s4, 9.7 GB, 91% singleton slots: a loop body's source carries
+* Another, 9.7 GB, 91% singleton slots: a loop body's source carries
   ``# __iteration_context__: <hash>`` and ``version_slot = f(source_hash)``,
   so every iteration is its own slot with one entry and nothing to supersede.
   72 entries of 48 MiB at ``execution_time 0.00s``. **188 MiB per second.**
-* s3, 15.3 GB in slots pruning did see: ``superseded_to_drop`` keeps the
+* A third, 15.3 GB in slots pruning did see: ``superseded_to_drop`` keeps the
   newest superseded version unconditionally, so 113 slots each kept one spare
   ~1 GB frame against an 83 MiB budget.
 
@@ -23,9 +23,9 @@ write time, to every entry.
 
 The constants were measured, not chosen. The distribution separates hard --
 p75 is 46 MiB/s, p90 is 430,000 -- so the ceiling's value is decided by its
-bottom end: CAS-141's 45.8 MiB array at 0.6 s is 75 MiB/s and must stay
-cached, so the ceiling is 128 MiB/s (72% of round 26's bytes refused for 1% of
-its compute) rather than the 64 MiB/s that would refuse it. An 8 MiB floor
+bottom end: a 45.8 MiB array that takes 0.6 s is 75 MiB/s and must stay
+cached, so the ceiling is 128 MiB/s (72% of those caches' bytes refused for 1%
+of their compute) rather than the 64 MiB/s that would refuse it. An 8 MiB floor
 drops the entries the rule fires on from 739 to 277 while giving up 0.05% of
 what it reclaims.
 
@@ -52,11 +52,11 @@ class TestTheArithmetic:
     """The pure predicate, directly -- every branch without a backend."""
 
     def test_a_frame_that_rebuilds_in_five_seconds_is_not_worth_a_gigabyte(self):
-        """r26s5's entry: 1.3 GB for 5.0 s is 263 MiB per second."""
+        """1.3 GB for 5.0 s is 263 MiB per second."""
         assert not worth_its_bytes(1300 * MIB, 5.0)
 
     def test_a_loop_iteration_that_computes_nothing_is_not_worth_48_mib(self):
-        """r26s4's: 48 MiB at execution_time 0.00s."""
+        """48 MiB at execution_time 0.00s."""
         assert not worth_its_bytes(48 * MIB, 0.0)
 
     def test_a_minute_of_work_is_worth_a_gigabyte(self):
@@ -66,7 +66,7 @@ class TestTheArithmetic:
         assert worth_its_bytes(WORTH_CEILING_BYTES_PER_SECOND * 10, 10.0)
         assert not worth_its_bytes(WORTH_CEILING_BYTES_PER_SECOND * 10 + 1, 10.0)
 
-    def test_cas141_s_case_stays_cached(self):
+    def test_a_large_frame_built_in_under_a_second_stays_cached(self):
         """45.8 MiB in 0.6 s = 75 MiB/s. The regression test for a policy that
         left big frames RAM-only must keep passing; the ceiling sits above it
         deliberately, not by luck."""
@@ -116,7 +116,7 @@ class TestThroughABackend:
     def test_an_undigested_call_entry_is_weighed_by_its_pickled_size(self, tmp_path):
         """A call entry that was not digested (`call_refs.ESTIMATED_FIELD`) is
         judged on its own, by the pickled size estimated for it -- what disk
-        holds -- not by what it takes in memory: r28s5's result is 402 MiB
+        holds -- not by what it takes in memory: a real result of 402 MiB
         pickled and 1.7 GiB in memory, as 3.7 million strings."""
         b = self._tiered(tmp_path)
         kept = self._set(b, "call:kept", 200 * MIB, 1.2, value_bytes=100 * MIB, value_bytes_estimated=True)
@@ -126,7 +126,7 @@ class TestThroughABackend:
         assert "DISK" not in (refused.get("storage") or []), refused
 
     def test_the_refusals_of_one_cell_are_said_once(self, tmp_path):
-        """Round 29, r29s5: about 30 of these warnings, 12 from one sweep cell,
+        """One notebook got about 30 of these warnings, 12 from one sweep cell,
         five lines each. One per cell, naming its statements."""
         import warnings
 
@@ -143,7 +143,7 @@ class TestThroughABackend:
         assert all(f"`row{i} = expand(orders, {i})`" in ours[0] for i in range(3)), ours[0]
 
     def test_a_refused_call_entry_leaves_the_saying_to_its_statement(self, tmp_path):
-        """r29s1, r29s3: every refusal was printed twice, the second naming an
+        """Every refusal was printed twice, the second naming an
         internal ``call:efa280...`` key -- the statement holding the call's
         result says it, naming the code the user wrote."""
         import warnings
@@ -156,17 +156,17 @@ class TestThroughABackend:
         assert not [w for w in caught if "CACHE-NOT-WORTH-BYTES" in str(w.message)]
 
     def test_the_refusal_says_so(self, tmp_path):
-        """Round 26's unanimous complaint was silence, not size."""
+        """The complaint was silence, not size."""
         b = self._tiered(tmp_path)
         with pytest.warns(Warning, match="CACHE-NOT-WORTH-BYTES"):
             self._set(b, "spendy", 200 * MIB, 1.2)
         b.shutdown()
 
     def test_each_refused_statement_is_named_once(self, tmp_path):
-        """Round 28: the refusal was said once per SESSION and named a key.
+        """The refusal was said once per SESSION and named a key.
 
-        r28s1, r28s4 and r28s5 each saw exactly one CACHE-NOT-WORTH-BYTES per
-        kernel -- every later refusal was silent -- and it read
+        Only one CACHE-NOT-WORTH-BYTES appeared per kernel -- every later
+        refusal was silent -- and it read
         ``cached value 'stmt:7ada31...'``, prefixed ``ipkernel.py:460``. Now: one
         per statement, naming its code, blamed on ``<cash>``.
         """

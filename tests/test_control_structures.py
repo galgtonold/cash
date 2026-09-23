@@ -143,7 +143,7 @@ class TestBuildIterationContext:
         assert ctx == {"outer": 5, "x": 10}
 
     def test_unhashable_value(self):
-        """Unhashable values are stored as a FULL-content hash (CAS-86).
+        """Unhashable values are stored as a FULL-content hash.
 
         repr() truncates large numpy/pandas objects, so two iterations
         differing outside the repr window collided into one context hash.
