@@ -8,7 +8,7 @@ outputs, so it is cached as an ordinary no-output call and restored as a no-op
 on warm runs, while the sibling ``fig.savefig(...)`` still executes because it
 writes a file. Result: a byte-blank chart, with the cell printing normally.
 
-``_identity_coupled_call_receivers`` is the narrow exemption. These tests pin
+``MutationClassifier.identity_coupled_call_receivers`` is the narrow exemption. These tests pin
 both directions -- that a draw IS caught, and that ordinary receivers are NOT,
 since widening it would silently disable per-iteration loop caching.
 
@@ -23,7 +23,8 @@ import ast
 
 import pytest
 
-from cash.notebook.statement import StatementProcessor
+from cash.notebook._protocols import TrackingState
+from cash.notebook.statement.mutations import MutationClassifier
 
 
 class _Shell:
@@ -31,15 +32,12 @@ class _Shell:
         self.user_ns = ns
 
 
-class _Stub:
-    """Minimal stand-in: the method under test only reads ``self.shell.user_ns``."""
-
-    def __init__(self, ns):
-        self.shell = _Shell(ns)
+def _classifier(ns: dict) -> MutationClassifier:
+    return MutationClassifier(_Shell(ns), TrackingState(), None)
 
 
 def _receivers(code: str, ns: dict):
-    return StatementProcessor._identity_coupled_call_receivers(_Stub(ns), ast.parse(code))
+    return _classifier(ns).identity_coupled_call_receivers(ast.parse(code))
 
 
 @pytest.fixture
@@ -106,4 +104,4 @@ def test_an_unbound_receiver_is_not_caught():
 
 
 def test_no_tree_is_handled():
-    assert StatementProcessor._identity_coupled_call_receivers(_Stub({}), None) == set()
+    assert _classifier({}).identity_coupled_call_receivers(None) == set()

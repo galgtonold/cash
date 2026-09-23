@@ -74,7 +74,7 @@ The first can be re-derived from the statement that made it; the second cannot.
 has no store target to give the receiver a fresh lineage. So Cash classifies
 method-call receivers in tiers, in this order:
 
-<!-- claim: cash/analysis/mutation_effects.py:classify_receivers @704f9e6f, cash/notebook/statement/processor.py:StatementProcessor._classify_method_mutations @716a2694, cash/analysis/mutations.py:KNOWN_PURE_METHODS @b44508ae, cash/analysis/mutations.py:standalone_method_call_inner_methods @4a62a44e, cash/analysis/mutations.py:chain_is_pure @96104373, cash/analysis/mutations.py:RECEIVER_READONLY_WRITE_METHODS @697bbf7a, cash/notebook/statement/processor.py:StatementProcessor._receiver_observable @1cca2d82 -->
+<!-- claim: cash/analysis/mutation_effects.py:classify_receivers @704f9e6f, cash/notebook/statement/mutations.py:MutationClassifier.classify @19b739eb, cash/analysis/mutations.py:KNOWN_PURE_METHODS @b44508ae, cash/analysis/mutations.py:standalone_method_call_inner_methods @4a62a44e, cash/analysis/mutations.py:chain_is_pure @96104373, cash/analysis/mutations.py:RECEIVER_READONLY_WRITE_METHODS @697bbf7a, cash/notebook/statement/mutations.py:MutationClassifier._receiver_observable @1cca2d82 -->
 
 - **Excluded outright.** A module receiver is a plain function call, not a
   mutation: `np.foo()`, `time.sleep()`, `plt.title()`. The exception is a
@@ -163,7 +163,7 @@ a draw on a live `Axes`/`Figure` (including one handed to a helper,
 
 ### A bare `model.fit(X, y)`
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._estimator_fit_receivers @4b10b7d8, cash/analysis/namespace_effects.py:is_estimator @7eb88875, cash/analysis/annotations.py:CacheAnnotation.cache_fit == False -->
+<!-- claim: cash/notebook/statement/mutations.py:MutationClassifier.estimator_fit_receivers @6f64bb3f, cash/analysis/namespace_effects.py:is_estimator @7eb88875, cash/analysis/annotations.py:CacheAnnotation.cache_fit == False -->
 A bare fit is a method-call mutation of its receiver, so it takes the default
 path above: **skip-cache, re-execute every run**. That is net-neutral — a fit
 that would keep missing cannot cost more than it saves — and it avoids the

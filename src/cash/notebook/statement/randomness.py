@@ -336,7 +336,7 @@ class StatementRandomness:
         """Output vars that are UNSEEDED fitted estimators (gap).
 
         Closes the anonymous/assignment-form fit hole the receiver-name path
-        (:meth:`_estimator_fit_receivers`) cannot reach: ``clf =
+        (``MutationClassifier.estimator_fit_receivers``) cannot reach: ``clf =
         RandomForestClassifier(...).fit(X, y)`` caches ``clf`` as an ordinary
         output, but the estimator is constructed inline (no named receiver) and
         the randomness lives inside compiled ``.fit()``, so nothing warns. Detect

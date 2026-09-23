@@ -46,12 +46,13 @@ from cash.notebook.statement.miss_guard import (
     MissGuard,
     resolve_cache_dir,
 )
+from cash.notebook.statement.mutations import MutationClassifier
 from cash.notebook.statement.randomness import StatementRandomness
 from cash.notebook.statement.rebuild_cost import RebuildCostLedger
 from cash.notebook.statement.restore import StatementRestorer
 from cash.notebook.statement.results import DecoratorCallMetric, ProcessResult
 from cash.notebook.statement.run import CodeRunner, StatementExecution, StatementRun
-from cash.object_hashing import estimate_object_size, mutation_fingerprint
+from cash.object_hashing import estimate_object_size
 from cash.purity import is_known_pure, is_stateful
 from cash.tracking.file_dep_snapshot import snapshot_dependencies, snapshot_file_deps
 
@@ -175,18 +176,13 @@ from ...analysis.cacheability import analyze_statement
 from ...analysis.cacheability_decision import (
     decide_cacheability,
     identity_coupled_reason,
-    receiver_is_identity_coupled,
 )
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.mutation_effects import (
     StatementEffects,
-    classify_receivers,
-    drawn_on_arguments,
     live_function_source,
     statement_effects,
 )
-from ...analysis.mutations import assigned_method_call_receivers, standalone_method_call_receivers
-from ...analysis.namespace_effects import bare_call_arguments, fits_its_receiver, is_estimator
 from ...analytics import AnalyticsManager
 from ...tracking.function_tracker import FunctionTracker
 from ...tracking.randomness import (
@@ -243,10 +239,6 @@ def _plain_call_assignment(code: str) -> tuple[str, dict[str, int] | None] | Non
             positions[element.id] = position  # a name bound twice keeps the last
         return ast.unparse(node.value), positions
     return None
-
-
-#: Methods that fit an estimator in place, for `# @cash:cache-fit`.
-_FIT_METHODS = frozenset({"fit", "partial_fit", "fit_transform", "fit_predict"})
 
 
 class StatementProcessor:
@@ -357,9 +349,7 @@ class StatementProcessor:
         self.tracking_state: TrackingState = tracking_state or TrackingState()
         self._randomness = StatementRandomness(shell, self.tracking_state)
         self._rebuild_cost = RebuildCostLedger(shell, self.tracking_state, cash_instance)
-        # Pre-execution fingerprints of a bare call's arguments, by statement
-        # source hash -- see _classify_method_mutations.
-        self._arg_snapshots: dict[str, dict[str, str]] = {}
+        self._mutations = MutationClassifier(shell, self.tracking_state, compute_hash_fn)
         # Statement code (context markers stripped) whose calls are not worth
         # routing through the call cache -- see _code_and_tree_for_execution.
         self._calls_not_worth_wrapping: set[str] = set()
@@ -925,15 +915,15 @@ class StatementProcessor:
         if is_control_body(code):
             mut_pre_route: set[str] = set()
             # ...with ONE exception: a draw on a live Figure/Axes.
-            draw_only = self._identity_coupled_call_receivers(tree)
-            fit_only = self._fitted_receivers(tree)
+            draw_only = self._mutations.identity_coupled_call_receivers(tree)
+            fit_only = self._mutations.fitted_receivers(tree)
         else:
-            mut_pre_route, run.mut_observe, run.mut_assumed, run.mut_record = self._classify_method_mutations(
+            mut_pre_route, run.mut_observe, run.mut_assumed, run.mut_record = self._mutations.classify(
                 tree,
                 run.source_hash,
                 outputs,
             )
-            run.est_fit = self._estimator_fit_receivers(tree, outputs) if cache_fit else set()
+            run.est_fit = self._mutations.estimator_fit_receivers(tree, outputs) if cache_fit else set()
             draw_only = set()
             fit_only = set()
         est_fit = run.est_fit
@@ -979,7 +969,7 @@ class StatementProcessor:
             run.skip_cache = True
             metrics["uncacheable_reasons"].append(
                 f"In-place mutation on: {', '.join(sorted(skip_pre_route))} "
-                "(receiver lineage bumped; statement re-executes)" + self._cache_fit_hint(skip_pre_route)
+                "(receiver lineage bumped; statement re-executes)" + self._mutations.cache_fit_hint(skip_pre_route)
             )
         # Deliberately the SAME treatment the inline spelling of the identical
         # mutation gets immediately above: the statement re-executes so the
@@ -1626,10 +1616,7 @@ class StatementProcessor:
         # lineage gets bumped) and skip-caches the statement. The verdict is
         # recorded for the upstream simulation, which cannot observe execution.
         if run.mut_record:
-            newly_mutated = {b for b in run.mut_observe if self._receiver_mutated(b)}
-            for name, before in self._arg_snapshots.pop(source_hash, {}).items():
-                if mutation_fingerprint(self.shell.user_ns.get(name)) != before:
-                    newly_mutated.add(name)
+            newly_mutated = self._mutations.observed_mutations(run.mut_observe, source_hash)
             if newly_mutated:
                 # ``est_fit`` is non-empty only under ``# @cash:cache-fit``
                 # . Those receivers still enter ``outputs`` (source-based
@@ -1651,7 +1638,7 @@ class StatementProcessor:
                     metrics.setdefault("uncacheable_reasons", []).append(
                         f"In-place mutation on: {', '.join(sorted(skip_observed))} "
                         "(observed; receiver lineage bumped; statement re-executes)"
-                        + self._cache_fit_hint(skip_observed)
+                        + self._mutations.cache_fit_hint(skip_observed)
                     )
             self.tracking_state.mutation_verdicts[source_hash] = set(run.mut_assumed) | newly_mutated
             self._persist_mutation_verdict(source_hash, self.tracking_state.mutation_verdicts[source_hash])
@@ -2049,209 +2036,8 @@ class StatementProcessor:
                 histories[name] = fingerprint
         return histories
 
-    def _identity_coupled_call_receivers(self, tree: ast.Module | None) -> set[str]:
-        """Receiver names in *tree* that are live matplotlib Figures/Axes.
-
-        The narrow companion to :meth:`_classify_method_mutations`, for the one
-        case that must survive the control-body skip. A body statement carries an
-        injected marker comment and its method-mutation classification is skipped
-        wholesale, because bumping a receiver with a per-statement source the
-        upstream simulation never reproduces desyncs the loop. That is right for
-        ordinary receivers and wrong for a live Axes: ``ax.bar(...)`` in a loop
-        body has NO outputs, so it is cached as an ordinary no-output call and
-        restored as a no-op, while the sibling ``fig.savefig(...)`` still
-        executes because it writes a file. The draw is skipped, the write is
-        not, and the deliverable PNG is blank.
-
-        Identity-coupling is the same single discriminator used to tell
-        ``ax.hist()`` (draws on an Axes) from ``df.hist()`` (receiver-pure), and
-        is used to widen scope to captured-return draws without
-        over-invalidating. It imports no matplotlib and is False for everything
-        that is not a Figure/Axes, so no loop that caches today stops caching.
-
-        Callers use this to skip the CACHE only. It deliberately does NOT feed
-        ``outputs``: the lineage bump is the part the control-body skip exists to
-        prevent, and re-executing a draw needs none of it.
-        """
-        if tree is None:
-            return set()
-        receivers: set[str] = set()
-        for base, _method in standalone_method_call_receivers(tree) | assigned_method_call_receivers(tree):
-            value = self.shell.user_ns.get(base)
-            if isinstance(value, types.ModuleType):
-                continue  # ``plt.savefig()`` is a module call, not a receiver draw
-            if receiver_is_identity_coupled(value):
-                receivers.add(base)
-        # An Axes handed to a plain function (``draw(ax, df)``) is drawn on
-        # too -- the same ``drawn_args`` rule `_classify_method_mutations`
-        # applies outside a loop. In a loop body it was missed, and a re-run
-        # saved every chart blank (round 23, a plotting helper per model).
-        return receivers | drawn_on_arguments(tree, self.shell.user_ns)
-
-    def _fitted_receivers(self, tree: ast.Module | None) -> set[str]:
-        """Estimators a statement fits in place (``km.fit_predict(Z)``).
-
-        The control-body companion of the ``fits_its_receiver`` routing in
-        :meth:`_classify_method_mutations`: a loop body skips that
-        classification, so ``labels_k = km.fit_predict(Z)`` was served from the
-        cache and ``models[k] = km`` kept an unfitted estimator (round 23,
-        r23s4). Cache-skip only, like :meth:`_identity_coupled_call_receivers`.
-        """
-        if tree is None:
-            return set()
-        return {
-            base
-            for base, method in (standalone_method_call_receivers(tree) | assigned_method_call_receivers(tree))
-            if fits_its_receiver(method, self.shell.user_ns.get(base))
-        }
-
-    def _classify_method_mutations(
-        self,
-        tree: ast.Module | None,
-        source_hash: str,
-        outputs: set[str],
-    ) -> tuple[set[str], set[str], set[str], bool]:
-        """Classify a statement's standalone method-call receivers.
-
-        Returns ``(pre_route, observe, assumed, record_verdict)``:
-
-        * ``pre_route`` — receivers to route into outputs + skip-cache now
-          (statically known-mutating; a prior runtime verdict says it mutates;
-          or assume-mutate because the receiver can't be reliably content-hashed
-          — minus anything already in ``outputs``).
-        * ``observe`` — tier-3 receivers to content-observe post-execution
-          (verdict unknown, receiver reliably hashable).
-        * ``assumed`` — tier-3 receivers assumed-mutating without observation
-          (recorded into the verdict so the simulation reproduces them).
-        * ``record_verdict`` — True when this statement's verdict is being learned.
-        """
-        verdict = self.tracking_state.mutation_verdicts.get(source_hash)
-        classes = classify_receivers(
-            tree, self.shell.user_ns, lambda: verdict, arguments=self._bare_call_arguments(tree, outputs)
-        )
-        pre_route = set(classes.mutated)
-        observe: set[str] = set()
-        assumed: set[str] = set()
-        # A receiver no rule or verdict decides is observed when it can be
-        # hashed reliably, otherwise assumed to change (correctness first).
-        for base in classes.unknown_receivers:
-            if self._receiver_observable(base):
-                observe.add(base)
-            else:
-                assumed.add(base)
-                pre_route.add(base)
-        # An object handed to a bare call (`im.add_qc(df)`, `sc.tl.leiden(hv)`)
-        # gets a full before/after fingerprint, since the cache hash samples.
-        # The result is learned into the verdict, so neither the next run nor
-        # the simulation asks again: `print(df)` is learned as reading only.
-        snapshots: dict[str, str] = {}
-        for name in classes.unknown_args:
-            fingerprint = mutation_fingerprint(self.shell.user_ns.get(name))
-            if fingerprint is None:
-                assumed.add(name)
-                pre_route.add(name)
-            else:
-                snapshots[name] = fingerprint
-        if snapshots:
-            self._arg_snapshots[source_hash] = snapshots
-        record_verdict = verdict is None and bool(observe or assumed or snapshots)
-        return pre_route - outputs, observe, assumed, record_verdict
-
-    def _bare_call_arguments(self, tree: ast.Module | None, outputs: set[str]) -> set[str]:
-        """See ``namespace_effects.bare_call_arguments`` (shared with the simulation)."""
-        return set(bare_call_arguments(tree, self.shell.user_ns)) - outputs
-
     def _resolve_live_function_source(self, name: str) -> str | None:
         return live_function_source(name, self.shell.user_ns)
-
-    def _estimator_fit_receivers(
-        self,
-        tree: ast.Module | None,
-        outputs: set[str],
-    ) -> set[str]:
-        """Receivers of a standalone ``est.fit(...)`` / ``est.partial_fit(...)``
-        whose live value is a duck-typed sklearn estimator.
-
-        Called ONLY for a statement carrying ``# @cash:cache-fit``; the
-        default is to leave a bare fit on the skip-cache path, where it
-        re-executes.  That re-execution does NOT by itself make aliases correct —
-        ``backup = model`` breaks on its own restore, not on the fit.
-
-        A bare ``model.fit(X, y)`` mutates its receiver in place, so the general
-        mutation classifier routes it to skip-caching. But a fit is the most
-        expensive cell in an ML notebook and its cache key is already
-        input-lineage-based (the estimator is an input), so a user who asks for it
-        can have it cached. This narrow gate selects ONLY sklearn-style
-        estimators (``is_estimator``) called through a fit method, so the
-        estimator-caching path never loosens general mutation caching.
-
-        A module is never an estimator (``pkg.fit(...)`` is a module
-        function call). Names already surfaced as AST outputs are excluded too -- those are produced by
-        an assignment (a fresh binding each run), so an in-place transfer onto a
-        pre-existing object would be wrong for them.
-        """
-        # The assignment form too: `X = vec.fit_transform(texts)` fits `vec`
-        # as it returns X.
-        candidates = standalone_method_call_receivers(tree) | assigned_method_call_receivers(tree)
-        if not candidates:
-            return set()
-        receivers: set[str] = set()
-        for base, method in candidates:
-            if method not in _FIT_METHODS:
-                continue
-            if is_estimator(self.shell.user_ns.get(base)):
-                receivers.add(base)
-        return receivers - outputs
-
-    def _cache_fit_hint(self, receivers) -> str:
-        """How to have a fitted estimator cached, when one of *receivers* is
-        one: the refusal otherwise gives no way out."""
-        for base in receivers:
-            if is_estimator(self.shell.user_ns.get(base)):
-                return (
-                    f" -- `{base}` is an estimator being fitted; add `# @cash:cache-fit` "
-                    "to cache the fit with it (see that directive's identity caveat)"
-                )
-        return ""
-
-    def _receiver_observable(self, base: str) -> bool:
-        """Return True if *base*'s value can be reliably content-hashed.
-
-        ``compute_hash`` *samples* large objects (DataFrame/Series/ndarray, and
-        collections over 200 elements), so an unchanged sample can't prove the
-        object wasn't mutated outside the sample. Such receivers are excluded
-        here and assume-mutated instead.
-        """
-        val = self.shell.user_ns.get(base)
-        if val is None:
-            return False
-        if type(val).__name__ in ("DataFrame", "Series", "ndarray"):
-            return False
-        if isinstance(val, (list, tuple, dict, set, frozenset)) and len(val) > 200:
-            return False
-        return True
-
-    def _receiver_mutated(self, base: str) -> bool:
-        """Observe whether *base*'s content changed during this statement.
-
-        Compares the post-execution content hash against the pre-statement hash
-        in ``current_session_hashes``. Conservative (returns True) when the value
-        is absent, has no prior recorded hash, or is unpicklable — in which case
-        ``compute_hash`` returns an identity hash that can't reflect an in-place
-        mutation.
-        """
-        val = self.shell.user_ns.get(base)
-        if val is None:
-            return True
-        try:
-            after = self.compute_hash(val)
-        except (TypeError, ValueError, AttributeError, pickle.PicklingError):
-            return True
-        identity_hash = hashlib.sha256(str(id(val)).encode("utf-8")).hexdigest()
-        if after == identity_hash:
-            return True  # unpicklable -> identity hash -> mutation undetectable
-        before = self.tracking_state.current_session_hashes.get(base)
-        return before is None or after != before
 
     def _check_callable_stateful(self, name: str) -> bool:
         """Return True if *name* resolves to a @stateful callable; continue-safe for known-pure."""

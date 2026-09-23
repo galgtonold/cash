@@ -1,6 +1,6 @@
 """Receiver-mutation classifier: pin both directions.
 
-``_classify_method_mutations`` (runtime) and ``_mutation_receivers`` (simulation)
+``MutationClassifier.classify`` (runtime) and ``_mutation_receivers`` (simulation)
 must agree, and must:
 
 * treat any method call on a live matplotlib Axes/Figure as an
@@ -66,7 +66,7 @@ def _routes_mutation(proc, shell, code):
     """True if *code*'s receiver is routed as an in-place mutation."""
     tree = ast.parse(code)
     h = hashlib.sha256(code.encode()).hexdigest()
-    pre_route, observe, assumed, _ = proc._classify_method_mutations(tree, h, set())
+    pre_route, observe, assumed, _ = proc._mutations.classify(tree, h, set())
     return pre_route | assumed
 
 
