@@ -26,7 +26,7 @@ from cash.analysis.code_analyzer import CodeAnalyzer
 from cash.purity_analyzer import PurityAnalyzer
 
 _HEADER = """\
-import csv, datetime, getpass, json, os, pickle, shutil, subprocess, sys, time, uuid
+import csv, datetime, getpass, gzip, json, os, pickle, re, shutil, subprocess, sys, time, uuid
 import urllib.request
 from pathlib import Path
 
@@ -90,6 +90,11 @@ ROWS = [
     # a decorated function.
     ("input()", "refuse", "impure_call"),
     ("getpass.getpass()", "refuse", "impure_call"),
+    # A builtin's name on some other receiver is not the builtin: the
+    # decorator reported these as "known I/O", the notebook never did.
+    ("re.compile('a+')", "cache", "silent"),
+    ("gzip.open(a)", "cache", "silent"),
+    ("df.eval('x + 1')", "cache", "silent"),
 ]
 
 

@@ -164,12 +164,6 @@ DECORATOR_POLICY: dict[EffectKind, Action] = {
 #: Kinds reported as ambient reads rather than as side effects.
 _AMBIENT_KINDS = frozenset({EffectKind.CLOCK, EffectKind.ENVIRONMENT})
 
-#: Builtin names the decorator reported on ANY receiver before (``re.compile``,
-#: ``gzip.open``), not only as the builtin itself.
-_REPORTED_ON_ANY_RECEIVER = frozenset(
-    {"print", "input", "open", "exec", "eval", "compile", "exit", "quit", "breakpoint"}
-)
-
 #: Bare builtins whose discarded result is not worth a word: each is reported
 #: by another rule already (an effect, or explicit dynamic execution).
 _DISCARD_REPORTED_BUILTINS = frozenset(name for name in MODULE_CALLS if "." not in name) | {
@@ -902,24 +896,6 @@ class _PurityVisitor(ast.NodeVisitor):
                 )
                 self.impure_call_nodes.append(node)
                 return
-            if (
-                effect is None
-                and isinstance(func_node, ast.Attribute)
-                and func_name in _REPORTED_ON_ANY_RECEIVER
-                and not (func_name == "open" and module_name is None)
-            ):
-                self.issues.append(
-                    PurityIssue(
-                        kind=ISSUE_IMPURE_CALL,
-                        description=f"{dotted}() - known I/O / side-effecting",
-                        where=self._qualname,
-                        line=line,
-                        effect_kind=EffectKind.FILE_WRITE if func_name == "open" else None,
-                    )
-                )
-                self.impure_call_nodes.append(node)
-                return
-
             # A method with an effect on any receiver (to_csv, write, post,
             # execute, ...), or a container mutator. Skipped when the receiver
             # is a fresh local (``lines.append`` where ``lines = []``):
