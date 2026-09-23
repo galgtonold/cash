@@ -26,7 +26,7 @@ Walk through these questions top to bottom and stop at the first match:
 
 ## The backend table
 
-<!-- claim: cash/backends/__init__.py:__all__ @87b54eb0 broad="the count and the table are a claim about the exported backend set" -->
+<!-- claim: cash/backends/__init__.py:__all__ @53380c02 broad="the count and the table are a claim about the exported backend set" -->
 | Backend | Persistence | Speed | Sharing | Best for |
 |---------|-------------|-------|---------|----------|
 | `InMemoryBackend` | Kernel restart clears | Fastest | Single process | Quick experiments |
@@ -387,7 +387,7 @@ Env vars resolve to the same `CashConfig` regardless of entry point. There is no
 
 ## API reference (compact)
 
-<!-- claim: cash/backends/__init__.py:__all__ @87b54eb0 broad="the import-path column is a claim about what the package exports" -->
+<!-- claim: cash/backends/__init__.py:__all__ @53380c02 broad="the import-path column is a claim about what the package exports" -->
 **Every** backend below imports from `cash.backends`. The four that are always
 available — no extra to install — are re-exported from the top-level `cash` as
 well, and that is the shorter spelling to reach for:

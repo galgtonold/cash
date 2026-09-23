@@ -127,6 +127,12 @@ Cash itself adds a few decorator-specific fields too — `serializer_cls`,
 `iterator_storage`, `n_chunks`. These are internal: a custom backend
 should round-trip whatever metadata it's given without inspecting it.
 
+`cash.backends.EntryMetadata` lists every key the bundled backends read or
+write, with what each means -- among them the persistence inputs
+(`force_persist`, `cost_model_family`, `referenced`, ...) a `TieredBackend`
+decides by. A test keeps the bundled backends from reading any key that list
+does not document.
+
 ---
 
 Per-backend background-write scheduler. Used by the bundled

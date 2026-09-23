@@ -11,11 +11,11 @@ import weakref
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, fields
-from typing import Any
+from typing import Any, TypedDict
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["CacheMetadata", "MetadataDict", "CacheBackend", "ttl_expired"]
+__all__ = ["CacheMetadata", "EntryMetadata", "MetadataDict", "CacheBackend", "ttl_expired"]
 
 #: Cost assumed for an entry whose execution time is unknown -- written without
 #: one (raw backend use), or ranked with nothing recorded about it. Small, so an
@@ -49,11 +49,74 @@ def gdsf_value(metadata: MetadataDict | dict, size: int) -> float:
 # (``CacheBackend._inprocess_key_lock``); held only for that, never a compute.
 _KEY_LOCK_BOOTSTRAP = threading.Lock()
 
-# The metadata channel backends actually see: an opaque dict they round-trip
-# without inspecting (the channel is polymorphic — both CacheMetadata and the
-# notebook layer's StatementCacheMetadata flow through it as plain dicts). The
-# typed CacheMetadata view lives only at the cash-layer edges.
+#: The metadata channel backends see: a plain dict. Its writers (the decorator's
+#: `CacheMetadata`, the notebook's statement and call entries) put more in it
+#: than any backend reads; backends round-trip the rest untouched.
 MetadataDict = dict[str, Any]
+
+
+class EntryMetadata(TypedDict, total=False):
+    """Every metadata key a backend reads or writes, and what it means.
+
+    A backend reads no key that is not listed here
+    (``tests/test_backends/test_entry_metadata_schema.py``).
+    """
+
+    # Stamped by the backend that stores the entry.
+    key: str
+    created_at: float
+    last_access: float
+    access_count: int
+    #: Bytes the entry takes in that backend.
+    size: int
+    #: Seconds until it expires; None never expires.
+    ttl: float | None
+    #: The tier a read was served from (`CacheBackend.source_label`).
+    source: str
+    #: The tiers a write reached, by `source_label`.
+    storage: list[str]
+    #: The file backend gzip-compressed the payload.
+    compressed: bool
+    # From the writer.
+    #: Seconds the value took to compute.
+    execution_time: float
+    #: The `Serializer` class to rebuild the value with.
+    serializer_cls: type
+    #: Metadata kept without a value (`CacheBackend.set_metadata_only`).
+    metadata_only: bool
+    #: Entries with one slot are versions of one thing; superseded versions
+    #: are pruned (`versions`).
+    version_slot: str
+    #: The source the value came from, to name it in a notice.
+    code: str
+    #: The RAM tier must store a real copy, or refuse the value.
+    copy_required: bool
+    # Read by the persistence policy (`persistence_policy.PersistencePolicy`).
+    #: Persist whatever the policy says (``@cash:persist``, ``persist_all``).
+    force_persist: bool
+    #: Written by ``@cash.cache``: persisted without being judged.
+    decorator_entry: bool
+    #: A value the same batch replaces later; judged at its end instead.
+    defer_persist: bool
+    #: The value's type, for `cost_model`'s restore prediction.
+    cost_model_family: str
+    cost_model_type_name: str
+    cost_model_size_bytes: int
+    #: Keys of entries this one refers to, and their total bytes.
+    call_refs: list[str]
+    call_ref_bytes: int
+    #: Another entry refers to this one and decides whether it is worth its bytes.
+    referenced: bool
+    #: The value's pickled size, an estimate when `value_bytes_estimated`.
+    value_bytes: int
+    value_bytes_estimated: bool
+    # Written back by the tiered backend.
+    #: What rebuilding the value would cost, when it was persisted for that.
+    rebuild_time: float
+    #: Why the value stayed in RAM: compute, bytes, size or replaced_in_cell.
+    persist_skipped: str
+    #: The tiers whose write raised, and what they raised.
+    store_errors: list[str]
 
 
 def ttl_expired(timestamp: float | None, ttl: float | None, now: float | None = None) -> bool:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from importlib import import_module
 
-from ._base import CacheBackend, CacheMetadata, MetadataDict
+from ._base import CacheBackend, CacheMetadata, EntryMetadata, MetadataDict
 from .file_backend import FileBackend
 from .memory_backend import InMemoryBackend
 from .serialization import ParquetSerializer, PickleSerializer, Serializer, get_serializer
@@ -40,6 +40,7 @@ def __dir__() -> list[str]:
 __all__ = [
     "CacheBackend",
     "CacheMetadata",
+    "EntryMetadata",
     "MetadataDict",
     "InMemoryBackend",
     "FileBackend",
