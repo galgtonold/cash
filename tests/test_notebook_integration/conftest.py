@@ -15,6 +15,7 @@ import os
 import shutil
 import signal
 import sys
+import tempfile
 import threading
 from pathlib import Path
 from queue import Empty, Queue
@@ -45,6 +46,15 @@ from nbclient import NotebookClient
 _REUSE_KERNEL = os.environ.get("CASH_TEST_REUSE_KERNEL", "1") != "0"
 
 DEFAULT_KERNEL_NAME = "python3"
+
+# Test kernels get an empty IPython directory. Kernels inherit this process's
+# environment, so without this a developer's own profile startup files run in
+# every test kernel -- `cash autoload` writes one that imports cash and runs
+# %cash_on -- and a test that forgot `import cash` passed on that machine and
+# failed everywhere else. Set at import, before any kernel is started.
+_IPYTHON_DIR = tempfile.mkdtemp(prefix="cash-test-ipython-")
+os.environ["IPYTHONDIR"] = _IPYTHON_DIR
+atexit.register(shutil.rmtree, _IPYTHON_DIR, ignore_errors=True)
 
 
 @pytest.fixture(scope="session", autouse=True)
