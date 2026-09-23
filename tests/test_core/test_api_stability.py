@@ -9,13 +9,9 @@ def test_core_exports_stable():
         # Core API
         "Cash",
         "CacheExplanation",
-        "cache",
-        "show_stats",
-        "register_hasher",
         "reset_session",
         "configure",
         "cleanup",
-        "help",  # public since d30849a (orientation summary, aimed at coding agents)
         "disabled",  # a no-cache block that restores CASH_DISABLE
         # Purity declarations
         "pure",
@@ -60,3 +56,23 @@ def test_core_exports_stable():
     }
     actual = set(cash.__all__)
     assert actual == expected_stable
+
+
+def test_a_star_import_leaves_help_alone_and_builds_nothing():
+    """``__all__`` listed ``help``, so ``from cash import *`` replaced the
+    builtin, and ``cache`` / ``show_stats`` / ``register_hasher``, which the
+    module ``__getattr__`` serves by building the global ``Cash``."""
+    import subprocess
+    import sys
+
+    code = (
+        "import builtins\n"
+        "from cash import *\n"
+        "import cash\n"
+        "assert help is builtins.help, help\n"
+        "assert cash._global_cash is None\n"
+        "assert {'cache', 'show_stats', 'register_hasher', 'help'} <= set(dir(cash))\n"
+        "assert callable(cash.help) and callable(cash.cache)\n"
+    )
+    done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stderr

@@ -216,8 +216,9 @@ def cleanup(max_age: int | None = None) -> int:
 
 # The coding-agent guide entry point: ``cash.help()`` prints/returns the compact
 # reference (see ``_agent_guide.py``). Deliberately shadows the builtin at the
-# ``cash.help`` path only; user code's bare ``help()`` is unaffected.
-from ._agent_guide import help  # noqa: A004,E402
+# ``cash.help`` path only, and is kept out of ``__all__`` so that a star import
+# leaves the user's bare ``help()`` alone.
+from ._agent_guide import help as help  # noqa: A004,E402
 
 
 def __getattr__(name):
@@ -235,15 +236,22 @@ def __getattr__(name):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
+#: Served by the module ``__getattr__``, which builds the global ``Cash``.
+_LAZY_NAMES = ("cache", "show_stats", "register_hasher")
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_LAZY_NAMES))
+
+
+# Left out of ``__all__``: ``help``, so ``from cash import *`` does not replace
+# the builtin, and the lazy names, so it does not build the global ``Cash``
+# (load config, construct the backend). All of them are ``cash.<name>``.
 __all__ = [
     # Core API (stable)
     "Cash",
     "CacheExplanation",
-    "cache",  # noqa: F822 - served by the module __getattr__
-    "show_stats",  # noqa: F822 - served by the module __getattr__
-    "register_hasher",  # noqa: F822 - served by the module __getattr__
     "opaque",
-    "help",
     "reset_session",
     "configure",
     "disabled",
