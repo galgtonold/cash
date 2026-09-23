@@ -34,8 +34,8 @@ _DOCS_BASE = "https://cash-lib.readthedocs.io/en/stable/warnings/"
 #: reporting on itself; anything else is the caller's own code.
 #:
 #: Matched as a path prefix, never as the substring "cash". A notebook statement
-#: compiles under the pseudo-filename ``<cash>`` or ``<cash-{digest}>``, and
-#: that IS the user's code -- a substring test would classify exactly the
+#: compiles under the pseudo-filename ``<cash-{digest}>``, and that IS the
+#: user's code -- a substring test would classify exactly the
 #: frames we most want to blame as internal ones.
 _CASH_ROOT = os.path.dirname(os.path.abspath(__file__)) + os.sep
 
