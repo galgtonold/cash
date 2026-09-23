@@ -219,7 +219,6 @@ class TestEarlyCellIdCapture:
             m = CashMagics.__new__(CashMagics)
             m.shell = shell
             m._auto_cache_enabled = True
-            m._benchmark_config = None
             m.badge_mode = "off"
             m._debug = False
             m.current_cell_id = None

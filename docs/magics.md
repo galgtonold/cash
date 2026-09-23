@@ -2,7 +2,7 @@
 
 Cash registers a suite of IPython magic commands that control caching, inspect
 session state, and move cache data between sessions. This page is the canonical
-reference for all **14** magics — each entry lists the exact signature, every
+reference for all **13** magics — each entry lists the exact signature, every
 parsed flag, and a working example. Behaviour is derived directly from
 `src/cash/notebook/ipython/magics.py` and `src/cash/notebook/ipython/admin.py`.
 
@@ -30,7 +30,6 @@ parsed flag, and a working example. Behaviour is derived directly from
 | [`%cash_diff`](#cash_diff) | Diff current session against an exported cache file. |
 | [`%cash_export`](#cash_export) | Serialize cache (and/or lineage) to a file. |
 | [`%cash_import`](#cash_import) | Load cache from a file written by `%cash_export`. |
-| [`%cash_benchmark`](#cash_benchmark) | Arm the next cell to run N timed iterations. |
 
 ---
 
@@ -442,48 +441,4 @@ Prints a warning if the export version isn't `1`.
 ```python
 %cash_import results.cache
 %cash_import results.cache --merge
-```
-
----
-
-## Benchmarking
-
-### `%cash_benchmark`
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_benchmark @89ce8822 -->
-
-Arm the **next** cell to run N timed iterations. Does nothing on its own — the
-next cell triggers the benchmark when it executes.
-
-**Signature:** `%cash_benchmark [<N>] [--cold] [--compare]`
-
-**Arguments:**
-
-- `<N>` (integer) — *Optional.* Number of iterations. Defaults to `3` and is
-  clamped to the range `[1, 100]`.
-- `--cold` — Clear the cache before each cached iteration (measures cold-start
-  time).
-- `--compare` — Also run the cell `N` times **without** caching so the output
-  includes a cached-vs-uncached speedup line.
-
-Timing uses `time.perf_counter` (not `time.time`) to avoid Windows' ~16ms
-clock resolution skewing fast cells. If both runs measure below timer
-resolution, the speedup line reports `n/a`.
-
-**Example:**
-
-```python
-%cash_benchmark               # 3 iterations, warm cache
-%cash_benchmark 10
-%cash_benchmark 5 --cold
-%cash_benchmark 5 --compare
-%cash_benchmark 10 --cold --compare
-```
-
-The arming pattern in practice:
-
-<!-- test:skip reason="illustrative — references undefined pd and missing big.csv" -->
-```python
-%cash_benchmark 5 --compare
-# next cell:
-df = pd.read_csv("big.csv").groupby("region").sum()
 ```

@@ -10,8 +10,6 @@ from __future__ import annotations
 import json
 import logging
 import pickle
-import statistics
-import time
 from typing import TYPE_CHECKING, Any
 
 from IPython.core.magic import line_magic
@@ -546,116 +544,6 @@ class CashAdminMagicsMixin:
                 )
             )
 
-    # ------------------------------------------------------------------
-    # Benchmarking
-    # ------------------------------------------------------------------
-
-    @line_magic
-    def cash_benchmark(self: CashMagics, line: str) -> None:
-        """Benchmark cache performance for a cell or statement.
-
-        Usage::
-
-            %cash_benchmark             - Benchmark the next cell (runs 3 times)
-            %cash_benchmark 5           - Run 5 iterations
-            %cash_benchmark --cold      - Clear cache before each run (cold start)
-            %cash_benchmark --compare   - Compare cached vs uncached execution
-        """
-        parts = strip_inline_comment(line).split()
-
-        iterations = 3
-        cold_start = "--cold" in parts
-        compare_mode = "--compare" in parts
-
-        for p in parts:
-            if p.isdigit():
-                iterations = max(1, min(int(p), 100))
-                break
-
-        self._benchmark_config = {
-            "iterations": iterations,
-            "cold_start": cold_start,
-            "compare_mode": compare_mode,
-            "active": True,
-        }
-        print(
-            f"[Benchmark] Mode enabled for next cell ({iterations} iterations"
-            f"{', cold start' if cold_start else ''}"
-            f"{', compare mode' if compare_mode else ''})"
-        )
-
-    def _run_benchmark(self: CashMagics, cell_code: str, iterations: int, cold_start: bool, compare_mode: bool) -> None:
-        """Execute a benchmark run and report results."""
-
-        # Use perf_counter, not time.time — the latter has ~16ms resolution
-        # on Windows and produces zero-duration measurements for fast cells.
-        uncached_times: list[float] = []
-        if compare_mode:
-            # The "without caching" arm must genuinely recompute on EVERY
-            # iteration. ``self.shell.run_cell`` is the cash-PATCHED entry point
-            # (installed at init, it dispatches to ``_execute_cell`` — cash's
-            # full caching pipeline), so running the cell through it stores the
-            # result on the first iteration and then RESTORES it from cache on
-            # every later one. That measured cache-hit-vs-cache-hit and reported
-            # a meaningless ~1x "speedup" on a workload that was really ~170x
-            # faster to restore than recompute.
-            #
-            # ``self._original_run_cell`` is the real, unpatched IPython
-            # ``run_cell`` captured *before* cash installed its hook, so it
-            # executes the user code as if cash were not present: a true
-            # recompute each iteration, and the honest "without caching"
-            # baseline.
-            for _i in range(iterations):
-                start = time.perf_counter()
-                self._original_run_cell(cell_code, silent=True)
-                uncached_times.append(time.perf_counter() - start)
-
-            # The uncached arm bypassed cash entirely, so nothing was stored in
-            # cash's cache. Warm it once (untimed) so the "with caching" arm
-            # below measures a genuine cache HIT rather than a first-run store.
-            # Skipped under --cold, whose contract is to clear the cache before
-            # each timed iteration (i.e. deliberately measure the miss path).
-            if not cold_start:
-                self._execute_cell(cell_code)
-
-        cached_times: list[float] = []
-        for _i in range(iterations):
-            if cold_start:
-                self._clear_cache_for_cold_start()
-            start = time.perf_counter()
-            self._execute_cell(cell_code)
-            cached_times.append(time.perf_counter() - start)
-
-        print(f"\n{'=' * 50}")
-        print(f"Benchmark Results ({iterations} iterations)")
-        print(f"{'=' * 50}")
-        _print_timing_section("With caching", cached_times, statistics)
-        _print_timing_section("Without caching", uncached_times, statistics)
-
-        if uncached_times and cached_times:
-            mean_cached = statistics.mean(cached_times)
-            mean_uncached = statistics.mean(uncached_times)
-            if mean_uncached > 0 and mean_cached > 0:
-                speedup = mean_uncached / mean_cached
-                savings_pct = (1 - mean_cached / mean_uncached) * 100
-                print(f"\n  Speedup: {speedup:.1f}x ({savings_pct:.0f}% faster with caching)")
-            else:
-                # Both runs measured below timer resolution.  Tell the user the
-                # result is unreliable rather than silently omit the line.
-                print("\n  Speedup: n/a (timings below timer resolution)")
-
-        print(f"{'=' * 50}")
-
-    def _clear_cache_for_cold_start(self: CashMagics) -> None:
-        """Clear cache and lineage state for a cold-start benchmark iteration."""
-        if hasattr(self, "_backend") and self._backend:
-            try:
-                self._backend.clear()
-            except (OSError, AttributeError, TypeError):
-                logger.debug("Failed to clear cache for cold start benchmark")
-        self.tracking_state.variable_lineage.clear()
-        self.tracking_state.executed_cell_codes.clear()
-
 
 # ---------------------------------------------------------------------------
 # Module-level helpers (used by magic methods above, but stateless)
@@ -713,19 +601,3 @@ def _print_diff_details(
         print(f"  [~] Changed:         {', '.join(sorted(changed))}")
     if identical:
         print(f"  [=] Identical:       {', '.join(sorted(identical))}")
-
-
-def _print_timing_section(label: str, times: list[float], statistics: Any) -> None:
-    """Print benchmark timing statistics for one run series."""
-    if not times:
-        return
-    mean = statistics.mean(times)
-    if len(times) > 1:
-        stdev = statistics.stdev(times)
-        print(f"  {label}:")
-        print(f"    Mean:   {mean * 1000:.1f}ms")
-        print(f"    Stdev:  {stdev * 1000:.1f}ms")
-        print(f"    Min:    {min(times) * 1000:.1f}ms")
-        print(f"    Max:    {max(times) * 1000:.1f}ms")
-    else:
-        print(f"  {label}:  {mean * 1000:.1f}ms")

@@ -314,9 +314,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # Session-level concerns (statistics, provenance) grouped in one object
         self._session = CashSession()
 
-        # Benchmark config (one-shot, set by %cash_benchmark)
-        self._benchmark_config = None
-
         # When CashMagics is re-instantiated in a still-running kernel
         # (cash.reset_session(), a second Cash(), or %load_ext after a reset),
         # un-patch the previous instance's hooks FIRST. Otherwise we'd capture an
@@ -457,8 +454,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         rejects.
 
         The handler is resolved by name **at call time** rather than captured, so
-        tests (and ``%cash_benchmark``) can swap ``self._execute_cell`` out and
-        still be routed through.
+        tests can swap ``self._execute_cell`` out and still be routed through.
         """
         if is_async:
 
@@ -1108,18 +1104,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
     def _execute_cell_inner(self, raw_cell: str, *args: Any, **kwargs: Any) -> Any:
         if not self._auto_cache_enabled:
             return self._original_run_cell(raw_cell, *args, **kwargs)
-
-        # Benchmark dispatch (one-shot)
-        benchmark_config = getattr(self, "_benchmark_config", None)
-        if benchmark_config and benchmark_config.get("active"):
-            self._benchmark_config["active"] = False
-            self._run_benchmark(
-                raw_cell,
-                benchmark_config["iterations"],
-                benchmark_config["cold_start"],
-                benchmark_config["compare_mode"],
-            )
-            return self._original_run_cell("pass", *args, **kwargs)
 
         try:
             result = self._cell_executor.execute_cell(

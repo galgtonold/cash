@@ -150,27 +150,34 @@ on the wrong side of that — but they are not equally bad. Cheap-and-small
 wastes nothing you can feel; cheap-and-huge spends real I/O on results you
 would have been better off recomputing. If your notebook is mostly the second
 shape, cash is not the tool for it — and `%cash_stats` will say so plainly
-rather than reporting a phantom win. Measure your own case with
-[`%cash_benchmark`](magics.md#cash_benchmark) rather than trusting a figure
-from someone else's machine.
+rather than reporting a phantom win. Measure your own case (below) rather
+than trusting a figure from someone else's machine.
 
 ## Measuring your own workload
 
 You don't need the repo to get numbers for the thing you actually care about.
-`%cash_benchmark` arms the **next** cell to run N timed iterations:
+Time the cell once without cash, then let cash cache it and run it again:
 
 <!-- test:skip reason="IPython magic command — requires kernel context" -->
 ```python
-%cash_benchmark 5 --compare
-# next cell — this is what gets measured:
-df = pd.read_csv("big.csv").groupby("region").sum()
+%cash_off
 ```
 
-`--compare` also runs the cell N times with caching off, so the output includes a
-cached-vs-uncached speedup for *your* data; `--cold` clears the cache before each
-cached iteration to measure cold-start instead. Timing uses `perf_counter`, so
-fast cells aren't distorted by Windows' ~16 ms clock granularity. See
-[`%cash_benchmark`](magics.md#cash_benchmark) for the full flag list.
+<!-- test:skip reason="IPython magic command — requires kernel context" -->
+```python
+%%time
+df = pd.read_csv("big.csv").groupby("region").sum()   # uncached cost
+```
+
+<!-- test:skip reason="IPython magic command — requires kernel context" -->
+```python
+%cash_on
+```
+
+Now run the same cell (without `%%time`) twice. The first run computes and
+stores the result, the second restores it, and the badge on each shows the time
+each statement took. `%cash_stats` then reports the session's time saved net
+of cash's own overhead, counting only savings it measured.
 
 That number is the one worth quoting internally.
 
