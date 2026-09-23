@@ -45,7 +45,7 @@ PLAIN_SEQS = (list, tuple)
 #: The immutable value types a parser puts in a row -- a ``date`` column, a
 #: ``Decimal`` amount. Leaves of plain data beside the primitives: without
 #: them, rows holding a date left the fast path and cost 16x their body per
-#: call to key (round 20).
+#: call to key.
 PARSED_VALUE_TYPES = (datetime.date, datetime.datetime, datetime.time, datetime.timedelta, decimal.Decimal)
 
 #: Leaves of plain data for keying. ``bytearray`` pickles by value, so it is

@@ -1957,9 +1957,9 @@ class CallUnit:
     def _why_missed(self, site: CallSite) -> str | None:
         """Which named part of this call's key moved since it was last keyed.
 
-        A sweep re-ran and the badge said only "0/6 hit", so
-        the tester had to guess why -- and guessed wrong, then reported the
-        re-run as a suspected bug.
+        A sweep re-ran and the badge said only "0/6 hit", so the user had to
+        guess why -- and guessed wrong, then reported the re-run as a
+        suspected bug.
         """
         try:
             return self._site_reason.get(self._site_id(site))

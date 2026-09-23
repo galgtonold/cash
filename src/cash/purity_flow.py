@@ -16,7 +16,7 @@ without going quiet on the code they are for:
 * **Does this ambient read reach anything but a log line?**
   ``t = time.perf_counter()`` feeding only ``print(f"{... - t:.2f}s")`` cannot
   freeze into a result, so KEY-AMBIENT-READ on it was noise -- and noise that
-  suppressed the network warning a tester needed. Anything that reaches a
+  suppressed the network warning a user needed. Anything that reaches a
   ``return``, a stored container, a condition or a non-logging call still warns.
 
 Both are conservative: whatever they do not understand counts as not fresh and
@@ -189,7 +189,7 @@ _ELEMENT_METHODS = frozenset({"get", "pop", "popitem", "setdefault", "item", "__
 #: per-key accumulator -- ``by_user[k].append(x)``, ``acc = out.get(k); acc[0]
 #: += 1``, ``for u, stamps in by_user.items(): stamps.sort()`` -- mutates
 #: elements of such a container, and was reported as a side effect in every
-#: parser three testers wrote. One level only: an element of an
+#: parser users wrote. One level only: an element of an
 #: element may still be anyone's.
 _DEEP = "\0deep:"
 
@@ -852,7 +852,7 @@ def is_log_line(call: ast.Call) -> bool:
 
     A cache hit skipping one is what caching means -- the work it reported on
     did not happen -- so it is not a side effect to warn about. Three of five
-    testers got an IMPURE-SIDE-EFFECTS on every function that called
+    users got an IMPURE-SIDE-EFFECTS on every function that called
     their progress helper. A ``print`` to stdout is not in this set: stdout
     may be the program's output, which a hit would drop.
     """

@@ -43,8 +43,8 @@ def register_cell_source(code: str) -> str:
     #
     # The lines are for DISPLAY -- a traceback, a warning -- and a statement
     # whose calls go through the cache reads as ``__cash_call__(fit, 0)(g)``
-    # there. A pandas warning quoted that as the user's line (round 25,
-    # r25s5); shown as the user wrote it. What runs is ``code``, compiled by
+    # there. A pandas warning quoted that as the user's line; shown as
+    # the user wrote it. What runs is ``code``, compiled by
     # the caller.
     shown = _USER_CALL.sub(r"\1(", code) if _HELPER in code else code
     linecache.cache[name] = (len(shown), None, shown.splitlines(True), name)

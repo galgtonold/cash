@@ -448,7 +448,7 @@ class CallCache:
             else:
                 # No site registered for this index -- CallCache is being used
                 # outside the ``CallRouting.code_and_tree_for_execution`` rewrite pipeline
-                # (e.g. called directly, as every pre-Task-5 unit test does).
+                # (e.g. called directly, as a unit test may do).
                 # In production ``set_sites`` is always called with a non-empty
                 # list before ``__cash_call__`` is ever bound into ``user_ns``
                 # (``CallRouting.code_and_tree_for_execution`` returns early when

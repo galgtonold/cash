@@ -5,7 +5,7 @@ a parser returns, a matrix of floats as lists. Such a value holds no set,
 no dict, no code and no object state, so the Python-level walks cash otherwise
 makes over it -- to key it, to copy it into the RAM tier, to size it -- can be
 answered one LEVEL at a time with ``chain.from_iterable`` and ``map`` instead
-of one element at a time. Round 19 measured what the walks cost: a warm run of
+of one element at a time. What the walks cost, measured: a warm run of
 a two-million-row parser and two consumers took 9.4 s where no cache took 0.7 s.
 
 Every function here gives up (returns None or False) on anything else -- a
@@ -36,7 +36,7 @@ def fake_clock() -> tuple[tuple, dict]:
     Under freezegun, ``date(2025, 10, 1)`` written in a module is a
     ``freezegun.api.FakeDate``: equal to the real date, but pickled under its
     own class -- so every key holding one moved, and a frozen run never shared
-    an entry with a real one (round 20). Reduced as the real class reduces,
+    an entry with a real one. Reduced as the real class reduces,
     it is keyed as the value it is.
     """
     mod = sys.modules.get("freezegun.api")
@@ -93,7 +93,7 @@ def _levels(value: Any):
         flat = list(chain.from_iterable(level))
         types = set(map(type, flat))
         # Before the level is yielded: a caller sizes it, and a frame asked its
-        # size walks every string it holds (4.3 s of r28s5's 12 s statement).
+        # size walks every string it holds (4.3 s of one 12 s statement).
         if not all(t in leaves or t in PLAIN_SEQS for t in types):
             raise _NotPlain
         yield flat, types
@@ -125,7 +125,7 @@ def dict_rows(value: Any) -> tuple[tuple, list] | None:
     ``csv.DictReader`` rows and JSON records: dicts that share one set of
     string (or int) keys, with plain values. Keyed as dicts they took the
     general path -- every dict walked and rebuilt in Python to put its keys in
-    order -- about 10x the plain-rows cost (round 20). Their content is the
+    order -- about 10x the plain-rows cost. Their content is the
     keys once and a tuple of values per row, which ``map(itemgetter(...))``
     builds at C speed, in key order, so two lists equal but for their dicts'
     insertion order have the same form.
@@ -174,7 +174,7 @@ def identity_snapshot(value: Any) -> list[tuple | None] | None:
     held. Comparing identities after a call (`identity_changed`) sees a sort,
     an append, a ``del``, a ``rows[i] = ...`` or a ``row[3] = ...`` at C speed:
     the re-hash it replaces was skipped for a big argument, so ``rows.sort()``
-    on a million parsed rows was stored and the warm run skipped it (round 20).
+    on a million parsed rows was stored and the warm run skipped it.
     The tuples hold their items, so an id cannot be reused while they exist.
     None for anything that is not plain data, and for a ``bytearray`` leaf,
     which changes in place without changing its identity.
@@ -306,8 +306,8 @@ def copy_plain(value: Any, immutable: bool | None = None, levels: list[set] | No
     Tuples of immutables all the way down need a new top list at most. Rows
     that are LISTS of immutables -- ``csv.reader`` output with a field or two
     converted -- need a new list per row, which ``map(list, rows)`` builds at C
-    speed: a pickle round trip was 4.8 s of a never-stored 2.5M-row parse
-    (round 20). Deeper nests, and ``bytearray`` leaves, still take the pickle
+    speed: a pickle round trip was 4.8 s of a never-stored 2.5M-row parse.
+    Deeper nests, and ``bytearray`` leaves, still take the pickle
     round trip, which is exact for these types and runs in C. *immutable* and
     *levels* are for a caller that has already profiled *value*.
     """

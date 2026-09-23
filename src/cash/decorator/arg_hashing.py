@@ -481,7 +481,7 @@ class ArgHashingMixin:
             # ever moves that tag -- in a script, `q.F = 0.03; run(q)` or
             # `df.loc[0, "a"] = 100` left it as it was, and both the memo below
             # and the tag-as-identity shortcut further down served the result
-            # for the unmutated object (rounds 17-18).
+            # for the unmutated object.
             # The instance's OWN tag: one inherited from a tagged class made
             # every instance key alike (see cash.lineage_tag).
             lineage = own_tag(arg)

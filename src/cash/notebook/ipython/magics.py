@@ -126,7 +126,7 @@ def new_session_stats() -> dict[str, Any]:
         # measured). A Restart & Run All recomputes nothing, so without
         # this the headline net after a restart was "at least -overhead,
         # at best <gross>" -- a range straddling zero in the one reading
-        # every tester takes.
+        # every user takes.
         "total_measured_saved": 0.0,
         # Cash's OWN added wall-time this session (restore + simulation +
         # hashing + badge machinery), accumulated per cell. Subtracted from

@@ -6,7 +6,7 @@ is inherited by every instance, so reading it with ``getattr`` made every
 instance of the class the same value: ``from pathlib import Path`` in a cached
 cell tagged ``Path``, and every path argument to a ``@cash.cache`` function
 then keyed alike -- a call on one file was served another file's result
-(round 28, found as a "flaky" test in the unit suite). Classes, modules and
+(it first showed up as a "flaky" test in the unit suite). Classes, modules and
 functions are therefore never tagged, and a tag is only ever read from the
 object's own ``__dict__``.
 """

@@ -30,8 +30,8 @@ _TYPE_TO_FAMILY: dict[str, str] = {
 
 # (family, backend_kind, operation) -> (a, b)
 # Fitted from `benchmarks/fit_cost_model.py benchmarks/results/ser_deser_matrix.frozen.csv
-# --objective relative`. Both the matrix and the objective changed before round
-# 26, and the numbers moved enough to be worth explaining.
+# --objective relative`. Both the matrix and the objective have changed since
+# the first fit, and the numbers moved enough to be worth explaining.
 #
 # WHAT THE OLD MATRIX MEASURED. Three faults, none of them in the fit:
 #

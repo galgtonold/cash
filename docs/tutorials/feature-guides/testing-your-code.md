@@ -163,7 +163,7 @@ whole module swapped out (`mock.patch("mylib.requests", MagicMock())`). An
 yours, and is not read — before, a fake that used `__import__` made the test
 raise `CashImpureFunctionError`.
 
-<!-- claim: cash/_clock.py:perf_counter @9808b623, cash/_plain_data.py:fake_clock @13005d11 -->
+<!-- claim: cash/_clock.py:perf_counter @9808b623, cash/_plain_data.py:fake_clock @bcb59121 -->
 **A clock test double** such as freezegun is not a mock in this sense: the
 call is cached as usual. Cash times its own work with a clock `freeze_time`
 does not reach, so a body that takes three seconds is still measured as three

@@ -806,7 +806,7 @@ class UpstreamChecker:
         on it can no longer have its dependency tracked. Without this, caching
         degrades silently mid-edit while every signal the user has (the badge,
         ``auto_cache_enabled``) still says it is on — the exact trap that cost
-        testers a long debugging detour.
+        users a long debugging detour.
 
         Deduped per ``(cell index, cell hash)`` on this checker so a persistent
         break warns once — not on every downstream cell run — but a NEW or
@@ -1802,7 +1802,7 @@ class UpstreamChecker:
         earlier. In four projects: ``name 'in_cents' is not defined`` with
         ``in_cents = ...`` above it in the same cell; ``KeyError: 'f1'`` right
         below ``results["f1"] = ...``; ``KeyError: 'logreg'`` for a dict whose
-        filling loop was not re-run. Each tester went looking for a bug in a
+        filling loop was not re-run. Each user went looking for a bug in a
         correct cell.
 
         Evidence, strongest first: a statement above the failing one, not
@@ -1957,7 +1957,7 @@ class UpstreamChecker:
         # raised, and actively misleading for a NameError. That one usually
         # means the cell simply has not run in THIS kernel -- there is nothing
         # to fix, and the remedy (run that cell) is the one thing the old text
-        # never suggested. A tester lost time to exactly that: five
+        # never suggested. A user lost time to exactly that: five
         # cells blocked at once, the message pointing at a cell they had just
         # read through and found nothing wrong with.
         advice = "fix the upstream cell and re-run"

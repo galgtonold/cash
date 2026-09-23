@@ -855,7 +855,7 @@ much to care:
   (`df = load(p); df = df[mask]; df["x"] = ...`). The same frame changed
   *before* the copy is still flagged: it may be the helper's own object.
 
-<!-- claim: cash/purity_flow.py:_FreshFlow._check_insertion @70874c70, cash/purity_flow.py:_FreshFlow._loop_targets @bd0ebd1c, cash/purity_flow.py:is_log_line @15e399e4, cash/effects.py:is_read_only_sql @1d849155 -->
+<!-- claim: cash/purity_flow.py:_FreshFlow._check_insertion @70874c70, cash/purity_flow.py:_FreshFlow._loop_targets @bd0ebd1c, cash/purity_flow.py:is_log_line @90d04d4b, cash/effects.py:is_read_only_sql @94e903d1 -->
   The same goes for the elements of a container the function built and filled
   only with objects of its own — the per-key accumulator every parser writes:
   `by_user[k].append(x)` on a local `defaultdict(list)`,
@@ -974,7 +974,7 @@ notebook statement does the same with the reads written in it.
 out, which is when they read the clock; `time.strftime("%Y-%m", t)` and
 `time.localtime(ts)` only format or convert the time you give them.
 
-<!-- claim: cash/purity_analyzer.py:_ambient_call @9ee41b73, cash/effects.py:_canonical_names @e0692d46 -->
+<!-- claim: cash/purity_analyzer.py:_ambient_call @81835f7e, cash/effects.py:_canonical_names @e0692d46 -->
 It is recognised by what the names refer to, not by how they are spelled:
 `import datetime as _dt; _dt.datetime.now()`, `from datetime import datetime as
 DateTime; DateTime.now()`, `import time as _time` and `from time import time as
@@ -1400,7 +1400,7 @@ was edited after this process imported it. The process is still running the
 *old* code; the file now holds the *new* code. cash noticed the difference the
 first time the function was called.
 
-<!-- claim: cash/source_norm.py:_pyc_proves_unchanged @032757a6 -->
+<!-- claim: cash/source_norm.py:_pyc_proves_unchanged @07afd5bd -->
 That includes a replacement that keeps an older timestamp — `shutil.copy2`,
 `cp -p`, `rsync -a`, robocopy, a drag-and-drop copy in Explorer all do — which
 used to look untouched. cash no longer takes the file's time as proof on
@@ -1575,7 +1575,7 @@ actually read. If the cell is not really code — pasted output, a traceback,
 notes you were half-way through typing — delete it or turn it into a markdown
 cell. Markdown cells are not parsed and never trip this.
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._warn_broken_upstream_cells @62677e0c -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._warn_broken_upstream_cells @6ebee167 -->
 The warning repeats when the break changes and stays quiet while it does not, so
 re-running cells *below* the broken one will not spam you; fixing it and later
 breaking it again will warn again. One gap in that promise: the scan only looks

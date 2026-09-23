@@ -68,8 +68,8 @@ class FrozenMixin:
         A list of two million parsed rows, passed on to two cached consumers,
         was pickled in full for every call -- warm runs about 9x slower than
         uncached -- and ``frozen=True`` on the parser changed nothing: its fast
-        path covered numpy arrays alone, and a list cannot carry a tag (round
-        19). Such a result is now keyed like a frozen frame: by the lineage of
+        path covered numpy arrays alone, and a list cannot carry a tag. Such a
+        result is now keyed like a frozen frame: by the lineage of
         the call that produced it, audited now and then (`_audit_frozen`'s
         schedule).
 

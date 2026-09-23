@@ -283,7 +283,7 @@ METHOD_VERBS: dict[str, EffectKind] = {
     "write_bytes": _W,
     # `OUT.mkdir(exist_ok=True)`: restored instead of run, it left an output
     # folder the user had emptied missing, and the first savefig into it
-    # raised (round 22, with every result persisted). A write on every type
+    # raised (with every result persisted). A write on every type
     # that has it (Path, ZipFile, SFTP clients).
     "mkdir": _W,
     "touch": _W,
@@ -351,7 +351,7 @@ CLOCK_ARG_VALUES: frozenset[str] = frozenset({"now", "today"})
 
 #: Functions that read the clock when their time argument is LEFT OUT: called
 #: with at most this many positional arguments. ``time.strftime("%Y-%m")``
-#: froze a report's period with no warning (round 20), while
+#: froze a report's period with no warning, while
 #: ``time.strftime("%Y-%m", t)`` only formats ``t`` -- as ``time.localtime(ts)``
 #: only converts.
 CLOCK_WHEN_ARGS_OMITTED: dict[str, int] = {
@@ -429,7 +429,7 @@ def writes_to_console(call: ast.Call) -> bool:
 
     Output, like ``print``, not a file. Counted as a write whose repeatability
     was unknown, a step marker (``os.write(2, f"RUN {step}")``) inside a helper
-    made every statement calling it a file writer (round 24, r24s1).
+    made every statement calling it a file writer.
     """
     func = call.func
     if not (isinstance(func, ast.Attribute) and func.attr in ("write", "writelines")):
@@ -468,8 +468,8 @@ def is_read_only_sql(call: ast.Call) -> bool:
     """``con.execute("SELECT ...")``: a query that reads, written as a literal.
 
     ``execute`` is how most database writes happen, but a literal SELECT (or a
-    WITH that only selects) changes nothing, and round 20 was told a sqlite
-    lookup was a "write method". A query built at run time, or any statement
+    WITH that only selects) changes nothing, yet a sqlite lookup was
+    reported as a "write method". A query built at run time, or any statement
     naming a write verb, is still a write.
     """
     if not (isinstance(call.func, ast.Attribute) and call.func.attr == "execute" and call.args):

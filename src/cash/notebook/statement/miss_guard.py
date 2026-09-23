@@ -1,6 +1,6 @@
 """Perpetual-miss guard: stop serialising a statement that can never hit.
 
-**The shape this bounds.** Five independent user-testing rounds each surfaced a
+**The shape this bounds.** Five independent rounds of user testing each surfaced a
 new instance of one recurring failure: some input hashes *unstably* across runs,
 so the statement's cache key differs every run, so it never hits — yet cash still
 pays the (large) serialisation on every run. The cache can never pay the user

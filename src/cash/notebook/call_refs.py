@@ -1,12 +1,12 @@
 """A statement's entry points at call results already in the cache.
 
-Round 25: every project's cache held its expensive results twice. A statement
+Without this, a project's cache held its expensive results twice. A statement
 gathering per-call cached fits -- ``models = {k: fit(g) for k, g in groups}``,
 ``results[name] = evaluate(...)`` in a loop -- stored the whole dict, and each
-fit was stored again under its call's key (r25s5 ~1.2 of 2.7 GiB, r25s1 ~1.3 of
-4 GiB). The statement's entry is still what lets a later cell, or a kernel
-restart, get the value without rebuilding the call's arguments; only its copy
-of the call results is redundant.
+fit was stored again under its call's key (about 1.2 of 2.7 GiB in one
+project, 1.3 of 4 GiB in another). The statement's entry is still what lets a
+later cell, or a kernel restart, get the value without rebuilding the call's
+arguments; only its copy of the call results is redundant.
 
 So when a statement is stored, a value that IS a call result this cell stored
 or was served -- directly, or as an item of a plain dict, list or tuple --

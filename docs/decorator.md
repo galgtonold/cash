@@ -1328,7 +1328,7 @@ columns), 50 ms for a 100 MB numpy array. What cash does about it:
   treated the same way; without it, every call hashes.)
 - **In a notebook**, `%cash_on` tracks every assignment and mutation, and cash
   uses that instead of hashing a tracked object again.
-- <!-- claim: cash/decorator/arg_hashing.py:plain_key_part @10345e4f, cash/_plain_data.py:is_plain @7f7e9e70, cash/_plain_data.py:dict_rows @39223208, cash/_plain_data.py:pickle_unshared @841b27ff -->
+- <!-- claim: cash/decorator/arg_hashing.py:plain_key_part @10345e4f, cash/_plain_data.py:is_plain @7f7e9e70, cash/_plain_data.py:dict_rows @c1110385, cash/_plain_data.py:pickle_unshared @841b27ff -->
   **Lists and tuples of plain values** — the rows a parser returns, including
   `date`, `datetime`, `timedelta` and `Decimal` columns — and **lists of dicts**
   that share their keys (`csv.DictReader` rows, JSON records) are recognised
@@ -1358,7 +1358,7 @@ def score(model, batch):            # keys `model` by train()'s identity:
     return model.predict(batch)     # no hash per call, same key in every process
 ```
 
-<!-- claim: cash/decorator/frozen.py:FrozenMixin._remember_frozen_container @b292fc7e, cash/decorator/frozen.py:FrozenMixin._warn_frozen_has_no_effect @f605e5d3 -->
+<!-- claim: cash/decorator/frozen.py:FrozenMixin._remember_frozen_container @9cf2a45a, cash/decorator/frozen.py:FrozenMixin._warn_frozen_has_no_effect @f605e5d3 -->
 A cached function receiving a frozen result keys it by the call that produced
 it: microseconds, the same in every process, and it works for an object that
 cannot be pickled. That covers a numpy array, a pandas / polars / modin frame, a

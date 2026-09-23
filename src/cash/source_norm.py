@@ -595,8 +595,8 @@ def own_source(fn: object) -> str:
     ``getsource`` unwraps, so for a ``functools.wraps`` wrapper it returned
     the WRAPPED function's text. Keyed by that, every function one decorator
     wraps shares the wrapper's code object and was keyed by whichever wrapped
-    body was read first (round 18); analysed by it, the wrapper's own body was
-    never read (round 19). Reading the code object gives each half its own
+    body was read first; analysed by it, the wrapper's own body was never
+    read. Reading the code object gives each half its own
     text; whoever needs the wrapped half reaches it through ``__wrapped__``.
     Raises what ``inspect.getsource`` raises (`SOURCE_RETRIEVAL_ERRORS`).
     """
@@ -659,9 +659,8 @@ def opaque_identity(fn: object) -> str:
 
     A partial reprs as ``functools.partial(<function slow at 0x...>, 1)``: an
     ADDRESS, so its identity differed in every process and a cached partial
-    never hit across processes (found attacking the decorator before round
-    26). What it wraps is stable; what it binds reaches a key through the
-    arguments and the function's own namespace name.
+    never hit across processes. What it wraps is stable; what it binds reaches
+    a key through the arguments and the function's own namespace name.
     """
     depth = 0
     while isinstance(fn, functools.partial) and depth < 8:
@@ -715,7 +714,7 @@ def _callable_identity(fn: object, depth: int) -> str:
 # `git pull` under a long-running worker -- that first digest describes the NEW
 # text while the code object executing is the OLD one. Key from the new text,
 # result from the old code, stored together, served to the restarted process:
-# round 17 measured 0.500504 served for 0.530876 (CAS-110).
+# one measured case served 0.500504 for a correct 0.530876.
 #
 # Recompiling just the function's text and comparing is NOT a valid check.
 # Bytecode depends on the surrounding module: inside its module the compiler
@@ -863,7 +862,7 @@ def _pyc_proves_unchanged(path: str, st: object) -> bool:
     robocopy and Explorer all keep the SOURCE file's mtime, so a helper
     replaced under a running process by a copy made two hours earlier looked
     untouched since the process started -- and was keyed by the new text while
-    the old code ran (round 19).
+    the old code ran.
 
     The ``.pyc`` is a record of the import: importlib checks its header against
     the source's (mtime, size) and rewrites it when they differ. A ``.pyc``
@@ -882,8 +881,8 @@ def _pyc_proves_unchanged(path: str, st: object) -> bool:
             return False
         # Untracked: read inside a cached call's body -- a nested cached
         # call's key being built -- the module's .pyc became that call's
-        # input, and editing ANY function in the module re-ran it (round 20: a
-        # 25 s step on every deploy). The file tracker sees every Python-level
+        # input, and editing ANY function in the module re-ran it (a 25 s
+        # step on every deploy). The file tracker sees every Python-level
         # open, FileIO included.
         with untracked(), io.FileIO(pyc, "rb") as fh:
             header = fh.read(16)
@@ -967,7 +966,7 @@ def class_functions(cls: type) -> list[types.FunctionType]:
             # A cached method's class attribute is cash's wrapper, whose globals
             # are cash's own: walked as the class's code, it reported
             # KEY-UNHASHABLE-GLOBAL for `Model.fit.ACTIVE_CONFIG`, a name in
-            # no file of the user's (round 19). The user's function is inside.
+            # no file of the user's. The user's function is inside.
             func = getattr(func, "__wrapped__", func)
         if isinstance(func, types.FunctionType):
             found.append(func)
@@ -1004,7 +1003,7 @@ def _module_text_identity(raw: bytes) -> bytes:
     covers re-runs work when it moves. Hashing the FILE meant a comment, a
     blank line or a reformat re-ran everything built on the module: measured
     2026-09-21, adding one comment to a module re-executed a 1.2 s call that
-    used a function the edit did not touch. Round 27 r27s2 reported the same
+    used a function the edit did not touch. A user project showed the same
     thing at scale -- editing one helper re-read all 10,000 of their ticket
     files, 48.7 s against a 17.3 s control, later 9.1x.
 

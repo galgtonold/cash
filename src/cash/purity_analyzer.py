@@ -850,7 +850,7 @@ class _PurityVisitor(ast.NodeVisitor):
 
     #: Container mutators (`MUTATOR_METHODS`) called on a MODULE (`np.sort`,
     #: `np.append`, `np.insert`) return a new array and change nothing --
-    #: a tester got "np.sort() - write method". A module's real writes
+    #: users got "np.sort() - write method". A module's real writes
     #: (`np.save`, `plt.savefig`, `os.write`) keep being reported.
 
     def _reports_effect(self, call: ast.Call) -> bool:
@@ -1349,7 +1349,7 @@ def _ambient_call(node: ast.Call, namespace: dict[str, Any] | None) -> str | Non
     """The ambient read *node* makes, spelled canonically, or None.
 
     The spelling in the source first (``datetime.now()``), then what its names
-    are bound to in *namespace* (:func:`cash.effects.classify_call`): testers
+    are bound to in *namespace* (:func:`cash.effects.classify_call`): users
     wrote ``import datetime as _dt; _dt.datetime.now()``, ``from datetime
     import datetime as DateTime``, ``import time as _time``, ``import os as
     _os`` and ``pd.Timestamp.now()`` freezing a timestamp with no warning,
@@ -1870,7 +1870,7 @@ class PurityAnalyzer:
             # ``@c.cache(...)`` / ``@get_cash().cache`` lines, and analyzing them
             # as if they were body statements walks into the decorator factory's
             # source (cash's own internals), flagging its mutations as the
-            # user's (finding #9). We only want to analyze the function body.
+            # user's. We only want to analyze the function body.
             func_def.decorator_list = []
 
             param_names = frozenset(
@@ -1928,7 +1928,7 @@ class PurityAnalyzer:
             _drop_audited(all_issues, own_issues_from, src)
             # Only now, after the waivers matched against the function's own
             # source: report lines as the FILE numbers them. Relative to the
-            # decorator line, "line 4" sent three testers to the wrong line.
+            # decorator line, "line 4" sent users to the wrong line.
             _anchor_issue_lines(all_issues, own_issues_from, func)
 
             if depth >= self._MAX_DEPTH:
@@ -1962,7 +1962,7 @@ class PurityAnalyzer:
                 # hash and purity are tracked as a separate node. Recursing
                 # would read cash's wrapper machinery (which ``functools.wraps``
                 # makes look like same-package user code) and flag cash's own
-                # internal mutations as the user's (finding #9).
+                # internal mutations as the user's.
                 #
                 # Its binding is still noted: rebinding the name the caller
                 # calls it by (``app.inner = fake``) replaces the edge.
