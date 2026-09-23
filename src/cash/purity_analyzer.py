@@ -94,6 +94,7 @@ from .source_norm import (
 )
 from .tracking.function_tracker import is_local_module
 from .utils import MAIN_MODULE_NAMES, resolve_main_module
+from .value_types import BUILTIN_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -2308,7 +2309,7 @@ class PurityAnalyzer:
         locals_ = _function_locals(func_def)
         freevars = set(getattr(getattr(func, "__code__", None), "co_freevars", ()) or ())
         own_name = getattr(func, "__name__", None)
-        candidates = (read_names & modified) - locals_ - freevars - _PY_BUILTIN_NAMES
+        candidates = (read_names & modified) - locals_ - freevars - BUILTIN_NAMES
         for name in sorted(candidates):
             if name == own_name or name not in module_ns:
                 continue
@@ -2346,9 +2347,6 @@ def get_analyzer() -> PurityAnalyzer:
         return _global_analyzer
 
 
-import builtins as _builtins  # noqa: E402
-
-_PY_BUILTIN_NAMES = frozenset(dir(_builtins))
 _MODULE_MOD_GLOBALS_CACHE: dict[str, frozenset[str]] = {}
 
 

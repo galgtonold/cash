@@ -18,12 +18,13 @@ from cash.control_markers import strip_markers
 from ...analysis.cacheability import analyze_statement
 from ...analysis.cacheability_decision import is_lineage_exempt, receiver_is_identity_coupled
 from ...analysis.code_analyzer import CodeAnalyzer
+from ...value_types import BUILTIN_NAMES
 from .._protocols import TrackingState
 from .._trace import trace_event
 from ..cache_key import statement_source_hash
 from ..cache_status import CacheStatus
 from ._types import RestoreCollector, apply_collected_mutations
-from .virtual_lineage import BUILTIN_NAMES, VirtualLineage, normalize_stmt
+from .virtual_lineage import VirtualLineage, normalize_stmt
 
 __all__ = ["MismatchClassifier"]
 

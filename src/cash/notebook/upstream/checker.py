@@ -41,6 +41,7 @@ from ...tracking.randomness import (
     rng_lineage_fingerprint,
     seed_cells_not_yet_run,
 )
+from ...value_types import BUILTIN_NAMES
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from ..cache_status import CacheStatus
 from ..control_structures import is_control_structure
@@ -53,7 +54,6 @@ from ..server_discovery import (
 )
 from ..staleness import StalenessTracker
 from .simulator import NotebookSimulator
-from .virtual_lineage import BUILTIN_NAMES
 
 if TYPE_CHECKING:
     from ..statement import ProcessResult
@@ -2060,7 +2060,9 @@ class UpstreamChecker:
             except (SyntaxError, ValueError, TypeError):
                 continue
             for name in inputs:
-                if name in live or name in BUILTIN_NAMES:
+                # A builtin name the user never bound needs no statement; one
+                # they did (`format = "csv"`) is found like any other.
+                if name in live or (name in BUILTIN_NAMES and name not in self.variable_lineage):
                     continue
                 if definers is None:
                     definers = {}

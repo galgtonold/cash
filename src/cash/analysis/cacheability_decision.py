@@ -38,7 +38,6 @@ override, so no hook indirection is justified.
 from __future__ import annotations
 
 import ast
-import builtins
 import logging
 import types
 from collections.abc import Callable, Mapping
@@ -46,6 +45,7 @@ from typing import Any
 
 from cash.analysis.annotations import CacheAnnotation
 from cash.analysis.cacheability import StatementAnalysis, user_callee_writing_files
+from cash.value_types import BUILTIN_NAMES, mro_kind
 
 logger = logging.getLogger(__name__)
 
@@ -101,9 +101,6 @@ _IDENTITY_COUPLED_BASES: Mapping[str, str] = {
 _CONTAINER_SCAN_LIMIT = 8
 _CONTAINER_SCAN_MAX_DEPTH = 4  # dict-of-list-of-Axes is 2 deep; leave headroom.
 
-# Builtin-ish names that never need lineage tracking.  Kept in module scope
-# so the per-input loop does not rebuild ``set(dir(builtins))`` on every call.
-_BUILTIN_NAMES: frozenset[str] = frozenset(dir(builtins))
 _SKIP_INPUT_NAMES: frozenset[str] = frozenset({"get_ipython", "__builtins__", "print", "__name__", "__doc__"})
 
 
@@ -120,24 +117,8 @@ def is_lineage_exempt(var_name: str, val: Any) -> bool:
 
 
 def _coupled_kind(value: Any) -> str | None:
-    """Return the friendly name if *value* is itself identity-coupled, else None.
-
-    Imports nothing: the match is on ``module.qualname`` strings taken from the
-    MRO.  The ``startswith`` gate keeps the common case (int, str, DataFrame)
-    to a couple of cheap string checks.
-    """
-    try:
-        mro = type(value).__mro__
-    except AttributeError:  # pragma: no cover - exotic metaclass
-        return None
-    for base in mro:
-        module = getattr(base, "__module__", "") or ""
-        if not module.startswith("matplotlib"):
-            continue
-        kind = _IDENTITY_COUPLED_BASES.get(f"{module}.{getattr(base, '__qualname__', '')}")
-        if kind is not None:
-            return kind
-    return None
+    """Return the friendly name if *value* is itself identity-coupled, else None."""
+    return mro_kind(value, _IDENTITY_COUPLED_BASES, ("matplotlib",))
 
 
 def _coupled_kind_in_container(value: Any, _depth: int = 0) -> str | None:
@@ -265,7 +246,7 @@ def _has_missing_lineage(
 ) -> bool:
     """Return True if any input variable lacks tracked lineage."""
     for var_name in inputs:
-        if var_name in _SKIP_INPUT_NAMES or var_name in _BUILTIN_NAMES:
+        if var_name in _SKIP_INPUT_NAMES or var_name in BUILTIN_NAMES:
             continue
         if var_name not in user_ns:
             return True

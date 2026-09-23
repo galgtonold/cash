@@ -22,7 +22,7 @@ import re
 import sys
 import time as time_module
 import types
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from cash.control_markers import iteration_digest, strip_markers
@@ -59,6 +59,7 @@ from ...tracking.randomness import (
     observed_rng_reads,
 )
 from ...utils import resolve_file_dep_path
+from ...value_types import BUILTIN_NAMES
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from ..cache_key import (
     CacheKeyContext,
@@ -100,49 +101,6 @@ from ._types import (
 __all__ = ["VirtualLineage"]
 
 logger = logging.getLogger(__name__)
-
-# Canonical built-ins to skip during lineage tracking (mirrors upstream.py).
-BUILTIN_NAMES: frozenset[str] = frozenset(
-    {
-        "get_ipython",
-        "__builtins__",
-        "print",
-        "range",
-        "len",
-        "enumerate",
-        "zip",
-        "map",
-        "filter",
-        "sorted",
-        "reversed",
-        "list",
-        "dict",
-        "set",
-        "str",
-        "int",
-        "float",
-        "bool",
-        "type",
-        "isinstance",
-        "hasattr",
-        "getattr",
-        "setattr",
-        "open",
-        "sum",
-        "min",
-        "max",
-        "ValueError",
-        "TypeError",
-        "KeyError",
-        "IndexError",
-        "AttributeError",
-        "RuntimeError",
-        "Exception",
-        "True",
-        "False",
-        "None",
-    }
-)
 
 
 def normalize_stmt(s: str) -> str:
@@ -958,7 +916,7 @@ class VirtualLineage:
                 if stmt_code.lstrip().startswith(self._CTRL_PREFIXES):
                     continue  # loop/control wrapper; iterable feeds via the loop
                 for inp in inputs:
-                    if inp in loop_target_vars or inp in BUILTIN_NAMES:
+                    if inp in loop_target_vars or self._unbound_builtin(inp):
                         continue
                     val = self.shell.user_ns.get(inp)
                     if val is not None and isinstance(val, types.ModuleType):
@@ -1004,7 +962,12 @@ class VirtualLineage:
             if recorded is None:
                 continue
             for inp in inputs:
-                if inp in outputs or inp in loop_target_vars or inp in vars_derived_from_loops or inp in BUILTIN_NAMES:
+                if (
+                    inp in outputs
+                    or inp in loop_target_vars
+                    or inp in vars_derived_from_loops
+                    or self._unbound_builtin(inp, input_hashes)
+                ):
                     continue
                 if isinstance(self.shell.user_ns.get(inp), types.ModuleType):
                     continue
@@ -3439,7 +3402,7 @@ class VirtualLineage:
             # However, the lineage hash construction below sorts them anyway.
             sorted_inputs = sorted(inputs)
             for inp in sorted_inputs:
-                if inp in BUILTIN_NAMES:
+                if self._unbound_builtin(inp, virtual_lineage):
                     continue
 
                 if inp in virtual_lineage:
@@ -3541,7 +3504,14 @@ class VirtualLineage:
                 mutated_vars.update(selfref_reassignment_targets(body_node))
 
         # Filter out built-ins and loop targets
-        return mutated_vars - BUILTIN_NAMES - loop_targets
+        return {v for v in mutated_vars if not self._unbound_builtin(v)} - loop_targets
+
+    def _unbound_builtin(self, name: str, bound: Mapping[str, str] | None = None) -> bool:
+        """Is *name* a builtin here: one of `BUILTIN_NAMES` that neither the
+        kernel (``variable_lineage``) nor the simulation so far (*bound*) has
+        bound? A user's ``max = ...`` or ``id = ...`` is an input like any other,
+        as the runtime treats it."""
+        return name in BUILTIN_NAMES and name not in self.variable_lineage and (bound is None or name not in bound)
 
 
 def _first_cell_reading(notebook_cells: list[str], limit: int, names: set[str]) -> int | None:

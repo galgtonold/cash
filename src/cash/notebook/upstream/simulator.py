@@ -34,6 +34,7 @@ from ...analysis.cacheability import (
 )
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...tracking.function_tracker import is_local_module
+from ...value_types import BUILTIN_NAMES
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from .._trace import is_tracing, trace_event
 from ..cache_key import read_provenance_key
@@ -41,7 +42,7 @@ from ..consumables import consumable_state, has_diverged, is_consumable_unrestor
 from ._types import SimulationCacheEntry, apply_collected_mutations
 from .mismatch_classifier import MismatchClassifier
 from .reexecution_planner import ReexecutionPlanner
-from .virtual_lineage import BUILTIN_NAMES, VirtualLineage
+from .virtual_lineage import VirtualLineage
 
 __all__ = ["NotebookSimulator"]
 

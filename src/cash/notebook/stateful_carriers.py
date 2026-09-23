@@ -50,6 +50,8 @@ from __future__ import annotations
 import re
 from typing import Any, Mapping
 
+from ..value_types import mro_kind
+
 __all__ = ["stateful_carrier_kind", "carrier_kind_from_producer"]
 
 # What a carrier's PRODUCER looks like, for when there is no live object to
@@ -108,22 +110,6 @@ _CARRIER_MODULE_PREFIXES = (
 )
 
 
-def _mro_kind(value: Any) -> str | None:
-    """Return the carrier kind for *value* by MRO string match, or ``None``."""
-    try:
-        mro = type(value).__mro__
-    except AttributeError:  # pragma: no cover - exotic metaclass
-        return None
-    for base in mro:
-        module = getattr(base, "__module__", "") or ""
-        if not module.startswith(_CARRIER_MODULE_PREFIXES):
-            continue
-        kind = _CARRIER_BASES.get(f"{module}.{getattr(base, '__qualname__', '')}")
-        if kind is not None:
-            return kind
-    return None
-
-
 def stateful_carrier_kind(value: Any) -> str | None:
     """Return a human-readable carrier kind for *value*, or ``None``.
 
@@ -132,4 +118,4 @@ def stateful_carrier_kind(value: Any) -> str | None:
     """
     if value is None:
         return None
-    return _mro_kind(value)
+    return mro_kind(value, _CARRIER_BASES, _CARRIER_MODULE_PREFIXES)

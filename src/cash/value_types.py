@@ -17,6 +17,7 @@ often each type shows up in an argument.
 
 from __future__ import annotations
 
+import builtins
 import datetime
 import decimal
 import enum
@@ -25,6 +26,8 @@ import functools
 import pathlib
 import sys
 import uuid
+from collections.abc import Mapping
+from typing import Any
 
 #: Exact types that carry no user code and hold nothing else.
 CODELESS_PRIMS = (str, int, float, bool, type(None), bytes, complex, bytearray)
@@ -83,3 +86,34 @@ def writable_types() -> tuple[type, ...]:
     Built once per set of those modules loaded, not on every call: the
     modules are looked up, never imported here."""
     return _writable_types(sys.modules.get("numpy"), sys.modules.get("pandas"))
+
+
+#: Every name a statement can use without binding it: the builtins, and the
+#: two IPython puts in every namespace. One set for the runtime, the
+#: simulation and the decorator's analyzer, which disagreed while each kept
+#: its own (a hand-picked list of 35 left out ``abs`` and ``round``). Being
+#: in here does not make a name a builtin: a user can bind ``id`` or ``max``,
+#: so a caller that can see the user's bindings checks them first.
+BUILTIN_NAMES: frozenset[str] = frozenset(dir(builtins)) | {"get_ipython", "__builtins__"}
+
+
+def mro_kind(value: Any, bases: Mapping[str, str], prefixes: tuple[str, ...]) -> str | None:
+    """What *value* is, by the first class in its MRO named in *bases*.
+
+    *bases* maps ``"module.qualname"`` to a kind; *prefixes* lists the
+    top-level packages of those modules, so the common case (an int, a
+    DataFrame) costs a couple of string checks. Imports nothing: a value of a
+    library that is not loaded cannot be one of its classes.
+    """
+    try:
+        mro = type(value).__mro__
+    except AttributeError:  # pragma: no cover - exotic metaclass
+        return None
+    for base in mro:
+        module = getattr(base, "__module__", "") or ""
+        if not module.startswith(prefixes):
+            continue
+        kind = bases.get(f"{module}.{getattr(base, '__qualname__', '')}")
+        if kind is not None:
+            return kind
+    return None
