@@ -186,8 +186,8 @@ class TestUpstreamSimulation:
 class TestCellOrdering:
     """Tests for various cell execution orders and re-execution patterns."""
 
-    def test_41_run_cell_twice_skips(self, nb_runner):
-        """Scenario 52: Run cell 1, run cell 1 again — should skip."""
+    def test_41_run_cell_twice_prints_the_same_value(self, nb_runner):
+        """Scenario 52: Run cell 1 twice; both runs print the same value."""
         nb_runner.create_notebook(
             [
                 "x = 42\nprint(f'x={x}')",

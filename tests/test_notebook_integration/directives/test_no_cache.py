@@ -232,8 +232,8 @@ class TestNoCacheAnnotation:
 class TestNoCacheDirective:
     """@cash:no-cache + cell edits."""
 
-    def test_no_cache_always_recomputes(self, nb_runner):
-        """Cell with @cash:no-cache always runs fresh."""
+    def test_no_cache_cell_runs_on_the_first_run_all(self, nb_runner):
+        """A cell with @cash:no-cache runs and prints on the first run_all."""
         nb_runner.create_notebook(
             [
                 "counter = 0",
