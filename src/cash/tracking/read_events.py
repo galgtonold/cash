@@ -30,7 +30,8 @@ __all__ = ["subscribe_read_events"]
 #: Callers whose opens and listings are the interpreter's, not a read of data:
 #: the import system (a module's source and bytecode, the ``sys.path``
 #: directories it lists) and the source readers behind ``inspect.getsource``
-#: and tracebacks, which the ``linecache`` wrappers below cover instead.
+#: and tracebacks, which the ``linecache`` wrappers in `reader_patches` cover
+#: instead.
 _NOT_A_READ = frozenset(
     {
         "_frozen_importlib",

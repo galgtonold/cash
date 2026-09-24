@@ -70,7 +70,7 @@ from .tracking import io_watch
 logger = logging.getLogger(__name__)
 
 #: The observer whose block is currently executing, per thread and per
-#: asyncio Task. Mirrors ``file_tracker.active_tracker`` on purpose: same
+#: asyncio Task. Mirrors ``tracker_context.active_tracker`` on purpose: same
 #: dispatch-dynamically shape, same isolation properties.
 active_observer: contextvars.ContextVar["EffectObserver | None"] = contextvars.ContextVar(
     "_cash_active_observer", default=None

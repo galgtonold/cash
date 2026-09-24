@@ -338,7 +338,7 @@ def file_content_hash(
             # path, and two release copies laid down by one deploy can share
             # size and timestamps exactly. Where
             # the filesystem gives an identity, it is the whole key: a relative
-            # read is recorded under both spellings (``FileTracker._track_path``)
+            # read is recorded under both spellings (``FileAccessTracker._track_path``)
             # and was hashed once for each. Where it gives none (st_ino 0 --
             # including every stat a Windows directory listing returns), the
             # absolute path stands in for it, so both spellings still share.

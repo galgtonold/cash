@@ -140,7 +140,8 @@ class FileAccessTracker:
         self.stale_memo_reads: set[str] = set()
 
     def __enter__(self):
-        # The first open tracker installs the wrappers (see `install_patches`).
+        # The first open tracker installs the wrappers (see
+        # `reader_patches.install_patches`).
         io_watch.hold()
         # Capture the enclosing tracker (if any) BEFORE we become active, so a
         # read inside this block also registers with the outer tracker(s).

@@ -350,7 +350,7 @@ class FileDependencyRegistry:
 
         ``open`` itself, and every reader that opens its file through it
         (``json``/``pickle``/``joblib``/``numpy`` loaders, ``Path.read_text``),
-        arrive as the ``open`` audit event instead (see `_on_open`), as do
+        arrive as the ``open`` audit event instead (see `read_events`), as do
         ``os.listdir``, ``os.scandir`` and ``glob``. What is left here opens
         files in C, or answers from a cache or a stat that raises no event.
         """
