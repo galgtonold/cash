@@ -193,7 +193,6 @@ class UpstreamChecker:
         self.variable_lineage = state.variable_lineage
         self.lineage = state.lineage
         self.executed_file_deps = state.executed_file_deps
-        self.vars_with_mutation_lineage = state.vars_with_mutation_lineage
         self.executed_input_lineages = state.executed_input_lineages
 
     def set_tracking_state(self, state: TrackingState) -> None:
@@ -624,7 +623,6 @@ class UpstreamChecker:
             state.lineage.discard(var)
             for attr in dict_attrs:
                 getattr(state, attr, {}).pop(var, None)
-            state.vars_with_mutation_lineage.discard(var)
             logger.debug("[UPSTREAM] evicted orphaned variable '%s'", var)
 
     @staticmethod

@@ -42,7 +42,6 @@ class TestControlStructureProcessor:
             }
         )
         processor.tracking_state.variable_lineage = {}
-        processor.tracking_state.vars_with_mutation_lineage = set()
         processor.compute_hash = MagicMock(return_value="fakehash")
         return processor
 
@@ -366,7 +365,6 @@ class TestOutputFlushing:
     def mock_statement_processor(self):
         processor = MagicMock()
         processor.tracking_state.variable_lineage = {}
-        processor.tracking_state.vars_with_mutation_lineage = set()
         processor.compute_hash = MagicMock(return_value="fakehash")
         return processor
 
@@ -670,7 +668,6 @@ class TestSingleUnitStreamOutput:
     def mock_statement_processor(self):
         processor = MagicMock()
         processor.tracking_state.variable_lineage = {}
-        processor.tracking_state.vars_with_mutation_lineage = set()
         processor.compute_hash = MagicMock(return_value="fakehash")
         return processor
 

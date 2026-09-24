@@ -1143,7 +1143,6 @@ class StatementProcessor:
         # second pass of AST visitors over the same tree.
         pure_mutations = run.analysis.all_mutated_vars - outputs
         if pure_mutations:
-            self.tracking_state.vars_with_mutation_lineage.update(pure_mutations)
             logger.debug("%s Detected in-place mutations on: %s", _LOG_MUTATION, pure_mutations)
 
         # Perpetual-miss guard: this statement's key has churned for

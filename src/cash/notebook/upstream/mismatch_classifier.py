@@ -97,7 +97,6 @@ class MismatchClassifier:
         self.variable_lineage = state.variable_lineage
         self.lineage = state.lineage
         self.executed_file_deps = state.executed_file_deps
-        self.vars_with_mutation_lineage = state.vars_with_mutation_lineage
         self.executed_input_lineages = state.executed_input_lineages
 
     # --- shell/cash convenience accessors (read-through to VirtualLineage) ---

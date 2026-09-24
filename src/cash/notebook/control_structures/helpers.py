@@ -475,8 +475,6 @@ def update_mutated_variable_lineages(
 
             statement_processor.tracking_state.lineage.record(var_name, new_lineage, value=val)
 
-            statement_processor.tracking_state.vars_with_mutation_lineage.add(var_name)
-
             logger.debug("[CONTROL] Updated lineage for mutated var '%s': %s...", var_name, new_lineage[:20])
 
         except (TypeError, ValueError, AttributeError) as e:

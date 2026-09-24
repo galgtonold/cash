@@ -158,7 +158,6 @@ class NotebookSimulator:
         self.variable_lineage = state.variable_lineage
         self.lineage = state.lineage
         self.executed_file_deps = state.executed_file_deps
-        self.vars_with_mutation_lineage = state.vars_with_mutation_lineage
         self.executed_input_lineages = state.executed_input_lineages
         # Propagate to the Phase-1 simulator so its dict refs stay in sync.
         if hasattr(self, "virtual_lineage"):

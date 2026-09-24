@@ -95,7 +95,6 @@ class TestTrackingState:
         assert state.variable_hashes == {}
         assert state.variable_sources == {}
         assert state.current_session_hashes == {}
-        assert state.vars_with_mutation_lineage == set()
         assert state.executed_input_lineages == {}
 
     def test_independent_instances(self):
@@ -125,7 +124,6 @@ class TestTrackingState:
             "variable_hashes",
             "variable_sources",
             "current_session_hashes",
-            "vars_with_mutation_lineage",
             "executed_input_lineages",
         }
         assert expected.issubset(field_names)
