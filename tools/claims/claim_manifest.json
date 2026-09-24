@@ -157,7 +157,7 @@
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/caching-class-methods.md": {
-    "anchors": 3,
+    "anchors": 2,
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/caching-over-a-grid.md": {
@@ -213,7 +213,7 @@
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/testing-your-code.md": {
-    "anchors": 2,
+    "anchors": 7,
     "audited": "2026-09-10"
   },
   "docs/tutorials/feature-guides/thread-safety.md": {
