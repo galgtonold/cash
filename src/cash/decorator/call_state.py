@@ -20,7 +20,7 @@ CACHE_MISS = object()
 class KeyBuildFailed(Exception):
     """Building a key met something it cannot key, and says what to tell the user.
 
-    Raised from inside a key build; `_resolve_cache_key` warns once with
+    Raised from inside a key build; `KeyBuilder.resolve` warns once with
     *code*, *message* and *fix*, and the call runs uncached -- never keyed
     without the part that failed, which would serve a stale result silently.
     """
@@ -41,7 +41,7 @@ class UnhashableArgs(Exception):
 
 
 class BuiltKey(NamedTuple):
-    """What `Cash._build_key` built: the key, two of its segments, and the
+    """What `KeyBuilder.build` built: the key, two of its segments, and the
     canonicalised arguments explain() reads frozen producers off."""
 
     cache_key: str
@@ -51,8 +51,8 @@ class BuiltKey(NamedTuple):
 
 
 class Call:
-    """One call's state, from the lookup (`Cash._lookup`) to the store
-    (`Cash._finish_miss`), shared by the sync and async wrappers."""
+    """One call's state, from the lookup (`CallRunner.lookup`) to the store
+    (`CallRunner.finish_miss`), shared by the sync and async wrappers."""
 
     __slots__ = (
         "args",
@@ -78,7 +78,7 @@ class Call:
 
 
 class BodyRun:
-    """What `Cash._body_scope` observed while the body ran, and what it returned."""
+    """What `CallRunner.body_scope` observed while the body ran, and what it returned."""
 
     __slots__ = ("tracker", "observer", "rng_pre", "res", "body_seconds", "saves_seconds", "rng_new")
 
@@ -113,7 +113,7 @@ CALL_ENTRY: "contextvars.ContextVar[list | None]" = contextvars.ContextVar("_cas
 
 #: The capture watch of the key being built: {name: (pre-call hash, scope,
 #: owner_globals, owner)} for every provisional capture folded into it. Both
-#: `ClosureFold.fold_closure` and `GlobalsFold.fold_read_globals` add to it; `_resolve_cache_key`
+#: `ClosureFold.fold_closure` and `GlobalsFold.fold_read_globals` add to it; `KeyBuilder.resolve`
 #: sets a fresh one per key and hands it back with the key, so two threads, or
 #: a cached call nested in another's key build, never share one.
 #:
@@ -130,7 +130,7 @@ CALL_ENTRY: "contextvars.ContextVar[list | None]" = contextvars.ContextVar("_cas
 CAPTURE_WATCH: "contextvars.ContextVar[dict | None]" = contextvars.ContextVar("_cash_capture_watch", default=None)
 
 
-#: `_store_refusal` was not handed a capture watch (the streaming path).
+#: `ResultStore.refusal` was not handed a capture watch (the streaming path).
 NO_WATCH = object()
 
 

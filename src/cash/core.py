@@ -14,7 +14,6 @@ import inspect
 import logging
 import os
 import sys
-import threading
 import time
 import weakref
 from collections.abc import Callable
@@ -49,7 +48,7 @@ from .decorator.code_identity import (
 )
 from .decorator.explain import (
     CacheExplanation,
-    ExplainMixin,
+    Explainer,
     MissHistory,
     MissKind,
 )
@@ -60,9 +59,9 @@ from .decorator.purity_checks import LearnedMutations, PurityChecks
 from .decorator.registry import FunctionRegistry, warn_inert_dependency
 from .decorator.reporting import CallLog, Notices
 from .decorator.rng import RngWatch
-from .decorator.runtime import RuntimeMixin
+from .decorator.runtime import CallRunner, KeyBuilder
 from .decorator.script_pickling import expose_script_function
-from .decorator.store import StoreMixin
+from .decorator.store import ResultStore
 from .decorator.stored_keys import StoredKeyRecord
 from .dependency_state import (
     DependencyStateHasher,
@@ -194,11 +193,7 @@ def _in_kernel() -> bool:
     return getattr(get_ipython(), "kernel", None) is not None
 
 
-class Cash(
-    ExplainMixin,
-    RuntimeMixin,
-    StoreMixin,
-):
+class Cash:
     """Smart caching framework for Python functions and Jupyter notebooks.
 
     Provides decorator-based caching with automatic dependency tracking,
@@ -336,20 +331,6 @@ class Cash(
         self._captures = CaptureAnalysis()
         self._helpers = HelperIdentity(self._args, self._captures)
         self._mutations = LearnedMutations()
-        # In-process async single-flight registry: cache_key ->
-        # concurrent.futures.Future. When use_locking is set, concurrent awaits
-        # of the same key coalesce - one coroutine computes, the rest wait and
-        # then read the stored result.
-        #
-        # A plain future rather than an asyncio.Event, because an Event belongs
-        # to the loop that made it: with one slot per key, a leader in a second
-        # loop replaced the first loop's event and its followers -- unable to
-        # await another loop's event -- each computed for themselves (4 loops x
-        # 4 awaits ran the body 16 times). `asyncio.wrap_future` attaches the
-        # wait to whichever loop is asking, so every await in the process
-        # coalesces, which is what the docs promise.
-        self._async_inflight: dict[str, Any] = {}
-        self._async_inflight_lock = threading.Lock()
         self.use_locking = use_locking
         verbose = self.config.verbose
         # Asking for debug output has to produce some, also in a script that
@@ -386,6 +367,52 @@ class Cash(
         # code is part of the key of any cached function it is passed to: the
         # name stays, and it is the RNG watch's method.
         self._warn_unseeded_estimator_result = self._rng.warn_unseeded_estimator_result
+        self._keys = KeyBuilder(
+            self._registry,
+            self._args,
+            self._code,
+            self._files,
+            self._closures,
+            self._globals,
+            self._rng,
+            self._code_args,
+            self._state_hasher,
+            self._misses,
+            self._notices,
+        )
+        self._store = ResultStore(
+            self._registry,
+            self._backend_slot,
+            self._frozen,
+            self._files,
+            self._purity,
+            self._misses,
+            self._notices,
+            self._stored_keys,
+        )
+        self._runner = CallRunner(
+            self._registry,
+            self._backend_slot,
+            self._keys,
+            self._store,
+            self._calls,
+            self._files,
+            self._purity,
+            self._rng,
+            self._misses,
+            self._notices,
+        )
+        self._explainer = Explainer(
+            self.config, self._registry, self._keys, self._args, self._frozen, self._backend_slot, self._misses
+        )
+        # Called by name from the wrapper `_make_wrapper` builds, whose code is
+        # part of the key of any cached function it is passed to: the names
+        # stay, and they are the call runner's steps.
+        self._lookup = self._runner.lookup
+        self._body_scope = self._runner.body_scope
+        self._finish_miss = self._runner.finish_miss
+        self._single_flight = self._runner.single_flight
+        self._compute_with_lock = self._runner.compute_with_lock
 
         atexit.register(self._exit_work.run)
 
@@ -682,9 +709,9 @@ class Cash(
         """Build and return the caching wrapper for *func*, sync or async.
 
         One wrapper for both: everything before and after the body is the
-        same sync code (`_lookup`, `_body_scope`, `_finish_miss`), and the
-        two variants differ only in whether they await the body, so they
-        cannot drift apart.
+        same sync code (`CallRunner.lookup`, `CallRunner.body_scope`,
+        `CallRunner.finish_miss`), and the two variants differ only in whether
+        they await the body, so they cannot drift apart.
         """
         func = spec.func
 
@@ -892,7 +919,7 @@ class Cash(
             """
             token = ACTIVE_CONFIG.set(self.config)
             try:
-                explanation = self._explain_call(cf, args, kwargs)
+                explanation = self._explainer.explain(cf, args, kwargs)
             finally:
                 ACTIVE_CONFIG.reset(token)
             return dataclasses.replace(explanation, cache_dir=_backend_cache_dir(self.backend))

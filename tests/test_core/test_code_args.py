@@ -455,7 +455,7 @@ def test_a_changed_closure_cell_does_NOT_invalidate(c):
 def test_explain_agrees_with_a_real_call_for_a_code_argument(c):
     """The two key-building paths must not disagree.
 
-    ``_resolve_cache_key`` and ``_explain_call`` each build a key from their
+    ``KeyBuilder.resolve`` and ``Explainer.explain`` each build a key from their
     own ``_state_hasher.compute`` chain. If only one folds code arguments,
     ``explain()`` reports ``no_entry`` for a call that in fact hits -- the
     silent-divergence failure this task is most likely to produce. The first
@@ -532,7 +532,7 @@ def test_ordinary_arguments_still_hit_warm_and_stay_silent(c):
 
 async def test_the_async_wrapper_folds_code_arguments_too(c):
     """The async wrapper is a second production entry point into the ONE
-    ``_resolve_cache_key`` the fold is wired into. Pinned separately because
+    ``KeyBuilder.resolve`` the fold is wired into. Pinned separately because
     "they share a helper" is an argument, not a measurement, and the async
     wrapper reaches that helper down its own path.
     """

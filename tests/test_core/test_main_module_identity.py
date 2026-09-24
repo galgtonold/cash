@@ -106,7 +106,7 @@ def test_the_state_hash_agrees_too(tmp_path):
             fn = worker.work.__wrapped__
             c = worker.c
         name = c.get_func_key(fn)
-        c._analyze_dependencies(fn)
+        c._runner._analyze_dependencies(fn)
         state = c._state_hasher.compute(name, own_source_override=c._code.pin_own_source(fn))
         print(json.dumps({"name": name, "state": state}))
     """,

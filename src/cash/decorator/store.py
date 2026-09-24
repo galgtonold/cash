@@ -9,7 +9,7 @@ import logging
 import pickle
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .._clock import perf_counter as _perf_counter
 from ..backends import CacheMetadata
@@ -24,6 +24,16 @@ from .call_state import NO_WATCH
 from .explain import not_persisted_reason
 from .file_deps import snapshot_tracked_deps
 
+if TYPE_CHECKING:
+    from .backend_slot import BackendSlot
+    from .explain import MissHistory
+    from .file_deps import FileDeps
+    from .frozen import FrozenResults
+    from .purity_checks import PurityChecks
+    from .registry import FunctionRegistry
+    from .reporting import Notices
+    from .stored_keys import StoredKeyRecord
+
 logger = logging.getLogger(__name__)
 
 STORE_FAILED_FIX = (
@@ -34,7 +44,7 @@ STORE_FAILED_FIX = (
 
 
 #: Result types seen to refuse an attribute (dict, list, ndarray, ...): not
-#: tried again (`Cash._attach_lineage`). At most `UNTAGGABLE_TYPES_MAX`: a
+#: tried again (`ResultStore.attach_lineage`). At most `UNTAGGABLE_TYPES_MAX`: a
 #: class made per call would otherwise be held here for good.
 UNTAGGABLE_TYPES: set[type] = set()
 UNTAGGABLE_TYPES_MAX = 256
@@ -70,10 +80,31 @@ def lineage_hash(cache_key: str, auto_file_deps: dict | None) -> str:
     return f"{cache_key}:fdeps:{fp}"
 
 
-class StoreMixin:
-    """Deciding whether and how to store a result, and tagging it with its lineage."""
+class ResultStore:
+    """Deciding whether and how to store a result -- whole, or streamed in
+    chunks -- and tagging it with its lineage."""
 
-    def _store_refusal(
+    def __init__(
+        self,
+        registry: FunctionRegistry,
+        backend_slot: BackendSlot,
+        frozen: FrozenResults,
+        files: FileDeps,
+        purity: PurityChecks,
+        misses: MissHistory,
+        notices: Notices,
+        stored_keys: StoredKeyRecord,
+    ) -> None:
+        self._registry = registry
+        self._backend_slot = backend_slot
+        self._frozen = frozen
+        self._files = files
+        self._purity = purity
+        self._misses = misses
+        self._notices = notices
+        self._stored_keys = stored_keys
+
+    def refusal(
         self,
         func: Callable,
         func_name: str,
@@ -140,7 +171,7 @@ class StoreMixin:
             )
         return refusal
 
-    def _attach_lineage(
+    def attach_lineage(
         self,
         result: Any,
         cache_key: str,
@@ -253,7 +284,7 @@ class StoreMixin:
         except (AttributeError, TypeError):
             logger.debug("Failed to attach lineage hash to %s result", type(result).__name__)
 
-    def _store_in_cache(
+    def store(
         self,
         cache_key: str,
         func_name: str,
@@ -284,7 +315,7 @@ class StoreMixin:
             # process and the stored-key record know it.
             ttl_declared = ttl is not None or None
             if ttl is None:
-                ttl = self._tier_default_ttl()
+                ttl = self._backend_slot.tier_default_ttl()
             meta = CacheMetadata(
                 key=cache_key,
                 func_name=func_name,
@@ -374,7 +405,7 @@ class StoreMixin:
 
         The fix line says **raise** the thresholds, and that direction is
         load-bearing. ``cache_if`` is consulted only in the ``chunk_index == 0``
-        branch of ``_stream_and_store`` -- the whole result fit one chunk -- and
+        branch of ``ResultStore.stream_and_store`` -- the whole result fit one chunk -- and
         this fires at ``chunk_index == 1``, once it did not. Lowering the
         thresholds would produce more chunks and so guarantee the very bypass
         it is warning about.
@@ -394,7 +425,7 @@ class StoreMixin:
             "see.",
         )
 
-    def _stream_and_store(
+    def stream_and_store(
         self,
         source,
         *,
@@ -484,7 +515,7 @@ class StoreMixin:
                 # Everything fit in one chunk, so cache_if can still see the
                 # whole result -- it gates STORAGE, never what the caller
                 # already received.
-                refusal = self._store_refusal(None, func_name, buffer, rng_new, cache_if, tracker, observer=observer)
+                refusal = self.refusal(None, func_name, buffer, rng_new, cache_if, tracker, observer=observer)
                 if refusal is not None:
                     self._misses.note_not_stored(cache_key, refusal)
                 else:
@@ -574,7 +605,7 @@ class StoreMixin:
                 CashCacheStoreFailedWarning,
                 f"{cache_key}:chunk_{chunk_index}",
                 "",
-                # NOT "you will get a truncated iterator". ``_chunks_are_intact``
+                # NOT "you will get a truncated iterator". ``CallRunner._chunks_are_intact``
                 # probes every chunk and turns a manifest with a hole into a
                 # MISS, on both read paths, so the cost is a permanent recompute
                 # rather than a short answer.

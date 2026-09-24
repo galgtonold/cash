@@ -142,11 +142,11 @@ def test_unpicklable_arg_warning_blames_user_call_site(tmp_path):
 
 
 def test_resolve_key_exception_emits_ineffective_warning(tmp_path):
-    """The `except` branch in _resolve_cache_key (where key gen raises e.g.
+    """The `except` branch in KeyBuilder.resolve (where key gen raises e.g.
     ValueError) also emits CashCacheIneffectiveWarning. We trigger it by
     registering a custom hasher that raises ValueError — TypeError would be
     swallowed by _serialize_args's inner try/except, but ValueError is only
-    caught by _resolve_cache_key's outer except, which is the branch we want
+    caught by KeyBuilder.resolve's outer except, which is the branch we want
     to exercise here.
     """
 

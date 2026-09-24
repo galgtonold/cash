@@ -131,7 +131,7 @@ The flags are documented in full under [Magic Commands](../magics.md).
 
 ## Asking a decorated function directly
 
-<!-- claim: cash/decorator/explain.py:ExplainMixin._explain_call @bd141dbf -->
+<!-- claim: cash/decorator/explain.py:Explainer.explain @bd141dbf -->
 For a `@cash.cache`-wrapped function, `explain()` answers "would the next call
 with these arguments hit, and why?" without calling the function, mutating
 stats, or writing anything:

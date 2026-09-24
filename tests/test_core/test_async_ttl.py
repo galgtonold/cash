@@ -43,6 +43,6 @@ async def test_async_ttl_expires(tmp_path, clock):
     clock[0] += 1.4  # past the ttl
     await f("k")
     # FileBackend honours TTL; InMemoryBackend does too via the validate
-    # branch in _try_get_cached. Tiered (RAM+disk) is the default, which
+    # branch in CallRunner._try_get_cached. Tiered (RAM+disk) is the default, which
     # also honours TTL.
     assert n["calls"] == 2

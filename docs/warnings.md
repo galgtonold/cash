@@ -249,7 +249,7 @@ out of the cache is in the cache — which matters a great deal if the predicate
 was there to stop an incomplete or unwanted result being stored, and not at all
 if it was there to save space.
 
-<!-- claim: cash/decorator/store.py:StoreMixin._warn_cache_if_bypassed @12524544 -->
+<!-- claim: cash/decorator/store.py:ResultStore._warn_cache_if_bypassed @12524544 -->
 **What to do.** To get the predicate back, the result has to arrive in one
 piece. Either **raise** `chunk_max_items` / `chunk_max_bytes` above the size
 this result actually reaches, or return a list instead of an iterator — a
@@ -743,7 +743,7 @@ row posted to a service, the dict the caller inspects afterwards — the program
 is correct on the run that filled the cache and quietly different on every run
 after it.
 
-<!-- claim: cash/decorator/store.py:StoreMixin._store_refusal @76b546c6, cash/decorator/purity_checks.py:PurityChecks.argument_snapshot @9319e225 -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @76b546c6, cash/decorator/purity_checks.py:PurityChecks.argument_snapshot @9319e225 -->
 `argument mutation` is handled differently, because it is the one that caught
 people out: an object the caller still holds would stop being changed. A call
 seen changing an argument is **not stored** — the line names the argument, and
@@ -1075,7 +1075,7 @@ returned its real result; only the caching was skipped. Cash never builds the
 key without the part that failed, because that key could not see a change to
 it.
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._resolve_cache_key @ec66ad8d -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @ec66ad8d -->
 **Why it matters.** That call did not cache. Correctness is not at risk — with
 no key, nothing is written and nothing is read, so this cannot produce a stale
 answer — but you are paying full compute every time it happens.
@@ -1446,7 +1446,7 @@ type when it can identify one; when the offending value is nested inside a
 container it says so instead, because it cannot see which element is to blame.
 The call ran and returned normally.
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._resolve_cache_key @ec66ad8d -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @ec66ad8d -->
 **Why it matters.** That call did not cache, and calls like it will not cache
 either — this is not first-call warm-up. Every call passing that argument pays
 full compute. Nothing can go stale, because nothing is being stored.
@@ -1960,7 +1960,7 @@ store in chunks, and one of those chunks failed to write. The message names the
 chunk, the backend and the exception. The rest of the entry — including the
 manifest that records how many chunks there should be — was written anyway.
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._chunks_are_intact @fd3a5c46 -->
+<!-- claim: cash/decorator/runtime.py:CallRunner._chunks_are_intact @fd3a5c46 -->
 **Why it matters.** It costs you the caching, not the correctness. Before
 serving a chunked entry Cash probes every chunk the manifest claims and treats a
 manifest with a hole as *absent*, so the call misses and recomputes — the same
@@ -1971,7 +1971,7 @@ entry. Measured: three calls after the failure ran the body three times and each
 returned all ten items; the call after the write succeeded was the last one to
 run the body.
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._compute_with_lock @3b0babd9 -->
+<!-- claim: cash/decorator/runtime.py:CallRunner.compute_with_lock @3b0babd9 -->
 Both read paths run that probe, including the double-checked re-read taken
 inside the lock when `use_locking=True`. Until 2026-09-06 the locking path
 skipped it and served the broken entry as a *short* iterator — three of ten
@@ -2024,7 +2024,7 @@ not affected: the reloaded code is keyed afresh.
 result to the cache failed. The message names the backend and the exception.
 Nothing was stored.
 
-<!-- claim: cash/decorator/store.py:StoreMixin._store_in_cache @e710d350 -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @e710d350 -->
 **Why it matters.** The result you received is correct — the failure is on the
 storage side only, and Cash deliberately reports it rather than raising it into
 your code. If this happens once, it costs one recompute. If it happens on every

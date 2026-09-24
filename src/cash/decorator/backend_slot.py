@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import threading
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..backends.factory import build_backend_from_config
 
@@ -50,3 +50,23 @@ class BackendSlot:
         """The built backend's local directory, or ``None``; never builds one."""
         backend = self._backend
         return backend.local_dir if backend is not None else None
+
+    def tier_default_ttl(self) -> int | None:
+        """The ``default_ttl`` of the first tier that has one, as configured now."""
+        backend = self._backend
+        return backend.default_ttl if backend is not None else None
+
+    def entry_ttl(self, ttl: int | None, metadata: Any) -> int | None:
+        """The ttl a stored entry is judged by.
+
+        The decorator's ``ttl=`` when it has one -- a per-function setting,
+        applied as it stands now, in both directions. Otherwise the SHORTER of
+        the ttl the entry was written with and the tier's ``default_ttl`` as
+        configured now: lowering a tier's default from a day to 5 seconds left
+        every entry written under the day being served,
+        while lowering a decorator's ttl took effect at once.
+        """
+        if ttl is not None:
+            return ttl
+        found = [t for t in (getattr(metadata, "ttl", None), self.tier_default_ttl()) if t is not None]
+        return min(found) if found else None

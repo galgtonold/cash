@@ -22,9 +22,15 @@ from .cached_function import CachedFunction
 from .call_state import PROCESS_STARTED, KeyBuildFailed, UnhashableArgs, UnhashableDefault
 
 if TYPE_CHECKING:
+    from ..config import CashConfig
+    from .arg_hashing import ArgHasher
+    from .backend_slot import BackendSlot
+    from .frozen import FrozenResults
+    from .registry import FunctionRegistry
+    from .runtime import KeyBuilder
     from .stored_keys import StoredKeyRecord
 
-# Reason codes returned by `Cash._explain_call` / ``f.explain(...)``.
+# Reason codes returned by `Explainer.explain` / ``f.explain(...)``.
 # Kept as module-level constants so external code can match against them
 # without string-typo risk: ``if e.reason == EXPLAIN_HIT: ...``.
 EXPLAIN_HIT = "hit"
@@ -155,7 +161,7 @@ class MissReason(NamedTuple):
         return f"{self.kind}: {self.text}" if self.text else str(self.kind)
 
 
-#: What each link of the state chain folds (`_build_key`), for a
+#: What each link of the state chain folds (`KeyBuilder.build`), for a
 #: change that no named part of the ledger accounts for.
 _STATE_STAGES = (
     "its code",
@@ -580,23 +586,41 @@ class MissHistory:
         self.remember_outcome(cache_key, {"not_stored": refusal})
 
 
-class ExplainMixin:
+class Explainer:
     """``f.explain()``: why the next call with some arguments would hit or miss."""
 
-    def _explain_call(self, cf: CachedFunction, args: tuple, kwargs: dict) -> CacheExplanation:
+    def __init__(
+        self,
+        config: CashConfig,
+        registry: FunctionRegistry,
+        keys: KeyBuilder,
+        args: ArgHasher,
+        frozen: FrozenResults,
+        backend_slot: BackendSlot,
+        misses: MissHistory,
+    ) -> None:
+        self._config = config
+        self._registry = registry
+        self._keys = keys
+        self._args = args
+        self._frozen = frozen
+        self._backend_slot = backend_slot
+        self._misses = misses
+
+    def explain(self, cf: CachedFunction, args: tuple, kwargs: dict) -> CacheExplanation:
         """Return why a call with these args would hit or miss the cache.
 
         Pure introspection - does NOT call ``func``, does NOT touch
         `Cash` stats, does NOT emit warnings, and does NOT
-        mutate the backend. The key comes from `_build_key`, the same
+        mutate the backend. The key comes from `KeyBuilder.build`, the same
         build a real call uses, and the entry is judged by the rules
-        `_try_get_cached` applies, so the answer reflects what would
+        `CallRunner._try_get_cached` applies, so the answer reflects what would
         actually happen on the next real call.
 
         See `CacheExplanation` for the return shape.
         """
         func, func_name, dynamic_depends_on, ttl = cf.func, cf.name, cf.dynamic_depends_on, cf.ttl
-        if self.config.disable:
+        if self._config.disable:
             return CacheExplanation(
                 would_hit=False,
                 reason=EXPLAIN_DISABLED,
@@ -627,7 +651,7 @@ class ExplainMixin:
         # a step would give held back: explain() must stay silent.
         token = _EXPLAINING.set(True)
         try:
-            built = self._build_key(func, func_name, dynamic_depends_on, args, kwargs)
+            built = self._keys.build(func, func_name, dynamic_depends_on, args, kwargs)
         except UnhashableDefault:
             return CacheExplanation(
                 would_hit=False,
@@ -729,8 +753,8 @@ class ExplainMixin:
 
         metadata = CacheMetadata.from_dict(raw_metadata)
 
-        # TTL check - the same rule `_try_get_cached` applies.
-        ttl = self._entry_ttl(ttl, metadata)
+        # TTL check - the same rule `CallRunner._try_get_cached` applies.
+        ttl = self._backend_slot.entry_ttl(ttl, metadata)
         if ttl_expired(metadata.timestamp, ttl):
             timestamp = metadata.timestamp or 0
             age = time.time() - timestamp

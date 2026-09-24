@@ -10,13 +10,13 @@ it on are the ones with money on the line, and it silently switched off the
 README's headline file-awareness promise.
 
 The mechanism is a double-check that had drifted from the first check. The
-wrapper's unlocked read runs ``_try_get_cached``, which validates the TTL, the
+wrapper's unlocked read runs ``CallRunner._try_get_cached``, which validates the TTL, the
 recorded file dependencies and the chunk manifest. It correctly reported a miss.
-``_compute_with_lock`` then re-read the entry inside the lock through its own
+``CallRunner.compute_with_lock`` then re-read the entry inside the lock through its own
 hand-rolled sequence -- which asked about the TTL and the chunks, and never
 about the files -- and handed the entry back anyway.
 
-This is the second omission of that kind in the same block: ``_chunks_are_intact``
+This is the second omission of that kind in the same block: ``CallRunner._chunks_are_intact``
 was added to it after a chunked manifest served a SHORT iterator, 3 of 10 items,
 silently. Twice means the duplication is the defect, so the locked path now
 calls the same function the unlocked one does, and these tests pin that the two

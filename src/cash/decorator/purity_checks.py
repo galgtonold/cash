@@ -430,15 +430,15 @@ class PurityChecks:
         figure.  The user then draws on their figure while ``plt.savefig()``
         writes the cache's private snapshot.
 
-        Checked here rather than inside ``_store_in_cache`` so the refusal
-        lands beside ``cache_if``, BEFORE ``_attach_lineage``: a value that is
+        Checked here rather than inside ``ResultStore.store`` so the refusal
+        lands beside ``cache_if``, BEFORE ``ResultStore.attach_lineage``: a value that is
         not stored must not carry a lineage hash pointing at an entry that was
         never written.
 
         KNOWN BOUNDARY: called at all four store sites (sync/async x
         non-iterator/single-chunk), which is every site where the value is in
         hand before anything is written.  A *multi*-chunk iterator is not
-        covered -- ``_stream_and_store`` has already written earlier chunks by the
+        covered -- ``ResultStore.stream_and_store`` has already written earlier chunks by the
         time any item could be inspected, so gating there would mean aborting
         mid-write and reclaiming them.  Reaching it needs a generator yielding
         enough Figures to cross ``chunk_max_bytes`` (or a million of them),
@@ -717,7 +717,7 @@ class PurityChecks:
         """Turn a `PurityReport` into warnings or an exception.
 
         Called once per function on first call (after first
-        ``_analyze_dependencies``).
+        ``CallRunner._analyze_dependencies``).
 
         * ``warn`` (default): one-shot `CashImpurityWarning`
           summarising issues; also recorded in

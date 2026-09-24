@@ -6,9 +6,10 @@ from __future__ import annotations
 import concurrent.futures
 import contextlib
 import logging
+import threading
 import time
 from collections.abc import Callable, Iterator
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from .._clock import perf_counter as _perf_counter
 from ..backends import CacheMetadata
@@ -39,6 +40,22 @@ from .iterators import ChunkedCachedIterator, StreamingCachedIterator, is_one_sh
 from .registry import resolve_dynamic_dependencies
 from .rng import capture_rng_pre_state, replay_rng_state
 
+if TYPE_CHECKING:
+    from ..dependency_state import DependencyStateHasher
+    from .arg_hashing import ArgHasher
+    from .backend_slot import BackendSlot
+    from .closure_fold import ClosureFold
+    from .code_args import CodeArgs
+    from .code_identity import CodeIdentity
+    from .explain import MissHistory
+    from .file_deps import FileDeps
+    from .globals_fold import GlobalsFold
+    from .purity_checks import PurityChecks
+    from .registry import FunctionRegistry
+    from .reporting import CallLog, Notices
+    from .rng import RngWatch
+    from .store import ResultStore
+
 logger = logging.getLogger(__name__)
 
 
@@ -62,10 +79,38 @@ def compute_cache_key(func_name: str, state_hash: str, dynamic_hash: str, args_h
     return f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"
 
 
-class RuntimeMixin:
-    """The steps of a cached call, shared by the sync and async wrappers."""
+class KeyBuilder:
+    """The cache key of a call: the state segment folded from the function's
+    code, closure, defaults, globals, files, RNG epoch and environment, then
+    the dynamic dependencies and the arguments."""
 
-    def _resolve_cache_key(
+    def __init__(
+        self,
+        registry: FunctionRegistry,
+        args: ArgHasher,
+        code: CodeIdentity,
+        files: FileDeps,
+        closures: ClosureFold,
+        globals_fold: GlobalsFold,
+        rng: RngWatch,
+        code_args: CodeArgs,
+        state_hasher: DependencyStateHasher,
+        misses: MissHistory,
+        notices: Notices,
+    ) -> None:
+        self._registry = registry
+        self._args = args
+        self._code = code
+        self._files = files
+        self._closures = closures
+        self._globals = globals_fold
+        self._rng = rng
+        self._code_args = code_args
+        self._state_hasher = state_hasher
+        self._misses = misses
+        self._notices = notices
+
+    def resolve(
         self,
         func: Callable,
         func_name: str,
@@ -75,7 +120,7 @@ class RuntimeMixin:
     ) -> tuple[BuiltKey | Unkeyable, dict]:
         """The key for a real call, or why it has none; and its `CAPTURE_WATCH`.
 
-        `_build_key`, with a ledger of what the state segment is made of
+        `KeyBuilder.build`, with a ledger of what the state segment is made of
         (`STATE_LEDGER`). A call with no key -- a mocked helper, an argument
         or default that cannot be hashed, a key build that raised -- has
         been warned about once; the caller runs it uncached.
@@ -90,7 +135,7 @@ class RuntimeMixin:
         watch: dict = {}
         watch_token = CAPTURE_WATCH.set(watch)
         try:
-            built = self._build_key(func, func_name, dynamic_depends_on, args, kwargs)
+            built = self.build(func, func_name, dynamic_depends_on, args, kwargs)
         except UnhashableDefault:
             # `ClosureFold.fold_defaults` has warned: an unhashable default means cash
             # cannot tell whether it changed, so caching at all risks a stale
@@ -114,20 +159,7 @@ class RuntimeMixin:
                 self._misses.keep_state_ledger(slot, ledger)
         return built, watch
 
-    def _run_uncached(self, spec: CachedFunction, call: Call, why: MissReason) -> Any:
-        """Run a call that has no key, log it as a miss, and hand back its result."""
-        result = spec.func(*call.args, **call.kwargs)
-        self._calls.log(
-            spec.name,
-            cache_hit=False,
-            execution_time=_perf_counter() - call.call_start,
-            args_hash="",
-            cache_key="",
-            miss=why,
-        )
-        return result
-
-    def _build_key(
+    def build(
         self,
         func: Callable,
         func_name: str,
@@ -137,8 +169,8 @@ class RuntimeMixin:
     ) -> BuiltKey:
         """The cache key for calling *func* with these arguments.
 
-        The ONE key build: a real call (`_resolve_cache_key`) and ``explain()``
-        (`_explain_call`) both use it, so the key explain() predicts is the key
+        The ONE key build: a real call (`KeyBuilder.resolve`) and ``explain()``
+        (`Explainer.explain`) both use it, so the key explain() predicts is the key
         the call looks up.
 
         Raises when there is no key: `UnhashableDefault`, `UnhashableArgs`,
@@ -202,6 +234,63 @@ class RuntimeMixin:
         cache_key = compute_cache_key(func_name, state_hash, dynamic_state_hash, args_hash)
         return BuiltKey(cache_key, state_hash, args_hash, normalized_args)
 
+
+class CallRunner:
+    """The steps of a cached call, shared by the sync and async wrappers: the
+    lookup, the body's scope, what a miss does after it, and the locked and
+    single-flight paths of ``use_locking``."""
+
+    def __init__(
+        self,
+        registry: FunctionRegistry,
+        backend_slot: BackendSlot,
+        keys: KeyBuilder,
+        store: ResultStore,
+        calls: CallLog,
+        files: FileDeps,
+        purity: PurityChecks,
+        rng: RngWatch,
+        misses: MissHistory,
+        notices: Notices,
+    ) -> None:
+        self._registry = registry
+        self._backend_slot = backend_slot
+        self._keys = keys
+        self._store = store
+        self._calls = calls
+        self._files = files
+        self._purity = purity
+        self._rng = rng
+        self._misses = misses
+        self._notices = notices
+        # In-process async single-flight registry: cache_key ->
+        # concurrent.futures.Future. When use_locking is set, concurrent awaits
+        # of the same key coalesce - one coroutine computes, the rest wait and
+        # then read the stored result.
+        #
+        # A plain future rather than an asyncio.Event, because an Event belongs
+        # to the loop that made it: with one slot per key, a leader in a second
+        # loop replaced the first loop's event and its followers -- unable to
+        # await another loop's event -- each computed for themselves (4 loops x
+        # 4 awaits ran the body 16 times). `asyncio.wrap_future` attaches the
+        # wait to whichever loop is asking, so every await in the process
+        # coalesces, which is what the docs promise.
+        self._async_inflight: dict[str, Any] = {}
+        self._async_inflight_lock = threading.Lock()
+
+    def _run_uncached(self, spec: CachedFunction, call: Call, why: MissReason) -> Any:
+        """Run a call that has no key, log it as a miss, and hand back its result."""
+        result = spec.func(*call.args, **call.kwargs)
+        self._calls.log(
+            spec.name,
+            cache_hit=False,
+            execution_time=_perf_counter() - call.call_start,
+            args_hash="",
+            cache_key="",
+            miss=why,
+        )
+        return result
+
     def _try_get_cached(
         self,
         cache_key: str,
@@ -227,7 +316,7 @@ class RuntimeMixin:
         if metadata is None:
             self._misses.note_miss(func_name, cache_key, self._misses.absent_entry_reason(func_name, cache_key))
             return CACHE_MISS
-        ttl = self._entry_ttl(ttl, metadata)
+        ttl = self._backend_slot.entry_ttl(ttl, metadata)
         try:
             if entry_expired(metadata, ttl):
                 age = time.time() - (metadata.timestamp or 0)
@@ -257,7 +346,7 @@ class RuntimeMixin:
             # key than when the upstream was freshly computed, recomputing
             # needlessly. The hash is deterministic from (cache_key,
             # auto_file_deps), both available here.
-            self._attach_lineage(cached_data, cache_key, metadata.auto_file_deps, ttl=ttl, func_name=func_name)
+            self._store.attach_lineage(cached_data, cache_key, metadata.auto_file_deps, ttl=ttl, func_name=func_name)
             replay_rng_state(metadata)
             self._registry.cached[func_name].last_key = cache_key
             self._calls.log(
@@ -278,26 +367,6 @@ class RuntimeMixin:
             )
         return CACHE_MISS
 
-    def _tier_default_ttl(self) -> int | None:
-        """The ``default_ttl`` of the first tier that has one, as configured now."""
-        backend = self._backend_slot.built
-        return backend.default_ttl if backend is not None else None
-
-    def _entry_ttl(self, ttl: int | None, metadata: Any) -> int | None:
-        """The ttl a stored entry is judged by.
-
-        The decorator's ``ttl=`` when it has one -- a per-function setting,
-        applied as it stands now, in both directions. Otherwise the SHORTER of
-        the ttl the entry was written with and the tier's ``default_ttl`` as
-        configured now: lowering a tier's default from a day to 5 seconds left
-        every entry written under the day being served,
-        while lowering a decorator's ttl took effect at once.
-        """
-        if ttl is not None:
-            return ttl
-        found = [t for t in (getattr(metadata, "ttl", None), self._tier_default_ttl()) if t is not None]
-        return min(found) if found else None
-
     def _chunks_are_intact(self, cache_key: str, metadata: CacheMetadata) -> bool:
         """True unless this is a chunked manifest missing some of its chunks.
 
@@ -310,9 +379,9 @@ class RuntimeMixin:
         payload and undo the laziness chunking exists for.
 
         Scope, because the docs depend on it: BOTH read paths apply this --
-        ``_try_get_cached`` for the default one, and the double-checked re-read
-        inside ``_compute_with_lock`` for ``use_locking=True``, since both go
-        through `_try_get_cached`. Both paths are pinned by
+        ``CallRunner._try_get_cached`` for the default one, and the double-checked re-read
+        inside ``CallRunner.compute_with_lock`` for ``use_locking=True``, since both go
+        through `CallRunner._try_get_cached`. Both paths are pinned by
         ``tests/test_core/test_iterator_caching.py``.
         """
         if getattr(metadata, "iterator_storage", None) != "chunked":
@@ -342,13 +411,13 @@ class RuntimeMixin:
         a single blob and are returned as *hit* directly.
 
         Every hit path goes through here -- the first lookup, the locked
-        re-read (`_compute_with_lock`) and the async single-flight follower
-        (`_single_flight`) -- and all of them pass the call's `recompute`, so a
+        re-read (`CallRunner.compute_with_lock`) and the async single-flight follower
+        (`CallRunner.single_flight`) -- and all of them pass the call's `recompute`, so a
         missing chunk is recomputed on every path rather than raised.
         """
         if metadata and metadata.iterator_storage == "chunked":
             n_chunks = metadata.n_chunks or 0
-            return ChunkedCachedIterator(self, call.cache_key, n_chunks, call.recompute)
+            return ChunkedCachedIterator(self._backend_slot, call.cache_key, n_chunks, call.recompute)
         return hit
 
     def _analyze_dependencies(self, func: Callable[..., Any]) -> None:
@@ -373,7 +442,7 @@ class RuntimeMixin:
         mode = self._registry.purity_mode(func_name)
         self._purity.surface_purity(func_name, report, mode)
 
-    def _lookup(self, spec: CachedFunction, args: tuple, kwargs: dict, *, async_body: bool) -> Call:
+    def lookup(self, spec: CachedFunction, args: tuple, kwargs: dict, *, async_body: bool) -> Call:
         """Everything a call does before the body: analysis, key, lookup.
 
         Returns the call's state. ``call.outcome`` is what the wrapper returns
@@ -406,7 +475,7 @@ class RuntimeMixin:
         # Outside the key build, which turns any exception into "no key": an
         # exception from the body of an uncached call must propagate, not run
         # the body a second time.
-        built, call.capture_watch = self._resolve_cache_key(func, func_name, spec.dynamic_depends_on, args, kwargs)
+        built, call.capture_watch = self._keys.resolve(func, func_name, spec.dynamic_depends_on, args, kwargs)
         if isinstance(built, Unkeyable):
             call.outcome = self._run_uncached(spec, call, built.reason)
             return call
@@ -434,7 +503,7 @@ class RuntimeMixin:
 
         The SAME validity test as the first lookup, by calling the same
         function -- not a hand-rolled subset of it, which would lose a check
-        (``_chunks_are_intact``, ``FileDeps.auto_file_deps_fresh``) as they are added.
+        (``CallRunner._chunks_are_intact``, ``FileDeps.auto_file_deps_fresh``) as they are added.
         One function decides whether an entry may be served.
         """
         raw_metadata, cached_data = self._backend_slot.backend.get(call.cache_key)
@@ -449,7 +518,7 @@ class RuntimeMixin:
         return self._wrap_iterator_hit(call, metadata, hit)
 
     @contextlib.contextmanager
-    def _body_scope(self, spec: CachedFunction, call: Call) -> Iterator[BodyRun]:
+    def body_scope(self, spec: CachedFunction, call: Call) -> Iterator[BodyRun]:
         """Run the body inside this: file tracking, effect observation, RNG
         watch and timing, shared by the sync and async wrappers.
 
@@ -494,14 +563,14 @@ class RuntimeMixin:
             run.saves_seconds = run.body_seconds / max(threads_at_start, THREADS_IN_CALLS[0], 1)
             run.rng_new = self._rng.note_draw(func_name, run.rng_pre)
 
-    def _finish_miss(self, spec: CachedFunction, call: Call, run: BodyRun) -> Any:
+    def finish_miss(self, spec: CachedFunction, call: Call, run: BodyRun) -> Any:
         """Everything a missed call does after its body: check, store, log."""
         func, func_name, args, kwargs = spec.func, spec.name, call.args, call.kwargs
         res = run.res
         # A generator is handed straight back, wrapped, and cached only once
         # the caller has drained it. Draining it here instead meant a streamed
         # response arrived in one lump after the full latency, so
-        # `@cash.cache` changed how the function behaved. `_stream_and_store`
+        # `@cash.cache` changed how the function behaved. `ResultStore.stream_and_store`
         # carries the tracker into each production step so lazy file reads are
         # still recorded. An async function returning a SYNC generator streams
         # the same way.
@@ -520,7 +589,7 @@ class RuntimeMixin:
                 cache_key=call.cache_key,
             )
             return StreamingCachedIterator(
-                self._stream_and_store(
+                self._store.stream_and_store(
                     res,
                     cache_key=call.cache_key,
                     spec=spec,
@@ -542,7 +611,7 @@ class RuntimeMixin:
         execution_time = _perf_counter() - call.call_start
 
         self._purity.warn_shared_result(func, func_name, res, args, kwargs)
-        refusal = self._store_refusal(
+        refusal = self._store.refusal(
             func, func_name, res, run.rng_new, spec.cache_if, run.tracker, call.capture_watch, observer=run.observer
         )
         if refusal is not None:
@@ -552,8 +621,8 @@ class RuntimeMixin:
             # hash points downstream at THIS cache entry, so a cache_if-rejected
             # (uncached) value must not carry one - it would reference an entry
             # that was never written.
-            self._attach_lineage(res, call.cache_key, auto_file_deps, ttl=call.ttl, func_name=func_name)
-            self._store_in_cache(
+            self._store.attach_lineage(res, call.cache_key, auto_file_deps, ttl=call.ttl, func_name=func_name)
+            self._store.store(
                 call.cache_key,
                 func_name,
                 res,
@@ -581,7 +650,7 @@ class RuntimeMixin:
         self._calls.note_effectiveness(func_name, miss_overhead, body_seconds=run.body_seconds, was_hit=False)
         return res
 
-    async def _single_flight(self, spec: CachedFunction, call: Call, compute: Callable[[], Any]) -> Any:
+    async def single_flight(self, spec: CachedFunction, call: Call, compute: Callable[[], Any]) -> Any:
         """Async single-flight for ``use_locking``: coalesce concurrent awaits
         of the same key in-process, so an expensive idempotent coroutine (a
         paid API call, say) under ``asyncio.gather`` computes once instead of
@@ -626,7 +695,7 @@ class RuntimeMixin:
             if not leader.done():
                 leader.set_result(None)
 
-    def _compute_with_lock(self, spec: CachedFunction, call: Call, compute: Callable[[], Any]) -> Any:
+    def compute_with_lock(self, spec: CachedFunction, call: Call, compute: Callable[[], Any]) -> Any:
         """Compute with double-checked locking; falls back to unlocked on error.
 
         Acquiring the lock is best-effort: if *any* backend raises while taking
@@ -635,7 +704,7 @@ class RuntimeMixin:
         crash the user's call. Acquisition, compute, and release are separated so
         a release failure can't re-run the compute, and a compute exception
         propagates normally (it is not mistaken for a lock failure). Under the
-        lock the key is looked up again by `_reread`, the same test as the first
+        lock the key is looked up again by `CallRunner._reread`, the same test as the first
         lookup."""
         lock_cm = self._backend_slot.backend.lock(call.cache_key)
         try:

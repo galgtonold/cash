@@ -281,7 +281,7 @@ Worth understanding before any parameter. With a bare `@cash.cache` and nothing
 configured, a cached result is discarded and recomputed when **any** of these
 change:
 
-<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe, cash/decorator/runtime.py:RuntimeMixin._analyze_dependencies @35b8b434 -->
+<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe, cash/decorator/runtime.py:CallRunner._analyze_dependencies @35b8b434 -->
 | What changed | How it's detected |
 |---|---|
 | The **arguments** | Hashed by *content* — so DataFrames and arrays work, and two equal-but-distinct objects share one entry |
@@ -829,7 +829,7 @@ After the TTL elapses, the next call recomputes and replaces the entry.
 Entries whose calls never come back stay on disk until you reclaim them —
 call `cash.cleanup()`, or run `python -m cash clear` from the CLI.
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._entry_ttl @b7544486, cash/decorator/explain.py:MissHistory.absent_entry_reason @69e58ae2 -->
+<!-- claim: cash/decorator/backend_slot.py:BackendSlot.entry_ttl @b7544486, cash/decorator/explain.py:MissHistory.absent_entry_reason @69e58ae2 -->
 An entry remembers the `ttl` it was written with, and the decorator's
 current `ttl` applies too, so the **shorter** of the two wins. Lengthening
 `ttl=60` to `ttl=3600` does not rescue entries already written under 60 s:
@@ -958,7 +958,7 @@ business invariants — its job is purely "should this be cached".
 result fits in a single chunk. For multi-chunk results, the predicate
 is bypassed (warning fires) — see the iterator section below.
 
-<!-- claim: cash/decorator/store.py:StoreMixin._store_refusal @76b546c6 -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @76b546c6 -->
 **It decides what is written, not what is served.** `cache_if` is not part of
 the key, so adding it to a function that already has entries changes nothing
 about those entries: a `None` stored before you added
@@ -1240,7 +1240,7 @@ dedup marks (so the next misbehavior re-warns instead of being silent).
 
 ### `func.explain(*args, **kwargs)`
 
-<!-- claim: cash/decorator/explain.py:ExplainMixin._explain_call @bd141dbf -->
+<!-- claim: cash/decorator/explain.py:Explainer.explain @bd141dbf -->
 Pure introspection — returns a `CacheExplanation` describing whether
 the next call with these args would hit or miss the cache, and why:
 

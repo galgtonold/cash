@@ -137,7 +137,7 @@ def test_a_slow_first_call_does_not_convict_a_function_worth_caching(tmp_path, m
 
     cash = _cash(tmp_path)
     cash.register_hasher(Payload, _costly_hash)
-    analyze = cash._analyze_dependencies
+    analyze = cash._runner._analyze_dependencies
 
     def work(n):
         acc = 0
@@ -153,7 +153,7 @@ def test_a_slow_first_call_does_not_convict_a_function_worth_caching(tmp_path, m
         time.sleep(delay)
         return analyze(func)
 
-    monkeypatch.setattr(cash, "_analyze_dependencies", slow_analyze)
+    monkeypatch.setattr(cash._runner, "_analyze_dependencies", slow_analyze)
 
     @cash.cache
     def dominant(payload):

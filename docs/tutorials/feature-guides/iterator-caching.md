@@ -48,7 +48,7 @@ No decorator option to enable — iterator detection is automatic. Pre-existing 
 
 ## How chunking works
 
-<!-- claim: cash/decorator/store.py:StoreMixin._stream_and_store @ed9fee88 broad="the loop, the tracker scope and the commit rule are one mechanism", cash/object_hashing.py:estimate_object_size @645bc0a2 -->
+<!-- claim: cash/decorator/store.py:ResultStore.stream_and_store @ed9fee88 broad="the loop, the tracker scope and the commit rule are one mechanism", cash/object_hashing.py:estimate_object_size @645bc0a2 -->
 The write path lives in `Cash._stream_and_store`. The loop is:
 
 1. Pull one item from the user's iterator, with the `FileAccessTracker` live — so a file the generator reads lazily is recorded as a dependency. It is entered once and suspended around each yield, so the caller's own reads in its loop body are not attributed to the generator.
@@ -117,7 +117,7 @@ What is **not** supported:
 
 ## Replay semantics
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._wrap_iterator_hit @0f360cdb, cash/decorator/iterators.py:StreamingCachedIterator @c3985e69 broad="the claim is about the whole replay wrapper", cash/decorator/iterators.py:ChunkedCachedIterator @8437fd80 broad="the claim is about the whole replay wrapper" -->
+<!-- claim: cash/decorator/runtime.py:CallRunner._wrap_iterator_hit @0f360cdb, cash/decorator/iterators.py:StreamingCachedIterator @c3985e69 broad="the claim is about the whole replay wrapper", cash/decorator/iterators.py:ChunkedCachedIterator @8437fd80 broad="the claim is about the whole replay wrapper" -->
 On a cache hit, the dispatch at `Cash._wrap_iterator_hit` reads `metadata['iterator_storage']` and returns a **fresh** `ChunkedCachedIterator` over the stored chunks — a lazy iterator that fetches one chunk at a time. It is also handed the call's recompute, so a chunk lost between the manifest check and the read reruns the function instead of raising; sync and async hits, the locked re-read and the async follower all pass it. That is *every* iterator hit, single-chunk included: a one-chunk result is still stored as a manifest plus one chunk entry, so it replays through the same path.
 
 `StreamingCachedIterator` is the other half, and it belongs to the **first** call rather than to a hit. It wraps `_stream_and_store`, so a miss hands you the producer's own items at the producer's own pace while the chunks fill behind you — there is nothing to read back out of the backend, because the result does not exist yet:
@@ -168,12 +168,12 @@ The returned object satisfies the iterator protocol — `iter(x) is x`, `__next_
 
 What it will not do is stop there. Ending the iteration quietly hands the caller a PREFIX of the answer — 100 items of 1000, with no error and no warning, so a sum or a count over the stream is wrong rather than slow (measured while stress-testing the decorator). Test reference: `test_chunked_iterator_missing_chunk_finishes_from_the_function` in `tests/test_core/test_iterator_caching.py`, and `tests/test_core/test_a_cached_iterator_is_never_served_short.py` for the end-to-end shapes.
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._chunks_are_intact @fd3a5c46, cash/decorator/runtime.py:RuntimeMixin._compute_with_lock @3b0babd9 -->
+<!-- claim: cash/decorator/runtime.py:CallRunner._chunks_are_intact @fd3a5c46, cash/decorator/runtime.py:CallRunner.compute_with_lock @3b0babd9 -->
 That miss is `Cash._chunks_are_intact`, which `get_metadata`-probes each chunk the manifest claims and treats a manifest with a hole as absent. **Both read paths run it** — `_try_get_cached` on the default path, and the double-checked re-read inside `Cash._compute_with_lock` when `use_locking=True` — so an incomplete manifest recomputes either way.
 
 The locking path skipped that probe until 2026-09-06 and served the broken entry as a *short* iterator instead: measured, the same entry returned 10 items and recomputed with locking off, and 3 items with no recompute with locking on — 0 items when the missing chunk was the first one. See [`STORE-CHUNK-FAILED`](../../warnings.md#store-chunk-failed).
 
-<!-- claim: cash/decorator/store.py:StoreMixin._write_one_chunk @3972fc3e -->
+<!-- claim: cash/decorator/store.py:ResultStore._write_one_chunk @3972fc3e -->
 TTL is honored uniformly: each chunk inherits the manifest's TTL (`Cash._write_one_chunk` propagates it), so `Cash.cleanup()` reclaims expired chunks alongside the expired manifest. Test reference: `test_chunked_chunks_inherit_manifest_ttl` in `tests/test_core/test_iterator_caching.py`.
 
 ## Persistence and backend tiers
@@ -221,7 +221,7 @@ Tuning notes:
 
 - **Partial consumption on a miss caches nothing.** The miss path produces only what the caller consumes, so stopping after ten of a thousand items leaves no complete result to store and the next call recomputes. Storing the ten under the full result's key would be a wrong answer rather than a slow one. On a *hit* partial consumption is free — only the chunks the caller reaches are loaded. Test reference: `test_chunked_iterator_partial_consumption_caches_nothing` in `tests/test_core/test_iterator_caching.py`.
 - **`cache_if` is bypassed on multi-chunk results.** As described above, the predicate cannot run without re-materializing chunks. The bypass warning is keyed per-function and fires once per process. To keep `cache_if` gating in effect, **raise** the thresholds until the whole result fits one chunk, so the single-chunk path stays in play — lowering them produces *more* chunks and so guarantees the bypass.
-<!-- claim: cash/decorator/store.py:StoreMixin._attach_lineage @0955942e -->
+<!-- claim: cash/decorator/store.py:ResultStore.attach_lineage @0955942e -->
 - **No lineage tag on iterator returns.** A non-iterator result is tagged with the call that produced it (`Cash._attach_lineage`), which is what lets a [`frozen=True`](../../decorator.md#passing-large-objects-between-cached-functions) result be keyed downstream without hashing it. Iterator wrappers are not tagged, so `frozen=True` does not reach them: passing a cached iterator to another `@cash.cache` function hashes its contents the normal way. Materialize to a list if you want the frozen short-circuit.
 - **Purity analysis treats generator bodies like any function.** A generator that calls `time.time()`, mutates module-level state, or reads `os.environ` inside the loop still triggers `CashImpurityWarning`. Apply `@cash.pure` / `assume_safe` / `strict` exactly as you would for a non-generator function. See [Purity Decorators](purity-decorators.md).
 - **Backend store failures are per-chunk.** If a chunk write raises, the wrapper emits `CashCacheStoreFailedWarning` and continues to the next chunk; the manifest is still written at the end. A later read that hits the missing chunk terminates iteration early (the same path as eviction). To detect this, watch for the warning rather than relying on the iterator length matching `total_items`.
