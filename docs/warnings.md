@@ -1771,6 +1771,10 @@ reproducible *and* cacheable. The same check covers a seed read from a settings
 object, a dict or a module global — `default_rng(settings.seed)`,
 `default_rng(opts["seed"])` — when that field is `None` in the call.
 
+<!-- claim: cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded @71ddf96a -->
+A statement marked `# @cash:no-cache` never raises it: Cash does not cache that
+statement, so there is no first result to replay.
+
 **This is Cash working as designed, not a defect.** Worth being blunt about,
 because the instinctive reaction — decide the cache is broken and turn caching
 off — is the worst outcome available here. Unseeded randomness is everywhere in
@@ -1818,7 +1822,8 @@ cached" in [Annotations](annotations.md).
     switched **on** — the statement re-executes, lands on the same position, and
     hands back the identical number you were trying to get away from. Measured:
     own line → the rewind is skipped; trailing → it is not, while the annotation
-    itself still parses as `no_cache`.
+    itself still parses as `no_cache`. Because the statement is marked
+    `no-cache`, this warning does not fire for it either, so nothing tells you.
 
     The check also runs over the **whole cell**, not one statement. One own-line
     `# @cash:no-cache` anywhere in a cell — above the draw or below it — turns

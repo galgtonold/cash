@@ -191,6 +191,42 @@ class TestSeededControl:
         assert caught == []
 
 
+class TestNoCacheStatement:
+    """A ``# @cash:no-cache`` statement is never cached, so it gets no warning.
+
+    ``RANDOM-UNSEEDED`` says the first result is cached and replayed. For a
+    no-cache statement that is false: it is never stored, and with the directive
+    on a line of its own the rewind is off too, so every run draws again. That
+    is the "genuinely fresh" outcome the warning itself recommends, so warning
+    about it contradicts its own advice.
+    """
+
+    CELLS = ["import random", "# @cash:no-cache\nx = random.random()"]
+
+    def test_no_cache_draw_does_not_warn(self, cash_magics):
+        run_cash_cell(cash_magics, self.CELLS[0], cells=self.CELLS)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            run_cash_cell(cash_magics, self.CELLS[1], cells=self.CELLS)
+            first = cash_magics.shell.user_ns["x"]
+            run_cash_cell(cash_magics, self.CELLS[1], cells=self.CELLS)
+        assert cash_magics.shell.user_ns["x"] != first, "the no-cache draw must be drawn again, not replayed"
+        assert [w for w in caught if issubclass(w.category, CashRandomnessWarning)] == []
+
+    def test_the_same_draw_without_no_cache_warns(self, cash_magics):
+        """Positive control: the draw alone is what the warning is for."""
+        caught = _run_capturing_warnings(cash_magics, "import random\nx = random.random()")
+        assert len(caught) == 1
+        assert "random.random" in str(caught[0].message)
+
+    def test_a_no_cache_seed_still_counts(self, cash_magics):
+        """Only the message is dropped: the scan still records the seed, or a
+        later draw from that module would warn although it is seeded."""
+        run_cash_cell(cash_magics, "import numpy as np\n# @cash:no-cache\nnp.random.seed(0)")
+        caught = _run_capturing_warnings(cash_magics, "x = np.random.rand(1000)")
+        assert caught == []
+
+
 class TestDedupe:
     """Policy: once per statement per session.
 
@@ -201,19 +237,28 @@ class TestDedupe:
     the warning out entirely.
     """
 
-    def test_repeated_run_of_same_statement_warns_once(self, cash_magics):
+    def test_repeated_run_of_same_statement_warns_once(self, cash_magics, cash_instance):
         """Recompute path: every run executes, so the *same* message is deduped.
 
-        ``# @cash:no-cache`` pins that path. Without it this test silently
-        depended on the cost model: ``np.random.rand(1000)`` is microseconds on a
-        fast machine, so it fell below the 0.01 s "too cheap to cache" floor and
-        the re-run recomputed (silent). On a loaded Windows CI runner the same
-        draw measured *over* the floor, so it was cached and the re-run
-        **restored** — emitting the distinct "restored from cache" warning, which
-        owns a separate dedupe slot. That timing dependency, not the dedupe
-        logic, is what made this test flaky. The cached path is covered below.
+        A cost floor no statement can clear pins that path. Without it this test
+        silently depended on the cost model: ``np.random.rand(1000)`` is
+        microseconds on a fast machine, so it fell below the 0.01 s "too cheap
+        to cache" floor and the re-run recomputed (silent). On a loaded Windows
+        CI runner the same draw measured *over* the floor, so it was cached and
+        the re-run **restored** — emitting the distinct "restored from cache"
+        warning, which owns a separate dedupe slot. That timing dependency, not
+        the dedupe logic, is what made this test flaky. The cached path is
+        covered below. (``# @cash:no-cache`` used to pin the path, but a
+        no-cache statement no longer warns at all.) numpy is bound up front, not
+        imported in the cell: a first ``import numpy`` is slow, and a cheap
+        statement over an input that was slow to build is stored despite the
+        floor.
         """
-        code = "import numpy as np\n# @cash:no-cache\nx = np.random.rand(1000)"
+        import numpy as np
+
+        cash_instance.config.min_execution_time_to_cache_seconds = 1e9
+        cash_magics.shell.user_ns["np"] = np
+        code = "x = np.random.rand(1000)"
         first = _run_capturing_warnings(cash_magics, code)
         second = _run_capturing_warnings(cash_magics, code)
         assert len(first) == 1

@@ -512,7 +512,7 @@ class StatementProcessor:
             run.annotation, run.ttl
         )
         self._calls.begin_statement(run.effective_ttl, run.force_persist)
-        run.unseeded_calls = self._randomness.warn_unseeded(code, run.allow_random)
+        run.unseeded_calls = self._randomness.warn_unseeded(code, run.allow_random, skip_cache=run.skip_cache)
         self._randomness.warn_entropy_reseed(code)
         run.metrics = metrics = {
             "status": CacheStatus.UNKNOWN,
