@@ -93,9 +93,9 @@ key has its own single builder, `RuntimeMixin._build_key` in
 predicts the key the call looks up.
 
 Keys are computed at runtime (`_analyze_and_hash` in `statement/processor.py`),
-during upstream simulation and virtual restore (`_update_virtual_lineage` and
-`try_virtual_restore` in `upstream/virtual_lineage.py`) and for call units
-(`call_unit.py`). If two of these disagree, a kernel restart turns into cache
+during upstream simulation and virtual restore (`_update_virtual_lineage` in
+`upstream/virtual_lineage.py`, `try_virtual_restore` in
+`upstream/cache_restore.py`) and for call units (`call_key.py`). If two of these disagree, a kernel restart turns into cache
 misses or stale values; that has caused critical bugs more than once. To change
 the key, change only `compute_cache_key()`, and add tests next to
 `tests/test_notebook/test_virtual_restore_modules.py`.
