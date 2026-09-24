@@ -207,7 +207,7 @@ class Player:
     def _run_cell(self, i: int) -> str | None:
         try:
             self.runner.run_cell(i)
-        except Exception as exc:  # noqa: BLE001 - a cell error is a finding, not a crash
+        except Exception as exc:  # a cell error is a finding, not a crash
             name = getattr(exc, "ename", None) or type(exc).__name__
             value = getattr(exc, "evalue", None) or str(exc)[-400:]
             return f"cell {self.labels[i - 1]!r} raised {name}: {value}"

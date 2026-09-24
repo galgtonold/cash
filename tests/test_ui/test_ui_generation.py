@@ -54,7 +54,7 @@ class TestUIGeneration(unittest.TestCase):
 
             # Check if it's a VBox/HBox (container) - only applies when ipywidgets is installed
             try:
-                import ipywidgets  # noqa: F401
+                import ipywidgets  # noqa: F401 - an availability probe
 
                 _has_ipywidgets = True
             except ImportError:

@@ -77,7 +77,7 @@ def test_a_capped_cache_still_serves_a_second_instance(tmp_path, cap, should_per
         reader = _instance(tmp_path, cap)
 
         @reader.cache(assume_safe=True)
-        def build(n):  # noqa: F811 - same body
+        def build(n):  # same body
             runs.append(n)
             time.sleep(0.2)
             return "x" * PAYLOAD_BYTES

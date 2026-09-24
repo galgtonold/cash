@@ -178,7 +178,7 @@ def replay_rng_state(metadata: Any) -> None:
         if rng_modules_changed({m: pre[m] for m in advanced}, {m: live[m] for m in advanced}):
             return
         restore_rng_state({m: post[m] for m in advanced})
-    except Exception:  # noqa: BLE001 - a replay must never break a hit
+    except Exception:  # a replay must never break a hit
         logger.debug("[CORE] could not replay the RNG state of a hit", exc_info=True)
 
 
@@ -388,7 +388,7 @@ class RngWatch:
 
         try:
             unseeded, _messages, _has_seed = RandomnessDetector().analyze_code(src)
-        except Exception:  # noqa: BLE001  # pragma: no cover - the scan must never break caching
+        except Exception:  # pragma: no cover - the scan must never break caching
             logger.debug("randomness scan failed for %s", func_name, exc_info=True)
             return
 

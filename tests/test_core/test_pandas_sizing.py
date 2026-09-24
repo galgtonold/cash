@@ -14,9 +14,9 @@ import pytest
 np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
 
-from cash import object_hashing  # noqa: E402
-from cash.backends.memory_backend import InMemoryBackend  # noqa: E402
-from cash.object_hashing import estimate_object_size, pandas_nbytes  # noqa: E402
+from cash import object_hashing
+from cash.backends.memory_backend import InMemoryBackend
+from cash.object_hashing import estimate_object_size, pandas_nbytes
 
 pytestmark = [pytest.mark.core]
 

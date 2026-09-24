@@ -61,7 +61,7 @@ def _cash_version() -> str:
         from cash import __version__
 
         return __version__
-    except Exception:  # noqa: BLE001
+    except Exception:
         return "unknown"
 
 

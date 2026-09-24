@@ -481,7 +481,7 @@ def _config_notice(code: str, what: str, fix: str) -> None:
     _CONFIG_NOTICES.add((code, what))
     try:
         warn_diagnostic(CashCacheIneffectiveWarning, code, what, fix)
-    except Exception:  # noqa: BLE001 - a notice must never break a config load
+    except Exception:  # a notice must never break a config load
         logger.debug("Could not emit %s", code, exc_info=True)
 
 

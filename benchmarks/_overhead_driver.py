@@ -21,7 +21,7 @@ from IPython.core.interactiveshell import InteractiveShell
 # registration in cold-mode runs, *and* enable cash in "off" mode runs
 # (because the notebook itself imports cash). The bench was measuring
 # something other than what its mode flag claimed.
-import cash  # noqa: F401 — side-effect import: neutralise IPython auto-load
+import cash  # side-effect import: neutralise IPython auto-load
 from benchmarks._overhead_io import CodeCell
 from benchmarks._overhead_results import CellTiming, StatementMetric
 
@@ -181,7 +181,7 @@ def _enable_cash(shell, cache_dir: Path, sink: list[StatementMetric], session=No
                     storage=[str(s) for s in (result.get("storage") or [])],
                 )
             )
-        except Exception:  # noqa: BLE001 — tee must never break user code
+        except Exception:  # tee must never break user code
             pass
         return result
 

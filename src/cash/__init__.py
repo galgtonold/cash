@@ -191,7 +191,7 @@ def cleanup(max_age: int | None = None) -> int:
 # reference (see ``_agent_guide.py``). Deliberately shadows the builtin at the
 # ``cash.help`` path only, and is kept out of ``__all__`` so that a star import
 # leaves the user's bare ``help()`` alone.
-from ._agent_guide import help as help  # noqa: A004,E402
+from ._agent_guide import help as help
 
 
 def __getattr__(name):
@@ -320,7 +320,7 @@ def _auto_load_in_ipython() -> None:
     scripts).
     """
     try:
-        ip = get_ipython()  # type: ignore[name-defined]  # noqa: F821
+        ip = get_ipython()  # type: ignore[name-defined]
         if ip is not None:
             load_ipython_extension(ip)
     except NameError:

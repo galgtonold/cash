@@ -307,7 +307,7 @@ def mock_pyarrow(monkeypatch):
         return
     # Try importing the real pyarrow first — if it works, don't stub.
     try:
-        import pyarrow  # noqa: F401
+        import pyarrow  # noqa: F401 - an availability probe
 
         yield
         return

@@ -16,8 +16,8 @@ import pytest
 pytest.importorskip("matplotlib")
 pytest.importorskip("sklearn")
 
-from tests._nbharness.replay_corpus import SCENARIOS, expected_recompute  # noqa: E402
-from tests._nbharness.replay_harness import fresh_trace_file, run_with_cash  # noqa: E402
+from tests._nbharness.replay_corpus import SCENARIOS, expected_recompute
+from tests._nbharness.replay_harness import fresh_trace_file, run_with_cash
 
 pytestmark = [pytest.mark.integration, pytest.mark.upstream]
 

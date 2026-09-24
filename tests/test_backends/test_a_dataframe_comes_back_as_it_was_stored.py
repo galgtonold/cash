@@ -21,8 +21,8 @@ pd = pytest.importorskip("pandas")
 np = pytest.importorskip("numpy")
 pytest.importorskip("pyarrow")
 
-import cash  # noqa: E402
-from cash.backends.serialization import ParquetSerializer  # noqa: E402
+import cash
+from cash.backends.serialization import ParquetSerializer
 
 FRAMES = {
     "range index": lambda: pd.DataFrame({"a": np.arange(5)}),

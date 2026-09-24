@@ -85,7 +85,7 @@ class LoopSplitPolicy:
             return None
         try:
             iterable[0:0]
-        except Exception:  # noqa: BLE001 - a user __getitem__ can raise anything: not sliceable
+        except Exception:  # a user __getitem__ can raise anything: not sliceable
             logger.debug("[LOOP_SPLIT] iterable is not sliceable", exc_info=True)
             return None
         if not header_safe_to_reevaluate(node.iter, iterable, user_ns):

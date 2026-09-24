@@ -26,7 +26,7 @@ class _StubBackend:
         self._metadata = metadata
         self._value = value
 
-    def get(self, key: str):  # noqa: ARG002 - key is irrelevant to the stub
+    def get(self, key: str):
         return self._metadata, self._value
 
 

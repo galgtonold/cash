@@ -68,7 +68,7 @@ def resolve_dynamic_dependencies(
                 dynamic_state_parts.append(state_token_of(ds))
         except KeyBuildFailed:
             raise
-        except Exception as e:  # noqa: BLE001 - any failure here is the resolver's
+        except Exception as e:  # any failure here is the resolver's
             raise KeyBuildFailed(
                 "KEY-DYNAMIC-DEP-FAILED",
                 f"@cash.cache on {func_name}: dynamic_depends_on resolver raised "
@@ -452,7 +452,7 @@ class FunctionRegistry:
                     if dep_func is not None:
                         stack.append((dep_func, dep))
             return reason
-        except Exception:  # noqa: BLE001 - never break a call over this
+        except Exception:  # never break a call over this
             logger.debug("[CORE] binding refresh failed for %s", func_name, exc_info=True)
             return None
 

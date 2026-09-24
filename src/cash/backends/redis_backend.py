@@ -14,7 +14,7 @@ from ._writes import PendingWrites
 from .serialization import PickleSerializer, Serializer
 
 try:
-    import redis  # noqa: F401
+    import redis  # noqa: F401 - an availability probe
     from redis.exceptions import RedisError
 
     HAS_REDIS = True
@@ -74,7 +74,6 @@ class RedisBackend(CacheBackend):
         try:
             import redis
             from redis.backoff import ExponentialBackoff
-            from redis.exceptions import ConnectionError, TimeoutError  # noqa: F401
             from redis.retry import Retry
         except ImportError as exc:
             raise DependencyNotFoundError(

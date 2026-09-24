@@ -271,7 +271,7 @@ class FileAccessTracker:
         self.add_tracked(abs_path, lstat=read_lstat)
         try:
             credit_read_to_stack(abs_path, self)
-        except Exception:  # noqa: BLE001 - attribution is an aid; the read counts regardless
+        except Exception:  # attribution is an aid; the read counts regardless
             logger.debug("[TRACKER] Could not credit %r to the stack", abs_path, exc_info=True)
         # a RELATIVE read path also records the UN-resolved relative
         # string as its own dependency. The realpath above is frozen to the cwd

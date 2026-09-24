@@ -56,11 +56,11 @@ class _CallVisitor(ast.NodeVisitor):
         self.names_to_resolve: list[str] = []
         self.referenced: list[str] = []
 
-    def visit_Name(self, node: ast.Name) -> None:  # noqa: N802
+    def visit_Name(self, node: ast.Name) -> None:
         if isinstance(node.ctx, ast.Load):
             self.referenced.append(node.id)
 
-    def visit_Attribute(self, node: ast.Attribute) -> None:  # noqa: N802
+    def visit_Attribute(self, node: ast.Attribute) -> None:
         if isinstance(node.ctx, ast.Load):
             parts: list[str] = []
             curr: ast.expr = node
@@ -72,7 +72,7 @@ class _CallVisitor(ast.NodeVisitor):
                 self.referenced.append(".".join(reversed(parts)))
         self.generic_visit(node)
 
-    def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
+    def visit_Call(self, node: ast.Call) -> None:
         if isinstance(node.func, ast.Name):
             self.names_to_resolve.append(node.func.id)
         elif isinstance(node.func, ast.Attribute):
@@ -138,17 +138,17 @@ class _FlowVisitor(ast.NodeVisitor):
     # visit_* methods
     # ------------------------------------------------------------------
 
-    def visit_Name(self, node: ast.Name) -> None:  # noqa: N802
+    def visit_Name(self, node: ast.Name) -> None:
         if isinstance(node.ctx, ast.Store):
             self.define_variable(node.id)
         elif isinstance(node.ctx, ast.Load) and not self.is_defined(node.id):
             self.real_inputs.add(node.id)
         self.generic_visit(node)
 
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # noqa: N802
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self._handle_function(node)
 
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:  # noqa: N802
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         self._handle_function(node)
 
     def _handle_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
@@ -177,7 +177,7 @@ class _FlowVisitor(ast.NodeVisitor):
         self.scopes.pop()
         self.comp_scopes.pop()
 
-    def visit_ClassDef(self, node: ast.ClassDef) -> None:  # noqa: N802
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
         for decorator in node.decorator_list:
             self.visit(decorator)
         for base in node.bases:
@@ -192,7 +192,7 @@ class _FlowVisitor(ast.NodeVisitor):
         self.scopes.pop()
         self.comp_scopes.pop()
 
-    def visit_Lambda(self, node: ast.Lambda) -> None:  # noqa: N802
+    def visit_Lambda(self, node: ast.Lambda) -> None:
         if node.args.defaults:
             for default in node.args.defaults:
                 self.visit(default)
@@ -233,19 +233,19 @@ class _FlowVisitor(ast.NodeVisitor):
         elif isinstance(target, ast.Starred):
             self._define_comp_target(target.value)
 
-    def visit_ListComp(self, node: ast.ListComp) -> None:  # noqa: N802
+    def visit_ListComp(self, node: ast.ListComp) -> None:
         self._visit_comprehension(node, [node.elt])
 
-    def visit_SetComp(self, node: ast.SetComp) -> None:  # noqa: N802
+    def visit_SetComp(self, node: ast.SetComp) -> None:
         self._visit_comprehension(node, [node.elt])
 
-    def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:  # noqa: N802
+    def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
         self._visit_comprehension(node, [node.elt])
 
-    def visit_DictComp(self, node: ast.DictComp) -> None:  # noqa: N802
+    def visit_DictComp(self, node: ast.DictComp) -> None:
         self._visit_comprehension(node, [node.key, node.value])
 
-    def visit_Subscript(self, node: ast.Subscript) -> None:  # noqa: N802
+    def visit_Subscript(self, node: ast.Subscript) -> None:
         if isinstance(node.ctx, ast.Store):
             parent_name = self._extract_base_name(node.value)
             if parent_name:
@@ -261,7 +261,7 @@ class _FlowVisitor(ast.NodeVisitor):
         self.visit(node.slice)
         self.visit(node.value)
 
-    def visit_Attribute(self, node: ast.Attribute) -> None:  # noqa: N802
+    def visit_Attribute(self, node: ast.Attribute) -> None:
         if isinstance(node.ctx, ast.Store):
             parent_name = self._extract_base_name(node.value)
             if parent_name:
@@ -272,12 +272,12 @@ class _FlowVisitor(ast.NodeVisitor):
                     self.modified_objects.add(parent_name)
         self.generic_visit(node)
 
-    def visit_Assign(self, node: ast.Assign) -> None:  # noqa: N802
+    def visit_Assign(self, node: ast.Assign) -> None:
         self.visit(node.value)
         for target in node.targets:
             self.visit(target)
 
-    def visit_NamedExpr(self, node: ast.NamedExpr) -> None:  # noqa: N802
+    def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
         # Walrus ``target := value``. Visit the value FIRST so a self-referential
         # read (``n := n + 1``) registers ``n`` as an input before the binding
         # hides it (mirrors visit_Assign). PEP 572 also binds the target in the
@@ -299,7 +299,7 @@ class _FlowVisitor(ast.NodeVisitor):
             self.outputs.add(name)
             self.defined_in_block.add(name)
 
-    def visit_AugAssign(self, node: ast.AugAssign) -> None:  # noqa: N802
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
         if isinstance(node.target, ast.Name):
             if not self.is_defined(node.target.id):
                 self.real_inputs.add(node.target.id)
@@ -325,7 +325,7 @@ class _FlowVisitor(ast.NodeVisitor):
         if node.value:
             self.visit(node.value)
 
-    def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
+    def visit_Call(self, node: ast.Call) -> None:
         if isinstance(node.func, ast.Attribute):
             for keyword in node.keywords:
                 if keyword.arg == "inplace" and isinstance(keyword.value, ast.Constant) and keyword.value.value is True:
@@ -339,12 +339,12 @@ class _FlowVisitor(ast.NodeVisitor):
                     break
         self.generic_visit(node)
 
-    def visit_Import(self, node: ast.Import) -> None:  # noqa: N802
+    def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
             name = alias.asname or alias.name.split(".")[0]
             self.define_variable(name)
 
-    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:  # noqa: N802
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         for alias in node.names:
             name = alias.asname or alias.name
             self.define_variable(name)
@@ -369,13 +369,13 @@ class _ForbiddenVisitor(ast.NodeVisitor):
         self.namespace = ChainMap(self.local_ns, user_ns)  # type: ignore[arg-type]
         self.found_reasons: list[str] = []
 
-    def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
+    def visit_Call(self, node: ast.Call) -> None:
         reason = _forbidden_call(node, self.namespace)
         if reason is not None:
             self.found_reasons.append(reason)
         self.generic_visit(node)
 
-    def visit_FunctionDef(self, node) -> None:  # noqa: N802
+    def visit_FunctionDef(self, node) -> None:
         """A function's BODY runs when it is called, not where it is defined.
 
         Every ``def`` whose body called ``time.time()`` got
@@ -403,12 +403,12 @@ class _ForbiddenVisitor(ast.NodeVisitor):
 
     visit_AsyncFunctionDef = visit_FunctionDef
 
-    def visit_Lambda(self, node: ast.Lambda) -> None:  # noqa: N802
+    def visit_Lambda(self, node: ast.Lambda) -> None:
         """Its body runs when it is called, like a function's."""
         for default in list(node.args.defaults) + [d for d in node.args.kw_defaults if d is not None]:
             self.visit(default)
 
-    def visit_Import(self, node: ast.Import) -> None:  # noqa: N802
+    def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
             base_name = alias.name.split(".")[0]
             module = _loaded(base_name)
@@ -417,7 +417,7 @@ class _ForbiddenVisitor(ast.NodeVisitor):
                     sys.modules.get(alias.name, module) if alias.asname else module
                 )
 
-    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:  # noqa: N802
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         module = _loaded(node.module or "") if not node.level else None
         if module is None:
             return

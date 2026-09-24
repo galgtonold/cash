@@ -12,7 +12,7 @@ import pytest
 
 pytest.importorskip("sklearn")
 
-from cash.notebook.cache_status import CacheStatus  # noqa: E402
+from cash.notebook.cache_status import CacheStatus
 
 SETUP = (
     "from sklearn.feature_extraction.text import TfidfVectorizer\n"

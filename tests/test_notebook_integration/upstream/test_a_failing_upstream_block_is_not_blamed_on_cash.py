@@ -60,7 +60,7 @@ def _rebuild(nb_runner) -> str:
     nb_runner.set_cell_source(2, REMOVES_THE_FILE)
     try:
         nb_runner.run_cells([4])
-    except Exception as exc:  # noqa: BLE001 - the message is the point
+    except Exception as exc:  # the message is the point
         return f"{type(exc).__name__}: {exc}"
     return nb_runner.get_output(4)
 

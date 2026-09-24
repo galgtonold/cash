@@ -219,7 +219,7 @@ def unexercised_cached_functions(namespace: dict[str, Any]) -> list[str]:
             continue
         try:
             stats = info()
-        except Exception:  # noqa: BLE001 - introspection must never break a page
+        except Exception:  # introspection must never break a page
             continue
         if not isinstance(stats, dict):
             continue
@@ -549,7 +549,7 @@ def run_page(
 
     if use_ipy == "auto":
         try:
-            import IPython  # noqa: F401
+            import IPython  # noqa: F401 - an availability probe
 
             _ipy_available = True
         except ImportError:

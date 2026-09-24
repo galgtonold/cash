@@ -6,12 +6,12 @@ import pytest
 def _has_parquet_support():
     """Check if pyarrow or fastparquet is available."""
     try:
-        import pyarrow  # noqa: F401
+        import pyarrow  # noqa: F401 - an availability probe
 
         return True
     except ImportError:
         try:
-            import fastparquet  # noqa: F401
+            import fastparquet  # noqa: F401 - an availability probe
 
             return True
         except ImportError:

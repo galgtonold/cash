@@ -158,8 +158,8 @@ def test_which_shapes_take_the_fast_path(tmp_path, monkeypatch, shape):
 
 # -- dates, dict rows, and one argument not sinking the rest -----------------
 
-import datetime as _dt  # noqa: E402
-import decimal as _decimal  # noqa: E402
+import datetime as _dt
+import decimal as _decimal
 
 
 def test_rows_holding_dates_and_decimals_are_plain():

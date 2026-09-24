@@ -19,4 +19,4 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from tests.test_notebook_integration.conftest import *  # noqa: E402, F401, F403
+from tests.test_notebook_integration.conftest import *  # noqa: F403 - re-exports the integration fixtures

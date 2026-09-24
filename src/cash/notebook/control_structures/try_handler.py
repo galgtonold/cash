@@ -139,7 +139,7 @@ class TryHandler:
                 computed_iterations=1 if computed_count > 0 else 0,
             )
 
-        except Exception as e:  # noqa: BLE001 - the user's error, after their own handlers and finally ran
+        except Exception as e:  # the user's error, after their own handlers and finally ran
             # Handed back to the cell, which raises it; logged above debug it
             # would print the traceback a second time.
             logger.debug("[CONTROL] Error in try per-statement execution: %s", e, exc_info=True)

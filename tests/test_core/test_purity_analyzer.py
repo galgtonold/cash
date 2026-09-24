@@ -289,7 +289,7 @@ def _marked_pure_callee(x):
     return x
 
 
-import cash as _cash  # noqa: E402
+import cash as _cash
 
 _cash.pure(_marked_pure_callee)  # marks the function itself
 

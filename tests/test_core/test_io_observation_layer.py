@@ -147,7 +147,7 @@ def test_importing_a_user_module_records_neither_its_source_nor_its_folder(tmp_p
     tracker = FileAccessTracker()
     try:
         with tracker:
-            import freshly_written_module  # noqa: F401
+            import freshly_written_module  # noqa: F401 - the import is the read under test
 
             imported = _tracked(tracker)
             with open(tmp_path / "rows.txt", encoding="utf-8") as fh:  # control: a read here IS tracked

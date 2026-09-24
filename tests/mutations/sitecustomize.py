@@ -107,7 +107,7 @@ class _Applier:
         try:
             self._mutation.apply(mod, self._record)
             self._write()
-        except Exception as exc:  # noqa: BLE001 - report, never mask
+        except Exception as exc:  # report, never mask
             sys.stderr.write(f"[cash-mutation] {self._mutation.name} failed: {exc!r}\n")
         finally:
             try:

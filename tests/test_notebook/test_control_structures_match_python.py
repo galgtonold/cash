@@ -150,7 +150,7 @@ def _user_names(ns: dict, baseline: set[str]) -> dict:
 def _run(fn) -> type | None:
     try:
         fn()
-    except BaseException as exc:  # noqa: BLE001 - the error type is what the test compares
+    except BaseException as exc:  # the error type is what the test compares
         return type(exc)
     return None
 

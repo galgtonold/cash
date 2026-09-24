@@ -198,7 +198,7 @@ class StatementReplay:
                             )
             except UpstreamStateError:
                 raise
-            except Exception as e:  # noqa: BLE001 - see below
+            except Exception as e:
                 # ANY exception, not a list of the ones user code was expected
                 # to raise. The statement being re-run is the user's, so what it
                 # raises is the user's failure to hear about. The list used to

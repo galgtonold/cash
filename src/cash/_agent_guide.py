@@ -122,7 +122,7 @@ Default: annotate nothing.
 """
 
 
-def help() -> str:  # noqa: A001 - deliberately shadows builtin at the cash.help path
+def help() -> str:  # deliberately shadows builtin at the cash.help path
     """Print the coding-agent guide and return it.
 
     Reachable as ``cash.help()`` — the REPL entry point an agent hits when

@@ -48,7 +48,7 @@ def _run_cell_catching(nb_runner, n):
     try:
         nb_runner.run_cell(n)
         return False, ""
-    except Exception as e:  # noqa: BLE001 - CellExecutionError or transport error
+    except Exception as e:  # CellExecutionError or transport error
         return True, str(e)
 
 

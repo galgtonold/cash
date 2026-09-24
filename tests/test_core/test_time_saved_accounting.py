@@ -63,7 +63,7 @@ def test_time_saved_survives_cross_instance_restore(tmp_path):
     c2 = Cash(cache_dir=cache_dir)
 
     @c2.cache
-    def slow(x):  # noqa: F811 - same source -> same key space
+    def slow(x):  # same source -> same key space
         time.sleep(0.25)
         return x * 2
 

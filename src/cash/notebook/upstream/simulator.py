@@ -555,7 +555,7 @@ class NotebookSimulator:
             if broken and not restored_by_index:
                 return None  # nothing on disk to jump to: run as usual
             return planned
-        except Exception:  # noqa: BLE001 - a plan that cannot be made is the ordinary run
+        except Exception:  # a plan that cannot be made is the ordinary run
             logger.debug("[UPSTREAM] cell run plan failed", exc_info=True)
             return None
 

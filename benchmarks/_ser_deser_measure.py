@@ -85,7 +85,7 @@ def measure_one(
     measurement row. Errors are captured into ``result.error``."""
     try:
         obj = make_object(family, target_bytes)
-    except Exception as e:  # noqa: BLE001 — capture, don't propagate
+    except Exception as e:  # capture, don't propagate
         return MeasureResult(
             family=family,
             target_bytes=target_bytes,
@@ -133,7 +133,7 @@ def measure_one(
             backend.shutdown()
             for key in keys:
                 deser_samples.append(cold_read_seconds(cache_root, key, repeats=1))
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return MeasureResult(
             family=family,
             target_bytes=target_bytes,
@@ -150,7 +150,7 @@ def measure_one(
             continue  # disk cells never build a second backend
         try:
             b.shutdown()  # ~8 threads per backend; see the docstring
-        except Exception:  # noqa: BLE001 - teardown must not lose a measurement
+        except Exception:  # teardown must not lose a measurement
             pass
 
     # Discard repeat 0 as warmup; median of the rest.

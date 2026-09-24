@@ -234,7 +234,7 @@ class CacheBackend(ABC):
         outside the process, or None when it cannot tell."""
         return None
 
-    def set_metadata_only(self, key: str, metadata: dict) -> None:  # noqa: B027 - intentional no-op default
+    def set_metadata_only(self, key: str, metadata: dict) -> None:  # intentional no-op default
         """Keep *metadata* for *key* without a value, where the backend can.
 
         Lets a notebook show what a statement cost after a restart even when
@@ -255,11 +255,11 @@ class CacheBackend(ABC):
         Only a tiered backend has tiers to move a value between."""
         return False
 
-    def hold_notices(self) -> None:  # noqa: B027 - intentional no-op default
+    def hold_notices(self) -> None:  # intentional no-op default
         """Hold notices about values not persisted until `release_notices`,
         to say them once for a batch of stores. The default holds nothing."""
 
-    def release_notices(self) -> None:  # noqa: B027 - intentional no-op default
+    def release_notices(self) -> None:  # intentional no-op default
         """Say the notices held since `hold_notices`."""
 
     @abstractmethod
@@ -394,7 +394,7 @@ class CacheBackend(ABC):
         """
         return [self.source_label]
 
-    def shutdown(self) -> None:  # noqa: B027 - intentional no-op default; subclasses override as needed
+    def shutdown(self) -> None:  # intentional no-op default; subclasses override as needed
         """Perform any necessary cleanup before exit (e.g. waiting for async writes)."""
 
     def lock(self, key: str) -> contextlib.AbstractContextManager:

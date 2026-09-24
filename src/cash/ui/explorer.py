@@ -548,7 +548,7 @@ class CacheExplorer:
         """
         try:
             import ipywidgets as widgets
-            from IPython.display import clear_output, display  # noqa: F401
+            from IPython.display import clear_output, display  # noqa: F401 - an availability probe
         except ImportError:
             return self._widget_html()
 

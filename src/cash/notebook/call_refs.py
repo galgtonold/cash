@@ -176,7 +176,7 @@ def with_call_refs(
 
     try:
         return {name: swap(value, _DEPTH) for name, value in variables.items()}
-    except Exception:  # noqa: BLE001 - a reference is an optimisation; store the values
+    except Exception:  # a reference is an optimisation; store the values
         logger.debug("call refs: could not build references", exc_info=True)
         if referenced is not None:
             referenced.clear()
@@ -212,7 +212,7 @@ def resolve_call_refs(payload: Any, backend: Any) -> Any:
         if ref.key not in loaded:
             try:
                 metadata, value = backend.get(ref.key)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 raise _Missing(ref.key) from exc
             if not isinstance(metadata, dict) or metadata.get(DIGEST_FIELD) != ref.digest:
                 raise _Missing(ref.key)

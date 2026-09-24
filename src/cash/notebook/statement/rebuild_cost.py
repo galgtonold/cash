@@ -169,7 +169,7 @@ class RebuildCostLedger:
         for key, cost in costs.items():
             try:
                 written = persist(key, cost)
-            except Exception:  # noqa: BLE001 - persisting ahead of need must never break a cell
+            except Exception:  # persisting ahead of need must never break a cell
                 logger.debug("%s end-of-cell persistence failed for %s", _LOG_PROCESSOR, key, exc_info=True)
                 continue
             if written:

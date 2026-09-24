@@ -408,7 +408,7 @@ class _WarmKernel:
                         await kc._async_wait_for_ready(timeout=30)
 
                     self.run_async(_wait_ready())
-                except Exception as exc:  # noqa: BLE001 - retry ANY boot failure
+                except Exception as exc:  # retry ANY boot failure
                     last_exc = exc
                     try:
                         if kc is not None:

@@ -97,8 +97,8 @@ def show_clean_error(
     cell_code_obj = compile(padded_code, cell_name, "exec")
 
     try:
-        exec(cell_code_obj, {"__cash_exc__": exc.with_traceback(user_inner_tb)})  # noqa: S102
-    except BaseException:  # noqa: BLE001 (intentional: must catch all to synthesise traceback)
+        exec(cell_code_obj, {"__cash_exc__": exc.with_traceback(user_inner_tb)})
+    except BaseException:  # noqa: BLE001 - must catch all to synthesise the traceback
         _et, _ev, synth_tb = sys.exc_info()
         # synth_tb has two frames: this function's exec() → cell code.
         # We want only the cell code frame (and anything below it).

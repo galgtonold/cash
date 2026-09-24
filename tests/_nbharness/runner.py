@@ -377,7 +377,7 @@ class NotebookTestRunner:
                     output_hook=lambda _m: None,
                 )
             )
-        except Exception:  # noqa: BLE001 - a control that can't be forced off
+        except Exception:  # a control that can't be forced off
             pass  # is caught by assert_cash_active, not hidden here
 
     def _start_new_kernel(self) -> None:
@@ -409,7 +409,7 @@ class NotebookTestRunner:
 
                     self._run_async(_wait_ready())
                     return  # booted cleanly
-                except Exception as exc:  # noqa: BLE001 — retry ANY boot failure
+                except Exception as exc:  # retry ANY boot failure
                     last_exc = exc
                     # Free the half-booted kernel's ports/PID before retrying.
                     # _force_kill_kernel needs no event loop and can't deadlock.
@@ -504,7 +504,7 @@ class NotebookTestRunner:
         try:
             self._run_async(self.client.km._async_restart_kernel(now=True))
             self._run_async(self.client.kc._async_wait_for_ready(timeout=30))
-        except Exception:  # noqa: BLE001 - replaced below, whatever the failure
+        except Exception:  # replaced below, whatever the failure
             self._replace_kernel()
         self._restore_working_directory()
         if self._inject_path:

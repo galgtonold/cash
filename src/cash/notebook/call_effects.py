@@ -81,7 +81,7 @@ def call_capturing_output(fn, args: tuple, kwargs: dict) -> tuple[Any, str, str]
     something to write back onto the live stream -- otherwise that
     output is simply gone, since the callee does not run at all on a hit.
     """
-    __tracebackhide__ = True  # noqa: F841 - see _entry_for
+    __tracebackhide__ = True
     old_stdout, old_stderr = sys.stdout, sys.stderr
     tee_out = TeeWriter(old_stdout)
     tee_err = TeeWriter(old_stderr)
@@ -127,7 +127,7 @@ def replay_deps(metadata: Mapping[str, Any]) -> None:
             else:
                 # The file THIS process reads, as the decorator replays it.
                 tracker.add_tracked(dep_path_for_this_process(path, recorded))
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - a dep that cannot be replayed is left out
             logger.debug("call unit: could not replay dep %r", path)
 
 
@@ -197,7 +197,7 @@ def hash_args(args: tuple, kwargs: dict) -> tuple:
     for value in (*args, *kwargs.values()):
         try:
             h = compute_hash(value)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - see the comment below
             # This branch IS live, on every Python before 3.14: hashing an
             # instance of a locally-defined class raises
             # `AttributeError: Can't pickle local object '<f>.<locals>.C'`

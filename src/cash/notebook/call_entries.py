@@ -212,7 +212,7 @@ class CallEntries:
         """
         try:
             metadata, value = self._cash.backend.get(key)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - an unreadable entry is a miss
             return False, None, 0.0, {}
         if metadata is None:
             return False, None, 0.0, {}
@@ -379,7 +379,7 @@ class CallEntries:
             value = (value, dict(callee_globals))
         try:
             self._cash.backend.set(key, value, metadata)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - a failed store costs a recompute, never the call
             logger.debug("call unit: store failed for %s", key)
         return held
 

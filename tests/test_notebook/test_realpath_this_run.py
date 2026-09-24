@@ -85,7 +85,7 @@ def test_a_relative_path_follows_a_chdir(tmp_path, monkeypatch):
 # A folder of 5,030 small files still paid a full `realpath`
 # per file -- two `_getfinalpathname` calls each on Windows. A regular file that
 # is not a link resolves through its directory, resolved once.
-from cash.tracking.file_dep_snapshot import realpath_of_read_this_run  # noqa: E402
+from cash.tracking.file_dep_snapshot import realpath_of_read_this_run
 
 
 def test_files_in_one_directory_resolve_the_directory_once(tmp_path, resolutions):

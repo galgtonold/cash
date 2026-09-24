@@ -555,7 +555,7 @@ class CallRunner:
             try:
                 self._files.track_declared_files(run.tracker, func_name)
                 yield run
-            except Exception as exc:  # noqa: BLE001 - the user's body can raise anything; logged, then re-raised
+            except Exception as exc:  # the user's body can raise anything; logged, then re-raised
                 self._calls.log_raised(func_name, exc, call.call_start)
                 raise
             finally:

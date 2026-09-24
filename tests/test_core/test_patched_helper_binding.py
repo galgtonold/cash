@@ -437,9 +437,9 @@ def test_a_call_that_ran_a_mock_says_so(c, mods):
 
 # -- a patched helper built by a factory -------------------------------------
 
-import datetime as _dt  # noqa: E402
-import decimal as _decimal  # noqa: E402
-import pathlib as _pathlib  # noqa: E402
+import datetime as _dt
+import decimal as _decimal
+import pathlib as _pathlib
 
 _CAPTURED = {
     "datetime": (_dt.datetime(2024, 7, 15), _dt.datetime(2024, 3, 10)),

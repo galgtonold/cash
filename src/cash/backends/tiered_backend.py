@@ -190,7 +190,7 @@ class TieredBackend(CacheBackend):
         try:
             ser = serializer if serializer is not None else PickleSerializer()
             return len(ser.serialize(value))
-        except Exception:  # noqa: BLE001 - a sizing probe must never raise
+        except Exception:  # a sizing probe must never raise
             logger.debug("Could not measure the serialized size", exc_info=True)
             return None
 
@@ -217,7 +217,7 @@ class TieredBackend(CacheBackend):
             for backend in self.backends[1:]:
                 try:
                     backend.delete(ref)
-                except Exception:  # noqa: BLE001 - reclaiming disk never fails a write
+                except Exception:  # reclaiming disk never fails a write
                     logger.debug("Could not drop call ref %r", ref, exc_info=True)
 
     def hold_notices(self) -> None:
@@ -246,7 +246,7 @@ class TieredBackend(CacheBackend):
         for faster in self.backends[: self.backends.index(disk)]:
             try:
                 faster.clear()
-            except Exception:  # noqa: BLE001 - a read must not fail over a stale RAM tier
+            except Exception:  # a read must not fail over a stale RAM tier
                 logger.debug("could not drop %s after a clear", type(faster).__name__, exc_info=True)
 
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
@@ -264,7 +264,7 @@ class TieredBackend(CacheBackend):
                 # (another process rewrote it), so drop this one and look on.
                 try:
                     backend.delete(key)
-                except Exception:  # noqa: BLE001 - an expired copy is not served either way
+                except Exception:  # an expired copy is not served either way
                     logger.debug("Could not drop expired %r from %s", key, type(backend).__name__, exc_info=True)
                 continue
             if metadata is not None:
@@ -278,7 +278,7 @@ class TieredBackend(CacheBackend):
                     # a big entry from emptying it.
                     try:
                         self.backends[j].set(key, value, metadata)
-                    except Exception as e:  # noqa: BLE001 (intentional: backend errors must not propagate)
+                    except Exception as e:  # noqa: BLE001 - backend errors must not propagate
                         logger.warning(
                             "Failed to promote key '%s' to tier %d (%s): %s",
                             key,
@@ -343,7 +343,7 @@ class TieredBackend(CacheBackend):
             try:
                 backend.set(key, value, metadata, serializer)
                 stored_destinations.append(backend.source_label)
-            except Exception as e:  # noqa: BLE001 (intentional: backend errors must not propagate)
+            except Exception as e:  # noqa: BLE001 - backend errors must not propagate
                 logger.warning("[TIERED] Failed to write to backend %s: %s", type(backend).__name__, e)
                 # And on the entry's metadata, which is how the caller hears
                 # about it (STORE-FAILED, cache_info()['warnings']), as it
@@ -420,7 +420,7 @@ class TieredBackend(CacheBackend):
         try:
             if self.backends[0].set(key, value, metadata, serializer) is not False:
                 stored_destinations.append("RAM")
-        except Exception as e:  # noqa: BLE001 (intentional: backend errors must not propagate)
+        except Exception as e:  # noqa: BLE001 - backend errors must not propagate
             logger.warning(
                 "Failed to write key '%s' to tier 0 (%s): %s",
                 key,

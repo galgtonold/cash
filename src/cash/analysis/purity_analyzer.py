@@ -427,18 +427,18 @@ class _PurityVisitor(ast.NodeVisitor):
 
     # --- impure / dynamic / called-name detection on Call nodes ---
 
-    def visit_Name(self, node: ast.Name) -> None:  # noqa: N802
+    def visit_Name(self, node: ast.Name) -> None:
         if isinstance(node.ctx, ast.Load):
             self.read_names.add(node.id)
         self.generic_visit(node)
 
-    def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
+    def visit_Call(self, node: ast.Call) -> None:
         if isinstance(node.func, ast.Name):
             self._name_call_nodes.append(node)
         self._record_call(node)
         self.generic_visit(node)
 
-    def visit_Subscript(self, node: ast.Subscript) -> None:  # noqa: N802
+    def visit_Subscript(self, node: ast.Subscript) -> None:
         """``os.environ["KEY"]`` -- the one ambient read that is not a call.
 
         Needed as its own visitor because the call rule cannot see it: this is
@@ -885,7 +885,7 @@ class _PurityVisitor(ast.NodeVisitor):
             obj = getattr(obj, attr, None)
         return obj is time.sleep
 
-    def visit_Expr(self, node: ast.Expr) -> None:  # noqa: N802
+    def visit_Expr(self, node: ast.Expr) -> None:
         if isinstance(node.value, ast.Call) and (self._discard_is_expected(node.value.func) or is_log_line(node.value)):
             self.generic_visit(node)
             return
@@ -931,7 +931,7 @@ class _PurityVisitor(ast.NodeVisitor):
 
     # --- scope mutation detection ---
 
-    def visit_Global(self, node: ast.Global) -> None:  # noqa: N802
+    def visit_Global(self, node: ast.Global) -> None:
         for name in node.names:
             self.issues.append(
                 PurityIssue(
@@ -943,7 +943,7 @@ class _PurityVisitor(ast.NodeVisitor):
             )
         self.generic_visit(node)
 
-    def visit_Nonlocal(self, node: ast.Nonlocal) -> None:  # noqa: N802
+    def visit_Nonlocal(self, node: ast.Nonlocal) -> None:
         for name in node.names:
             self.issues.append(
                 PurityIssue(
@@ -955,7 +955,7 @@ class _PurityVisitor(ast.NodeVisitor):
             )
         self.generic_visit(node)
 
-    def visit_Assign(self, node: ast.Assign) -> None:  # noqa: N802
+    def visit_Assign(self, node: ast.Assign) -> None:
         for target in node.targets:
             self._maybe_flag_mutation_target(target, node.lineno)
         # Record the RHS kind for a simple ``name = ...`` so a dynamically-bound
@@ -973,11 +973,11 @@ class _PurityVisitor(ast.NodeVisitor):
             self._assign_kinds.setdefault(node.targets[0].id, set()).add(kind)
         self.generic_visit(node)
 
-    def visit_AugAssign(self, node: ast.AugAssign) -> None:  # noqa: N802
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
         self._maybe_flag_mutation_target(node.target, node.lineno)
         self.generic_visit(node)
 
-    def visit_Delete(self, node: ast.Delete) -> None:  # noqa: N802
+    def visit_Delete(self, node: ast.Delete) -> None:
         for target in node.targets:
             self._maybe_flag_mutation_target(target, node.lineno)
         self.generic_visit(node)
@@ -1990,10 +1990,10 @@ class PurityAnalyzer:
             # recursion.
 
             def _call_site_path(chain: tuple[str, ...] | None) -> tuple[str, tuple[str, ...]] | None:
-                if chain and chain[0] in local_imports:  # noqa: B023 - loop var, used within iteration
-                    module_name, prefix = local_imports[chain[0]]  # noqa: B023
+                if chain and chain[0] in local_imports:  # loop var, used within iteration
+                    module_name, prefix = local_imports[chain[0]]
                     return (module_name, prefix + chain[1:]) if module_name in sys.modules else None
-                return _binding_path(func, chain)  # noqa: B023
+                return _binding_path(func, chain)
 
             def _queue_helper(callee: Any, line: int, path: tuple[str, tuple[str, ...]] | None = None) -> None:
                 if callee is None or not callable(callee):
@@ -2023,12 +2023,12 @@ class PurityAnalyzer:
                 # may DO, not what it computes: it is walked below like any
                 # helper, so an edit to it moves its callers' keys, and only
                 # its findings are left out (``reported`` in the walk).
-                if is_stateful(callee) and reported:  # noqa: B023 - loop var, called within iteration
+                if is_stateful(callee) and reported:  # loop var, called within iteration
                     all_issues.append(
                         PurityIssue(
                             kind=ISSUE_IMPURE_CALL,
                             description=f"calls @stateful {_qualname_of(callee)}()",
-                            where=qualname,  # noqa: B023 - loop var, called within iteration
+                            where=qualname,  # loop var, called within iteration
                             line=line,
                         )
                     )
@@ -2066,9 +2066,9 @@ class PurityAnalyzer:
                 if own:
                     if path is not None:
                         caller_paths.setdefault(id(callee), path)
-                    stack.append((callee, depth + 1, False, reported))  # noqa: B023 - same
+                    stack.append((callee, depth + 1, False, reported))
                 for layer in layers:
-                    stack.append((layer, depth + 1, False, reported))  # noqa: B023 - same
+                    stack.append((layer, depth + 1, False, reported))
 
             audited = audited_lines(src)[0] if "@cash:" in src else frozenset()
             for call_node in visitor.called_callable_nodes + visitor.impure_call_nodes:
@@ -2406,32 +2406,32 @@ class _GlobalMutationScanner(ast.NodeVisitor):
         # a local there. (Only consulted when _in_function is True.)
         return all(name not in loc for loc in self._locals_stack)
 
-    def visit_FunctionDef(self, node):  # noqa: N802
+    def visit_FunctionDef(self, node):
         self._locals_stack.append(_function_locals(node))
         self.generic_visit(node)
         self._locals_stack.pop()
 
     visit_AsyncFunctionDef = visit_FunctionDef
 
-    def visit_Lambda(self, node):  # noqa: N802
+    def visit_Lambda(self, node):
         self._locals_stack.append(_function_locals(node))
         self.generic_visit(node)
         self._locals_stack.pop()
 
-    def visit_Global(self, node):  # noqa: N802
+    def visit_Global(self, node):
         # An explicit `global G` inside a function is intent to rebind the
         # module global at runtime. (`global` at module scope is a no-op.)
         if self._in_function:
             self.modified.update(node.names)
         self.generic_visit(node)
 
-    def visit_AugAssign(self, node):  # noqa: N802
+    def visit_AugAssign(self, node):
         base = _target_root_name(node.target)
         if self._in_function and base and self._is_global(base):
             self.modified.add(base)
         self.generic_visit(node)
 
-    def visit_Assign(self, node):  # noqa: N802
+    def visit_Assign(self, node):
         for t in node.targets:
             if isinstance(t, (ast.Subscript, ast.Attribute)):
                 base = _target_root_name(t)
@@ -2439,14 +2439,14 @@ class _GlobalMutationScanner(ast.NodeVisitor):
                     self.modified.add(base)
         self.generic_visit(node)
 
-    def visit_Delete(self, node):  # noqa: N802
+    def visit_Delete(self, node):
         for t in node.targets:
             base = t.id if isinstance(t, ast.Name) else _target_root_name(t)
             if self._in_function and base and self._is_global(base):
                 self.modified.add(base)
         self.generic_visit(node)
 
-    def visit_Call(self, node):  # noqa: N802
+    def visit_Call(self, node):
         f = node.func
         if (
             self._in_function

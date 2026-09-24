@@ -532,7 +532,7 @@ def _try_extension_cells() -> tuple[NotebookCell, ...] | None:
     """
     try:
         cells = latest_cells()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - None means not available
         logger.debug("[UTILS] extension cell read failed: %s", e)
         return None
     if not cells:
@@ -740,7 +740,7 @@ class NotebookCellReaders:
                 return val
         try:
             # Colab has no public call that returns the open notebook, so this uses its private messaging module.
-            from google.colab import _message  # type: ignore[import-not-found]  # noqa: PLC2701
+            from google.colab import _message  # type: ignore[import-not-found]  # noqa: PLC2701 - see the comment above
 
             resp = _message.blocking_request("get_ipynb", timeout_sec=_COLAB_GET_IPYNB_TIMEOUT)
             nb = resp.get("ipynb") if isinstance(resp, dict) else None

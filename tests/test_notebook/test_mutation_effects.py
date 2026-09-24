@@ -96,7 +96,7 @@ class TestCellEffects:
         assert "g" not in shared.method_receivers
 
     def test_a_numpy_view_mutates_its_base(self):
-        class ndarray:  # noqa: N801 - duck-types numpy's type name
+        class ndarray:  # duck-types numpy's type name
             __module__ = "numpy"
 
         effects = _effects("v = arr[1:]\nv += 1", namespace={"arr": ndarray()})

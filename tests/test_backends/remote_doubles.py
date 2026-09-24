@@ -60,12 +60,12 @@ class FakeS3Client(_Recorder):
         self.store: dict[tuple[str, str], bytes] = {}
 
     # -- the operations the backend uses -----------------------------------
-    def put_object(self, Bucket, Key, Body, **_kw):  # noqa: N803 - boto3 casing
+    def put_object(self, Bucket, Key, Body, **_kw):  # boto3 casing
         self.record("put_object")
         self.store[(Bucket, Key)] = bytes(Body)
         return {}
 
-    def get_object(self, Bucket, Key, Range=None, **_kw):  # noqa: N803
+    def get_object(self, Bucket, Key, Range=None, **_kw):
         try:
             blob = self.store[(Bucket, Key)]
         except KeyError:
@@ -75,19 +75,19 @@ class FakeS3Client(_Recorder):
         self.record("get_object", blob)
         return {"Body": _Body(blob), "ContentLength": len(blob)}
 
-    def delete_object(self, Bucket, Key, **_kw):  # noqa: N803
+    def delete_object(self, Bucket, Key, **_kw):
         self.record("delete_object")
         self.store.pop((Bucket, Key), None)
         return {}
 
-    def delete_objects(self, Bucket, Delete, **_kw):  # noqa: N803
+    def delete_objects(self, Bucket, Delete, **_kw):
         """One request for up to 1000 keys. The batch form of delete_object."""
         self.record("delete_objects")
         for obj in Delete.get("Objects", []):
             self.store.pop((Bucket, obj["Key"]), None)
         return {}
 
-    def list_objects_v2(self, Bucket, Prefix="", **_kw):  # noqa: N803
+    def list_objects_v2(self, Bucket, Prefix="", **_kw):
         self.record("list_objects_v2")
         return {"Contents": self._contents(Bucket, Prefix), "KeyCount": len(self._contents(Bucket, Prefix))}
 
@@ -106,7 +106,7 @@ class _FakePaginator:
     def __init__(self, client: FakeS3Client):
         self._client = client
 
-    def paginate(self, Bucket, Prefix="", **_kw):  # noqa: N803
+    def paginate(self, Bucket, Prefix="", **_kw):
         self._client.record("list_objects_v2")
         contents = self._client._contents(Bucket, Prefix)
         yield {"Contents": contents} if contents else {"KeyCount": 0}

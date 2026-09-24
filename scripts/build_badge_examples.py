@@ -80,9 +80,9 @@ def _reset_uuid_counter() -> None:
 # inside html.py resolves to our stub when it later calls ``uuid.uuid4()``.
 uuid.uuid4 = _deterministic_uuid4  # type: ignore[assignment]
 
-from cash.notebook.badge_renderer.renderers.html import render_html  # noqa: E402
-from cash.notebook.badge_renderer.view_builder import build_interactive_badge  # noqa: E402
-from scripts.badge_fixtures import FIXTURES  # noqa: E402
+from cash.notebook.badge_renderer.renderers.html import render_html
+from cash.notebook.badge_renderer.view_builder import build_interactive_badge
+from scripts.badge_fixtures import FIXTURES
 
 
 def main() -> int:

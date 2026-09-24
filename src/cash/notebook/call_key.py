@@ -708,5 +708,5 @@ class CallKeys:
         """
         try:
             return self._site_reason.get(self._site_id(site))
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - the reason is a hint; none is fine
             return None

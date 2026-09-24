@@ -62,7 +62,7 @@ def test_a_last_producer_needs_nothing_after_it():
 # `results[...] =`. `def draw_roc` iterating `results.items()` matched, so the
 # init was scheduled to stop the loop's writes doubling -- and the loop was
 # never scheduled at all.
-from cash.notebook.upstream.loop_rules import LoopRules  # noqa: E402
+from cash.notebook.upstream.loop_rules import LoopRules
 
 
 def test_a_function_reading_an_accumulator_is_not_a_rerun_of_its_loop():

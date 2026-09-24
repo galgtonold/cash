@@ -706,7 +706,7 @@ class CashMagics(InspectionMagicsMixin, Magics):
         try:
             for queue in all_pending_writes():
                 queue.wait_all()
-        except Exception:  # noqa: BLE001 — best-effort, must not break the cell
+        except Exception:  # best-effort, must not break the cell
             logger.debug("Flushing pending cache writes failed", exc_info=True)
 
     def _capture_cell_id(self, info: Any) -> None:

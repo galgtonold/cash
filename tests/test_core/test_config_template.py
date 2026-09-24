@@ -15,7 +15,7 @@ import pytest
 
 tomllib = pytest.importorskip("tomllib")
 
-from cash.config import (  # noqa: E402
+from cash.config import (
     CashConfig,
     TierConfig,
     _load_toml_layer,

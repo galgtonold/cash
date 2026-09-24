@@ -19,7 +19,7 @@ from tests._cell_driver import run_cash_cell
 pd = pytest.importorskip("pandas")
 np = pytest.importorskip("numpy")
 
-from cash.notebook import call_entries, call_refs  # noqa: E402
+from cash.notebook import call_entries, call_refs
 
 BUILD = (
     "import time\nimport numpy as np\nimport pandas as pd\n"

@@ -33,7 +33,7 @@ except ImportError:
         def preprocess_cell(self, cell, resources, index):
             return cell, resources
 
-    def Bool(default, **_kwargs):  # noqa: N802 - stands in for traitlets.Bool
+    def Bool(default, **_kwargs):  # stands in for traitlets.Bool
         return _Plain(default)
 
     class _Plain:

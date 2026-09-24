@@ -137,7 +137,7 @@ def _total_system_ram() -> int | None:
         return None
     try:
         return int(psutil.virtual_memory().total)
-    except Exception:  # noqa: BLE001 — any psutil failure → fixed fallback
+    except Exception:  # any psutil failure → fixed fallback
         logger.debug("psutil.virtual_memory() failed; using RAM fallback", exc_info=True)
         return None
 

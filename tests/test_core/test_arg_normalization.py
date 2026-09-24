@@ -135,7 +135,7 @@ def test_unpicklable_default_falls_back_to_raw_and_still_caches():
     retried so f(1) keeps caching."""
     c = _cash()
     calls = {"n": 0}
-    sentinel = lambda: None  # noqa: E731 - unpicklable default
+    sentinel = lambda: None  # unpicklable default
 
     @c.cache
     def f(x, _cb=sentinel):

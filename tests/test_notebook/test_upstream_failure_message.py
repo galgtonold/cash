@@ -55,7 +55,7 @@ def test_the_message_stays_embeddable():
     assert "'''" not in m
 
 
-def _Checker(executed_cell_codes) -> StatementReplay:  # noqa: N802 - reads as the double it replaced
+def _Checker(executed_cell_codes) -> StatementReplay:  # reads as the double it replaced
     """Just enough of a replay to exercise the planning-gap detection."""
     state = TrackingState()
     state.executed_cell_codes.update(executed_cell_codes)

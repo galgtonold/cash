@@ -134,7 +134,7 @@ def main() -> int:
         for b in backends.values():
             try:
                 b.shutdown()
-            except Exception:  # noqa: BLE001 - teardown
+            except Exception:  # teardown
                 pass
         shutil.rmtree(root, ignore_errors=True)
 

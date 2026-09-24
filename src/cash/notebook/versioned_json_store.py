@@ -147,6 +147,6 @@ class StoreRegistry(Generic[S]):
         be resolved -- an unresolvable store means "no store"."""
         try:
             return self.get(resolve_cache_dir(backend))
-        except Exception:  # noqa: BLE001 - every store here is an optimisation or a nicety
+        except Exception:  # every store here is an optimisation or a nicety
             logger.debug("could not resolve a store", exc_info=True)
             return None

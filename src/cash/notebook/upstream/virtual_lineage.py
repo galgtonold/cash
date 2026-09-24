@@ -935,7 +935,7 @@ class VirtualLineage:
                 if self._split_store is None:
                     return None
             return self._split_store.get(loop_source_hash(node))
-        except Exception:  # noqa: BLE001 - never let a lookup break simulation
+        except Exception:  # never let a lookup break simulation
             logger.debug("[UPSTREAM_DEBUG] loop split lookup failed", exc_info=True)
             return None
 
@@ -1065,7 +1065,7 @@ class VirtualLineage:
                 and recorded[0] == input_hashes
                 and compute_file_hash_component(recorded[2]) == recorded[3]
             )
-        except Exception:  # noqa: BLE001 - any doubt keeps the split, as before
+        except Exception:  # any doubt keeps the split
             logger.debug("[UPSTREAM_DEBUG] could not check a loop's recorded outcome", exc_info=True)
             return False
 

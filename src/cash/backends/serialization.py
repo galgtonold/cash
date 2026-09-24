@@ -107,12 +107,12 @@ def get_serializer(data: Any) -> Serializer:
         # against an empty tuple is simply False rather than an AttributeError.
         if isinstance(data, getattr(pd, "DataFrame", ())):
             try:
-                import pyarrow  # noqa: F401
+                import pyarrow  # noqa: F401 - an availability probe
 
                 return ParquetSerializer()
             except ImportError:
                 try:
-                    import fastparquet  # noqa: F401
+                    import fastparquet  # noqa: F401 - an availability probe
 
                     return ParquetSerializer()
                 except ImportError:

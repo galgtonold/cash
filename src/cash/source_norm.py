@@ -787,7 +787,7 @@ def _process_start_time() -> float:
             ):
                 ticks = (creation.dwHighDateTime << 32) | creation.dwLowDateTime
                 started = ticks / 1e7 - 11644473600.0  # FILETIME epoch -> Unix
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - no start time just falls back to the next source
             started = None
     if started is None and os.path.exists("/proc/self/stat"):
         try:
@@ -797,7 +797,7 @@ def _process_start_time() -> float:
             with open("/proc/stat", encoding="ascii") as fh:
                 btime = next(int(line.split()[1]) for line in fh if line.startswith("btime"))
             started = btime + start_ticks / os.sysconf("SC_CLK_TCK")
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - no start time just falls back to the next source
             started = None
     if started is None:
         # cash's own import time. Misses only a file edited in the gap between

@@ -376,7 +376,7 @@ class TestUpdateUserNsFromModule:
         module_name, _ = temp_module
         mod = importlib.import_module(module_name)
 
-        local_func = lambda x: x  # noqa: E731
+        local_func = lambda x: x
         user_ns = {"my_func": local_func, "helper": mod.helper}
 
         updated = tracker._update_user_ns_from_module(module_name, mod, user_ns)

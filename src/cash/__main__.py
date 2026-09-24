@@ -283,7 +283,7 @@ def _tier_default_ttl() -> int | None:
         for tier in get_config().tiers or ():
             if getattr(tier, "default_ttl", None) is not None:
                 return int(tier.default_ttl)
-    except Exception:  # noqa: BLE001 - a listing must not fail over config
+    except Exception:  # a listing must not fail over config
         logger.debug("Could not read the tiers' default_ttl", exc_info=True)
     return None
 
@@ -462,7 +462,7 @@ def _inspect_notebook(notebook_path: str) -> None:
     except ImportError:
         print("  nbformat not installed. Install with: pip install nbformat")
         return
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - any unreadable notebook is reported, not raised
         print(f"  Error reading notebook: {e}")
         return
 
@@ -827,7 +827,7 @@ HOOK_BODY_ACTIVE = f"""{HOOK_MARKER}
 import cash  # auto-registers cash IPython magics
 
 try:
-    _ip = get_ipython()  # noqa: F821  (IPython injects this at startup)
+    _ip = get_ipython()  # noqa: F821 - IPython injects this at startup
 except NameError:
     _ip = None
 if _ip is not None:

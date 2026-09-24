@@ -134,7 +134,7 @@ class TestUserNamespacePatching:
 
         user_ns = {"open": open}
         tracker = FileAccessTracker(user_ns=user_ns)
-        with tracker:  # noqa: SIM117
+        with tracker:
             # Use the user_ns version of open
             with user_ns["open"](str(test_file), "r") as f:
                 _ = f.read()

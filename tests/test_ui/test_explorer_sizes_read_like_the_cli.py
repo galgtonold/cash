@@ -17,8 +17,8 @@ import pytest
 
 pytest.importorskip("IPython")
 
-from cash import Cash  # noqa: E402
-from cash.config import human_bytes  # noqa: E402
+from cash import Cash
+from cash.config import human_bytes
 
 SIZES = [0, 500, 1023, 1024, 2048, 1536, 5 * 1024**2, 2 * 1024**3, 3 * 1024**4]
 

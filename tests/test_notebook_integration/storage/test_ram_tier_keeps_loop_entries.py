@@ -90,7 +90,7 @@ def _teed(nb_runner):
     yield
     try:
         nb_runner.peek(f"exec({_UNTEE!r}, {{}})")
-    except Exception:  # noqa: BLE001 - a kernel that never started has nothing to undo
+    except Exception:  # a kernel that never started has nothing to undo
         pass
 
 

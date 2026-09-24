@@ -43,7 +43,7 @@ def assert_kernelspec_is_this_interpreter():
         from jupyter_client.kernelspec import KernelSpecManager
 
         argv = KernelSpecManager().get_kernel_spec(DEFAULT_KERNEL_NAME).argv
-    except Exception:  # noqa: BLE001 - no spec / unreadable -> stay out of the way
+    except Exception:  # no spec / unreadable -> stay out of the way
         return
     problem = kernelspec_mismatch(argv, sys.executable)
     if problem:

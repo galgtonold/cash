@@ -40,15 +40,15 @@ from pathlib import Path
 # Make the benchmarks package importable when invoked as a script.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from benchmarks._edit_scenarios import (  # noqa: E402
+from benchmarks._edit_scenarios import (
     EditScenario,
     ScenarioResult,
     attribute_waste,
     build_cells,
     plan_scenarios,
 )
-from benchmarks._overhead_driver import new_cash_session, run_notebook  # noqa: E402
-from benchmarks._overhead_io import CodeCell, load_code_cells  # noqa: E402
+from benchmarks._overhead_driver import new_cash_session, run_notebook
+from benchmarks._overhead_io import CodeCell, load_code_cells
 
 
 def _metrics_by_cell(timings) -> dict[int, list]:

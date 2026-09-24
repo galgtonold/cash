@@ -41,7 +41,7 @@ def _raw_annotations(owner: Any) -> dict:
         else:
             found = getattr(owner, "__annotations__", {})
         return dict(found) if isinstance(found, dict) else {}
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - a broken __annotations__ is not ours to raise
         return {}
 
 
@@ -83,7 +83,7 @@ def _walk(value: Any, namespace: dict, out: list, depth: int) -> None:
     try:
         origin = typing.get_origin(value)
         args = typing.get_args(value)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - an alias typing cannot take apart has nothing to walk
         return
     if origin is not None:
         _walk(origin, namespace, out, depth + 1)

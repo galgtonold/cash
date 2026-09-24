@@ -105,9 +105,9 @@ def test_an_explicit_location_keeps_both_the_location_and_the_code():
 import os
 import tempfile
 
-from cash import Cash  # noqa: E402
-from cash.backends.file_backend import FileBackend  # noqa: E402
-from cash.diagnostics import _is_cash_frame, _stacklevel_of_first_user_frame  # noqa: E402
+from cash import Cash
+from cash.backends.file_backend import FileBackend
+from cash.diagnostics import _is_cash_frame, _stacklevel_of_first_user_frame
 
 CASH_ROOT = os.path.dirname(os.path.abspath(__import__("cash").__file__))
 

@@ -204,7 +204,7 @@ def _define(c, ns: dict, src: str):
 
     name = f"<cash-test-{uuid.uuid4().hex}>"
     linecache.cache[name] = (len(src), None, src.splitlines(True), name)
-    exec(compile(src, name, "exec"), ns)  # noqa: S102 - fixture construction
+    exec(compile(src, name, "exec"), ns)
     return c.cache(ns["f"])
 
 

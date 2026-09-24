@@ -114,7 +114,7 @@ def _load_metadata(meta_bytes: bytes, where: str) -> dict[str, Any]:
     """Unpickle an entry's metadata region, or raise :class:`CorruptEntry`."""
     try:
         metadata = pickle.loads(meta_bytes)
-    except Exception as exc:  # noqa: BLE001 - unpickling runs arbitrary code
+    except Exception as exc:  # unpickling runs arbitrary code
         # A module missing in this environment (a numpy scalar written by
         # another one), a user object's __setstate__: any of it means the
         # entry cannot be read here.

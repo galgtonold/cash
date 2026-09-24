@@ -31,7 +31,7 @@ if os.environ.get("CASH_TEST_FAULTHANDLER", "1") == "1":
     _FH_DIR = os.path.join(_tempfile.gettempdir(), "cash_faulthandler")
     try:
         os.makedirs(_FH_DIR, exist_ok=True)
-        _FH_FILE = open(  # noqa: SIM115 - kept open for the worker's lifetime
+        _FH_FILE = open(  # kept open for the worker's lifetime
             os.path.join(_FH_DIR, f"worker_{os.getpid()}.log"), "w", encoding="utf-8"
         )
         _faulthandler.enable(file=_FH_FILE, all_threads=True)
@@ -158,7 +158,7 @@ class _StallWatchdog:
         try:
             sys.stderr.write(banner)
             sys.stderr.flush()
-        except Exception:  # noqa: BLE001 - never let reporting hide the stall
+        except Exception:  # never let reporting hide the stall
             pass
         try:
             import faulthandler
@@ -174,7 +174,7 @@ class _StallWatchdog:
                 fh.write(banner)
                 fh.flush()
                 faulthandler.dump_traceback(file=fh, all_threads=True)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         _kill_child_processes()
         # os._exit, not sys.exit: whatever is stuck (a zmq recv, a spin loop,
@@ -195,12 +195,12 @@ def _kill_child_processes() -> None:
     try:
         me = psutil.Process(os.getpid())
         children = me.children(recursive=True)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return
     for child in children:
         try:
             child.kill()
-        except Exception:  # noqa: BLE001
+        except Exception:
             continue
 
 
@@ -655,7 +655,7 @@ ABOVE_PERSISTENCE_FLOOR_S = 0.2
 def _discarded_write_count():
     try:
         from cash.backends._writes import discarded_writes
-    except Exception:  # noqa: BLE001 - import cycles during collection
+    except Exception:  # import cycles during collection
         return 0
     return len(discarded_writes())
 
@@ -679,7 +679,7 @@ def _no_silently_discarded_cache_writes(request):
         for queue in all_pending_writes():
             try:
                 queue.wait_all()
-            except Exception:  # noqa: BLE001 - a dying queue is not a finding
+            except Exception:  # a dying queue is not a finding
                 continue
         reset_discarded_writes(keep=before)
         return
@@ -725,12 +725,12 @@ def pytest_sessionfinish(session, exitstatus):
     """
     try:
         from cash.backends._writes import all_pending_writes, discarded_writes
-    except Exception:  # noqa: BLE001
+    except Exception:
         return
     for queue in all_pending_writes():
         try:
             queue.wait_all()
-        except Exception:  # noqa: BLE001 - a dying queue is not a finding
+        except Exception:  # a dying queue is not a finding
             continue
 
     leaked = list(discarded_writes())

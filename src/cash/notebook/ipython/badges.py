@@ -291,7 +291,7 @@ class BadgePresenter:
                 configured_tiers=self._configured_tier_labels(),
             )
             return html or None
-        except Exception as e:  # noqa: BLE001 — intentionally broad; see render
+        except Exception as e:
             logger.debug("[BADGE RENDER ERROR] %s", e, exc_info=True)
             return None
 
@@ -327,7 +327,7 @@ class BadgePresenter:
                 display(HTML(html), display_id=display_id, update=update_existing)
             else:
                 display(HTML(html))
-        except Exception as e:  # noqa: BLE001 — intentionally broad; see render
+        except Exception as e:
             logger.debug("[BADGE RENDER ERROR] %s", e, exc_info=True)
 
     def print_text(self, metrics_list: list[ProcessResult], cell_total_time: float | None = None) -> None:
@@ -339,7 +339,7 @@ class BadgePresenter:
         # must never abort the cell or swallow the user's output.
         try:
             _badge.print_text_badge(metrics_list, cell_total_time=cell_total_time)
-        except Exception as e:  # noqa: BLE001 — the badge is never worth breaking a cell
+        except Exception as e:  # the badge is never worth breaking a cell
             logger.debug("[BADGE RENDER ERROR] %s", e, exc_info=True)
 
     def show_error(

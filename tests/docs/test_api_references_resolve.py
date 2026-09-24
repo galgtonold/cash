@@ -13,9 +13,9 @@ import pytest
 
 pytest.importorskip("IPython")
 
-from cash.backends import InMemoryBackend  # noqa: E402
-from cash.core import Cash  # noqa: E402
-from cash.notebook.ipython.magics import CashMagics  # noqa: E402
+from cash.backends import InMemoryBackend
+from cash.core import Cash
+from cash.notebook.ipython.magics import CashMagics
 
 ROOT = Path(__file__).resolve().parents[2]
 

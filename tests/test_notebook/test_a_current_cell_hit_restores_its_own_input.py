@@ -45,7 +45,7 @@ def kernel(tmp_path):
 def _run(magics, cell, cells, **kwargs) -> BaseException | None:
     try:
         run_cash_cell(magics, cell, cells=cells, **kwargs)
-    except BaseException as exc:  # noqa: BLE001 - what the cell raised is the observation
+    except BaseException as exc:  # what the cell raised is the observation
         return exc
     return None
 

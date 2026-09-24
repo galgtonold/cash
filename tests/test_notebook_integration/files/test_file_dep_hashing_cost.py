@@ -74,7 +74,7 @@ def _counting(nb_runner):
     yield
     try:
         nb_runner.peek(UNINSTALL)
-    except Exception:  # noqa: BLE001 - a kernel that never started has nothing to undo
+    except Exception:  # a kernel that never started has nothing to undo
         pass
 
 

@@ -58,11 +58,11 @@ def rewrite_badge_paths(html: str, page_url: str) -> str:
     return _ABS_BADGE_SRC.sub(lambda m: m.group(1) + prefix + m.group(2) + m.group(3), html)
 
 
-def on_page_markdown(markdown: str, *, page, config, files, **kwargs) -> str:  # noqa: ARG001
+def on_page_markdown(markdown: str, *, page, config, files, **kwargs) -> str:
     """mkdocs hook: drop doc-number markers before the page is rendered."""
     return strip_docnum_markers(markdown)
 
 
-def on_post_page(output: str, *, page, config, **kwargs) -> str:  # noqa: ARG001
+def on_post_page(output: str, *, page, config, **kwargs) -> str:
     """mkdocs hook: fix badge iframe paths in every rendered page."""
     return rewrite_badge_paths(output, page.url)

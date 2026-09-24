@@ -23,7 +23,7 @@ class CacheStatus(enum.Enum):
     MODULE_RELOADED = "MODULE_RELOADED"
     WARNING = "WARNING"
 
-    def __str__(self) -> str:  # noqa: D105
+    def __str__(self) -> str:
         return self.value
 
     @classmethod

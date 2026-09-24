@@ -75,7 +75,7 @@ def _register_writer(cache_dir: str, writes: PendingWrites) -> str:
     # files never become dependencies of the user's code whatever it is called.
     try:
         register_cache_dir(cache_dir, is_cash_file)
-    except Exception:  # noqa: BLE001 - tracking is best-effort, storage is not
+    except Exception:  # tracking is best-effort, storage is not
         logger.debug("Could not register %s with the file tracker", cache_dir, exc_info=True)
     with _WRITERS_LOCK:
         bucket = _WRITERS_BY_DIR.get(scope)
@@ -457,7 +457,7 @@ class FileBackend(CacheBackend):
         for sibling in _sibling_writers(self._writer_scope, self._writes):
             try:
                 sibling.wait(key)
-            except Exception:  # noqa: BLE001 — see docstring
+            except Exception:
                 logger.debug("Sibling write for key %r failed", key, exc_info=True)
 
     @staticmethod

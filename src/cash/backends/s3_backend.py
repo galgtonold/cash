@@ -20,7 +20,7 @@ from .entry_format import (
 from .serialization import PickleSerializer, Serializer
 
 try:
-    import boto3  # noqa: F401
+    import boto3  # noqa: F401 - an availability probe
 
     HAS_BOTO3 = True
 except ImportError:

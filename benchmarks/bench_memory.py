@@ -102,7 +102,7 @@ def main() -> int:
         print("bench_memory needs psutil (pip install psutil)")
         return 1
     try:
-        import numpy  # noqa: F401
+        import numpy  # noqa: F401 - an availability probe
     except ImportError:
         print("bench_memory needs numpy")
         return 1

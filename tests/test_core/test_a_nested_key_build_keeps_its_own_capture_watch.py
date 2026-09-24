@@ -38,7 +38,7 @@ def test_a_cached_call_in_a_resolver_does_not_replace_the_outer_record(tmp_path)
     src = "def f():\n    return mutate(ACC)\n"
     filename = f"<cash-test-{uuid.uuid4().hex}>"
     linecache.cache[filename] = (len(src), None, src.splitlines(True), filename)
-    exec(compile(src, filename, "exec"), ns)  # noqa: S102 - fixture construction
+    exec(compile(src, filename, "exec"), ns)
     fn = c.cache(dynamic_depends_on=resolver)(ns["f"])
 
     with warnings.catch_warnings():

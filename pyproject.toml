@@ -213,8 +213,12 @@ line-length = 120
 extend-exclude = ["*.ipynb", "tests/docs/_fixtures"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "PLC2701", "PLW1514"]
+select = ["E", "F", "W", "I", "PLC2701", "PLW1514", "BLE001", "PGH004", "RUF100"]
 ignore = ["E501", "E402"]
+# A suppression must name the rule it silences (PGH004) and must silence
+# something (RUF100), so a stale or blanket noqa fails the lint. In src/ a
+# broad `except Exception` needs a noqa saying why swallowing everything is
+# right there (BLE001), written as `# noqa: BLE001 - <reason>`.
 # PLC2701 (importing another module's private name) and PLW1514 (a text-mode
 # open() without an encoding, which reads cp1252 on Windows) are preview rules.
 # With explicit-preview-rules, only they are switched on: no other preview rule
@@ -228,6 +232,7 @@ known-first-party = ["cash"]
 [tool.ruff.lint.per-file-ignores]
 # Trailing whitespace inside tests is notebook cell source used as test data.
 "tests/**" = ["E731", "E741", "W291", "W293"]
-# Only src/ is held to PLC2701. Tests, benchmarks and scripts reach into
-# private names on purpose, to pin down or measure internals.
-"!src/**" = ["PLC2701"]
+# Only src/ is held to PLC2701 and BLE001. Tests, benchmarks and scripts reach
+# into private names on purpose, to pin down or measure internals, and catch
+# broadly to report or clean up.
+"!src/**" = ["PLC2701", "BLE001"]

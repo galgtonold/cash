@@ -16,7 +16,7 @@ import pytest
 
 pytest.importorskip("numpy")
 
-from cash.backends.entry_format import read_entry  # noqa: E402
+from cash.backends.entry_format import read_entry
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(240)]
 

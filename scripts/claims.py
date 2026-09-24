@@ -48,7 +48,7 @@ for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 
-from tools.claims.anchors import (  # noqa: E402
+from tools.claims.anchors import (
     AnchorError,
     Problem,
     Target,

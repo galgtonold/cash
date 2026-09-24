@@ -616,7 +616,7 @@ class Cash:
         if not self.config.disable:
             try:
                 install_read_watch()
-            except Exception:  # noqa: BLE001 - the first miss installs them anyway
+            except Exception:  # the first miss installs them anyway
                 logger.debug("[CORE] could not install the read watch at decoration", exc_info=True)
 
         return self._wrap_with_stats(cf, self._make_wrapper(cf))

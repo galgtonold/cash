@@ -272,7 +272,7 @@ class _Arm:
         module.__file__ = str(path)
         module.__dict__["_c"] = instance
         sys.modules[ARM_MODULE] = module
-        exec(compile(source, str(path), "exec"), module.__dict__)  # noqa: S102
+        exec(compile(source, str(path), "exec"), module.__dict__)
 
         work = module.work
         # Keep every version reachable for the life of the arm. Cash memoizes

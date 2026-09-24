@@ -111,7 +111,7 @@ def warn_source_changed_since_load(fn: Callable) -> None:
             "restart the process to run the new code. If a deploy puts new files "
             "on disk before the restart, this is the window it opens.",
         )
-    except Exception:  # noqa: BLE001 - a notice must never break a call
+    except Exception:  # a notice must never break a call
         logger.debug("Could not emit the source-changed notice", exc_info=True)
 
 

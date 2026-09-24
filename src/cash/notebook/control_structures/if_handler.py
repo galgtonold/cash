@@ -131,7 +131,7 @@ class IfHandler:
                 computed_iterations=1 if computed_count > 0 else 0,
             )
 
-        except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user if-branch code
+        except Exception as e:  # broad fallback wrapping arbitrary user if-branch code
             # Handed back to the cell, which raises it; logged above debug it
             # would print the traceback a second time.
             logger.debug("[CONTROL] Error in if per-statement execution: %s", e, exc_info=True)
@@ -203,7 +203,7 @@ class IfHandler:
             test_code = ast.unparse(current.test)
             try:
                 taken = bool(eval(test_code, self.shell.user_ns, self.shell.user_ns))
-            except Exception as e:  # noqa: BLE001 - the user's error, only marked with its line
+            except Exception as e:  # the user's error, only marked with its line
                 _helpers.at_line(e, current, overwrite=True)
                 raise
 

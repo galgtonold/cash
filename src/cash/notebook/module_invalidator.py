@@ -157,7 +157,7 @@ class ModuleInvalidator:
             return None
         try:
             return processor.lineage_builder.lineage_if_rerun(processor.tracking_state, name, value, code)
-        except Exception:  # noqa: BLE001 - the reload's own hash is always a valid fallback
+        except Exception:  # the reload's own hash is always a valid fallback
             logger.debug("[MODULE] could not re-derive %s's import lineage", name, exc_info=True)
             return None
 
@@ -270,7 +270,7 @@ class ModuleInvalidator:
             if module is None or not hasattr(module, source[1]):
                 return False
             fresh = getattr(module, source[1])
-        except Exception:  # noqa: BLE001 - any doubt means clear, the old behaviour
+        except Exception:  # any doubt means clear
             logger.debug("keeping from-import %s failed", var_name, exc_info=True)
             return False
         # What a re-import would bind, from the module the statement names. For

@@ -88,7 +88,7 @@ def _run_threads(fn, n):
         try:
             ready.wait(timeout=30)
             fn()
-        except BaseException as exc:  # noqa: BLE001 - re-raised in the main thread
+        except BaseException as exc:  # re-raised in the main thread
             errors.append(exc)
 
     threads = [threading.Thread(target=body) for _ in range(n)]

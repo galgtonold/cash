@@ -53,7 +53,7 @@ __all__ = [
 #: Defined in `value_policy`, which applies the same rate to every entry as it
 #: is written. One number: a value the writer would refuse is not one this
 #: would then keep a spare copy of.
-from .value_policy import BYTES_PER_COMPUTE_SECOND  # noqa: E402
+from .value_policy import BYTES_PER_COMPUTE_SECOND
 
 #: However cheap they are to hold, no more superseded versions than this.
 MAX_SUPERSEDED = 16

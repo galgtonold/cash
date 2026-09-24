@@ -35,7 +35,7 @@ def test_sparse_family_optional():
     """Sparse family available only when scipy is installed; should either
     return a csr_matrix or raise ImportError. Test runs in both worlds."""
     try:
-        import scipy.sparse  # noqa: F401
+        import scipy.sparse  # noqa: F401 - an availability probe
     except ImportError:
         with pytest.raises(ImportError):
             make_object("sparse", target_bytes=100_000)

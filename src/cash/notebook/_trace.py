@@ -51,10 +51,10 @@ def trace_event(event: str, **fields: Any) -> None:
     except Exception:  # noqa: BLE001 — tracing must never break the run
         try:
             line = json.dumps({"event": event, "_trace_error": True})
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - tracing must never break the run
             return
     try:
         with _LOCK, open(path, "a", encoding="utf-8") as fh:
             fh.write(line + "\n")
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - tracing must never break the run
         pass

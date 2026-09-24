@@ -90,5 +90,5 @@ def test_circular_reference_bounded():
 
 def test_unpicklable_object():
     """Lambdas (and other unpicklable values) still produce a sensible size."""
-    func = lambda x: x * 2  # noqa: E731
+    func = lambda x: x * 2
     assert estimate_object_size(func) > 0

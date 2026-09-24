@@ -261,11 +261,11 @@ def _warnings_at_the_caller():
                     registry=_WARNING_REGISTRIES.setdefault(filename, {}),
                     source=w.source,
                 )
-            except Exception:  # noqa: BLE001 - relaying a warning never breaks the call
+            except Exception:  # relaying a warning never breaks the call
                 logger.debug("call unit: could not relay a warning", exc_info=True)
                 try:
                     warnings.warn_explicit(w.message, w.category, w.filename, w.lineno)
-                except Exception:  # noqa: BLE001
+                except Exception:  # noqa: BLE001 - relaying a warning never breaks the call
                     pass
 
 
@@ -391,7 +391,7 @@ class CallUnit:
 
         @functools.wraps(fn)
         def _entry(*args, **kwargs):
-            __tracebackhide__ = True  # noqa: F841 - see _guarded
+            __tracebackhide__ = True
             with _warnings_at_the_caller():
                 return _guarded(*args, **kwargs)
 
@@ -399,7 +399,7 @@ class CallUnit:
             # IPython leaves a frame with this set out of the traceback it
             # prints: a user's KeyError showed three of cash's wrapper frames
             # between their cell and their function.
-            __tracebackhide__ = True  # noqa: F841
+            __tracebackhide__ = True
             run = self._site_runs.get(site)
             if run is None:
                 run = self._site_runs[site] = _SiteRun()
@@ -476,7 +476,7 @@ class CallUnit:
         func_name = self._func_name(fn)
 
         def _invoke(*args, **kwargs):
-            __tracebackhide__ = True  # noqa: F841 - see _entry_for
+            __tracebackhide__ = True
             # Globals this callee writes. Resolved per call rather
             # than once per `wrap`, because the underlying source analysis is
             # memoised (`callee_mutated_globals`) while the "is it bound, is it
@@ -525,7 +525,7 @@ class CallUnit:
 
     def _serve_hit(self, call: _Call, value, recorded_cost: float, metadata: Mapping[str, Any], hit_started: float):
         """Hand back a found entry's value, with the call's effects put back."""
-        __tracebackhide__ = True  # noqa: F841 - see _entry_for
+        __tracebackhide__ = True
         value, captured_globals = unwrap_callee_globals(value, metadata)
         if value is UNWRAP_FAILED:
             # The entry says it carries captured globals and does not.
@@ -557,7 +557,7 @@ class CallUnit:
     def _run_miss(self, call: _Call):
         """Run the call, watching what it does, and keep its result when a
         later hit could stand in for it."""
-        __tracebackhide__ = True  # noqa: F841 - see _entry_for
+        __tracebackhide__ = True
         # The call runs inside the STATEMENT's ambient capture
         # (FileAccessTracker, RNG capture, output capture), which wraps
         # the whole statement's exec. On a genuine miss that capture
@@ -681,7 +681,7 @@ class CallUnit:
         """
         try:
             return self._cash.get_func_key(fn)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - a display name must never break the call
             return f"{getattr(fn, '__module__', '?')}.{getattr(fn, '__qualname__', '?')}"
 
     def _record(

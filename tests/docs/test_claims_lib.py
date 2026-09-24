@@ -98,9 +98,9 @@ def test_published_pages_excludes_superpowers():
 # --------------------------------------------------------------------------- #
 # Resolution and fingerprinting                                               #
 # --------------------------------------------------------------------------- #
-import ast  # noqa: E402
+import ast
 
-from tools.claims.anchors import fingerprint, normalize, resolve  # noqa: E402
+from tools.claims.anchors import fingerprint, normalize, resolve
 
 
 def test_resolves_a_method_through_its_class():
@@ -198,7 +198,7 @@ def test_hash_of_a_known_string_is_pinned():
 # --------------------------------------------------------------------------- #
 # Value anchors                                                               #
 # --------------------------------------------------------------------------- #
-from tools.claims.anchors import literal_value, values_match  # noqa: E402
+from tools.claims.anchors import literal_value, values_match
 
 
 def test_literal_value_reads_a_plain_assignment():
@@ -277,7 +277,7 @@ def test_a_non_literal_documented_value_is_an_error_not_a_mismatch():
 # --------------------------------------------------------------------------- #
 # Page checking                                                               #
 # --------------------------------------------------------------------------- #
-from tools.claims.anchors import anchor_count, check_page  # noqa: E402
+from tools.claims.anchors import anchor_count, check_page
 
 
 def test_a_clean_page_reports_nothing():
@@ -328,10 +328,10 @@ def test_broad_justification_does_not_suppress_drift_detection():
 # --------------------------------------------------------------------------- #
 # Manifest / coverage ratchet                                                 #
 # --------------------------------------------------------------------------- #
-import json  # noqa: E402
+import json
 
-from tools.claims import anchors as _claims  # noqa: E402
-from tools.claims.anchors import Problem, check_manifest  # noqa: E402
+from tools.claims import anchors as _claims
+from tools.claims.anchors import Problem, check_manifest
 
 
 def _write_manifest(path, data):
@@ -435,9 +435,9 @@ def test_manifest_anchor_count_regression_is_a_problem(tmp_path, monkeypatch):
 # brief: does a prefix symbol (Cash.cache vs Cash.cache_info) or a duplicated #
 # target cross-wire the regex-based rewrites in --pin / --accept?            #
 # --------------------------------------------------------------------------- #
-import functools  # noqa: E402
+import functools
 
-import scripts.claims as _cli  # noqa: E402
+import scripts.claims as _cli
 
 
 def _patch_src_root(monkeypatch, src_root):
@@ -790,7 +790,7 @@ def test_accept_does_not_repin_a_fenced_example_anchor(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------- #
 # Display: full claim text stored, ellipsized only where shown                #
 # --------------------------------------------------------------------------- #
-from tools.claims.anchors import ellipsize  # noqa: E402
+from tools.claims.anchors import ellipsize
 
 
 def test_claim_text_is_stored_in_full_not_truncated(tmp_path):
@@ -926,7 +926,7 @@ def test_value_anchor_on_a_class_still_needs_broad_justification(tmp_path):
 # The two fixtures below are those two shapes, reduced. Each needs a DIFFERENT #
 # rule to reach it, which is why check_unanchored has two.                    #
 # --------------------------------------------------------------------------- #
-from tools.claims.anchors import check_unanchored, mention_pattern  # noqa: E402
+from tools.claims.anchors import check_unanchored, mention_pattern
 
 
 def _page(tmp_path, name, body):

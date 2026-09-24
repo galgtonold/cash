@@ -116,7 +116,7 @@ class TestFileTracking(unittest.TestCase):
 
     def test_pathlib_tracking(self):
         try:
-            from pathlib import Path  # noqa: F401
+            from pathlib import Path  # noqa: F401 - an availability probe
 
             code = f"from pathlib import Path; content = Path('{self.temp_path}').read_text()"
 

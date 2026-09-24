@@ -66,7 +66,7 @@ def test_an_rng_state_is_sized_without_a_call_per_int(monkeypatch):
     b = InMemoryBackend()
     calls = []
     real = object_hashing.memory_footprint
-    counting = lambda obj, _seen=None: calls.append(1) or real(obj, _seen)  # noqa: E731
+    counting = lambda obj, _seen=None: calls.append(1) or real(obj, _seen)
     monkeypatch.setattr(object_hashing, "memory_footprint", counting)
     monkeypatch.setattr(memory_backend, "memory_footprint", counting)
     b.set("k", _entry())

@@ -14,8 +14,8 @@ import pytest
 pytest.importorskip("matplotlib")
 pytest.importorskip("sklearn")
 
-from tests._nbharness.recorded_sessions import SESSIONS  # noqa: E402
-from tests._nbharness.session_harness import Player  # noqa: E402
+from tests._nbharness.recorded_sessions import SESSIONS
+from tests._nbharness.session_harness import Player
 
 pytestmark = [pytest.mark.integration, pytest.mark.upstream, pytest.mark.timeout(900)]
 

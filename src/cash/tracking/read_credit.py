@@ -168,7 +168,7 @@ def note_untracked_read(path: Any, frame: Any) -> None:
             return
         for code in codes:
             _record_read(code, abs_path, stat)
-    except Exception:  # noqa: BLE001 - attribution is an aid, never a failure
+    except Exception:  # attribution is an aid, never a failure
         logger.debug("[TRACKER] could not note an untracked read of %r", path, exc_info=True)
 
 

@@ -60,7 +60,7 @@ def test_pandas_types_resolve_after_a_later_import():
         from cash.notebook.statement import derivation_edges as de
 
         before = de._pandas_refholder_types()
-        import pandas  # noqa: F401
+        import pandas  # noqa: F401 - the import is the event under test
         after = de._pandas_refholder_types()
         print(len(before), len(after) > 0)
         """

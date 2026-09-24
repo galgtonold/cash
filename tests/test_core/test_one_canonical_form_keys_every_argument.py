@@ -88,7 +88,7 @@ def test_equal_values_key_alike_whatever_their_order(tmp_path):
     assert len(runs) == 1
 
 
-def _helper_with_a_lock_default(x, lock=threading.Lock()):  # noqa: B008 - the unhashable default under test
+def _helper_with_a_lock_default(x, lock=threading.Lock()):  # the unhashable default under test
     return x
 
 

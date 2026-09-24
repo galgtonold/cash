@@ -51,7 +51,7 @@ def test_sdist_has_no_environment_or_build_junk(tmp_path):
     if not (REPO_ROOT / "pyproject.toml").exists():
         pytest.skip("not running from the repo checkout")
     try:
-        import build  # noqa: F401
+        import build  # noqa: F401 - an availability probe
     except ImportError:
         pytest.skip("`build` not installed; cannot construct an sdist to inspect")
 

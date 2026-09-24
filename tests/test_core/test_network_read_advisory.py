@@ -53,10 +53,10 @@ def c(tmp_path):
 @pytest.fixture(scope="module")
 def url():
     class Handler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):  # noqa: N802
+        def do_GET(self):
             self._answer()
 
-        def do_POST(self):  # noqa: N802
+        def do_POST(self):
             self.rfile.read(int(self.headers.get("Content-Length", 0)))
             self._answer()
 

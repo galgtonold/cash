@@ -74,7 +74,7 @@ class TestTooLoose:
         """A notebook's own `len` gets no benefit of the doubt from its name."""
         calls = []
 
-        def len(x):  # noqa: A001 - the point of the test
+        def len(x):
             calls.append(x)
             return 3
 

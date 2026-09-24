@@ -42,7 +42,7 @@ class TestOneImportPath:
             assert "CascadingBackend" not in module.__all__
             assert "CascadingBackend" not in dir(module)
         with pytest.raises(ImportError):
-            from cash.backends import CascadingBackend  # noqa: F401
+            from cash.backends import CascadingBackend  # noqa: F401 - the import is what must fail
 
     def test_opaque_leaves_the_class_unmodified(self):
         """`cash.opaque` marks a class once, in the registry, and does not

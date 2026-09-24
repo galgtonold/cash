@@ -245,7 +245,7 @@ def test_no_file_falls_back_to_main():
     worse than leaving them as they are.
     """
     namespace: dict = {}
-    exec("def f(): pass", namespace)  # noqa: S102 - the case under test
+    exec("def f(): pass", namespace)
     assert resolve_main_module(namespace["f"]) == "__main__"
 
 
@@ -256,7 +256,7 @@ def test_it_reads_the_function_s_own_globals_not_the_entry_point():
     it was not defined in; the function's own globals are always right.
     """
     namespace = {"__file__": "/somewhere/else/defining_file.py"}
-    exec("def f(): pass", namespace)  # noqa: S102 - the case under test
+    exec("def f(): pass", namespace)
     assert resolve_main_module(namespace["f"]) == "defining_file"
 
 
@@ -264,5 +264,5 @@ def test_a_notebook_style_namespace_stays_main():
     """Jupyter's ``__main__`` is a user namespace, not a file."""
     c = cash.Cash(cache_dir=None)
     namespace: dict = {"__name__": "__main__"}
-    exec("def f(n): return n", namespace)  # noqa: S102 - the case under test
+    exec("def f(n): return n", namespace)
     assert c.get_func_key(namespace["f"]).startswith("__main__.")

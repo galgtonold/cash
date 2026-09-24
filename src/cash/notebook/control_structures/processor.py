@@ -237,7 +237,7 @@ class ControlStructureProcessor:
                 return
             sp.tracking_state.executed_write_stmt_codes.add(code)
             sp.persist_write_provenance(code, set(reads), None, written)
-        except Exception:  # noqa: BLE001 - never let bookkeeping break the user's loop
+        except Exception:  # never let bookkeeping break the user's loop
             logger.debug("[CONTROL] write provenance failed", exc_info=True)
 
     def _persist_outcome(self, node, code, reads, before, outcome, rng_before) -> None:
@@ -275,7 +275,7 @@ class ControlStructureProcessor:
                 return
             sp.persist_metadata_only(key, {"control_outcome": True, "code": code, "ttl": None, **record})
             written[key] = record
-        except Exception:  # noqa: BLE001 - never let bookkeeping break the user's loop
+        except Exception:  # never let bookkeeping break the user's loop
             logger.debug("[CONTROL] control-outcome persistence failed", exc_info=True)
 
     def _persistable_callees(self, node, code, reads, before, rng_before) -> dict[str, str] | None:
@@ -435,7 +435,7 @@ class ControlStructureProcessor:
                 force_outputs=force_outputs,
             )
             return self._finalize_single_unit(node, code, metrics)
-        except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user code executed as a unit
+        except Exception as e:  # broad fallback wrapping arbitrary user code executed as a unit
             # Handed back to the cell, which raises it; logged above debug it
             # would print the traceback a second time.
             logger.debug("[CONTROL] Error executing control structure as single unit: %s", e, exc_info=True)
@@ -484,7 +484,7 @@ class ControlStructureProcessor:
                 stream_output=True,
             )
             return self._finalize_single_unit(node, code, metrics)
-        except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user code executed as a unit
+        except Exception as e:  # broad fallback wrapping arbitrary user code executed as a unit
             # Handed back to the cell, which raises it; logged above debug it
             # would print the traceback a second time.
             logger.debug("[CONTROL] Error executing awaited control structure as single unit: %s", e, exc_info=True)

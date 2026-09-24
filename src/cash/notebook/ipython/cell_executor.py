@@ -1586,7 +1586,7 @@ class CellExecutor:
                     )
                     badge_render_time += time.time() - t_badge
 
-                except Exception as e:  # noqa: BLE001 - intentionally broad: catches user code exceptions
+                except Exception as e:  # intentionally broad: catches user code exceptions
                     self._finalize_error_badge(e, cell, node)
                     raise
             finally:

@@ -58,7 +58,7 @@ def c(tmp_path):
 @pytest.fixture(scope="module")
 def url():
     class Handler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):  # noqa: N802
+        def do_GET(self):
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"7")

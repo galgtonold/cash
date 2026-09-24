@@ -37,7 +37,7 @@ import sys
 import time
 
 try:
-    import cash.notebook  # noqa: F401
+    import cash.notebook  # noqa: F401 - imported for its side effects, if present
 except ImportError:
     pass
 else:

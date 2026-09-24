@@ -38,7 +38,7 @@ class _Exploding:
 
 
 def _missing_module_loader():  # pragma: no cover - never actually called
-    import _cas_probe_missing_mod  # noqa: F401
+    import _cas_probe_missing_mod  # noqa: F401 - the import is what must fail
 
     return 1
 

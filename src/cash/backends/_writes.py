@@ -388,7 +388,7 @@ class PendingWrites:
         if future is not None:
             try:
                 future.result()
-            except Exception:  # noqa: BLE001 - about to delete; the failure is moot
+            except Exception:  # about to delete; the failure is moot
                 logger.debug("Pending write for %r failed before its delete", key, exc_info=True)
 
     def has_pending(self, key: str) -> bool:

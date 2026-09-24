@@ -193,7 +193,7 @@ def test_explain_after_source_edit_returns_no_entry(tmp_path):
 
     # Re-decorate a different body with the same qualname.
     @c.cache
-    def f(x):  # noqa: F811 — intentional rebind to simulate source edit
+    def f(x):  # intentional rebind to simulate source edit
         return x * 3
 
     e = f.explain(5)
