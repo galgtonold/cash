@@ -14,9 +14,9 @@ import pytest
 
 from cash.backends import FileBackend
 from cash.core import Cash
-from cash.notebook._protocols import TrackingState
 from cash.notebook.module_invalidator import ModuleInvalidator
 from cash.notebook.statement import StatementProcessor
+from cash.notebook.tracking_state import TrackingState
 
 
 @pytest.fixture

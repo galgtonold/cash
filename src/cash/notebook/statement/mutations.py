@@ -23,7 +23,8 @@ from cash.analysis.namespace_effects import bare_call_arguments, fits_its_receiv
 from cash.object_hashing import mutation_fingerprint
 
 if TYPE_CHECKING:
-    from cash.notebook._protocols import ShellProtocol, TrackingState
+    from cash.notebook._protocols import ShellProtocol
+    from cash.notebook.tracking_state import TrackingState
 
 __all__ = ["MutationClassifier"]
 

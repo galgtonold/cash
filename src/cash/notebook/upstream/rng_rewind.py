@@ -24,7 +24,8 @@ from ...tracking.randomness import (
     seed_cells_not_yet_run,
 )
 from ...value_types import BUILTIN_NAMES
-from .._protocols import ShellProtocol, TrackingState
+from .._protocols import ShellProtocol
+from ..tracking_state import TrackingState
 
 __all__ = ["RngRewind"]
 

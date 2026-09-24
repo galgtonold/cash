@@ -33,7 +33,7 @@ from ...value_types import IMMUTABLE_PRIMS
 from ..server_discovery import get_notebook_path
 
 if TYPE_CHECKING:
-    from .._protocols import TrackingState
+    from ..tracking_state import TrackingState
 
 logger = logging.getLogger(__name__)
 

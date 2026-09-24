@@ -13,9 +13,9 @@ from unittest.mock import MagicMock
 
 from cash.backends import InMemoryBackend
 from cash.core import Cash
-from cash.notebook._protocols import TrackingState
 from cash.notebook.cache_status import CacheStatus
 from cash.notebook.statement import StatementProcessor
+from cash.notebook.tracking_state import TrackingState
 
 
 def computed_metrics() -> dict:

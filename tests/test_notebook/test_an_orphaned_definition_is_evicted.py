@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from cash.notebook._protocols import TrackingState
+from cash.notebook.tracking_state import TrackingState
 from cash.notebook.upstream.checker import UpstreamChecker
 
 

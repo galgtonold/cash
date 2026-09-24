@@ -2,7 +2,7 @@ import hashlib
 import unittest
 from unittest.mock import MagicMock, patch
 
-from cash.notebook._protocols import TrackingState
+from cash.notebook.tracking_state import TrackingState
 from cash.notebook.upstream import UpstreamChecker
 
 

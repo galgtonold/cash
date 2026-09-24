@@ -21,10 +21,10 @@ from ...analysis.cacheability_decision import is_lineage_exempt, receiver_is_ide
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.namespace_effects import is_estimator
 from ...value_types import BUILTIN_NAMES
-from .._protocols import TrackingState
 from .._trace import trace_event
 from ..cache_key import statement_source_hash
 from ..cache_status import CacheStatus
+from ..tracking_state import TrackingState
 from ._types import (
     CellCheck,
     ClassificationResult,

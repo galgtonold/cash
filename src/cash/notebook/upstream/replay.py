@@ -19,8 +19,8 @@ from ...analysis.annotations import get_statement_annotations
 from ...analysis.ast_util import parse_cached
 from ...analysis.code_analyzer import clean_cell_source, parse_cell_source
 from ...exceptions import UpstreamStateError
-from .._protocols import TrackingState
 from ..control_structures import is_control_structure
+from ..tracking_state import TrackingState
 
 if TYPE_CHECKING:
     from ..statement import ProcessResult

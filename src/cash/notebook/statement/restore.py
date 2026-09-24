@@ -38,7 +38,8 @@ from ..restored_var import apply_restored_var
 from .capture import replay_outputs
 
 if TYPE_CHECKING:
-    from .._protocols import ShellProtocol, TrackingState
+    from .._protocols import ShellProtocol
+    from ..tracking_state import TrackingState
     from ._metadata import StatementCacheMetadata
 
 logger = logging.getLogger(__name__)

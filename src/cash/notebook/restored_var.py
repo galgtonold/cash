@@ -15,8 +15,8 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from cash.notebook._protocols import TrackingState
     from cash.notebook.statement._metadata import StatementCacheMetadata
+    from cash.notebook.tracking_state import TrackingState
 
 logger = logging.getLogger(__name__)
 

@@ -18,12 +18,12 @@ from cash.notebook.cache_status import CacheStatus
 from cash.notebook.statement.results import COST_MODEL_KEYS
 
 if TYPE_CHECKING:
-    from cash.notebook._protocols import TrackingState
     from cash.notebook.statement._metadata import StatementCacheMetadata
     from cash.notebook.statement.rebuild_cost import RebuildCostLedger
     from cash.notebook.statement.restore import StatementRestorer
     from cash.notebook.statement.results import ProcessResult
     from cash.notebook.statement.run import StatementRun
+    from cash.notebook.tracking_state import TrackingState
 
 logger = logging.getLogger(__name__)
 

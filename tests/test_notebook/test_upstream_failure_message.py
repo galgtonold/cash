@@ -18,7 +18,7 @@ import pytest
 
 pytest.importorskip("IPython")
 
-from cash.notebook._protocols import TrackingState
+from cash.notebook.tracking_state import TrackingState
 from cash.notebook.upstream.replay import StatementReplay
 
 

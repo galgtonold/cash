@@ -20,7 +20,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from cash.notebook._protocols import TrackingState
+from cash.notebook.tracking_state import TrackingState
 from cash.notebook.upstream import UpstreamChecker
 from cash.notebook.upstream._types import CellCheck, SimulationResult, TraceEntry
 from cash.notebook.upstream.cache_restore import lineage_conflict

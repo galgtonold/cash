@@ -31,8 +31,9 @@ from cash.tracking.randomness import (
 )
 
 if TYPE_CHECKING:
-    from cash.notebook._protocols import ShellProtocol, TrackingState
+    from cash.notebook._protocols import ShellProtocol
     from cash.notebook.statement.results import ProcessResult
+    from cash.notebook.tracking_state import TrackingState
 
 logger = logging.getLogger(__name__)
 

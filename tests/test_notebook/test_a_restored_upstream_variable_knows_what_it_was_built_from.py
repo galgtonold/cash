@@ -14,8 +14,8 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from cash.backends import InMemoryBackend
-from cash.notebook._protocols import TrackingState
 from cash.notebook.restore import Restorer
+from cash.notebook.tracking_state import TrackingState
 from cash.tracking.file_dep_snapshot import snapshot_dependencies
 
 

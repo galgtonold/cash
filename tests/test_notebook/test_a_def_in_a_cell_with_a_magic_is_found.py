@@ -12,7 +12,7 @@ while the runtime, which has the live function, saw the mutation.
 from __future__ import annotations
 
 from cash.analysis.mutation_effects import NotebookSources, cell_effects
-from cash.notebook._protocols import TrackingState
+from cash.notebook.tracking_state import TrackingState
 from cash.notebook.upstream import NotebookSimulator
 
 HELPER = "%matplotlib inline\ndef add(d):\n    d.append(1)"

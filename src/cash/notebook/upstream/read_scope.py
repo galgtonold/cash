@@ -13,9 +13,10 @@ import logging
 
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source, statement_code
 from ...analysis.namespace_effects import resolve_literal_path, resolve_path_list, statement_read_paths
-from .._protocols import ShellProtocol, TrackingState
+from .._protocols import ShellProtocol
 from .._trace import trace_event
 from ..cache_key import read_provenance_key
+from ..tracking_state import TrackingState
 from .virtual_lineage import VirtualLineage
 
 __all__ = ["ReadScope"]

@@ -33,7 +33,8 @@ from cash.notebook.stateful_carriers import stateful_carrier_kind
 from cash.tracking.file_dep_snapshot import snapshot_file_deps
 
 if TYPE_CHECKING:
-    from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
+    from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol
+    from cash.notebook.tracking_state import TrackingState
     from cash.tracking.function_tracker import FunctionTracker
 
 logger = logging.getLogger(__name__)

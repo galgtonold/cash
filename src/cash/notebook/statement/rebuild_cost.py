@@ -7,7 +7,8 @@ import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
+    from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol
+    from cash.notebook.tracking_state import TrackingState
 
 logger = logging.getLogger(__name__)
 

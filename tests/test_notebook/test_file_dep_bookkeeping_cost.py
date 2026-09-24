@@ -21,10 +21,10 @@ import types
 
 import pytest
 
-from cash.notebook._protocols import TrackingState
 from cash.notebook.restored_var import apply_restored_var
 from cash.notebook.statement import StatementCacheMetadata
 from cash.notebook.statement.file_deps import StatementFileDeps
+from cash.notebook.tracking_state import TrackingState
 from cash.tracking import file_dep_snapshot
 
 

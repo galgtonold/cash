@@ -23,8 +23,8 @@ import ast
 
 import pytest
 
-from cash.notebook._protocols import TrackingState
 from cash.notebook.statement.mutations import MutationClassifier
+from cash.notebook.tracking_state import TrackingState
 
 
 class _Shell:

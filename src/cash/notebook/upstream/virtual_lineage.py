@@ -43,7 +43,7 @@ from ...tracking.randomness import (
     hidden_write_lineage,
 )
 from ...value_types import BUILTIN_NAMES
-from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
+from .._protocols import CashInstanceProtocol, ShellProtocol
 from ..cache_key import (
     CacheKeyContext,
     VirtualCallable,
@@ -73,6 +73,7 @@ from ..run_memo import file_state_this_run, known_fresh_entry, note_fresh_entry,
 from ..statement import is_control_body
 from ..statement.derivation_edges import bump_derived_lineages
 from ..statement.file_deps import compute_file_hash_component
+from ..tracking_state import TrackingState
 from ._types import (
     IncrementalStartResult,
     InputHashes,

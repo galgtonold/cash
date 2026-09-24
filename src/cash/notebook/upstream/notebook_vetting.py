@@ -17,7 +17,8 @@ from ...analysis.ast_util import called_names
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source
 from ...diagnostics import log_diagnostic, warn_diagnostic
 from ...exceptions import CashUpstreamSyntaxWarning, ForwardReferenceError
-from .._protocols import ShellProtocol, TrackingState
+from .._protocols import ShellProtocol
+from ..tracking_state import TrackingState
 
 __all__ = ["NotebookVetter"]
 

@@ -92,7 +92,7 @@ class TestRestoreRecordsFileDeps:
     """A restored statement's file dependencies reach ``executed_file_deps``."""
 
     def _restore(self, metadata, variables):
-        from cash.notebook._protocols import TrackingState
+        from cash.notebook.tracking_state import TrackingState
 
         mock_shell = MagicMock()
         mock_shell.user_ns = {}
@@ -244,7 +244,7 @@ class TestForwardProbePopulatesState:
     placeholder values and lineages for resolved broken vars."""
 
     def _make_checker(self):
-        from cash.notebook._protocols import TrackingState
+        from cash.notebook.tracking_state import TrackingState
         from cash.notebook.upstream.cache_restore import _FORWARD_PROBE_PLACEHOLDER
 
         mock_shell = MagicMock()

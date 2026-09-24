@@ -34,7 +34,7 @@ import warnings
 import pytest
 
 from cash.exceptions import CashWarning
-from cash.notebook._protocols import TrackingState
+from cash.notebook.tracking_state import TrackingState
 from cash.notebook.upstream._types import TraceEntry
 from cash.notebook.upstream.reexecution_planner import ReexecutionPlanner
 

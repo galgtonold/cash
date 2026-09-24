@@ -15,7 +15,7 @@ from cash.control_markers import has_marker
 from cash.exceptions import (
     CacheKeyComputationError,
 )
-from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
+from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol
 from cash.notebook.cache_key import (
     CacheKeyContext,
     compute_cache_key,
@@ -44,6 +44,7 @@ from cash.notebook.statement.restore import StatementRestorer
 from cash.notebook.statement.results import COST_MODEL_KEYS, ProcessResult
 from cash.notebook.statement.run import CodeRunner, StatementExecution, StatementRun, error_result
 from cash.notebook.statement.store import StatementStore
+from cash.notebook.tracking_state import TrackingState
 from cash.notebook.versioned_json_store import resolve_cache_dir
 from cash.purity import is_known_pure, is_stateful
 

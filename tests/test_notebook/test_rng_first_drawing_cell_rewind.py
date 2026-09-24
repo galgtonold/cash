@@ -23,7 +23,7 @@ import hashlib
 import random
 from unittest.mock import MagicMock
 
-from cash.notebook._protocols import TrackingState
+from cash.notebook.tracking_state import TrackingState
 from cash.notebook.upstream import UpstreamChecker
 from cash.tracking.randomness import (
     capture_rng_state,

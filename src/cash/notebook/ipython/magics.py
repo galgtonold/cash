@@ -25,7 +25,7 @@ from ...object_hashing import compute_hash
 from ...tracking import io_watch
 from ...tracking.function_tracker import FunctionTracker
 from .. import compute_baselines
-from .._protocols import ShellProtocol, TrackingState
+from .._protocols import ShellProtocol
 from ..cache_status import CacheStatus
 from ..control_structures import ControlStructureProcessor
 from ..live_cells import install_expiry_hook, register_target
@@ -41,6 +41,7 @@ from ..server_discovery import (
 )
 from ..statement import ProcessResult, StatementProcessor
 from ..statement.capture import replay_outputs
+from ..tracking_state import TrackingState
 from ..upstream import UpstreamChecker
 from ._args import parse_mode, strip_inline_comment
 from ._help import help_text

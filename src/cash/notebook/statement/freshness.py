@@ -33,7 +33,7 @@ from ..call_refs import resolve_call_refs
 from ._metadata import StatementCacheMetadata
 
 if TYPE_CHECKING:
-    from .._protocols import TrackingState
+    from ..tracking_state import TrackingState
 
 logger = logging.getLogger(__name__)
 

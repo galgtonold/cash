@@ -14,7 +14,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from cash.analysis.ast_util import parse_cached
-from cash.notebook._protocols import TrackingState
+from cash.notebook.tracking_state import TrackingState
 from cash.notebook.upstream import NotebookSimulator
 from cash.notebook.upstream.virtual_lineage import VirtualLineage
 

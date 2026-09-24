@@ -24,7 +24,8 @@ from cash.notebook.call_unit import CallCache, call_cost_floor_s, call_site_is_c
 from cash.tracking.file_tracker import tracking_seconds
 
 if TYPE_CHECKING:
-    from cash.notebook._protocols import ShellProtocol, TrackingState
+    from cash.notebook._protocols import ShellProtocol
+    from cash.notebook.tracking_state import TrackingState
     from cash.tracking.function_tracker import FunctionTracker
 
 logger = logging.getLogger(__name__)

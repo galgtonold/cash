@@ -21,9 +21,10 @@ from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.mutation_effects import CellEffects
 from ...analysis.mutations import consumed_input_names
 from ...value_types import BUILTIN_NAMES
-from .._protocols import ShellProtocol, TrackingState
+from .._protocols import ShellProtocol
 from .._trace import trace_event
 from ..consumables import consumable_state, has_diverged, is_consumable_unrestorable
+from ..tracking_state import TrackingState
 from .virtual_lineage import VirtualLineage
 
 __all__ = ["StaleValueGuard"]

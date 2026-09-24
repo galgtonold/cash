@@ -26,9 +26,10 @@ from cash.control_markers import strip_markers
 from ...analysis.ast_util import resolve_callee
 from ...analysis.mutation_effects import CellEffects
 from ...tracking.function_tracker import FunctionTracker, is_local_module
-from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
+from .._protocols import CashInstanceProtocol, ShellProtocol
 from .._trace import is_tracing, trace_event
 from ..cache_status import CacheStatus
+from ..tracking_state import TrackingState
 from ._types import CellCheck, ClassificationResult, ReexecutionPlan, SimulationCache, SimulationResult
 from .mismatch_classifier import MismatchClassifier
 from .read_scope import ReadScope

@@ -51,7 +51,8 @@ from .file_deps import compute_file_hash_component
 
 if TYPE_CHECKING:
     from ...tracking.function_tracker import FunctionTracker
-    from .._protocols import ShellProtocol, TrackingState
+    from .._protocols import ShellProtocol
+    from ..tracking_state import TrackingState
     from .file_deps import StatementFileDeps
 
 logger = logging.getLogger(__name__)

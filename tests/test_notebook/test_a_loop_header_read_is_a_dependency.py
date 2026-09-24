@@ -74,7 +74,7 @@ class TestAMovedFileIsCheckedEitherWay:
         """
         import hashlib
 
-        from cash.notebook._protocols import TrackingState
+        from cash.notebook.tracking_state import TrackingState
         from cash.notebook.upstream import NotebookSimulator
 
         shell.user_ns["DATA"] = str(tmp_path / "rows.txt")
@@ -136,8 +136,8 @@ class TestAMovedFileIsCheckedEitherWay:
         """
         import hashlib
 
-        from cash.notebook._protocols import TrackingState
         from cash.notebook.statement.file_deps import compute_file_hash_component
+        from cash.notebook.tracking_state import TrackingState
         from cash.notebook.upstream import NotebookSimulator
 
         data = tmp_path / "rows.txt"

@@ -156,13 +156,13 @@ class TestTrackingStateWiring:
     is a read-only live view of it, so every write has to go through the store."""
 
     def test_state_exposes_lineage_store(self):
-        from cash.notebook._protocols import TrackingState
+        from cash.notebook.tracking_state import TrackingState
 
         state = TrackingState()
         assert isinstance(state.lineage, LineageStore)
 
     def test_store_writes_visible_through_the_view(self):
-        from cash.notebook._protocols import TrackingState
+        from cash.notebook.tracking_state import TrackingState
 
         state = TrackingState()
         view = state.variable_lineage
@@ -171,7 +171,7 @@ class TestTrackingStateWiring:
         assert state.variable_lineage is view
 
     def test_the_view_refuses_writes(self):
-        from cash.notebook._protocols import TrackingState
+        from cash.notebook.tracking_state import TrackingState
 
         state = TrackingState()
         with pytest.raises(TypeError):

@@ -33,12 +33,13 @@ from cash.tracking.randomness import capture_object_rng_states, capture_rng_stat
 from ..call_refs import REF_BYTES_FIELD, REFS_FIELD
 
 if TYPE_CHECKING:
-    from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
+    from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol
     from cash.notebook.statement.amplification import AmplificationGuard
     from cash.notebook.statement.call_routing import CallRouting
     from cash.notebook.statement.lineage import StatementLineageBuilder
     from cash.notebook.statement.rebuild_cost import RebuildCostLedger
     from cash.notebook.statement.run import StatementExecution, StatementRun
+    from cash.notebook.tracking_state import TrackingState
 
 logger = logging.getLogger(__name__)
 

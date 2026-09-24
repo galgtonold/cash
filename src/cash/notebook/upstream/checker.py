@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from ...analysis.mutation_effects import CellEffects, NotebookSources, cell_effects
 from ...exceptions import AmbiguousCellError, UpstreamStateError
 from ...value_types import BUILTIN_NAMES
-from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
+from .._protocols import CashInstanceProtocol, ShellProtocol
 from ..server_discovery import (
     get_notebook_cells,
     get_notebook_cells_with_ids,
@@ -16,6 +16,7 @@ from ..server_discovery import (
     warn_notebook_not_found_once,
 )
 from ..staleness import StalenessTracker
+from ..tracking_state import TrackingState
 from .notebook_vetting import NotebookVetter
 from .replay import StatementReplay
 from .rng_rewind import RngRewind

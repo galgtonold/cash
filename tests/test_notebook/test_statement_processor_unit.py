@@ -8,9 +8,9 @@ imported and instantiated directly, improving test coverage visibility.
 
 from unittest.mock import MagicMock
 
-from cash.notebook._protocols import TrackingState
 from cash.notebook.statement import ProcessResult, StatementProcessor
 from cash.notebook.statement.results import ProcessResultRequired
+from cash.notebook.tracking_state import TrackingState
 
 
 class TestProcessResultTypes:

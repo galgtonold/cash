@@ -50,7 +50,7 @@ def test_the_declared_type_matches_what_is_stored():
     """Guards the annotation itself: it drifted once and nothing noticed."""
     import dataclasses
 
-    from cash.notebook._protocols import TrackingState
+    from cash.notebook.tracking_state import TrackingState
 
     field = {f.name: f for f in dataclasses.fields(TrackingState)}["executed_cell_hashes"]
     assert field.type in ("dict[str, set[str]]", dict[str, set[str]]), field.type

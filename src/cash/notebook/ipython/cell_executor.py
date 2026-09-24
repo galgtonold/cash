@@ -62,12 +62,13 @@ from ...exceptions import (
 from ...remote_source import measured_validation as _measured_validation
 from ...tracking.file_dep_snapshot import begin_file_state_epoch, end_file_state_epoch
 from ...tracking.randomness import get_drawing_rng_modules, rng_lineage_fingerprint
-from .._protocols import ShellProtocol, TrackingState
+from .._protocols import ShellProtocol
 from ..cache_status import CacheStatus
 from ..consumables import consumable_state, is_consumable_unrestorable
 from ..control_structures import contains_top_level_await, is_control_structure
 from ..statement import ProcessResult
 from ..statement.capture import replay_outputs
+from ..tracking_state import TrackingState
 
 if TYPE_CHECKING:
     from ..control_structures import ControlStructureProcessor
