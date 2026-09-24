@@ -224,7 +224,7 @@ class StatementProcessor:
             calls=self._calls,
         )
 
-    def get_cash_instance(self) -> Any | None:
+    def get_cash_instance(self) -> CashInstanceProtocol | None:
         """Return the Cash instance for decorator call tracking.
 
         Tries ``self.cash_instance`` first, then the default instance, so

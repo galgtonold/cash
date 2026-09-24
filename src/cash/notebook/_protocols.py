@@ -14,7 +14,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from cash.analytics import AnalyticsManager
     from cash.backends import CacheBackend
+    from cash.config import CashConfig
 
 
 @runtime_checkable
@@ -36,12 +38,21 @@ class ShellProtocol(Protocol):
 class CashInstanceProtocol(Protocol):
     """Minimal interface for the ``Cash`` instance used by the notebook subsystem.
 
-    ``StatementProcessor`` and ``UpstreamChecker`` access the ``Cash``
-    object only through its ``.backend`` attribute. That is typed as the
-    backend base class itself, which every backend subclasses and which
-    declares, with a default where one makes sense, every method the
-    notebook calls (``get_metadata``, ``set_metadata_only``, ``hold_notices``,
-    ...).
+    What ``StatementProcessor``, ``UpstreamChecker`` and their collaborators
+    read off the ``Cash`` object. ``backend`` is typed as the backend base
+    class itself, which every backend subclasses and which declares, with a
+    default where one makes sense, every method the notebook calls
+    (``get_metadata``, ``set_metadata_only``, ``hold_notices``, ...).
     """
 
     backend: CacheBackend
+    config: CashConfig
+
+    @property
+    def analytics(self) -> AnalyticsManager:
+        """The session's analytics, which the dashboard reads."""
+        ...
+
+    def drain_decorator_calls(self) -> list[dict[str, Any]]:
+        """Return and clear the ``@cash.cache`` call events recorded so far."""
+        ...

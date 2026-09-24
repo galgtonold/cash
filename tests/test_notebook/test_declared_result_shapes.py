@@ -13,6 +13,7 @@ import ast
 from pathlib import Path
 
 from cash.backends import CacheBackend
+from cash.notebook._protocols import CashInstanceProtocol
 from cash.notebook.ipython._types import TimingBreakdown
 from cash.notebook.ipython.cell_executor import PipelineCompleted
 from cash.notebook.statement.results import DecoratorCallMetric, ProcessResult
@@ -85,3 +86,37 @@ def test_every_backend_method_the_notebook_calls_is_on_the_backend_base():
 
     assert "set_metadata_only" in used, "the scan no longer finds backend calls"
     assert {name for name in used if not hasattr(CacheBackend, name)} == set()
+
+
+def _reads_cash_instance(node: ast.AST) -> bool:
+    return (isinstance(node, ast.Name) and node.id == "cash_instance") or (
+        isinstance(node, ast.Attribute) and node.attr == "cash_instance"
+    )
+
+
+def test_every_member_the_notebook_reads_off_the_cash_instance_is_on_its_protocol():
+    """The statement and upstream code hold the ``Cash`` object as a
+    ``CashInstanceProtocol``, so what they read off it must be declared there.
+    ``magics.py`` is left out: it holds the real ``Cash``."""
+    used = set()
+    for path in NOTEBOOK.rglob("*.py"):
+        if path.name == "magics.py":
+            continue
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Attribute) and _reads_cash_instance(node.value):
+                used.add(node.attr)
+            elif (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "getattr"
+                and len(node.args) >= 2
+                and _reads_cash_instance(node.args[0])
+                and isinstance(node.args[1], ast.Constant)
+            ):
+                used.add(node.args[1].value)
+
+    assert "config" in used, "the scan no longer finds reads off the Cash instance"
+    declared = set(CashInstanceProtocol.__annotations__) | {
+        name for name in vars(CashInstanceProtocol) if not name.startswith("_")
+    }
+    assert used - declared == set()
