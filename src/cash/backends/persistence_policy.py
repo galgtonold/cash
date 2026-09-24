@@ -1,13 +1,23 @@
-"""When a value is written past the RAM tier.
+"""When a value is cached, and when it is written past the RAM tier.
 
-One object holds the whole rule, so the tiered backend, the config and
-``cash info`` cannot disagree about it:
+One object holds the whole rule, so the tiered backend, the notebook's
+statement store, the config and ``cash info`` cannot disagree about it.
+
+Past RAM (`decide`, `decide_rebuild`):
 
 * an entry someone asked to keep (``@cash.cache``, ``@cash:persist``) is kept;
 * otherwise it is kept when restoring it beats recomputing it by
   ``min_savings_pct`` of the compute, as the fitted cost model predicts, and it
   took at least ``compute_floor_s`` to compute;
 * and only while it is worth the disk it takes (`value_policy`).
+
+A notebook statement's value, in any tier (`too_cheap_to_store`,
+`refuses_value`):
+
+* a statement that took less than ``store_floor_s`` gets no entry at all;
+* a value whose predicted restore exceeds the larger of ``restore_budget_s``
+  and ``(1 - min_savings_pct)`` of its compute is not kept, only its
+  metadata.
 """
 
 from __future__ import annotations
@@ -23,7 +33,15 @@ from .value_policy import worth_its_bytes
 if TYPE_CHECKING:
     from cash.config import CashConfig
 
-__all__ = ["COMPUTE_FLOOR_S", "MIN_SAVINGS_PCT", "Decision", "PersistencePolicy"]
+__all__ = [
+    "COMPUTE_FLOOR_S",
+    "MIN_SAVINGS_PCT",
+    "RESTORE_BUDGET_S",
+    "STORE_FLOOR_S",
+    "Decision",
+    "PersistencePolicy",
+    "restore_kind",
+]
 
 #: Nothing that computes faster than this is persisted past RAM. Not because
 #: disk I/O is slower than recomputing (a small entry restores in well under a
@@ -34,6 +52,25 @@ COMPUTE_FLOOR_S = 0.1
 
 #: The fraction of the compute a restore has to save.
 MIN_SAVINGS_PCT = 0.20
+
+#: A notebook statement that computes faster than this gets no cache entry,
+#: not even a metadata-only one, so the next lookup is a fast clean miss
+#: rather than a read that only finds "recompute". The default of
+#: ``min_execution_time_to_cache_seconds``.
+STORE_FLOOR_S = 0.01
+
+#: The restore time a notebook value may always take, whatever its compute:
+#: the fixed overhead of a cheap restore (opening a file) must not refuse a
+#: trivial statement. The default of ``min_cache_fixed_budget_seconds``.
+RESTORE_BUDGET_S = 0.05
+
+
+def restore_kind(backend: Any) -> str:
+    """The `cost_model` kind a notebook value is restored from: ``"ram"`` when
+    the backend's first tier holds values in memory, else ``"disk"``."""
+    tiers = getattr(backend, "backends", None)
+    first = tiers[0] if tiers else backend
+    return "ram" if getattr(first, "cost_kind", None) == "ram" else "disk"
 
 
 class Decision(NamedTuple):
@@ -52,18 +89,48 @@ class Decision(NamedTuple):
 
 @dataclass(frozen=True)
 class PersistencePolicy:
-    """The persistence rule, with its two tunables."""
+    """The persistence rule, with its tunables."""
 
     compute_floor_s: float = COMPUTE_FLOOR_S
     min_savings_pct: float = MIN_SAVINGS_PCT
+    store_floor_s: float = STORE_FLOOR_S
+    restore_budget_s: float = RESTORE_BUDGET_S
 
     @classmethod
     def from_config(cls, config: CashConfig) -> PersistencePolicy:
-        return cls(min_savings_pct=float(config.min_cache_savings_pct))
+        return cls(
+            min_savings_pct=float(config.min_cache_savings_pct),
+            store_floor_s=float(config.min_execution_time_to_cache_seconds),
+            restore_budget_s=float(config.min_cache_fixed_budget_seconds),
+        )
 
     def describe(self) -> str:
         """One line for ``cash info``."""
-        return f"cost model ({self.compute_floor_s:g}s compute floor, {self.min_savings_pct:.0%} savings required)"
+        return (
+            f"cost model ({self.compute_floor_s:g}s compute floor, {self.min_savings_pct:.0%} savings required; "
+            f"notebook statements: {self.store_floor_s:g}s store floor, {self.restore_budget_s:g}s restore budget)"
+        )
+
+    def too_cheap_to_store(self, compute_s: float) -> bool:
+        """Is a notebook statement that took *compute_s* too cheap for any entry?
+
+        *compute_s* is wall clock, so it charges the statement for any
+        scheduling stall too, and a coarse clock can report exactly 0.0 for an
+        instantaneous statement; 0 is below the floor like any other.
+        """
+        return compute_s < self.store_floor_s
+
+    def restore_budget(self, compute_s: float) -> float:
+        """The longest restore a notebook value computed in *compute_s* may take:
+        ``max(restore_budget_s, (1 - min_savings_pct) * compute_s)``. The fixed
+        budget keeps cheap statements; the ratio takes over once compute is large
+        enough to dominate, so a restore never costs most of a long compute."""
+        return max(self.restore_budget_s, (1.0 - self.min_savings_pct) * compute_s)
+
+    def refuses_value(self, compute_s: float, restore_s: float) -> bool:
+        """Should a notebook value that took *compute_s* and restores in
+        *restore_s* be kept as metadata only, in every tier?"""
+        return compute_s > 0 and restore_s > self.restore_budget(compute_s)
 
     def pays_to_restore(
         self, compute_s: float, size_bytes: int, *, type_name: str = "", backend_kind: str = "disk"

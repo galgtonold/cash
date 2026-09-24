@@ -41,13 +41,7 @@ from ..server_discovery import (
     set_notebook_path,
 )
 from ..statement import ProcessResult, StatementProcessor
-
-# The SAME floor reader the cache-write decision uses. The cacheable/trivial
-# split in %cash_stats is only honest if "worth caching" means exactly what the
-# cache meant by it, so this deliberately shares the reader rather than
-# re-deriving the threshold here.
 from ..statement.capture import replay_outputs
-from ..statement.store import config_float
 from ..upstream import UpstreamChecker
 from ._args import parse_mode, strip_inline_comment
 from ._help import help_text
@@ -1213,14 +1207,10 @@ class CashMagics(InspectionMagicsMixin, Magics):
         baselines = self._baselines()
         stats["cells_executed"] += 1
         cell_compute_time = 0.0
-        # Cash's own "too cheap to cache" floor, so the cacheable/trivial split
-        # below matches the decision the cache actually made rather than a
-        # second opinion invented here.
-        floor = config_float(
-            getattr(self._cash_instance, "config", None),
-            "min_execution_time_to_cache_seconds",
-            0.01,
-        )
+        # The statement store's own "too cheap to cache" floor, so the
+        # cacheable/trivial split below matches the decision the cache actually
+        # made rather than a second opinion invented here.
+        floor = self._statement_processor.persistence_policy().store_floor_s
         for m in all_metrics:
             status = m.get("status")
             if status == CacheStatus.COMPUTED:

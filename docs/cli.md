@@ -46,7 +46,7 @@ cash info
 #   Holds:      412 entries, 1.3 GiB
 #               `cash inspect` lists them, with what each one saves
 #   Max size:   auto -- disk 16.4 GiB, RAM 4.0 GiB
-#   Persist:    cost model (0.1s compute floor, 20% savings required)
+#   Persist:    cost model (0.1s compute floor, 20% savings required; notebook statements: 0.01s store floor, 0.05s restore budget)
 #   Config files:
 #     user         /home/me/.config/cash/config.toml  (not found)
 #     project      /home/me/project/pyproject.toml  (read)

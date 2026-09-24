@@ -162,3 +162,63 @@ class TestSizeAwareConfig:
         config = CashConfig()
         d = config.to_dict()
         assert "min_cache_savings_pct" in d
+
+
+class TestTheGateIsThePersistencePolicy:
+    """The store asks ``PersistencePolicy`` rather than keeping its own rule."""
+
+    def test_the_policy_defaults_are_the_config_defaults(self):
+        from cash.backends.persistence_policy import PersistencePolicy
+        from cash.config import CashConfig
+
+        assert PersistencePolicy.from_config(CashConfig()) == PersistencePolicy()
+
+    def test_the_restore_budget_is_the_larger_of_fixed_and_ratio(self):
+        from cash.backends.persistence_policy import PersistencePolicy
+
+        policy = PersistencePolicy(min_savings_pct=0.2, restore_budget_s=0.05)
+        assert policy.restore_budget(0.01) == 0.05
+        assert policy.restore_budget(10.0) == 8.0
+        assert policy.refuses_value(10.0, 8.5)
+        assert not policy.refuses_value(10.0, 7.5)
+        # Nothing measured, nothing refused.
+        assert not policy.refuses_value(0.0, 1.0)
+
+    def test_the_store_reads_the_configured_budget(self):
+        """A value refused under the default budget is kept once the configured
+        fixed budget covers its restore."""
+        import numpy as np
+
+        sp = TestSizeAwareCaching._make_processor()
+        config = MagicMock()
+        config.min_cache_savings_pct = 0.20
+        config.min_cache_fixed_budget_seconds = 0.05
+        config.min_execution_time_to_cache_seconds = 0.0
+        sp.cash_instance.config = config
+        big = {"big_var": np.zeros(50_000_000, dtype=np.float64)}
+        assert sp._store.should_skip_large_object_caching(big, execution_time=0.1)[0] is True
+
+        config.min_cache_fixed_budget_seconds = 100.0
+        assert sp._store.should_skip_large_object_caching(big, execution_time=0.1)[0] is False
+
+    def test_the_restore_kind_is_the_first_tiers(self, tmp_path):
+        from cash.backends.file_backend import FileBackend
+        from cash.backends.memory_backend import InMemoryBackend
+        from cash.backends.persistence_policy import restore_kind
+        from cash.backends.tiered_backend import TieredBackend
+
+        class _Ram(InMemoryBackend):
+            pass
+
+        assert restore_kind(TieredBackend([InMemoryBackend(), FileBackend(cache_dir=str(tmp_path))])) == "ram"
+        assert restore_kind(FileBackend(cache_dir=str(tmp_path))) == "disk"
+        assert restore_kind(_Ram()) == "ram"
+        assert restore_kind(None) == "disk"
+
+    def test_cash_info_names_the_statement_gate(self):
+        from cash.backends.persistence_policy import PersistencePolicy
+
+        line = PersistencePolicy().describe()
+        assert "0.1s compute floor" in line
+        assert "0.01s store floor" in line
+        assert "0.05s restore budget" in line

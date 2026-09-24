@@ -1,9 +1,11 @@
 """Writing a statement's result to the cache, and deciding whether to.
 
-:class:`StatementStore` owns the store half of the statement pipeline: the
-"too cheap to cache" floor, the size-aware restore-cost gate (Gate A of the
-cost model), the refusals that route a result to a metadata-only entry, and
-the write itself -- the payload, the metadata and the files it was built from.
+:class:`StatementStore` owns the store half of the statement pipeline: it
+applies the persistence policy's statement gate (the "too cheap to cache"
+floor and the restore-cost budget, `PersistencePolicy.too_cheap_to_store` and
+`PersistencePolicy.refuses_value`), the refusals that route a result to a
+metadata-only entry, and the write itself -- the payload, the metadata and the
+files it was built from.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from cash import cost_model
+from cash.backends.persistence_policy import PersistencePolicy, restore_kind
 from cash.notebook._memo import LruMemo
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON
@@ -40,22 +43,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["StatementStore", "config_float"]
-
-
-def config_float(config: Any, attr: str, default: float) -> float:
-    """Read a float-valued config attribute defensively.
-
-    Returns ``default`` when the config is None, missing the attribute,
-    or holding a value that can't be converted to float (e.g. a
-    MagicMock in tests).
-    """
-    if config is None:
-        return default
-    try:
-        return float(getattr(config, attr, default))
-    except (TypeError, ValueError):
-        return default
+__all__ = ["StatementStore"]
 
 
 def _snapshot_with_inherited(
@@ -232,6 +220,12 @@ class StatementStore:
         memo[key] = snaps
         return snaps
 
+    def policy(self) -> PersistencePolicy:
+        """The persistence policy under the current config, read per statement
+        so ``cash.configure`` takes effect on the next one."""
+        config = getattr(self.cash_instance, "config", None)
+        return PersistencePolicy.from_config(config) if config is not None else PersistencePolicy()
+
     def should_skip_large_object_caching(
         self,
         captured_vars: dict[str, Any],
@@ -239,103 +233,40 @@ class StatementStore:
         force_persist: bool = False,
         has_file_dependencies: bool = False,
     ) -> tuple[bool, str | None, dict[str, Any] | None]:
-        """Decide whether caching a set of output variables is worthwhile.
+        """Decide whether keeping a statement's output values is worthwhile.
 
-        The guiding principle is **expected time savings**: caching should only
-        be skipped when the overhead of storing and later restoring the result
-        is so high relative to re-computing that the user wouldn't benefit.
+        A value is refused when restoring it is predicted to cost more than
+        the policy's restore budget (`PersistencePolicy.refuses_value`), with
+        the restore time predicted by `cost_model` for where the value is read
+        back from: the first tier (`restore_kind`).
 
-        The cost model is **backend-aware**:
-
-        * **RAM (InMemoryBackend)** – no serialisation, only ``deepcopy``.
-          Estimated at ~2 GB/s for pandas types, ~500 MB/s for generic objects.
-          Overhead = 2 × copy time (store + restore).  This is very cheap, so
-          RAM caching is almost always worthwhile.
-
-        * **Disk / remote (FileBackend, Redis, S3, TieredBackend)** – needs
-          pickle + I/O.  Restore cost is predicted by the fitted cost model
-          in ``cash.cost_model`` (per-family ``a + b·size_bytes``).
-          Overhead = 2 × serialise time (store + restore).
-
-        Caching is skipped when the expected time savings would be less than
-        ``min_cache_savings_pct`` (default 20 %) of the original execution time::
-
-            expected_savings = execution_time - est_restore_time
-            skip  ⟺  expected_savings < min_cache_savings_pct × execution_time
-
-        Equivalently::
-
-            skip  ⟺  est_restore_time > (1 - min_cache_savings_pct) × execution_time
-
-        Special cases that always allow caching (never skip):
-        - ``force_persist`` is set (user explicitly wants caching via ``@cash:persist``)
-        - The statement has direct file dependencies (I/O-bound; caching avoids
-          re-reading from disk)
+        Never refused: under ``force_persist`` (``@cash:persist``), or when the
+        statement reads files itself (reading is the expensive part then).
 
         Returns:
             ``(should_skip, reason, prediction)`` where *reason* is a human-readable
             explanation when skipping (else ``None``), and *prediction* is the cost-model
             dict for the largest variable seen (keys: ``size_bytes``, ``restore_seconds``,
             ``type_name``, ``family``), or ``None`` when estimation failed for all vars.
-
-        The early-return paths (``force_persist``, ``has_file_dependencies``) still
-        compute and return the prediction so downstream observability (cost-model
-        validation, residual reports) sees consistent family attribution regardless
-        of which gate fired the cache decision.
+            The prediction is returned on every path, so cost-model validation
+            sees the same family attribution whichever gate decided.
         """
-        # NOTE: the "too cheap to cache" floor (statements whose own compute
-        # is below ``min_execution_time_to_cache_seconds``) is checked
-        # earlier in ``_store`` — earlier than this method — so
-        # that no metadata entry is written at all. That keeps subsequent
-        # warm lookups as fast cache misses rather than slow
-        # metadata-only hits.
+        policy = self.policy()
+        backend_kind = restore_kind(getattr(self.cash_instance, "backend", None))
 
-        # --- Determine cost model based on backend type -----------------------
-        backend = getattr(self.cash_instance, "backend", None)
-        backend_type = type(backend).__name__ if backend else ""
-
-        # For TieredBackend the first (fastest) tier determines the restore cost
-        # because that's where the data will be read from on cache hit.
-        if backend_type == "TieredBackend" and backend.backends:
-            primary_backend_type = type(backend.backends[0]).__name__
-        else:
-            primary_backend_type = backend_type
-
-        is_ram_backend = primary_backend_type == "InMemoryBackend"
-
-        config = getattr(self.cash_instance, "config", None)
-        min_savings_pct = config_float(config, "min_cache_savings_pct", 0.20)
-        fixed_budget = config_float(config, "min_cache_fixed_budget_seconds", 0.05)
-
-        # Track the prediction for the largest variable (by size_bytes) seen so
-        # far. Computed even on the early-return paths so observability is
-        # consistent — the file_dependencies / force_persist gates decide
-        # whether to cache, not whether to predict.
         largest_prediction: dict[str, Any] | None = None
-
-        # Compute predictions for all vars; collect skip-causing var separately.
+        # Only the FIRST refused var decides; every var is predicted.
         skip_decision: tuple[str | None, dict[str, Any] | None] | None = None
         for var_name, var_value in captured_vars.items():
             skip, reason, prediction = self._check_var_restore_budget(
-                var_name,
-                var_value,
-                execution_time,
-                is_ram_backend,
-                min_savings_pct,
-                fixed_budget,
+                var_name, var_value, execution_time, backend_kind, policy
             )
-            # Keep track of the largest variable's prediction for exposure.
             if prediction is not None:
                 if largest_prediction is None or prediction["size_bytes"] > largest_prediction["size_bytes"]:
                     largest_prediction = prediction
-            # Only the FIRST skip-causing var matters for the decision; remember it.
             if skip and skip_decision is None:
                 skip_decision = (reason, prediction)
 
-        # Never skip caching for statements that directly read files (file I/O
-        # is inherently expensive; the "fast computation" heuristic doesn't apply)
-        # or when force_persist is set by a user annotation. The prediction is
-        # still returned so observability stays consistent.
         if force_persist or has_file_dependencies:
             return False, None, largest_prediction
 
@@ -350,28 +281,20 @@ class StatementStore:
         var_name: str,
         var_value: Any,
         execution_time: float,
-        is_ram_backend: bool,
-        min_savings_pct: float,
-        fixed_budget: float,
+        backend_kind: str,
+        policy: PersistencePolicy,
     ) -> tuple[bool, str | None, dict[str, Any] | None]:
         """Return (skip, reason, prediction) for a single variable based on the
         predicted restore cost from the fitted cost model.
-
-        The skip decision uses ``max(fixed_budget, (1 - min_savings_pct) ×
-        execution_time)`` as the budget. The fixed budget covers the
-        per-call overhead of cheap caches (e.g. opening a file) so trivial
-        cells aren't refused; the ratio kicks in once compute is large
-        enough to dominate. This matches the policy framing: small fixed
-        overhead is fine, what we want to avoid is doubling a long cell.
 
         ``prediction`` is a dict with keys ``size_bytes``, ``restore_seconds``,
         ``type_name``, ``family``; or ``None`` if size estimation raises.
         """
 
+        is_ram_backend = backend_kind == "ram"
         try:
             obj_size = estimate_object_size(var_value)
             type_name = type(var_value).__name__
-            backend_kind = "ram" if is_ram_backend else "disk"
             family = cost_model.resolve_family(type_name)
             est_restore_time = cost_model.estimated_restore_time(type_name, obj_size, backend_kind)
             prediction: dict[str, Any] = {
@@ -380,15 +303,11 @@ class StatementStore:
                 "type_name": type_name,
                 "family": family,
             }
-            max_acceptable_restore = max(
-                fixed_budget,
-                (1.0 - min_savings_pct) * execution_time,
-            )
 
-            if execution_time > 0 and est_restore_time > max_acceptable_restore:
+            if policy.refuses_value(execution_time, est_restore_time):
                 size_mb = obj_size / (1024 * 1024)
                 backend_label = "copying" if is_ram_backend else "serializing"
-                pct_label = f"{min_savings_pct * 100:.0f}%"
+                pct_label = f"{policy.min_savings_pct * 100:.0f}%"
                 reason = (
                     f"Restoring '{var_name}' ({size_mb:.0f} MB {type_name}) would take "
                     f"~{est_restore_time:.2f}s vs {execution_time:.2f}s compute "
@@ -466,25 +385,18 @@ class StatementStore:
         # printed [] (test_file_handle_iteration_second_run_all).
         reads_files = bool(execution.accessed_files or accessed_remote)
         if not force_persist and not file_dependencies and not accessed_remote:
-            config_obj = getattr(self.cash_instance, "config", None)
-            min_exec_time = config_float(config_obj, "min_execution_time_to_cache_seconds", 0.01)
-            # ``execution_time`` is wall clock (``time.time()``), not CPU time,
-            # so it charges the statement for any scheduling stall too. On
-            # Windows the clock can report exactly 0.0 for a genuinely
-            # instantaneous statement (a = 1) because its resolution is coarser
-            # than the operation; treat 0 the same as "below the floor" — both
-            # mean "too cheap to cache". The converse also holds: on a heavily
-            # contended machine a trivial statement can measure tens of ms and
-            # legitimately clear the floor, so nothing may assume this branch is
-            # taken for a given statement (see the floor-exit test, which pins
-            # the threshold rather than trusting the machine to be fast).
-            if execution_time < min_exec_time and not self._rebuild_cost.final_over_costly_inputs(
+            # On a contended machine a trivial statement can measure tens of ms
+            # and clear the floor, so nothing may assume this branch is taken
+            # for a given statement (the floor-exit test pins the threshold
+            # rather than trusting the machine to be fast).
+            policy = self.policy()
+            if policy.too_cheap_to_store(execution_time) and not self._rebuild_cost.final_over_costly_inputs(
                 inputs, outputs, in_loop=self._calls.in_loop, written_later=self.written_later_in_cell
             ):
                 logger.debug(
                     "[SIZE_AWARE] Compute took only %.1fms, below %.0fms floor — not writing cache entry",
                     execution_time * 1000,
-                    min_exec_time * 1000,
+                    policy.store_floor_s * 1000,
                 )
                 return None
 

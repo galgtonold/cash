@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from typing import Any
 
 import cash
+from cash.backends.persistence_policy import PersistencePolicy
 from cash.control_markers import has_marker
 from cash.exceptions import (
     CacheKeyComputationError,
@@ -318,6 +319,11 @@ class StatementProcessor:
         self.tracking_state.current_session_hashes.pop(name, None)
         self.tracking_state.from_import_components.pop(name, None)
         self.tracking_state.module_attribute_deps.pop(name, None)
+
+    def persistence_policy(self) -> PersistencePolicy:
+        """The persistence policy statements are stored under right now
+        (see :meth:`StatementStore.policy`)."""
+        return self._store.policy()
 
     def set_written_later_in_cell(self, names: frozenset[str]) -> None:
         """Tell the store which names a later top-level statement of the cell
