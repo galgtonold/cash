@@ -3,7 +3,7 @@
 !!! info "Applies to: notebook"
     Notebooks with `%cash_on`. How to find out why a cell ran, did not run, or
     was not cached. For `@cash.cache` functions, see
-    [Seeing what it did](../../decorator.md#seeing-what-it-did).
+    [Seeing what cash did](../../decorator.md#seeing-what-cash-did).
 
 Start with the badge; most questions end there. When it is not enough, turn on
 `%cash_debug`. `%cash_stats` tells you whether caching pays off over the
@@ -143,7 +143,7 @@ it. To start over, run `!cash clear --all` and restart the kernel.
 
 `cash inspect` lists entries by size with the time each one saves, so a large
 entry that saves little stands out. Remove it with `cash clear --function NAME`
-or `cash clear --entry ID`. [Where your cache lives](../../how-it-works/storage.md)
+or `cash clear --entry ID`. [Where your cache lives](../../how-it-works/storage.md#where-the-cache-folder-is)
 explains the size caps.
 
 ## Scripted access

@@ -18,7 +18,7 @@ sending a request. The two engines handle this differently.
     `getattr(obj, name)()`, `importlib.import_module`) raises
     `CashImpureFunctionError`. [How `@cash.cache`
     decides](decorator-path.md#side-effects) has the details, and the
-    [decorator guide](../decorator.md) covers `assume_safe`.
+    [decorator guide](../decorator.md#side-effects) covers `assume_safe`.
 
 === "Notebook"
 
@@ -26,7 +26,7 @@ sending a request. The two engines handle this differently.
     produce, or that writes files, sends requests, reads the clock or asks for
     input, is not cached: it runs every time, and the badge says why. The rest
     of this page explains how Cash decides. The full list of what is cached,
-    refused or keyed is in the [notebook guide](../notebook_caching_api.md).
+    refused or keyed is in the [notebook guide](../notebook_caching_api.md#what-gets-cached).
 
 Unseeded randomness is the exception on both paths: it is cached, and the
 first value is kept.

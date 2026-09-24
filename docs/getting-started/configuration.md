@@ -41,7 +41,7 @@ Installed programs such as `pytest` or a console script use the project
 root above the current directory, or a per-user cache directory per tool when
 run outside any project. The project `pyproject.toml` is looked for from the
 same root, so a script finds the same settings wherever it is started. See
-[Where your cache lives](../how-it-works/storage.md) for how the folder is
+[Where your cache lives](../how-it-works/storage.md#where-the-cache-folder-is) for how the folder is
 chosen and capped.
 
 <!-- claim: cash/_location.py:_marks_project @2991b315 -->

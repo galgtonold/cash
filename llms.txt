@@ -27,7 +27,7 @@ never cached.
 ## Notebook
 
 - [Quick start: notebook](docs/getting-started/quickstart-notebook.md): turning on `%cash_on`.
-- [Notebook guide](docs/notebook_caching_api.md): what a statement caches, refuses, or keys on.
+- [Notebook guide](docs/notebook_caching_api.md#what-gets-cached): what a statement caches, refuses, or keys on.
 - [Magic commands](docs/magics.md): `%cash_on`, `%cash_badge`, `%cash_stats` and the rest.
 - [Annotations](docs/annotations.md): the `# @cash:` per-statement directives.
 - [Reading the badge](docs/badges.md): statuses and "why did this re-run?".

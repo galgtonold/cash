@@ -37,15 +37,11 @@ modification time must match too. The full rule is in
 ## What's automatically tracked
 
 <!-- claim: cash/tracking/file_tracker.py:FileDependencyRegistry._initialize_defaults @b63601b2, cash/tracking/file_tracker.py:_on_open @0ac87d87, cash/tracking/file_tracker.py:_on_listing @c2c76d1d -->
-- `open()` in a read mode, and everything that reads through it: `pathlib`
-  reads, `json`, `pickle`, `joblib`, and numpy's `load`, `loadtxt` and
-  `genfromtxt`.
-- Every pandas `read_*` function; polars `read_*` and `scan_*`; pyarrow's
-  `csv`, `parquet`, `feather` and `json` readers; `sqlite3.connect`.
-- `glob`, `os.listdir` and `os.scandir`. The **folder** is recorded, so a new
-  matching file recomputes the call.
-- `os.path.exists` and `os.path.isfile` when they answer False. The call
-  recomputes once the file appears.
+Cash tracks `open()` in a read mode and what reads through it, the pandas, polars,
+pyarrow and numpy readers, `sqlite3.connect`, directory listings (a new
+matching file recomputes the call) and existence checks that answer False (the
+call recomputes once the file appears). The full reader list is under
+[Files](../../how-it-works/invalidation.md#files).
 
 A path passed by keyword counts the same as one passed by position.
 

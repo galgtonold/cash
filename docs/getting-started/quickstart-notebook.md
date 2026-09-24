@@ -53,7 +53,7 @@ From here on:
 
 ## What's next
 
-- [Notebook guide](../notebook_caching_api.md): what cash caches, what it
+- [Notebook guide](../notebook_caching_api.md#what-gets-cached): what cash caches, what it
   refuses, and why.
 - [Reading the badge](../badges.md): every status and reason.
 - [Controlling caching](../tutorials/feature-guides/controlling-cache-behavior.md):

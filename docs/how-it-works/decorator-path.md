@@ -133,7 +133,7 @@ side effects and still caches:
 One case raises instead: a body that picks code from a run-time value
 (`eval`, `exec`, `getattr(obj, name)()`, `importlib.import_module`) raises
 `CashImpureFunctionError`, because Cash cannot tell when that code changes.
-The [decorator guide](../decorator.md) covers
+The [decorator guide](../decorator.md#side-effects) covers
 `assume_safe` and the `# @cash:assume-safe` line marker.
 
 ## Storing and returning
@@ -141,7 +141,7 @@ The [decorator guide](../decorator.md) covers
 <!-- claim: cash/backends/serialization.py:get_serializer @76cf2c1b -->
 A result is written to the RAM tier and to disk, however cheap it was, unless
 a tier's size cap refuses it; see
-[where your cache lives](storage.md). A hit returns a copy rebuilt from the
+[where results are stored](../decorator.md#where-results-are-stored). A hit returns a copy rebuilt from the
 stored bytes, not the object the first call returned, and it does not replay
 the body's `print` output.
 

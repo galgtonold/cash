@@ -15,12 +15,11 @@ that reading where you know better:
 | `@cash.stateful` | a helper whose side effect matters | Warns about every call to it; `strict=True` raises |
 | `cash.opaque` | a class passed as an argument | Its code is left out of the key |
 
-<a id="cashassume-safe-waive-one-statement"></a>
 To accept one side effect in one place, you don't need a marker: put
 `# @cash:assume-safe` on the line (see [Side effects](../../decorator.md#side-effects)).
 
 In a notebook, `@cash.stateful` has a stronger meaning (a statement that calls
-it is never cached); see the [Notebook guide](../../notebook_caching_api.md).
+it is never cached); see the [Notebook guide](../../notebook_caching_api.md#what-gets-cached).
 
 ## `@cash.pure`: trust this helper
 

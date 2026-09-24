@@ -16,8 +16,8 @@ decision for it, such as `# @cash:no-cache` or `# @cash:persist`. See
 
 *Decorator.* `@cash.cache(assume_safe=True)` tells cash you have checked the
 function's side effects and it should cache it anyway. `# @cash:assume-safe`
-on one line does the same for that line only. See the
-[`@cash.cache` guide](decorator.md).
+on one line does the same for that line only. See
+[Side effects](decorator.md#side-effects).
 
 ## Badge
 

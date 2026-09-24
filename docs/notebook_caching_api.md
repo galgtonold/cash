@@ -131,7 +131,7 @@ a `.gitignore`, so git ignores it.
 By default the disk cache may use a quarter of the free disk space, at least
 8 GiB and at most 100 GiB, and the in-memory cache a fifth of your RAM, between
 512 MiB and 4 GiB. When either is full, cash removes the entries least worth
-keeping. See [Where your cache lives](how-it-works/storage.md).
+keeping. See [Where your cache lives](how-it-works/storage.md#where-the-cache-folder-is).
 
 ## Inspect, clear and share
 

@@ -287,7 +287,8 @@ changes it afterwards, mark the producer `@cash.cache(frozen=True)`: the
 argument is then keyed by the call that made it. Otherwise register a cheap
 hasher for its type that returns a version or content id. For numpy and
 dataframe types this needs `override=True`, and what it returns becomes the
-value's whole identity. If neither fits, remove the decorator.
+value's whole identity. If neither fits, remove the decorator. See
+[`frozen=` and large arguments](decorator.md#frozen-and-large-arguments).
 
     cash.register_hasher(pd.DataFrame, lambda df: df.attrs["version"], override=True)
 
@@ -879,7 +880,7 @@ its place (a connection string, not a connection):
 
 For a closure, `lambda` or `functools.partial`, pass a module-level function
 and give the captured values as arguments
-([Known limitations](known-limitations.md#a-closure-or-lambda-passed-as-an-argument-stops-the-call-caching-entirely)).
+([Code you pass as an argument](decorator.md#code-you-pass-as-an-argument)).
 
 **When it is safe to ignore.** When you do not need that call cached.
 

@@ -74,7 +74,7 @@ script and walks up to the first directory that holds a `setup.py`, a
 `python /srv/etl/run.py` uses the same cache whether you, cron or a CI step
 started it, from any directory. A script with no project above it caches next
 to itself. An installed tool run from outside any project caches per user, in
-the platform's cache folder. [Where your cache lives](how-it-works/storage.md)
+the platform's cache folder. [Where your cache lives](how-it-works/storage.md#where-the-cache-folder-is)
 has the full rule.
 
 To choose the folder yourself, highest priority first:
@@ -116,7 +116,6 @@ Your test suite runs from the same project, so it reads and writes this same
 cache. Give it its own; see [Testing your code](tutorials/feature-guides/testing-your-code.md#isolating-the-suites-cache).
 
 ## Seeing what cash did
-<a id="seeing-what-it-did"></a>
 
 A script shows nothing by default. Use these to check that caching works.
 
@@ -195,7 +194,6 @@ left column is tracked for you. The right column is not, and says what to do.
 | An **environment variable** read by literal name (`os.getenv("TENANT")`) and the working directory | |
 | Sources named in `depends_on=` or `dynamic_depends_on=`, and an elapsed `ttl` | |
 
-<a id="file-reads-are-tracked-automatically"></a>
 File reads need no annotation. `pd.read_csv`, `open()`, `np.load` and the other
 tracked readers record each file with the entry, and every lookup checks that
 its content still matches. A touch that leaves the bytes alone still hits.
@@ -308,7 +306,6 @@ cached function: a hit skips the reseed, so later draws differ between a hit and
 a miss.
 
 ### `frozen=` and large arguments
-<a id="passing-large-objects-between-cached-functions"></a>
 
 <!-- claim: cash/decorator/frozen.py:FrozenMixin._audit_frozen @12932111, cash/decorator/frozen.py:FrozenMixin._warn_frozen_has_no_effect @f605e5d3 -->
 An argument is keyed by its content at the time of the call, so a big array or
@@ -333,7 +330,6 @@ warns when hashing an argument costs more than the cache saves. For big inputs,
 key the cached functions by **file path** and parse inside them.
 
 ## Side effects
-<a id="strict-and-assume_safe-purity-gates"></a>
 
 A hit returns the stored value without running the body. Anything else the body
 did (a file written, a request sent, a line printed) does not happen again. On

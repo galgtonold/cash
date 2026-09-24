@@ -61,7 +61,6 @@ When several directives reach one statement, they combine: each flag applies if
 any of them sets it, and the last `ttl=` wins. `no-cache` beats `persist` and
 also switches off the caching of calls inside the statement.
 
-<a id="grammar"></a>
 <!-- claim: cash/analysis/annotations.py:ANNOTATION_PATTERN @412c3ce1, cash/analysis/annotations.py:parse_annotation_line @5d8ea461 -->
 Spelling: `@cash:` must be lower case, and a space after the colon or around `=`
 is fine (`# @cash: persist`, `# @cash:ttl = 60`). An unknown name warns once with
@@ -99,7 +98,6 @@ The stored result expires `N` seconds after it was written; the next run
 computes it again. `N` is a whole number of seconds with no unit; `ttl=0` means
 it is always expired. It overrides the default from `%cash_on ttl=N`.
 
-<a id="ttl-with-no-value-or-non-digits"></a>
 A value cash cannot read (`ttl=5m`, `ttl=-30`, `ttl=`) is ignored with an
 [`ANNOT-TTL-INVALID`](warnings.md#annot-ttl-invalid) warning, and the statement
 keeps its normal caching. Write `# @cash:ttl=300` for five minutes.

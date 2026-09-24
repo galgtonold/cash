@@ -374,6 +374,5 @@ that trigger it. Say whether it happens on Run All or only when you re-run one
 cell, and count calls rather than timing them: a counter your function appends
 to shows what ran.
 
-<a id="code-passed-as-an-argument"></a><a id="a-closure-or-lambda-passed-as-an-argument-stops-the-call-caching-entirely"></a>
 Limitations of `@cash.cache` functions, such as code passed as an argument, are in
 the [decorator guide](decorator.md#code-you-pass-as-an-argument).

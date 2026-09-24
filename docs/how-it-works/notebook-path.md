@@ -24,7 +24,7 @@ stored result or runs it and stores what it produced.
    result. A statement that is not safe to cache runs without a lookup.
 4. **Badge.** Cash prints a badge with one row per statement: `CACHED`,
    `EXECUTED`, `NOT CACHED` (with the reason) or `SKIPPED`.
-   [Reading the badge](../badges.md#2-status-reference) lists every status.
+   [Reading the badge](../badges.md#statuses) lists every status.
 
 Cash caches statements rather than whole cells so that editing one line keeps
 the rest of the cell's work. The price is a few milliseconds of bookkeeping

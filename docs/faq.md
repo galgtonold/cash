@@ -28,7 +28,7 @@
 
 ??? question "Where is the cache, and how do I clear it?"
     In a `.cash/` folder, with a size cap. See
-    [Where your cache lives](how-it-works/storage.md). To clear it, run
+    [Where your cache lives](how-it-works/storage.md#where-the-cache-folder-is). To clear it, run
     `cash clear --all` or delete the folder.
 
 ??? question "Is my cache still valid after I upgrade cash?"
@@ -61,6 +61,7 @@
     `getattr(obj, name)()`, `importlib.import_module`), so cash cannot tell
     when a result goes stale. Put `# @cash:assume-safe` on that line, pass
     `assume_safe=True` for the whole function, or call the function by name.
+    See [Side effects](decorator.md#side-effects).
 
 ??? question "Why does a cache hit not print anything?"
     A hit returns the stored value without running the function body, so its

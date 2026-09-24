@@ -27,8 +27,8 @@ expensive_function(1, 2)   # second call: cache hit, instant
 
 <!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @dfaf7643 -->
 cash keys each call on its arguments and on the function's source. Every result
-is written to disk, in a `.cash/` folder in your project, so the next run of the
-script gets a hit on the first call too.
+is written to disk, in a [`.cash/` folder](../decorator.md#where-results-are-stored)
+in your project, so the next run of the script gets a hit on the first call too.
 
 <!-- claim: cash/decorator/arg_hashing.py:ArgHashingMixin._hash_arg_payload @7bc7e4ca, cash/object_hashing.py:builtin_hash @bd4210c7 -->
 Arguments do not need to be hashable: DataFrames and arrays are hashed by
