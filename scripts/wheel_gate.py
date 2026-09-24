@@ -38,7 +38,7 @@ WHAT IT DOES
      really is the venv (the install-layout is genuinely exercised).
   4. Drives a REAL `jupyter server` + `BlockingKernelClient` via the proven
      `wheel_gate_driver.py`, with a real kernel `restart` between run phases.
-  5. Runs four assertion-driven scenarios. Each proves a ground-truth invariant
+  5. Runs seven assertion-driven scenarios. Each proves a ground-truth invariant
      with an EXTERNAL signal -- a counter written from INSIDE a function/cell to
      a file, read from OUTSIDE the kernel. Never a badge or a print, which are
      themselves restored on a cache hit and so cannot witness a silent re-run.
