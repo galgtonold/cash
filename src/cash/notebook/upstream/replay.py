@@ -17,7 +17,7 @@ from cash.control_markers import strip_markers
 
 from ...analysis.annotations import get_statement_annotations
 from ...analysis.ast_util import parse_cached
-from ...analysis.code_analyzer import clean_cell_source, parse_cell_source
+from ...analysis.code_analyzer import clean_cell_source, parse_cell_source, statement_code
 from ...exceptions import UpstreamStateError
 from ..control_structures import is_control_structure
 from ..tracking_state import TrackingState
@@ -336,8 +336,12 @@ class StatementReplay:
                 tree = parse_cell_source(cell)
                 if tree is None:
                     continue
+                clean = clean_cell_source(cell)
                 for node in tree.body:
-                    code = ast.unparse(node)
+                    # Spelled as the runtime and the trace spell it, trailing
+                    # ``;`` included, so it compares with *stmt_code* and
+                    # *already_scheduled*.
+                    code = statement_code(node, clean)
                     if code == stmt_code:
                         return found
                     if code not in scheduled and self._writes(node, kind, name, reads):

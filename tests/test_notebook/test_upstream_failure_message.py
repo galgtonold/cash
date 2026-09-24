@@ -184,3 +184,13 @@ def test_a_writer_below_the_failing_statement_is_not_blamed():
     cell = "best = results.sort_values(['f1'])\nresults['f1'] = 1"
     m = _fail_with(_Checker({}), "best = results.sort_values(['f1'])", KeyError("f1"), [cell])
     assert "NOTE" not in m, m
+
+
+def test_a_failing_statement_that_ends_in_a_semicolon_still_finds_its_producer():
+    """The runtime keeps an expression's trailing ``;`` (IPython's "no repr"),
+    so the failing statement arrives as ``ax.bar(sales[in_cents]);``. The cell
+    is walked statement by statement, and each one must be spelled the same
+    way, or the failing statement is never found and the note goes missing."""
+    cell = "in_cents = file_median > 1\nax.bar(sales[in_cents]);"
+    m = _fail_with(_Checker({}), "ax.bar(sales[in_cents]);", NameError("name 'in_cents' is not defined"), [cell])
+    assert "'in_cents' is set by 'in_cents = file_median > 1' (cell 1)" in m, m
