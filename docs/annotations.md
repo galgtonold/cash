@@ -81,7 +81,8 @@ Results that took longer than 0.1 s are usually on disk already.
 
 <!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @420335a6 -->
 The statement runs every time and nothing is stored, including the calls inside
-it. The badge shows a plain `EXECUTED` row.
+it. The badge shows a plain `EXECUTED` row. A statement below that reads its
+result is cached as usual and computed again when the value changes.
 
 Use it for what cash cannot see for itself: a read whose answer must be fresh
 every run (a GET for a live price), a helper with an effect hidden from cash, or

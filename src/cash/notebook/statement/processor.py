@@ -1065,6 +1065,7 @@ class StatementProcessor:
             accessed_files=execution.accessed_files,
             tree=run.tree,
             accessed_remote=execution.accessed_remote,
+            no_cache=run.annotation is not None and run.annotation.no_cache,
         )
         if not run.skip_cache:
             self._refuse_unrestorable_outputs(run, captured_vars)

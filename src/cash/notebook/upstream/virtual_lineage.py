@@ -64,6 +64,7 @@ from ..lineage_formula import (
     key_hidden_reads,
     lineage_hidden_reads,
     module_source_component,
+    no_cache_value_component,
     output_lineage,
     statement_environment_component,
 )
@@ -1532,8 +1533,13 @@ class VirtualLineage:
         stmt_code: str,
         tree: ast.Module | None = None,
         virtual_lineage: dict[str, str] | None = None,
+        no_cache_values: dict[str, str] | None = None,
     ) -> dict[str, str]:
         """The lineage of each output of a simulated statement.
+
+        *no_cache_values* are the value digests a ``no-cache`` statement
+        recorded when it last ran, read back so the simulation reaches the
+        lineage the runtime recorded.
 
         Built by the runtime's own formula (``lineage_formula``), one output at
         a time as the runtime does: a module-source component belongs to the
@@ -1566,6 +1572,7 @@ class VirtualLineage:
                 func_component,
                 module_source_component(function_tracker, user_ns.get(out), out, stmt_code, tree),
                 environment,
+                no_cache_value_component(no_cache_values, out),
             )
             for out in outputs
         }
@@ -1848,6 +1855,7 @@ class VirtualLineage:
                 stmt_code,
                 mutation_tree,
                 virtual_lineage,
+                no_cache_values=self.tracking_state.no_cache_values.get(cache_key),
             )
 
             if logger.isEnabledFor(logging.DEBUG):

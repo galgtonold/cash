@@ -37,6 +37,8 @@ from ..lineage_formula import (
     input_lineage,
     lineage_hidden_reads,
     module_source_component,
+    no_cache_value_component,
+    no_cache_value_digest,
     output_lineage,
     statement_environment_component,
 )
@@ -91,8 +93,13 @@ class StatementLineageBuilder:
         accessed_files: set[str] | None = None,
         tree: ast.Module | None = None,
         accessed_remote: set[str] | None = None,
+        no_cache: bool = False,
     ) -> dict[str, Any]:
         """Capture output variables, compute their lineage, and update tracking state.
+
+        *no_cache* marks a ``# @cash:no-cache`` statement: each output's
+        lineage then also carries a digest of its value
+        (:func:`no_cache_value_digest`).
 
         *accessed_remote* holds object-storage URLs the statement read. They
         join the same lineage component as local files, contributing the store's
@@ -131,6 +138,7 @@ class StatementLineageBuilder:
         # The environment it read, as its key folds it: a new value is a new
         # lineage, so what is built on an output misses too.
         environment = statement_environment_component(code, user_ns)
+        value_digests: dict[str, str] = {}
 
         # Derivation-alias edges. A fresh rebind (``g = ...`` — output not also
         # read as an input) drops the var's stale edges before we re-detect; an
@@ -162,6 +170,7 @@ class StatementLineageBuilder:
                 callable_source_component(self.function_tracker, inputs, user_ns),
                 self._compute_module_lineage_component(tracking_state, value, var_name, code, tree),
                 environment,
+                self._no_cache_value(value_digests, var_name, value) if no_cache else "",
             )
 
             # Record via LineageStore so the dict entry and ``_cash_lineage_hash``
@@ -187,6 +196,12 @@ class StatementLineageBuilder:
                 tracking_state, var_name, accessed_files, inputs, value, rebind=var_name not in inputs
             )
 
+        if cache_key:
+            if value_digests:
+                tracking_state.no_cache_values[cache_key] = value_digests
+            else:
+                tracking_state.no_cache_values.pop(cache_key, None)
+
         # After all outputs' lineages are recorded, replay derivation bumps:
         # a mutation of a base/frame bumps its live-alias derivatives
         # . Skip-inputs rule keeps view *creation* from
@@ -202,6 +217,12 @@ class StatementLineageBuilder:
         )
 
         return captured_vars
+
+    @staticmethod
+    def _no_cache_value(digests: dict[str, str], var_name: str, value: Any) -> str:
+        """Record the digest of a no-cache output's value; return its component."""
+        digests[var_name] = no_cache_value_digest(value)
+        return no_cache_value_component(digests, var_name)
 
     def build_output_lineages(self, tracking_state: "TrackingState", outputs: set[str]) -> dict[str, str]:
         """Collect ``{var: lineage_hash}`` for all outputs that have a lineage."""

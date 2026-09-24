@@ -185,6 +185,13 @@ class TrackingState:
     # W: StatementLineageBuilder. R: VirtualLineage, ControlStructureProcessor.
     statement_file_reads: dict[str, tuple[frozenset[str], frozenset[str]]] = field(default_factory=dict)
 
+    # Cache key -> {output: digest of the value} a ``no-cache`` statement bound
+    # on its last run. It goes into those outputs' lineage, so a reader below
+    # misses when the value changed; the simulation reads it back to reach the
+    # same lineage.
+    # W: StatementLineageBuilder. R: StatementLineageBuilder, VirtualLineage.
+    no_cache_values: dict[str, dict[str, str]] = field(default_factory=dict)
+
     # sha256(``ast.unparse`` of a top-level if/for/while/with/try) ->
     # ({input: lineage at entry}, {var: lineage it left behind}, files behind
     # those, their file-hash component). The runtime derives a control

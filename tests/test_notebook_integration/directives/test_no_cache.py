@@ -304,6 +304,33 @@ class TestNoCacheAnnotationEdits:
         assert "y = 6" in nb_runner.get_output(2)
 
 
+@pytest.mark.integration
+@pytest.mark.timeout(180)
+def test_a_reader_of_a_no_cache_value_sees_this_runs_value(nb_runner):
+    """The draw changes each run, so a cached reader below it must recompute.
+
+    Every statement is stored, so the reader is cached however cheap it is.
+    Its output is compared with the draw's own, printed by the no-cache cell.
+    """
+    nb_runner.create_notebook(
+        [
+            "import cash\n%cash_on\nimport random",
+            "# @cash:no-cache\nt = random.random()\nprint('t =', t)",
+            "y = t + 0\nprint('y =', y)",
+        ]
+    )
+    nb_runner.start_kernel()
+    nb_runner.enable_persist()
+    seen = []
+    for _ in range(2):
+        nb_runner.run_all()
+        t = _last(nb_runner.get_output(2)).split("=")[-1].strip()
+        y = _last(nb_runner.get_output(3)).split("=")[-1].strip()
+        seen.append((t, y))
+    assert seen[0][0] != seen[1][0], "setup: the no-cache draw must change"
+    assert all(t == y for t, y in seen), seen
+
+
 @pytest.mark.stress
 @pytest.mark.core
 @pytest.mark.timeout(30)

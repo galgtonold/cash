@@ -59,8 +59,9 @@ For other types, register a hasher; see
 === "Notebook"
 
     A registered hasher does not change a statement's key. A variable made by
-    a statement is keyed on its lineage, never on its content, so this rarely
-    matters.
+    a statement is keyed on its lineage, not on its content, so this rarely
+    matters. The exception is the output of a `no-cache` statement, whose
+    lineage includes a hash of its value.
 
 ## In a notebook
 
@@ -127,6 +128,7 @@ lineage(x) = SHA256(
     + [file_component]                           # "path:mtime:size" per file read
     + [func_source_hashes]                       # called functions, sorted
     + [module_source_hashes]                     # local modules, sorted
+    + [value_digest]                             # x's content, if its statement is no-cache
 )
 ```
 
