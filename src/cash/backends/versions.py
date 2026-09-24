@@ -34,19 +34,17 @@ import threading
 from dataclasses import dataclass
 from typing import Any
 
+from .cache_dir import VERSIONS_INDEX_FILENAME
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "Version",
     "VersionIndex",
     "superseded_to_drop",
-    "INDEX_FILENAME",
     "BYTES_PER_COMPUTE_SECOND",
     "MAX_SUPERSEDED",
 ]
-
-#: No entry suffix, so every entry glob passes it by.
-INDEX_FILENAME = "_versions.log"
 
 #: Superseded bytes one second of compute pays for. A 1.4 s build of a 700 MB
 #: frame affords 90 MB -- the newest superseded version, which always stays,
@@ -98,7 +96,7 @@ class VersionIndex:
     """
 
     def __init__(self, cache_dir: str, untracked: Any) -> None:
-        self.path = os.path.join(cache_dir, INDEX_FILENAME)
+        self.path = os.path.join(cache_dir, VERSIONS_INDEX_FILENAME)
         self._untracked = untracked
         self._lock = threading.Lock()
         self._slots: dict[str, dict[str, Version]] | None = None

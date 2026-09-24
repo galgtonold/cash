@@ -6,7 +6,7 @@ import logging
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
-from ._base import CacheBackend, MetadataDict
+from ._base import CacheBackend, MetadataDict, entry_expired
 from .clear_watch import ClearWatcher
 from .persistence_policy import PersistencePolicy
 from .serialization import PickleSerializer, Serializer
@@ -251,12 +251,22 @@ class TieredBackend(CacheBackend):
 
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
         self._drop_ram_if_cleared()
+        tier_default = self.default_ttl
         for i, backend in enumerate(self.backends):
             metadata, value = backend.get(key)
             # Key-presence test: metadata is None when the child backend
             # reports "key absent" (per its API contract). A non-None
             # metadata dict with a None value means the user genuinely
             # cached None — still a hit.
+            if metadata is not None and entry_expired(metadata, tier_default):
+                # Checked here, for every tier: the RAM and S3 tiers do not
+                # check a ttl themselves. A slower tier may hold a newer copy
+                # (another process rewrote it), so drop this one and look on.
+                try:
+                    backend.delete(key)
+                except Exception:  # noqa: BLE001 - an expired copy is not served either way
+                    logger.debug("Could not drop expired %r from %s", key, type(backend).__name__, exc_info=True)
+                continue
             if metadata is not None:
                 # Read-Repair / Promotion to faster tiers
                 # If found in Tier 2 (File), promote to Tier 1 (Memory)
@@ -399,9 +409,8 @@ class TieredBackend(CacheBackend):
         metadata = dict(metadata) if metadata is not None else {}
         stored_destinations = []
         # A tier's `default_ttl` belongs to the entry, not to that tier: stamped
-        # once, here, every tier's copy expires together. Left to the file tier
-        # alone, a process kept serving the result from RAM long after the
-        # disk copy had expired.
+        # once, here, so every tier's copy carries it. `get` is what expires
+        # them together -- the RAM and S3 tiers never check a ttl themselves.
         if metadata.get("ttl") is None and self.default_ttl is not None:
             metadata["ttl"] = self.default_ttl
 

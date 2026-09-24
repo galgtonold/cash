@@ -75,8 +75,8 @@ cash info
 Summarises a cache directory, one function per row, largest first.
 
 - `path`: a cache directory, or a `.ipynb` file (reports its cells, whether it
-  uses `%cash_on`, and the `.cash` directory beside it). Without a path,
-  inspects the cache the library is using, the one `cash info` reports.
+  uses `%cash_on`, and its cache). Without a path, inspects the cache the
+  library is using, the one `cash info` reports.
 - `--function NAME`: list one function's entries instead. A unique trailing
   part of the name is enough (`work` finds `model.work`); `notebook` selects
   the notebook statements. An ambiguous name lists the candidates.
@@ -120,6 +120,10 @@ aaaaaaaaaaaa      12.5s    4.0 KiB     3x   2 min ago   df, model
   shows when an entry with a `ttl` runs out. `reads:` lists the files an entry
   depends on.
 
+A notebook's cache is the one its kernel uses: `.cash` beside the notebook,
+unless a `pyproject.toml` above it sets `[tool.cash] cache_dir` or
+`CASH_CACHE_DIR` is set. If there is none, the report names where it looked.
+
 Unreadable entries are skipped. Inspecting a notebook needs `nbformat`; without
 it, cash says how to install it and exits 0.
 
@@ -130,8 +134,9 @@ it, cash says how to install it and exits 0.
 
 Deletes cache data immediately. There is no confirmation prompt.
 
-- `path`: a cache directory to delete in full, or a `.ipynb` file whose `.cash`
-  directory is deleted.
+- `path`: a cache directory to delete in full, or a `.ipynb` file whose whole
+  cache directory is deleted. If it has none, cash prints where it looked and
+  exits 0.
 - `--all`: delete the cache the library is using, the one `cash info`
   reports. Cannot be combined with a path.
 - `--function NAME`: delete one function's entries and keep the rest. Names
@@ -149,13 +154,17 @@ Deletes cache data immediately. There is no confirmation prompt.
   entries. Cannot be combined with a path.
 - `--force`: clear a directory that does not look like a cash cache.
 
+`--function`, `--entry` and `--expired` work on a file cache's entries. On a
+SQLite cache (one `cache.db` file) they are refused with exit code 2; clear it
+whole with `cash clear <dir>`.
+
 ```bash
 cash clear --expired                   # free what will never be served again
 cash clear --entry a1b2c3              # drop one entry
 cash clear --function ray.build_grid   # drop one function, keep the rest
 cash clear --function notebook         # drop the notebook statements only
 cash clear --all                       # delete the cache in use
-cash clear ./notebooks/analysis.ipynb  # delete the .cash beside the notebook
+cash clear ./notebooks/analysis.ipynb  # delete that notebook's cache
 ```
 
 <!-- claim: cash/backends/cache_dir.py:CacheDirStamp.check @c89cf812, cash/backends/cache_dir.py:CacheDirStamp._entries_are_current @853438c9 -->
@@ -214,4 +223,4 @@ existing hook with a different body.
 |---|---|
 | `0` | Success, including "nothing to clear" and "autoload not installed". |
 | `1` | A refusal or a missing target: `cash inspect` with no cache or an unknown or ambiguous `--function`; `cash clear` with a missing path, an unknown `--function` or `--entry`, a directory that is not a cash cache (without `--force`), or the current directory; `cash autoload` refusing to overwrite or remove a file (without `--force`). |
-| `2` | A bad `cash clear` invocation: none of `path`, `--all`, `--function`, `--entry`, `--expired` or `--tool`; `--all` or `--tool` together with a path; `--expired` with `--function` or `--entry`. Nothing is touched. |
+| `2` | A bad `cash clear` invocation: none of `path`, `--all`, `--function`, `--entry`, `--expired` or `--tool`; `--all` or `--tool` together with a path; `--expired` with `--function` or `--entry`; `--function`, `--entry` or `--expired` on a SQLite cache. Nothing is touched. |

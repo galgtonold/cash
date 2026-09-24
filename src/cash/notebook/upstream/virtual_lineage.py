@@ -27,10 +27,15 @@ from cash.control_markers import iteration_digest, strip_markers
 
 from ..._paths import resolve_file_dep_path
 from ...analysis.ast_util import called_names, parse_cached
-from ...analysis.cacheability import analyze_statement, statement_writes_files
+from ...analysis.cacheability import statement_writes_files
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source
-from ...analysis.mutation_effects import classify_receivers, live_function_source, statement_effects
-from ...analysis.mutations import selfref_reassignment_targets
+from ...analysis.mutation_effects import (
+    StatementEffects,
+    classify_receivers,
+    control_structure_mutations,
+    live_function_source,
+    statement_effects,
+)
 from ...analysis.namespace_effects import bare_call_argument_names, bare_call_arguments
 from ...source_norm import source_identity_digest
 from ...tracking import file_dep_snapshot as _fds
@@ -93,9 +98,10 @@ def normalize_stmt(s: str) -> str:
     return strip_markers(s).strip()
 
 
-# Sentinel placed in user_ns by the forward-probe optimisation so that
-# _check_input_lineage_skip sees the variable as "present".  Replaced by
-# the real cached value when _restore_from_cache runs.
+# Stands in the namespace for a variable the forward probe found a current-cell
+# cache hit for: a statement whose input is not in the namespace is never
+# looked up (``cacheability_decision._has_missing_lineage``), so without it the
+# hit that restores the variable could not happen. The restore replaces it.
 _FORWARD_PROBE_PLACEHOLDER = object()
 
 
@@ -305,6 +311,8 @@ class VirtualLineage:
         # Derivation-alias vars bumped during the most recent cache-hit
         # propagation; read back by _update_virtual_lineage.
         self._last_hit_bumped: set[str] = set()
+        #: Names the forward probe bound to ``_FORWARD_PROBE_PLACEHOLDER``.
+        self._probe_placeholders: set[str] = set()
 
     def set_tracking_state(self, state: TrackingState) -> None:
         """Re-wire shared state refs (mirrors NotebookSimulator.set_tracking_state)."""
@@ -330,11 +338,12 @@ class VirtualLineage:
         Resolves from cell SOURCE (not ``inspect.getsource``, which has no
         linecache entry under nbclient) so ``function_arg_mutations`` can analyse
         a called function's body during the headless simulation. Later same-name
-        defs win (last definition), matching the runtime namespace.
+        defs win (last definition), matching the runtime namespace. A cell's
+        magics are stripped first, as the simulation reads every cell.
         """
         sources: dict[str, str] = {}
         for code in notebook_cells:
-            tree = parse_cached(code.replace("\r\n", "\n"))
+            tree = parse_cell_source(code)
             if tree is None:
                 continue
             for node in tree.body:
@@ -1475,23 +1484,12 @@ class VirtualLineage:
         Treated like a loop mutation so it is trusted in memory and its lineage is
         bumped, matching the runtime's ``update_lineage_after_execution``.
         """
-        mutated_vars: set[str] = set()
         if isinstance(node, ast.For):
-            target_names = extract_target_names(node.target)
-            loop_target_vars.update(target_names)
-            mutated_vars = self._find_loop_mutated_vars(node.body, set(target_names))
-            vars_mutated_by_loops.update(mutated_vars)
-        elif isinstance(node, ast.While):
-            mutated_vars = self._find_loop_mutated_vars(node.body, set())
-            vars_mutated_by_loops.update(mutated_vars)
-        elif isinstance(node, (ast.If, ast.With, ast.AsyncWith, ast.Try)):
-            direct_body: list = []
-            for attr in ("body", "orelse", "finalbody"):
-                direct_body.extend(getattr(node, attr, []) or [])
-            for handler in getattr(node, "handlers", []) or []:
-                direct_body.extend(handler.body)
-            mutated_vars = self._find_loop_mutated_vars(direct_body, set())
-            vars_mutated_by_loops.update(mutated_vars)
+            loop_target_vars.update(extract_target_names(node.target))
+        if not isinstance(node, (ast.For, ast.While, ast.If, ast.With, ast.AsyncWith, ast.Try)):
+            return set()
+        mutated_vars = control_structure_mutations(node, self._unbound_builtin)
+        vars_mutated_by_loops.update(mutated_vars)
         return mutated_vars
 
     def _apply_loop_mutation_lineages(
@@ -2355,6 +2353,36 @@ class VirtualLineage:
         # visible before the next _update_virtual_lineage call.
         apply_collected_mutations(self.restores, self.tracking_state)
 
+    def _statement_reads_writes(
+        self,
+        stmt_code: str,
+        tree: ast.Module | None,
+        virtual_modules: set[str],
+    ) -> tuple[StatementEffects, set[str], set[str]]:
+        """*stmt_code*'s effects, and what it reads and writes, as its key sees them.
+
+        The same analysis the runtime's ``_analyze_and_hash`` runs, with the
+        notebook's cell text as the source of called functions: the two
+        engines must agree on what a statement reads and writes, or they mint
+        different keys. A bare method call (``lst.append(x)``) or a bare call
+        to a helper that mutates its argument has no Store target, so the
+        receivers the runtime treats as mutated are writes too. The globals a
+        callee writes (``effects.callee_globals``) are left to the caller.
+        """
+        effects = statement_effects(
+            stmt_code,
+            tree,
+            namespace=self.shell.user_ns,
+            resolve_source=self._resolve_sim_function_source,
+            control_body=is_control_body(stmt_code),
+            virtual_modules=virtual_modules,
+        )
+        inputs, outputs = set(effects.inputs), set(effects.outputs)
+        if tree is not None:
+            outputs |= self._mutation_receivers(stmt_code, tree, virtual_modules)
+            outputs |= effects.arg_mutations
+        return effects, inputs, outputs
+
     def _update_virtual_lineage(
         self,
         stmt_code: str,
@@ -2377,29 +2405,10 @@ class VirtualLineage:
             if virtual_modules is None:
                 virtual_modules = set()
 
-            # The same analysis the runtime's `_analyze_and_hash` runs, with the
-            # notebook's cell text as the source of called functions: the two
-            # engines must agree on what a statement reads and writes, or they
-            # mint different keys.
             mutation_tree = parse_cached(stmt_code)
-            effects = statement_effects(
-                stmt_code,
-                mutation_tree,
-                namespace=self.shell.user_ns,
-                resolve_source=self._resolve_sim_function_source,
-                control_body=is_control_body(stmt_code),
-                virtual_modules=virtual_modules,
-            )
-            inputs, outputs = set(effects.inputs), set(effects.outputs)
+            effects, inputs, outputs = self._statement_reads_writes(stmt_code, mutation_tree, virtual_modules)
 
-            # A bare method call (``lst.append(x)``) or a bare call to a helper
-            # that mutates its argument has no Store target: add the receivers
-            # the runtime treats as mutated, so the simulated lineage is bumped
-            # by the same source-based formula.
             if mutation_tree is not None:
-                outputs = outputs | self._mutation_receivers(stmt_code, mutation_tree, virtual_modules)
-                outputs |= effects.arg_mutations
-
                 # Model bare-name ``del x`` as a namespace removal so the
                 # position-scoped liveness check downstream reconstructs an
                 # above-the-del consumer's inputs. Only ``ast.Name``
@@ -2679,6 +2688,20 @@ class VirtualLineage:
                 file_deps=set(resolved_paths) if resolved_paths else None,
             )
 
+    def drop_probe_placeholders(self) -> None:
+        """Unbind the names the forward probe held that no restore filled.
+
+        The probe binds a placeholder for the cell it checked; its restore
+        replaces it as the cell runs. One still bound afterwards (the restore
+        failed) is not a value: left in place it would read as present to the
+        next check and to the user. It goes, with the lineage recorded for it.
+        """
+        for var in self._probe_placeholders:
+            if self.shell.user_ns.get(var) is _FORWARD_PROBE_PLACEHOLDER:
+                del self.shell.user_ns[var]
+                self.lineage.discard(var)
+        self._probe_placeholders.clear()
+
     def eliminate_broken_vars_via_current_cell_probe(
         self,
         broken_vars: set[str],
@@ -2704,102 +2727,109 @@ class VirtualLineage:
             return
 
         try:
-            current_cell_code = notebook_cells[current_cell_idx].replace("\r\n", "\n")
-            tree = ast.parse(current_cell_code)
-        except (IndexError, SyntaxError):
+            raw_cell = notebook_cells[current_cell_idx]
+        except IndexError:
             return
+        tree = parse_cell_source(raw_cell)
+        if tree is None:
+            return
+        clean_cell = clean_cell_source(raw_cell)
+        # Local: import cycle upstream.virtual_lineage -> ipython.cell_executor -> ... -> upstream.virtual_lineage.
+        from ..ipython.cell_executor import CellExecutor
 
         # Track which broken vars are resolved by forward cache hits.
         # We simulate forward through the current cell's statements:
         # if a statement (a) would cache-hit and (b) its outputs overlap
         # with broken_vars, those outputs become available in memory.
         resolved_by_cache = set()
+        # A broken var a statement that misses reads before any hit restores it
+        # is needed from upstream: a later hit would come too late.
+        needed_first: set[str] = set()
+        occurrences: dict[str, int] = {}
 
-        for node in ast.iter_child_nodes(tree):
-            if not isinstance(node, ast.stmt):
-                continue
+        for node in tree.body:
             if is_control_structure(node):
-                continue  # Control structures are too complex to probe
+                # Too complex to probe: what it reads is needed as it runs.
+                try:
+                    reads, _ = CodeAnalyzer.analyze_code_block(ast.unparse(node))
+                except (SyntaxError, ValueError, TypeError):
+                    reads = set(broken_vars)
+                needed_first |= reads & broken_vars
+                continue
 
+            # The statement's key, built as ``_update_virtual_lineage`` builds
+            # it (and so as the runtime does): its text with an expression's
+            # trailing ``;``, its occurrence in the cell, its reads with the
+            # hidden ones (an RNG a draw reads), and its writes with the
+            # globals its callees write.
             try:
                 stmt_code = ast.unparse(node)
             except (ValueError, TypeError):
                 continue
+            if CellExecutor.expr_has_trailing_semicolon(clean_cell, node):
+                stmt_code += ";"
+            occurrence_index = occurrences.get(stmt_code, 0)
+            occurrences[stmt_code] = occurrence_index + 1
 
-            inputs, outputs = CodeAnalyzer.analyze_code_block(stmt_code)
-            if not outputs:
+            effects, inputs, outputs = self._statement_reads_writes(stmt_code, parse_cached(stmt_code), virtual_modules)
+            outputs |= effects.callee_globals
+            unresolved = inputs & (broken_vars - resolved_by_cache - needed_first)
+            if not unresolved:
                 continue
 
-            # Check if this statement uses any broken variable
-            uses_broken = inputs & (broken_vars - resolved_by_cache)
-            if not uses_broken:
-                # Statement doesn't need any broken vars — skip probe
-                continue
-
-            # Build input hashes from virtual lineage (same as simulation)
-            input_hashes: dict[str, str] = {}
-            for inp in inputs:
-                if inp in virtual_lineage:
-                    input_hashes[inp] = virtual_lineage[inp]
-                elif inp in self.variable_lineage:
-                    input_hashes[inp] = self.variable_lineage[inp]
-
-            # Probe the cache (read-only — don't restore anything yet)
+            # Probe the cache's metadata only: nothing is restored here.
             try:
                 cache_key, _, _, _, _ = compute_cache_key(
                     stmt_code,
-                    inputs,
+                    inputs | key_hidden_reads(stmt_code, self),
                     ctx=CacheKeyContext(
                         variable_lineage=self.variable_lineage,
                         user_ns=self.shell.user_ns,
                         function_tracker=self.function_tracker,
-                        virtual_lineage=input_hashes,
+                        virtual_lineage=virtual_lineage,
                         virtual_modules=virtual_modules,
                         compute_hash_fn=self.compute_hash_fn,
+                        virtual_callables=self._virtual_callables,
                     ),
                     outputs=outputs,
+                    occurrence_index=occurrence_index,
                 )
-
-                metadata, cached_data = self.cash_instance.backend.get(cache_key)
-                if metadata and cached_data is not None:
-                    # Verify file deps are still valid (mtime + size, both
-                    # forms — see _validate_file_freshness for rationale).
-                    file_deps = metadata.get("file_dependencies", {})
-                    deps_valid = self._validate_file_freshness(file_deps, memo_key=cache_key)
-
-                    if deps_valid:
-                        # Cache hit! This statement's restore will put its
-                        # outputs (including any broken vars) into memory.
-                        produced = outputs & (broken_vars - resolved_by_cache)
-                        if produced:
-                            resolved_by_cache.update(produced)
-                            # Populate variable_lineage and user_ns so the
-                            # statement processor's _check_input_lineage_skip
-                            # doesn't bail out before computing the cache key.
-                            # The placeholder will be overwritten by the real
-                            # cached value when _restore_from_cache runs.
-                            for var in produced:
-                                if var in virtual_lineage:
-                                    self.restores.record_restore(
-                                        var_name=var,
-                                        lineage_hash=virtual_lineage[var],
-                                    )
-                                    # Drain so subsequent statements probing the
-                                    # cache see the placeholder lineage.
-                                    apply_collected_mutations(
-                                        self.restores,
-                                        self.tracking_state,
-                                    )
-                                if var not in self.shell.user_ns:
-                                    self.shell.user_ns[var] = _FORWARD_PROBE_PLACEHOLDER
-                            logger.debug(
-                                "[UPSTREAM] Forward probe: cache hit for '%s' resolves broken vars: %s",
-                                stmt_code[:50],
-                                produced,
-                            )
-
+                metadata = self._get_metadata_only(cache_key)
             except (KeyError, TypeError, ValueError, OSError):
+                metadata = None
+            # A metadata-only record (the value stayed in RAM, or was too large
+            # to write) restores nothing; file deps must still be valid (mtime +
+            # size, both forms -- see _validate_file_freshness for rationale).
+            if (
+                not metadata
+                or metadata.get("metadata_only")
+                or not self._validate_file_freshness(metadata.get("file_dependencies", {}), memo_key=cache_key)
+            ):
+                needed_first |= unresolved
                 continue
+
+            # Cache hit! Its restore puts back what its entry recorded,
+            # including any broken vars among them.
+            produced = outputs & unresolved & set(metadata.get("output_lineages") or ())
+            if not produced:
+                continue
+            resolved_by_cache.update(produced)
+            # The runtime keys the statement with these lineages, as the
+            # simulation did: record them, so the restore finds the entry, and
+            # hold each name's place until the restore fills it.
+            for var in produced:
+                if var in virtual_lineage:
+                    self.restores.record_restore(var_name=var, lineage_hash=virtual_lineage[var])
+                if var not in self.shell.user_ns:
+                    self.shell.user_ns[var] = _FORWARD_PROBE_PLACEHOLDER
+                    self._probe_placeholders.add(var)
+            # Drain so subsequent statements probing the cache see the lineage.
+            apply_collected_mutations(self.restores, self.tracking_state)
+            logger.debug(
+                "[UPSTREAM] Forward probe: cache hit for '%s' resolves broken vars: %s",
+                stmt_code[:50],
+                produced,
+            )
 
         if resolved_by_cache:
             broken_vars -= resolved_by_cache
@@ -3072,69 +3102,6 @@ class VirtualLineage:
                 yield child
                 if is_control_structure(child):
                     yield from VirtualLineage._iter_body_nodes(child)
-
-    def _recurse_control_structure_mutations(self, body_node: ast.AST, loop_targets: set[str]) -> set[str]:
-        """Recurse into a nested control structure and return its mutated vars."""
-        if isinstance(body_node, ast.For):
-            nested_targets = extract_target_names(body_node.target)
-            return self._find_loop_mutated_vars(body_node.body, loop_targets | set(nested_targets))
-        if isinstance(body_node, ast.While):
-            return self._find_loop_mutated_vars(body_node.body, loop_targets)
-        if isinstance(body_node, ast.If):
-            result = self._find_loop_mutated_vars(body_node.body, loop_targets)
-            if body_node.orelse:
-                result |= self._find_loop_mutated_vars(body_node.orelse, loop_targets)
-            return result
-        if isinstance(body_node, ast.With):
-            return self._find_loop_mutated_vars(body_node.body, loop_targets)
-        if isinstance(body_node, ast.Try):
-            result = self._find_loop_mutated_vars(body_node.body, loop_targets)
-            for handler in body_node.handlers:
-                result |= self._find_loop_mutated_vars(handler.body, loop_targets)
-            if body_node.orelse:
-                result |= self._find_loop_mutated_vars(body_node.orelse, loop_targets)
-            if body_node.finalbody:
-                result |= self._find_loop_mutated_vars(body_node.finalbody, loop_targets)
-            return result
-        return set()
-
-    def _find_loop_mutated_vars(self, body_nodes: list, loop_targets: set[str]) -> set[str]:
-        """
-        Find variables that are *actually* mutated inside loop body.
-
-        Uses ``MutationDetector`` for precise detection of in-place mutations
-        (subscript assignment, method calls like ``.append()``, augmented
-        assigns, attribute assignments).  This avoids false positives from the
-        old ``inputs - outputs`` heuristic, which incorrectly marked
-        read-only variables (e.g. ``df`` in ``ticker_data = df[...]``) as
-        mutated.
-
-        Excludes loop target variables and built-ins.
-        """
-
-        mutated_vars: set[str] = set()
-
-        for body_node in body_nodes:
-            if is_control_structure(body_node):
-                # Recurse into nested control structures
-                mutated_vars.update(self._recurse_control_structure_mutations(body_node, loop_targets))
-            else:
-                # Use analyze_statement for precise in-place mutation detection.
-                # This catches: .append(), .update(), [key]=val, +=, obj.attr=val
-                try:
-                    stmt_code = ast.unparse(body_node)
-                    detected = analyze_statement(stmt_code, None).all_mutated_vars
-                    mutated_vars.update(detected)
-                except (SyntaxError, ValueError, TypeError):
-                    logger.debug("analyze_statement failed for AST node in loop body")
-                # Self-referential reassignment accumulators (``total = total + b``,
-                # ``total += b``) leave no in-place-mutation trace, so
-                # all_mutated_vars misses them and the loop is wrongly re-executed,
-                # re-draining one-shot iterables. Trust them like append.
-                mutated_vars.update(selfref_reassignment_targets(body_node))
-
-        # Filter out built-ins and loop targets
-        return {v for v in mutated_vars if not self._unbound_builtin(v)} - loop_targets
 
     def _unbound_builtin(self, name: str, bound: Mapping[str, str] | None = None) -> bool:
         """Is *name* a builtin here: one of `BUILTIN_NAMES` that neither the

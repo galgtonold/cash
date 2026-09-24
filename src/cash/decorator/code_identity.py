@@ -14,6 +14,7 @@ import pickle
 import sys
 import textwrap
 import types
+import weakref
 from collections.abc import Callable
 from typing import Any
 
@@ -428,6 +429,7 @@ class CodeIdentityMixin:
         the same loaded-vs-disk check helpers get.
         """
         key = id(func)
+        owner = func
         # A partial has no code of its own, and the fallbacks below then keyed
         # on a repr carrying the wrapped function's ADDRESS -- a different pin
         # in every process, so a cached partial never hit across processes.
@@ -437,7 +439,12 @@ class CodeIdentityMixin:
         while isinstance(func, functools.partial) and depth < 8:
             func = func.func
             depth += 1
-        pin = self._own_pins.get(key)
+        # An id outlives nothing: once a redefined function dies, a later
+        # definition can get its address. So an entry counts only while it
+        # still refers to this very object, and the decorator (which passes
+        # the hash it just computed) always takes a fresh pin.
+        entry = self._own_pins.get(key)
+        pin = entry[1] if entry is not None and source_hash is None and entry[0]() is owner else None
         if pin is not None:
             if self._own_pins_unverified and key in self._own_pins_unverified:
                 self._own_pins_unverified.discard(key)
@@ -451,7 +458,8 @@ class CodeIdentityMixin:
                     # text and recomputes.
                     live = bytecode_identity(func)
                     if live is not None:
-                        pin = self._own_pins[key] = live
+                        pin = live
+                        self._own_pins[key] = (entry[0], live)
             return pin
         at_decoration = source_hash is not None
         keyed_stat = stat_code_file(func)
@@ -480,11 +488,32 @@ class CodeIdentityMixin:
                     c for c in code.co_consts if isinstance(c, (bool, int, float, complex, str, bytes, type(None)))
                 )
                 pin = hashlib.sha256(f"{pin}:{code.co_code.hex()}:{consts!r}".encode("utf-8")).hexdigest()
-        if len(self._own_pins) < 4096:
-            self._own_pins[key] = pin
+        self._own_pins_unverified.discard(key)
+        if key in self._own_pins or len(self._own_pins) < 4096:
+            self._own_pins[key] = (self._pin_owner_ref(owner, key), pin)
             if at_decoration:
                 self._own_pins_unverified.add(key)
         return pin
+
+    def _pin_owner_ref(self, owner: Any, key: int) -> Callable[[], Any]:
+        """A zero-argument callable returning *owner* while it lives.
+
+        A weak reference drops the pin when the function dies, so the table
+        does not keep every redefinition alive; the few callables that take
+        no weak reference are held strongly, which also keeps their id theirs.
+        """
+        pins, unverified = self._own_pins, self._own_pins_unverified
+
+        def _drop(ref: weakref.ref) -> None:
+            entry = pins.get(key)
+            if entry is not None and entry[0] is ref:
+                pins.pop(key, None)
+                unverified.discard(key)
+
+        try:
+            return weakref.ref(owner, _drop)
+        except TypeError:
+            return lambda: owner
 
     @staticmethod
     def _code_fingerprint(code: types.CodeType, _depth: int = 0) -> str:

@@ -158,17 +158,29 @@ region = "us-east-1"
 export CASH_TIER_1_HOST=prod-redis.example.com   # override one tier's host
 ```
 
-A tier's `type` is `memory`, `file`, `sqlite`, `redis` or `s3`. Its other keys
-are listed under [`TierConfig`](../api/config.md#cash.config.TierConfig). A key
-a tier leaves out comes from the top-level setting of the same meaning: a
-`file` tier without `cache_dir` uses `cache_dir`, one without `max_size_bytes`
-uses `max_cache_size`.
+A tier's `type` decides which other keys it uses (details under
+[`TierConfig`](../api/config.md#cash.config.TierConfig)). A key its type does
+not use does nothing, and cash warns
+[`CONFIG-INVALID`](../warnings.md#config-invalid).
 
-<!-- claim: cash/backends/store_notices.py:StoreNotices.too_big @0b79929c, cash/backends/redis_backend.py:RedisBackend.max_size_bytes == 10485760, cash/backends/sqlite_backend.py:SQLiteBackend.max_size_bytes == 104857600 -->
+<!-- claim: cash/config.py:_TIER_FIELDS @3f70dfeb, cash/config.py:TierConfig.__post_init__ @afa4a855 -->
+| `type` | Keys |
+|---|---|
+| `memory` | `max_entries`, `max_size_bytes` |
+| `file` | `cache_dir`, `max_size_bytes`, `default_ttl`, `compress`, `flush_interval` |
+| `sqlite` | `cache_dir`, `db_path`, `max_size_bytes`, `default_ttl`, `wal_mode` |
+| `redis` | `host`, `port`, `db`, `password`, `prefix` |
+| `s3` | `bucket`, `region`, `prefix` |
+
+A key a tier leaves out comes from the top-level setting of the same meaning:
+a `file` tier without `cache_dir` uses `cache_dir`, one without
+`max_size_bytes` uses `max_cache_size`.
+
+<!-- claim: cash/backends/store_notices.py:StoreNotices.too_big @0b79929c, cash/backends/redis_backend.py:RedisBackend.max_size_bytes == 10485760, cash/backends/sqlite_backend.py:SQLiteBackend.max_size_bytes == 104857600, cash/backends/sqlite_backend.py:SQLiteBackend.promotion_size_cap @36b1d2f8 -->
 In a stack, a value bigger than a tier's size cap skips that tier and goes to
 the others. The disk tier's cap is its whole `max_cache_size`; Redis tiers
-skip values over 10 MiB and SQLite tiers values over 100 MiB. Memory and S3
-tiers have no such cap.
+skip values over 10 MiB, and SQLite tiers values over 100 MiB or their own
+`max_size_bytes` if that is smaller. Memory and S3 tiers have no such cap.
 
 ## Config files
 
@@ -229,13 +241,21 @@ Settings that shape the backend (`cache_dir`, `compress`, `max_cache_size`,
 detail of a tier in use) make cash finish the old backend's pending writes and
 build a new one. All other settings take effect on the next operation. A
 connection detail for a backend not in use is kept for later.
+`configure(debug=False)` also stops the log output `debug=True` started.
+
+<!-- claim: cash/reconfigure.py:apply_overrides @3b83cdfd, cash/config.py:validated_overrides @db2d884f -->
+Values are checked exactly as `Cash(...)` checks them, before anything
+changes: a bad value raises `ValueError` and leaves the old settings in place.
+`~` is expanded, and a relative `cache_dir` is relative to the current
+directory. An instance built with a backend object (`Cash(backend=...)`) keeps
+it: changing its tier settings raises `ValueError`.
 
 ## Magics that set these fields
 
 In a notebook, two magics change these settings for the session:
 
 - `%cash_debug on` / `off` sets `debug`.
-- `%cash_persist on` / `off` turns on the same behaviour as `persist_all`.
+- `%cash_persist on` / `off` sets `persist_all`.
 
 `%cash_on ttl=N` gives every cached statement a TTL for the session; it is not
 a config field. See [Magic commands](../magics.md).

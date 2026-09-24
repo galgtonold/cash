@@ -80,6 +80,7 @@ from cash.tracking.file_tracker import FileAccessTracker, active_tracker
 from cash.tracking.randomness import capture_rng_state, rng_modules_changed
 
 from ..cost_model import estimated_restore_time
+from ._tee import TeeWriter
 
 logger = logging.getLogger(__name__)
 
@@ -362,56 +363,6 @@ def call_cost_floor_s(cash: Any) -> float:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return float(value)
     return _COST_FLOOR_S
-
-
-class _ForwardingTee:
-    """Records everything written while forwarding untouched to the real stream.
-
-    Used by :meth:`CallUnit._call_capturing_output` to capture a callee's own
-    stdout/stderr for later replay on a cache hit, without disturbing the
-    statement's own ambient capture: *real_stream* IS that ambient capture's
-    current stdout/stderr object during a miss, so every write still reaches
-    it exactly as before this class existed. Deliberately not the processor's
-    own ``TeeWriter`` (``statement/processor.py``) -- this module sits
-    beneath the processor in the import graph and must not depend on it.
-
-    **Known gap, not fixed here**: ``sys.stdout.buffer`` (the underlying
-    binary stream some libraries write raw bytes to directly, bypassing the
-    text layer) is forwarded untouched by ``__getattr__`` and is NOT
-    recorded -- a callee writing through it produces no replay text on a
-    later hit. Recording binary writes would need a second, byte-oriented
-    tee wired through ``.buffer`` specifically; text ``write``/``writelines``
-    (what ``print`` and the overwhelming majority of callees use) are the
-    channels this class covers.
-    """
-
-    __slots__ = ("_real", "_chunks")
-
-    def __init__(self, real_stream: Any) -> None:
-        self._real = real_stream
-        self._chunks: list[str] = []
-
-    def write(self, s: str) -> int:
-        self._real.write(s)
-        self._chunks.append(s)
-        return len(s)
-
-    def writelines(self, lines) -> None:
-        # Not delegated to ``__getattr__``: routing straight to
-        # ``self._real.writelines`` would bypass ``_chunks`` entirely, so a
-        # callee using ``sys.stdout.writelines([...])`` (or a library that
-        # does under the hood) produced empty replay text on a later hit.
-        for line in lines:
-            self.write(line)
-
-    def flush(self) -> None:
-        self._real.flush()
-
-    def getvalue(self) -> str:
-        return "".join(self._chunks)
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._real, name)
 
 
 #: Returned by :func:`_unwrap_callee_globals` when an entry claims to carry a
@@ -1182,8 +1133,8 @@ class CallUnit:
         """
         __tracebackhide__ = True  # noqa: F841 - see _entry_for
         old_stdout, old_stderr = sys.stdout, sys.stderr
-        tee_out = _ForwardingTee(old_stdout)
-        tee_err = _ForwardingTee(old_stderr)
+        tee_out = TeeWriter(old_stdout)
+        tee_err = TeeWriter(old_stderr)
         sys.stdout, sys.stderr = tee_out, tee_err
         try:
             result = fn(*args, **kwargs)

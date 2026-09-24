@@ -74,7 +74,9 @@ and [reordering a loop's items](../known-limitations.md#reordering-a-loops-items
 <!-- claim: cash/notebook/control_structures/if_handler.py:IfHandler.process @33f81117, cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @b6c569ea -->
 `if`/`elif`/`else` and `try`/`except` bodies are cached statement by
 statement too, and only the branch that ran is stored. `while` and `with`
-blocks are cached as one unit, because they have no list of items to key on.
+blocks are cached as one unit, because they have no list of items to key on,
+and so is a `for` with `break`, `continue` or `else:`, whose outcome depends
+on how the loop ended.
 A long loop whose per-iteration bookkeeping stops paying for itself is also
 cached as one unit ([cost model](../cost-model.md)).
 

@@ -18,6 +18,7 @@ contract is:
 
 from __future__ import annotations
 
+import threading
 import time
 from unittest.mock import patch
 
@@ -288,20 +289,24 @@ class TestTieredCellFinishTime:
         disk = FileBackend(str(tmp_path / "fb"), flush_interval=0)
         tiered = TieredBackend([ram, disk], promotion_policy=lambda e, s: True)
 
-        # Make the disk write take half a second.
+        # Hold the disk write until the test releases it. The timeout only
+        # matters if set() waits for the write, which the assert then reports.
         original = disk._do_set_sync
+        release = threading.Event()
 
         def slow(*args, **kwargs):
-            time.sleep(0.5)
+            release.wait(timeout=5.0)
             return original(*args, **kwargs)
 
         monkeypatch.setattr(disk, "_do_set_sync", slow)
 
-        t0 = time.perf_counter()
         meta = {"execution_time": 5.0, "size": 100}  # promote past RAM
         tiered.set("k", "v", meta)
-        elapsed = time.perf_counter() - t0
-        assert elapsed < 0.1, f"tiered set() blocked for {elapsed:.3f}s"
+        # The property, not a stopwatch (see TestSetReturnsBeforeWriteCompletes):
+        # an `elapsed < 0.1` check here failed on loaded runners.
+        pending = disk._writes.pending_count()
+        release.set()
+        assert pending > 0, "tiered set() returned only after its disk write finished"
 
         # Disk write happens in background but is still durable
         disk.shutdown()

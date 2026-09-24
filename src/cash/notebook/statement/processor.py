@@ -135,20 +135,18 @@ class StatementProcessor:
     ) -> None:
         self.shell: ShellProtocol = shell
         self.cash_instance: CashInstanceProtocol = cash_instance
-        # When True, force-persist every statement (bypass the cost-aware
-        # floors), as if every statement carried ``# @cash:persist``. Seeded
-        # from config; flippable at runtime (``%cash_persist`` magic). Read
-        # defensively because tests pass a MagicMock cash_instance.
-        try:
-            self.persist_all = bool(getattr(cash_instance.config, "persist_all", False))
-        except (AttributeError, TypeError):
-            self.persist_all = False
         self.compute_hash: Callable[[Any], str] | None = compute_hash_fn
 
         self._amplification = AmplificationGuard()
 
-        self.analytics_manager = AnalyticsManager(
-            enabled=getattr(getattr(cash_instance, "config", None), "analytics", True) is not False
+        # The Cash instance's own, which the dashboard reads (`Cash.show_stats`).
+        analytics = getattr(cash_instance, "analytics", None)
+        self.analytics_manager = (
+            analytics
+            if isinstance(analytics, AnalyticsManager)
+            else AnalyticsManager(
+                enabled=getattr(getattr(cash_instance, "config", None), "analytics", True) is not False
+            )
         )
 
         # Shared with the upstream checker (the magics pass the same one to
@@ -854,6 +852,18 @@ class StatementProcessor:
 
         self._post_execute(run, execution)
         return metrics
+
+    @property
+    def persist_all(self) -> bool:
+        """Force-persist every statement (bypass the cost-aware floors), as if
+        each carried ``# @cash:persist``.
+
+        Read from config at each statement, so ``cash.configure(persist_all=
+        True)`` and ``%cash_persist`` (which writes config) both take effect
+        on the next one. ``is True``, because tests pass a MagicMock
+        cash_instance whose attributes are all truthy.
+        """
+        return getattr(getattr(self.cash_instance, "config", None), "persist_all", False) is True
 
     def _parse_annotation(
         self,

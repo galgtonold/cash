@@ -15,12 +15,12 @@ from pathlib import Path
 
 from cash import __version__
 from cash._location import per_user_cache_root
+from cash.backends._base import effective_ttl
 from cash.backends.adaptive_caps import adaptive_disk_cap_for, human_bytes, resolve_ram_cap
-from cash.backends.cache_dir import VERSION_FILENAME, entry_totals
+from cash.backends.cache_dir import DB_FILENAME, KEYS_DIRNAME, VERSION_FILENAME, entry_totals, is_cash_file
 from cash.backends.entry_format import ENTRY_SUFFIX
 from cash.backends.file_backend import FileBackend, StoredEntry
 from cash.backends.persistence_policy import PersistencePolicy
-from cash.backends.sqlite_backend import DB_FILENAME
 from cash.config import (
     SIZE_FIELDS,
     TOML_MISSING,
@@ -62,6 +62,22 @@ def tool_cache_dir(name: str) -> str:
     """
 
     return str(per_user_cache_root() / name)
+
+
+def notebook_cache_dir(notebook_path: str) -> str:
+    """The cache directory a kernel for *notebook_path* uses.
+
+    Jupyter starts the kernel in the notebook's directory, which is then its
+    cwd and its project anchor: ``[tool.cash] cache_dir`` in a
+    ``pyproject.toml`` above it applies, and so does ``CASH_CACHE_DIR``, as
+    the kernel reads them.
+    """
+    nb_dir = Path(notebook_path).resolve().parent
+    try:
+        cache_dir = str(get_config(anchor=nb_dir).cache_dir)
+    except Exception:  # noqa: BLE001 - a broken config must not break `clear`
+        cache_dir = ".cash"
+    return os.path.normpath(os.path.join(nb_dir, cache_dir))
 
 
 def _target_dir(args: argparse.Namespace) -> str:
@@ -271,19 +287,6 @@ def _tier_default_ttl() -> int | None:
     return None
 
 
-def _effective_ttl(metadata: dict, tier_default: int | None) -> int | None:
-    """The ttl an entry is served under, by the rule reads apply.
-
-    The decorator's ``ttl=`` as written; otherwise the SHORTER of the ttl it
-    was written with and the tier's ``default_ttl`` as configured now -- so a
-    lowered default shows here as it takes effect.
-    """
-    written = metadata.get("ttl")
-    if metadata.get("ttl_declared") or tier_default is None:
-        return written
-    return tier_default if written is None else min(written, tier_default)
-
-
 def _store(cache_dir: str | os.PathLike) -> FileBackend:
     """The cache directory, opened the way the library opens it.
 
@@ -306,7 +309,7 @@ def _scan_entries(cache_dir: str | os.PathLike) -> list[_Entry]:
 
 def _entry_of(stored: StoredEntry, tier_default: int | None) -> _Entry:
     metadata = stored.metadata
-    ttl = _effective_ttl(metadata, tier_default)
+    ttl = effective_ttl(metadata, tier_default)
     return _Entry(
         stem=stored.id,
         function=_function_of(stored.key, metadata),
@@ -472,13 +475,11 @@ def _inspect_notebook(notebook_path: str) -> None:
     uses_cash = any("%cash_on" in c.source for c in code_cells)
     print(f"  Uses cash: {'Yes' if uses_cash else 'No'}")
 
-    # Check for associated cache directory
-    nb_dir = os.path.dirname(os.path.abspath(notebook_path))
-    cache_dir = os.path.join(nb_dir, ".cash")
+    cache_dir = notebook_cache_dir(notebook_path)
     if os.path.isdir(cache_dir):
         _inspect_cache_dir(cache_dir)
     else:
-        print("  Cache: not found (no .cash directory)")
+        print(f"  Cache: not found (no directory at {cache_dir})")
 
 
 def _inspect_cache_dir(cache_dir: str, only_function: str | None = None) -> None:
@@ -689,31 +690,38 @@ def _rmtree_cache(cache_dir: str, force: bool = False) -> None:
     print(f"Cleared: {resolved}")
 
 
-#: Names a cash cache directory holds: an entry, the format stamp, the advisory
-#: indexes and their temp files, and a single-file backend's database.
-_CASH_CACHE_NAMES = frozenset({VERSION_FILENAME, DB_FILENAME, ".gitignore"})
-_CASH_CACHE_SUFFIXES = (ENTRY_SUFFIX, ".data", ".meta", ".tmp", ".part", ".log")
-#: Directories cash writes inside its cache, with what they may hold.
-_CASH_CACHE_DIRS = {".keys": (".json",)}
-
-
 def _not_cash_files(cache_dir: str) -> list[str]:
     """Names in *cache_dir* that cash did not write, shallowest first."""
     found: list[str] = []
     for root, dirs, files in os.walk(cache_dir):
-        own = _CASH_CACHE_DIRS.get(os.path.basename(root)) if root != cache_dir else None
-        if own is not None and os.path.dirname(root) == cache_dir:
-            files = [name for name in files if not name.endswith(own)]
+        rel_root = os.path.relpath(root, cache_dir)
         for name in files:
-            if name in _CASH_CACHE_NAMES or name.endswith(_CASH_CACHE_SUFFIXES):
-                continue
-            found.append(os.path.relpath(os.path.join(root, name), cache_dir))
-        if not files and not dirs and root != cache_dir and own is None:
+            rel = name if root == cache_dir else os.path.join(rel_root, name)
+            if not is_cash_file(rel):
+                found.append(rel)
+        if not files and not dirs and root != cache_dir and rel_root != KEYS_DIRNAME:
             # An empty directory is the user's too, unless it is one of cash's.
-            found.append(os.path.relpath(root, cache_dir) + os.sep)
+            found.append(rel_root + os.sep)
         if len(found) > 32:
             return found
     return found
+
+
+def _refuse_entry_flags_on_sqlite(cache_dir: str, flag: str) -> None:
+    """Exit with a message when *cache_dir* is a SQLite cache.
+
+    The entry-level flags work on a file cache's entry files. A SQLite cache
+    has none, so they reported "Cleared 0" or "No cached function matches"
+    over a cache that was full.
+    """
+    if _sqlite_cache(cache_dir) is None or entry_totals(cache_dir) not in (None, (0, 0)):
+        return
+    print(
+        f"cash clear {flag} works on a file cache's entries, and {os.path.abspath(cache_dir)} "
+        f"holds a sqlite database ({DB_FILENAME}) instead."
+    )
+    print(f"  To clear it whole: cash clear {cache_dir}")
+    sys.exit(2)
 
 
 def cmd_clear(args: argparse.Namespace) -> None:
@@ -741,16 +749,19 @@ def cmd_clear(args: argparse.Namespace) -> None:
             )
             sys.exit(2)
         target = args.path if (args.path and os.path.isdir(args.path)) else _target_dir(args)
+        _refuse_entry_flags_on_sqlite(target, "--expired")
         _clear_expired(target)
         return
 
     if only_entry:
         target = args.path if (args.path and os.path.isdir(args.path)) else _target_dir(args)
+        _refuse_entry_flags_on_sqlite(target, "--entry")
         _clear_entry(target, only_entry)
         return
 
     if only_function:
         target = args.path if (args.path and os.path.isdir(args.path)) else _target_dir(args)
+        _refuse_entry_flags_on_sqlite(target, "--function")
         _clear_function(target, only_function)
         return
 
@@ -789,12 +800,11 @@ def cmd_clear(args: argparse.Namespace) -> None:
     if os.path.isdir(target):
         _rmtree_cache(target, force=force)
     elif os.path.isfile(target) and target.endswith(".ipynb"):
-        nb_dir = os.path.dirname(os.path.abspath(target))
-        cache_dir = os.path.join(nb_dir, ".cash")
+        cache_dir = notebook_cache_dir(target)
         if os.path.isdir(cache_dir):
             _rmtree_cache(cache_dir, force=force)
         else:
-            print(f"No cache found for {target}")
+            print(f"No cache found for {target} (looked in {cache_dir})")
     else:
         print(f"Not found: {target}")
         sys.exit(1)

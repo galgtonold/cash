@@ -45,7 +45,7 @@ def test_cash_persist_magic_toggles_at_runtime(cash_magics, statement_processor)
     magics, p = cash_magics, statement_processor
 
     magics.cash_persist("on")
-    assert magics._persist_all is True
+    assert magics._cash_instance.config.persist_all is True
     assert p.persist_all is True
     p.process_statement("z = 4 + 5")
     assert p.process_statement("z = 4 + 5")["status"] in (
@@ -54,10 +54,38 @@ def test_cash_persist_magic_toggles_at_runtime(cash_magics, statement_processor)
     )
 
     magics.cash_persist("off")
-    assert magics._persist_all is False
+    assert magics._cash_instance.config.persist_all is False
     assert p.persist_all is False
     p.process_statement("w = 6 + 7")
     assert p.process_statement("w = 6 + 7")["status"] == CacheStatus.COMPUTED
+
+
+def test_configure_reaches_a_running_pipeline(cash_magics, statement_processor):
+    """``cash.configure(persist_all=True)`` is documented as a hot field. The
+    processor copied the flag once, at construction, so flipping it on a
+    running session changed config and nothing else."""
+    p = statement_processor
+    # Far above any scheduling stall, so "too cheap to cache" is certain.
+    cash_magics._cash_instance.config.min_execution_time_to_cache_seconds = 3600.0
+    assert p.persist_all is False
+    cash_magics._cash_instance.reconfigure(persist_all=True)
+    assert p.persist_all is True
+    p.process_statement("v = 3 + 4")
+    assert p.process_statement("v = 3 + 4")["status"] in (CacheStatus.RESTORED, CacheStatus.SKIPPED)
+
+    cash_magics._cash_instance.reconfigure(persist_all=False)
+    assert p.persist_all is False
+    p.process_statement("u = 5 + 6")
+    assert p.process_statement("u = 5 + 6")["status"] == CacheStatus.COMPUTED
+
+
+def test_cash_persist_writes_config(cash_magics):
+    """``%cash_persist`` kept its own copy; config (what ``cash.configure``
+    and everything else reads) never heard of it."""
+    cash_magics.cash_persist("on")
+    assert cash_magics._cash_instance.config.persist_all is True
+    cash_magics.cash_persist("")  # toggle
+    assert cash_magics._cash_instance.config.persist_all is False
 
 
 def test_explicit_no_cache_still_wins_over_persist_all(persist_all_processor):

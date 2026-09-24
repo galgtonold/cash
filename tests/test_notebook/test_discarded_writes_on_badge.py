@@ -17,6 +17,7 @@ from __future__ import annotations
 import pytest
 
 from cash.backends import _writes as _backend_base
+from cash.notebook.cache_status import CacheStatus
 from cash.notebook.ipython.cell_executor import discarded_writes_notification
 
 
@@ -49,7 +50,7 @@ def test_a_failed_write_produces_a_warning_row():
     row, seen = discarded_writes_notification(0)
 
     assert row is not None
-    assert row["status"] == "WARNING"
+    assert row["status"] is CacheStatus.WARNING
     assert seen == 1
     # Says what it costs, not just that it happened -- a count alone is
     # bookkeeping, and the reader has no reason to care about bookkeeping.

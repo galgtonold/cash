@@ -5,7 +5,7 @@ to accept. ``TieredBackend.set()`` asks each tier individually: an
 oversized object skips the constrained tier but still reaches the
 unconstrained ones below it.
 
-The universal 1s compute floor stays in place — the size constraint is
+The 0.1 s compute floor (``COMPUTE_FLOOR_S``) stays in place — the size constraint is
 *on top* of it, not a replacement for it.
 """
 
@@ -18,6 +18,7 @@ import pytest
 from cash.backends._base import CacheBackend
 from cash.backends.file_backend import FileBackend
 from cash.backends.memory_backend import InMemoryBackend
+from cash.backends.persistence_policy import COMPUTE_FLOOR_S
 from cash.backends.tiered_backend import TieredBackend
 
 
@@ -88,9 +89,9 @@ class TestTieredPerTierSkip:
         """A fast computation never promotes past RAM — even tiny objects."""
         tiered = TieredBackend(
             [InMemoryBackend(), redis_backend, FileBackend(str(tmp_path))],
-            # default promotion policy: <1s compute → no promotion
+            # default persistence policy: under the compute floor → no promotion
         )
-        meta = {"execution_time": 0.5}  # below the 1s floor
+        meta = {"execution_time": COMPUTE_FLOOR_S / 2}
         tiered.set("fast", "x" * 100, meta)
         assert meta["storage"] == ["RAM"]
         # Redis and Disk neither got the data nor were attempted.

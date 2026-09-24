@@ -92,8 +92,14 @@ def statement_calls_user_writer(
     return None
 
 
-#: (co_filename, co_firstlineno, source) -> name of the writing function or None.
-_callee_write_cache: dict[tuple[str, int, str], str | None] = {}
+#: How many calls deep :func:`user_callee_writing_files` follows user code.
+_MAX_CALLEE_DEPTH = 3
+
+#: (co_filename, co_firstlineno, source, depth) -> name of the writing function
+#: or None. Keyed on the depth the function was examined at: below the cap a
+#: search sees fewer calls, and its "no" must not answer a question asked from
+#: higher up.
+_callee_write_cache: dict[tuple[str, int, str, int], str | None] = {}
 
 
 def user_callee_writing_files(func: Any, _depth: int = 0) -> str | None:
@@ -113,10 +119,13 @@ def user_callee_writing_files(func: Any, _depth: int = 0) -> str | None:
     caching. Code from an installed package is not looked into: its source
     says nothing about what this call does with the user's files. ``@pure``
     is the user's word that the function has no effect; it is taken.
+
+    Calls are followed :data:`_MAX_CALLEE_DEPTH` deep, which also ends a
+    call cycle, so the answer depends only on the function and the depth.
     """
 
     func = inspect.unwrap(func) if callable(func) else func
-    if not isinstance(func, types.FunctionType) or is_pure(func) or _depth > 3:
+    if not isinstance(func, types.FunctionType) or is_pure(func) or _depth > _MAX_CALLEE_DEPTH:
         return None
     code_obj = func.__code__
     if normcase_path(os.path.abspath(code_obj.co_filename)).startswith(installed_roots()):
@@ -125,10 +134,9 @@ def user_callee_writing_files(func: Any, _depth: int = 0) -> str | None:
         source = textwrap.dedent(inspect.getsource(func))
     except (OSError, TypeError):
         return None
-    key = (code_obj.co_filename, code_obj.co_firstlineno, source)
+    key = (code_obj.co_filename, code_obj.co_firstlineno, source, _depth)
     if key in _callee_write_cache:
         return _callee_write_cache[key]
-    _callee_write_cache[key] = None  # a recursive call finds "no"
     try:
         tree = ast.parse(source)
     except SyntaxError:

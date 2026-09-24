@@ -5,6 +5,11 @@ Everything here is about the directory as a whole rather than about one entry:
 and doubles as the directory's generation token, `recreate_cache_dir` builds a
 missing directory the way the file backend would, and `create_temp_file` is the
 temp-file primitive the entry writes and the writability probe share.
+
+It also holds the one list of what cash writes into a cache directory
+(`is_cash_file`): the name of every sidecar store is defined here, so ``cash
+clear`` (which removes nothing else) and the file tracker (which never makes
+these a dependency of user code) cannot drift from the writers.
 """
 
 from __future__ import annotations
@@ -22,12 +27,21 @@ from .entry_format import ENTRY_SUFFIX, MAGIC
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "ANALYTICS_DB_FILENAME",
     "CACHE_FORMAT_VERSION",
+    "COMPUTE_BASELINES_FILENAME",
+    "DB_FILENAME",
     "ENTRY_GLOB",
+    "KEYS_DIRNAME",
+    "LOOP_SPLIT_FILENAME",
+    "MISS_GUARD_FILENAME",
+    "RANK_INDEX_FILENAME",
+    "VERSIONS_INDEX_FILENAME",
     "VERSION_FILENAME",
     "CacheDirStamp",
     "create_temp_file",
     "entry_totals",
+    "is_cash_file",
     "recreate_cache_dir",
     "warn_if_unwritable",
     "write_all",
@@ -41,6 +55,46 @@ CACHE_FORMAT_VERSION = 2
 
 #: The per-directory format stamp. No entry suffix, so entry globs skip it.
 VERSION_FILENAME = "CACHE_VERSION"
+
+# Everything else cash writes into a cache directory. None of these has the
+# entry suffix, so every entry glob (listing, sizing, clearing, format
+# migration) passes them by. A new sidecar gets its name here, or `cash clear`
+# refuses to remove a directory holding it.
+
+#: What keeps the directory out of version control.
+GITIGNORE_FILENAME = ".gitignore"
+#: SQLiteBackend's database, when a tier gives a cache directory, not a path.
+DB_FILENAME = "cache.db"
+#: The file tier's eviction priorities (`rank_index`).
+RANK_INDEX_FILENAME = "_rank.log"
+#: The file tier's superseded versions (`versions`).
+VERSIONS_INDEX_FILENAME = "_versions.log"
+#: The notebook's statement miss guard.
+MISS_GUARD_FILENAME = "_miss_guard.json"
+#: The notebook's loop-split verdicts.
+LOOP_SPLIT_FILENAME = "_loop_split.json"
+#: The notebook's measured compute costs, for ``%cash_stats``.
+COMPUTE_BASELINES_FILENAME = "_compute_baselines.json"
+#: The analytics database, in the per-user cache root.
+ANALYTICS_DB_FILENAME = "analytics.db"
+#: The decorator's stored-key records: one ``<function>.json`` each.
+KEYS_DIRNAME = ".keys"
+
+#: Files SQLite creates beside a database: the WAL, its shared-memory index,
+#: and the rollback journal of a database not in WAL mode.
+_SQLITE_COMPANIONS = ("-wal", "-shm", "-journal")
+_CASH_FILE_NAMES = frozenset(
+    {
+        VERSION_FILENAME,
+        GITIGNORE_FILENAME,
+        RANK_INDEX_FILENAME,
+        VERSIONS_INDEX_FILENAME,
+        MISS_GUARD_FILENAME,
+        LOOP_SPLIT_FILENAME,
+        COMPUTE_BASELINES_FILENAME,
+        *(db + companion for db in (DB_FILENAME, ANALYTICS_DB_FILENAME) for companion in ("", *_SQLITE_COMPANIONS)),
+    }
+)
 
 #: Every live entry in a cache directory.
 ENTRY_GLOB = f"*{ENTRY_SUFFIX}"
@@ -75,6 +129,49 @@ def entry_totals(cache_dir: str) -> tuple[int, int] | None:
     except OSError:
         return None
     return count, size
+
+
+def _is_temp_of(name: str, owner: Callable[[str], bool]) -> bool:
+    """Is *name* the temp file of a write that replaces a file *owner* accepts?
+
+    The stores write ``<name>.tmp``, ``<name>.<pid>.tmp`` or
+    ``<name>.<pid>.<thread>.tmp`` beside the file and rename it into place.
+    """
+    if not name.endswith(".tmp"):
+        return False
+    base = name[: -len(".tmp")]
+    while True:
+        head, dot, tail = base.rpartition(".")
+        if not dot or not tail.isdigit():
+            break
+        base = head
+    return owner(base)
+
+
+def _is_cash_name(name: str) -> bool:
+    return name in _CASH_FILE_NAMES or name.endswith(ENTRY_SUFFIX)
+
+
+def is_cash_file(relpath: str) -> bool:
+    """Did cash write *relpath*, a path relative to a cache directory?
+
+    An entry, the format stamp, the ``.gitignore``, a sidecar store, a
+    stored-key record, an SQLite database with its companions, or the temp
+    file of a write to one of these (``create_temp_file``'s ``.tmp-*.part``
+    and ``.probe-*.tmp`` included). Anything else is the user's.
+    """
+    parts = relpath.replace("\\", "/").split("/")
+    if len(parts) == 2 and parts[0] == KEYS_DIRNAME:
+        name = parts[1]
+        return name.endswith(".json") or _is_temp_of(name, lambda base: base.endswith(".json"))
+    if len(parts) != 1:
+        return False
+    name = parts[0]
+    if _is_cash_name(name) or _is_temp_of(name, _is_cash_name):
+        return True
+    return (name.startswith(".tmp-") and name.endswith(".part")) or (
+        name.startswith(".probe-") and name.endswith(".tmp")
+    )
 
 
 def create_temp_file(directory: str, prefix: str = ".tmp-", suffix: str = ".part") -> tuple[int, str]:
@@ -114,7 +211,7 @@ def write_all(fd: int, data: bytes) -> None:
 def _write_gitignore(cache_dir: str) -> None:
     """Keep a directory cash created out of version control, as ``.pytest_cache``
     does: a ``.gitignore`` of ``*`` inside it. Never over an existing file."""
-    path = os.path.join(cache_dir, ".gitignore")
+    path = os.path.join(cache_dir, GITIGNORE_FILENAME)
     try:
         if not os.path.exists(path):
             with open(path, "w", encoding="utf-8") as fh:

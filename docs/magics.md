@@ -56,13 +56,15 @@ Cells after this one run uncached until the next `%cash_on`. It also clears the
 default `ttl`.
 
 ### `%cash_persist`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_persist @6b423b4b -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_persist @729a986b -->
 
 **Usage:** `%cash_persist [on|off]`
 
 Stores every statement on disk, as if each carried `# @cash:persist`, skipping
 the [cost model](cost-model.md)'s thresholds. With no argument it toggles.
-Useful for benchmarks and reproducible runs; wasteful for everyday work.
+It sets `persist_all`, the same switch as `cash.configure(persist_all=True)`,
+from the next statement on. Useful for benchmarks and reproducible runs;
+wasteful for everyday work.
 
 ```python
 %cash_persist on
@@ -92,10 +94,17 @@ With no argument it prints the current mode. See [Reading the badge](badges.md).
 
 **Usage:** `%cash_debug [on|off|json|file PATH]`
 
-- `on` / `off`: log cash's decisions as cells run, or stop. With no argument it
-  toggles. `true`/`1`/`enable` and `false`/`0`/`disable` also work.
+- `on` / `off`: log cash's decisions into the cell that produced them, or
+  stop. With no argument it toggles. `true`/`1`/`enable` and
+  `false`/`0`/`disable` also work. `off` removes only the handlers cash added;
+  your own logging setup stays.
 - `json`: log each record as a JSON object.
 - `file PATH`: also append each record to `PATH`, one JSON object per line.
+  Quote a path that contains a space or a `#`.
+
+Each mode replaces the handlers the previous one added, so no record prints
+twice. The mode is case-insensitive; a path keeps its case. Any other argument
+prints an error and changes nothing.
 
 What the log lines mean is in [Debugging](tutorials/feature-guides/debugging-and-monitoring.md#2-turn-on-cash_debug).
 
@@ -135,7 +144,7 @@ Returns the last cell's statements (status, code, outputs, times), the session's
 variable lineage and whether caching is on. With no argument it prints JSON and
 returns the dict; `dict` returns it without printing; `json` returns a JSON
 string. Statuses use the enum names: `COMPUTED` for the badge's EXECUTED,
-`RESTORED` for CACHED.
+`RESTORED` for CACHED. Any other argument prints an error and returns `None`.
 
 ```python
 status = %cash_status dict
@@ -152,6 +161,8 @@ status = %cash_status dict
   Add `--graph` for its dependency graph, `--time` for a timeline, or `--json`
   for JSON instead of text.
 - `--clear`: forget all provenance records.
+
+Any other flag, or an extra word, prints an error and shows nothing else.
 
 ```python
 %cash_provenance

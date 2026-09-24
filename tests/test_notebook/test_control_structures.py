@@ -595,6 +595,26 @@ class TestTeeWriter:
         finally:
             sys.stdout = old_stdout
 
+    def test_tee_output_records_writelines(self):
+        """The statement pipeline's tee had no ``writelines``, so it went to
+        the real stream through ``__getattr__`` and was missing from what is
+        cached and replayed on a hit (a copy in call_unit had the fix)."""
+        import sys
+        from io import StringIO
+
+        from cash.notebook.statement.capture import tee_output
+
+        old_stdout = sys.stdout
+        sys.stdout = StringIO()
+        try:
+            with tee_output() as teed:
+                print("a")
+                sys.stdout.writelines(["b\n", "c\n"])
+            assert teed.stdout == "a\nb\nc\n"
+            assert sys.stdout.getvalue() == "a\nb\nc\n"
+        finally:
+            sys.stdout = old_stdout
+
     def test_tee_output_captures_stderr(self):
         """tee_output should record stderr while letting it through."""
         import sys

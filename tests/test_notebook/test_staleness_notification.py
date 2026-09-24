@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import types
 
+from cash.notebook.cache_status import CacheStatus
 from cash.notebook.ipython.cell_executor import CellExecutor, staleness_notification
 from cash.notebook.staleness import StalenessTracker
 
@@ -32,7 +33,7 @@ def test_a_fresh_file_produces_no_notification(tmp_path):
 def test_a_stale_file_produces_a_warning_row(tmp_path):
     n = staleness_notification(_stale_tracker(tmp_path))
     assert n is not None
-    assert n["status"] == "WARNING"
+    assert n["status"] is CacheStatus.WARNING
     assert n["is_upstream"] is True
 
 
@@ -116,7 +117,7 @@ def test_the_executor_actually_calls_it_with_a_live_tracker(tmp_path):
 
     all_metrics = executor._build_pre_execution_notifications("x = 1", [], [])
 
-    warnings = [m for m in all_metrics if m.get("status") == "WARNING"]
+    warnings = [m for m in all_metrics if m.get("status") is CacheStatus.WARNING]
     assert len(warnings) == 1
     assert "THRESHOLD = 0.9" in warnings[0]["code"]
 
@@ -145,7 +146,7 @@ def test_a_raising_tracker_does_not_crash_the_notification_builder(tmp_path):
 
     all_metrics = executor._build_pre_execution_notifications("x = 1", [], [])  # must not raise
 
-    assert not any(m.get("status") == "WARNING" for m in all_metrics)
+    assert not any(m.get("status") is CacheStatus.WARNING for m in all_metrics)
 
 
 def test_reading_the_saved_file_adds_no_row(tmp_path):
@@ -161,4 +162,4 @@ def test_reading_the_saved_file_adds_no_row(tmp_path):
 
     all_metrics = executor._build_pre_execution_notifications("x = 1", [], [])
 
-    assert not [m for m in all_metrics if m.get("status") == "WARNING"], all_metrics
+    assert not [m for m in all_metrics if m.get("status") is CacheStatus.WARNING], all_metrics

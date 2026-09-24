@@ -9,9 +9,19 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
+      # Trailing whitespace inside tests/ is notebook cell source used as test
+      # data (ruff exempts it from W291/W293 for the same reason), and two
+      # trailing spaces in Markdown are a line break.
       - id: trailing-whitespace
+        exclude: ^tests/
+        args: [--markdown-linebreak-ext=md]
+      # Generated files: the built JupyterLab extension and the image stamps
+      # the docs scripts write are left exactly as their generators emit them.
       - id: end-of-file-fixer
+        exclude: ^src/cash/labextension/static/|\.stamp$
+      # mkdocs.yml uses !!python/name tags; check the syntax, not the tags.
       - id: check-yaml
+        args: [--unsafe]
       - id: check-toml
       - id: check-added-large-files
         args: ['--maxkb=500']

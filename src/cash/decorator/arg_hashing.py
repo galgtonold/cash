@@ -359,8 +359,8 @@ class ArgHashingMixin:
                 if refcount > ArgHashingMixin._block_refcount_baseline() + ours.get(id(values), 0):
                     return True
                 del values, base
-        except Exception:  # noqa: BLE001 - a pandas internals change: keep the memo
-            return False
+        except Exception:  # noqa: BLE001 - a pandas internals change: re-hash, the safe answer
+            return True
         return False
 
     @staticmethod

@@ -59,6 +59,18 @@ _SUPPORTED_TIER_TYPES = frozenset({"memory", "file", "sqlite", "redis", "s3"})
 _NAMED_CHOICES = {"backend": _SUPPORTED_TIER_TYPES | {"tiered"}, "type": _SUPPORTED_TIER_TYPES}
 
 
+#: The `TierConfig` fields each tier type is built from
+#: (``backends.factory._settings``). Any other field set on a tier does
+#: nothing, and is reported (CONFIG-INVALID) rather than silently ignored.
+_TIER_FIELDS: dict[str, frozenset[str]] = {
+    "memory": frozenset({"max_size_bytes", "max_entries"}),
+    "file": frozenset({"max_size_bytes", "default_ttl", "cache_dir", "compress", "flush_interval"}),
+    "sqlite": frozenset({"max_size_bytes", "default_ttl", "cache_dir", "db_path", "wal_mode"}),
+    "redis": frozenset({"host", "port", "db", "password", "prefix"}),
+    "s3": frozenset({"bucket", "region", "prefix"}),
+}
+
+
 def _check_choice(name: str, value: Any) -> None:
     """``ValueError`` when *name* must be one of a fixed set and *value* is not."""
     allowed = _NAMED_CHOICES.get(name)
@@ -83,9 +95,9 @@ class TierConfig:
     # memory / file / sqlite shared:
     max_size_bytes: int | None = None
     """memory, file and sqlite tiers: size cap in bytes (or a size such as
-    ``"2GB"``). A value bigger than this skips the tier. Unset, a memory
-    tier is sized to the machine and a file or sqlite tier uses
-    ``max_cache_size``."""
+    ``"2GB"``). In a tiered stack, a value bigger than this skips the
+    tier. Unset, a memory tier is sized to the machine and a file or
+    sqlite tier uses ``max_cache_size``."""
 
     default_ttl: int | None = None
     """file and sqlite tiers: TTL in seconds for entries stored without one.
@@ -143,6 +155,19 @@ class TierConfig:
     def __post_init__(self) -> None:
         if self.type not in _SUPPORTED_TIER_TYPES:
             raise ValueError(f"Unknown tier type: {self.type!r}. Supported: {sorted(_SUPPORTED_TIER_TYPES)}")
+        unused = sorted(
+            f.name
+            for f in fields(self)
+            if f.name != "type" and getattr(self, f.name) is not None and f.name not in _TIER_FIELDS[self.type]
+        )
+        if unused:
+            _config_notice(
+                "CONFIG-INVALID",
+                f"a {self.type} tier sets {', '.join(unused)}, which a {self.type} tier does not use, "
+                f"so {'it does' if len(unused) == 1 else 'they do'} nothing.",
+                f"remove {'it' if len(unused) == 1 else 'them'}; a {self.type} tier is built from "
+                f"{', '.join(sorted(_TIER_FIELDS[self.type]))}.",
+            )
 
 
 @dataclass
@@ -716,6 +741,7 @@ def get_config(
     user_config_path: Any = _USE_DEFAULT_PATH,
     project_config_path: Any = _USE_DEFAULT_PATH,
     overrides: dict[str, Any] | None = None,
+    anchor: Path | None = None,
 ) -> CashConfig:
     """Resolve the configuration from every layer and return it.
 
@@ -735,6 +761,7 @@ def get_config(
             user_config_path=user_config_path,
             project_config_path=project_config_path,
             overrides=overrides,
+            anchor=anchor,
         )
 
 
@@ -744,6 +771,7 @@ def _resolve_config(
     user_config_path: Any = _USE_DEFAULT_PATH,
     project_config_path: Any = _USE_DEFAULT_PATH,
     overrides: dict[str, Any] | None = None,
+    anchor: Path | None = None,
 ) -> CashConfig:
     """Resolve the merged Cash configuration.
 
@@ -760,6 +788,10 @@ def _resolve_config(
             skip; omit to walk up from cwd.
         overrides: Highest-priority overrides (mirrors what
             ``Cash(**kwargs)`` does internally).
+        anchor: The project anchor to resolve as, in place of this
+            process's (`project_anchor`): where the default ``cache_dir`` is
+            and where the walk for ``pyproject.toml`` starts. The CLI passes a
+            notebook's directory, the anchor of a kernel started for it.
 
     Returns:
         The merged `CashConfig`.
@@ -789,7 +821,9 @@ def _resolve_config(
         )
 
     user_path = default_user_config_path() if user_config_path is _USE_DEFAULT_PATH else user_config_path
-    project_path = default_project_config_path() if project_config_path is _USE_DEFAULT_PATH else project_config_path
+    project_path = (
+        default_project_config_path(anchor) if project_config_path is _USE_DEFAULT_PATH else project_config_path
+    )
     env_data = _load_env_config()
     kwarg_data = _validated_layer(overrides, "Cash(...) arguments", strict=True) if overrides else {}
 
@@ -814,7 +848,7 @@ def _resolve_config(
     }
     # Where a relative ``cache_dir`` is resolved from: the project anchor for
     # the default ``.cash``, else the layer that set it.
-    cache_dir_origin: Path | object = project_anchor()
+    cache_dir_origin: Path | object = project_anchor() if anchor is None else anchor
     #: Only when no layer set ``cache_dir`` may an installed console script
     #: be redirected to a per-user location.
     cache_dir_was_configured = False
@@ -832,7 +866,9 @@ def _resolve_config(
             cache_dir_origin = relative_to
             cache_dir_was_configured = True
 
-    if not cache_dir_was_configured:
+    # Not for a given anchor: that resolves as a process anchored there (a
+    # notebook's kernel), not as the installed tool this one is.
+    if not cache_dir_was_configured and anchor is None:
         installed = installed_entry_point_cache_dir()
         if installed is not None:
             merged["cache_dir"] = str(installed)
@@ -1017,6 +1053,22 @@ def _build_tiers(entries: list[Any]) -> list[TierConfig]:
                 "only through CASH_TIER_<N>_* variables needs CASH_TIER_<N>_TYPE.",
             )
     return tiers
+
+
+def validated_overrides(overrides: dict[str, Any]) -> dict[str, Any]:
+    """*overrides* as ``Cash(**overrides)`` would apply them, for ``cash.configure``.
+
+    The constructor's path, so the two cannot disagree: every value checked
+    (``ValueError`` on a bad one, as code gave it), ``tiers`` built into
+    `TierConfig`s, and ``cache_dir`` with ``~`` expanded and otherwise
+    relative to the cwd, like any path given in code.
+    """
+    checked = _validated_layer(overrides, "cash.configure(...)", strict=True)
+    if "tiers" in checked:
+        checked["tiers"] = _build_tiers(checked["tiers"] or [])
+    if "cache_dir" in checked:
+        checked["cache_dir"] = _anchor_cache_dir(checked["cache_dir"], _CALLER_RELATIVE)
+    return checked
 
 
 def _build_config(merged: dict[str, Any], source: str) -> CashConfig:

@@ -37,8 +37,9 @@ cannot pass.
 
 ## New tests must fail first
 
-`scripts/fails_first.py` stashes your uncommitted changes under `src/`, runs
-the new tests against the unfixed source, and fails if they pass there. A
+`scripts/fails_first.py` checks out the last commit into a temporary
+worktree, runs the new tests against that unfixed source, and fails if they
+pass there. A
 test that passes without the fix proves nothing and is rewritten.
 
 ## The docs are tested too

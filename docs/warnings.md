@@ -58,7 +58,7 @@ including code added to it later.
 | [KEY-BOOL-STATE-TOKEN](#key-bool-state-token) | decorator | `CashCacheIneffectiveWarning` | `state_token()` returned a bool |
 | [KEY-BUILD-FAILED](#key-build-failed) | decorator | `CashCacheIneffectiveWarning` | building the key raised; the call ran uncached |
 | [KEY-CALLABLE-HASHER](#key-callable-hasher) | decorator | `CashCacheIneffectiveWarning` | a hasher registered for every function |
-| [KEY-DEPENDS-ON-OPAQUE](#key-depends-on-opaque) | decorator | `CashCacheIneffectiveWarning` | a `depends_on=` target has no readable source |
+| [KEY-DEPENDS-ON-OPAQUE](#key-depends-on-opaque) | decorator | `CashCacheIneffectiveWarning` | a `depends_on=` target has no source or bytecode to fingerprint |
 | [KEY-DYNAMIC-DEP-FAILED](#key-dynamic-dep-failed) | decorator | `CashCacheIneffectiveWarning` | a `dynamic_depends_on` resolver failed |
 | [KEY-DYNAMIC-DEPENDENCY](#key-dynamic-dependency) | decorator | `CashImpurityWarning` | code in an argument picks what it calls at run time |
 | [KEY-FROZEN-MUTATED](#key-frozen-mutated) | decorator | `CashImpurityWarning` | a `frozen=True` result was modified |
@@ -421,7 +421,7 @@ before passing it.
 
 *Both paths.*
 
-<!-- claim: cash/config.py:_validated_layer @84048bbe, cash/config.py:_warn_toml_malformed @ca4597b4, cash/config.py:_load_toml_layer @045509b5, cash/config.py:_build_tiers @d9b42b7d -->
+<!-- claim: cash/config.py:_validated_layer @84048bbe, cash/config.py:_warn_toml_malformed @ca4597b4, cash/config.py:_load_toml_layer @045509b5, cash/config.py:_build_tiers @d9b42b7d, cash/config.py:TierConfig.__post_init__ @afa4a855 -->
 **What happened.** Cash could not use part of its configuration:
 
 * a value of the wrong type in a config file or `CASH_*` variable (that
@@ -429,7 +429,9 @@ before passing it.
 * a config file that is not valid TOML, including one saved with a UTF-8 BOM
   (every setting in it is ignored);
 * a config file with its settings outside a `[cash]` or `[tool.cash]` table;
-* a tier with no `type` (left out of the stack).
+* a tier with no `type` (left out of the stack);
+* a tier key its `type` does not use, such as `default_ttl` on a `memory`
+  tier or `wal_mode` on a `file` tier (the tier is built without it).
 
 A bad value passed in code, to `Cash(...)` or `cash.configure()`, raises
 `ValueError` instead.
@@ -682,16 +684,17 @@ tells two such functions apart.
 *Decorator.*
 
 <!-- claim: cash/decorator/registry.py:RegistryMixin._register_declared_callable_dep @65dda02c -->
-**What happened.** A callable in `depends_on=` has no readable source (a
-builtin, or a compiled extension), so the declaration does nothing.
+**What happened.** A callable in `depends_on=` has no source and no Python
+bytecode (a builtin, a NumPy ufunc, or a compiled extension). Cash can key it
+only by its name, so the declaration does next to nothing.
 
 **Why it matters.** Changing that callable will not invalidate the entry.
 
 **What to do.** For an extension you build yourself, pass its version as an
 argument, or use a `DataSource` whose token is the build id.
 
-**When it is safe to ignore.** Usually: a stdlib or pinned third-party builtin
-will not change between runs.
+**When it is safe to ignore.** Usually: a stdlib or pinned third-party builtin,
+such as `depends_on=[math.sqrt]`, will not change between runs.
 
 ## KEY-DYNAMIC-DEP-FAILED {#key-dynamic-dep-failed}
 

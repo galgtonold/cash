@@ -382,13 +382,14 @@ def installed_entry_point_cache_dir() -> Path | None:
         return None
 
 
-def default_project_config_path() -> Path | None:
-    """Walk upward from the project anchor to find a ``pyproject.toml``.
+def default_project_config_path(anchor: Path | None = None) -> Path | None:
+    """Walk upward from the project anchor (or *anchor*) to find a ``pyproject.toml``.
 
     The first directory containing one wins. None if we never find one (a
     standalone script with no project structure).
     """
-    anchor = project_anchor()
+    if anchor is None:
+        anchor = project_anchor()
     for d in [anchor, *anchor.parents]:
         candidate = d / "pyproject.toml"
         if candidate.exists():

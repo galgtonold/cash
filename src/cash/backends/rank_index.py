@@ -32,13 +32,11 @@ import os
 import threading
 from typing import Any
 
+from .cache_dir import RANK_INDEX_FILENAME
+
 logger = logging.getLogger(__name__)
 
-__all__ = ["RankIndex", "INDEX_FILENAME"]
-
-#: No entry suffix, so every entry glob (listing, sizing, clearing, format
-#: migration) passes it by.
-INDEX_FILENAME = "_rank.log"
+__all__ = ["RankIndex"]
 
 _CLOCK_TAG = "@L"
 
@@ -54,7 +52,7 @@ class RankIndex:
     BATCH = 64
 
     def __init__(self, cache_dir: str, untracked: Any) -> None:
-        self.path = os.path.join(cache_dir, INDEX_FILENAME)
+        self.path = os.path.join(cache_dir, RANK_INDEX_FILENAME)
         # cash's own I/O must never become a dependency of the user's code:
         # the caller passes the same `untracked()` its directory walk uses.
         self._untracked = untracked

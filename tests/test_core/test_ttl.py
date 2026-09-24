@@ -245,3 +245,21 @@ def test_one_ttl_rule():
     assert ttl_expired(100.0, 5, now=105.0) is False
     assert ttl_expired(100.0, 5, now=105.5) is True
     assert ttl_expired(None, 5, now=10.0) is True
+
+
+def test_cleanup_removes_what_a_read_would_not_serve(temp_cache_dir, monkeypatch, clock):
+    """`Cash.cleanup` judged an entry by the ttl it was written with alone,
+    so after a tier's default_ttl was lowered it kept entries no read would
+    serve any more."""
+
+    def body(x):
+        time.sleep(0.15)  # past the persistence floor: the entry reaches disk
+        return x
+
+    first = _tiered(monkeypatch, temp_cache_dir, 86400)
+    first.cache(assume_safe=True)(body)(1)
+    first.backend.backends[-1]._writes.wait_all()
+    later = _tiered(monkeypatch, temp_cache_dir, 5)  # the next run, config lowered
+    assert later.cleanup() == 0, "control: inside the new ttl nothing goes"
+    clock[0] += 6
+    assert later.cleanup() == 1

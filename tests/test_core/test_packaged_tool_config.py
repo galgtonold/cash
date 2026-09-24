@@ -82,7 +82,7 @@ def test_cash_info_shows_what_a_tools_config_file_resolves_to(tmp_path, capsys, 
 
 
 def test_the_expiry_shown_and_cleared_follows_a_lowered_tier_default():
-    from cash.__main__ import _effective_ttl
+    from cash.backends._base import effective_ttl as _effective_ttl
 
     assert _effective_ttl({"ttl": 86400}, tier_default=5) == 5
     assert _effective_ttl({"ttl": 86400, "ttl_declared": True}, tier_default=5) == 86400

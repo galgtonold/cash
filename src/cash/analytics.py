@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from ._location import per_user_cache_root
+from .backends.cache_dir import ANALYTICS_DB_FILENAME
 from .tracking.file_tracker import register_cache_dir
 
 logger = logging.getLogger(__name__)
@@ -37,7 +38,7 @@ _MAX_DB_BYTES = 64 * 1024 * 1024  # 64 MiB
 def default_db_path() -> Path:
     """Where the analytics db lives unless a path is given: the per-user cache root."""
 
-    return per_user_cache_root() / "analytics.db"
+    return per_user_cache_root() / ANALYTICS_DB_FILENAME
 
 
 def _write_events(db_path: str, buffer: list[tuple]) -> None:

@@ -22,9 +22,9 @@ side-effect statements like ``print()`` always execute.
 units — the entire code is passed to the statement processor, which handles
 cache key computation, mutation detection, and side-effect checking.
 
-Loops containing ``break`` or ``continue`` are also executed as single units,
-because decomposing them per-iteration is not possible (those statements must
-execute inside a loop context).
+Loops containing ``break`` or ``continue``, and loops with an ``else``, are
+also executed as single units, because decomposing them per-iteration is not
+possible (those statements must execute inside a loop context).
 """
 
 from __future__ import annotations
@@ -354,9 +354,11 @@ class ControlStructureProcessor:
         prev_node: ast.stmt | None,
     ) -> ControlStructureResult:
         if isinstance(node, ast.For):
-            # For loops with break/continue must be executed as single units
-            if contains_break_or_continue(node.body):
-                logger.debug("[CONTROL] Loop contains break/continue, executing as single unit")
+            # A loop with break/continue, or with an ``else`` (which runs only
+            # when the loop was not broken out of), runs as one unit: the
+            # per-iteration path has no loop for those to act on.
+            if contains_break_or_continue(node.body) or node.orelse:
+                logger.debug("[CONTROL] Loop has break/continue or else, executing as single unit")
                 return self.execute_as_single_unit(
                     node,
                     ttl,

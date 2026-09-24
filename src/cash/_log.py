@@ -1,12 +1,16 @@
 """Where cash's log records go: the one place that configures the ``cash`` logger.
 
-Two entry points, and they share one record of what cash itself installed:
+The entry points share one record of what cash itself installed:
 
 * `enable` -- ``debug=True`` / ``verbose=True`` / ``CASH_DEBUG``. Lowers the
   ``cash`` level and, when nothing would print a record (a script's default),
   adds one stderr handler that stands down once the application logs.
+* `enable_console` -- ``%cash_debug on``. Replaces cash's own handlers with
+  one that writes to the current ``sys.stdout``, so records reach the cell.
 * `setup_logging` -- ``%cash_debug json`` / ``%cash_debug file``. Replaces
   cash's own handlers with a console handler and optionally a JSON file.
+* `disable` -- ``%cash_debug off``. Removes cash's own handlers and the level
+  cash set.
 
 Handlers the application put on the ``cash`` logger are never removed.
 """
@@ -17,8 +21,9 @@ import json
 import logging
 import sys
 from datetime import datetime
+from typing import Any
 
-__all__ = ["JsonFormatter", "application_handlers", "enable", "setup_logging"]
+__all__ = ["JsonFormatter", "application_handlers", "disable", "enable", "enable_console", "follow", "setup_logging"]
 
 #: Handlers cash added to the ``cash`` logger; everything else is the application's.
 _OWN_HANDLERS: list[logging.Handler] = []
@@ -78,6 +83,7 @@ def _add_own(cash_logger: logging.Logger, handler: logging.Handler) -> None:
 def _remove_own(cash_logger: logging.Logger) -> None:
     for handler in _OWN_HANDLERS:
         cash_logger.removeHandler(handler)
+        handler.close()  # a log file is released, not left open until exit
     _OWN_HANDLERS.clear()
 
 
@@ -99,6 +105,86 @@ def enable(level: int) -> None:
         handler.setFormatter(logging.Formatter("%(name)s: %(message)s"))
         handler.addFilter(_StandDownWhenTheAppLogs())
         _add_own(cash_logger, handler)
+
+
+class _CurrentStdoutHandler(logging.StreamHandler):
+    """A ``StreamHandler`` that always writes to the *current* ``sys.stdout``.
+
+    Under ipykernel, ``sys.stdout`` is swapped to a per-cell output proxy on
+    each execution.  A vanilla ``StreamHandler(sys.stdout)`` captures the
+    stream at construction time, so debug records emitted during later cells
+    would be routed to whatever stdout was active when ``%cash_debug on`` ran.
+    Resolving ``sys.stdout`` at emit time keeps debug output landing in the
+    cell that produced it.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(stream=sys.stdout)
+
+    @property
+    def stream(self):  # type: ignore[override]
+        return sys.stdout
+
+    @stream.setter
+    def stream(self, value: Any) -> None:
+        # logging.StreamHandler.__init__ assigns self.stream; ignore the stored
+        # value and always defer to the live sys.stdout via the getter.
+        pass
+
+
+def enable_console(level: int = logging.DEBUG) -> None:
+    """Send ``cash`` records at *level* to the current ``sys.stdout``.
+
+    For ``%cash_debug on``: raising the level alone relied on root-logger
+    propagation to reach the cell, which recent ipykernel no longer does, so
+    debug markers never appeared. Replaces the handlers cash added before, so
+    switching from ``json`` to ``on`` does not print every record twice.
+    """
+    global _LEVEL_SET
+    cash_logger = logging.getLogger("cash")
+    cash_logger.setLevel(level)
+    _LEVEL_SET = level
+    _remove_own(cash_logger)
+    handler = _CurrentStdoutHandler()
+    handler.setLevel(level)
+    handler.setFormatter(logging.Formatter("[%(name)s] %(message)s"))
+    _add_own(cash_logger, handler)
+
+
+def disable() -> None:
+    """Undo `enable`, `enable_console` and `setup_logging`: remove cash's own
+    handlers, and put the ``cash`` level back to ``NOTSET`` if cash set it.
+    The application's handlers and levels stay."""
+    global _LEVEL_SET
+    cash_logger = logging.getLogger("cash")
+    _remove_own(cash_logger)
+    if _LEVEL_SET is not None and cash_logger.level == _LEVEL_SET:
+        cash_logger.setLevel(logging.NOTSET)
+    _LEVEL_SET = None
+
+
+def follow(level: int | None) -> None:
+    """Make the ``cash`` logger match settings that just changed.
+
+    *level* is what they ask for now, or ``None`` when ``debug`` and
+    ``verbose`` are both off. Unlike `enable`, it also raises the level and
+    takes back cash's stderr handler, so ``cash.configure(debug=False)``
+    stops the output ``debug=True`` started. A level someone else set, and
+    the application's handlers, stay as they are.
+    """
+    global _LEVEL_SET
+    cash_logger = logging.getLogger("cash")
+    ours = _LEVEL_SET is not None and cash_logger.level == _LEVEL_SET
+    if level is None:
+        if ours:
+            cash_logger.setLevel(logging.NOTSET)
+            _LEVEL_SET = None
+        _remove_own(cash_logger)
+        return
+    if ours:
+        cash_logger.setLevel(level)
+        _LEVEL_SET = level
+    enable(level)
 
 
 def setup_logging(level: int = logging.INFO, json_output: bool = False, log_file: str | None = None) -> None:
@@ -124,7 +210,7 @@ def setup_logging(level: int = logging.INFO, json_output: bool = False, log_file
     _add_own(cash_logger, console)
 
     if log_file:
-        fh = logging.FileHandler(log_file)
+        fh = logging.FileHandler(log_file, encoding="utf-8")
         fh.setLevel(logging.DEBUG)
         fh.setFormatter(JsonFormatter())
         _add_own(cash_logger, fh)

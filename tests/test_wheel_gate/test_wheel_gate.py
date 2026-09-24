@@ -17,13 +17,13 @@ Run it explicitly::
     pytest -m wheel_gate tests/test_wheel_gate
 
 The harness exits 0 iff the observed RED/GREEN matrix matches the baseline
-recorded in ``scripts/wheel_gate.py``. As of 2026-07-20 that baseline is
-**all six scenarios GREEN** (S1-S6), confirmed on the ``0.1.0`` wheel: the bugs
-S1/S2/S5 were written to catch (restart retrain, to_csv re-fire,
-unrelated-cell plot re-fire) are all fixed, and S3/S4/S6
-are controls.
+recorded in ``scripts/wheel_gate.py``: currently **all seven scenarios GREEN**
+(S1-S7). The scenario table at the top of that script says what each one
+guards.
 
-This test asserts that exit code, so a scenario flipping either way fails CI:
+No CI workflow runs this test: ci.yml ignores this directory and publish.yml
+does not run it, so run it by hand before a release. It asserts the harness's
+exit code, so a scenario flipping either way fails it:
 
   * an invariant regressing to RED means a shipped fix broke, and
   * a scenario unexpectedly changing state means the baseline is stale and the

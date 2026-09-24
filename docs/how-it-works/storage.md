@@ -51,7 +51,7 @@ Each tier has a size cap, sized to the machine unless you set one:
 <!-- claim: cash/__main__.py:cmd_info @f8794ec8, cash/__main__.py:cmd_clear @a2a0458b -->
 `cash info` prints the folder in use, where that setting came from, and both
 caps. `cash clear` deletes a cache folder: `cash clear analysis.ipynb` clears
-the whole `.cash` beside that notebook, shared with its neighbours, and
+that notebook's whole cache folder, shared with its neighbours, and
 `--all` clears the folder in use. `--function NAME` and `--entry ID` delete
 less; [the CLI page](../cli.md) has every option.
 
@@ -68,6 +68,12 @@ for the next read, unless it would take more than 90% of the memory cap.
 `SQLiteBackend`, `RedisBackend` and `S3Backend` can replace or join these
 tiers; see
 [choosing a backend](../tutorials/feature-guides/choosing-a-backend.md).
+
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @231ca6c0, cash/backends/_base.py:effective_ttl @7c55c336 -->
+An entry's ttl is checked on every tier's copy as it is read, so the memory
+copy expires with the disk copy. The ttl is the decorator's `ttl=`, or else
+the shorter of the ttl the entry was written with and the tier's current
+`default_ttl`. `cash.cleanup()` and `cash clear --expired` use the same rule.
 
 ## What's worth persisting
 

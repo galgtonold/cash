@@ -55,7 +55,8 @@ result = daily.rolling(7).mean()       # edit this line: only it runs again
   and the statements that read it run again.
 - **Loops are cached per iteration**, keyed on the loop variable, so changing one
   item leaves the others cached. `if` and `try` blocks are cached per branch. A
-  `while` or `with` block runs as one unit.
+  `while` or `with` block, or a `for` with `break`, `continue` or `else:`, runs
+  as one unit.
 - **Calls inside a statement are cached too.** In `out.append(compute(x))` the
   append runs every time, but `compute(x)` comes from the cache.
 - **Printed output is replayed** on a hit, along with rich output. A trailing

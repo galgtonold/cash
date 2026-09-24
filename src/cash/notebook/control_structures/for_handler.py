@@ -590,13 +590,11 @@ class ForLoopHandler:
         Halves come from ``loop_split.split_nodes`` -- the same derivation the
         simulator uses -- so both sides run the same two statements. The head
         recurses through :meth:`process` (and is itself unsplittable, being a
-        half); the tail takes the ordinary single-unit path.
+        half); the tail takes the ordinary single-unit path. A head that
+        fails ends the loop there, with its error, as the unsplit loop would.
         """
-
-        try:
-            head, tail = split_nodes(node, k)
-        except ValueError:
-            return None
+        # ``recorded_k`` returned a k, so the loop has no ``else`` to refuse.
+        head, tail = split_nodes(node, k)
 
         # A tail's accumulator is populated by its own head, so the shape is
         # read from the BODY rather than requiring a fresh preceding seed.
@@ -608,6 +606,8 @@ class ForLoopHandler:
         logger.debug("[LOOP_SPLIT] executing split at k=%d (force_outputs=%s)", k, force_outputs)
 
         head_res = self.process(head, ttl, silent, parent_context, raw_cell, inherited_annotation)
+        if not head_res.success:
+            return head_res
         tail_res = self.dispatcher.execute_as_single_unit(
             tail,
             ttl,
@@ -617,7 +617,10 @@ class ForLoopHandler:
             force_outputs=force_outputs,
         )
         return ControlStructureResult(
-            success=bool(head_res.success and tail_res.success),
+            success=tail_res.success,
             metrics=list(head_res.metrics) + list(tail_res.metrics),
-            total_iterations=getattr(head_res, "total_iterations", 0) or 0,
+            error=tail_res.error,
+            total_iterations=head_res.total_iterations + tail_res.total_iterations,
+            cached_iterations=head_res.cached_iterations + tail_res.cached_iterations,
+            computed_iterations=head_res.computed_iterations + tail_res.computed_iterations,
         )

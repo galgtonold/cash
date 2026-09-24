@@ -203,3 +203,93 @@ class TestNoTomlMutation:
         cash.configure(debug=True)
         # Nothing should have been written to the XDG location.
         assert not (tmp_path / "xdg").exists()
+
+
+# ---------------------------------------------------------------------------
+# configure() takes a value the way Cash(...) does
+# ---------------------------------------------------------------------------
+
+
+class TestSameAsTheConstructor:
+    """A setting means the same thing whether it is given to ``Cash(...)`` or
+    to ``configure()``. The runtime path had its own checks: tier tables were
+    stored unconverted (and broke every later call), ``~`` was not expanded,
+    a backend the caller built was replaced, and ``debug=False`` did not stop
+    the output ``debug=True`` started."""
+
+    def test_tier_tables_are_built_into_tiers(self, tmp_path):
+        from cash import Cash
+        from cash.backends.memory_backend import InMemoryBackend
+        from cash.config import TierConfig
+
+        c = Cash(cache_dir=str(tmp_path / "c"), register_magic=False)
+        c.backend  # built
+        c.reconfigure(tiers=[{"type": "memory"}])
+        assert c.config.tiers == [TierConfig(type="memory")]
+        assert [type(b) for b in c.backend.backends] == [InMemoryBackend]
+        c.reconfigure(max_cache_size=100)  # and the next call still works
+        assert c.config.max_cache_size == 100
+
+    def test_a_bad_value_changes_nothing(self, tmp_path):
+        from cash import Cash
+
+        c = Cash(cache_dir=str(tmp_path / "c"), register_magic=False)
+        backend = c.backend
+        before = c.config.max_cache_size
+        with pytest.raises(ValueError, match="floppy"):
+            c.reconfigure(max_cache_size=100, tiers=[{"type": "floppy"}])
+        assert c.config.max_cache_size == before
+        assert c.config.tiers == []
+        assert c.backend is backend
+
+    def test_a_home_relative_cache_dir_is_expanded(self, tmp_path, monkeypatch):
+        from cash import Cash
+
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+        monkeypatch.chdir(tmp_path)
+        c = Cash(cache_dir=str(tmp_path / "c"), register_magic=False)
+        c.backend
+        c.reconfigure(cache_dir="~/b")
+        expected = str(tmp_path / "home" / "b")
+        assert c.config.cache_dir == expected
+        assert c.backend.backends[-1].cache_dir == expected
+        assert not (tmp_path / "~").exists()
+
+    def test_a_backend_the_caller_built_is_never_replaced(self, tmp_path):
+        from cash import Cash
+        from cash.backends.sqlite_backend import SQLiteBackend
+
+        mine = SQLiteBackend(str(tmp_path / "mine.db"))
+        c = Cash(backend=mine, register_magic=False)
+        before = c.config.max_cache_size
+        with pytest.raises(ValueError, match="given its backend"):
+            c.reconfigure(max_cache_size=10**6)
+        assert c.backend is mine
+        assert c.config.max_cache_size == before
+        c.reconfigure(min_cache_savings_pct=0.5)  # not a tier setting: fine
+        assert c.backend is mine
+        mine.shutdown()
+
+    def test_debug_off_stops_the_debug_output(self, tmp_path, monkeypatch, request):
+        import logging
+
+        from cash import Cash, _log
+
+        cash_logger = logging.getLogger("cash")
+        # From cash's logger as a fresh process has it, whatever earlier tests
+        # in this worker set.
+        monkeypatch.setattr(_log, "_LEVEL_SET", None)
+        level = cash_logger.level
+        cash_logger.setLevel(logging.NOTSET)
+        request.addfinalizer(lambda: cash_logger.setLevel(level))
+        c = Cash(cache_dir=str(tmp_path / "c"), register_magic=False)
+        c.reconfigure(debug=True)
+        assert cash_logger.isEnabledFor(logging.DEBUG)
+        c.reconfigure(debug=False)
+        assert not cash_logger.isEnabledFor(logging.DEBUG)
+        assert not cash_logger.isEnabledFor(logging.INFO)
+        c.reconfigure(verbose=True)
+        assert cash_logger.isEnabledFor(logging.INFO) and not cash_logger.isEnabledFor(logging.DEBUG)
+        c.reconfigure(verbose=False)
+        assert not cash_logger.isEnabledFor(logging.INFO)

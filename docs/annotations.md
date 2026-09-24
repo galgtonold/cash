@@ -37,8 +37,8 @@ quotes = fetch_quotes("AAPL")     # fetched again after five minutes
 - **At the end of the line.** `x = expensive()  # @cash:persist` works too.
 - **On a loop or `if` header.** The directive applies to every statement in the
   block. Inside the block, it applies to the statement below it only. A `while`
-  or `with` block, or a `for` with `break`/`continue`, runs as one unit, so a
-  directive anywhere inside it applies to the whole block.
+  or `with` block, or a `for` with `break`, `continue` or an `else:` block, runs
+  as one unit, so a directive anywhere inside it applies to the whole block.
 - **At the top of a cell.** `no-cache` and `no-cache-calls` in the cell's first
   comment lines apply to every statement in the cell. They do not reach a `for`
   or `if` block that comes after another statement; put the directive directly

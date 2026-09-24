@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
 
 from . import _log
 from .backends import CacheBackend, CacheMetadata
-from .backends._base import ttl_expired
+from .backends._base import entry_expired
 from .backends._writes import in_multiprocessing_child
 from .backends.factory import build_backend_from_config, build_tiered
 from .config import CashConfig, get_config
@@ -32,7 +32,7 @@ from .decorator.arg_hashing import (
     CODE_VALUE_TYPES,
     ArgHashingMixin,
 )
-from .decorator.cached_function import CHUNK_MAX_BYTES, CHUNK_MAX_ITEMS, CachedFunction
+from .decorator.cached_function import CHUNK_MAX_BYTES, CHUNK_MAX_ITEMS, CachedFunction, new_stats
 from .decorator.call_state import (
     CACHE_MISS,
     CALL_ENTRY,
@@ -93,6 +93,7 @@ from .tracking.file_tracker import (
 )
 
 if TYPE_CHECKING:
+    from .analytics import AnalyticsManager
     from .ui.explorer import CacheExplorer
 
 # Configure Logging
@@ -203,6 +204,15 @@ def _summary_at_exit(ref: weakref.ref[Cash]) -> None:
 #: after every statement; nothing drains it in a script or a service, so it
 #: keeps only the most recent calls rather than one entry per call forever.
 _CALL_LOG_MAX = 10_000
+
+
+def _in_kernel() -> bool:
+    """Whether this runs inside a Jupyter kernel, where widgets can be drawn."""
+    try:
+        from IPython import get_ipython
+    except ImportError:
+        return False
+    return getattr(get_ipython(), "kernel", None) is not None
 
 
 class Cash(
@@ -318,6 +328,7 @@ class Cash(
         self._exit_work: _ExitWork | None = None
 
         self._backend_lock = threading.Lock()
+        self._analytics: AnalyticsManager | None = None
 
         self.graph = DependencyGraph()
         self.functions: dict[str, Callable[..., Any]] = {}  # Registry of cached functions
@@ -382,10 +393,10 @@ class Cash(
         self._populated: set[str] = set()
         self._effective_ttl_cache: dict[str, int | None] = {}
         self._deref_writes: dict = {}  # code object -> frozenset of reassigned freevars
-        # id(func) -> decoration-pinned own-source identity. The
-        # wrapper closure keeps *func* alive, so the id stays valid for the
-        # wrapper's lifetime.
-        self._own_pins: dict[int, str] = {}
+        # id(func) -> (reference to func, decoration-pinned own-source
+        # identity). The reference is checked on every read: a redefined
+        # function's id can go to a later definition once the old one dies.
+        self._own_pins: dict[int, tuple[Callable[[], Any], str]] = {}
         # Pins taken at decoration whose file has not yet been compared with
         # the loaded code; the first call does it once (see _pin_own_source).
         self._own_pins_unverified: set[int] = set()
@@ -499,9 +510,9 @@ class Cash(
         # check -- overriding is rare, and every cached call pays for this.
         self._override_hashers: dict[type, tuple[Callable[[Any], str], str]] = {}
 
-        # Dedup keys for _warn_once: (category, func_name, arg_type_name).
+        # Dedup keys for _warn_once: (category, func_name, arg_type_name, code).
         # Guarded by _decorator_call_log_lock (already exists for thread safety).
-        self._warning_keys_seen: set[tuple[type[Warning], str, str]] = set()
+        self._warning_keys_seen: set[tuple[type[Warning], str, str, str]] = set()
 
         # Functions the STATIC pass already reported on. The runtime effect
         # observer stays quiet for these: it would be a second warning about
@@ -566,6 +577,17 @@ class Cash(
         self._exit_work.backend = value
 
     @property
+    def analytics(self) -> AnalyticsManager:
+        """This session's analytics: the one manager its events are recorded
+        on and the dashboard reads, so "Current Session" is this one and its
+        buffered events are counted. Created on first use."""
+        if self._analytics is None:
+            from .analytics import AnalyticsManager
+
+            self._analytics = AnalyticsManager(enabled=self.config.analytics)
+        return self._analytics
+
+    @property
     def backend_if_built(self) -> CacheBackend | None:
         """The backend if one has been built, else ``None``; never builds one."""
         return self._backend
@@ -592,8 +614,6 @@ class Cash(
         """Change settings at runtime, rebuilding the backend only when the
         tiers it is built from changed. See ``cash.configure``."""
         apply_overrides(self, overrides)
-        if overrides.get("debug") or overrides.get("verbose"):
-            _log.enable(logging.DEBUG if self.debug else logging.INFO)
 
     def __repr__(self) -> str:
         backend_name = type(self._backend).__name__ if self._backend is not None else "<deferred>"
@@ -953,12 +973,7 @@ class Cash(
         def cache_clear() -> None:
             """Delete this function's cache entries and reset its statistics
             and warning log, so its warnings are shown again."""
-            _stats["hits"] = 0
-            _stats["misses"] = 0
-            _stats["total_time_saved"] = 0.0
-            _stats["bypassed"] = 0
-            for tally in ("miss_reasons", "not_persisted", "not_stored", "changed"):
-                _stats[tally].clear()
+            _stats.update(new_stats())
             self._delete_backend_entries(func_name)
             with self._decorator_call_log_lock:
                 cf.warnings.clear()
@@ -1111,6 +1126,7 @@ class Cash(
             The number of entries removed.
         """
         now = time.time()
+        tier_default = self.backend.default_ttl
 
         def is_expired(raw_metadata):
             try:
@@ -1121,7 +1137,9 @@ class Cash(
                 if max_age is not None and age > max_age:
                     return True
 
-                return ttl_expired(timestamp, metadata.ttl, now)
+                # The rule a read applies (`TieredBackend.get`), so cleanup
+                # removes exactly what would no longer be served.
+                return entry_expired(raw_metadata, tier_default, now)
             except (AttributeError, TypeError, ValueError):
                 return True
 
@@ -1293,9 +1311,11 @@ class Cash(
         # catching. It prints "ipywidgets is required" and returns normally, so
         # the except-ImportError fallback this replaces was unreachable: the
         # documented script behaviour never once happened.
-        if HAS_WIDGETS:
+        # And whether anything can draw it: outside a kernel, displaying the
+        # widgets only prints their repr.
+        if HAS_WIDGETS and _in_kernel():
             try:
-                show_analytics_dashboard()
+                show_analytics_dashboard(self.analytics)
                 return
             except (ImportError, RuntimeError):
                 pass

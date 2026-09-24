@@ -268,7 +268,7 @@ class ReportingMixin:
         once_per_version: bool = False,
     ) -> None:
         """Emit a coded diagnostic at most once per
-        ``(category, func_name, arg_type_name)`` for this Cash instance.
+        ``(category, func_name, arg_type_name, code)`` for this Cash instance.
 
         ``once_per_version``: and once per CACHE for the same text -- which
         names the lines and the code it found them in -- so a later process
@@ -304,7 +304,10 @@ class ReportingMixin:
         if _EXPLAINING.get():
             return
         rendered = format_diagnostic(code, message, fix)  # raises on a bad code
-        key = (category, func_name, arg_type_name)
+        # The code is part of the key: warnings sharing a category, function
+        # and (often empty) arg type are still different warnings, and one
+        # must not silence another.
+        key = (category, func_name, arg_type_name, code)
         with self._decorator_call_log_lock:
             if key in self._warning_keys_seen:
                 return

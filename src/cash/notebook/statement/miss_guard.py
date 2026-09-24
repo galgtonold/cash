@@ -64,11 +64,12 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
+from cash.backends.cache_dir import MISS_GUARD_FILENAME
 from cash.backends.file_backend import recreate_cache_dir
 
 logger = logging.getLogger(__name__)
 
-_STORE_FILENAME = "_miss_guard.json"
+_STORE_FILENAME = MISS_GUARD_FILENAME
 # Bumping this invalidates every persisted verdict (they are re-learned).
 _STORE_VERSION = 1
 

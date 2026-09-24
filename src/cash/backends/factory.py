@@ -15,15 +15,17 @@ from __future__ import annotations
 
 import logging
 import os
+import weakref
 from typing import TYPE_CHECKING, Any
 
 from ..exceptions import DependencyNotFoundError
 from ._base import CacheBackend
 from .adaptive_caps import resolve_disk_cap, resolve_ram_cap
+from .cache_dir import DB_FILENAME
 from .file_backend import FileBackend
 from .memory_backend import InMemoryBackend
 from .persistence_policy import PersistencePolicy
-from .sqlite_backend import DB_FILENAME, SQLiteBackend
+from .sqlite_backend import SQLiteBackend
 from .tiered_backend import TieredBackend
 
 if TYPE_CHECKING:
@@ -31,7 +33,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["apply_persistence_settings", "build_backend_from_config", "build_tiered", "tier_specs"]
+__all__ = [
+    "apply_persistence_settings",
+    "build_backend_from_config",
+    "build_tiered",
+    "built_from_config",
+    "tier_specs",
+]
 
 #: The tiers ``backend = "tiered"`` stands for.
 DEFAULT_STACK = ("memory", "file")
@@ -41,10 +49,23 @@ DEFAULT_STACK = ("memory", "file")
 TierSpec = tuple[str, tuple[tuple[str, Any], ...]]
 
 
+#: Every backend `build_backend_from_config` made. Only these may be rebuilt
+#: when the config changes: one the caller passed in (``Cash(backend=...)``)
+#: is theirs, and the config does not describe it.
+_FROM_CONFIG: weakref.WeakSet[CacheBackend] = weakref.WeakSet()
+
+
 def build_backend_from_config(config: CashConfig) -> CacheBackend:
     """The backend *config* describes. See the module docstring."""
     tiers = [_build(kind, dict(settings)) for kind, settings in tier_specs(config)]
-    return build_tiered(tiers, config) if config.tiers or len(tiers) > 1 else tiers[0]
+    backend = build_tiered(tiers, config) if config.tiers or len(tiers) > 1 else tiers[0]
+    _FROM_CONFIG.add(backend)
+    return backend
+
+
+def built_from_config(backend: CacheBackend) -> bool:
+    """Did `build_backend_from_config` build *backend*?"""
+    return backend in _FROM_CONFIG
 
 
 def build_tiered(backends: list[CacheBackend], config: CashConfig) -> TieredBackend:
@@ -100,6 +121,7 @@ def _settings(tier: TierConfig, config: CashConfig) -> dict[str, Any]:
             out["flush_interval"] = _pick(tier.flush_interval, config.flush_interval)
         else:
             out["db_path"] = tier.db_path
+            out["wal_mode"] = _pick(tier.wal_mode, True)
         return out
     if t == "redis":
         return {
@@ -145,6 +167,7 @@ def _build(kind: str, s: dict[str, Any]) -> CacheBackend:
             db_path=s["db_path"] or _sqlite_db_path(s["cache_dir"]),
             max_size_bytes=cap,
             default_ttl=s["default_ttl"],
+            wal_mode=s["wal_mode"],
         )
     if kind == "redis":
         return _build_redis(**s)
