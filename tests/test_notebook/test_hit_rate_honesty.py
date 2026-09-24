@@ -163,7 +163,7 @@ def test_reset_zeroes_every_stat_a_session_can_hold(cash_magics, capsys):
     reset == a fresh session for EVERY key, so the next counter added cannot
     reintroduce the drift.
     """
-    from cash.notebook.ipython.magics import new_session_stats
+    from cash.notebook.ipython.session import new_session_stats
 
     for key in cash_magics._session.stats:
         cash_magics._session.stats[key] = 99

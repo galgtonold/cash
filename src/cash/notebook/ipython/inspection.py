@@ -17,6 +17,7 @@ from cash._console import safe_text
 from ...backends._writes import discarded_writes
 from ..provenance import BADGE_WORDS
 from ._args import parse_mode, strip_inline_comment
+from .session import new_session_stats
 
 if TYPE_CHECKING:
     from .magics import CashMagics
@@ -310,9 +311,6 @@ class InspectionMagicsMixin:
         # Rebuilt from the same definition a fresh session uses, so a new
         # counter can never be added to the stats and silently survive a
         # reset.
-        # Local: import cycle ipython.inspection -> ipython.magics -> ipython.inspection.
-        from .magics import new_session_stats
-
         self._session.stats.update(new_session_stats())
         # The verified-saving baselines are part of the stats, not of the
         # cache: a reset must drop them too or savings would be credited

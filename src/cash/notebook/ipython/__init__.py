@@ -1,6 +1,6 @@
 """IPython adapter for the notebook caching subsystem.
 
-The modules in this package — `magics`, `inspection`, `cell_executor`, `badges`,
+The modules in this package — `magics`, `inspection`, `session`, `cell_executor`, `badges`,
 `error_display` — make up the adapter that wires Cash's caching pipeline
 into IPython's `Magics` system: `%cash_on`, `%cash_status`,
 `%cash_stats`, and so on.
