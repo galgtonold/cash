@@ -10,7 +10,7 @@ import time
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
-from ..backends import CacheMetadata
+from .cache_metadata import CacheMetadata
 
 # Sentinel object used by wrapper helpers to signal a cache miss without
 # conflicting with any legitimate cached value (including None).

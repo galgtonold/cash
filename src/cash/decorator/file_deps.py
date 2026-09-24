@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Any
 
 from .._clock import perf_counter as _perf_counter
 from .._paths import normalize_path
-from ..backends import CacheMetadata
 from ..exceptions import CashCacheIneffectiveWarning, CashCacheStoreFailedWarning
 from ..remote_source import measured_validation, validation_is_expensive, warn_validation_cost_once
 from ..source_norm import own_source_digest
@@ -24,6 +23,7 @@ from ..tracking.file_dep_snapshot import (
 )
 from ..tracking.read_credit import credited_reads
 from ..tracking.tracker_context import active_tracker
+from .cache_metadata import CacheMetadata
 from .code_identity import CODE_KEYED_STATS
 
 if TYPE_CHECKING:

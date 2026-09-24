@@ -1,6 +1,6 @@
 """Typed, in-memory view of a statement cache entry's metadata.
 
-Sibling to :class:`cash.backends.CacheMetadata` (the decorator-side view).
+Sibling to :class:`cash.decorator.cache_metadata.CacheMetadata` (the decorator-side view).
 Both are dataclass *views* over the same opaque dict channel the backends
 round-trip: typed dataclasses inside cash, a plain dict into and out of
 every backend -- see the ``MetadataDict`` note in ``cash/backends/_base.py``.

@@ -8,7 +8,7 @@ release. To pick a bundled backend, see [Backends](backends.md).
 
 ```python
 from cash.backends import (
-    CacheBackend, CacheMetadata, EntryMetadata, MetadataDict,
+    CacheBackend, EntryMetadata, MetadataDict,
     Serializer, PickleSerializer, ParquetSerializer, get_serializer,
 )
 ```
@@ -112,7 +112,7 @@ write and reads after a read. Its `to_dict()` leaves out unset fields, so an
 entry written without a `ttl` has no `ttl` key. `EntryMetadata` lists every
 key the bundled backends read or write.
 
-::: cash.backends.CacheMetadata
+::: cash.decorator.cache_metadata.CacheMetadata
     options:
       members: false
 

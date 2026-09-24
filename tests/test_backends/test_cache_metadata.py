@@ -7,7 +7,7 @@ dataclass converts at the edges via to_dict()/from_dict().
 
 import pytest
 
-from cash.backends import CacheMetadata
+from cash.decorator.cache_metadata import CacheMetadata
 
 
 class TestCacheMetadataRoundTrip:

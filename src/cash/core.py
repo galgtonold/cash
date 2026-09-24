@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
 from . import _log
 from ._active import ACTIVE_CONFIG
 from .analytics import AnalyticsManager
-from .backends import CacheBackend, CacheMetadata
+from .backends import CacheBackend
 from .backends._base import entry_expired
 from .backends._writes import in_multiprocessing_child
 from .backends.factory import build_tiered
@@ -34,6 +34,7 @@ from .decorator.arg_hashing import (
     mark_opaque,
 )
 from .decorator.backend_slot import BackendSlot
+from .decorator.cache_metadata import CacheMetadata
 from .decorator.cached_function import CHUNK_MAX_BYTES, CHUNK_MAX_ITEMS, CachedFunction, new_stats
 from .decorator.call_state import (
     CACHE_MISS,

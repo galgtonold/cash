@@ -21,7 +21,7 @@ Stop at the first line that fits:
 - **Cloud jobs, durable storage across regions**: `S3Backend`.
 - **Nothing written to disk** (sensitive data, throwaway runs): `InMemoryBackend`.
 
-<!-- claim: cash/backends/__init__.py:__all__ @53380c02 broad="the count and the table are a claim about the exported backend set" -->
+<!-- claim: cash/backends/__init__.py:__all__ @286e3eee broad="the count and the table are a claim about the exported backend set" -->
 | Backend | Survives a restart | Shared with | Import |
 |---|---|---|---|
 | `TieredBackend` (**default**: RAM + file) | yes | processes on this machine | `from cash import TieredBackend` |

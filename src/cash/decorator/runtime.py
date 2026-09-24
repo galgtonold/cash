@@ -12,13 +12,13 @@ from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from .._clock import perf_counter as _perf_counter
-from ..backends import CacheMetadata
 from ..backends._base import ttl_expired
 from ..dependency_state import STATE_LEDGER, ledger_note
 from ..exceptions import CashCacheIneffectiveWarning
 from ..purity_analyzer import PurityReport
 from ..tracking.file_tracker import FileAccessTracker
 from .arg_hashing import PLAIN_CENSUS
+from .cache_metadata import CacheMetadata
 from .cached_function import CachedFunction
 from .call_state import (
     CACHE_MISS,
