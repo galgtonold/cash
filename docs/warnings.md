@@ -1129,7 +1129,7 @@ control.
 
 ## KEY-DEPENDS-ON-OPAQUE {#key-depends-on-opaque}
 
-<!-- claim: cash/decorator/registry.py:RegistryMixin._register_declared_callable_dep @33eccac7 -->
+<!-- claim: cash/decorator/registry.py:FunctionRegistry._register_declared_callable_dep @33eccac7, cash/decorator/registry.py:warn_inert_dependency @6242cef6 -->
 **What happened.** You named a callable in `depends_on=`, and Cash has nothing
 to fingerprint it by — no source and no Python bytecode: it is a builtin, a
 NumPy ufunc, or it lives in a compiled extension. All Cash can key on is its
@@ -1181,7 +1181,7 @@ line then, so the decision is written down where the next reader looks.
 
 ## KEY-DYNAMIC-DEP-FAILED {#key-dynamic-dep-failed}
 
-<!-- claim: cash/decorator/registry.py:RegistryMixin._resolve_dynamic_dependencies @1d703750 -->
+<!-- claim: cash/decorator/registry.py:resolve_dynamic_dependencies @1d703750 -->
 **What happened.** A resolver you passed to `dynamic_depends_on=` raised when
 Cash called it to find out which data sources this particular call depends on,
 or returned something that is not a `DataSource` (or a list of them, or
@@ -1993,7 +1993,7 @@ failing until you fix its cause.
 
 ## STORE-CODE-CHANGED {#store-code-changed}
 
-<!-- claim: cash/decorator/file_deps.py:FileDepsMixin._code_moved_since_keyed @54401443, cash/decorator/registry.py:RegistryMixin._code_functions @bbc5e6f3 -->
+<!-- claim: cash/decorator/file_deps.py:FileDepsMixin._code_moved_since_keyed @54401443, cash/decorator/registry.py:FunctionRegistry.code_functions @bbc5e6f3 -->
 **What happened.** The file holding your cached function, a helper it calls, or
 another cached function it depends on changed on disk after this process read
 the code it keys that function by — and the change touched the code this call

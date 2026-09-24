@@ -171,7 +171,7 @@ class GlobalsFoldMixin:
         if func_name in visited:
             return set()
         visited.add(func_name)
-        report = self._purity_reports.get(func_name)
+        report = self._registry.purity_reports.get(func_name)
         found = set(getattr(report, "environment_reads", ()) or ())
         for dep in self.graph.get_dependencies(func_name):
             found |= self._environment_reads(dep, visited)
@@ -296,8 +296,8 @@ class GlobalsFoldMixin:
             if inner is not None:
                 name = func_key(inner)
                 if name in self.functions:
-                    if name not in self._populated:
-                        self._ensure_closure_analyzed(inner)
+                    if name not in self._registry.populated:
+                        self._registry.ensure_closure_analyzed(inner)
                     return "cached:" + self._state_hasher.compute(
                         name, own_source_override=self._code.pin_own_source(inner)
                     )
@@ -462,7 +462,7 @@ class GlobalsFoldMixin:
         ``SysModulesHelperResolver``: a redefined helper reads the redefined
         module's globals.
         """
-        report = self._purity_reports.get(func_name)
+        report = self._registry.purity_reports.get(func_name)
         if report is None or not (report.helper_resolution_paths or report.helper_objects):
             return state_hash
         owner_code = getattr(func, "__code__", None)
@@ -775,7 +775,7 @@ class GlobalsFoldMixin:
                 owner_code=owner_code,
                 seen=seen,
             )
-            dep_report = self._purity_reports.get(dep)
+            dep_report = self._registry.purity_reports.get(dep)
             if dep_report is not None and (dep_report.helper_resolution_paths or dep_report.helper_objects):
                 state_hash = self._fold_paths_read_globals(
                     dep_report,

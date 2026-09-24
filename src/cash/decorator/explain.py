@@ -608,10 +608,10 @@ class ExplainMixin:
         # key and a false `no_entry`). This only fills internal
         # analysis caches; it does not warn, run the function, or touch the
         # backend.
-        self._ensure_closure_analyzed(func)
+        self._registry.ensure_closure_analyzed(func)
         # Same binding check a real call makes first: a patched helper
         # changes the key, and a mock means the call would run uncached.
-        unkeyable = self._refresh_helper_bindings(func, func_name)
+        unkeyable = self._registry.refresh_helper_bindings(func, func_name)
         if unkeyable is not None:
             return CacheExplanation(
                 would_hit=False,

@@ -40,8 +40,8 @@ The resolver receives **the same positional and keyword arguments as the decorat
 
 ## How it works
 
-<!-- claim: cash/decorator/registry.py:RegistryMixin._resolve_dynamic_dependencies @1d703750, cash/data_source.py:DataSource.state_token @89498b3e -->
-The resolver lives in `Cash._resolve_dynamic_dependencies`. The path is:
+<!-- claim: cash/decorator/registry.py:resolve_dynamic_dependencies @1d703750, cash/data_source.py:DataSource.state_token @89498b3e -->
+The resolver lives in `resolve_dynamic_dependencies` (`cash/decorator/registry.py`). The path is:
 
 1. The resolver is called as `resolver(*args, **kwargs)` — same signature as the decorated function.
 2. The return value is normalised to a list: `dss = ds_result if isinstance(ds_result, list) else [ds_result]`.

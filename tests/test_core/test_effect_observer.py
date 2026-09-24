@@ -401,7 +401,9 @@ def test_the_mutation_check_retires_itself_when_re_hashing_is_expensive(tmp_path
 
     _call_capturing(c, reads, [1, 2, 3])
     name = next(n for n in c.functions if n.endswith("reads"))
-    assert c._cached[name].mutation_check_retired, "an over-budget re-hash did not retire the check for that function"
+    assert c._registry.cached[name].mutation_check_retired, (
+        "an over-budget re-hash did not retire the check for that function"
+    )
 
 
 def test_an_argument_over_budget_for_the_key_is_not_hashed_again(tmp_path, monkeypatch):

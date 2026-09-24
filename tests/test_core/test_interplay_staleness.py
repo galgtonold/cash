@@ -119,4 +119,4 @@ def test_ttl_not_propagated_without_ttld_dependency():
 
     derived(5)  # trigger analysis -> graph populated
     key = c.get_func_key(derived.__wrapped__)
-    assert c._effective_ttl(key, None) is None  # never expires
+    assert c._registry.effective_ttl(key, None) is None  # never expires

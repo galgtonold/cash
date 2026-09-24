@@ -127,7 +127,7 @@ class StoreMixin:
             # Not waivable: no audit makes a fake the answer.
             refusal = "a unittest.mock object was called while it ran, so the result may be a test's fake"
         mutated = observer.mutated_args if observer is not None else None
-        if refusal is None and mutated and self._purity_mode(func_name) != "silent":
+        if refusal is None and mutated and self._registry.purity_mode(func_name) != "silent":
             # A hit returns the stored value and leaves the caller's object as
             # it was, where this call changed it: downstream of the call, the
             # program then differs between a hit and a miss (`a -= a.mean()`,
@@ -167,7 +167,7 @@ class StoreMixin:
             # CASH_DEBUG every int result logged "Cannot attach
             # _cash_lineage_hash to int".
             return
-        frozen = self._is_frozen(func_name)
+        frozen = self._registry.is_frozen(func_name)
         if frozen and type(result) in (list, tuple, dict):
             self._frozen.remember_container(result, func_name, lineage_hash(cache_key, auto_file_deps))
             return
@@ -325,7 +325,7 @@ class StoreMixin:
                 # copy at all. Kept apart from `decorator_entry`, so that
                 # `frozen=True` does not look undecorated to the rate ceiling
                 # and lose disk persistence.
-                copy_required=not self._is_frozen(func_name),
+                copy_required=not self._registry.is_frozen(func_name),
             )
 
             # Kept, not a temporary: TieredBackend writes back where the value

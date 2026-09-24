@@ -15,6 +15,7 @@ from ..backends import CacheMetadata
 from ..backends._base import ttl_expired
 from ..dependency_state import STATE_LEDGER, ledger_note
 from ..exceptions import CashCacheIneffectiveWarning
+from ..purity_analyzer import PurityReport
 from ..tracking.file_tracker import FileAccessTracker
 from .arg_hashing import PLAIN_CENSUS
 from .cached_function import CachedFunction
@@ -31,9 +32,11 @@ from .call_state import (
     UnhashableDefault,
     run_to_completion,
 )
+from .code_identity import func_key
 from .explain import MissKind, MissReason, describe_stale_files
 from .file_deps import propagate_file_deps_to_active_tracker, snapshot_tracked_deps
 from .iterators import ChunkedCachedIterator, StreamingCachedIterator, is_one_shot_iterator
+from .registry import resolve_dynamic_dependencies
 from .rng import capture_rng_pre_state, replay_rng_state
 
 logger = logging.getLogger(__name__)
@@ -77,7 +80,7 @@ class RuntimeMixin:
         or default that cannot be hashed, a key build that raised -- has
         been warned about once; the caller runs it uncached.
         """
-        mocked = self._refresh_helper_bindings(func, func_name)
+        mocked = self._registry.refresh_helper_bindings(func, func_name)
         if mocked is not None:
             return Unkeyable(
                 MissReason(MissKind.MOCKED, f"{mocked}, which has no code to key, so the call ran uncached")
@@ -185,11 +188,11 @@ class RuntimeMixin:
             # parameter DEFAULT, so `build()` and `build(Schema)` -- the same
             # logical call -- produced two cache keys and two executions.
             normalized_args = self._args.normalize_call_args(func_name, args, kwargs)
-            if self._cached[func_name].seed_params:
+            if self._registry.cached[func_name].seed_params:
                 self._warn_if_seed_is_none(func, func_name, args, kwargs)
             state_hash = self._fold_code_args(*normalized_args, state_hash, func_name=func_name)
             chain.append(state_hash)
-            dynamic_state_hash = self._resolve_dynamic_dependencies(func_name, dynamic_depends_on, args, kwargs)
+            dynamic_state_hash = resolve_dynamic_dependencies(func_name, dynamic_depends_on, args, kwargs)
             args_hash = self._args.serialize_args(func_name, args, kwargs, normalized=normalized_args)
             self._args.note_arg_cost(func_name)
         finally:
@@ -256,7 +259,7 @@ class RuntimeMixin:
             # auto_file_deps), both available here.
             self._attach_lineage(cached_data, cache_key, metadata.auto_file_deps, ttl=ttl, func_name=func_name)
             replay_rng_state(metadata)
-            self._cached[func_name].last_key = cache_key
+            self._registry.cached[func_name].last_key = cache_key
             self._calls.log(
                 func_name,
                 cache_hit=True,
@@ -348,6 +351,28 @@ class RuntimeMixin:
             return ChunkedCachedIterator(self, call.cache_key, n_chunks, call.recompute)
         return hit
 
+    def _analyze_dependencies(self, func: Callable[..., Any]) -> None:
+        """Populate analysis for *func* + its transitive cached-dependency
+        closure, then surface *func*'s own purity issues.
+
+        Populating the WHOLE closure (not just *func*) before the first cache
+        key is computed is what keeps the key stable from the very first call.
+        The state hash folds in each dependency's purity-report
+        ``helper_source_hashes``; filled lazily on each dependency's own first
+        call, the key would deepen only after the chain warmed, and a fresh
+        process would miss the first call to every cached function even with a
+        valid entry on disk.
+
+        Surfacing stays per-function: each dependency warns/raises on its OWN
+        first direct call, not here, so eager population doesn't change which
+        warnings fire or when.
+        """
+        self._registry.ensure_closure_analyzed(func)
+        func_name = func_key(func)
+        report = self._registry.purity_reports.get(func_name) or PurityReport()
+        mode = self._registry.purity_mode(func_name)
+        self._surface_purity(func_name, report, mode)
+
     def _lookup(self, spec: CachedFunction, args: tuple, kwargs: dict, *, async_body: bool) -> Call:
         """Everything a call does before the body: analysis, key, lookup.
 
@@ -358,16 +383,16 @@ class RuntimeMixin:
         func, func_name = spec.func, spec.name
         call = Call(args, kwargs)
         call.call_start = _perf_counter()
-        if func_name not in self._analyzed:
+        if func_name not in self._registry.analyzed:
             # Double-checked under a per-function lock: the key is built
             # from what this populates, so two threads must not race it.
-            with self._analysis_lock:
-                if func_name not in self._analyzed:
+            with self._registry.analysis_lock:
+                if func_name not in self._registry.analyzed:
                     self._analyze_dependencies(func)
-                    self._analyzed.add(func_name)
+                    self._registry.analyzed.add(func_name)
         # Inherit the shortest TTL of any TTL'd dependency (computed after
         # analysis populates the graph).
-        call.ttl = self._effective_ttl(func_name, spec.ttl)
+        call.ttl = self._registry.effective_ttl(func_name, spec.ttl)
         if async_body:
             call.recompute = lambda: run_to_completion(lambda: func(*args, **kwargs))
         else:
@@ -539,7 +564,7 @@ class RuntimeMixin:
                 auto_file_deps=auto_file_deps,
                 body_seconds=run.body_seconds,
                 saves_seconds=run.saves_seconds,
-                rng_replay=self._rng_replay_parts(bool(self._cached[func_name].rng_modules), run.rng_pre),
+                rng_replay=self._rng_replay_parts(bool(self._registry.cached[func_name].rng_modules), run.rng_pre),
             )
         # Everything that was not the body: the key and lookup before it, the
         # checks and the store after it.

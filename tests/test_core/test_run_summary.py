@@ -66,7 +66,7 @@ def test_cache_clear_resets_what_the_summary_charges(tmp_path):
 
     c = _cash(tmp_path)
     work = _exercise(c)
-    stats = c._cached[c.get_func_key(work.__wrapped__)].stats
+    stats = c._registry.cached[c.get_func_key(work.__wrapped__)].stats
     assert stats["lookup_seconds"] > 0 and stats["miss_overhead_seconds"] > 0
     work.cache_clear()
     assert stats == new_stats()
@@ -96,7 +96,7 @@ def test_functions_are_ranked_by_time_saved(tmp_path):
 
     cheap(1)
     dear(1)
-    c._cached[next(k for k in c._cached if "dear" in k)].stats["total_time_saved"] = 99.0
+    c._registry.cached[next(k for k in c._registry.cached if "dear" in k)].stats["total_time_saved"] = 99.0
     text = c.run_summary()
     assert text.index("dear") < text.index("cheap")
 

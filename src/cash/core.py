@@ -61,7 +61,7 @@ from .decorator.globals_fold import (
 from .decorator.purity_checks import (
     PurityChecksMixin,
 )
-from .decorator.registry import RegistryMixin
+from .decorator.registry import FunctionRegistry, warn_inert_dependency
 from .decorator.reporting import CallLog, Notices
 from .decorator.rng import RngMixin
 from .decorator.runtime import RuntimeMixin
@@ -81,13 +81,7 @@ from .exceptions import (
 )
 from .graph import DependencyGraph
 from .object_hashing import builtin_hash_family
-from .purity_analyzer import (
-    PurityReport,
-)
 from .reconfigure import apply_overrides
-from .source_norm import (
-    callable_identity,
-)
 from .tracking.file_dep_snapshot import (
     ACTIVE_CONFIG,
 )
@@ -214,7 +208,6 @@ class Cash(
     ExplainMixin,
     RuntimeMixin,
     StoreMixin,
-    RegistryMixin,
 ):
     """Smart caching framework for Python functions and Jupyter notebooks.
 
@@ -328,42 +321,18 @@ class Cash(
         self._backend_slot = BackendSlot(self.config, backend)
         self._analytics: AnalyticsManager | None = None
 
-        self.graph = DependencyGraph()
-        self.functions: dict[str, Callable[..., Any]] = {}  # Registry of cached functions
-        # func_name -> its decoration's options and per-process state.
-        self._cached: dict[str, CachedFunction] = {}
-        self.data_sources: dict[str, DataSource] = {}  # Registry of data sources
-        self.source_hashes: dict[str, str] = {}  # Current source hashes
+        self._registry = FunctionRegistry()
+        # The registry's tables, under the names Cash publishes them by.
+        self.graph = self._registry.graph
+        self.functions = self._registry.functions
+        self.data_sources = self._registry.data_sources
+        self.source_hashes = self._registry.source_hashes
         if self.config.summary:
             # Per instance: two Cash instances are two independent caches, and
             # each accounts for itself. Through a weakref, so the hook does
             # not keep the instance alive; registered before the exit work,
             # so it runs after it.
             atexit.register(_summary_at_exit, weakref.ref(self))
-        self._analyzed = set()  # Track which functions we've *surfaced* purity for
-        # ONE lock for the one-time analysis, whatever function triggers it.
-        #
-        # The CACHE KEY depends on what the analysis populates (helper source
-        # hashes, graph edges), so a thread that built a key while another was
-        # still analysing would get a different key for the same call: an
-        # entry no later run looks up, and under `use_locking=True` a second
-        # execution, since each key is single-flighted on its own.
-        #
-        # RLock, not Lock: analysis walks the dependency graph and re-enters
-        # this same guard for the callees it populates on the way.
-        #
-        # One lock rather than one per function, deliberately. Analysis of f
-        # populates f's whole callee closure, so per-function locks could be
-        # taken in two orders by two threads and deadlock. It is a one-time,
-        # source-reading step measured in milliseconds; serialising unrelated
-        # first calls behind it costs nothing worth a lock-ordering rule.
-        self._analysis_lock = threading.RLock()
-        # Track which functions have had their graph edges + purity report
-        # populated (separate from _analyzed: a dependency can be populated to
-        # complete a parent's state hash long before it is called directly and
-        # surfaced). Keeps the cache key stable from the first call.
-        self._populated: set[str] = set()
-        self._effective_ttl_cache: dict[str, int | None] = {}
         self._deref_writes: dict = {}  # code object -> frozenset of reassigned freevars
         # code object -> global names its decorator expressions read
         self._decorator_names_cache: dict = {}
@@ -395,13 +364,13 @@ class Cash(
         self._warned_untrackable_carrier: set[tuple] = set()
         # The keys earlier runs stored, recorded beside the cache.
         self._stored_keys = StoredKeyRecord(self._backend_slot.local_dir)
-        self._notices = Notices(self._cached, self.functions, self._stored_keys, self._backend_slot)
-        self._misses = MissHistory(self._cached, self._stored_keys)
+        self._notices = Notices(self._registry.cached, self.functions, self._stored_keys, self._backend_slot)
+        self._misses = MissHistory(self._registry.cached, self._stored_keys)
         effectiveness = EffectivenessLedger()
-        self._calls = CallLog(self.config, self._cached, self._misses, effectiveness)
+        self._calls = CallLog(self.config, self._registry.cached, self._misses, effectiveness)
         self._exit_work = _ExitWork(self._backend_slot, self._stored_keys, effectiveness)
         self._frozen = FrozenResults(self.config, self._notices)
-        self._args = ArgHasher(self._cached, self._frozen, self._notices)
+        self._args = ArgHasher(self._registry.cached, self._frozen, self._notices)
         self._code = CodeIdentity(self._args)
         # function object -> digest of its parameter defaults, for defaults that
         # are immutable and therefore cannot drift between calls.
@@ -439,17 +408,6 @@ class Cash(
         # observer stays quiet for these: it would be a second warning about
         # the same function, and the user has already been told.
         self._purity_static_flagged: set[str] = set()
-        # Per-function purity report cache. Populated on first call.
-        # Helper source hashes from this report fold into the cache
-        # key state hash so cross-process helper edits invalidate.
-        self._purity_reports: dict[str, PurityReport] = {}
-
-        # Declared plain-callable dependencies (``depends_on=[proxy_fn]`` where
-        # proxy_fn is NOT a decorated cached function). Snapshot source hash at
-        # registration + a ``(module, attr_chain)`` path for live re-resolution,
-        # so editing the dep on disk + reload invalidates the parent key.
-        self._declared_dep_snapshots: dict[str, str] = {}
-        self._declared_dep_paths: dict[str, tuple[str, tuple[str, ...]]] = {}
 
         # Deep seam over the registries above: folds source/dependency/
         # helper state into the cache key's ``state_hash`` segment. Borrows
@@ -458,11 +416,11 @@ class Cash(
             functions=self.functions,
             data_sources=self.data_sources,
             source_hashes=self.source_hashes,
-            purity_reports=self._purity_reports,
+            purity_reports=self._registry.purity_reports,
             graph=self.graph,
             helper_resolver=SysModulesHelperResolver(self._hash_helper_identity),
-            declared_dep_snapshots=self._declared_dep_snapshots,
-            declared_dep_resolver=self._resolve_declared_dep_hash,
+            declared_dep_snapshots=self._registry.declared_dep_snapshots,
+            declared_dep_resolver=self._registry.resolve_declared_dep_hash,
         )
 
         # The same live re-resolution, for functions found inside data globals
@@ -714,11 +672,10 @@ class Cash(
             allow_random=allow_random,
             declared_files=_declared_files(file_depends_on),
         )
-        func_name = self._register_func(cf, depends_on)
+        func_name = cf.name
+        for dep in self._registry.register(cf, depends_on):
+            warn_inert_dependency(self._notices, func_name, dep)
         self._code.pin_own_source(func, self.source_hashes[func_name])
-        # A downstream that depends on this function inherits its TTL
-        # (effective TTL = min over the dependency closure).
-        self._effective_ttl_cache.clear()
 
         # Async generators are not cached; warn once and return unwrapped.
         if inspect.isasyncgenfunction(func):
@@ -754,24 +711,6 @@ class Cash(
                 logger.debug("[CORE] could not install the read watch at decoration", exc_info=True)
 
         return self._wrap_with_stats(cf, self._make_wrapper(cf))
-
-    def _register_func(self, cf: CachedFunction, depends_on: list[Callable[..., Any] | DataSource] | None) -> str:
-        """Register *cf* in the cache graph and return its key."""
-        func, func_name = cf.func, cf.name
-        previous = self._cached.get(func_name)
-        if previous is not None:
-            cf.carry_over(previous)
-        self._cached[func_name] = cf
-        self.functions[func_name] = func
-        new_hash = callable_identity(func)
-        old_hash = self.source_hashes.get(func_name)
-        if old_hash and old_hash != new_hash:
-            self._analyzed.discard(func_name)
-            self._populated.discard(func_name)
-        self.source_hashes[func_name] = new_hash
-        self.graph.add_node(func_name)
-        self._register_static_dependencies(func_name, depends_on)
-        return func_name
 
     # -- why a call missed ---------------------------------------------------
     #
@@ -1177,7 +1116,7 @@ class Cash(
         Empty when no cached function was ever called, so a caller can print
         this unconditionally without emitting a header over nothing.
         """
-        stats = [(name, cf.stats) for name, cf in self._cached.items()]
+        stats = [(name, cf.stats) for name, cf in self._registry.cached.items()]
         rows = [(name, s) for name, s in stats if s["hits"] or s["misses"]]
         bypassed = sum(s.get("bypassed", 0) for _, s in stats)
         disabled_line = (
@@ -1366,7 +1305,7 @@ class Cash(
         Equivalent to calling ``f.cache_clear()`` on every ``@cash.cache``-decorated
         function. Resets hit/miss statistics and removes all backend entries.
         """
-        for cf in list(self._cached.values()):
+        for cf in list(self._registry.cached.values()):
             if cf.wrapper is not None:
                 cf.wrapper.cache_clear()
 

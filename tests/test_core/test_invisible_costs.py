@@ -194,7 +194,7 @@ def test_the_hit_line_and_the_summary_show_what_the_lookup_cost(tmp_path):
     from cash.decorator.cached_function import CachedFunction
 
     def account(name, stats):
-        c._cached[name] = CachedFunction(lambda: None, name, stats=stats)
+        c._registry.cached[name] = CachedFunction(lambda: None, name, stats=stats)
 
     account(
         "app.total",

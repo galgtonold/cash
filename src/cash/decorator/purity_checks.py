@@ -208,7 +208,7 @@ class PurityChecksMixin:
         argument (identity), or the result being one of the function's module
         globals (identity).
         """
-        if self._purity_mode(func_name) == "silent":
+        if self._registry.purity_mode(func_name) == "silent":
             return
         try:
             shared = self._shared_with(result, args, kwargs, func)
@@ -418,7 +418,7 @@ class PurityChecksMixin:
         argument that moved. None when the check has been retired as too
         costly for this function, or nothing could be hashed.
         """
-        cf = self._cached.get(func_name)
+        cf = self._registry.cached.get(func_name)
         if cf is None or cf.mutation_check_retired:
             return None
         # The key was hashed a moment ago, on this thread: if that already cost
@@ -519,7 +519,7 @@ class PurityChecksMixin:
                     f"the result was not stored, so this call runs every time",
                 )
                 return
-        cf = self._cached.get(func_name)
+        cf = self._registry.cached.get(func_name)
         if cf is None or cf.mutation_check_retired:
             return
         started = _perf_counter()
@@ -582,11 +582,11 @@ class PurityChecksMixin:
         """
         if observer is None or not observer.effects:
             return
-        if self._purity_mode(func_name) == "silent":
+        if self._registry.purity_mode(func_name) == "silent":
             return
         covered: set[str] = set()
         if func_name in self._purity_static_flagged:
-            covered = static_effect_kinds(self._purity_reports.get(func_name))
+            covered = static_effect_kinds(self._registry.purity_reports.get(func_name))
         effects = [(kind, detail) for kind, detail in observer.effects if kind not in covered]
         if not effects:
             return
@@ -681,8 +681,8 @@ class PurityChecksMixin:
             # Named statically, so the observer does not report the same read
             # as a connection -- whether or not the advisory below is shown.
             self._purity_static_flagged.add(func_name)
-            cf = self._cached.get(func_name)
-            if self._effective_ttl(func_name, cf.ttl if cf is not None else None) is not None:
+            cf = self._registry.cached.get(func_name)
+            if self._registry.effective_ttl(func_name, cf.ttl if cf is not None else None) is not None:
                 # `ttl=` is the answer to "how old may a fetched answer be":
                 # once one is set, the question has been answered.
                 issues = [i for i in issues if getattr(i, "kind", None) != ISSUE_NETWORK_READ]

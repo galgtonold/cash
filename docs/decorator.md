@@ -281,7 +281,7 @@ Worth understanding before any parameter. With a bare `@cash.cache` and nothing
 configured, a cached result is discarded and recomputed when **any** of these
 change:
 
-<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe, cash/decorator/registry.py:RegistryMixin._analyze_dependencies @35b8b434 -->
+<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe, cash/decorator/runtime.py:RuntimeMixin._analyze_dependencies @35b8b434 -->
 | What changed | How it's detected |
 |---|---|
 | The **arguments** | Hashed by *content* — so DataFrames and arrays work, and two equal-but-distinct objects share one entry |
@@ -341,13 +341,13 @@ def features(x):  return clean(x) + ...
 def pipeline(x):  return features(x)       # ...and pipeline's cache invalidates
 ```
 
-<!-- claim: cash/decorator/code_identity.py:hash_callable_source @57867b7d, cash/decorator/registry.py:RegistryMixin._ensure_closure_analyzed @ecd28b28 -->
+<!-- claim: cash/decorator/code_identity.py:hash_callable_source @57867b7d, cash/decorator/registry.py:FunctionRegistry.ensure_closure_analyzed @ecd28b28 -->
 The analyzer captures helper source hashes and folds them into the cache key, so
 both cross-process edits and in-process redefinitions (notebook cell rerun, REPL)
 are picked up automatically. Overhead is ~3μs *per helper*, paid once for each helper in the
 transitive call graph on every call.
 
-<!-- claim: cash/decorator/registry.py:RegistryMixin._refresh_helper_bindings @b357a2d1 -->
+<!-- claim: cash/decorator/registry.py:FunctionRegistry.refresh_helper_bindings @b357a2d1 -->
 Each helper is looked up through the name its *caller* uses — `_sieve` in
 `from sievelib import sieve as _sieve` — at every level of the call graph. So
 rebinding that name at runtime (`monkeypatch.setattr(app, "_sieve", fake)`,
@@ -916,7 +916,7 @@ def load_user(user_id):
     return json.load(open(f"/data/users/{user_id}.json"))
 ```
 
-<!-- claim: cash/decorator/registry.py:RegistryMixin._resolve_dynamic_dependencies @1d703750 -->
+<!-- claim: cash/decorator/registry.py:resolve_dynamic_dependencies @1d703750 -->
 The resolver runs with the same `args/kwargs` as the function on every call.
 
 !!! warning "A resolver that fails makes the call run uncached"

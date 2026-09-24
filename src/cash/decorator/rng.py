@@ -202,7 +202,7 @@ class RngMixin:
         draw has already been stored under an epoch-free key; the next call
         recomputes once and is stable from then on.
         """
-        cf = self._cached.get(func_name)
+        cf = self._registry.cached.get(func_name)
         modules = cf.rng_modules if cf is not None else None
         if modules is None:
             modules = self._load_rng_draw_marker(func_name)
@@ -227,7 +227,7 @@ class RngMixin:
         need the key it is supposed to inform). One backend read per function per
         process; misses are remembered as empty so it is not retried.
         """
-        cf = self._cached.get(func_name)
+        cf = self._registry.cached.get(func_name)
         if cf is not None and cf.rng_modules is not None:
             return cf.rng_modules
         modules: set[str] = set()
@@ -267,7 +267,7 @@ class RngMixin:
         drew = {m for m in changed if m in pre_state}
         if not drew:
             return False
-        cf = self._cached.get(func_name)
+        cf = self._registry.cached.get(func_name)
         if cf is None:
             return False
         if cf.rng_modules is None:
@@ -370,7 +370,7 @@ class RngMixin:
         # check their bound value per call.
         seed_params = seed_parameters(src)
         if seed_params:
-            cf = self._cached.get(func_name)
+            cf = self._registry.cached.get(func_name)
             if cf is not None:
                 cf.seed_params = seed_params
 
@@ -428,7 +428,7 @@ class RngMixin:
         bound = None
         g = getattr(func, "__globals__", None) or {}
         for expr, (call, root, is_param, path) in sorted(
-            getattr(self._cached.get(func_name), "seed_params", {}).items()
+            getattr(self._registry.cached.get(func_name), "seed_params", {}).items()
         ):
             if is_param:
                 if bound is None:

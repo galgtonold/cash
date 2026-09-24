@@ -30,7 +30,7 @@ Acquisition, compute, and release are deliberately separated. If **acquisition**
 
 ### Single-flight is a property of one key, so the first call has to agree on it
 
-<!-- claim: cash/decorator/registry.py:RegistryMixin._ensure_closure_analyzed @ecd28b28 -->
+<!-- claim: cash/decorator/registry.py:FunctionRegistry.ensure_closure_analyzed @ecd28b28 -->
 A lock coalesces the callers that ask for **the same cache key**. On the very
 first call of a process there is one more thing to get right: the key itself.
 Cash folds the source of the helpers a function calls into its key, and that

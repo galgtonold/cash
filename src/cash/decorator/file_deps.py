@@ -137,7 +137,7 @@ class FileDepsMixin:
         As written rather than absolute, so a relative path keys the same on
         every machine.
         """
-        cf = self._cached.get(func_name)
+        cf = self._registry.cached.get(func_name)
         declared = cf.declared_files if cf is not None else ()
         if not declared:
             return state_hash
@@ -154,7 +154,7 @@ class FileDepsMixin:
         time with the tracker's other read hashes.
         """
 
-        cf = self._cached.get(func_name)
+        cf = self._registry.cached.get(func_name)
         for _, path in cf.declared_files if cf is not None else ():
             if os.path.exists(path):
                 tracker.add_tracked(normalize_path(os.path.realpath(path)))
@@ -283,7 +283,7 @@ class FileDepsMixin:
         own = getattr(func, "__code__", None)
         have = tracker.get_accessed_files()
         arg_paths: set[str] | None = None
-        for fn in self._code_functions(func, func_name):
+        for fn in self._registry.code_functions(func, func_name):
             code = getattr(fn, "__code__", None)
             if code is None or code is own or code in live:
                 continue
@@ -323,7 +323,7 @@ class FileDepsMixin:
         """
         stats: dict[str, tuple[int, int] | None] = {}
         moved: list[str] = []
-        for fn in self._code_functions(func, func_name):
+        for fn in self._registry.code_functions(func, func_name):
             code = getattr(fn, "__code__", None)
             rec = CODE_KEYED_STATS.get(id(code)) if code is not None else None
             if rec is None or rec[0] is not code:
