@@ -373,7 +373,6 @@ class _WarmKernel:
         # the async kernel client is never driven across event loops, which
         # can hang.
         self.loop, self.run_async = _make_async_runner()
-        self._initialized = False
         self._tests_since_boot = 0
         # Whether user_ns may still hold a previous test's names. Cleared by
         # whoever resets, so prepare_for_test can skip a reset that the last
@@ -434,7 +433,6 @@ class _WarmKernel:
             pass
         _force_kill_kernel(self.km)
         self.km = self.kc = None
-        self._initialized = False
         self.boot()
         self._tests_since_boot = 0
 

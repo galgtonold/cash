@@ -10,7 +10,6 @@ import os
 import shutil
 import sys
 import time
-from io import StringIO
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -123,10 +122,6 @@ class _StallWatchdog:
     def poll_interval(self) -> float:
         """How often to check. Scales down for the short timeouts tests use."""
         return min(5.0, max(0.05, self.timeout / 4.0))
-
-    def idle_seconds(self) -> float:
-        with self._lock:
-            return time.monotonic() - self._last
 
     def _run(self) -> None:
         while True:
@@ -335,18 +330,6 @@ def mock_shell():
     shell.reset()
 
 
-@pytest.fixture
-def simple_mock_shell():
-    """Provide a simple mock shell without exec functionality."""
-    shell = MagicMock()
-    shell.user_ns = {}
-    shell.events = MagicMock()
-    shell.ast_transformers = []
-    shell.input_transformers_cleanup = []
-    shell.run_cell = MagicMock()
-    return shell
-
-
 # ============================================================================
 # CashMagics Fixtures
 # ============================================================================
@@ -380,26 +363,6 @@ def statement_processor(cash_magics):
 # ============================================================================
 # Isolation and Cleanup Fixtures
 # ============================================================================
-
-
-@pytest.fixture(autouse=True)
-def isolate_tests(monkeypatch):
-    """
-    Automatically isolate each test from side effects.
-    Runs before every test automatically.
-    """
-    # Store original sys.modules to detect imports
-    original_modules = set(sys.modules.keys())
-
-    yield
-
-    # Cleanup: Remove any new modules that were imported during test
-    # This prevents module-level state from leaking between tests
-    new_modules = set(sys.modules.keys()) - original_modules
-    for module in new_modules:
-        if module.startswith("test_") or "cash" not in module:
-            # Don't remove test modules or non-cash modules
-            continue
 
 
 @pytest.fixture(autouse=True)
@@ -504,41 +467,6 @@ def _default_cache_dir_outside_the_checkout(request, monkeypatch, tmp_path_facto
         )
 
 
-@pytest.fixture
-def isolated_test(monkeypatch, tmp_path):
-    """
-    Provide complete test isolation:
-    - Clean working directory
-    - Isolated environment
-    """
-    original_cwd = Path.cwd()
-    monkeypatch.chdir(tmp_path)
-    yield tmp_path
-    monkeypatch.chdir(original_cwd)
-
-
-# ============================================================================
-# Output Capture Fixtures
-# ============================================================================
-
-
-@pytest.fixture
-def captured_output():
-    """Capture stdout and stderr during test execution."""
-    old_stdout = sys.stdout
-    old_stderr = sys.stderr
-    stdout_capture = StringIO()
-    stderr_capture = StringIO()
-
-    sys.stdout = stdout_capture
-    sys.stderr = stderr_capture
-
-    yield stdout_capture, stderr_capture
-
-    sys.stdout = old_stdout
-    sys.stderr = old_stderr
-
-
 # ============================================================================
 # Data Fixtures
 # ============================================================================
@@ -553,12 +481,6 @@ def sample_dataframe():
         return pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6], "c": [7, 8, 9]})
     except ImportError:
         pytest.skip("pandas not installed")
-
-
-@pytest.fixture
-def sample_data():
-    """Provide sample data for caching tests."""
-    return {"integers": [1, 2, 3, 4, 5], "strings": ["a", "b", "c"], "nested": {"key1": "value1", "key2": [1, 2, 3]}}
 
 
 # ============================================================================
@@ -704,7 +626,6 @@ def pytest_terminal_summary(terminalreporter):
 # Use ABOVE_PERSISTENCE_FLOOR_S for the sleep, and assert the body ran once
 # across the runs so the test also proves the value was genuinely cached.
 # ---------------------------------------------------------------------------
-PERSISTENCE_FLOOR_S = 0.1
 ABOVE_PERSISTENCE_FLOOR_S = 0.2
 
 

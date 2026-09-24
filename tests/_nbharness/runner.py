@@ -4,7 +4,7 @@ import hashlib
 import os
 import shutil
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import List, Optional, Union
 
 import nbformat
 from nbclient import NotebookClient
@@ -220,7 +220,6 @@ class NotebookTestRunner:
         self.nb_path: Optional[Path] = None
         self.client: Optional[NotebookClient] = None
         self._kernel_started = False
-        self._cash_initialized = False
         self._force_fresh_kernel = False
         self._warm: Optional["_WarmKernel"] = None
         # Each runner gets its own event loop to avoid cross-test contamination.
@@ -331,7 +330,6 @@ class NotebookTestRunner:
             # every call this test makes would hit a killed process.
             self.client.km = wk.km
             self.client.kc = wk.kc
-            self._cash_initialized = True
             return self
 
         # Fresh-boot path (no reuse): this runner drives its own kernel I/O, so
@@ -640,7 +638,6 @@ from cash import Cash
             error_name = reply["content"].get("ename", "Unknown")
             error_value = reply["content"].get("evalue", "")
             raise RuntimeError(f"Failed to initialize cash: {error_name}: {error_value}")
-        self._cash_initialized = True
 
     def set_cell_source(self, cell_num: int, source: str) -> "NotebookTestRunner":
         """
@@ -783,51 +780,9 @@ from cash import Cash
                 return line.split("__CASH_PEEK__", 1)[1].strip()
         return "?"
 
-    def get_status(self) -> Dict[str, Any]:
-        """
-        Get machine-readable cash status from the last cell execution.
-
-        Returns a dict with:
-            - last_cell: Metrics from the last cell execution
-            - lineage: Current variable lineage state
-            - executed_codes: Variable to code mapping
-            - auto_cache_enabled: Whether auto-caching is on
-            - cache_stats: Backend statistics
-        """
-        import json
-
-        status_code = "_cash_status_result = get_ipython().run_line_magic('cash_status', 'dict')"
-        self._run_async(self.client.kc._async_execute_interactive(status_code, store_history=False))
-
-        # Get the result from the kernel
-        get_result_code = """
-import json as _json
-print(_json.dumps(_cash_status_result, default=str))
-"""
-        self._run_async(
-            self.client.kc._async_execute_interactive(
-                get_result_code, store_history=False, output_hook=lambda msg: None
-            )
-        )
-
-        # Extract result from iopub messages
-        try:
-            # Find the stream output
-            for msg in self.client.kc.iopub_channel.get_msgs():
-                if msg["msg_type"] == "stream" and msg["content"].get("name") == "stdout":
-                    return json.loads(msg["content"]["text"].strip())
-        except Exception:
-            pass
-
-        return {}
-
     def get_cell(self, cell_num: int):
         """Get the cell object."""
         return self.nb.cells[cell_num - 1]
-
-    def cell_count(self) -> int:
-        """Return the number of cells."""
-        return len(self.nb.cells)
 
     def reset_cash_state(self) -> "NotebookTestRunner":
         """
