@@ -47,7 +47,7 @@ __all__ = [
 
 #: Set while ``explain()`` builds a key: the same steps a real call takes, with
 #: every warning they would give held back, because inspecting a call must not
-#: warn. ``Cash._warn_once``, the carrier warnings and ``state_token_of`` check
+#: warn. ``Notices.warn_once``, the carrier warnings and ``state_token_of`` check
 #: it.
 EXPLAINING: contextvars.ContextVar[bool] = contextvars.ContextVar("_cash_explaining", default=False)
 

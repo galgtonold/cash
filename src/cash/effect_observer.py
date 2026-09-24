@@ -36,7 +36,7 @@ subprocess is reported, never acted on: by the time it is seen the function
 has run, and its result is correct and worth storing. Even under
 ``strict=True`` it warns rather than raising, since raising after the effect
 landed would discard a correct result and prevent nothing. Two observations do
-stop the result being stored (`Cash._store_refusal`), because storing it would
+stop the result being stored (`ResultStore.refusal`), because storing it would
 make a hit behave differently from the call: an argument the call changed in
 place (`mutated_args`, which a hit would leave as it was), and a
 ``unittest.mock`` object called while the body ran (`mock_called`: the result
@@ -223,14 +223,14 @@ class EffectObserver:
         self._mock_calls_at: list[int] = []
         #: The call's arguments before the body ran, for naming the ones it
         #: changed in place: ``{parameter: content hash}`` of those that can
-        #: change (`Cash._argument_snapshot`), and ``{parameter: (value,
+        #: change (`PurityChecks.argument_snapshot`), and ``{parameter: (value,
         #: identity snapshot)}`` for plain lists and dicts
-        #: (`Cash._argument_identities`). Set by the decorator; None when not
+        #: (`PurityChecks.argument_identities`). Set by the decorator; None when not
         #: taken.
         self.arg_snapshot: dict[str, str] | None = None
         self.arg_identities: dict[str, tuple[Any, list]] | None = None
         #: The parameters the call changed in place, once the decorator has
-        #: compared (`Cash._check_argument_mutation`); None when none did.
+        #: compared (`PurityChecks.check_argument_mutation`); None when none did.
         self.mutated_args: list[str] | None = None
 
     # -- lifecycle ---------------------------------------------------------

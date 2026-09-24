@@ -117,7 +117,7 @@ def warn_source_changed_since_load(fn: Callable) -> None:
 
 #: Pydantic v2 compiles these onto every model class. They are derived from the
 #: field declarations and their digest differs in every process, so folding them
-#: made a pydantic spec un-cacheable across runs. `Cash._pydantic_field_parts`
+#: made a pydantic spec un-cacheable across runs. `CodeIdentity._pydantic_field_parts`
 #: folds the declarations they were standing in for.
 PYDANTIC_COMPILED = frozenset(
     {

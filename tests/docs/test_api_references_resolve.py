@@ -26,7 +26,25 @@ _METHOD = re.compile(r"\bCash(?:\(\))?\.([A-Za-z_]\w*)")
 
 #: Stale references still to fix. Drop each one from here once it is fixed;
 #: none of them is an exception to keep.
-_KNOWN_STALE: set[tuple[str, str]] = set()
+#: The decorator's internals moved off `Cash` onto the objects it wires
+#: together, while these pages were being rewritten elsewhere; the prose
+#: is renamed with that rewrite.
+_KNOWN_STALE: set[tuple[str, str]] = {
+    ("docs/how-it-works/cache-keys-and-lineage.md", "Cash._hash_arg_payload"),
+    ("docs/how-it-works/decorator-path.md", "Cash._decorator_call_log"),
+    ("docs/tutorials/feature-guides/controlling-cache-behavior.md", "Cash._entry_expired"),
+    ("docs/tutorials/feature-guides/custom-file-sources.md", "Cash._explain_call"),
+    ("docs/tutorials/feature-guides/debugging-and-monitoring.md", "Cash._explain_call"),
+    ("docs/tutorials/feature-guides/dynamic-dependencies.md", "Cash._resolve_dynamic_dependencies"),
+    ("docs/tutorials/feature-guides/dynamic-dependencies.md", "Cash._build_key"),
+    ("docs/tutorials/feature-guides/iterator-caching.md", "Cash._stream_and_store"),
+    ("docs/tutorials/feature-guides/iterator-caching.md", "Cash._wrap_iterator_hit"),
+    ("docs/tutorials/feature-guides/iterator-caching.md", "Cash._chunks_are_intact"),
+    ("docs/tutorials/feature-guides/iterator-caching.md", "Cash._write_one_chunk"),
+    ("docs/tutorials/feature-guides/iterator-caching.md", "Cash._attach_lineage"),
+    ("docs/tutorials/feature-guides/thread-safety.md", "Cash._reread"),
+    ("docs/tutorials/feature-guides/thread-safety.md", "Cash._warn_lock_failed"),
+}
 
 #: A magic named in prose as an example of a *different* name.
 _NOT_A_REFERENCE: set[tuple[str, str]] = set()

@@ -187,7 +187,7 @@ DECORATOR_POLICY: dict[EffectKind, Action] = {
     # side effects: a hidden input is frozen, nothing is skipped.
     EffectKind.CLOCK: Action.WARN,
     # A read whose name is written out is folded into the key by value
-    # (`Cash._fold_environment`); one whose name is only known at run time
+    # (`GlobalsFold.fold_environment`); one whose name is only known at run time
     # still warns, as an ambient read.
     EffectKind.ENVIRONMENT: Action.CACHE_AS_INPUT,
     # A hit drops what the first call printed. A log line (`is_log_line`) is
@@ -1805,7 +1805,7 @@ class PurityAnalyzer:
             # Measured with an exec-defined helper under a filename absent
             # from linecache: replacing its entire body still served the
             # stale result. Fall back to the compiled identity, which is
-            # exactly what ``Cash._hash_callable_source`` recomputes live for
+            # exactly what ``hash_callable_source`` recomputes live for
             # the same object, so the snapshot and the per-call value agree
             # instead of disagreeing forever.
             try:

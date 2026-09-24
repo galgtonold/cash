@@ -590,7 +590,7 @@ def _note_untracked_read(path: Any, frame: Any) -> None:
         # A stat is 15us, and a loop re-reading one file pays it every time.
         # Reusing one taken in the last second can only be too OLD, and an old
         # stat that differs from the file makes a store refused, never a stale
-        # answer served (`Cash._credit_remembered_reads`).
+        # answer served (`FileDeps.credit_remembered_reads`).
         now = time.monotonic()
         seen = _memory.untracked_stat.get(abs_path)
         if seen is not None and now - seen[0] < 1.0:
@@ -1441,7 +1441,7 @@ class FileAccessTracker:
         # `_credit_read_to_stack`): its recorded reads are live, not remembered.
         self.reading_codes: set[Any] = set()
         # Files a memo handed this block data from that was read from an
-        # EARLIER version of the file (see `Cash._credit_remembered_reads`).
+        # EARLIER version of the file (see `FileDeps.credit_remembered_reads`).
         self.stale_memo_reads: set[str] = set()
 
     def __enter__(self):

@@ -245,7 +245,7 @@ class CacheMetadata:
     copy_required: bool | None = None
 
     #: Where the global RNG stood before and after the call that computed this
-    #: entry, so a hit can leave it where the body did (``Cash._rng_replay_parts``).
+    #: entry, so a hit can leave it where the body did (``RngWatch.replay_parts``).
     rng_replay: dict[str, Any] | None = None
 
     force_persist: bool | None = None
