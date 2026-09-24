@@ -282,3 +282,24 @@ def test_fence_defined_function_reports_its_own_source():
         "getsource returned a DIFFERENT function's source, so cash's "
         "source-based analysis is running on the wrong body:\n" + src
     )
+
+
+@pytest.mark.parametrize("expect_raises", [False, True])
+def test_fence_body_keeps_its_markdown_line_numbers(tmp_path, expect_raises):
+    """A traceback from a fence points at the page line that raised."""
+    from tests.docs._harness import PageExecutionError, run_page
+
+    earlier = "<!-- test:expect-raises -->\n" if expect_raises else ""
+    page = tmp_path / "lines.md"
+    page.write_text(
+        f"# Lines\n\n{earlier}```python\nx = 1\n```\n\nText.\n\n```python\ny = 2\nraise ValueError\n```\n",
+        encoding="utf-8",
+    )
+    lines = page.read_text(encoding="utf-8").splitlines()
+    raising = lines.index("raise ValueError") + 1
+    with pytest.raises(PageExecutionError) as exc:
+        run_page(page, use_ipy=False)
+    tb = exc.value.__cause__.__traceback__
+    while tb.tb_next:
+        tb = tb.tb_next
+    assert tb.tb_lineno == raising

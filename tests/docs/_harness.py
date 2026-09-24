@@ -455,9 +455,12 @@ def run_page(
         if f.is_nb_cell:
             result.skipped_fences.append((f.line_start, "nb-cell: requires IPython kernel (PR2+ scope)"))
             continue
-        pad = max(0, f.line_start - sum(p.count("\n") + 2 for p in pieces) - 1)
-        # Compute the start line of this fence's body in the assembled script.
-        # The script line numbers match md line numbers because of padding.
+        # Pad with blank lines so each body line keeps its markdown line number
+        # in the assembled script (and in tracebacks). The next piece starts on
+        # the line after ``used``; the ``try:`` of an expect-raises wrapper
+        # takes the ```python line itself.
+        used = sum(p.count("\n") + 2 for p in pieces)
+        pad = max(0, f.line_start - used - (1 if f.expect_raises else 0))
         body_start = f.line_start + 1  # first body line (after the ```python line)
         body_end = f.line_end - 1  # last body line (before the closing ```)
         if f.expect_raises:
