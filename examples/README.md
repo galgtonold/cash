@@ -21,6 +21,7 @@ steps that change one thing and show what runs again.
 | Notebook | Shows | Needs |
 |---|---|---|
 | [`try_cash_binder.ipynb`](try_cash_binder.ipynb) | The live tour: a Monte Carlo model, edits upstream and downstream, the decorator | numpy |
+| [`try_cash_colab.ipynb`](try_cash_colab.ipynb) | The same tour for Colab, with a first cell that installs cash | numpy |
 | [`demo_cell_caching.ipynb`](demo_cell_caching.ipynb) | Statement caching, a changed input, `# @cash:ttl` | nothing |
 | [`cache_calls_demo.ipynb`](cache_calls_demo.ipynb) | Caching of the functions a cell calls | nothing |
 | [`file_caching_demo.ipynb`](file_caching_demo.ipynb) | A CSV read that runs again when the file changes | pandas |
