@@ -27,8 +27,8 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
+from cash._memo import PATCH_SITES, LruMemo
 from cash.tracking import io_watch
-from cash.tracking._memo import Memo
 from cash.tracking.read_credit import note_untracked_read
 from cash.tracking.tracker_context import active_tracker
 
@@ -64,9 +64,9 @@ def _dispatch_track(path: Any) -> None:
 
 
 #: (module id, pattern) -> (namespace size, matched names); `_find_patch_targets`.
-_patch_targets = Memo(1024)
+_patch_targets: LruMemo[tuple[int, str], tuple[int, list]] = LruMemo(PATCH_SITES)
 #: (owner id, name, kind) -> (original, wrapper); `_install_wrapper`.
-_wrappers = Memo(1024)
+_wrappers: LruMemo[tuple[int, str, Any], tuple[Any, Any]] = LruMemo(PATCH_SITES)
 #: What the last full install was computed from; `install_patches`.
 _installed_for: Any = None
 
@@ -87,7 +87,7 @@ def _find_patch_targets(func_pattern: str, module_obj: Any) -> list:
             return cached[1]
         prefix = func_pattern[:-1]
         found = [name for name in dir(module_obj) if name.startswith(prefix)]
-        _patch_targets.put(key, (size, found))
+        _patch_targets[key] = (size, found)
         return found
     if hasattr(module_obj, func_pattern):
         return [func_pattern]
@@ -121,7 +121,7 @@ def _install_wrapper(owner: Any, name: str, original: Any, kind: Any, make: Call
     else:
         wrapper = make(original)
         _mark_patch(wrapper, original)
-        _wrappers.put(key, (original, wrapper))
+        _wrappers[key] = (original, wrapper)
     if not _patches.replace(owner, name, wrapper):
         logger.debug("[FILE_TRACKER] Failed to patch %r.%s", owner, name)
 

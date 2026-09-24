@@ -164,7 +164,7 @@ def test_outside_a_cell_run_the_window_still_bounds_reuse(tmp_path, monkeypatch,
 def test_a_full_memo_keeps_memoizing(tmp_path, monkeypatch, count_hashes):
     """At 4,096 entries the memo stopped taking new ones, so file 4,097 on was
     hashed every time (one notebook had 5,222 files)."""
-    monkeypatch.setattr(file_dep_snapshot, "_HASH_MEMO_MAX", 3)
+    monkeypatch.setattr(file_dep_snapshot._HASH_MEMO, "maxsize", 3)
     file_dep_snapshot.begin_file_state_epoch()
     paths = [_aged(tmp_path, f"f{i}.csv") for i in range(5)]
     for p in paths:

@@ -15,7 +15,17 @@ from __future__ import annotations
 from collections import OrderedDict
 from typing import Generic, TypeVar
 
-__all__ = ["LruMemo"]
+__all__ = [
+    "CODE_OBJECTS",
+    "FILE_DIGESTS",
+    "MODULE_ANALYSES",
+    "MODULE_READ_DIGESTS",
+    "NOTEBOOK_FUNCTIONS",
+    "PATCH_SITES",
+    "READ_PATHS",
+    "SOURCE_FILES",
+    "LruMemo",
+]
 
 K = TypeVar("K")
 V = TypeVar("V")
@@ -76,3 +86,36 @@ class LruMemo(Generic[K, V]):
 
     def clear(self) -> None:
         self._data.clear()
+
+
+# -- Sizes -------------------------------------------------------------------
+# Every bounded memo's size, named for what one entry is, with why it is that big.
+
+#: One entry per function, class or code object: a notebook session defines
+#: and redefines them freely, and 4096 is far more than one keeps alive.
+CODE_OBJECTS = 4096
+
+#: One entry per source file or module name met walking a stack: a kernel
+#: with the scientific stack loaded has a few thousand modules.
+SOURCE_FILES = 8192
+
+#: One entry per path read outside a cached call: its resolution and stat.
+READ_PATHS = 4096
+
+#: One entry per module and pattern, or owner and name, that the file-read
+#: patches go on: a fixed list of reader functions.
+PATCH_SITES = 1024
+
+#: One analysis per module file whose names are read; each holds the file's
+#: top-level bindings.
+MODULE_ANALYSES = 1024
+
+#: One digest per module file and set of names read from it.
+MODULE_READ_DIGESTS = 4096
+
+#: One content digest per file version: a folder read runs to tens of
+#: thousands of files, and an entry is a few hundred bytes.
+FILE_DIGESTS = 1 << 17
+
+#: One source digest per function the notebook's cells reference.
+NOTEBOOK_FUNCTIONS = 500

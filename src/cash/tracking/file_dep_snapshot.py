@@ -49,6 +49,7 @@ import time
 from collections.abc import Iterable, Mapping
 from typing import Any, NamedTuple
 
+from cash._memo import FILE_DIGESTS, LruMemo
 from cash._paths import normalize_path, resolve_file_dep_path
 from cash.config import get_config
 from cash.tracking.tracker_context import untracked
@@ -173,10 +174,7 @@ _HASH_READ_CHUNK = 1024 * 1024  # 1 MiB streaming chunk
 #:    thousands of files outlasts the window on its own, and re-hashing them
 #:    for every derived statement cost 19-108 s a cell. The next cell run
 #:    falls back to the window; between cells only the window applies.
-_HASH_MEMO: dict[tuple[str, int, int, int, int, int], tuple[float, str, int | None]] = {}
-#: A full memo is cleared, not frozen: frozen, every file past the cap was
-#: re-hashed on every check.
-_HASH_MEMO_MAX = 1 << 17
+_HASH_MEMO: LruMemo[tuple[str, int, int, int, int, int], tuple[float, str, int | None]] = LruMemo(FILE_DIGESTS)
 _HASH_MEMO_TTL_SECONDS = 5.0
 _HASH_MEMO_MIN_AGE_SECONDS = 10.0
 #: The current cell run's number, or None between runs.
@@ -388,8 +386,6 @@ def file_content_hash(
                     h.update(f.read(_HASH_SAMPLE_REGION_BYTES))
         digest = h.hexdigest()
         if memo_key is not None:
-            if len(_HASH_MEMO) >= _HASH_MEMO_MAX:
-                _HASH_MEMO.clear()
             _HASH_MEMO[memo_key] = (time.monotonic(), digest, HASH_EPOCH)
         return digest
     except OSError:

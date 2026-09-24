@@ -48,6 +48,7 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from .._memo import MODULE_ANALYSES, MODULE_READ_DIGESTS, LruMemo
 from ..source_norm import read_code_text, stat_has_settled, unparse_without_docstrings
 
 __all__ = ["closure_digest", "static_attribute_reads"]
@@ -263,8 +264,7 @@ def _analyse(source: str) -> _Analysis | None:
 
 
 #: ``{path: (mtime_ns, size, analysis)}``, one entry per file.
-_ANALYSES: dict[str, tuple[int, int, _Analysis | None]] = {}
-_MAX_ANALYSES = 1024
+_ANALYSES: LruMemo[str, tuple[int, int, _Analysis | None]] = LruMemo(MODULE_ANALYSES)
 
 
 def analysis_for(path: str) -> _Analysis | None:
@@ -281,8 +281,6 @@ def analysis_for(path: str) -> _Analysis | None:
     except (OSError, UnicodeDecodeError):
         analysis = None
     if settled:
-        if len(_ANALYSES) >= _MAX_ANALYSES:
-            _ANALYSES.clear()
         _ANALYSES[path] = (st.st_mtime_ns, st.st_size, analysis)
     return analysis
 
@@ -296,8 +294,7 @@ def closure_digest_of_source(source: str, names: Iterable[str]) -> str | None:
 #: ``{(path, names): (mtime_ns, size, digest)}``. Keys are computed for every
 #: statement by both the runtime and the simulation, so the walk and the
 #: re-rendering of the closure must not repeat while the file stands still.
-_DIGESTS: dict[tuple[str, frozenset[str]], tuple[int, int, str | None]] = {}
-_MAX_DIGESTS = 4096
+_DIGESTS: LruMemo[tuple[str, frozenset[str]], tuple[int, int, str | None]] = LruMemo(MODULE_READ_DIGESTS)
 
 
 def closure_digest(path: str, names: Iterable[str]) -> str | None:
@@ -319,8 +316,6 @@ def closure_digest(path: str, names: Iterable[str]) -> str | None:
     digest = _digest(analysis, key[1]) if analysis is not None else None
     if not settled:
         return digest
-    if len(_DIGESTS) >= _MAX_DIGESTS:
-        _DIGESTS.clear()
     _DIGESTS[key] = (st.st_mtime_ns, st.st_size, digest)
     return digest
 

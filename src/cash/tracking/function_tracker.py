@@ -14,6 +14,7 @@ import tempfile
 import types
 from typing import Any
 
+from .._memo import NOTEBOOK_FUNCTIONS, LruMemo
 from ..install_paths import is_user_path
 from ..source_norm import bytecode_identity, callable_identity, module_identity, read_code_text, source_digest
 from .module_symbols import analysis_for
@@ -21,6 +22,9 @@ from .module_symbols import analysis_for
 __all__ = ["FunctionTracker", "is_local_module"]
 
 logger = logging.getLogger(__name__)
+
+#: A miss in the source memo, whose entries may be None.
+_UNCACHED = object()
 
 
 def is_local_module(module: types.ModuleType) -> bool:
@@ -48,15 +52,6 @@ def _collect_imported_names(tree: ast.AST) -> set[str]:
             names.add(node.module.split(".")[0])
             names.add(node.module)
     return names
-
-
-def _evict_source_cache(cache: dict, max_size: int) -> None:
-    """Evict oldest 25% of entries from the source cache if it is at capacity."""
-    if len(cache) >= max_size:
-        evict_count = max_size // 4
-        keys_to_evict = list(cache.keys())[:evict_count]
-        for k in keys_to_evict:
-            del cache[k]
 
 
 def _reload_from_source(module) -> None:
@@ -90,12 +85,9 @@ class FunctionTracker:
     inspect.getsource() calls (which can be expensive).
     """
 
-    # Max entries in the source hash cache
-    MAX_CACHE_SIZE = 500
-
     def __init__(self):
         # Maps (func_id, func_qualname) -> source_hash
-        self._source_cache: dict[tuple[int, str], str] = {}
+        self._source_cache: LruMemo[tuple[int, str], str | None] = LruMemo(NOTEBOOK_FUNCTIONS)
         # Maps function_name -> source_hash (for tracking changes)
         self._function_hashes: dict[str, str] = {}
         # Module file tracking: module_name -> last known mtime
@@ -165,8 +157,10 @@ class FunctionTracker:
 
         # Check cache using id + qualname (id alone isn't enough since objects can be recycled)
         cache_key = (id(func), getattr(func, "__qualname__", ""))
-        if use_cache and cache_key in self._source_cache:
-            return self._source_cache[cache_key]
+        if use_cache:
+            cached = self._source_cache.get(cache_key, _UNCACHED)
+            if cached is not _UNCACHED:
+                return cached
 
         # Hashed in its NORMALIZED form (`callable_identity`): this hash lands
         # in the notebook statement cache key (see cache_key.py), so hashing
@@ -180,7 +174,6 @@ class FunctionTracker:
         source_hash = source_digest(func)
         if source_hash is None and bytecode_identity(func) is not None:
             source_hash = callable_identity(func)
-        _evict_source_cache(self._source_cache, self.MAX_CACHE_SIZE)
         self._source_cache[cache_key] = source_hash
         return source_hash
 
@@ -868,12 +861,9 @@ class FunctionTracker:
 
     def _invalidate_module_functions(self, module_name: str):
         """Clear cached source hashes for functions from a specific module."""
-        to_remove = []
-        for (func_id, qualname), _ in self._source_cache.items():
-            if module_name in qualname:
-                to_remove.append((func_id, qualname))
-        for key in to_remove:
-            del self._source_cache[key]
+        for key in self._source_cache.keys():
+            if module_name in key[1]:
+                self._source_cache.pop(key)
 
         # Also clear function_hashes for functions from this module
         module = sys.modules.get(module_name)

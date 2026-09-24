@@ -96,9 +96,9 @@ class TestFunctionSourceHash:
         assert h1 == h2
 
     def test_cache_eviction(self):
-        """Cache should evict when it exceeds MAX_CACHE_SIZE."""
+        """Cache should evict when it exceeds its size."""
         tracker = FunctionTracker()
-        tracker.MAX_CACHE_SIZE = 5  # Small for testing
+        tracker._source_cache.maxsize = 5  # Small for testing
 
         funcs = []
         for i in range(10):

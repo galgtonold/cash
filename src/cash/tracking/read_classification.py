@@ -16,8 +16,8 @@ import sys
 import threading
 import zoneinfo
 
+from cash._memo import SOURCE_FILES, LruMemo
 from cash.install_paths import installed_roots, interpreter_roots, norm_dir, normcase_path, site_roots
-from cash.tracking._memo import Memo
 
 __all__ = [
     "RUNTIME_CACHE_SEGMENT",
@@ -199,7 +199,7 @@ def _module_package_dir(module_name: str) -> str | None:
 #: module name -> (metadata module?, read plumbing?, top-level name). A read
 #: walks the whole stack, ~30 frames in a kernel, and a folder read does it for
 #: every file, so each module is classified once.
-_module_kinds = Memo(8192)
+_module_kinds: LruMemo[str, tuple[bool, bool, str]] = LruMemo(SOURCE_FILES)
 
 
 def incidental_read(path: str, own_package: str | None = None) -> str | None:
@@ -224,7 +224,7 @@ def incidental_read(path: str, own_package: str | None = None) -> str | None:
         kind = _module_kinds.get(module)
         if kind is None:
             kind = (_in_modules(module, _METADATA_MODULES), _in_modules(module, _READ_PLUMBING), module.split(".")[0])
-            _module_kinds.put(module, kind)
+            _module_kinds[module] = kind
         is_metadata, is_plumbing, top = kind
         if is_metadata:
             return "package metadata"

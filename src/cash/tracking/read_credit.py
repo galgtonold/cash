@@ -15,9 +15,9 @@ import sys
 import time
 from typing import TYPE_CHECKING, Any
 
+from cash._memo import CODE_OBJECTS, READ_PATHS, SOURCE_FILES, LruMemo
 from cash._paths import is_remote_url, normalize_path
 from cash.install_paths import is_user_path
-from cash.tracking._memo import Memo
 from cash.tracking.read_classification import is_cash_internal, is_pseudo_fs, regular_file_stat
 
 if TYPE_CHECKING:
@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 #: `_READS_PER_CODE_MAX` files is marked ``None``: it reads per argument, and
 #: every file it ever read is no one call's dependency.
 _READS_PER_CODE_MAX = 16
-_reads_by_code = Memo(4096)
+_reads_by_code: LruMemo[Any, dict[str, Any] | None] = LruMemo(CODE_OBJECTS)
 _CASH_PACKAGE_DIR = os.path.normcase(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -53,10 +53,9 @@ def _record_read(code: Any, abs_path: str, stat: Any) -> None:
         return
     if code not in memo:
         reads = {}
-        if not memo.put(code, reads):
-            return
+        memo[code] = reads
     if abs_path not in reads and len(reads) >= _READS_PER_CODE_MAX:
-        memo.put(code, None)
+        memo[code] = None
     else:
         reads[abs_path] = stat  # the LATEST read: a memo refilled is current again
 
@@ -93,7 +92,7 @@ def credit_read_to_stack(abs_path: str, tracker: "FileAccessTracker") -> None:
 
 
 #: code filename -> ``wrapper``/``cash``/``user``/``other``; `_frame_kind`.
-_frame_kinds = Memo(8192)
+_frame_kinds: LruMemo[str, str] = LruMemo(SOURCE_FILES)
 
 
 def _frame_kind(filename: str) -> str:
@@ -110,14 +109,14 @@ def _frame_kind(filename: str) -> str:
             if is_user_path(filename)
             else "other"
         )
-        _frame_kinds.put(filename, kind)
+        _frame_kinds[filename] = kind
     return kind
 
 
 #: absolute path -> resolved path, for reads outside a tracker; `note_untracked_read`.
-_untracked_realpaths = Memo(4096, reset=True)
+_untracked_realpaths: LruMemo[str, str] = LruMemo(READ_PATHS)
 #: resolved path -> (monotonic time, stat); `note_untracked_read`.
-_untracked_stats = Memo(4096, reset=True)
+_untracked_stats: LruMemo[str, tuple[float, Any]] = LruMemo(READ_PATHS)
 
 
 def note_untracked_read(path: Any, frame: Any) -> None:
@@ -151,7 +150,7 @@ def note_untracked_read(path: Any, frame: Any) -> None:
         abs_path = _untracked_realpaths.get(absolute)
         if abs_path is None:
             abs_path = normalize_path(os.path.realpath(absolute))
-            _untracked_realpaths.put(absolute, abs_path)
+            _untracked_realpaths[absolute] = abs_path
         if is_pseudo_fs(abs_path) or is_cash_internal(abs_path):
             return
         # A stat is 15us, and a loop re-reading one file pays it every time.
@@ -164,7 +163,7 @@ def note_untracked_read(path: Any, frame: Any) -> None:
             stat = seen[1]
         else:
             stat = regular_file_stat(abs_path)
-            _untracked_stats.put(abs_path, (now, stat))
+            _untracked_stats[abs_path] = (now, stat)
         if stat is None:
             return
         for code in codes:
