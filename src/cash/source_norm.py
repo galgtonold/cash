@@ -60,12 +60,10 @@ __all__ = [
     "own_source_digest",
     "source_digest",
     "code_consts_without_docstring",
-    "drop_docstrings",
     "normalize_source_for_hash",
     "source_identity_digest",
     "stat_has_settled",
     "strip_cache_decorator",
-    "strip_docstrings",
     "unparse_without_docstrings",
 ]
 

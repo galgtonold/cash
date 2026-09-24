@@ -43,7 +43,6 @@ __all__ = [
     "bare_call_argument_names",
     "bare_call_arguments",
     "is_estimator",
-    "FITTING_METHODS",
     "fits_its_receiver",
 ]
 

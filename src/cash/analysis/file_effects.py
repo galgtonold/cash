@@ -21,7 +21,6 @@ __all__ = [
     "WRITE_TEXT_MARKERS",
     "REPEATABILITY_REPLACING",
     "REPEATABILITY_ACCUMULATING",
-    "REPEATABILITY_UNKNOWN",
     "locally_opened_handles",
     "call_repeatability",
     "statement_write_repeatability",

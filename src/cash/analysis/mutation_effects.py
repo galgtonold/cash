@@ -69,7 +69,6 @@ __all__ = [
     "drawn_on_arguments",
     "is_module_name",
     "live_function_source",
-    "nocache_written_vars",
     "statement_effects",
 ]
 
