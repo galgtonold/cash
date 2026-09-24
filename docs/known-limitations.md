@@ -418,7 +418,7 @@ In JupyterLab and VS Code with IPython ≥ 8.3, cell IDs normally resolve and th
 
 > this cell reads `x` (cell 3), which nothing above it binds. It works right now only because that cell has already run and the name is still in memory — a run from the top, or tomorrow's kernel, raises `NameError` here.
 
-<!-- claim: cash/exceptions.py:ForwardReferenceError, cash/notebook/upstream/checker.py:UpstreamChecker._refuse_forward_references -->
+<!-- claim: cash/exceptions.py:ForwardReferenceError, cash/notebook/upstream/notebook_vetting.py:NotebookVetter._refuse_forward_references -->
 Raised when a cell reads, **at module level**, a name that only a *later* cell binds. The notebook runs today because that later cell has already been executed and the value is still in the namespace; a clean in-order run raises `NameError` at that line. Cash fails rather than warns, because the alternative is caching against a namespace the notebook cannot rebuild in order — every key derived from that state would rest on an ordering the notebook does not have.
 
 It is deliberately narrow, so that ordinary notebooks keep working:

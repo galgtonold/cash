@@ -26,7 +26,7 @@ def test_a_removed_definition_and_its_consumer_are_evicted():
     checker = UpstreamChecker(shell, tracking_state=state)
 
     # Cell 1 (`y = 5`) became `pass`; cell 2 still computes z from y.
-    checker._evict_orphaned_definitions(["pass", "z = y + 1"], "print(z)")
+    checker.vetter._evict_orphaned_definitions(["pass", "z = y + 1"], "print(z)")
 
     assert "y" not in shell.user_ns
     assert "z" not in shell.user_ns

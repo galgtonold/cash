@@ -2,7 +2,7 @@
 
 Reproducing a re-executed draw means rewinding the stream to where the draw
 STARTED. cash records each RNG-touching cell's *post*-state, so
-``_restore_position_rng_state`` could only rewind by finding some upstream cell
+``RngRewind.restore_position_rng_state`` could only rewind by finding some upstream cell
 that touched RNG and had been recorded. When the drawing cell is the first to
 touch the stream there is no such predecessor, the restore silently did nothing,
 and the re-executed draw continued from the live stream and returned a different
@@ -70,7 +70,7 @@ def test_rewinds_to_own_pre_state_when_no_upstream_anchor():
     assert not state.observed_rng_cells
     assert not state.rng_post_states
 
-    checker._restore_position_rng_state(DRAW, CELLS, 1)
+    checker.rng.restore_position_rng_state(DRAW, CELLS, 1)
     assert random.random() == expected, "a first-drawing cell must rewind to the position it started from"
 
 
@@ -89,7 +89,7 @@ def test_own_pre_state_wins_over_upstream_anchor():
     assert from_anchor != from_own, "test setup must distinguish the two sources"
 
     random.random()  # move the live stream off both
-    checker._restore_position_rng_state(DRAW, CELLS, 1)
+    checker.rng.restore_position_rng_state(DRAW, CELLS, 1)
     assert random.random() == from_own, "the cell's own recorded start must take priority over the upstream anchor"
 
 
@@ -113,7 +113,7 @@ def test_stale_pre_state_is_rejected_when_the_seed_changed():
     state.lineage.record(rng_virtual_var("random"), "seed-v2")
 
     random.random()
-    checker._restore_position_rng_state(DRAW, CELLS, 1)
+    checker.rng.restore_position_rng_state(DRAW, CELLS, 1)
     assert random.random() == from_anchor, "a pre-state recorded under a superseded seed must not be restored"
 
 
@@ -126,10 +126,10 @@ def test_unseeded_pre_state_stays_valid():
     expected = random.random()
 
     random.random()
-    checker._restore_position_rng_state(DRAW, CELLS, 1)
+    checker.rng.restore_position_rng_state(DRAW, CELLS, 1)
     first = random.random()
     random.random()
-    checker._restore_position_rng_state(DRAW, CELLS, 1)
+    checker.rng.restore_position_rng_state(DRAW, CELLS, 1)
     second = random.random()
 
     assert first == expected == second, "an unseeded stream's frozen position must survive repeated rewinds"
@@ -141,6 +141,6 @@ def test_no_recorded_state_anywhere_is_a_noop():
     random.seed(7)
     before = capture_rng_state()
 
-    checker._restore_position_rng_state(DRAW, CELLS, 1)
+    checker.rng.restore_position_rng_state(DRAW, CELLS, 1)
 
     assert capture_rng_state()["random"] == before["random"]

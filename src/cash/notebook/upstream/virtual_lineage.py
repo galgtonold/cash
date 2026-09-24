@@ -1308,7 +1308,7 @@ class VirtualLineage:
             # cache hit, because the broken cell never ran to change that
             # memory. The visible ``CashUpstreamSyntaxWarning`` naming the
             # offending cell is emitted by
-            # ``UpstreamChecker._warn_broken_upstream_cells``; here we only keep
+            # ``NotebookVetter._warn_broken_upstream_cells``; here we only keep
             # the simulation alive. Non-syntax errors still propagate below —
             # they signal a real bug, not a user typo. (Was: re-raise, which
             # poisoned every downstream cell silently.)

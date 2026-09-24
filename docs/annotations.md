@@ -44,10 +44,10 @@ ANNOTATION_PATTERN = re.compile(r'#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\S*))?')
 
 It's applied with `re.search` (not `re.match`), so the directive can appear **anywhere on the line** — including trailing on a normal code line.
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._opts_out_of_rng_rewind @bb37e3c0 -->
+<!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind._opts_out_of_rng_rewind @bb37e3c0 -->
 !!! warning "One consumer reads own-line comments only"
     That is true of the *parser*. It is not true of everything downstream of it.
-    `UpstreamChecker._opts_out_of_rng_rewind` — the check that decides whether
+    `RngRewind._opts_out_of_rng_rewind` — the check that decides whether
     `# @cash:no-cache` also switches off the RNG rewind (see "A value can be
     frozen without being cached", below) — walks the cell's lines and skips any
     that does not start with `#` once stripped, so it never sees a trailing

@@ -1579,7 +1579,7 @@ actually read. If the cell is not really code — pasted output, a traceback,
 notes you were half-way through typing — delete it or turn it into a markdown
 cell. Markdown cells are not parsed and never trip this.
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._warn_broken_upstream_cells @6ebee167 -->
+<!-- claim: cash/notebook/upstream/notebook_vetting.py:NotebookVetter._warn_broken_upstream_cells @6ebee167 -->
 The warning repeats when the break changes and stays quiet while it does not, so
 re-running cells *below* the broken one will not spam you; fixing it and later
 breaking it again will warn again. One gap in that promise: the scan only looks
@@ -1686,7 +1686,7 @@ split, another bootstrap sample, a second fit from a different initialisation �
 you will get the same number every time, and it is easy to read that as
 stability. A correct cache producing a wrong conclusion.
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._opts_out_of_rng_rewind @bb37e3c0 -->
+<!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind._opts_out_of_rng_rewind @bb37e3c0 -->
 **What to do.** Decide what you wanted from that statement.
 
 - Genuinely fresh every run: `# @cash:no-cache` on a comment line of its own
@@ -1730,7 +1730,7 @@ waiting to be fixed. Keying the downstream values on the fresh entropy would
 make them recompute on every run, and then they never converge: each re-run
 mints another answer instead of agreeing with the last.
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._opts_out_of_rng_rewind @bb37e3c0 -->
+<!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind._opts_out_of_rng_rewind @bb37e3c0 -->
 **What to do.** Pick one of the two things `seed(None)` sits between.
 
 - If those values must reflect the new stream, mark them `# @cash:no-cache` on
@@ -1806,7 +1806,7 @@ cached" in [Annotations](annotations.md).
   `@cash.cache(allow_random=True)`. Both silence the warning and change nothing
   else — the value was frozen before and stays frozen.
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._opts_out_of_rng_rewind @bb37e3c0 -->
+<!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind._opts_out_of_rng_rewind @bb37e3c0 -->
 !!! warning "Write `# @cash:no-cache` on a line of its own"
 
     For the rewind — and only for the rewind — the placement is load-bearing,

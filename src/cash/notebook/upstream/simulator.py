@@ -36,8 +36,9 @@ from ...value_types import BUILTIN_NAMES
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from .._trace import is_tracing, trace_event
 from ..cache_key import read_provenance_key
+from ..cache_status import CacheStatus
 from ..consumables import consumable_state, has_diverged, is_consumable_unrestorable
-from ._types import CellCheck, ReexecutionPlan, SimulationCache, SimulationResult
+from ._types import CellCheck, ClassificationResult, ReexecutionPlan, SimulationCache, SimulationResult
 from .mismatch_classifier import MismatchClassifier
 from .reexecution_planner import ReexecutionPlanner
 from .virtual_lineage import VirtualLineage, loop_derived_vars
@@ -1109,6 +1110,262 @@ class NotebookSimulator:
             relevant_read_paths_known=relevant_read_paths_known,
         )
         return plan
+
+    # --- After the repair ran ---
+
+    def resync_after_replay(self, records_before: dict[str, tuple]) -> None:
+        """Bring the simulation's snapshots in line with what the replay recorded.
+
+        After upstream statements run or are restored, ``variable_lineage``
+        holds the authoritative lineage of each. A snapshot may hold a
+        simulated one that differs (a control structure simulated as one
+        unit), and without the sync the next check sees a mismatch and
+        repairs again.
+        """
+        rerecorded = self._rerecorded_since(records_before)
+        self._sync_simulation_cache_lineages(rerecorded)
+        # The snapshots of the cells replayed here may not know the files
+        # behind what the replay restored (see record_replayed_file_deps).
+        self.record_replayed_file_deps(rerecorded)
+
+    def lineage_records(self) -> dict[str, tuple]:
+        """Each variable's recorded lineage and input-lineage map, as held now.
+
+        The map object is kept (not copied): recording a variable replaces it,
+        so ``is`` tells a re-recording apart even when the lineage came out the
+        same.
+        """
+        return {
+            v: (h, self.tracking_state.executed_input_lineages.get(v))
+            for v, h in self.tracking_state.variable_lineage.items()
+        }
+
+    def _rerecorded_since(self, before: dict[str, tuple]) -> set[str]:
+        """Variables this upstream pass recorded again (re-executed or restored)."""
+        changed = set()
+        for v, h in self.tracking_state.variable_lineage.items():
+            old = before.get(v)
+            if old is None or old[0] != h or old[1] is not self.tracking_state.executed_input_lineages.get(v):
+                changed.add(v)
+        return changed
+
+    def _should_sync_cache_var(
+        self,
+        var_name: str,
+        cumulative_stmt_codes: set[str],
+        cached_vl: dict[str, str],
+        idx: int,
+    ) -> bool:
+        """Return True if *var_name*'s cached lineage should be synced at cache index *idx*.
+
+        A variable is synced only when its current runtime lineage was produced
+        by code within cells 0..idx.  Variables produced by later cells are
+        excluded to avoid contaminating earlier cache entries.
+        """
+        if var_name not in self.tracking_state.variable_lineage:
+            return False
+        if cached_vl[var_name] == self.tracking_state.variable_lineage[var_name]:
+            return False  # Already matches, nothing to sync
+        producing_code = self.tracking_state.executed_cell_codes.get(var_name)
+        if producing_code is None:
+            return True
+        normalized_code = strip_markers(producing_code).strip()
+        if normalized_code not in cumulative_stmt_codes:
+            logger.debug(
+                "[UPSTREAM_DEBUG] Skipping sync for '%s' in cache entry %d: producing code not in cells 0..%d",
+                var_name,
+                idx,
+                idx,
+            )
+            return False
+        return True
+
+    def plan_cell_run(
+        self,
+        nodes: list,
+        raw_cell: str,
+        occurrence_counts: dict[str, int],
+    ) -> dict[int, dict] | None:
+        """Which of a run of assignments in the cell being run need not run.
+
+        A cell rebuilding ``sales`` through a dozen steps
+        writes only the last version to disk (``_written_later_in_cell``), and
+        after a restart Run All re-ran every step to get back to it. Here the
+        run is simulated the way the upstream repair simulates a cell above,
+        and the same backward scan finds the latest versions it can restore;
+        what they cover need not run.
+
+        Returns ``{index in nodes: metric}`` for each statement that need not
+        run -- restored, or skipped because what it built is current or
+        overwritten -- or ``None`` to run them all. Every statement not in the
+        result runs as it would have, in order, after the restores.
+        """
+        try:
+            vl = self.virtual_lineage
+            planner = self.planner
+            classifier = self.classifier
+            sim = SimulationResult(virtual_lineage=dict(self.tracking_state.variable_lineage))
+            trace = sim.trace
+            counts = dict(occurrence_counts)
+            for node in nodes:
+                before = len(trace)
+                vl.simulate_one_node(sim, 0, node, counts, {}, raw_cell=raw_cell)
+                if len(trace) != before + 1:
+                    return None
+            if any(entry.files_stale for entry in trace):
+                return None  # a file it reads changed: run it
+            final: dict[str, str] = {}
+            for entry in trace:
+                final.update(entry.produced_lineages)
+            if set(final) != set().union(*(entry.outputs for entry in trace)):
+                return None
+            broken = {
+                name
+                for name, lineage in final.items()
+                if name not in self.shell.user_ns or self.tracking_state.variable_lineage.get(name) != lineage
+            }
+            restored_by_index: dict[int, dict] = {}
+            run: list[int] = []
+            if broken:
+                run, restored, _ = classifier.backward_scan_pass(
+                    sim,
+                    ClassificationResult(
+                        broken_vars=broken,
+                        tainted_vars=set(),
+                        trace_codes={entry.stmt_code for entry in trace},
+                    ),
+                )
+                while True:
+                    size = len(run)
+                    # Stricter than the repair's own pass: a statement that runs
+                    # reads the version its run made before it, so that version's
+                    # producer runs too. The live value may be a LATER version the
+                    # scan restored -- ``is_big = sales['a'] > ...`` ran on the
+                    # final ``sales`` otherwise.
+                    run = sorted(
+                        set(run)
+                        | {
+                            p
+                            for i in run
+                            for v in (trace[i].inputs or ())
+                            if (p := planner.latest_producer(trace, v, before=i)) is not None
+                        }
+                    )
+                    run = planner.complete_later_producers(run, trace)
+                    if len(run) == size:
+                        break
+                for info in restored:
+                    position = info.get("position")
+                    if isinstance(position, int):
+                        info["is_upstream"] = False
+                        restored_by_index[position] = info
+            run_set = set(run)
+            planned: dict[int, dict] = {}
+            for i, entry in enumerate(trace):
+                if i in run_set:
+                    continue
+                planned[i] = restored_by_index.get(i) or {
+                    "code": entry.stmt_code,
+                    "status": CacheStatus.SKIPPED,
+                    "is_upstream": False,
+                    "saved_time": 0.0,
+                    "total_time": 0.0,
+                }
+            if broken and not restored_by_index:
+                return None  # nothing on disk to jump to: run as usual
+            return planned
+        except Exception:  # noqa: BLE001 - a plan that cannot be made is the ordinary run
+            logger.debug("[UPSTREAM] cell run plan failed", exc_info=True)
+            return None
+
+    def _sync_simulation_cache_lineages(self, rerecorded: set[str]) -> None:
+        """Sync simulation cache virtual lineages with actual runtime lineages.
+
+        Only the *rerecorded* variables -- the ones this upstream pass just
+        re-executed or restored -- are synced. Their runtime lineage is fresh.
+        Any other variable's runtime lineage is only as fresh as its last run:
+        after an upstream edit, a sibling the pass did not need (``a = f(x)``
+        when only ``b = g(x)`` was asked for) still holds the value computed
+        from the old ``x``, and its snapshot is the only place that knows.
+        Syncing it laundered the stale value into a match, and the next cell
+        that read it was served the old result.
+
+        After upstream statements are executed/restored/skipped, ``variable_lineage``
+        holds the authoritative lineage for each variable.  The simulation cache
+        may store stale ``virtual_lineage`` values from an earlier run where
+        forward propagation failed (e.g., the fallback lineage computed
+        differently than the runtime lineage because a control structure was
+        simulated as a single unit, or ``inspect.getsource`` returned different
+        results).
+
+        This method patches every cached ``virtual_lineage`` snapshot so that
+        variables get their lineage updated to the authoritative value — but
+        **only if the runtime lineage was produced by code within cells 0..idx**.
+        Variables whose runtime lineage was produced by a *later* cell (beyond
+        idx) are NOT synced.  This prevents downstream mutations from
+        contaminating earlier cache entries.
+
+        For example, if cell 2 produces ``df`` via ``df.sort_values(...)`` and
+        cell 5 mutates it via ``df['SMA'] = ...``, after cell 5 executes the
+        runtime lineage for ``df`` reflects the SMA mutation.  Without the
+        scoping fix, syncing would update cell 2's cached virtual_lineage for
+        ``df`` to the SMA-mutated lineage.  Then when cell 4 (a display cell)
+        runs, reusing cache for cells 0-2 yields a virtual lineage that
+        already matches the mutated actual lineage → no restoration → bug.
+
+        With scoping, we check ``executed_cell_codes['df']`` to see which
+        statement last produced ``df``'s runtime lineage.  If that statement
+        is ``df['SMA'] = ...`` (from cell 5), it won't be found in cells
+        0..2's trace segments, so cell 2's cache entry is NOT synced for
+        ``df``.
+        """
+        if not len(self.cache):
+            return
+
+        updated = False
+        # For each cache entry at index idx, collect ALL statement codes that
+        # appear in the trace segments of cells 0..idx.  We only sync a
+        # variable's lineage if the code that produced the current runtime
+        # lineage (from executed_cell_codes) is among these statements.
+        cumulative_stmt_codes = set()
+        #: ``{var: (old, new)}`` synced so far; later entries' recorded inputs
+        #: follow (below).
+        moved: dict[str, tuple[str, str]] = {}
+        for idx in range(len(self.cache)):
+            entry = self.cache.entry(idx)
+            if entry is None:
+                continue
+            cell_trace = entry.trace_segment
+            for trace_entry in cell_trace:
+                cumulative_stmt_codes.add(trace_entry.stmt_code)
+                # A statement below a synced one read the value it now names.
+                # Left behind, a loop there compared its recorded inputs with
+                # the old lineage and read as reading changed data on every run
+                # after a repair: ``results = {}`` and everything built on it
+                # re-ran each time.
+                input_hashes = trace_entry.input_hashes
+                if moved and isinstance(input_hashes, dict):
+                    for var_name, (old, new) in moved.items():
+                        if input_hashes.get(var_name) == old:
+                            input_hashes[var_name] = new
+
+            cached_vl = entry.virtual_lineage
+            for var_name in list(cached_vl.keys()):
+                if var_name not in rerecorded:
+                    continue
+                if not self._should_sync_cache_var(var_name, cumulative_stmt_codes, cached_vl, idx):
+                    continue
+                # Safe to sync: the runtime lineage was produced by code within
+                # cells 0..idx, so this is a valid forward-propagation correction.
+                if cached_vl[var_name] != self.tracking_state.variable_lineage[var_name]:
+                    moved[var_name] = (cached_vl[var_name], self.tracking_state.variable_lineage[var_name])
+                cached_vl[var_name] = self.tracking_state.variable_lineage[var_name]
+                updated = True
+
+        if updated and logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "[UPSTREAM_DEBUG] Synced simulation cache lineages with runtime state (scoped to producing code)"
+            )
 
     def _settle_loop_trust(self, sim: SimulationResult) -> None:
         """Decide which loop outputs memory is trusted for (``vars_mutated_by_loops``

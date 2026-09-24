@@ -193,7 +193,7 @@ class TestStatementLineage(unittest.TestCase):
             # 2. Run Downstream (trigger check)
             print("Running Cell 2 (Check for redundant re-execution)...")
 
-            with patch("cash.notebook.upstream.UpstreamChecker._reexecute_statements") as mock_reexec:
+            with patch("cash.notebook.upstream.replay.StatementReplay.reexecute") as mock_reexec:
                 run_cash_cell(self.magics, cell2)
 
                 if mock_reexec.call_count > 0:
@@ -259,7 +259,7 @@ class TestStatementLineage(unittest.TestCase):
 
             # Verify that the upstream checker does NOT redundantly
             # re-execute the import (modules are skipped by design)
-            with patch("cash.notebook.upstream.UpstreamChecker._reexecute_statements") as mock_reexec:
+            with patch("cash.notebook.upstream.replay.StatementReplay.reexecute") as mock_reexec:
                 run_cash_cell(self.magics, cell2)
                 self.assertEqual(mock_reexec.call_count, 0, "Should not re-execute import statements")
 
