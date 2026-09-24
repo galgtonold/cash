@@ -1,8 +1,7 @@
 """Notebook simulator: pure-AST + cache-probing replay of upstream cells.
 
-Extracted from ``UpstreamChecker`` so the simulation logic has a clear test
-surface independent of the orchestrator. See ``docs/architecture_decisions.md``
-ADR-009.
+Kept apart from ``UpstreamChecker`` so the simulation can be tested without
+a kernel or a notebook server.
 
 The simulator never executes user code via the IPython kernel. It simulates
 statement-by-statement using AST analysis and the cache backend, producing a
@@ -49,7 +48,7 @@ class NotebookSimulator:
     Owned by :class:`UpstreamChecker`, with which it shares the
     ``TrackingState``. :meth:`simulate_upstream` runs the three phases --
     :class:`VirtualLineage`, :class:`MismatchClassifier`,
-    :class:`ReexecutionPlanner` -- and applies what they buffered.
+    :class:`ReexecutionPlanner` -- in order.
     :meth:`simulate_cell` and :meth:`restore_statement` do one cell or one
     statement the same way.
     """

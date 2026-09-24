@@ -1726,8 +1726,8 @@ class VirtualLineage:
                 # position-scoped liveness check downstream reconstructs an
                 # above-the-del consumer's inputs. Only ``ast.Name``
                 # targets remove a lineage entry; ``del d[k]`` / ``del obj.attr``
-                # are container mutations handled at cacheability.py:233, so they
-                # must NOT pop the base's lineage here.
+                # are container mutations (``MutationVisitor.visit_Delete``), so
+                # they must NOT pop the base's lineage here.
                 for node in mutation_tree.body:
                     if not isinstance(node, ast.Delete):
                         continue

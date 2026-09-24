@@ -44,7 +44,7 @@ __all__ = [
 
 
 # ---------------------------------------------------------------------------
-# Mutation detection — moved from mutation_detector.py
+# Mutation detection
 # ---------------------------------------------------------------------------
 
 # Methods that mutate their receiver object in-place

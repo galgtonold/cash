@@ -8,11 +8,13 @@ Public surface (production):
 Public surface (tests):
     - :class:`NotebookSimulator` — pure-AST + cache-probing replay of upstream
       cells; constructible with just a ``TrackingState`` + ``SimpleNamespace``.
-      See ADR-009 for the test-seam rationale.
 
-Everything else (:class:`VirtualLineage`, :class:`MismatchClassifier`,
-:class:`ReexecutionPlanner`, the value-type IR in ``_types``) is internal to
-this package. See ADR-010 for the package-extraction rationale.
+Everything else is internal to this package: the simulation's phases
+(:class:`VirtualLineage`, :class:`MismatchClassifier`,
+:class:`ReexecutionPlanner`), the parts they and the checker delegate to
+(``cache_restore``, ``loop_rules``, ``unsaved_edits``, ``stale_values``,
+``read_scope``, ``file_writers``, ``notebook_vetting``, ``rng_rewind``,
+``replay``), and the value types in ``_types``.
 """
 
 from __future__ import annotations

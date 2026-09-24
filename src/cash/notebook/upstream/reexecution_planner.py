@@ -1151,20 +1151,6 @@ class ReexecutionPlanner:
             code,
         )
 
-    # Cheap textual pre-filter before running the full AST side-effect
-    # analysis on a trace statement. Superset of the names in the write
-    # detection tables (open modes, pandas to_*, save/savefig, json/pickle
-    # dump, csv.writer, os/shutil mutations, pathlib write_text/bytes).
-    _WRITE_MARKERS = (
-        "open(",
-        "write",
-        "to_",
-        "save",
-        "dump",
-        "os.",
-        "shutil.",
-    )
-
     def _user_ns(self) -> dict:
         return self.virtual_lineage.shell.user_ns
 

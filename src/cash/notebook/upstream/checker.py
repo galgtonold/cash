@@ -40,18 +40,14 @@ logger = logging.getLogger(__name__)
 
 
 class UpstreamChecker:
-    """
-    Manages detection and re-execution of changed upstream statements.
+    """Brings the state a cell reads up to date with the notebook above it.
 
-    Uses two complementary strategies:
-    1. Lineage-based checking: Compares computed lineage hashes for already-executed variables
-    2. Notebook-simulation checking: Simulates execution of notebook statements to detect code changes
-
-    Attributes:
-        shell: IPython shell instance
-        executed_cell_codes: Maps variable names to the statement code that defined them
-        executed_cell_hashes: Maps variable names to the SET of hashes of the statement code that defined them
-        variable_lineage: Maps variable names to their lineage hash (includes input dependencies)
+    Before a cell runs, :meth:`check_and_reexecute` finds the cell in the
+    saved notebook, vets the notebook (:class:`NotebookVetter`), simulates
+    the cells above it (:class:`NotebookSimulator`) and re-runs or restores
+    what the simulation found stale (:class:`StatementReplay`), with the
+    random stream put where a top-to-bottom run leaves it
+    (:class:`RngRewind`). Every part shares one ``TrackingState``.
     """
 
     def __init__(
@@ -78,9 +74,8 @@ class UpstreamChecker:
         #: tracking dict is read and written through it.
         self.tracking_state = tracking_state or TrackingState()
 
-        # Simulation lives behind a clear seam — see notebook_simulator.py.
-        # UpstreamChecker is the orchestrator; the simulator does the AST +
-        # cache-probing replay.
+        # The simulation runs no user code: it replays the notebook from its
+        # text and the cache, and this class runs what it schedules.
         self.simulator = NotebookSimulator(
             shell=shell,
             cash_instance=cash_instance,
