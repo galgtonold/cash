@@ -406,7 +406,7 @@ def format_size(n: int) -> str:
         unit = _SIZE_UNITS[name.lower()]
         if n >= unit and (n * 10) % unit == 0:
             return f"{n / unit:g} {name}"
-    # Local: import cycle config -> backends.adaptive_caps -> backends -> backends._base -> config.
+    # Local: import cycle config -> backends -> backends.file_backend -> backends._writes -> config.
     from .backends.adaptive_caps import human_bytes
 
     return human_bytes(n)

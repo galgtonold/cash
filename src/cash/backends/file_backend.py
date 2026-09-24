@@ -26,14 +26,7 @@ from ..exceptions import CashCacheStoreFailedWarning
 from ..tracking.file_tracker import register_cache_dir, untracked
 from ._base import CacheBackend, MetadataDict, ttl_expired
 from ._writes import PendingWrites
-from .cache_dir import (
-    CACHE_FORMAT_VERSION,
-    CacheDirStamp,
-    create_temp_file,
-    recreate_cache_dir,
-    warn_if_unwritable,
-    write_all,
-)
+from .cache_dir import CacheDirStamp, create_temp_file, warn_if_unwritable, write_all
 from .entry_format import ENTRY_SUFFIX, CorruptEntry, metadata_span, pack_entry, read_entry, update_metadata_in_place
 from .file_eviction import FileEvictor
 from .serialization import PickleSerializer, Serializer
@@ -41,7 +34,7 @@ from .versions import VersionIndex, superseded_to_drop
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["FileBackend", "CACHE_FORMAT_VERSION", "StoredEntry", "recreate_cache_dir"]
+__all__ = ["FileBackend", "StoredEntry"]
 
 
 class StoredEntry(NamedTuple):

@@ -30,7 +30,7 @@ from collections.abc import Callable
 from typing import Any, ClassVar, Generic, TypeVar
 
 from cash._paths import replace_with_retry
-from cash.backends.file_backend import recreate_cache_dir
+from cash.backends.cache_dir import recreate_cache_dir
 
 logger = logging.getLogger(__name__)
 
