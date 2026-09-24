@@ -15,9 +15,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from cash.notebook._protocols import TrackingState
 from cash.notebook.cache_status import CacheStatus
 from cash.notebook.control_structures.for_handler import ForLoopHandler
+from tests.test_notebook._control_fakes import fake_statement_processor
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -33,19 +33,7 @@ def mock_shell():
 
 @pytest.fixture
 def mock_statement_processor():
-    processor = MagicMock()
-    processor.process_statement = MagicMock(
-        return_value={
-            "status": CacheStatus.COMPUTED,
-            "execution_time": 0.01,
-            "stdout": "",
-            "stderr": "",
-            "outputs": [],
-        }
-    )
-    processor.tracking_state = TrackingState()
-    processor.compute_hash = MagicMock(return_value="fakehash")
-    return processor
+    return fake_statement_processor()
 
 
 @pytest.fixture

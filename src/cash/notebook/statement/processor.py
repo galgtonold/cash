@@ -367,6 +367,11 @@ class StatementProcessor:
         """Record what file(s) the writer statement *code* produced."""
         self._records.persist_write_provenance(code, inputs, tree, written)
 
+    def persist_metadata_only(self, key: str, metadata: dict[str, Any]) -> None:
+        """Write *metadata* under *key* with no value, for a later kernel to
+        read (see :meth:`StatementRestorer.persist_metadata_only`)."""
+        self._stmt_restorer.persist_metadata_only(self.cash_instance.backend, key, metadata)
+
     def user_written_paths(self, paths) -> frozenset[str]:
         """*paths* without cash's own storage (its cache directories)."""
         return self._records.user_written_paths(paths)
@@ -1210,7 +1215,8 @@ class StatementProcessor:
             code_hash=cache_key,
         )
 
-    def _resolve_live_function_source(self, name: str) -> str | None:
+    def resolve_live_function_source(self, name: str) -> str | None:
+        """The source of the function *name* is bound to in the user namespace now."""
         return live_function_source(name, self.shell.user_ns)
 
     def _check_callable_stateful(self, name: str) -> bool:
@@ -1352,7 +1358,7 @@ class StatementProcessor:
             code,
             tree,
             namespace=self.shell.user_ns,
-            resolve_source=self._resolve_live_function_source,
+            resolve_source=self.resolve_live_function_source,
             control_body=is_control_body(code),
         )
         inputs, outputs = set(effects.inputs), set(effects.outputs)

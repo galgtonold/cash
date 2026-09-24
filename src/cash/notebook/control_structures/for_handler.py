@@ -21,7 +21,6 @@ and exercise it without going through ``ControlStructureProcessor.process()``.
 from __future__ import annotations
 
 import ast
-import contextlib
 import logging
 import time as _time
 from typing import TYPE_CHECKING, Any
@@ -48,7 +47,7 @@ from .split_policy import PROBE_ITERS as _SPLIT_PROBE_ITERS
 from .split_policy import LoopSplitPolicy
 
 if TYPE_CHECKING:
-    from ..statement import ProcessResult
+    from ..statement import ProcessResult, StatementProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +96,7 @@ class ForLoopHandler:
     touching the orchestrator.
     """
 
-    def __init__(self, shell, statement_processor, dispatcher):
+    def __init__(self, shell, statement_processor: StatementProcessor, dispatcher):
         self.shell = shell
         self.statement_processor = statement_processor
         self.dispatcher = dispatcher
@@ -459,14 +458,8 @@ class ForLoopHandler:
         # intercepted sub-call needs the CURRENT iteration's loop-var values
         # as a key discriminator wherever it sits, including inside a nested
         # `if`/`try` or `for`. `loop_vars_scope`'s `finally` pops even if a
-        # body statement raises. Looked up with `getattr`: a processor
-        # without it must cost the loop its call caching, never make the
-        # user's loop fail.
-        loop_vars_scope = getattr(self.statement_processor, "loop_vars_scope", None)
-        scope = (
-            loop_vars_scope(loop_vars, loop_var_digests) if loop_vars_scope is not None else contextlib.nullcontext()
-        )
-        with scope:
+        # body statement raises.
+        with self.statement_processor.loop_vars_scope(loop_vars, loop_var_digests):
             for body_idx, body_node in enumerate(node.body):
                 before_count = len(all_metrics)
                 if is_control_structure(body_node):

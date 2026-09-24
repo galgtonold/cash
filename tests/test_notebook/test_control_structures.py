@@ -18,6 +18,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from cash.notebook.cache_status import CacheStatus
+from tests.test_notebook._control_fakes import fake_statement_processor
 
 
 class TestControlStructureProcessor:
@@ -31,20 +32,7 @@ class TestControlStructureProcessor:
 
     @pytest.fixture
     def mock_statement_processor(self):
-        processor = MagicMock()
-        processor.process_statement = MagicMock(
-            return_value={
-                "status": CacheStatus.COMPUTED,
-                "execution_time": 0.01,
-                "stdout": "",
-                "stderr": "",
-                "outputs": [],
-            }
-        )
-        processor.tracking_state.variable_lineage = {}
-        processor.tracking_state.vars_with_mutation_lineage = set()
-        processor.compute_hash = MagicMock(return_value="fakehash")
-        return processor
+        return fake_statement_processor()
 
     @pytest.fixture
     def control_processor(self, mock_shell, mock_statement_processor):
@@ -364,11 +352,7 @@ class TestOutputFlushing:
 
     @pytest.fixture
     def mock_statement_processor(self):
-        processor = MagicMock()
-        processor.tracking_state.variable_lineage = {}
-        processor.tracking_state.vars_with_mutation_lineage = set()
-        processor.compute_hash = MagicMock(return_value="fakehash")
-        return processor
+        return fake_statement_processor()
 
     @pytest.fixture
     def control_processor(self, mock_shell, mock_statement_processor):
@@ -668,11 +652,7 @@ class TestSingleUnitStreamOutput:
 
     @pytest.fixture
     def mock_statement_processor(self):
-        processor = MagicMock()
-        processor.tracking_state.variable_lineage = {}
-        processor.tracking_state.vars_with_mutation_lineage = set()
-        processor.compute_hash = MagicMock(return_value="fakehash")
-        return processor
+        return fake_statement_processor()
 
     @pytest.fixture
     def control_processor(self, mock_shell, mock_statement_processor):
