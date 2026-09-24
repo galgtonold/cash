@@ -358,7 +358,7 @@ class NotebookSimulator:
         # depends on is stale. The plan must still be built so
         # the planner can schedule the writer.
         has_stale_file_writers = bool(
-            self.planner.find_stale_file_writer_indices(
+            self.planner.file_writers.find_stale_file_writer_indices(
                 sim.trace,
                 virtual_lineage=sim.virtual_lineage,
                 relevant_read_paths=relevant_read_paths,

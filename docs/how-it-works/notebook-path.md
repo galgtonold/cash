@@ -247,7 +247,7 @@ counts as a change to the module, so after a restart a cell that uses the
 module runs the setting line again before it draws or prints. Before this, a
 chart drawn after a restart silently lost the notebook's style.
 
-<!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._writer_output_already_fresh @982cbefa, cash/notebook/write_observer.py:observe_writes @41f55ba6, cash/notebook/carrier_history.py:carrier_history_fingerprint @0ef3e0bc -->
+<!-- claim: cash/notebook/upstream/file_writers.py:FileWriterScheduler._writer_output_already_fresh @982cbefa, cash/notebook/write_observer.py:observe_writes @41f55ba6, cash/notebook/carrier_history.py:carrier_history_fingerprint @0ef3e0bc -->
 A cell that writes files (`df.to_csv(...)`, a loop saving one chart per kind)
 is not re-run after a restart just because it ran in an earlier kernel. When it
 runs, Cash records the files it actually wrote, whether the path is in the code or
@@ -266,7 +266,7 @@ line of the chart, or an upstream edit to the data it writes. Writes a C
 extension makes without going through Python's `open` are not seen; such a
 writer is re-run as before.
 
-<!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner.find_stale_file_writer_indices @42142a9a, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._note_stale_exports @cbaec54b -->
+<!-- claim: cash/notebook/upstream/file_writers.py:FileWriterScheduler.find_stale_file_writer_indices @42142a9a, cash/notebook/upstream/file_writers.py:FileWriterScheduler.note_stale_exports @cbaec54b -->
 A writer whose file the cell you run does not read is left alone, as a plain
 kernel leaves a cell you did not run. "Does not read" has to be provable: a
 path in the code, a name bound to one, or a list of paths a loop or

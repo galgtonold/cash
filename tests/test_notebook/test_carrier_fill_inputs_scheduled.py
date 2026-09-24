@@ -120,7 +120,7 @@ def test_nothing_extra_is_scheduled_when_no_fill_needs_it(live_figure):
 def test_a_file_writing_producer_is_never_dragged_in(live_figure):
     """The one producer this must NOT schedule.
 
-    ``_schedule_file_write_statements`` runs BEFORE the carrier pass, so a
+    ``FileWriterScheduler.schedule`` runs BEFORE the carrier pass, so a
     producer added here has already bypassed its scope and repeatability gates.
     Re-firing an append duplicates a line on disk, and a kernel restart cannot
     undo that -- whereas the NameError it leaves behind is loud, names the
