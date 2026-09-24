@@ -38,6 +38,7 @@ import hashlib
 import importlib.util
 import inspect
 import io
+import marshal
 import os
 import re
 import sys
@@ -851,6 +852,74 @@ def _compiled_module(path: str) -> types.CodeType | None:
     return code
 
 
+def _pyc_postdates_source(st: object, pyc_st: object) -> bool:
+    """True when the ``.pyc`` was written after the source's last save had settled.
+
+    The header records the source's mtime in WHOLE seconds and its size, so it
+    cannot tell apart two saves of the same size inside one second: import the
+    first, save the second (``sum`` -> ``max``) in the same second, and every
+    later import -- a kernel restart included -- loads the first save's
+    bytecode, because the header still matches. A ``.pyc`` written more than a
+    tick after the source's mtime (`stat_has_settled`'s window, which covers
+    the coarsest clocks) was compiled from the last save: any later save would
+    carry a later mtime, which the header would not match.
+    """
+    return pyc_st.st_mtime - st.st_mtime > _SETTLED_SECONDS
+
+
+def loaded_module_matches_disk(module: object) -> bool:
+    """False when *module* was loaded from a ``.pyc`` that is not its source file.
+
+    Python loads a module from its ``.pyc`` when the header matches the
+    source's (mtime in whole seconds, size), which a same-size save inside the
+    second of the last import keeps (`_pyc_postdates_source`). The module then
+    runs the previous save's code while every key cash builds from the file
+    describes the new one, and a value computed by the old code is stored --
+    and persisted -- under the new code's key.
+
+    True whenever the import cannot have used stale bytecode: no source file,
+    no ``.pyc``, a header that does not match the source (the import compiled
+    the source instead), a checked hash-based ``.pyc`` (Python compares it
+    with the source's hash), or a ``.pyc`` written after the source had
+    settled. Otherwise the ``.pyc``'s code is compared with the source
+    compiled, once per file version.
+    """
+
+    path = getattr(module, "__file__", None)
+    if not path or not path.endswith((".py", ".pyw")):
+        return True
+    try:
+        st = os.stat(path)
+        pyc = importlib.util.cache_from_source(path)
+        pyc_st = os.stat(pyc)
+        # Untracked for the reason `_pyc_proves_unchanged` gives.
+        with untracked(), io.FileIO(pyc, "rb") as fh:
+            header = fh.read(16)
+            if len(header) < 16 or header[:4] != importlib.util.MAGIC_NUMBER:
+                return True
+            flags = int.from_bytes(header[4:8], "little")
+            if flags & 0b1:
+                if flags & 0b10:
+                    return True  # checked hash-based: validated against the source
+            elif int.from_bytes(header[8:12], "little") != (int(st.st_mtime) & 0xFFFFFFFF) or int.from_bytes(
+                header[12:16], "little"
+            ) != (st.st_size & 0xFFFFFFFF):
+                return True
+            elif _pyc_postdates_source(st, pyc_st):
+                return True
+            body = fh.readall()
+    except (OSError, ValueError, NotImplementedError):
+        return True
+    try:
+        loaded = marshal.loads(body)
+    except (EOFError, ValueError, TypeError):
+        return True
+    on_disk = _compiled_module(path)
+    if on_disk is None:
+        return True  # nothing to reload to: the error belongs to the next import
+    return loaded == on_disk
+
+
 def _pyc_proves_unchanged(path: str, st: object) -> bool:
     """True when the module's ``.pyc`` shows *path* is what this process imported.
 
@@ -863,9 +932,11 @@ def _pyc_proves_unchanged(path: str, st: object) -> bool:
     The ``.pyc`` is a record of the import: importlib checks its header against
     the source's (mtime, size) and rewrites it when they differ. A ``.pyc``
     older than this process whose header still matches the source means the
-    import saw exactly this (mtime, size). A newer one may have been written by
-    a later import of a different file, and a missing one says nothing -- both
-    fall back to compiling the file, once per (path, mtime, size).
+    import saw exactly this (mtime, size) -- and, when the ``.pyc`` was written
+    after the source's mtime tick had passed (`_pyc_postdates_source`), exactly
+    this file. A newer one may have been written by a later import of a
+    different file, and a missing one says nothing -- both fall back to
+    compiling the file, once per (path, mtime, size).
     """
 
     started = _process_start_time()
@@ -873,7 +944,8 @@ def _pyc_proves_unchanged(path: str, st: object) -> bool:
         return False
     try:
         pyc = importlib.util.cache_from_source(path)
-        if os.stat(pyc).st_mtime > started:
+        pyc_st = os.stat(pyc)
+        if pyc_st.st_mtime > started or not _pyc_postdates_source(st, pyc_st):
             return False
         # Untracked: read inside a cached call's body -- a nested cached
         # call's key being built -- the module's .pyc became that call's

@@ -915,7 +915,7 @@ class CellExecutor:
 
         # Auto-track local module imports found in this cell
         try:
-            newly_tracked = ft.auto_track_local_imports(raw_cell)
+            newly_tracked = ft.auto_track_local_imports(raw_cell, self.shell.user_ns)
             if newly_tracked:
                 logger.debug("[AUTO_TRACK] Auto-tracking local modules: %s", ", ".join(sorted(newly_tracked)))
         except (ImportError, AttributeError, OSError, TypeError) as exc:

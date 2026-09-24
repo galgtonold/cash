@@ -846,9 +846,10 @@ like `re.compile(p).match`: it cannot change under you.
 *Decorator.*
 
 <!-- claim: cash/source_norm.py:loaded_code_matches_disk @f140e8b2, cash/decorator/code_identity.py:warn_source_changed_since_load @4f566032 -->
-<!-- claim: cash/source_norm.py:_pyc_proves_unchanged @07afd5bd -->
+<!-- claim: cash/source_norm.py:_pyc_proves_unchanged @5d0686e2 -->
 **What happened.** A file holding a cached function or a helper was edited
-after this process imported it. The process still runs the old code.
+after this process imported it, or the import loaded bytecode compiled from an
+earlier save of it. The process runs the old code.
 
 <!-- claim: cash/decorator/code_identity.py:CodeIdentity.pin_own_source @ede4d2d0 -->
 **Why it matters.** Cash keys that code by what is actually running, so
@@ -857,6 +858,12 @@ on the new code.
 
 **What to do.** Restart the process to run the new code. A deploy that copies
 files before restarting a service triggers this.
+
+If it appears again right after a restart, Python is loading bytecode from an
+earlier save: its `.pyc` records the file's modification time in whole
+seconds and its size, so an edit that keeps the size within a second of the
+last import looks current. Save the file again, or delete its `__pycache__`
+entry.
 
 **When it is safe to ignore.** Always, for correctness. Look into it if you
 did not expect the file to change.

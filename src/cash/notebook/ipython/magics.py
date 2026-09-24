@@ -980,7 +980,7 @@ class CashMagics(InspectionMagicsMixin, Magics):
         # its file mtime so future runs detect source changes.
         ft = self._statement_processor.function_tracker
         try:
-            ft.auto_track_local_imports(raw_cell)
+            ft.auto_track_local_imports(raw_cell, self.shell.user_ns)
         except (ImportError, AttributeError, OSError, TypeError) as exc:
             logger.debug("Post-execution auto-track failed: %s", exc)
 

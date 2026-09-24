@@ -11,6 +11,8 @@ helper, which does recompute. Here the reader only sees ``tbl``; whether
 statement that built it read a module that changed.
 """
 
+import os
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
@@ -263,4 +265,43 @@ def test_a_helper_imported_in_the_cash_on_cell(nb_runner, tmp_path, restart):
     assert "R total 4 0" in nb_runner.get_output(5), (
         "the helper imported in the %cash_on cell was edited and the cell "
         "below kept the pre-edit result:\n" + nb_runner.get_raw_output(5)
+    )
+
+
+def test_a_same_size_edit_in_the_second_of_the_import_reaches_a_restart(nb_runner, tmp_path):
+    """The case above failed intermittently in a full run: on a warm kernel
+    the edit lands in the same second as the first import, and ``sum`` ->
+    ``max`` keeps the size, so the restarted kernel imported the helper from
+    the ``.pyc`` of the first save -- Python checks only whole-second mtime
+    and size. Cash keyed the helper's readers by the edited file while the
+    old code ran, and persisted the old value under the new key. Here the
+    edit keeps the first save's mtime outright, so it is not left to timing.
+    """
+    mod = tmp_path / "helpersamesec.py"
+    mod.write_text(_module("sum"), encoding="utf-8")
+    first = os.stat(mod)
+    nb_runner.create_notebook(
+        [
+            "import cash\n%cash_on\n%cash_persist on\n%cash_badge print\nimport helpersamesec as hm",
+            "ROWS = [1, 2, 3, 4]",
+            "tbl = hm.summary(ROWS)",
+            "note = 'total ' + str(tbl) + ' ' + str(sum(i * i for i in range(2_000_000)) % 1)",
+            "print('R', note)",
+        ]
+    )
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert "R total 10 0" in nb_runner.get_output(5), nb_runner.get_raw_output(5)
+    pyc = tmp_path / "__pycache__"
+    assert any(p.name.startswith("helpersamesec.") for p in pyc.iterdir()), (
+        "no .pyc: the restart cannot load stale bytecode"
+    )
+
+    mod.write_text(_module("max"), encoding="utf-8")
+    os.utime(mod, ns=(first.st_atime_ns, first.st_mtime_ns))
+    nb_runner.restart()
+    nb_runner.run_all()
+    assert "R total 4 0" in nb_runner.get_output(5), (
+        "a same-size edit in the second of the import was not what ran after "
+        "the restart:\n" + nb_runner.get_raw_output(5)
     )

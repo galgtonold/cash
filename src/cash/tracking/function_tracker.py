@@ -16,7 +16,14 @@ from typing import Any
 
 from .._memo import NOTEBOOK_FUNCTIONS, LruMemo
 from ..install_paths import is_user_path
-from ..source_norm import bytecode_identity, callable_identity, module_identity, read_code_text, source_digest
+from ..source_norm import (
+    bytecode_identity,
+    callable_identity,
+    loaded_module_matches_disk,
+    module_identity,
+    read_code_text,
+    source_digest,
+)
 from .module_symbols import analysis_for
 
 __all__ = ["FunctionTracker", "is_local_module"]
@@ -307,15 +314,21 @@ class FunctionTracker:
     # Module file tracking for imported functions
     # ================================================================
 
-    def track_module(self, module_name: str) -> str | None:
+    def track_module(self, module_name: str, user_ns: dict[str, Any] | None = None) -> str | None:
         """Start tracking a module's file for changes.
 
         Also discovers and tracks transitive local dependencies — if the
         module imports other local modules, those files are monitored too.
         When a sub-dependency changes, the parent module is reported as changed.
 
+        A module the import loaded from stale bytecode is reloaded from its
+        source first (`_reload_stale_bytecode`), so what is tracked from here
+        on is the file.
+
         Args:
             module_name: The module name (e.g., 'my_helpers')
+            user_ns: The namespace whose names bound from the module
+                (``from my_helpers import f``) follow such a reload
 
         Returns:
             The file path of the module, or None if not found
@@ -333,10 +346,11 @@ class FunctionTracker:
                 mtime = os.path.getmtime(file_path)
                 self.module_mtimes[module_name] = mtime
                 logger.debug("Tracking module '%s' at %s, mtime=%s", module_name, file_path, mtime)
+                # Discover and track transitive local dependencies
+                reached = self._discover_transitive_dependencies(module_name)
+                self._reload_stale_bytecode(reached, user_ns)
                 # Snapshot per-symbol hashes for granular invalidation
                 self.snapshot_module_symbols(module_name)
-                # Discover and track transitive local dependencies
-                self._discover_transitive_dependencies(module_name)
                 return file_path
             except OSError:
                 logger.debug("Failed to read module file for tracking '%s'", module_name)
@@ -379,7 +393,51 @@ class FunctionTracker:
         if sub_name not in visited:
             stack.append(sub_name)
 
-    def _discover_transitive_dependencies(self, module_name: str) -> None:
+    def _reload_stale_bytecode(self, module_names: set[str], user_ns: dict[str, Any] | None) -> set[str]:
+        """Reload, from source, the modules in *module_names* whose import ran stale bytecode.
+
+        Python took a ``.pyc`` compiled from an earlier save of the same size
+        and second (`loaded_module_matches_disk`), so the module runs code that
+        is not in its file. Tracking takes the file as the baseline, so no edit
+        is ever seen and the stale code keeps running, while every key built
+        from the module describes the file: after a quick same-size edit and
+        Restart & Run All, a cell below printed -- and persisted -- the
+        pre-edit helper's value under the edited helper's key.
+
+        The modules in the set that import a reloaded one are reloaded after it,
+        so their ``from x import f`` bindings pick up the new code, as a
+        changed module's are (`check_and_reload_changed_modules`). Returns the
+        modules reloaded.
+        """
+        stale = {
+            name for name in module_names if name in sys.modules and not loaded_module_matches_disk(sys.modules[name])
+        }
+        if not stale:
+            return set()
+        imports_map = FunctionTracker._build_imports_map_for_set(module_names)
+        to_reload = set(stale)
+        grew = True
+        while grew:
+            grew = False
+            for name, deps in imports_map.items():
+                if name not in to_reload and deps & to_reload:
+                    to_reload.add(name)
+                    grew = True
+        reloaded = set()
+        for name in FunctionTracker._kahn_sort_bottom_up(to_reload, imports_map):
+            logger.info("Module '%s' was loaded from bytecode older than its file; reloading it", name)
+            try:
+                ok = self.reload_module(name)
+            except Exception as exc:  # noqa: BLE001 - the file's own top level raised; the import already ran
+                logger.warning("Could not reload '%s' from its source: %s", name, exc)
+                ok = False
+            if ok:
+                reloaded.add(name)
+                if user_ns is not None:
+                    self._update_user_ns_from_module(name, sys.modules[name], user_ns)
+        return reloaded
+
+    def _discover_transitive_dependencies(self, module_name: str) -> set[str]:
         """Walk the import graph of a tracked module to find local sub-dependencies.
 
         For each local module that ``module_name`` (transitively) imports, we
@@ -389,10 +447,12 @@ class FunctionTracker:
 
         This way, ``check_tracked_modules`` can detect changes in sub-dependency
         files and map them back to the parent modules that the notebook imported.
+
+        Returns the names of the modules reached, *module_name* included.
         """
         module = sys.modules.get(module_name)
         if module is None:
-            return
+            return set()
 
         visited: set[str] = set()
         stack = [module_name]
@@ -420,6 +480,7 @@ class FunctionTracker:
 
             sub_module_names = _collect_imported_names(tree)
             self._process_sub_modules(sub_module_names, module_name, visited, stack)
+        return visited
 
     def refresh_transitive_dependencies(self) -> None:
         """Re-scan transitive dependencies for all currently tracked modules.
@@ -877,7 +938,7 @@ class FunctionTracker:
     # Auto-tracking of local module imports
     # ================================================================
 
-    def auto_track_local_imports(self, code: str) -> set[str]:
+    def auto_track_local_imports(self, code: str, user_ns: dict[str, Any] | None = None) -> set[str]:
         """Scan code for import statements and auto-track local modules.
 
         Parses the code for `import X` and `from X import Y` statements,
@@ -886,6 +947,7 @@ class FunctionTracker:
 
         Args:
             code: Source code of a notebook cell
+            user_ns: The namespace the cell ran in (see `track_module`)
 
         Returns:
             Set of module names that were newly tracked
@@ -907,7 +969,7 @@ class FunctionTracker:
                 continue  # Not yet imported
 
             if is_local_module(module):
-                file_path = self.track_module(mod_name)
+                file_path = self.track_module(mod_name, user_ns)
                 if file_path:
                     newly_tracked.add(mod_name)
                     logger.debug("[AUTO_TRACK] Auto-tracking local module '%s' (%s)", mod_name, file_path)

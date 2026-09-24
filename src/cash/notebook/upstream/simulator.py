@@ -146,7 +146,7 @@ class NotebookSimulator:
                 continue
             try:
                 if is_local_module(module):
-                    ft.track_module(mod_name)
+                    ft.track_module(mod_name, user_ns)
             except (AttributeError, OSError, TypeError, ValueError):
                 logger.debug("Could not track '%s' at %%cash_on", mod_name)
 

@@ -1050,7 +1050,7 @@ class StatementProcessor:
         # Auto-track newly imported local modules so _capture_variables includes
         # the module source hash in the lineage on first execution.
         try:
-            self.function_tracker.auto_track_local_imports(run.code)
+            self.function_tracker.auto_track_local_imports(run.code, self.shell.user_ns)
         except (ImportError, AttributeError, OSError):
             logger.debug("%s Failed to auto-track local imports", _LOG_PROCESSOR)
         self._records.persist_import_bindings(run.code, run.tree)
