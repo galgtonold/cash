@@ -173,7 +173,7 @@
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/custom-file-sources.md": {
-    "anchors": 10,
+    "anchors": 12,
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/custom-hashers.md": {
@@ -189,7 +189,7 @@
     "anchors": 8
   },
   "docs/tutorials/feature-guides/dynamic-dependencies.md": {
-    "anchors": 4,
+    "anchors": 5,
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/iterator-caching.md": {
