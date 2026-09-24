@@ -93,38 +93,6 @@ class _Memo:
         return True
 
 
-class _TrackerMemory:
-    """What this module remembers process-wide between reads, each part bounded.
-
-    Every read walks the stack and every tracker that opens re-installs the
-    wrappers, so the answers that do not change are kept here -- see the
-    function that fills each one.
-    """
-
-    def __init__(self) -> None:
-        #: module name -> (metadata module?, read plumbing?, top-level name); `incidental_read`.
-        self.module_kind = _Memo(8192)
-        #: code filename -> ``wrapper``/``cash``/``user``/``other``; `_frame_kind`.
-        self.frame_kind = _Memo(8192)
-        #: code -> {file: stat when last read}, or None past the per-code cap; `_record_read`.
-        self.reads_by_code = _Memo(4096)
-        #: absolute path -> resolved path, for reads outside a tracker; `_note_untracked_read`.
-        self.untracked_realpath = _Memo(4096, reset=True)
-        #: resolved path -> (monotonic time, stat); `_note_untracked_read`.
-        self.untracked_stat = _Memo(4096, reset=True)
-        #: (module id, pattern) -> (namespace size, matched names); `_find_patch_targets`.
-        self.patch_targets = _Memo(1024)
-        #: (owner id, name, kind) -> (original, wrapper); `_install_wrapper`.
-        self.wrappers = _Memo(1024)
-        #: What the last full install was computed from; `_install_patches`.
-        self.installed_for: Any = None
-        #: Seconds spent recording reads; `tracking_seconds`.
-        self.tracking_seconds = 0.0
-
-
-_memory = _TrackerMemory()
-
-
 class untracked:
     """Run cash's OWN I/O without it becoming anyone's dependency.
 
@@ -330,9 +298,10 @@ def _module_package_dir(module_name: str) -> str | None:
     return norm_dir(os.path.dirname(file)) if file else None
 
 
-# A read walks the whole stack, ~30 frames in a kernel, and a folder read does
-# it for every file: 5,030 reads re-classified the same modules. Hence
-# `_memory.module_kind`.
+#: module name -> (metadata module?, read plumbing?, top-level name). A read
+#: walks the whole stack, ~30 frames in a kernel, and a folder read does it for
+#: every file, so each module is classified once.
+_module_kinds = _Memo(8192)
 
 
 def incidental_read(path: str, own_package: str | None = None) -> str | None:
@@ -354,10 +323,10 @@ def incidental_read(path: str, own_package: str | None = None) -> str | None:
     reader_seen = False
     while frame is not None:
         module = frame.f_globals.get("__name__") or ""
-        kind = _memory.module_kind.get(module)
+        kind = _module_kinds.get(module)
         if kind is None:
             kind = (_in_modules(module, _METADATA_MODULES), _in_modules(module, _READ_PLUMBING), module.split(".")[0])
-            _memory.module_kind.put(module, kind)
+            _module_kinds.put(module, kind)
         is_metadata, is_plumbing, top = kind
         if is_metadata:
             return "package metadata"
@@ -461,8 +430,8 @@ def _is_cash_internal(path: str) -> bool:
     return any(is_cash_file(rel) for rel in inside)
 
 
-#: ``_memory.reads_by_code``: ``code -> {file: its stat when last read}`` for
-#: files read while a frame of that code was on the stack, process-wide. A memo (``functools.lru_cache``, a
+#: ``code -> {file: its stat when last read}`` for files read while a frame of
+#: that code was on the stack, process-wide. A memo (``functools.lru_cache``, a
 #: module dict) hands a later call the product of an earlier read, and the
 #: later call reads nothing -- so its entry recorded no file and kept serving
 #: after the file changed. What a helper read once is what
@@ -474,12 +443,13 @@ def _is_cash_internal(path: str) -> bool:
 #: `_READS_PER_CODE_MAX` files is marked ``None``: it reads per argument, and
 #: every file it ever read is no one call's dependency.
 _READS_PER_CODE_MAX = 16
+_reads_by_code = _Memo(4096)
 _CASH_PACKAGE_DIR = os.path.normcase(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def _record_read(code: Any, abs_path: str, stat: Any) -> None:
     """Remember that *code* read *abs_path*, as it was (*stat*)."""
-    memo = _memory.reads_by_code
+    memo = _reads_by_code
     reads = memo.get(code, ())
     if reads is None:
         return
@@ -524,10 +494,14 @@ def _credit_read_to_stack(abs_path: str, tracker: "FileAccessTracker") -> None:
         frame, depth = frame.f_back, depth + 1
 
 
+#: code filename -> ``wrapper``/``cash``/``user``/``other``; `_frame_kind`.
+_frame_kinds = _Memo(8192)
+
+
 def _frame_kind(filename: str) -> str:
     """``wrapper`` (the cached call's own), ``cash``, ``user`` or ``other``,
     remembered per filename: every read walks the stack."""
-    kind = _memory.frame_kind.get(filename)
+    kind = _frame_kinds.get(filename)
     if kind is None:
         kind = (
             "wrapper"
@@ -538,19 +512,14 @@ def _frame_kind(filename: str) -> str:
             if is_user_path(filename)
             else "other"
         )
-        _memory.frame_kind.put(filename, kind)
+        _frame_kinds.put(filename, kind)
     return kind
 
 
-def tracking_seconds() -> float:
-    """Seconds cash has spent recording file reads in this process.
-
-    Read before and after a statement, the difference is cash's own time inside
-    it, which is not the statement's cost: a folder read recorded 16.5 s for a
-    load that takes 1.8 s without cash, and a later hit credited all of it as
-    saved.
-    """
-    return _memory.tracking_seconds
+#: absolute path -> resolved path, for reads outside a tracker; `_note_untracked_read`.
+_untracked_realpaths = _Memo(4096, reset=True)
+#: resolved path -> (monotonic time, stat); `_note_untracked_read`.
+_untracked_stats = _Memo(4096, reset=True)
 
 
 def _note_untracked_read(path: Any, frame: Any) -> None:
@@ -581,10 +550,10 @@ def _note_untracked_read(path: Any, frame: Any) -> None:
         # `realpath` is 60us on Windows, most of what this costs; resolved once
         # per absolute path (so a chdir still resolves anew).
         absolute = os.path.abspath(raw)
-        abs_path = _memory.untracked_realpath.get(absolute)
+        abs_path = _untracked_realpaths.get(absolute)
         if abs_path is None:
             abs_path = normalize_path(os.path.realpath(absolute))
-            _memory.untracked_realpath.put(absolute, abs_path)
+            _untracked_realpaths.put(absolute, abs_path)
         if _is_pseudo_fs(abs_path) or _is_cash_internal(abs_path):
             return
         # A stat is 15us, and a loop re-reading one file pays it every time.
@@ -592,12 +561,12 @@ def _note_untracked_read(path: Any, frame: Any) -> None:
         # stat that differs from the file makes a store refused, never a stale
         # answer served (`Cash._credit_remembered_reads`).
         now = time.monotonic()
-        seen = _memory.untracked_stat.get(abs_path)
+        seen = _untracked_stats.get(abs_path)
         if seen is not None and now - seen[0] < 1.0:
             stat = seen[1]
         else:
             stat = _regular_file_stat(abs_path)
-            _memory.untracked_stat.put(abs_path, (now, stat))
+            _untracked_stats.put(abs_path, (now, stat))
         if stat is None:
             return
         for code in codes:
@@ -609,7 +578,7 @@ def _note_untracked_read(path: Any, frame: Any) -> None:
 def credited_reads(code: Any) -> dict[str, Any] | None:
     """``{file: stat when read}`` for files read while *code* was on the stack;
     None when it reads per argument."""
-    reads = _memory.reads_by_code.get(code, ())
+    reads = _reads_by_code.get(code, ())
     return None if reads is None else dict(reads)
 
 
@@ -765,10 +734,12 @@ def _glob_base_dir(pattern: Any) -> str | None:
     return "/".join(base) or "."
 
 
-io_watch.subscribe("open", _on_open, outside_scopes=True)
-io_watch.subscribe("os.listdir", _on_listing)
-io_watch.subscribe("os.scandir", _on_listing)
-io_watch.subscribe("glob.glob", _on_glob)
+def _subscribe_read_events() -> None:
+    """Route the audit events of Python-level opens and listings to the tracker."""
+    io_watch.subscribe("open", _on_open, outside_scopes=True)
+    io_watch.subscribe("os.listdir", _on_listing)
+    io_watch.subscribe("os.scandir", _on_listing)
+    io_watch.subscribe("glob.glob", _on_glob)
 
 
 def _dispatch_track(path: Any) -> None:
@@ -785,6 +756,14 @@ def _dispatch_track(path: Any) -> None:
         _tracker._track_path(path)
 
 
+#: (module id, pattern) -> (namespace size, matched names); `_find_patch_targets`.
+_patch_targets = _Memo(1024)
+#: (owner id, name, kind) -> (original, wrapper); `_install_wrapper`.
+_wrappers = _Memo(1024)
+#: What the last full install was computed from; `_install_patches`.
+_installed_for: Any = None
+
+
 def _find_patch_targets(func_pattern: str, module_obj: Any) -> list:
     """Return the list of attribute names to patch on *module_obj*.
 
@@ -796,12 +775,12 @@ def _find_patch_targets(func_pattern: str, module_obj: Any) -> list:
         namespace = getattr(module_obj, "__dict__", None)
         size = len(namespace) if isinstance(namespace, dict) else -1
         key = (id(module_obj), func_pattern)
-        cached = _memory.patch_targets.get(key)
+        cached = _patch_targets.get(key)
         if cached is not None and size >= 0 and cached[0] == size:
             return cached[1]
         prefix = func_pattern[:-1]
         found = [name for name in dir(module_obj) if name.startswith(prefix)]
-        _memory.patch_targets.put(key, (size, found))
+        _patch_targets.put(key, (size, found))
         return found
     if hasattr(module_obj, func_pattern):
         return [func_pattern]
@@ -829,13 +808,13 @@ def _install_wrapper(owner: Any, name: str, original: Any, kind: Any, make: Call
     once per original and only set again after that.
     """
     key = (id(owner), name, kind)
-    cached = _memory.wrappers.get(key)
+    cached = _wrappers.get(key)
     if cached is not None and cached[0] is original:
         wrapper = cached[1]
     else:
         wrapper = make(original)
         _mark_patch(wrapper, original)
-        _memory.wrappers.put(key, (original, wrapper))
+        _wrappers.put(key, (original, wrapper))
     if not _patches.replace(owner, name, wrapper):
         logger.debug("[FILE_TRACKER] Failed to patch %r.%s", owner, name)
 
@@ -961,21 +940,23 @@ class _ReadsInWorker:
     """A task sent to a worker process that brings back what it read.
 
     Module-level so it pickles by reference: the worker imports this module
-    (0.14 s, once per worker) and runs the task under a tracker of its own.
-    A cached function the task calls there propagates its reads -- and on a
-    hit, its recorded ones -- into that tracker like into any outer call's.
+    (0.14 s, once per worker) and runs the task under a tracker of its own,
+    of the submitting tracker's class. A cached function the task calls there
+    propagates its reads -- and on a hit, its recorded ones -- into that
+    tracker like into any outer call's.
     """
 
-    __slots__ = ("fn",)
+    __slots__ = ("fn", "tracker_type")
 
-    def __init__(self, fn: Callable[..., Any]) -> None:
+    def __init__(self, fn: Callable[..., Any], tracker_type: type) -> None:
         self.fn = fn
+        self.tracker_type = tracker_type
 
     def __reduce__(self):
-        return (_ReadsInWorker, (self.fn,))
+        return (_ReadsInWorker, (self.fn, self.tracker_type))
 
     def __call__(self, *args: Any, **kwargs: Any) -> _WorkerReads:
-        tracker = FileAccessTracker()
+        tracker = self.tracker_type()
         with tracker:
             value = self.fn(*args, **kwargs)
         return _WorkerReads(value, sorted(tracker.get_accessed_files()), sorted(tracker.get_absent_files()))
@@ -1015,7 +996,7 @@ def _patch_process_pool_submit() -> None:
             tracker = active_tracker.get()
             if tracker is None or getattr(self, "_cash_internal", False):
                 return original(self, fn, *args, **kwargs)
-            inner = original(self, _ReadsInWorker(fn), *args, **kwargs)
+            inner = original(self, _ReadsInWorker(fn, type(tracker)), *args, **kwargs)
             outer = _RelayFuture(inner)
 
             def relay(done: concurrent.futures.Future) -> None:
@@ -1325,13 +1306,14 @@ _shared_import_hook = PostImportHook()
 
 def _install_patches() -> None:
     """Wrap the readers no audit event reports; run when the first tracker opens."""
+    global _installed_for
     with _install_lock:
         registry = file_registry()
         # A cached call opens and closes a tracker every time it misses: while
         # the handlers and the imported modules are the ones the last install
         # saw, put the same wrappers back without looking anything up.
         basis = (id(registry), registry._revision, tuple(id(sys.modules.get(name)) for name in registry.handlers))
-        if basis != _memory.installed_for or not _patches.reinstall():
+        if basis != _installed_for or not _patches.reinstall():
             for mod_name in registry.handlers:
                 module = sys.modules.get(mod_name)
                 if module is not None:
@@ -1341,7 +1323,7 @@ def _install_patches() -> None:
             # work handed to a process pool reports what it read back to it.
             _patch_thread_pool_submit()
             _patch_process_pool_submit()
-            _memory.installed_for = basis
+            _installed_for = basis
         if _shared_import_hook not in sys.meta_path:
             sys.meta_path.insert(0, _shared_import_hook)
 
@@ -1354,9 +1336,6 @@ def _remove_patches() -> None:
         except ValueError:
             pass
         _patches.restore()
-
-
-io_watch.add_patcher(_install_patches, _remove_patches)
 
 
 class FileAccessTracker:
@@ -1510,11 +1489,12 @@ class FileAccessTracker:
         return self.absent_files
 
     def _track_path(self, path):
+        global _tracking_seconds
         started = _perf_counter()
         try:
             self._track_path_untimed(path)
         finally:
-            _memory.tracking_seconds += _perf_counter() - started
+            _tracking_seconds += _perf_counter() - started
 
     def _track_path_untimed(self, path):
         if not isinstance(path, (str, bytes, os.PathLike)):
@@ -1712,3 +1692,25 @@ class FileAccessTracker:
         parent = self._propagation_parent()
         if parent is not None:
             parent.add_tracked_remote(url)
+
+
+#: Seconds spent recording reads; `tracking_seconds`.
+_tracking_seconds = 0.0
+
+
+def tracking_seconds() -> float:
+    """Seconds cash has spent recording file reads in this process.
+
+    Read before and after a statement, the difference is cash's own time inside
+    it, which is not the statement's cost: a folder read recorded 16.5 s for a
+    load that takes 1.8 s without cash, and a later hit credited all of it as
+    saved.
+    """
+    return _tracking_seconds
+
+
+# What feeds a tracker: the audit events Python raises for its own opens and
+# listings, and wrappers on the readers that raise none, installed while one
+# is open.
+_subscribe_read_events()
+io_watch.add_patcher(_install_patches, _remove_patches)
