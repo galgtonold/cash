@@ -202,11 +202,30 @@ class TestVerdictPersistence:
         guard = MissGuard(str(tmp_path))
         keys = (f"key-{i}" for i in itertools.count())
         _drive_to_guarded(guard, keys)
-        assert json.loads((tmp_path / "_miss_guard.json").read_text(encoding="utf-8"))["guarded"] == ["src"]
+        assert json.loads((tmp_path / "_miss_guard.json").read_text(encoding="utf-8"))["guarded"] == {"src": True}
 
         guard.observe("src", "stable", hit=True)
-        assert json.loads((tmp_path / "_miss_guard.json").read_text(encoding="utf-8"))["guarded"] == []
+        assert json.loads((tmp_path / "_miss_guard.json").read_text(encoding="utf-8"))["guarded"] == {}
         assert _is_guarded(MissGuard(str(tmp_path)), "src") is False
+
+    def test_a_verdict_survives_a_destination_that_frees_up(self, tmp_path, monkeypatch):
+        """On Windows ``os.replace`` is denied while any handle has the file
+        open. The write waits that out, as every versioned JSON store does,
+        rather than losing the verdict on disk while it stays in memory."""
+        real_replace = os.replace
+        denials = [2]
+
+        def denies_twice(src, dst):
+            if denials[0]:
+                denials[0] -= 1
+                raise PermissionError(5, "Access is denied")
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(os, "replace", denies_twice)
+        _drive_to_guarded(MissGuard(str(tmp_path)), (f"key-{i}" for i in itertools.count()))
+
+        assert denials == [0]
+        assert _is_guarded(MissGuard(str(tmp_path)), "src") is True
 
     def test_a_clean_notebook_never_writes_a_store(self, tmp_path):
         guard = MissGuard(str(tmp_path))

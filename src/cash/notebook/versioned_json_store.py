@@ -1,8 +1,9 @@
 """A small ``{key: value}`` map kept as a versioned JSON file in the cache dir.
 
-Shared by the loop-split verdicts (:mod:`.loop_split`) and the measured
-compute costs (:mod:`.compute_baselines`). Both follow the same rules, so
-they live here once:
+Shared by the loop-split verdicts (:mod:`.loop_split`), the measured
+compute costs (:mod:`.compute_baselines`) and the miss guard's verdicts
+(:mod:`.statement.miss_guard`). All follow the same rules, so they live here
+once:
 
 * **Lazy.** The file is read on first use, once per session.
 * **Best-effort.** A missing, unreadable, corrupt or future-versioned file

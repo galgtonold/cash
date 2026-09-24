@@ -58,19 +58,14 @@ it hits, which un-guards the statement. Two triggers, both cheap:
 
 from __future__ import annotations
 
-import json
-import logging
-import os
 from dataclasses import dataclass
 
 from cash.backends.cache_dir import MISS_GUARD_FILENAME
-from cash.backends.file_backend import recreate_cache_dir
 
-logger = logging.getLogger(__name__)
+from ..versioned_json_store import VersionedJsonStore
 
-_STORE_FILENAME = MISS_GUARD_FILENAME
 # Bumping this invalidates every persisted verdict (they are re-learned).
-_STORE_VERSION = 1
+_STORE_VERSION = 2
 
 # Number of CONSECUTIVE key-churn misses (each run producing a cache key
 # different from the previous run's, with no hit in between) before we stop
@@ -107,6 +102,29 @@ GUARD_SKIP_REASON = (
 )
 
 
+class _GuardedStore(VersionedJsonStore[bool]):
+    """The source hashes currently guarded: the only part of the guard kept
+    across kernels, as ``{source_hash: true}``."""
+
+    FILENAME = MISS_GUARD_FILENAME
+    VERSION = _STORE_VERSION
+    FIELD = "guarded"
+    LOG_TAG = "MISS_GUARD"
+
+    def _load_value(self, value: object) -> bool | None:
+        return True if value is True else None
+
+    def guarded(self) -> list[str]:
+        self._ensure_loaded()
+        return list(self._items)
+
+    def replace(self, guarded: set[str]) -> None:
+        """Make *guarded* the whole persisted set."""
+        self._ensure_loaded()
+        self._items = dict.fromkeys(guarded, True)
+        self._write()
+
+
 @dataclass
 class _Record:
     """Per-source-hash miss-guard state. In-memory except ``guarded``."""
@@ -133,70 +151,38 @@ class MissGuard:
     """
 
     def __init__(self, cache_dir: str | None) -> None:
-        self._path = os.path.join(cache_dir, _STORE_FILENAME) if cache_dir else None
+        self._store = _GuardedStore(cache_dir)
         self._records: dict[str, _Record] = {}
         self._loaded = False
 
     # -- persistence ----------------------------------------------------
 
     def _ensure_loaded(self) -> None:
-        """Read persisted verdicts once per session, lazily.
+        """Seed the guarded verdicts from disk once per session, lazily.
 
-        Best-effort by construction: a missing, unreadable, corrupt, or
-        future-versioned store leaves the guard empty, which means every
-        statement serialises — the pre-guard behaviour. The guard is a
-        performance optimisation, so its failure mode must be "no optimisation",
-        never "no cache".
+        Best-effort, like every :class:`VersionedJsonStore`: a missing,
+        unreadable, corrupt or future-versioned store leaves the guard empty,
+        so every statement serialises. The guard is a performance
+        optimisation, so its failure mode must be "no optimisation", never
+        "no cache".
         """
         if self._loaded:
             return
         self._loaded = True
-        if not self._path:
-            return
-        try:
-            with open(self._path, encoding="utf-8") as fh:
-                doc = json.load(fh)
-        except (OSError, ValueError):
-            logger.debug("[MISS_GUARD] no readable verdict store at %s", self._path)
-            return
-        if not isinstance(doc, dict) or doc.get("version") != _STORE_VERSION:
-            return
-        guarded = doc.get("guarded")
-        if not isinstance(guarded, list):
-            return
-        for source_hash in guarded:
-            if isinstance(source_hash, str):
-                # ``last_key=""`` matches no real key, so the first run of the
-                # new session reads as churn rather than as a stabilised key.
-                self._records[source_hash] = _Record(last_key="", guarded=True)
+        for source_hash in self._store.guarded():
+            # ``last_key=""`` matches no real key, so the first run of the
+            # new session reads as churn rather than as a stabilised key.
+            self._records[source_hash] = _Record(last_key="", guarded=True)
 
     def _persist(self) -> None:
         """Write the guarded set. Called ONLY when a verdict flips.
 
-        Never per cell — that is the fsync-per-cell regression under a
-        new name. A flip happens a handful of times in a notebook's whole life.
-        Atomic via ``os.replace`` so a crashed write can't leave a torn file for
-        the next session to choke on; no ``fsync``, because losing the last
-        verdict to a hard kernel kill only costs re-learning it.
+        Never per cell: the hot path stays in memory. A flip happens a
+        handful of times in a notebook's whole life. No ``fsync``, because
+        losing the last verdict to a hard kernel kill only costs re-learning
+        it.
         """
-        if not self._path:
-            return
-        doc = {
-            "version": _STORE_VERSION,
-            "guarded": sorted(sh for sh, rec in self._records.items() if rec.guarded),
-        }
-        tmp_path = f"{self._path}.{os.getpid()}.tmp"
-        try:
-            recreate_cache_dir(os.path.dirname(self._path))
-            with open(tmp_path, "w", encoding="utf-8") as fh:
-                json.dump(doc, fh)
-            os.replace(tmp_path, self._path)
-        except OSError:
-            logger.debug("[MISS_GUARD] verdict persistence failed", exc_info=True)
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
+        self._store.replace({sh for sh, rec in self._records.items() if rec.guarded})
 
     # -- the state machine ----------------------------------------------
 

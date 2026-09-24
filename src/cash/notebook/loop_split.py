@@ -115,9 +115,8 @@ def split_sources(node: ast.For, k: int) -> tuple[str, str]:
 class LoopSplitStore(VersionedJsonStore[int]):
     """Persisted ``source_hash -> k`` verdicts, read by both sides.
 
-    Mirrors ``statement/miss_guard.py``: loaded lazily once per session,
-    written only when a verdict is added, and best-effort throughout (see
-    :mod:`.versioned_json_store`) -- a missing, unreadable, corrupt or
+    Loaded lazily once per session, written only when a verdict is added,
+    and best-effort throughout (see :mod:`.versioned_json_store`) -- a missing, unreadable, corrupt or
     future-versioned store leaves it empty, which means "no loop is split",
     which is exactly the pre-split behaviour. The failure mode must be "no
     optimisation", never "wrong answer".
