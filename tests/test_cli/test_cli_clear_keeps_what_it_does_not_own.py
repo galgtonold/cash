@@ -121,12 +121,16 @@ def test_a_notebook_cache_with_its_sidecar_stores_is_removed(tmp_path, monkeypat
     for name in ("_miss_guard.json", "_loop_split.json", "_compute_baselines.json", "cache.db-wal", "cache.db-shm"):
         assert name in written, f"the fixture did not write {name}: {sorted(written)}"
     assert any(n.startswith(".keys/") for n in written), sorted(written)
-    try:
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr(sys, "argv", ["cash", "clear", str(cache)])
-        main()
-    finally:
-        db.shutdown()
+    # Closed first: Windows cannot delete a database a connection holds open
+    # (clearing under a running kernel is its own test). A clean close removes
+    # the -wal/-shm files, which a kernel that died leaves behind, so put them
+    # back: they are what this test is about.
+    db.shutdown()
+    for name in ("cache.db-wal", "cache.db-shm"):
+        (cache / name).touch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["cash", "clear", str(cache)])
+    main()
     out = capsys.readouterr().out
     assert not cache.exists(), out
     assert "Cleared" in out, out
