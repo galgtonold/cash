@@ -9,8 +9,11 @@ actually holds.
 For each markdown file under `docs/tutorials/feature-guides/` (and later
 under `use-cases/`), `tests/docs/test_tutorials.py::test_doc_page`:
 
-1. Extracts every ` ```python ` fence in source order (`_harness.extract_fences`)
-2. Skips fences annotated with `<!-- test:skip reason="..." -->`
+1. Extracts every ` ```python ` fence in source order (`_harness.extract_fences`),
+   including indented ones inside a content tab, admonition or list item
+   (their body is dedented)
+2. Skips fences annotated with `<!-- test:skip reason="..." -->`, and the
+   ones listed in `_harness.PENDING_FENCES` (see below)
 3. Concatenates the remaining fences into a single executable script
 4. Compiles with `PyCF_ALLOW_TOP_LEVEL_AWAIT` so async examples work
 5. Runs the script in a fresh namespace (autouse fixtures from
@@ -26,6 +29,43 @@ under `use-cases/`), `tests/docs/test_tutorials.py::test_doc_page`:
 If the doc says "first call computes, second call hits" but the code
 actually misses both times (because someone broke `@cash.cache`), the
 test fails with the markdown filename and line range.
+
+A page with a `{ .nb-cell }` fence or a `%magic` line runs through an
+in-process IPython shell with cash's magics loaded instead, one fence per
+cell, so it behaves as a notebook would.
+
+## Checking a badge
+
+A notebook cell can assert the badge a reader sees:
+
+```markdown
+<!-- test:expect-badge first=EXECUTED rerun=CACHED -->
+```
+
+`first=` is the badge on the cell's first run; `rerun=` runs the cell again
+at once and checks that badge. A bare word means `first=`. The words are the
+badge's own: CACHED, EXECUTED, MIXED, SKIPPED. Put this annotation at the
+top of a stack of annotations: the other annotation readers stop at a comment
+they do not know.
+
+The docs conftest caps `time.sleep` at 1 ms, so a cell that sleeps to stand in
+for slow work is too cheap to cache here and reads EXECUTED on a rerun. Assert
+CACHED only on a statement that clears the cost floor for real, or carries
+`# @cash:persist`.
+
+`CASH_DOCS_RERUN_NB_CELLS=1` reruns every `{ .nb-cell }` fence that is not
+only imports and definitions, and fails when the rerun reads EXECUTED. It is
+opt-in because a few cells on the current pages still fail it. Annotate a
+cell that really does run again with `<!-- test:expect-badge rerun=EXECUTED -->`.
+
+## Fences waiting on a page edit
+
+`_harness.PENDING_FENCES` lists fences that do not run as written, keyed by
+page and the start of the fence's code, each with the reason. They are
+skipped until the page is fixed; then delete the entry.
+`test_harness.py::test_every_pending_fence_entry_still_matches_a_fence` fails
+on an entry that matches no fence, so the list only shrinks. Do not add to it:
+fix the page, or give the fence a `test:skip` with a reason.
 
 ## Skipping a fence
 
@@ -63,6 +103,11 @@ drift is the one exception: see [When a claim drifts](#when-a-claim-drifts).
   `test_try_cash_notebooks_in_sync.py` fail when a committed file under
   `docs/` or `examples/` no longer matches the script that builds it. Each
   names the script to re-run.
+- **Example notebooks**: `test_example_notebooks.py` checks every notebook in
+  `examples/` for the standard setup cell and no `%%time`, `%load_ext cash`,
+  debug toggles or mtime sleeps. With `CASH_RUN_EXAMPLE_NOTEBOOKS=1` (the
+  `example-notebooks` CI job) it also runs the notebooks on its allow-list
+  top to bottom in real kernels, offline.
 - **Page-level checks**: `test_doc_claims.py` (env vars, config defaults,
   magics, internal links, cited line numbers and test names),
   `test_api_references_resolve.py`, `test_mermaid_diagrams.py` and the other
