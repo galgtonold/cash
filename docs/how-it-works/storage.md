@@ -102,7 +102,7 @@ keeps it in memory if it fits and warns once
 
 ## When the disk fills up
 
-<!-- claim: cash/backends/file_backend.py:FileBackend._do_set_sync @39e0412a, cash/backends/file_eviction.py:FileEvictor.evict @27bf1fea -->
+<!-- claim: cash/backends/file_backend.py:FileBackend._do_set_sync @39e0412a, cash/backends/file_eviction.py:FileEvictor.evict @8d0ef9e7 -->
 Only a write can start eviction. After each write to disk, the background
 writer adds the entry's size to a running total. If the total is over the cap,
 it deletes entries until the cache is under 90% of the cap, so the next few
@@ -116,7 +116,7 @@ cheap value goes before many small expensive ones. Entries nobody reads lose
 their standing over time. An entry read since the ranking was made, or one
 about to be rewritten, is skipped in that round.
 
-<!-- claim: cash/backends/file_eviction.py:FileEvictor.touched_since @89a9925f -->
+<!-- claim: cash/backends/file_eviction.py:FileEvictor.touched_since @1e44fa35 -->
 The value just written is not protected. If it is the least valuable entry, it
 goes first; when that keeps happening, the cap is too small, and
 [`CACHE-THRASH`](../warnings.md#cache-thrash) warns once per session.

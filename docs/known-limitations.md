@@ -29,7 +29,7 @@ reconstruct and these cases do not arise. Entries that also affect Run All say s
 
 This is the one home for randomness in notebooks; other pages link here.
 
-<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @f9c1baa7, cash/tracking/randomness/state.py:restore_rng_state @3e10fc77, cash/tracking/randomness/state.py:capture_rng_state @421bfe05 -->
+<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @dbaae9db, cash/tracking/randomness/state.py:restore_rng_state @3e10fc77, cash/tracking/randomness/state.py:capture_rng_state @421bfe05 -->
 **Symptom:** re-running a cell returns the same random numbers.
 
 An unseeded draw is cached like any other value, so a re-run shows the stored
@@ -239,7 +239,7 @@ the statement.
 
 ### Reads through a loader cash cannot see
 
-<!-- claim: cash/tracking/file_tracker.py:_install_module_patches @03e888c6 -->
+<!-- claim: cash/tracking/reader_patches.py:_install_module_patches @c4527d67 -->
 **Symptom:** you changed a file and the cell still shows the old data, with a
 `CACHED` badge and no warning.
 

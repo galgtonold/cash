@@ -36,7 +36,7 @@ modification time must match too. The full rule is in
 
 ## What's automatically tracked
 
-<!-- claim: cash/tracking/file_tracker.py:FileDependencyRegistry._initialize_defaults @b63601b2, cash/tracking/file_tracker.py:_on_open @0ac87d87, cash/tracking/file_tracker.py:_on_listing @c2c76d1d -->
+<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @caa8d35e, cash/tracking/read_events.py:_on_open @7e1d5c60, cash/tracking/read_events.py:_on_listing @c2c76d1d -->
 Cash tracks `open()` in a read mode and what reads through it, the pandas, polars,
 pyarrow and numpy readers, `sqlite3.connect`, directory listings (a new
 matching file recomputes the call) and existence checks that answer False (the
@@ -45,12 +45,12 @@ call recomputes once the file appears). The full reader list is under
 
 A path passed by keyword counts the same as one passed by position.
 
-<!-- claim: cash/tracking/file_tracker.py:_is_read_mode @238e2cb8 -->
+<!-- claim: cash/tracking/read_events.py:_is_read_mode @238e2cb8 -->
 A file opened for writing is not a dependency: the entry would then depend on
 its own output. Cash reports the write as a side effect instead
 ([Side effects](../../decorator.md#side-effects)).
 
-<!-- claim: cash/tracking/file_tracker.py:incidental_read @6f65994d -->
+<!-- claim: cash/tracking/read_classification.py:incidental_read @9366e41c -->
 Some reads are left out on purpose because they are not your data: files of the
 Python installation, package metadata, reads a library makes while it is
 imported, and an installed package reading its own files (fonts, templates,

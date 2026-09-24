@@ -1187,8 +1187,8 @@ handle), or on Windows a file held open by another process.
 
 *Decorator.*
 
-<!-- claim: cash/decorator/file_deps.py:FileDepsMixin._inputs_moved_during_call @460be4de, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @faa17b34 -->
-<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker._digest_now @8624e84e, cash/tracking/file_dep_snapshot.py:snapshot_file_deps @fac08483 -->
+<!-- claim: cash/decorator/file_deps.py:FileDepsMixin._inputs_moved_during_call @460be4de, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @a2ece8d1 -->
+<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker._digest_now @270aaafd, cash/tracking/file_dep_snapshot.py:snapshot_file_deps @fac08483 -->
 **What happened.** A file the function read changed before it returned. The
 result was returned but not stored.
 

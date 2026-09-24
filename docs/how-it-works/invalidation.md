@@ -49,7 +49,7 @@ stored. This page lists what it tracks and how it checks.
 
 ### Files
 
-<!-- claim: cash/tracking/file_tracker.py:FileDependencyRegistry._initialize_defaults @b63601b2, cash/tracking/file_tracker.py:_is_read_mode @238e2cb8 -->
+<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @caa8d35e, cash/tracking/read_events.py:_is_read_mode @238e2cb8 -->
 Cash records a file when your code reads it through one of these:
 
 | Library | Readers |
