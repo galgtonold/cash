@@ -183,10 +183,11 @@ is computing while you clear its function still finishes and stores its
 result; stop the job first if you are clearing because the code or data
 changed.
 
-<!-- claim: cash/__main__.py:_rmtree_cache @1dca2a62 -->
+<!-- claim: cash/__main__.py:_rmtree_cache @fec6529c, cash/__main__.py:_remove_markers_last @e10b3bc7 -->
 **A cache a notebook has open.** On Windows a file that a running kernel holds
 open cannot be deleted. `cash clear` then stops, names the file, and exits 1;
-close the notebook or stop its kernel, then run it again.
+close the notebook or stop its kernel, then run the same command again. What
+is left still counts as a cash cache, so it needs no `--force`.
 
 `Nothing cleared: no cache at …` means the directory `cash info` reports has
 no cache. A script outside any project caches beside itself, and changing

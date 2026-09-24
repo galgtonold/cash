@@ -688,7 +688,7 @@ def _rmtree_cache(cache_dir: str, force: bool = False) -> None:
             )
             sys.exit(1)
     try:
-        shutil.rmtree(resolved)
+        _remove_markers_last(resolved)
     except OSError as exc:
         # On Windows a file another process holds open cannot be deleted, so
         # clearing the cache of a notebook whose kernel is still running
@@ -702,6 +702,29 @@ def _rmtree_cache(cache_dir: str, force: bool = False) -> None:
         )
         sys.exit(1)
     print(f"Cleared: {resolved}")
+
+
+def _remove_markers_last(cache_dir: str) -> None:
+    """Delete *cache_dir*, removing what marks it as a cash cache last.
+
+    A removal can stop halfway: on Windows a file a running kernel holds open
+    cannot be deleted. Whatever is left must still pass `_looks_like_a_cache`,
+    so the same ``cash clear`` works again once the notebook is closed,
+    without ``--force``. So the top-level ``.entry`` files go after everything
+    else, and the ``CACHE_VERSION`` stamp after them.
+    """
+    names = os.listdir(cache_dir)
+    markers = sorted(
+        (n for n in names if n == VERSION_FILENAME or n.endswith(ENTRY_SUFFIX)),
+        key=lambda n: n == VERSION_FILENAME,
+    )
+    for name in [n for n in names if n not in markers] + markers:
+        path = os.path.join(cache_dir, name)
+        if os.path.isdir(path) and not os.path.islink(path):
+            shutil.rmtree(path)
+        else:
+            os.unlink(path)
+    os.rmdir(cache_dir)
 
 
 def _not_cash_files(cache_dir: str) -> list[str]:

@@ -10,6 +10,7 @@ directory whole: ``Cleared: ...\shared_data``, exit 0, ``precious.csv`` gone.
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from types import SimpleNamespace
@@ -175,29 +176,93 @@ def test_temp_files_of_cash_writes_are_cash_files(name, cash_wrote_it):
     assert is_cash_file(name) is cash_wrote_it
 
 
+def _hold_open(monkeypatch, name):
+    """Make deleting the file *name* fail as it does on Windows while another
+    process has it open (WinError 32), until the returned release() is called.
+
+    The locked file is also listed last: the order a removal meets it in is
+    the filesystem's choice, and last is the order that deletes the most
+    before stopping.
+    """
+    import errno
+
+    held = {"on": True}
+    real_unlink, real_scandir = os.unlink, os.scandir
+
+    def unlink(path, *args, **kwargs):
+        if held["on"] and os.path.basename(os.fspath(path)) == name:
+            raise PermissionError(errno.EACCES, "The process cannot access the file", os.fspath(path))
+        return real_unlink(path, *args, **kwargs)
+
+    class _LockedLast:
+        def __init__(self, it):
+            with it:
+                self._entries = iter(sorted(it, key=lambda e: e.name == name))
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            return next(self._entries)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(os, "unlink", unlink)
+    monkeypatch.setattr(os, "remove", unlink)
+    monkeypatch.setattr(os, "scandir", lambda *a, **k: _LockedLast(real_scandir(*a, **k)))
+    return lambda: held.update(on=False)
+
+
+def _clear_from_the_cli(cache, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["cash", "clear", str(cache)])
+    main()
+
+
 def test_a_cache_a_running_kernel_holds_open_is_refused_in_one_line(tmp_path, monkeypatch, capsys):
     """On Windows a kernel still using the cache holds ``cache.db`` open, and
     deleting it fails with WinError 32. ``cash clear`` printed a traceback;
     it names the file and what to do, and exits 1."""
-    import errno
-    import shutil
-
-    cache = _cache_with(tmp_path)
+    cache = _cache_with(tmp_path, "cache.db")
     (cache / "raw").rmdir()
-    locked = str(cache / "cache.db")
-
-    def in_use(path, *args, **kwargs):
-        raise PermissionError(errno.EACCES, "The process cannot access the file", locked)
-
-    monkeypatch.setattr(shutil, "rmtree", in_use)
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(sys, "argv", ["cash", "clear", str(cache)])
+    _hold_open(monkeypatch, "cache.db")
     with pytest.raises(SystemExit) as exit_info:
-        main()
+        _clear_from_the_cli(cache, monkeypatch, tmp_path)
     captured = capsys.readouterr()
     assert exit_info.value.code == 1, captured.out
     lines = captured.out.strip().splitlines()
     assert len(lines) == 1, captured.out
-    assert locked in lines[0] and "stop the kernel" in lines[0], lines[0]
+    assert str(cache / "cache.db") in lines[0] and "stop the kernel" in lines[0], lines[0]
     assert "Traceback" not in captured.out + captured.err
     assert "Cleared" not in captured.out
+
+
+@pytest.mark.parametrize("stamped", [True, False], ids=["stamp", "entries_only"])
+def test_a_clear_stopped_by_an_open_file_works_again_once_it_is_closed(tmp_path, monkeypatch, capsys, stamped):
+    """What a stopped clear leaves must still look like a cash cache, or the
+    rerun the error message asks for is refused without --force."""
+    cache = _cache_with(tmp_path, "cache.db")
+    (cache / "raw").rmdir()
+    (cache / ".keys").mkdir()
+    (cache / ".keys" / "0123abcd.json").write_text("{}", encoding="utf-8")  # a directory, removed whole
+    if not stamped:
+        (cache / "CACHE_VERSION").unlink()  # an entry file is the only marker
+    release = _hold_open(monkeypatch, "cache.db")
+    with pytest.raises(SystemExit) as exit_info:
+        _clear_from_the_cli(cache, monkeypatch, tmp_path)
+    assert exit_info.value.code == 1
+    assert (cache / "cache.db").exists()
+    capsys.readouterr()
+
+    release()  # the notebook is closed
+    _clear_from_the_cli(cache, monkeypatch, tmp_path)
+    out = capsys.readouterr().out
+    assert not cache.exists(), out
+    assert "Cleared" in out, out
