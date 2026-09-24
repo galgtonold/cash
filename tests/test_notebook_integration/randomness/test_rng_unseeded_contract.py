@@ -125,20 +125,14 @@ def test_no_cache_redraws_below_a_frozen_draw(nb_runner):
 @pytest.mark.timeout(180)
 def test_no_cache_redraws_after_a_replayed_statement(nb_runner):
     """A cache hit puts the stream back where the cached statement left it;
-    the no-cache draw after it must still redraw.
-
-    Printed by a no-cache cell of its own: with every statement persisted, a
-    plain ``print(r)`` is itself a cache hit and replays the first run's output.
-    """
-    nb_runner.create_notebook(
-        [C_ON, SETUP, "x = 1\n# @cash:no-cache\nr = random.random()", "# @cash:no-cache\nprint('r=', r)"]
-    )
+    the no-cache draw after it must still redraw."""
+    nb_runner.create_notebook([C_ON, SETUP, "x = 1\n# @cash:no-cache\nr = random.random()"])
     nb_runner.start_kernel()
     nb_runner.enable_persist()
     nb_runner.run_all()
-    first = _drawn(nb_runner, 4)
+    first = nb_runner.peek("r")
     nb_runner.run_all()
-    assert _drawn(nb_runner, 4) != first
+    assert nb_runner.peek("r") != first
 
 
 @pytest.mark.timeout(180)

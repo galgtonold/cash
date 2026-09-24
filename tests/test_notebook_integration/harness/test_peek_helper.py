@@ -21,14 +21,9 @@ known to have teeth rather than assumed to:
   `test_peek_finds_its_marker_when_other_output_shares_the_channel`, where the
   badge occupies the first line.
 
-What these guards do NOT discriminate: an implementation that evaluates through
-a notebook cell. That was the third naive version tried, and it passes
-everything here -- `test_peek_leaves_the_notebook_untouched` catches the cell
-being *recorded*, but a cell run with `store_history=False` would slip through.
-The reason no test pins it is that the divergence it would cause needs a served
-statement whose printed state is stale, and the callee-global-write fix removed that shape by
-skip-caching exactly those statements. Worth knowing before trusting this file
-to catch a rewrite of the evaluation path.
+The peek itself runs through cash's cell hook, like any code the kernel runs
+while ``%cash_on`` is active. `test_peek_is_not_replayed_when_every_statement_is_stored`
+pins that it is never served from the cache.
 """
 
 import pytest
@@ -128,3 +123,19 @@ def test_peek_returns_a_marker_rather_than_guessing_when_it_fails(nb_runner):
     nb_runner.run_all()
 
     assert nb_runner.peek("1 / 0") == "?"
+
+
+def test_peek_is_not_replayed_when_every_statement_is_stored(nb_runner):
+    """With ``%cash_persist on`` cash stores even a cheap statement, the
+    peek's own ``print`` included. Its text names the variable only inside a
+    string, so its key does not change when the value does, and a second peek
+    replayed the first one's output."""
+    nb_runner.create_notebook([SETUP, "counter = 0", "# @cash:no-cache\ncounter += 1"])
+    nb_runner.start_kernel()
+    nb_runner.enable_persist()
+    nb_runner.run_all()
+    assert nb_runner.peek("counter") == "1"
+
+    nb_runner.run_cells([3])
+
+    assert nb_runner.peek("counter") == "2", "peek replayed a stored reading instead of asking the kernel"

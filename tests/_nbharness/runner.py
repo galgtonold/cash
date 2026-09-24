@@ -729,8 +729,11 @@ from cash import Cash
     def peek(self, expr: str) -> str:
         """Evaluate *expr* in the live kernel and return its ``repr``.
 
-        Runs outside the notebook's cells with ``store_history=False``, so
-        nothing about it is cached, replayed, or added to the notebook.
+        Runs outside the notebook's cells with ``store_history=False``, so it
+        is not added to the notebook. Cash still sees it, so it carries
+        ``# @cash:no-cache``: under ``%cash_persist on`` the ``print`` would
+        otherwise be stored, and its key names the variable only inside a
+        string, so a later peek replayed the first reading.
 
         **Use this when the claim is about kernel state; use ``get_output``
         when the claim is about what the user sees.** Both are legitimate;
@@ -770,7 +773,7 @@ from cash import Cash
 
         self._run_async(
             self.client.kc._async_execute_interactive(
-                f"print('__CASH_PEEK__', repr({expr}))",
+                f"# @cash:no-cache\nprint('__CASH_PEEK__', repr({expr}))",
                 store_history=False,
                 output_hook=_hook,
             )
