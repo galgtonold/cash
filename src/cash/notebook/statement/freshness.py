@@ -78,10 +78,14 @@ class CacheFreshnessChecker:
         one of them per statement: 120,000 checks, 1.1 s,
         for a cell served entirely from the cache.
 
-        Only inside a real cell (an ``int`` execution count) and for at most
-        ``_ANSWERS_LAST_S``: a file another process or a background thread
-        rewrites mid-cell is seen within that, and a caller outside any cell
-        gets one check per lookup, as before.
+        Only inside a cell run (an ``int`` *epoch*: ``file_state_epoch``,
+        which every cell run moves) and for at most ``_ANSWERS_LAST_S``: a
+        file another process or a background thread rewrites mid-cell is seen
+        within that, and a caller outside any cell gets one check per lookup.
+        Not the shell's ``execution_count``: a cell run without history
+        (``shell.run_cell(code)``) leaves it unchanged, and the next cell
+        reused this one's answers -- a same-size edit made between the two,
+        within the window, was served stale.
         """
         self._memo = FreshnessMemo()
         self._fresh_sets = []

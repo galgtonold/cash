@@ -371,16 +371,22 @@ class StatementRandomness:
         allow_random: bool,
         *,
         is_hit: bool,
+        skip_cache: bool = False,
     ) -> None:
         """Badge + warn for an inline/assignment-form unseeded fit (gap).
 
         Stamps the metric so the badge shows the unseeded pill, and routes the
         same warning the named-receiver path uses — the compute-time "detected"
         claim on a miss, the "frozen replay" claim on a hit.
+
+        Only when the value is cached. A ``skip_cache`` statement -- a bare
+        ``clf.fit(X, y)``, whose receiver lands in *outputs* as a mutation on
+        a re-run -- fits afresh every run, so there is no frozen replay to warn
+        about (the same gate as :meth:`flag_observed_hidden_draw`).
         """
         # Cheap guard on the hot path: no ``fit`` token, no AST walk. A ``.fit`` /
         # ``.partial_fit`` call always spells "fit", so this cannot false-negate.
-        if not outputs or "fit" not in code:
+        if skip_cache or not outputs or "fit" not in code:
             return
         fits = self._inline_unseeded_fit_outputs(tree, outputs)
         if not fits:

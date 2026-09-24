@@ -180,3 +180,31 @@ def test_default_bare_fit_does_not_warn(nb_runner):
     assert DETECTED_TEXT not in out, f"uncached bare fit warned about a replay that cannot happen: {out!r}"
     assert "frozen replay" not in out, out
     assert "fitted 40" in nb_runner.get_output(4)
+
+
+def test_rerun_bare_fit_does_not_warn(nb_runner):
+    """A re-run of an uncached bare fit stays quiet too.
+
+    On the re-run the fit's receiver is pre-routed as a mutation and joins the
+    statement's outputs, which the inline-fit check read as a cached fitted
+    estimator: the second run warned "cash caches the fit ... frozen replay"
+    and badged the row ``[random: unseeded]`` for a fit that re-runs.
+    """
+    nb_runner.create_notebook(
+        [
+            SETUP,
+            DATA,
+            "clf = RandomForestClassifier(n_estimators=40)",  # UNSEEDED
+            "clf.fit(X, y)\nprint('fitted', clf.n_estimators)",
+        ]
+    )
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    nb_runner.run_all()
+
+    out = nb_runner.get_raw_output(4)
+    assert "fitted 40" in nb_runner.get_output(4)
+    assert "NOT CACHED" in out, out
+    assert DETECTED_TEXT not in out, f"a re-run of an uncached bare fit claimed a frozen replay: {out!r}"
+    assert "frozen replay" not in out, out
+    assert "random: unseeded" not in out, out

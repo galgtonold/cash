@@ -695,6 +695,21 @@ from cash import Cash
 
         return self
 
+    def run_cell_without_history(self, cell_num: int) -> "NotebookTestRunner":
+        """Execute a cell's source with ``store_history=False`` (1-based).
+
+        What ``shell.run_cell(code)``, an agent or a frontend extension does:
+        the kernel's ``execution_count`` does not move, unlike a notebook
+        run. Its output is not recorded on the cell; read state with ``peek``.
+        """
+        if not self._kernel_started:
+            raise RuntimeError("Kernel not started. Call start_kernel() first.")
+        source = self.get_cell_source(cell_num)
+        self._run_async(
+            self.client.kc._async_execute_interactive(source, store_history=False, output_hook=lambda msg: None)
+        )
+        return self
+
     def run_cells(self, cell_nums: List[int]) -> "NotebookTestRunner":
         """Execute multiple cells in order."""
         for num in cell_nums:

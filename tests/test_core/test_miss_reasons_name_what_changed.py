@@ -164,7 +164,7 @@ def test_a_sampled_fingerprint_is_labelled_and_a_hit_says_it_trusts_timestamps()
     from cash.core import Cash
     from cash.decorator.explain import describe_file_deps
 
-    shown = describe_file_deps({"big.npy": {"size": 3 << 28, "hash": "ab" * 32, "ctime_ns": 1, "ctime": 1.0}})
+    shown = describe_file_deps({"big.npy": {"size": 3 << 28, "hash": "ab" * 32, "ctime_ns": 1, "sampled": True}})
     assert "sampled hash" in shown["big.npy"], shown
     line = Cash._describe_call(
         {

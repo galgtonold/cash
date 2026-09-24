@@ -63,6 +63,7 @@ from ...analysis.mutation_effects import (
 )
 from ...analysis.namespace_effects import statement_calls_user_writer
 from ...analytics import AnalyticsManager
+from ...tracking.file_dep_snapshot import file_state_epoch
 from ...tracking.file_tracker import FileAccessTracker
 from ...tracking.function_tracker import FunctionTracker
 from ..consumables import is_consumable_unrestorable
@@ -690,13 +691,6 @@ class StatementProcessor:
             metrics["uncacheable_reasons"].append(
                 f"Fits: {', '.join(sorted(fit_only))} (estimator fitted in place; statement re-executes)"
             )
-        # An UNSEEDED estimator fit routed to caching above is frozen on re-run
-        # with no warning -- cash's AST detector cannot see the randomness inside
-        # sklearn's compiled .fit(). Warn now (compute time); the same set drives
-        # the restore-time warning on a cache hit below.
-        unseeded_fits = self._randomness.warn_unseeded_estimator_fit(code, est_fit, run.allow_random)
-        self._randomness.stamp_random_effect(metrics, code, run.unseeded_calls, unseeded_fits)
-
         if not run.skip_cache:
             cacheable, reasons = decide_cacheability(
                 code=code,
@@ -713,6 +707,14 @@ class StatementProcessor:
             if not cacheable:
                 metrics["uncacheable_reasons"].extend(reasons)
                 run.skip_cache = True
+        # An UNSEEDED estimator fit routed to caching above is frozen on re-run
+        # with no warning -- cash's AST detector cannot see the randomness inside
+        # sklearn's compiled .fit(). Warn now (compute time); the same set drives
+        # the restore-time warning on a cache hit below. Only once the statement
+        # is known to be cached: one that re-executes fits afresh every run.
+        fits_cached = est_fit if not run.skip_cache else set()
+        unseeded_fits = self._randomness.warn_unseeded_estimator_fit(code, fits_cached, run.allow_random)
+        self._randomness.stamp_random_effect(metrics, code, run.unseeded_calls, unseeded_fits)
         run.effective_ttl = self._ttl_floor_from_called_functions(inputs, run.effective_ttl)
         metadata, cached_data, cache_check_time = self._do_cache_lookup(
             run.skip_cache, run.cache_key, run.effective_ttl, inputs
@@ -834,7 +836,7 @@ class StatementProcessor:
             return metrics
 
         self._randomness.flag_inline_unseeded_fit(
-            metrics, run.code, run.tree, run.outputs, run.allow_random, is_hit=False
+            metrics, run.code, run.tree, run.outputs, run.allow_random, is_hit=False, skip_cache=run.skip_cache
         )
         self._randomness.flag_observed_hidden_draw(metrics, run.code, run.outputs, skip_cache=run.skip_cache)
         metrics["status"] = CacheStatus.COMPUTED
@@ -934,7 +936,7 @@ class StatementProcessor:
         """Run cache lookup unless *skip_cache* is set."""
         if not skip_cache:
             return self._freshness.check_cache(
-                self.tracking_state, cache_key, ttl, inputs, epoch=getattr(self.shell, "execution_count", None)
+                self.tracking_state, cache_key, ttl, inputs, epoch=file_state_epoch()
             )
         logger.debug("%s Skipping cache lookup due to missing input lineage or @cash:no-cache", _LOG_ANNOTATION)
         return None, None, 0.0
@@ -1297,7 +1299,7 @@ class StatementProcessor:
             except Exception:  # noqa: BLE001 - when unsure, check files again
                 wrote = True
         if wrote:
-            self._freshness.forget_file_answers(getattr(self.shell, "execution_count", None))
+            self._freshness.forget_file_answers(file_state_epoch())
 
     def _update_state_tracking(
         self,

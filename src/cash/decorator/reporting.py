@@ -16,7 +16,7 @@ from ..diagnostics import format_diagnostic, warn_diagnostic, warn_diagnostic_me
 from ..exceptions import CashCacheIneffectiveWarning
 from .cached_function import WARNINGS_MAX
 from .call_state import CALL_ENTRY, NESTED_CASH_SECONDS
-from .explain import MissKind, MissReason, entry_id_of, is_sampled_dep
+from .explain import MissKind, MissReason, entry_id_of, is_sampled_dep, same_file_key
 
 #: One line per decorated call -- hit or miss, and why -- when `debug=True` /
 #: `CASH_DEBUG=1` or `verbose=True` asks for it.
@@ -98,7 +98,13 @@ class ReportingMixin:
         if self._per_call_lines():
             if file_deps:
                 # Only for the line: a hit pays nothing for it otherwise.
-                entry["sampled_files"] = tuple(path for path, rec in file_deps.items() if is_sampled_dep(rec))
+                # One name per file: the tracker can record a file under both
+                # the relative and the absolute path it was opened by.
+                sampled: dict[str, str] = {}
+                for path, rec in file_deps.items():
+                    if is_sampled_dep(rec):
+                        sampled.setdefault(same_file_key(path), path)
+                entry["sampled_files"] = tuple(sampled.values())
             calls_logger.info("%s", self._describe_call(entry))
 
     def _per_call_lines(self) -> bool:
