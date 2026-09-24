@@ -1618,7 +1618,8 @@ class PurityAnalyzer:
     _CACHE_SIZE_LIMIT = 500
 
     def __init__(self) -> None:
-        self._cache: dict[str, PurityReport] = {}
+        # memo key -> (report, the closure it belongs to, or None)
+        self._cache: dict[str, tuple[PurityReport, weakref.ref | None]] = {}
         self._cache_lock = threading.Lock()
 
     def analyze(self, func: Callable[..., Any]) -> PurityReport:
@@ -1629,6 +1630,7 @@ class PurityAnalyzer:
         is not audited: ``@pure`` reports nothing, ``@stateful`` reports the
         function itself.
         """
+        owner: weakref.ref | None = None
         source_hash = _try_source_hash(func)
         if source_hash is not None:
             # Keyed by the namespace the names resolve in as well as the text:
@@ -1637,8 +1639,27 @@ class PurityAnalyzer:
             # second module the first one's helpers -- editing its own `step`
             # then changed nothing its key could see.
             source_hash = f"{source_hash}:{id(getattr(func, '__globals__', None))}"
+            # A closure's names also resolve in its cells: two closures with
+            # the same text in one module (one factory called twice, or two
+            # factories) can capture different helpers, and sharing a report
+            # keyed the second by the first one's helpers. A report of a
+            # closure belongs to that function object alone.
+            if getattr(func, "__closure__", None):
+                try:
+                    owner = weakref.ref(func)
+                except TypeError:
+                    source_hash = None
+                else:
+                    source_hash = f"{source_hash}:{id(func)}"
+        if source_hash is not None:
             with self._cache_lock:
-                cached = self._cache.get(source_hash)
+                entry = self._cache.get(source_hash)
+            cached = None
+            if entry is not None:
+                cached, cached_owner = entry
+                # The id of a closure that died can be reused by a new one.
+                if cached_owner is not None and cached_owner() is not func:
+                    cached = None
             # The source is the same, but a name it calls through may hold a
             # different object now (a patched helper, or a real one restored):
             # the tree below that binding is not the one this report walked.
@@ -1666,7 +1687,7 @@ class PurityAnalyzer:
                     # Drop the oldest entry; insertion-order dict.
                     oldest = next(iter(self._cache))
                     del self._cache[oldest]
-                self._cache[source_hash] = report
+                self._cache[source_hash] = (report, owner)
         return report
 
     def _analyze_uncached(self, root_func: Callable[..., Any]) -> PurityReport:
