@@ -58,7 +58,6 @@ from cash.notebook.call_refs import (
 )
 from cash.tracking.file_tracker import FileAccessTracker
 from cash.tracking.randomness import capture_rng_state, rng_modules_changed
-from cash.tracking.tracker_context import active_tracker
 
 logger = logging.getLogger(__name__)
 

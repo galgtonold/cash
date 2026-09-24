@@ -21,7 +21,7 @@ from typing import Any
 from cash.notebook._tee import TeeWriter
 from cash.object_hashing import compute_hash, is_identity_fallback_hash
 from cash.tracking.file_dep_snapshot import dep_path_for_this_process
-from cash.tracking.file_tracker import active_tracker
+from cash.tracking.tracker_context import active_tracker
 
 logger = logging.getLogger(__name__)
 
