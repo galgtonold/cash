@@ -7,6 +7,19 @@ import pytest
 pytestmark = [pytest.mark.upstream]
 
 
+def _fingerprint(output: str) -> str:
+    """Return cell 4's ``CHK ...`` line, or fail loudly if it is absent.
+
+    Comparing two absent fingerprints would compare equal and quietly assert
+    nothing -- the exact way the wall-clock assertion this replaces went
+    vacuous. An empty or missing line is a test failure, not a match.
+    """
+    for line in output.splitlines():
+        if line.startswith("CHK "):
+            return line.strip()
+    raise AssertionError(f"cell 4 produced no CHK fingerprint line; got:\n{output[:1000]}")
+
+
 # Out-of-order execution & re-execution patterns.
 #
 # Tests that exercise:
@@ -137,245 +150,66 @@ class TestOutOfOrderExecution:
         assert "c = 3" in nb_runner.get_output(3)
 
 
-@pytest.mark.stress
-class TestRerunWithoutChanges:
-    """Re-running cells without changes should be idempotent."""
+class TestOutOfOrderEdgeCases:
+    """Edge cases for out-of-order execution."""
 
-    def test_idempotent_rerun_single_cell(self, nb_runner):
-        """Run cell 3 multiple times — each should give same result."""
+    def test_middle_cell_first(self, nb_runner):
+        """
+        Execute the middle cell first. It should restore its inputs from
+        cache and not mark anything as broken.
+        """
         nb_runner.create_notebook(
             [
-                "val = 7",
-                "doubled = val * 2",
-                "print(f'doubled = {doubled}')",
+                "x = 42\nprint(f'x={x}')",
+                "y = x * 2\nprint(f'y={y}')",
+                "z = y + 1\nprint(f'z={z}')",
             ]
         )
         nb_runner.start_kernel()
+
+        # Populate cache
         nb_runner.run_all()
-        assert "doubled = 14" in nb_runner.get_output(3)
 
-        for _ in range(3):
-            nb_runner.run_cell(3)
-            assert "doubled = 14" in nb_runner.get_output(3)
+        # Reset and run cell 2 first
+        nb_runner.reset_cash_state()
+        nb_runner.run_cell(2)
+        out2 = nb_runner.get_output(2)
+        assert "y=84" in out2
 
-    def test_rerun_all_three_times(self, nb_runner):
-        """Run all three times — regression check for state accumulation bugs."""
+        # Now run cell 3 — should use cached y
+        nb_runner.run_cell(3)
+        out3 = nb_runner.get_output(3)
+        assert "z=85" in out3
+
+    def test_last_cell_first_then_second_to_last(self, nb_runner):
+        """
+        Run the last cell, then the second-to-last. Second-to-last should
+        not re-execute upstream when the variable is ahead.
+        """
         nb_runner.create_notebook(
             [
                 "a = 10",
-                "b = a + 5",
-                "c = b * 2\nprint(f'c = {c}')",
+                "b = a + 5\nprint(f'b={b}')",
+                "c = b * 2\nprint(f'c={c}')",
             ]
         )
         nb_runner.start_kernel()
-        for _ in range(3):
-            nb_runner.run_all()
-            assert "c = 30" in nb_runner.get_output(3)
+        nb_runner.enable_debug()  # needed for the "Auto-executing upstream" assertion below
 
-
-@pytest.mark.stress
-class TestEditBetweenOutOfOrderRuns:
-    """Combine edits with out-of-order execution."""
-
-    def test_edit_cell1_run_cell3_then_cell2(self, nb_runner):
-        """Edit cell 1, run cell 3 (should auto-propagate), then run cell 2."""
-        nb_runner.create_notebook(
-            [
-                "x = 5",
-                "y = x + 1\nprint(f'y = {y}')",
-                "z = x * 10\nprint(f'z = {z}')",
-            ]
-        )
-        nb_runner.start_kernel()
+        # Populate cache
         nb_runner.run_all()
-        assert "y = 6" in nb_runner.get_output(2)
-        assert "z = 50" in nb_runner.get_output(3)
 
-        nb_runner.set_cell_source(1, "x = 20")
+        # Reset and run cell 3 first
+        nb_runner.reset_cash_state()
         nb_runner.run_cell(3)
-        assert "z = 200" in nb_runner.get_output(3)
+        out3 = nb_runner.get_output(3)
+        assert "c=30" in out3
 
+        # Now run cell 2 — b was already restored, should use cache
         nb_runner.run_cell(2)
-        assert "y = 21" in nb_runner.get_output(2)
-
-    def test_edit_after_partial_run(self, nb_runner):
-        """Run cells 1-2, edit cell 1, then run cell 3."""
-        nb_runner.create_notebook(
-            [
-                "x = 3",
-                "y = x ** 2",
-                "z = y + x\nprint(f'z = {z}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_cells([1, 2])
-
-        nb_runner.set_cell_source(1, "x = 10")
-        nb_runner.run_cell(3)
-        assert "z = 110" in nb_runner.get_output(3)
-
-    def test_interleaved_edits_and_runs(self, nb_runner):
-        """Edit cell 1, run cell 2, edit cell 1 again, run cell 3."""
-        nb_runner.create_notebook(
-            [
-                "x = 1",
-                "y = x + 10\nprint(f'y = {y}')",
-                "z = y * 2\nprint(f'z = {z}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "y = 11" in nb_runner.get_output(2)
-        assert "z = 22" in nb_runner.get_output(3)
-
-        nb_runner.set_cell_source(1, "x = 5")
-        nb_runner.run_cell(2)
-        assert "y = 15" in nb_runner.get_output(2)
-
-        nb_runner.set_cell_source(1, "x = 50")
-        nb_runner.run_cell(3)
-        assert "z = 120" in nb_runner.get_output(3)
-
-
-@pytest.mark.stress
-class TestSelfAssignmentInteractions:
-    """Test cache coherence with self-assignment patterns (df = df.something())."""
-
-    def test_self_assignment_chain(self, nb_runner):
-        """Self-assignment across cells with upstream edit."""
-        nb_runner.create_notebook(
-            [
-                "data = [3, 1, 2]",
-                "data = sorted(data)",
-                "result = data[0]\nprint(f'result = {result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result = 1" in nb_runner.get_output(3)
-
-        # Change initial data
-        nb_runner.set_cell_source(1, "data = [30, 10, 20]")
-        nb_runner.run_cell(3)
-        assert "result = 10" in nb_runner.get_output(3)
-
-    def test_self_assignment_rerun(self, nb_runner):
-        """Self-assignment re-run should not accumulate."""
-        nb_runner.create_notebook(
-            [
-                "items = [1, 2, 3]",
-                "items = [x * 2 for x in items]",
-                "print(f'items = {items}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "items = [2, 4, 6]" in nb_runner.get_output(3)
-
-        # Re-run all — should NOT produce [4, 8, 12]
-        nb_runner.run_all()
-        assert "items = [2, 4, 6]" in nb_runner.get_output(3)
-
-
-@pytest.mark.stress
-class TestDiamondDependency:
-    """Multiple cells depend on the same upstream cell."""
-
-    def test_diamond_edit_root(self, nb_runner):
-        """
-        Cell 1: x = 10
-        Cell 2: y = x + 1
-        Cell 3: z = x * 2
-        Cell 4: w = y + z  (diamond dependency on x through y and z)
-        """
-        nb_runner.create_notebook(
-            [
-                "x = 10",
-                "y = x + 1",
-                "z = x * 2",
-                "w = y + z\nprint(f'w = {w}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "w = 31" in nb_runner.get_output(4)
-
-        nb_runner.set_cell_source(1, "x = 5")
-        nb_runner.run_cell(4)
-        assert "w = 16" in nb_runner.get_output(4)
-
-    def test_diamond_edit_one_branch(self, nb_runner):
-        """Edit only one branch of the diamond."""
-        nb_runner.create_notebook(
-            [
-                "x = 10",
-                "y = x + 1",
-                "z = x * 2",
-                "w = y + z\nprint(f'w = {w}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "w = 31" in nb_runner.get_output(4)
-
-        # Change only cell 2 formula (one branch)
-        # y = 10 + 100 = 110, z = 10 * 2 = 20, w = 110 + 20 = 130
-        nb_runner.set_cell_source(2, "y = x + 100")
-        nb_runner.run_cell(4)
-        assert "w = 130" in nb_runner.get_output(4)
-
-
-@pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestSelectiveCellExecution:
-    """Running specific subsets of cells."""
-
-    def test_run_cells_subset(self, nb_runner):
-        """Run only specific cells."""
-        nb_runner.create_notebook(
-            [
-                "x = 10  # cell 1",
-                "y = 20  # cell 2 (independent)",
-                "z = x + y\nprint(f'z = {z}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_cells([1, 2, 3])
-        assert "z = 30" in nb_runner.get_output(3)
-
-    def test_edit_and_run_single_cell(self, nb_runner):
-        """Edit one cell and run only that cell and its dependents."""
-        nb_runner.create_notebook(
-            [
-                "n = 5  # parameter",
-                "result = n ** 2\nprint(f'result = {result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result = 25" in nb_runner.get_output(2)
-
-        # Edit and run just the edited cell + dependent
-        nb_runner.set_cell_source(1, "n = 10  # parameter bigger")
-        nb_runner.run_cells([1, 2])
-        assert "result = 100" in nb_runner.get_output(2)
-
-    def test_run_last_cell_only_after_full_run(self, nb_runner):
-        """After full run, re-running last cell should use cached deps."""
-        nb_runner.create_notebook(
-            [
-                "data = [1, 2, 3, 4, 5]  # data list",
-                "total = sum(data)",
-                "print(f'total = {total}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "total = 15" in nb_runner.get_output(3)
-
-        # Re-run only the last cell
-        nb_runner.run_cell(3)
-        assert "total = 15" in nb_runner.get_output(3)
+        out2 = nb_runner.get_raw_output(2)
+        assert "Auto-executing upstream" not in out2
+        assert "b=15" in nb_runner.get_output(2)
 
 
 # Tests for out-of-order cell execution in notebooks.
@@ -576,81 +410,6 @@ print(f"Display: {df.shape}, cols={list(df.columns)}")"""
         assert "Auto-executing upstream" not in out3_rerun, (
             f"Cell 3 should NOT auto-execute upstream. Got: {out3_rerun}"
         )
-
-
-class TestOutOfOrderEdgeCases:
-    """Edge cases for out-of-order execution."""
-
-    def test_middle_cell_first(self, nb_runner):
-        """
-        Execute the middle cell first. It should restore its inputs from
-        cache and not mark anything as broken.
-        """
-        nb_runner.create_notebook(
-            [
-                "x = 42\nprint(f'x={x}')",
-                "y = x * 2\nprint(f'y={y}')",
-                "z = y + 1\nprint(f'z={z}')",
-            ]
-        )
-        nb_runner.start_kernel()
-
-        # Populate cache
-        nb_runner.run_all()
-
-        # Reset and run cell 2 first
-        nb_runner.reset_cash_state()
-        nb_runner.run_cell(2)
-        out2 = nb_runner.get_output(2)
-        assert "y=84" in out2
-
-        # Now run cell 3 — should use cached y
-        nb_runner.run_cell(3)
-        out3 = nb_runner.get_output(3)
-        assert "z=85" in out3
-
-    def test_last_cell_first_then_second_to_last(self, nb_runner):
-        """
-        Run the last cell, then the second-to-last. Second-to-last should
-        not re-execute upstream when the variable is ahead.
-        """
-        nb_runner.create_notebook(
-            [
-                "a = 10",
-                "b = a + 5\nprint(f'b={b}')",
-                "c = b * 2\nprint(f'c={c}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.enable_debug()  # needed for the "Auto-executing upstream" assertion below
-
-        # Populate cache
-        nb_runner.run_all()
-
-        # Reset and run cell 3 first
-        nb_runner.reset_cash_state()
-        nb_runner.run_cell(3)
-        out3 = nb_runner.get_output(3)
-        assert "c=30" in out3
-
-        # Now run cell 2 — b was already restored, should use cache
-        nb_runner.run_cell(2)
-        out2 = nb_runner.get_raw_output(2)
-        assert "Auto-executing upstream" not in out2
-        assert "b=15" in nb_runner.get_output(2)
-
-
-def _fingerprint(output: str) -> str:
-    """Return cell 4's ``CHK ...`` line, or fail loudly if it is absent.
-
-    Comparing two absent fingerprints would compare equal and quietly assert
-    nothing -- the exact way the wall-clock assertion this replaces went
-    vacuous. An empty or missing line is a test failure, not a match.
-    """
-    for line in output.splitlines():
-        if line.startswith("CHK "):
-            return line.strip()
-    raise AssertionError(f"cell 4 produced no CHK fingerprint line; got:\n{output[:1000]}")
 
 
 # Tests for out-of-order execution: display cell → display cell → computation cell.
@@ -893,3 +652,107 @@ for _v in ['df', 't0', 'elapsed1', 'elapsed2', 'n']:
             f"Cell 2 took {t_elapsed:.2f}s, suggesting it recomputed instead of "
             f"restoring from cache. Debug output: {nb_runner.get_raw_output(2)[:500]}"
         )
+
+
+@pytest.mark.stress
+class TestEditBetweenOutOfOrderRuns:
+    """Combine edits with out-of-order execution."""
+
+    def test_edit_cell1_run_cell3_then_cell2(self, nb_runner):
+        """Edit cell 1, run cell 3 (should auto-propagate), then run cell 2."""
+        nb_runner.create_notebook(
+            [
+                "x = 5",
+                "y = x + 1\nprint(f'y = {y}')",
+                "z = x * 10\nprint(f'z = {z}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "y = 6" in nb_runner.get_output(2)
+        assert "z = 50" in nb_runner.get_output(3)
+
+        nb_runner.set_cell_source(1, "x = 20")
+        nb_runner.run_cell(3)
+        assert "z = 200" in nb_runner.get_output(3)
+
+        nb_runner.run_cell(2)
+        assert "y = 21" in nb_runner.get_output(2)
+
+    def test_edit_after_partial_run(self, nb_runner):
+        """Run cells 1-2, edit cell 1, then run cell 3."""
+        nb_runner.create_notebook(
+            [
+                "x = 3",
+                "y = x ** 2",
+                "z = y + x\nprint(f'z = {z}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_cells([1, 2])
+
+        nb_runner.set_cell_source(1, "x = 10")
+        nb_runner.run_cell(3)
+        assert "z = 110" in nb_runner.get_output(3)
+
+    def test_interleaved_edits_and_runs(self, nb_runner):
+        """Edit cell 1, run cell 2, edit cell 1 again, run cell 3."""
+        nb_runner.create_notebook(
+            [
+                "x = 1",
+                "y = x + 10\nprint(f'y = {y}')",
+                "z = y * 2\nprint(f'z = {z}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "y = 11" in nb_runner.get_output(2)
+        assert "z = 22" in nb_runner.get_output(3)
+
+        nb_runner.set_cell_source(1, "x = 5")
+        nb_runner.run_cell(2)
+        assert "y = 15" in nb_runner.get_output(2)
+
+        nb_runner.set_cell_source(1, "x = 50")
+        nb_runner.run_cell(3)
+        assert "z = 120" in nb_runner.get_output(3)
+
+
+@pytest.mark.stress
+class TestSelfAssignmentInteractions:
+    """Test cache coherence with self-assignment patterns (df = df.something())."""
+
+    def test_self_assignment_chain(self, nb_runner):
+        """Self-assignment across cells with upstream edit."""
+        nb_runner.create_notebook(
+            [
+                "data = [3, 1, 2]",
+                "data = sorted(data)",
+                "result = data[0]\nprint(f'result = {result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "result = 1" in nb_runner.get_output(3)
+
+        # Change initial data
+        nb_runner.set_cell_source(1, "data = [30, 10, 20]")
+        nb_runner.run_cell(3)
+        assert "result = 10" in nb_runner.get_output(3)
+
+    def test_self_assignment_rerun(self, nb_runner):
+        """Self-assignment re-run should not accumulate."""
+        nb_runner.create_notebook(
+            [
+                "items = [1, 2, 3]",
+                "items = [x * 2 for x in items]",
+                "print(f'items = {items}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "items = [2, 4, 6]" in nb_runner.get_output(3)
+
+        # Re-run all — should NOT produce [4, 8, 12]
+        nb_runner.run_all()
+        assert "items = [2, 4, 6]" in nb_runner.get_output(3)

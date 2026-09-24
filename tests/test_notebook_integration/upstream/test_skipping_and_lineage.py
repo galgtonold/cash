@@ -1,16 +1,16 @@
 """Statements skipped as already executed, and the lineage behind them."""
 
+import textwrap
 import time
 
 import pytest
-
-pytestmark = [pytest.mark.stress]
 
 
 # Stress tests: Skip Logic & Lineage Edge Cases (Scenarios 1-30)
 #
 # Tests the skip optimization, cache key computation, lineage tracking,
 # and various edge cases around when statements should/shouldn't be skipped.
+@pytest.mark.stress
 @pytest.mark.skip_optimization
 class TestSkipLogic:
     """Tests for the already-executed skip optimization."""
@@ -207,6 +207,349 @@ class TestSkipLogic:
         assert "y=42" in nb_runner.get_output(2)
 
 
+# Skip optimization edge cases.
+#
+# Tests that exercise the 'already executed' skip optimization
+# in combination with external modifications, reruns, and edits.
+# The skip optimization checks:
+# 1. Code matches executed_cell_codes[var]
+# 2. Output's _cash_hash matches stored lineage
+# 3. No file dependencies OR file deps unchanged
+# 4. Input lineages match executed_input_lineages[var]
+@pytest.mark.stress
+@pytest.mark.upstream
+@pytest.mark.timeout(30)
+class TestSkipOptimizationBasic:
+    """Basic skip optimization behavior."""
+
+    def test_rerun_same_cell_skips(self, nb_runner):
+        """Re-running the same cell should skip (not recompute)."""
+        nb_runner.create_notebook(
+            [
+                "x = 42",
+                "y = x * 2\nprint(f'y = {y}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "y = 84" in nb_runner.get_output(2)
+
+        # Re-run — should still produce same result (skip or recompute)
+        nb_runner.run_all()
+        assert "y = 84" in nb_runner.get_output(2)
+
+    def test_edit_upstream_forces_recompute(self, nb_runner):
+        """Editing upstream cell should force downstream recompute."""
+        nb_runner.create_notebook(
+            [
+                "x = 1",
+                "y = x + 1\nprint(f'y = {y}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "y = 2" in nb_runner.get_output(2)
+
+        nb_runner.set_cell_source(1, "x = 100")
+        nb_runner.run_all()
+        assert "y = 101" in nb_runner.get_output(2)
+
+    def test_same_code_different_input_lineage(self, nb_runner):
+        """Same code but different input lineage — should recompute."""
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "y = x + 1\nprint(f'y = {y}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "y = 11" in nb_runner.get_output(2)
+
+        # Change x, run all
+        nb_runner.set_cell_source(1, "x = 20")
+        nb_runner.run_all()
+        assert "y = 21" in nb_runner.get_output(2)
+
+        # Change back — should use cached result or recompute correctly
+        nb_runner.set_cell_source(1, "x = 10")
+        nb_runner.run_all()
+        assert "y = 11" in nb_runner.get_output(2)
+
+
+@pytest.mark.core
+class TestReexecutionPatterns:
+    """Test various re-execution patterns."""
+
+    def test_skip_optimization_on_rerun(self, nb_runner):
+        """
+        Run all cells, then re-run them all.
+        Second run should skip (or cache-hit) unchanged cells.
+        """
+        nb_runner.create_notebook(
+            [
+                "x = 42",
+                "y = x + 8\nprint(f'y = {y}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+
+        assert "y = 50" in nb_runner.get_output(2)
+
+        # Re-run all - should produce same result
+        nb_runner.run_all()
+        out = nb_runner.get_output(2)
+        assert "y = 50" in out, f"Expected same result on re-run, got: {out}"
+
+    def test_add_new_intermediate_dependency(self, nb_runner):
+        """
+        Run A -> C, then modify C to depend on new variable B.
+        """
+        nb_runner.create_notebook(
+            [
+                "a = 10",
+                "b = 99",
+                "result = a * 2\nprint(f'result = {result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+
+        assert "result = 20" in nb_runner.get_output(3)
+
+        # Now make result depend on b too
+        nb_runner.set_cell_source(3, "result = a + b\nprint(f'result = {result}')")
+        nb_runner.run_cell(3)
+
+        out = nb_runner.get_output(3)
+        assert "result = 109" in out, f"Expected result=109, got: {out}"
+
+
+@pytest.mark.integration
+@pytest.mark.timeout(30)
+class TestAdvancedCachingPatterns:
+    """Test advanced caching behavior and edge cases."""
+
+    @pytest.mark.core
+    def test_cache_hit_on_identical_rerun(self, nb_runner):
+        """Running the same cells twice should use cache on second run."""
+        nb_runner.create_notebook(
+            [
+                "import time\nstart = time.time()",
+                textwrap.dedent("""\
+                # Simulate expensive computation
+                result = sum(i**2 for i in range(10000))"""),
+                "print(f'Result: {result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out1 = nb_runner.get_output(3)
+        assert "Result: 333283335000" in out1
+
+        # Second run should be faster (cache hit)
+        nb_runner.run_all()
+        out2 = nb_runner.get_output(3)
+        assert "Result: 333283335000" in out2
+
+    @pytest.mark.core
+    def test_annotation_no_cache(self, nb_runner):
+        """@cash:no-cache should prevent caching."""
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "# @cash:no-cache\ny = x * 2",
+                "print(f'y: {y}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(3)
+        assert "y: 20" in out
+
+    @pytest.mark.core
+    def test_skip_optimization_correctness(self, nb_runner):
+        """Skip optimization should correctly detect when re-execution is needed."""
+        nb_runner.create_notebook(
+            [
+                "base = 5",
+                "derived = base * 3",
+                "print(f'derived: {derived}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out1 = nb_runner.get_output(3)
+        assert "derived: 15" in out1
+
+        # Change base — derived should be recomputed
+        nb_runner.set_cell_source(1, "base = 10")
+        nb_runner.run_all()
+        out2 = nb_runner.get_output(3)
+        assert "derived: 30" in out2
+
+        # Change back — derived should change again
+        nb_runner.set_cell_source(1, "base = 5")
+        nb_runner.run_all()
+        out3 = nb_runner.get_output(3)
+        assert "derived: 15" in out3
+
+    @pytest.mark.core
+    def test_cell_output_display(self, nb_runner):
+        """Ensure cell outputs are captured correctly."""
+        nb_runner.create_notebook(
+            [
+                "x = 42",
+                "print('hello')\nprint('world')",
+                "y = x + 1\nprint(f'y is {y}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out2 = nb_runner.get_output(2)
+        assert "hello" in out2
+        assert "world" in out2
+        out3 = nb_runner.get_output(3)
+        assert "y is 43" in out3
+
+
+@pytest.mark.stress
+@pytest.mark.upstream
+@pytest.mark.timeout(30)
+class TestSkipWithFileDepEdit:
+    """Skip optimization + file dependencies + cell edits."""
+
+    def test_file_dep_prevents_skip(self, nb_runner, tmp_path):
+        """If a file dependency changed, skip should not happen."""
+        data_file = tmp_path / "data.txt"
+        data_file.write_text("10", encoding="utf-8")
+        path_str = str(data_file).replace("\\", "/")
+
+        nb_runner.create_notebook(
+            [
+                f"with open('{path_str}') as f:\n    val = int(f.read().strip())",
+                "result = val * 2\nprint(f'result = {result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "result = 20" in nb_runner.get_output(2)
+
+        # Change file and re-run
+        import time
+
+        time.sleep(0.1)  # Ensure mtime changes
+        data_file.write_text("50", encoding="utf-8")
+        nb_runner.run_all()
+        assert "result = 100" in nb_runner.get_output(2)
+
+    def test_file_unchanged_skips_correctly(self, nb_runner, tmp_path):
+        """If file is unchanged, skip optimization should work."""
+        data_file = tmp_path / "stable.txt"
+        data_file.write_text("42", encoding="utf-8")
+        path_str = str(data_file).replace("\\", "/")
+
+        nb_runner.create_notebook(
+            [
+                f"with open('{path_str}') as f:\n    val = int(f.read().strip())",
+                "result = val * 3\nprint(f'result = {result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "result = 126" in nb_runner.get_output(2)
+
+        # Re-run without changing file — result should stay the same
+        nb_runner.run_all()
+        assert "result = 126" in nb_runner.get_output(2)
+
+
+@pytest.mark.stress
+@pytest.mark.upstream
+@pytest.mark.timeout(30)
+class TestSkipWithMultiOutput:
+    """Skip optimization with multi-output cells."""
+
+    def test_multi_output_cell_skip(self, nb_runner):
+        """Cell that produces multiple outputs — skip all or none."""
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "a = x + 1\nb = x + 2",
+                "print(f'a = {a}, b = {b}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "a = 11, b = 12" in nb_runner.get_output(3)
+
+        # Re-run — should produce same result
+        nb_runner.run_all()
+        assert "a = 11, b = 12" in nb_runner.get_output(3)
+
+    def test_multi_output_edit_upstream(self, nb_runner):
+        """Edit upstream, multi-output cell should recompute."""
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "a = x + 1\nb = x * 2",
+                "print(f'a = {a}, b = {b}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "a = 11, b = 20" in nb_runner.get_output(3)
+
+        nb_runner.set_cell_source(1, "x = 100")
+        nb_runner.run_all()
+        assert "a = 101, b = 200" in nb_runner.get_output(3)
+
+
+@pytest.mark.stress
+@pytest.mark.upstream
+@pytest.mark.timeout(30)
+class TestExternalModification:
+    """External modification of variables (e.g., in a separate cell)."""
+
+    def test_overwrite_cached_var_then_rerun(self, nb_runner):
+        """Overwrite a cached variable, then re-run the producer cell."""
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "y = x * 2\nprint(f'y = {y}')",
+                "# Intentionally overwrite y\ny = 999\nprint(f'y_overwritten = {y}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "y = 20" in nb_runner.get_output(2)
+        assert "y_overwritten = 999" in nb_runner.get_output(3)
+
+        # Now re-run cell 2 — should it produce 20 again?
+        nb_runner.run_cell(2)
+        assert "y = 20" in nb_runner.get_output(2)
+
+    def test_dependent_after_overwrite(self, nb_runner):
+        """After overwriting a variable, downstream should use new value."""
+        nb_runner.create_notebook(
+            [
+                "x = 5",
+                "y = x * 2",
+                "z = y + 1\nprint(f'z = {z}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "z = 11" in nb_runner.get_output(3)
+
+        # Overwrite y in cell 2
+        nb_runner.set_cell_source(2, "y = 100")
+        nb_runner.run_all()
+        assert "z = 101" in nb_runner.get_output(3)
+
+
+@pytest.mark.stress
 @pytest.mark.skip_optimization
 class TestLineageIntegrity:
     """Tests for lineage computation and cache key correctness."""
@@ -335,204 +678,3 @@ class TestLineageIntegrity:
         nb_runner.run_cell(1)
         nb_runner.run_cell(2)
         assert "a=10, b=20, c=30" in nb_runner.get_output(2)
-
-
-# Skip optimization edge cases.
-#
-# Tests that exercise the 'already executed' skip optimization
-# in combination with external modifications, reruns, and edits.
-# The skip optimization checks:
-# 1. Code matches executed_cell_codes[var]
-# 2. Output's _cash_hash matches stored lineage
-# 3. No file dependencies OR file deps unchanged
-# 4. Input lineages match executed_input_lineages[var]
-@pytest.mark.upstream
-@pytest.mark.timeout(30)
-class TestSkipOptimizationBasic:
-    """Basic skip optimization behavior."""
-
-    def test_rerun_same_cell_skips(self, nb_runner):
-        """Re-running the same cell should skip (not recompute)."""
-        nb_runner.create_notebook(
-            [
-                "x = 42",
-                "y = x * 2\nprint(f'y = {y}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "y = 84" in nb_runner.get_output(2)
-
-        # Re-run — should still produce same result (skip or recompute)
-        nb_runner.run_all()
-        assert "y = 84" in nb_runner.get_output(2)
-
-    def test_edit_upstream_forces_recompute(self, nb_runner):
-        """Editing upstream cell should force downstream recompute."""
-        nb_runner.create_notebook(
-            [
-                "x = 1",
-                "y = x + 1\nprint(f'y = {y}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "y = 2" in nb_runner.get_output(2)
-
-        nb_runner.set_cell_source(1, "x = 100")
-        nb_runner.run_all()
-        assert "y = 101" in nb_runner.get_output(2)
-
-    def test_same_code_different_input_lineage(self, nb_runner):
-        """Same code but different input lineage — should recompute."""
-        nb_runner.create_notebook(
-            [
-                "x = 10",
-                "y = x + 1\nprint(f'y = {y}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "y = 11" in nb_runner.get_output(2)
-
-        # Change x, run all
-        nb_runner.set_cell_source(1, "x = 20")
-        nb_runner.run_all()
-        assert "y = 21" in nb_runner.get_output(2)
-
-        # Change back — should use cached result or recompute correctly
-        nb_runner.set_cell_source(1, "x = 10")
-        nb_runner.run_all()
-        assert "y = 11" in nb_runner.get_output(2)
-
-
-@pytest.mark.upstream
-@pytest.mark.timeout(30)
-class TestExternalModification:
-    """External modification of variables (e.g., in a separate cell)."""
-
-    def test_overwrite_cached_var_then_rerun(self, nb_runner):
-        """Overwrite a cached variable, then re-run the producer cell."""
-        nb_runner.create_notebook(
-            [
-                "x = 10",
-                "y = x * 2\nprint(f'y = {y}')",
-                "# Intentionally overwrite y\ny = 999\nprint(f'y_overwritten = {y}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "y = 20" in nb_runner.get_output(2)
-        assert "y_overwritten = 999" in nb_runner.get_output(3)
-
-        # Now re-run cell 2 — should it produce 20 again?
-        nb_runner.run_cell(2)
-        assert "y = 20" in nb_runner.get_output(2)
-
-    def test_dependent_after_overwrite(self, nb_runner):
-        """After overwriting a variable, downstream should use new value."""
-        nb_runner.create_notebook(
-            [
-                "x = 5",
-                "y = x * 2",
-                "z = y + 1\nprint(f'z = {z}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "z = 11" in nb_runner.get_output(3)
-
-        # Overwrite y in cell 2
-        nb_runner.set_cell_source(2, "y = 100")
-        nb_runner.run_all()
-        assert "z = 101" in nb_runner.get_output(3)
-
-
-@pytest.mark.upstream
-@pytest.mark.timeout(30)
-class TestSkipWithFileDepEdit:
-    """Skip optimization + file dependencies + cell edits."""
-
-    def test_file_dep_prevents_skip(self, nb_runner, tmp_path):
-        """If a file dependency changed, skip should not happen."""
-        data_file = tmp_path / "data.txt"
-        data_file.write_text("10", encoding="utf-8")
-        path_str = str(data_file).replace("\\", "/")
-
-        nb_runner.create_notebook(
-            [
-                f"with open('{path_str}') as f:\n    val = int(f.read().strip())",
-                "result = val * 2\nprint(f'result = {result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result = 20" in nb_runner.get_output(2)
-
-        # Change file and re-run
-        import time
-
-        time.sleep(0.1)  # Ensure mtime changes
-        data_file.write_text("50", encoding="utf-8")
-        nb_runner.run_all()
-        assert "result = 100" in nb_runner.get_output(2)
-
-    def test_file_unchanged_skips_correctly(self, nb_runner, tmp_path):
-        """If file is unchanged, skip optimization should work."""
-        data_file = tmp_path / "stable.txt"
-        data_file.write_text("42", encoding="utf-8")
-        path_str = str(data_file).replace("\\", "/")
-
-        nb_runner.create_notebook(
-            [
-                f"with open('{path_str}') as f:\n    val = int(f.read().strip())",
-                "result = val * 3\nprint(f'result = {result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result = 126" in nb_runner.get_output(2)
-
-        # Re-run without changing file — result should stay the same
-        nb_runner.run_all()
-        assert "result = 126" in nb_runner.get_output(2)
-
-
-@pytest.mark.upstream
-@pytest.mark.timeout(30)
-class TestSkipWithMultiOutput:
-    """Skip optimization with multi-output cells."""
-
-    def test_multi_output_cell_skip(self, nb_runner):
-        """Cell that produces multiple outputs — skip all or none."""
-        nb_runner.create_notebook(
-            [
-                "x = 10",
-                "a = x + 1\nb = x + 2",
-                "print(f'a = {a}, b = {b}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "a = 11, b = 12" in nb_runner.get_output(3)
-
-        # Re-run — should produce same result
-        nb_runner.run_all()
-        assert "a = 11, b = 12" in nb_runner.get_output(3)
-
-    def test_multi_output_edit_upstream(self, nb_runner):
-        """Edit upstream, multi-output cell should recompute."""
-        nb_runner.create_notebook(
-            [
-                "x = 10",
-                "a = x + 1\nb = x * 2",
-                "print(f'a = {a}, b = {b}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "a = 11, b = 20" in nb_runner.get_output(3)
-
-        nb_runner.set_cell_source(1, "x = 100")
-        nb_runner.run_all()
-        assert "a = 101, b = 200" in nb_runner.get_output(3)
