@@ -53,8 +53,7 @@ class CashStripPreprocessor(Preprocessor):
     This removes:
     - the cell badges cash displays (HTML outputs carrying the badge markup)
     - cash's debug lines from stream outputs: its log records
-      (``cash.<module>: ...`` / ``[cash.<module>] ...``) and its tagged debug
-      prints (``[UPSTREAM] ...``, ``[TIMING_PROXY] ...``, ...)
+      (``cash.<module>: ...`` / ``[cash.<module>] ...``)
     - optionally, cash magic commands from cell source (``%cash_on``, ...)
 
     Every other output is left exactly as it was: a user's own HTML, and
@@ -70,13 +69,11 @@ class CashStripPreprocessor(Preprocessor):
     #: (``cash.notebook.badge_renderer.renderers.html.render_html``).
     BADGE_MARKUP = '<div class="c3-wrap"><details class="c3-card"'
 
-    #: A line cash's own logging or debug printing produced: a log record
-    #: formatted as ``cash.x: msg`` or ``[cash.x] msg`` (a bare ``cash: ...``
-    #: line is a summary meant for the reader, not debug output), or a tagged debug
-    #: print such as ``[UPSTREAM] ...`` or ``[TIMING_PROXY] ...``.
-    DEBUG_LINE = re.compile(
-        r"^(?:cash(?:\.\w+)+: |\[cash(?:\.\w+)*\] |\[(?:TIMING|UPSTREAM|LINEAGE|ALREADY|CACHE|CONTROL)(?:_[A-Z_]+)?\] )"
-    )
+    #: A line cash's own logging produced: a log record formatted as
+    #: ``cash.x: msg`` or ``[cash.x] msg`` (a bare ``cash: ...`` line is a
+    #: summary meant for the reader, not debug output). Tags such as
+    #: ``[UPSTREAM]`` only ever appear inside such a record.
+    DEBUG_LINE = re.compile(r"^(?:cash(?:\.\w+)+: |\[cash(?:\.\w+)*\] )")
 
     strip_badges = Bool(True, help="Remove the cell badges cash displays.").tag(config=True)
     strip_debug = Bool(True, help="Remove cash's debug lines from stream outputs.").tag(config=True)

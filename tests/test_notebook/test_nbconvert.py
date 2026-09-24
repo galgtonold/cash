@@ -66,7 +66,9 @@ class TestCashStripPreprocessor:
 
     def test_strip_debug_lines(self, preprocessor):
         outputs = [
-            _make_output("stream", text="Result: 42\n[UPSTREAM_DEBUG] checking...\nDone\n"),
+            _make_output(
+                "stream", text="Result: 42\n[cash.notebook.upstream.simulator] [UPSTREAM_DEBUG] checking...\nDone\n"
+            ),
         ]
         cell = _make_cell("x = 42", outputs)
         result, _ = preprocessor.preprocess_cell(cell, {}, 0)
@@ -99,14 +101,14 @@ class TestCashStripPreprocessor:
         assert len(result.outputs) == 1
 
     def test_a_users_printed_lines_are_kept(self, preprocessor):
-        text = "DEBUG mode is on\nCash: 1,200 EUR\nlevel=DEBUG\ncash: caching disabled\n"
+        text = "DEBUG mode is on\nCash: 1,200 EUR\nlevel=DEBUG\ncash: caching disabled\n[CACHE] 3 hits\n"
         outputs = [_make_output("stream", text=text)]
         cell = _make_cell("report()", outputs)
         result, _ = preprocessor.preprocess_cell(cell, {}, 0)
         assert result.outputs[0]["text"] == text
 
     def test_cash_log_records_are_stripped(self, preprocessor):
-        text = "before\ncash.core: [CACHE] miss for f\n[cash.notebook.magics] debug on\n[TIMING_PROXY] Badge init: 1.0ms\nafter\n"
+        text = "before\ncash.core: [CACHE] miss for f\n[cash.notebook.magics] debug on\n[cash.notebook.ipython.magics] [TIMING_PROXY] Total 1.0ms\nafter\n"
         outputs = [_make_output("stream", text=text)]
         cell = _make_cell("f()", outputs)
         result, _ = preprocessor.preprocess_cell(cell, {}, 0)
