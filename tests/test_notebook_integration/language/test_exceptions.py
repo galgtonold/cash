@@ -6,10 +6,6 @@ import pytest
 from nbclient.exceptions import CellExecutionError
 
 
-# Exception handling code + cell edit interaction tests.
-#
-# Tests that exercise try/except blocks, error recovery code paths,
-# and how cash handles errors and recovers across cell edits.
 class TestTryExceptEdits:
     """Try/except blocks + cell edits."""
 
@@ -297,10 +293,6 @@ class TestExceptionHandlingEdits:
         assert "result = caught: ValueError" in nb_runner.get_output(2)
 
 
-# Error handling interaction edit tests.
-#
-# Tests editing cells that change error-handling behavior: adding/removing
-# try/except blocks, changing raised exceptions, etc.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -380,9 +372,6 @@ class TestErrorHandlingEdits:
         assert "avg = 20" in nb_runner.get_output(2)
 
 
-# Error handling and exception propagation interaction tests.
-# Tests that editing code that raises/catches exceptions properly
-# invalidates downstream cells.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)
@@ -481,8 +470,6 @@ class TestExceptionHandlingInteraction:
         assert "cleanup=True" in out
 
 
-# Exception handling, try/except, custom exceptions, error propagation,
-# and conditional error recovery across cells.
 @pytest.mark.integration
 @pytest.mark.stress
 class TestExceptionHandlingCaching:
@@ -597,7 +584,6 @@ class TestConditionalErrorHandling:
         assert "result = 19.50" in nb_runner.get_output(2)
 
 
-# Exception handling & custom exceptions — cash caching with error patterns.
 @pytest.mark.stress
 class TestCustomExceptions:
     """Test custom exception patterns across cells."""
@@ -676,10 +662,6 @@ class TestCustomExceptions:
         assert "valid_nums=[42, 99] total=141" in nb_runner.get_output(2)
 
 
-# Exception hierarchy and custom exception interaction tests.
-#
-# Tests editing custom exception classes, raise patterns,
-# and exception handling hierarchies.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -774,9 +756,6 @@ class TestCustomExceptionAttrs:
         assert "result=ok" in nb_runner.get_output(2)
 
 
-# Interaction test: exception hierarchy with custom base and derived.
-# Tests custom exception hierarchy, isinstance checks, except chaining,
-# and cross-cell error handling patterns.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestExceptionHierarchyCustom:
@@ -1004,10 +983,6 @@ class TestMultiCellErrorRecovery:
         assert "a=1 z_missing=True" in nb_runner.get_output(3)
 
 
-# Assertion and debugging print interaction tests.
-#
-# Tests editing assert statements, debug prints, and
-# conditional debugging output.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)

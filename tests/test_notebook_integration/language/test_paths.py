@@ -5,7 +5,6 @@ import textwrap
 import pytest
 
 
-# Sys/OS interaction — cash caching with sys, os, platform operations.
 @pytest.mark.stress
 class TestSysPatterns:
     """Test sys module interaction."""
@@ -112,9 +111,6 @@ class TestOsPatterns:
         assert "content_0" in nb_runner.get_output(3)
 
 
-# Interaction test: os.path vs pathlib cross-usage.
-# Tests mixing os.path and pathlib operations with string conversions
-# and cross-cell path manipulation.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestOsPathPathlibCross:
@@ -276,9 +272,6 @@ class TestPathManipulation:
         assert "name=main.py" in out
 
 
-# Pathlib / os.path interaction tests.
-# Tests that editing path construction logic properly invalidates
-# downstream cells that use the constructed paths.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)
@@ -394,9 +387,6 @@ class TestPathlibOps:
         assert "new=data.docx" in nb_runner.get_output(2)
 
 
-# Interaction test: pathlib Path operations and manipulation.
-# Tests Path construction, parts, stem, suffix,
-# parent traversal, and cross-cell path pipelines.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestPathlibPathOps:

@@ -67,10 +67,6 @@ class TestMapFilterReduce:
         assert "result = 147" in nb_runner.get_output(4)
 
 
-# Map/reduce/filter interaction tests.
-#
-# Tests editing cells that use functional programming patterns
-# (map, filter, reduce) and verifying cache invalidation.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -148,9 +144,6 @@ class TestMapReduceEdits:
         assert "40" in out
 
 
-# Built-in function patterns with edits.
-#
-# Tests map, filter, reduce with function/data edits.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestBuiltinFuncEdits:
@@ -208,8 +201,6 @@ class TestBuiltinFuncEdits:
         assert "result = 24" in nb_runner.get_output(2)
 
 
-# Mapping and filtering with functions interaction tests.
-# Tests that editing filter/map functions or data properly invalidates downstream.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)

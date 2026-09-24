@@ -248,24 +248,11 @@ print(f"z = {z}")""",
     assert "z = 25" in out  # 10 * 2 + 5 = 25
 
 
-# Tests for accumulator initialization skip logic with mutation-only updates.
-#
-# Bug: When a loop mutates a variable via .append() (pure mutation, no assignment output),
-# the accumulator-init-skip logic in upstream.py doesn't recognize the variable as
-# loop-updated. This causes `a = []` to be re-executed when the upstream cell is modified,
-# resetting the accumulated value.
-#
-# The fix extends the accumulator-init-skip to also check vars_mutated_by_loops,
-# not just scheduled_iteration_outputs.
-#
-# Root cause: CodeAnalyzer.analyze_code_block('a.append(x)') returns outputs=set(),
-# so 'a' never appears in scheduled_iteration_outputs. But the mutation analysis correctly
-# detects 'a' as mutated, and control_structure_mutations adds it to vars_mutated_by_loops.
-#
-# NOTE: Mutation-only accumulator inits are now preserved across upstream
-# modifications that change loop code (the fix extends the skip logic to
-# vars_mutated_by_loops, while re-scheduling the init alongside any FULLY
-# re-run loop so in-place accumulation does not double).
+# A loop that only mutates its accumulator (``a.append(x)``) has no assignment
+# output, so ``a`` never appears in scheduled_iteration_outputs; the mutation
+# analysis puts it in vars_mutated_by_loops instead, and the init-skip checks
+# both. The init is re-scheduled alongside any loop that re-runs in full, so
+# in-place accumulation does not double.
 @pytest.mark.mutations
 @pytest.mark.upstream
 class TestMutationAccumulatorInit:

@@ -5,9 +5,6 @@ import textwrap
 import pytest
 
 
-# Builder / fluent API pattern interaction tests.
-#
-# Tests editing builder-style method chains and fluent interfaces.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -81,9 +78,6 @@ class TestBuilderEdits:
         assert "result = 75" in nb_runner.get_output(2)
 
 
-# Chained method calls and builder pattern interaction tests.
-# Tests that editing builder/fluent API patterns properly invalidates
-# the final built object downstream.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)
@@ -188,9 +182,6 @@ class TestBuilderPatternInteraction:
         assert "info=prod.server.com:443" in out
 
 
-# Chained method calls and fluent interface patterns.
-#
-# Tests method chaining / builder patterns with edits.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestFluentInterface:
@@ -232,10 +223,6 @@ class TestFluentInterface:
         assert "r = 35" in nb_runner.get_output(2)
 
 
-# Method chaining interaction tests.
-#
-# Tests editing cells that use method chaining patterns
-# (string chains, list chains, custom fluent APIs).
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -363,10 +350,6 @@ class TestChainedAttributeAccess:
         assert "result=42" in nb_runner.get_output(2)
 
 
-# Observer/event pattern interaction tests.
-#
-# Tests editing cells with event handling, callback patterns,
-# and verifying that edits propagate correctly.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -434,10 +417,6 @@ class TestObserverPatternEdits:
         assert "result = 7" in nb_runner.get_output(2)
 
 
-# State machine interaction tests.
-#
-# Tests editing cells that implement state machine logic
-# with transitions and verifying correct propagation.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -546,7 +525,6 @@ class TestStateMachinePattern:
         assert "states=['Y', 'X', 'Y', 'X', 'Y', 'X']" in nb_runner.get_output(2)
 
 
-# State machine patterns — cash caching with FSM implementations.
 @pytest.mark.stress
 class TestStateMachine:
     """Test state machine patterns across cells."""
@@ -592,7 +570,6 @@ class TestStateMachine:
         assert len(nb_runner.get_output(2).split("history=")[1].split("]")[0].split(",")) == 7
 
 
-# Design patterns — Observer, Strategy, Builder, State with cash caching.
 @pytest.mark.stress
 class TestStrategyPattern:
     """Test Strategy pattern."""
@@ -627,10 +604,6 @@ class TestStrategyPattern:
         assert "EUR 10.00" in nb_runner.get_output(2)
 
 
-# Validator pattern interaction tests.
-#
-# Tests editing cells with input validation patterns
-# and verifying correct error/success propagation.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -693,9 +666,6 @@ class TestValidatorPatternEdits:
         assert "age invalid" in out
 
 
-# Assertion and validation interaction tests.
-# Tests that editing validation logic or asserted conditions
-# properly invalidates downstream cells.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)

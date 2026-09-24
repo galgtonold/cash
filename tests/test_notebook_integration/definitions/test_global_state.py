@@ -7,10 +7,6 @@ import pytest
 pytestmark = [pytest.mark.stress]
 
 
-# Global state & side-effect interaction tests.
-#
-# Tests that exercise global variables, print statements, accumulation
-# patterns, and other side-effecting code with cell edits.
 @pytest.mark.core
 @pytest.mark.timeout(30)
 class TestGlobalStateEdits:
@@ -35,10 +31,6 @@ class TestGlobalStateEdits:
         assert "total = 102" in nb_runner.get_output(4)
 
 
-# Global variable and side-effect interaction tests.
-#
-# Tests editing cells that mutate global state, counters, accumulators,
-# and side-effects to verify cache consistency.
 @pytest.mark.mutations
 @pytest.mark.timeout(90)
 class TestGlobalCounterEdits:
@@ -168,8 +160,6 @@ class TestAccumulatorEdits:
         assert "'A': 10" in out
 
 
-# Global registry and config patterns interaction tests.
-# Tests editing shared state objects that downstream cells depend on.
 @pytest.mark.integration
 @pytest.mark.timeout(90)
 class TestGlobalRegistryInteraction:
@@ -231,8 +221,6 @@ class TestGlobalRegistryInteraction:
         assert "info=debug:L5" in out
 
 
-# Global state, singleton, registry, and mutable default argument patterns.
-# Tests tricky Python patterns that interact with caching in subtle ways.
 @pytest.mark.integration
 class TestSingletonPatterns:
     """Test singleton-like patterns across cells."""
@@ -271,9 +259,6 @@ class TestSingletonPatterns:
         assert "['add', 'mul']" in output
 
 
-# Global/nonlocal scope interaction patterns.
-#
-# Tests editing variables that are used inside functions via closures or global scope.
 class TestGlobalNonlocalScope:
     """Scope-related interaction patterns."""
 
@@ -379,9 +364,6 @@ class TestGlobalNonlocalScope:
         assert "results=[10, 30, 60]" in nb_runner.get_output(2)
 
 
-# Module-level vs local scope interaction tests.
-# Tests that editing module-level constants/variables and local function
-# variables properly invalidates downstream cells.
 @pytest.mark.integration
 @pytest.mark.timeout(90)
 class TestModuleLocalScopeInteraction:
@@ -448,10 +430,6 @@ class TestModuleLocalScopeInteraction:
         assert "result=60" in out
 
 
-# Variable shadowing and scope interaction tests.
-#
-# Tests editing code that involves variable shadowing between
-# function scope, global scope, and comprehension scope.
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
 class TestVariableShadowingEdits:

@@ -5,12 +5,6 @@ import pytest
 pytestmark = [pytest.mark.stress, pytest.mark.timeout(90)]
 
 
-# Cache status validation tests.
-#
-# Verifies that statements are correctly cached (RESTORED/SKIPPED)
-# when re-run without changes, and correctly COMPUTED when changes occur.
-# This is per user requirement: "we should also check if it was cached
-# when it was supposed to be."
 @pytest.mark.core
 class TestCacheStatusValidation:
     """Verify caching status is correct, not just output correctness."""
@@ -100,8 +94,6 @@ class TestCacheStatusValidation:
         assert "final = 101" in nb_runner.get_output(3)
 
 
-# Deep caching status verification tests.
-# Verify RESTORED/COMPUTED/SKIPPED status is correct across scenarios.
 @pytest.mark.integration
 class TestDeepCacheStatusVerification:
     """Verify caching status is correct in complex scenarios."""

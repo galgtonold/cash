@@ -42,10 +42,6 @@ class TestStringOperations:
         assert "Foo Bar Baz" in nb_runner.get_output(2)
 
 
-# String manipulation chain interaction tests.
-#
-# Tests editing string processing pipelines across cells
-# with transformations, formatting, and parsing.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 @pytest.mark.upstream
@@ -104,10 +100,6 @@ class TestStringChainEdits:
         assert "date = 2024/01/15" in nb_runner.get_output(2)
 
 
-# String manipulation and formatting edit tests.
-#
-# Tests editing cells with string formatting, regex, and text
-# processing patterns.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 @pytest.mark.upstream
@@ -261,8 +253,6 @@ class TestStringMethodChains:
         assert "joined = x|y|z" in nb_runner.get_output(2)
 
 
-# String chain operations interaction tests.
-# Tests split→join, replace→strip chains with cache invalidation.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 @pytest.mark.integration
@@ -443,9 +433,6 @@ class TestStringSplitJoinPartition:
         assert "parts=['x', 'y', 'z', 'w']" in nb_runner.get_output(2)
 
 
-# Interaction test: string join with generator expressions.
-# Tests str.join with various iterables including generators,
-# conditional joins, and cross-cell string building.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestStringJoinGenerator:
@@ -510,9 +497,6 @@ class TestStringJoinGenerator:
         assert "depth=3" in nb_runner.get_output(2)
 
 
-# Interaction test: string methods partition and rpartition.
-# Tests str.partition and rpartition for splitting around separators,
-# with cross-cell parsing pipelines.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestPartitionRpartition:
@@ -580,9 +564,6 @@ class TestPartitionRpartition:
         assert "upper=NAME" in nb_runner.get_output(2)
 
 
-# Interaction test: string partition and rpartition methods.
-# Tests str.partition, str.rpartition for splitting around separators,
-# cross-cell string processing pipelines.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestStringPartitionRpartition:
@@ -773,9 +754,6 @@ class TestStringRemovePrefixSuffix:
         assert "r=hello_world" in nb_runner.get_output(2)
 
 
-# Interaction test: string casefold and unicode normalization.
-# Tests casefold for case-insensitive comparisons, unicode normalization
-# concepts, and cross-cell string equality checks.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestStringCasefoldNorm:
@@ -884,9 +862,6 @@ class TestStringCasefoldUnicode:
         assert "cfold=strasse" in nb_runner.get_output(2)
 
 
-# Interaction test: string maketrans with translate and multi-char replacement.
-# Tests str.maketrans with 3-arg form (intab, outtab, delchars), translate,
-# and cross-cell text transformation pipelines.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestStringMaketransTranslate:

@@ -7,10 +7,6 @@ import pytest
 pytestmark = [pytest.mark.stress]
 
 
-# Class/OOP + cell edit interaction tests.
-#
-# Tests that exercise class definitions, inheritance, method changes,
-# and how cash tracks class-related dependencies through cell edits.
 class TestClassDefinitionEdits:
     """Basic class definition + edit scenarios."""
 
@@ -130,11 +126,6 @@ class TestClassDefinitionEdits:
         assert "result = 50" in nb_runner.get_output(2)
 
 
-# Multi-cell class evolution and refactoring patterns, complex
-# re-execution scenarios, out-of-order execution, and selective cell re-runs.
-#
-# Tests patterns where users iteratively develop and refine code across cells,
-# re-run subsets of cells, and evolve class hierarchies during a session.
 class TestClassEvolution:
     """Test iterative class development patterns common in notebooks."""
 
@@ -376,9 +367,6 @@ class TestClassInstanceEdits:
         assert "result = world" in nb_runner.get_output(3)
 
 
-# Multi-cell class instantiation with method edits.
-#
-# Tests class defined in one cell, instantiated in another, method called in third.
 @pytest.mark.timeout(90)
 class TestMultiCellClassEdits:
     """Class spread across cells with edits."""
@@ -445,7 +433,6 @@ class TestMultiCellClassEdits:
         assert "result = 51" in nb_runner.get_output(3)
 
 
-# complex class interactions across multiple cells.
 @pytest.mark.integration
 class TestCrossCellClassInteractions:
     """Classes defined in one cell, used in another."""
@@ -598,9 +585,6 @@ class TestMixinEdits:
         assert "Hi alice" in out2
 
 
-# Class __repr__/__str__ edit propagation.
-#
-# Tests editing dunder methods on classes.
 @pytest.mark.timeout(90)
 class TestDunderMethodEdits:
     """Dunder method edit patterns."""
@@ -663,10 +647,6 @@ class TestDunderMethodEdits:
         assert "size = 10" in nb_runner.get_output(2)
 
 
-# Property and descriptor pattern interaction tests.
-#
-# Tests editing property definitions, getters/setters,
-# and descriptor protocols across cells.
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
 class TestPropertyEdits:
@@ -714,9 +694,6 @@ class TestPropertyEdits:
         assert "area=12 vol=60" in nb_runner.get_output(2)
 
 
-# Property and descriptor edit patterns.
-#
-# Tests @property, computed properties with class edits.
 @pytest.mark.timeout(90)
 class TestPropertyDescriptorEdits:
     """Property and descriptor patterns."""
@@ -802,10 +779,6 @@ class TestClassMethodEdits:
         assert "a=10 b=20" in nb_runner.get_output(2)
 
 
-# Dynamic class creation interaction tests.
-#
-# Tests editing dynamic class creation with type(),
-# class factories, and mixin patterns.
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
 class TestDynamicClassEdits:

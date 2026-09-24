@@ -5,10 +5,6 @@ import pytest
 pytestmark = [pytest.mark.stress, pytest.mark.timeout(90)]
 
 
-# Bit manipulation and bitwise operation interaction tests.
-#
-# Tests editing bitwise operations (AND, OR, XOR, shifts)
-# and their propagation.
 @pytest.mark.upstream
 class TestBitwiseEdits:
     """Editing bitwise operations."""
@@ -131,9 +127,6 @@ class TestBooleanBitwise:
         assert "left=32 right=4" in nb_runner.get_output(2)
 
 
-# Boolean logic and condition edits.
-#
-# Tests boolean operations, conditions, short-circuit edits.
 class TestBooleanLogicEdits:
     """Boolean logic patterns with edit propagation."""
 

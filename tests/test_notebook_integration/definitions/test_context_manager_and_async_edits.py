@@ -95,9 +95,6 @@ class TestContextManagerEdits:
         assert "result = BETA" in nb_runner.get_output(2)
 
 
-# Async/await patterns with edits.
-#
-# Tests asyncio-based patterns in notebook cells.
 @pytest.mark.timeout(90)
 class TestAsyncPatterns:
     """Async/await edit propagation."""

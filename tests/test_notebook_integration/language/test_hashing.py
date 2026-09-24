@@ -96,7 +96,6 @@ class TestHashlibSha256Md5:
         assert "ba7816bf" not in out2  # different from abc
 
 
-# Hashlib, secrets & crypto patterns — cash caching with hashing/security.
 @pytest.mark.stress
 class TestHashlibPatterns:
     """Test hashlib patterns across cells."""
@@ -130,9 +129,6 @@ class TestHashlibPatterns:
         assert "content_size=24" in nb_runner.get_output(2)
 
 
-# Interaction test: hashlib HMAC for message authentication.
-# Tests hmac.new with hashlib digests, compare_digest for timing-safe
-# comparison, and cross-cell HMAC verification pipelines.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestHmacAuth:

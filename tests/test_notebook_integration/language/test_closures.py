@@ -5,10 +5,6 @@ import textwrap
 import pytest
 
 
-# Closure and scope interaction tests.
-#
-# Tests editing closures, nonlocal variables, nested function scopes,
-# and variable capture patterns.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -81,10 +77,6 @@ class TestClosureEdits:
         assert "result = 24" in nb_runner.get_output(2)
 
 
-# Closure factory and scope capture interaction tests.
-#
-# Tests editing cells with closure factories, captured variables,
-# and function composition patterns.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -163,7 +155,6 @@ class TestClosureFactoryEdits:
         assert "result = 7" in nb_runner.get_output(2)
 
 
-# Closure & scope edge cases — closures, nonlocal, late binding.
 @pytest.mark.stress
 class TestClosureBasics:
     """Test closure patterns across cells."""
@@ -248,9 +239,6 @@ class TestClosureScopeCapture:
         assert "result=110" in nb_runner.get_output(2)
 
 
-# Closure and nonlocal interaction tests.
-# Tests that editing closures with nonlocal variables properly
-# invalidates downstream computations.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)
@@ -334,7 +322,6 @@ class TestClosureNonlocalInteraction:
         assert "results=[1, 3, 6]" in out
 
 
-# advanced closure, nonlocal, and scope edge cases.
 @pytest.mark.stress
 @pytest.mark.integration
 class TestAdvancedClosures:

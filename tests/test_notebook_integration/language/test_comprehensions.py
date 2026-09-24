@@ -5,10 +5,6 @@ import textwrap
 import pytest
 
 
-# Comprehension filter and transform edit tests.
-#
-# Tests editing filter conditions and transformations in various
-# comprehension expressions.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 @pytest.mark.upstream
@@ -131,9 +127,6 @@ class TestComprehensionChain:
         assert "mapping={'a': 10, 'b': 20, 'c': 30}" in nb_runner.get_output(2)
 
 
-# Comprehension variants interaction tests.
-# Tests dict comprehension, set comprehension, and nested comprehension
-# patterns with cache invalidation.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 @pytest.mark.integration
@@ -204,9 +197,6 @@ class TestComprehensionVariantsInteraction:
         assert "total=100" in out
 
 
-# Interaction test: list comprehension with multiple for-clauses.
-# Tests nested list comprehensions with multiple iterables,
-# conditions, and cross-cell flattening patterns.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestMultiForComprehension:
@@ -405,9 +395,6 @@ class TestDictComprehensionConditional:
         assert "d={5: 25, 10: 100, 15: 225}" in nb_runner.get_output(2)
 
 
-# Interaction test: dict comprehension with conditional expressions.
-# Tests dict comprehension with ternary operators, nested conditions,
-# and cross-cell dict transformation pipelines.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestDictCompConditionalExpr:
@@ -472,9 +459,6 @@ class TestDictCompConditionalExpr:
         assert "total=14" in nb_runner.get_output(2)
 
 
-# Interaction test: set comprehension with complex filtering.
-# Tests set comprehension with multi-condition filters, set algebra,
-# and cross-cell set-based analysis.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestSetComprehensionFilter:

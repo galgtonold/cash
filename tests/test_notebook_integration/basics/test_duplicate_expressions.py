@@ -6,16 +6,9 @@ from nbclient.exceptions import CellExecutionError
 pytestmark = [pytest.mark.core]
 
 
-# Duplicate/similar code + cell interaction tests.
-#
-# Tests that exercise identical or similar code patterns in multiple cells,
-# testing occurrence_index, cache key disambiguation, and the ambiguity
-# detection mechanism.
-#
-# NOTE: Cash raises RuntimeError when two cells have *identical* content
-# and cannot be resolved by cell ID. Tests here either:
-#   (a) use unique comments/variations to differentiate, or
-#   (b) explicitly test the ambiguity error.
+# Two cells with identical content that the cell id cannot tell apart raise
+# RuntimeError, so these tests either vary the cells (a comment is enough) or
+# assert the ambiguity error.
 @pytest.mark.stress
 @pytest.mark.timeout(30)
 class TestDuplicateStatements:
@@ -194,19 +187,11 @@ class TestRepetitivePatterns:
         assert "sum_a = 60, sum_b = 6" in nb_runner.get_output(3)
 
 
-# Integration tests for duplicate expression statement caching.
-#
-# BUG (Finding F2): When the same expression statement appears multiple times
-# in a cell (e.g., `c.increment()` called 3 times), the 2nd and subsequent calls
-# are RESTORED from cache instead of COMPUTED. This is because all identical
-# statements produce the same cache key - there is no occurrence counter.
-#
-# For pure functions (like print), this is cosmetically wrong but functionally
-# correct. For stateful method calls, this causes DATA CORRUPTION because the
-# object's state is only modified once.
-#
-# Root cause: cache_key.py:compute_cache_key() doesn't include a statement
-# occurrence index, so identical statements get the same cache key.
+# The same expression statement several times in one cell (``c.increment()``
+# three times) must run every time. Identical statements differ only in their
+# occurrence index in the cell, which is part of the cache key; without it the
+# later calls would be restored from the first, and a stateful method would
+# change its object once instead of three times.
 class TestDuplicateExpressionStatements:
     """Tests for duplicate expression statement deduplication bug."""
 

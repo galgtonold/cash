@@ -5,9 +5,6 @@ import textwrap
 import pytest
 
 
-# Interaction test: class __slots__ with inheritance and memory optimization.
-# Tests __slots__ classes with inheritance, MRO slot resolution,
-# and cross-cell attribute access patterns.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestSlotsInheritance:
@@ -163,9 +160,6 @@ class TestSlotsOptimization:
         assert "val=42 has_dict=False" in nb_runner.get_output(2)
 
 
-# Slots and __slots__ interaction tests.
-# Tests that editing classes with __slots__ and their instances
-# properly invalidates downstream cells.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)
@@ -241,7 +235,6 @@ class TestSlotsInteraction:
         assert "text=temp: 25" in out
 
 
-# __slots__, memory optimization & class patterns — cash caching.
 @pytest.mark.stress
 class TestMemoryOptimization:
     """Test memory optimization patterns."""

@@ -7,9 +7,6 @@ import pytest
 pytestmark = [pytest.mark.stress]
 
 
-# Matrix/nested list computation patterns.
-#
-# Tests 2D list operations with edits.
 @pytest.mark.timeout(90)
 class TestMatrixComputations:
     """2D list/matrix operation edit patterns."""
@@ -109,10 +106,6 @@ class TestMatrixNestedList:
         assert "diag=[1, 5, 9]" in nb_runner.get_output(2)
 
 
-# Matrix operations interaction tests.
-#
-# Tests editing cells with nested list matrix operations
-# (transpose, multiply, etc.) and verifying propagation.
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
 class TestMatrixOpsEdits:
@@ -136,7 +129,6 @@ class TestMatrixOpsEdits:
         assert "sum = [[11, 22], [33, 44]]" in nb_runner.get_output(2)
 
 
-# matrix/linear algebra with pure Python lists.
 @pytest.mark.integration
 class TestMatrixOps:
     """Matrix operations implemented with lists."""

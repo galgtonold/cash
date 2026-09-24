@@ -5,10 +5,6 @@ import textwrap
 import pytest
 
 
-# Partial application interaction tests.
-#
-# Tests editing cells with functools.partial, closures,
-# and currying patterns.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -186,9 +182,6 @@ class TestFunctoolsPartialMethod:
         assert "result=150" in nb_runner.get_output(2)
 
 
-# Interaction test: functools partial and partialmethod.
-# Tests functools.partial for argument binding, partialmethod for classes,
-# and cross-cell partial application pipelines.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestPartialPartialmethod:
@@ -255,7 +248,6 @@ class TestPartialPartialmethod:
         assert "is_42=True" in nb_runner.get_output(2)
 
 
-# Functools advanced — partial, lru_cache, reduce, singledispatch across cells.
 @pytest.mark.stress
 class TestPartialPatterns:
     """Test functools.partial patterns across cells."""
@@ -291,9 +283,6 @@ class TestPartialPatterns:
         assert "fib50=12586269025" in out2
 
 
-# Partial application and currying interaction tests.
-# Tests that editing partial functions and curried arguments properly
-# invalidates downstream computations.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)
@@ -361,9 +350,6 @@ class TestPartialCurryingInteraction:
         assert "msg=Hey, Alice!!" in out
 
 
-# Partial application and functools patterns.
-#
-# Tests functools.partial, lru_cache, and related patterns with edits.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestFunctoolsPatterns:
@@ -472,7 +458,6 @@ class TestFunctoolsLruCache:
         assert "r=5040" in nb_runner.get_output(2)
 
 
-# Caching meta-patterns — cash caching code that itself caches (lru_cache, memoize).
 @pytest.mark.stress
 class TestLruCachePatterns:
     """Test functools.lru_cache interaction with cash."""
@@ -694,9 +679,6 @@ class TestFunctionalPatterns:
         assert "25" in nb_runner.get_output(3)  # increment(increment(5)) = 5+10+10=25
 
 
-# Interaction test: functools reduce with various operators.
-# Tests functools.reduce for accumulation with different operators,
-# initial values, and cross-cell reduction pipelines.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestFunctoolsReduceOps:
@@ -761,9 +743,6 @@ class TestFunctoolsReduceOps:
         assert "length=5" in nb_runner.get_output(2)
 
 
-# Interaction test: functools.singledispatch for type-based dispatch.
-# Tests singledispatch with multiple type registrations and
-# cross-cell dispatch behavior.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestSingledispatch:

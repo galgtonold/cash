@@ -5,10 +5,6 @@ import textwrap
 import pytest
 
 
-# Mixed computation and display pattern tests.
-#
-# Tests combining computation cells with display/print cells,
-# editing either the computation or the display logic.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -71,10 +67,6 @@ class TestComputeDisplaySplit:
         assert "cubed = 1000" in nb_runner.get_output(3)
 
 
-# Print and display output interaction tests.
-#
-# Tests where print/display formatting changes, output cells
-# are edited, and print modes are toggled.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -269,8 +261,6 @@ class TestLargeOutput:
         assert "length = 1500" in nb_runner.get_output(2)
 
 
-# Multi-output cell patterns, display vs return, print ordering,
-# and assignment expression (walrus) patterns.
 @pytest.mark.stress
 @pytest.mark.integration
 class TestExpressionVsStatement:

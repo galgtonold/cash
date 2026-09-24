@@ -5,8 +5,6 @@ import textwrap
 import pytest
 
 
-# decimal/fractions precision arithmetic with caching.
-# Tests Decimal, Fraction operations, and edit propagation for precise math.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)
@@ -71,7 +69,6 @@ class TestDecimalFractionOps:
         assert "exact=True" in out2
 
 
-# decimal and fractions precision arithmetic.
 @pytest.mark.stress
 @pytest.mark.integration
 class TestDecimalPrecision:
@@ -195,9 +192,6 @@ class TestDecimalPrecisionQuantize:
         assert "x=29.00" in nb_runner.get_output(2)
 
 
-# Interaction test: decimal module precision and rounding.
-# Tests Decimal arithmetic with custom precision, rounding modes,
-# quantize operations, and cross-cell financial calculations.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestDecimalPrecisionRounding:
@@ -262,9 +256,6 @@ class TestDecimalPrecisionRounding:
         assert "total=61.5" in nb_runner.get_output(1)
 
 
-# Interaction test: fractions module arithmetic.
-# Tests Fraction creation from various inputs, arithmetic operations,
-# limit_denominator, and cross-cell fraction pipelines.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestFractionsArithmetic:

@@ -3,10 +3,6 @@
 import pytest
 
 
-# Extreme edge cases, working directory changes, pickling,
-# subprocess interactions, time-sensitive patterns, and multi-cell class hierarchies.
-#
-# These tests target the deepest corners of the caching system.
 @pytest.mark.integration
 @pytest.mark.timeout(30)
 class TestWorkingDirectoryChanges:

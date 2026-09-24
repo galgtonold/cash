@@ -5,10 +5,6 @@ import pytest
 pytestmark = [pytest.mark.stress]
 
 
-# Exception handling code interaction tests.
-#
-# Tests where try/except blocks are edited, error paths change,
-# and caching handles exception-related code modifications.
 @pytest.mark.upstream
 @pytest.mark.timeout(45)
 class TestTryExceptEdits:
@@ -72,9 +68,6 @@ class TestTryExceptEdits:
         assert "result = 25.0" in nb_runner.get_output(2)
 
 
-# Exception hierarchy and error handling edits.
-#
-# Tests custom exception classes and try/except flow with edits.
 @pytest.mark.timeout(90)
 class TestExceptionHierarchyEdit:
     """Custom exception and error handling patterns."""

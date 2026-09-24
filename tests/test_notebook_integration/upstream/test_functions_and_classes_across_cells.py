@@ -145,11 +145,6 @@ class TestNestedFunctionClosures:
         assert "result=12" in output2  # add_one(5)=6, double(6)=12
 
 
-# Advanced cross-cell interaction torture tests.
-#
-# Tests that combine multiple features simultaneously: function definitions
-# referencing external variables, class hierarchies with file dependencies,
-# decorator + module reload combos, and long multi-cell computation chains.
 @pytest.mark.integration
 @pytest.mark.stress
 class TestCrossCellFunctionState:
@@ -404,12 +399,6 @@ class TestContextManagers:
         assert "hello context" in nb_runner.get_output(2)
 
 
-# Cross-cell patterns, class instances, generators,
-# exception recovery, partial re-runs, multi-module cascades.
-#
-# Tests focus on complex real-world usage patterns that span multiple cells
-# and exercise the caching framework's ability to track dependencies across
-# execution boundaries.
 @pytest.mark.core
 class TestClassInstanceCrossCells:
     """Test class instance creation, method calls, and mutation across cells."""

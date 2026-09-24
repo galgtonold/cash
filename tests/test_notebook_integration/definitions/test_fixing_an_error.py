@@ -6,13 +6,8 @@ from nbclient.exceptions import CellExecutionError
 pytestmark = [pytest.mark.stress]
 
 
-# Error handling + cell edit interaction tests.
-#
-# Tests that exercise error scenarios: syntax errors, runtime errors,
-# exception recovery, and cell edits to fix errors.
-#
-# Note: nbclient raises CellExecutionError for cell errors, so we must
-# use try/except to handle expected errors gracefully.
+# nbclient raises CellExecutionError for a cell that errors, so the tests
+# catch it where they expect an error.
 @pytest.mark.core
 @pytest.mark.timeout(30)
 class TestSyntaxErrorRecovery:
@@ -203,10 +198,6 @@ class TestErrorThenSuccess:
         assert "z = 999" in nb_runner.get_output(3)
 
 
-# Error-then-fix pattern interaction tests.
-#
-# Tests where cells produce errors, then are fixed, and
-# the cache correctly handles the recovery.
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
 class TestErrorThenFix:
@@ -290,10 +281,6 @@ class TestErrorThenFix:
         assert "result = 3" in nb_runner.get_output(2)
 
 
-# Error handling and recovery interaction tests.
-#
-# Tests where code errors occur, user fixes them, and caching
-# should properly handle the error-recovery workflow.
 @pytest.mark.upstream
 @pytest.mark.timeout(45)
 class TestErrorThenFixCells:

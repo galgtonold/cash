@@ -5,9 +5,6 @@ import textwrap
 import pytest
 
 
-# Walrus operator and assignment expression patterns.
-#
-# Tests := operator in various contexts with edits.
 class TestWalrusOperator:
     """Walrus operator patterns with edit propagation."""
 
@@ -105,10 +102,6 @@ class TestWalrusOperator:
         assert "count=4" in nb_runner.get_output(2)
 
 
-# Walrus operator interaction tests.
-#
-# Tests editing cells that use the walrus operator (:=)
-# in various contexts and verifying cache propagation.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -241,9 +234,6 @@ class TestWalrusWhileComprehension:
         assert "result=[5, 20, 45]" in nb_runner.get_output(2)
 
 
-# Interaction test: nested comprehension with walrus operator.
-# Tests complex nested list/dict comprehensions using := for
-# intermediate results and cross-cell consumption.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestNestedCompWalrus:
@@ -310,8 +300,6 @@ class TestNestedCompWalrus:
         assert "total=5000" in nb_runner.get_output(2)
 
 
-# dict merge and walrus operator patterns with caching.
-# Tests dict merge (|), walrus operator (:=), and edit propagation.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)

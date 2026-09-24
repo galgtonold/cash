@@ -5,14 +5,6 @@ import pytest
 pytestmark = [pytest.mark.stress]
 
 
-# Simulation cache coherence under edits.
-#
-# The simulation cache stores (cell_hash, virtual_lineage, ...) for each cell.
-# These tests probe whether the simulation cache is correctly invalidated when:
-# - A cell is edited (hash changes → must re-simulate from that point)
-# - The same cell is edited back (hash reverts → should match old cache)
-# - Cells are inserted/removed (index shifts)
-# - Multiple cells change simultaneously
 @pytest.mark.upstream
 class TestSimulationCacheInvalidation:
     """Verify simulation cache invalidation on cell edits."""
@@ -223,10 +215,6 @@ class TestSimulationCacheWithMultiStatement:
         assert "y = 6" in nb_runner.get_output(2)
 
 
-# Simulation cache edge case interaction tests (advanced).
-#
-# Tests that specifically stress the simulation cache and upstream
-# detection logic with tricky patterns that could cause divergence.
 @pytest.mark.upstream
 @pytest.mark.timeout(30)
 class TestSimCacheAfterEdits:

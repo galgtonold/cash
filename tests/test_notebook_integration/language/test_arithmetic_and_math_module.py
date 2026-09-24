@@ -3,10 +3,6 @@
 import pytest
 
 
-# Numeric / math computation chain interaction tests.
-#
-# Tests editing numeric computations including arithmetic chains,
-# math functions, and statistical calculations.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -50,10 +46,6 @@ class TestArithmeticChainEdits:
         assert "result = 80" in nb_runner.get_output(4)
 
 
-# Numeric computation and math pattern edit tests.
-#
-# Tests editing cells with numeric computations, math operations,
-# and scientific-style calculations.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -139,9 +131,6 @@ class TestNumericComputationEdits:
         assert "5" in out2  # starts with 5xxx
 
 
-# Numeric precision and math computation edits.
-#
-# Tests math operations, rounding, precision with edits.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestNumericPrecisionEdits:
@@ -333,9 +322,6 @@ class TestMathModuleFunctions:
         assert "fact=3628800" in nb_runner.get_output(2)
 
 
-# Interaction test: math module advanced functions (log, pow, factorial, comb).
-# Tests math.log, math.pow, math.factorial, math.comb, math.perm,
-# and cross-cell mathematical computations.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestMathAdvancedFunctions:
@@ -406,9 +392,6 @@ class TestMathAdvancedFunctions:
         assert "identity=True" in nb_runner.get_output(2)
 
 
-# Interaction test: math module special functions.
-# Tests math.gcd, math.lcm, math.comb, math.perm, math.isclose,
-# and cross-cell mathematical computation pipelines.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestMathSpecialFunctions:

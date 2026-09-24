@@ -49,11 +49,6 @@ class TestVariableReassignment:
         assert "LOW" in nb_runner.get_output(3)
 
 
-# Variable shadowing and scope interaction tests.
-#
-# Tests where variables are overwritten in later cells,
-# edits change which version of a variable is used, and
-# scoping rules interact with caching.
 @pytest.mark.upstream
 @pytest.mark.timeout(45)
 class TestVariableOverwriting:
@@ -123,8 +118,6 @@ class TestMultipleVariables:
         assert "result = 50" in nb_runner.get_output(2)
 
 
-# Tricky multi-cell variable shadowing, reassignment, deletion,
-# and scope interactions that stress the lineage tracker.
 @pytest.mark.integration
 class TestConditionalAssignment:
     """Test conditional assignment patterns."""
@@ -223,11 +216,6 @@ class TestConstantEdits:
         assert "result = 1000" in nb_runner.get_output(2)
 
 
-# Global constant and config pattern interaction tests.
-#
-# Tests where shared constants/config are defined in an early cell
-# and used by many downstream cells. Edit the config and verify
-# all downstream cells update correctly.
 @pytest.mark.upstream
 @pytest.mark.timeout(45)
 class TestConfigDrivenWorkflow:
@@ -369,11 +357,6 @@ class TestDatetimePatterns:
         assert "160" in nb_runner.get_output(3)
 
 
-# Complex real-world simulation: data science pipeline.
-#
-# Full end-to-end data science workflow: load data, clean,
-# feature engineer, model (simple), evaluate — with edits
-# at each stage.
 @pytest.mark.upstream
 @pytest.mark.timeout(60)
 class TestDataSciencePipeline:

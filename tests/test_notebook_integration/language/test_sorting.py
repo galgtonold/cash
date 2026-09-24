@@ -5,10 +5,6 @@ import pytest
 pytestmark = [pytest.mark.stress, pytest.mark.timeout(90)]
 
 
-# Sorting and ordering pattern interaction tests.
-#
-# Tests editing sort keys, reverse flags, custom comparators,
-# and sorted data propagation.
 @pytest.mark.upstream
 class TestSortingEdits:
     """Editing sorting operations."""
@@ -81,9 +77,6 @@ class TestSortingEdits:
         assert "top3 = [10, 20]" in nb_runner.get_output(3)
 
 
-# Sorting with custom key functions interaction tests.
-# Tests that editing sort keys or comparison functions properly
-# invalidates sorted outputs downstream.
 @pytest.mark.integration
 class TestSortingKeyInteraction:
     """Test sorting with custom keys and cache invalidation."""

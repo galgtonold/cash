@@ -44,19 +44,6 @@ class TestClassHierarchyPatterns:
         assert "Result: 200" in out2
 
 
-# Advanced edge cases and uncommon Python patterns.
-#
-# Tests focusing on:
-# 1. Global/nonlocal keyword interactions
-# 2. Type annotation patterns (no runtime effect)
-# 3. Property decorators and descriptors
-# 4. Dataclass patterns
-# 5. Complex unpacking patterns
-# 6. Generator/iterator patterns across cells
-# 7. Complex string operations (multiline, raw, bytes)
-# 8. Chained method calls
-# 9. Boolean logic chains
-# 10. Default argument patterns
 @pytest.mark.integration
 @pytest.mark.timeout(30)
 class TestPropertyAndDescriptorPatterns:

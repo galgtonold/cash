@@ -52,9 +52,6 @@ class TestArrayModuleTyped:
         assert "sum=300" in nb_runner.get_output(2)
 
 
-# Interaction test: array module typed arrays.
-# Tests array.array for typed numeric arrays, buffer protocol,
-# tobytes/frombytes, and cross-cell array processing pipelines.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestArrayTypedArrays:
@@ -117,8 +114,6 @@ class TestArrayTypedArrays:
         assert "sum=45" in nb_runner.get_output(2)
 
 
-# struct pack/unpack patterns with caching.
-# Tests struct.pack, struct.unpack, calcsize, and edit propagation.
 class TestStructPackUnpack:
     """Test struct packing/unpacking caching."""
 
@@ -329,9 +324,6 @@ class TestStructPackMixedFormats:
         assert "vals=(10, 20, 30)" in nb_runner.get_output(2)
 
 
-# Interaction test: struct pack_into and unpack_from with buffer.
-# Tests struct.pack_into and unpack_from for buffer operations,
-# Struct class precompilation, and cross-cell binary data processing.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestStructBufferOps:
@@ -392,7 +384,6 @@ class TestStructBufferOps:
         assert "ver=1 length=256 offset=65536" in nb_runner.get_output(2)
 
 
-# Struct, memoryview & buffer patterns — cash caching with binary data.
 @pytest.mark.stress
 class TestBytearrayPatterns:
     """Test bytearray and memoryview patterns."""

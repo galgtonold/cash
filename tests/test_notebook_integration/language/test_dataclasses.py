@@ -99,9 +99,6 @@ class TestDataclassFieldEdits:
         assert "c2=default,[]" in out
 
 
-# Interaction test: dataclass field with default_factory.
-# Tests dataclass with default_factory, field metadata,
-# post_init processing, and cross-cell dataclass pipelines.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestDataclassDefaultFactory:
@@ -203,9 +200,6 @@ class TestDataclassPostInit:
         assert "p=100,200" in nb_runner.get_output(2)
 
 
-# Interaction test: dataclass with custom __post_init__ and field factory.
-# Tests dataclass post-init validation, field(default_factory=...), and
-# computed property behavior across cells.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestDataclassPostInitFactory:
@@ -316,9 +310,6 @@ class TestDataclassOrdering:
         assert "result=[95, 88]" in nb_runner.get_output(2)
 
 
-# Interaction test: dataclass field ordering with total_ordering comparisons.
-# Tests @dataclass(order=True) with field(compare=False), sorted() on dataclasses,
-# cross-cell min/max operations, and cache invalidation on value changes.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestDataclassFieldOrdering:
@@ -384,9 +375,6 @@ class TestDataclassFieldOrdering:
         assert "is_hot=True" in nb_runner.get_output(2)
 
 
-# Interaction test: dataclass with eq, order, and hash customization.
-# Tests dataclass with eq=True, order=True for comparison, frozen for
-# hashability, and cross-cell sorted/set operations.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestDataclassEqOrderHash:
@@ -501,9 +489,6 @@ class TestDataclassInheritanceFrozen:
         assert "val=99" in nb_runner.get_output(2)
 
 
-# Interaction test: dataclass with slots and frozen.
-# Tests dataclass(slots=True, frozen=True) for memory-efficient
-# immutable records, and cross-cell immutable data patterns.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestDataclassSlotsFrozen:
@@ -567,7 +552,6 @@ class TestDataclassSlotsFrozen:
         assert "is_unit=False" in nb_runner.get_output(2)
 
 
-# Dataclass & NamedTuple advanced patterns — cash caching with typed data.
 @pytest.mark.stress
 class TestDataclassAdvanced:
     """Test advanced dataclass patterns."""

@@ -3,9 +3,7 @@
 import pytest
 
 
-# Reproduce the VolAdj recomputation bug from the financial_analysis_demo notebook.
-#
-# Exact notebook structure:
+# The shape of the financial_analysis_demo notebook:
 #   Cell 1: imports
 #   Cell 2: %cash_on
 #   Cell 3: load CSV data  (df = pd.read_csv(...))

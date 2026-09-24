@@ -6,10 +6,6 @@ import time
 import pytest
 
 
-# Stress tests: Skip Logic & Lineage Edge Cases (Scenarios 1-30)
-#
-# Tests the skip optimization, cache key computation, lineage tracking,
-# and various edge cases around when statements should/shouldn't be skipped.
 @pytest.mark.stress
 @pytest.mark.skip_optimization
 class TestSkipLogic:
@@ -207,11 +203,7 @@ class TestSkipLogic:
         assert "y=42" in nb_runner.get_output(2)
 
 
-# Skip optimization edge cases.
-#
-# Tests that exercise the 'already executed' skip optimization
-# in combination with external modifications, reruns, and edits.
-# The skip optimization checks:
+# The already-executed skip holds only when:
 # 1. Code matches executed_cell_codes[var]
 # 2. Output's _cash_hash matches stored lineage
 # 3. No file dependencies OR file deps unchanged

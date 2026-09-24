@@ -5,10 +5,6 @@ import textwrap
 import pytest
 
 
-# Class hierarchy interaction tests.
-#
-# Tests editing base classes, overriding methods, adding/removing
-# inheritance, and multiple inheritance scenarios.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -75,10 +71,6 @@ class TestInheritanceEdits:
         assert "val = 20" in nb_runner.get_output(4)
 
 
-# Class inheritance chain edit tests.
-#
-# Tests editing base/parent classes and verifying that changes
-# propagate through inheritance hierarchies.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -352,7 +344,6 @@ class TestDiamondMRO:
         assert "log=['Base', 'Right', 'Left', 'Child']" in nb_runner.get_output(2)
 
 
-# Complex inheritance & MRO patterns — diamond, mixin, super() chains.
 class TestDiamondInheritance:
     """Test diamond inheritance and MRO."""
 
@@ -420,9 +411,6 @@ class TestDiamondInheritance:
         assert "label=v2" in nb_runner.get_output(3)
 
 
-# Interaction test: class method resolution order (MRO) with cooperative super().
-# Tests diamond inheritance, MRO resolution, and super() chain
-# across cells with method override behavior.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestMROCooperativeSuper:
@@ -487,8 +475,6 @@ class TestMROCooperativeSuper:
         assert "val=Y" in nb_runner.get_output(2)
 
 
-# Multi-level inheritance and mixin interaction tests.
-# Tests base/derived class method changes with 3-level inheritance and mixins.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)
@@ -671,9 +657,6 @@ class TestMixinPatterns:
         assert "price=9.99" in out2
 
 
-# Class composition patterns.
-#
-# Tests composition (has-a) relationships with edits.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestClassComposition:
@@ -739,10 +722,6 @@ class TestClassComposition:
         assert "names = ['Charlie', 'Diana', 'Eve']" in nb_runner.get_output(3)
 
 
-# Multi-cell class composition (has-a) interaction tests.
-#
-# Tests where one class has another class as a member,
-# and edits propagate through the composition.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)

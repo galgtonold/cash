@@ -1,27 +1,14 @@
 """``# @cash:no-cache``: what it covers and what re-runs because of it.
 
-``# @cash: no-cache`` makes a statement behave as if cash weren't installed:
-re-running ADVANCES state (like plain Jupyter), for both reassignment and
-in-place mutation. Previously the in-place case was wrongly reset to its
-cell-entry base.
+A no-cache statement behaves as if cash weren't installed: re-running it
+advances state, like plain Jupyter, for reassignment and in-place mutation
+alike, and does not re-run the producer of the variable it changes.
 
-Root cause (found with the upstream-trace harness): a no-cache statement still
-bumps its var's runtime lineage, so pass 2 of the simulation flagged the var
-stale (runtime lineage advanced past the simulation's) and re-executed its
-producer -- resetting it. The no-cache exclusion only covered the
-stale-value guard's self-write sets, not the pass-2 lineage mismatch. The fix
-drops no-cache-written vars from ``broken_vars`` before producer scheduling.
-
-Verification: does a leading ``# @cash:no-cache`` cover the WHOLE cell?
-
-Empirical, external-counter based. Each statement in the annotated cell calls
-``bump(tag)``, which appends a line to a file on disk. The file is read from the
-TEST side (never by a notebook cell), so cash's file-tracking machinery cannot
-double-count it and the badge is never trusted as evidence.
-
-If the directive covered the whole cell, an isolated re-run of that cell would
-append 3 more lines (all statements live). If it covers only the NEXT statement,
-the re-run appends 1 line and statements 2/3 replay from cache.
+A leading ``# @cash:no-cache`` covers the whole cell. The coverage tests count
+live statements with ``bump(tag)``, which appends a line to a file that only
+the test side reads, so cash's file tracking cannot double-count it and the
+badge is never taken as evidence: an isolated re-run appends one line per
+statement that really ran.
 """
 
 import textwrap
@@ -175,11 +162,6 @@ def test_statement_adjacent_no_cache_still_scoped(nb_runner, tmp_path):
     print(f"[no-cache control] after warm re-run, sink = {got}")
 
 
-# Cash annotation directives (@cash: no-cache, @cash: ttl, etc.)
-# and debug mode behavior.
-#
-# Tests the special comment-based directives that control caching behavior
-# at the statement level.
 @pytest.mark.stress
 @pytest.mark.integration
 class TestNoCacheAnnotation:
@@ -244,10 +226,6 @@ class TestNoCacheAnnotation:
         assert "20" in output
 
 
-# Annotation/directive interaction tests.
-#
-# Tests that exercise @cash: directives (no-cache, ttl, persist)
-# combined with cell edits to verify correct behavior.
 @pytest.mark.stress
 @pytest.mark.core
 @pytest.mark.timeout(30)
@@ -285,10 +263,6 @@ class TestNoCacheDirective:
         assert "y = 15" in nb_runner.get_output(2)
 
 
-# Annotation interaction tests.
-#
-# Tests combining @cash: annotations (no-cache, ttl, persist)
-# with cell edits to verify annotation handling during edits.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(45)

@@ -5,8 +5,6 @@ import textwrap
 import pytest
 
 
-# Simulation and numerical computation patterns —
-# Monte Carlo, optimization, statistical tests, and numerical methods.
 @pytest.mark.integration
 @pytest.mark.stress
 class TestMonteCarloSimulation:

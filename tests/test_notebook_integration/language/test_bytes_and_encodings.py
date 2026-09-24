@@ -3,8 +3,6 @@
 import pytest
 
 
-# bytes encoding and decoding patterns with caching.
-# Tests str.encode, bytes.decode, hex conversion, and edit propagation.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)
@@ -71,9 +69,6 @@ class TestBytesEncode:
         assert "match=True" in out2
 
 
-# Interaction test: bytes and bytearray encoding operations.
-# Tests bytes/bytearray construction, hex conversion,
-# encoding/decoding, and cross-cell binary pipelines.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestBytesEncodingOps:
@@ -134,10 +129,6 @@ class TestBytesEncodingOps:
         assert "upper=PYTHON" in nb_runner.get_output(2)
 
 
-# String encoding and bytes conversion interaction tests.
-#
-# Tests editing string/bytes conversions, encoding schemes,
-# and byte manipulation patterns.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -362,9 +353,6 @@ class TestBase64HexConversions:
         assert "enc=eHl6" in nb_runner.get_output(2)
 
 
-# Interaction test: io.StringIO and io.BytesIO in-memory streams.
-# Tests reading/writing to in-memory buffers, seek/tell operations,
-# cross-cell stream sharing, and cache invalidation on content changes.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestIoStringBytesIO:

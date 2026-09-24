@@ -5,7 +5,6 @@ import textwrap
 import pytest
 
 
-# Weakref & memory patterns — cash caching with weak references and GC.
 @pytest.mark.stress
 class TestWeakrefBasics:
     """Test weak references and garbage collection."""
@@ -132,9 +131,6 @@ class TestWeakrefObjects:
         assert "v=99" in nb_runner.get_output(2)
 
 
-# Interaction test: weakref module weak references.
-# Tests weakref.ref, finalize, WeakValueDictionary,
-# and cross-cell reference management patterns.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestWeakrefOps:
@@ -200,9 +196,6 @@ class TestWeakrefOps:
         assert "alive=True" in nb_runner.get_output(2)
 
 
-# Weakref interaction tests.
-# Tests that editing objects tracked via weakrefs properly invalidates
-# downstream computations.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)

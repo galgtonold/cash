@@ -5,8 +5,6 @@ import textwrap
 import pytest
 
 
-# Generator, iterator, and functional patterns — yield, send/throw,
-# itertools, functools, closures, higher-order functions.
 @pytest.mark.integration
 @pytest.mark.stress
 class TestGeneratorPatterns:
@@ -86,8 +84,6 @@ class TestGeneratorPatterns:
         assert "[1, 1, 2, 3, 5, 8]" in nb_runner.get_output(2)
 
 
-# generator/iterator protocol patterns with caching.
-# Tests generator functions, iter/next, StopIteration, and edit propagation.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)
@@ -150,9 +146,6 @@ class TestGeneratorIterator:
         assert "total=55" in out2
 
 
-# Generator and iterator pipeline patterns.
-#
-# Tests generator functions, chaining, and edit propagation.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestGeneratorPipeline:
@@ -239,7 +232,6 @@ class TestGeneratorYieldFrom:
         assert "result=45" in nb_runner.get_output(2)
 
 
-# advanced generators: send(), throw(), close(), yield from.
 @pytest.mark.stress
 @pytest.mark.integration
 class TestGeneratorProtocol:
@@ -345,9 +337,6 @@ class TestGeneratorSendClose:
         assert "first5=[100, 110, 120, 130, 140]" in nb_runner.get_output(2)
 
 
-# Interaction test: generator with send() and throw().
-# Tests generator coroutine-like patterns with send(), throw(),
-# and close(), verifying cross-cell generator state.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestGeneratorSendThrow:
@@ -457,10 +446,6 @@ class TestCustomIterator:
         assert "fibs=[0, 1, 1, 2, 3, 5, 8, 13]" in nb_runner.get_output(2)
 
 
-# Iterator and protocol interaction tests.
-#
-# Tests editing cells with custom iterators, context managers,
-# and protocol-based patterns.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)

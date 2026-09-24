@@ -80,9 +80,6 @@ class TestRecursiveFibTree:
         assert "result=5040" in nb_runner.get_output(2)
 
 
-# Recursive function edit propagation.
-#
-# Tests editing recursive functions and verifying downstream re-evaluation.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestRecursiveFunctionEdit:
@@ -156,10 +153,6 @@ class TestRecursiveDataStruct:
         assert "d=1" in nb_runner.get_output(3)
 
 
-# Recursive data structure interaction tests.
-#
-# Tests editing cells with recursive data structures
-# (trees, linked lists) and verifying propagation.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -220,8 +213,6 @@ class TestRecursiveDataEdits:
         assert "result = (10, 20)" in nb_runner.get_output(2)
 
 
-# Recursive data structure traversal interaction tests.
-# Tests tree, linked list, and nested dict traversal with cache invalidation.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)
@@ -324,8 +315,6 @@ class TestRecursiveTraversalInteraction:
         assert "vals=[10, 20]" in out
 
 
-# Recursive data structures, tree/graph traversal, and
-# nested container patterns across cells.
 class TestTreePatterns:
     """Test tree data structures across cells."""
 
@@ -564,7 +553,6 @@ class TestGraphPatterns:
         assert "from_5=[5, 4, 2, 3, 1]" in nb_runner.get_output(3)
 
 
-# graph algorithms: BFS, DFS, shortest path.
 @pytest.mark.stress
 @pytest.mark.integration
 class TestGraphAlgorithms:

@@ -5,10 +5,6 @@ import textwrap
 import pytest
 
 
-# Enum and constant pattern interaction tests.
-#
-# Tests editing enum definitions, constant values, and
-# patterns that use them across cells.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -62,10 +58,6 @@ class TestEnumEdits:
         assert "pending" in nb_runner.get_output(3)
 
 
-# Enum definition and constant map edit tests.
-#
-# Tests editing enum definitions, constant maps, and named values
-# used in downstream calculations.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -127,8 +119,6 @@ class TestEnumConstEdits:
         assert "total = 110.00" in nb_runner.get_output(2)
 
 
-# enum patterns with caching.
-# Tests Enum, IntEnum, Flag operations, and edit propagation.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)
@@ -199,12 +189,6 @@ class TestEnumPatterns:
         assert "avg=2.0" in out2
 
 
-# Collections patterns, enum usage, protocol/structural typing,
-# __slots__, and complex comprehension patterns.
-#
-# Tests how cash handles specialized collection types, enums across cells,
-# Protocol-based structural subtyping, __slots__ classes, and deeply nested
-# comprehensions.
 @pytest.mark.stress
 @pytest.mark.integration
 class TestEnumChangeInvalidation:
@@ -380,9 +364,6 @@ class TestEnumAutoAndFunctional:
         assert out.index("CRITICAL") < out.index("LOW")
 
 
-# Interaction test: enum with custom methods and class attributes.
-# Tests Enum with custom methods, classmethods, properties,
-# and cross-cell enum-based dispatch.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestEnumCustomMethods:
@@ -445,7 +426,6 @@ class TestEnumCustomMethods:
         assert "pos=(2,1)" in nb_runner.get_output(2)
 
 
-# Advanced enum patterns — cash caching with Enum, Flag, IntEnum.
 @pytest.mark.stress
 class TestEnumAdvanced:
     """Test advanced enum patterns across cells."""
@@ -558,9 +538,6 @@ class TestEnumAdvanced:
         assert "color=BLUE hex=#0000FF" in nb_runner.get_output(2)
 
 
-# Enum member editing and dispatch patterns.
-#
-# Tests enum-based dispatch/mapping with edits.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestEnumDispatchEdits:

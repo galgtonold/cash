@@ -68,10 +68,6 @@ class TestManualMemoization:
         assert "cache_size=2" in nb_runner.get_output(2)
 
 
-# Cached property and memoization interaction tests.
-#
-# Tests editing cells with memoization patterns
-# and verifying correct cache invalidation.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)

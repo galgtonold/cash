@@ -5,10 +5,6 @@ import textwrap
 import pytest
 
 
-# NumPy integration patterns and numerical computing workflows.
-#
-# Tests how cash handles numpy arrays, matrix operations, random number
-# generation, and numerical computation pipelines across cells.
 @pytest.mark.integration
 @pytest.mark.stress
 class TestNumpyBasicOperations:
@@ -138,7 +134,6 @@ class TestNumpyWithRestart:
         assert "25.0" in nb_runner.get_output(3)
 
 
-# Matrix/linear algebra — pure Python matrix operations with cash.
 @pytest.mark.stress
 class TestPureMatrixOps:
     """Test pure Python matrix operations."""

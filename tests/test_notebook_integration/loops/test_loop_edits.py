@@ -7,10 +7,6 @@ import pytest
 pytestmark = [pytest.mark.stress, pytest.mark.loops]
 
 
-# Loop and control structure caching patterns.
-#
-# Tests how cash handles for loops, while loops, if/else branches, nested
-# control structures, and their caching/invalidation behavior across cells.
 @pytest.mark.integration
 class TestForLoopCaching:
     """Test for loop caching across cells."""
@@ -131,10 +127,6 @@ class TestComplexControlFlow:
         assert "5 5" in nb_runner.get_output(2)
 
 
-# Loop and iteration pattern interaction tests.
-#
-# Tests where users write loops across cells, edit loop bounds,
-# body, and iteration patterns, verifying cache consistency.
 @pytest.mark.timeout(45)
 class TestForLoopEdits:
     """For loop editing patterns."""

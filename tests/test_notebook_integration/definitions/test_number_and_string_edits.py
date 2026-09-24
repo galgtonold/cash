@@ -5,10 +5,6 @@ import pytest
 pytestmark = [pytest.mark.stress]
 
 
-# Numeric precision and math interaction tests.
-#
-# Tests with floating point, integer overflow, precision changes,
-# and mathematical operations combined with cell edits.
 @pytest.mark.upstream
 @pytest.mark.timeout(45)
 class TestFloatingPointEdits:
@@ -101,8 +97,6 @@ class TestLargeNumberEdits:
         assert "result = 3628800" in nb_runner.get_output(2)
 
 
-# math module chain operations with caching and edit propagation.
-# Tests math.sqrt, math.pow, math.log chains and invalidation on edit.
 @pytest.mark.integration
 @pytest.mark.timeout(90)
 class TestMathChainEdit:
@@ -171,11 +165,6 @@ class TestMathChainEdit:
         assert "identity=1.0" in out2
 
 
-# String operations and formatting interaction tests.
-#
-# Tests where users perform string operations across cells,
-# edit string content and formatting, and verify caching
-# handles string changes correctly.
 @pytest.mark.upstream
 @pytest.mark.timeout(45)
 class TestStringEdits:

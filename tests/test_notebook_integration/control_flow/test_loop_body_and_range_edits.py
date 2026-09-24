@@ -5,10 +5,6 @@ import pytest
 pytestmark = [pytest.mark.stress]
 
 
-# Control structure + cell edit interaction tests.
-#
-# Tests that exercise loops and conditionals combined with cell edits,
-# out-of-order execution, and kernel restarts.
 @pytest.mark.control
 @pytest.mark.timeout(30)
 class TestLoopCellEdits:

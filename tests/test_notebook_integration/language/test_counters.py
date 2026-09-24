@@ -5,10 +5,6 @@ import pytest
 pytestmark = [pytest.mark.stress, pytest.mark.timeout(90)]
 
 
-# Counter and accumulator interaction tests.
-#
-# Tests editing cells that use Counter, defaultdict,
-# and accumulator patterns.
 @pytest.mark.upstream
 class TestCounterPatternEdits:
     """Editing Counter and accumulator patterns."""
@@ -85,9 +81,6 @@ class TestCounterPatternEdits:
         assert "'C': 4" in nb_runner.get_output(2)
 
 
-# Interaction test: collections.Counter with arithmetic and most_common.
-# Tests Counter addition, subtraction, intersection (&), union (|),
-# and most_common across cells.
 class TestCounterArithAdvanced:
     """Test Counter arithmetic operations across cells."""
 
@@ -190,9 +183,6 @@ class TestCounterArithmetic:
         assert "elements=['a', 'a', 'a', 'b']" in nb_runner.get_output(2)
 
 
-# Interaction test: collections.Counter elements and most_common.
-# Tests Counter arithmetic, elements() iteration, most_common filtering,
-# and cross-cell counter merging with cache invalidation.
 class TestCounterElements:
     """Test Counter.elements and arithmetic across cells."""
 
@@ -301,8 +291,6 @@ class TestCounterMostCommonSubtract:
         assert "most=[(1, 4)]" in nb_runner.get_output(2)
 
 
-# counter/statistics patterns with caching.
-# Tests collections.Counter, statistics module, and edit propagation.
 @pytest.mark.integration
 class TestCounterStatistics:
     """Test Counter and statistics operation caching."""

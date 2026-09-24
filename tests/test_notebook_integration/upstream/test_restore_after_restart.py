@@ -5,10 +5,6 @@ import textwrap
 import pytest
 
 
-# Virtual restore + cell edit interaction tests.
-#
-# Tests that exercise virtual restore from disk cache after kernel restart,
-# combined with cell edits and dependency changes.
 @pytest.mark.stress
 @pytest.mark.restore
 @pytest.mark.timeout(30)

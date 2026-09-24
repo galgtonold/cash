@@ -3,13 +3,6 @@
 import pytest
 
 
-# Kernel restart + cell edit interactions.
-#
-# Tests that exercise the most fragile path: editing cells after a kernel restart.
-# After restart, cash must:
-# - Rebuild lineage state from disk cache
-# - Detect that cell code has changed since the cached state
-# - Re-execute changed statements and propagate properly
 @pytest.mark.stress
 @pytest.mark.restore
 class TestEditAfterRestart:
@@ -162,11 +155,6 @@ class TestKernelRestartWithChanges:
         assert "30" in nb_runner.get_output(2)
 
 
-# Kernel restart + cell edit combined interaction tests.
-#
-# Tests where users restart the kernel (via shutdown + start_kernel)
-# combined with cell edits before/after restart, verifying disk
-# restore and re-computation work correctly together.
 @pytest.mark.restore
 @pytest.mark.stress
 @pytest.mark.timeout(60)

@@ -7,10 +7,6 @@ import pytest
 pytestmark = [pytest.mark.stress]
 
 
-# Decorator patterns + cell edit interaction tests.
-#
-# Tests that exercise decorated functions and how cash handles
-# changes to decorators, decorated functions, and decorator arguments.
 @pytest.mark.core
 @pytest.mark.timeout(30)
 class TestDecoratorEdits:
@@ -91,8 +87,6 @@ class TestDecoratorEdits:
         assert "result = 6" in nb_runner.get_output(3)
 
 
-# Decorator patterns — function decorators, class decorators,
-# decorator with arguments, stacked decorators, method decorators.
 @pytest.mark.integration
 class TestFunctionDecorators:
     """Test function decorators across cells."""
@@ -216,7 +210,6 @@ class TestStackedDecorators:
         assert "result = 11" in nb_runner.get_output(4)
 
 
-# decorator stacking and parameterized decorators.
 @pytest.mark.integration
 class TestDecoratorStacking:
     """Stacking multiple decorators."""
@@ -387,9 +380,6 @@ class TestDecoratorStacking:
         assert "result=10" in out
 
 
-# Decorator stacking / chaining interaction tests.
-#
-# Tests editing stacked decorators and their ordering effects.
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
 class TestDecoratorStackEdits:
@@ -459,9 +449,6 @@ class TestDecoratorStackEdits:
         assert "result = {(hi)}" in nb_runner.get_output(4)
 
 
-# Interaction test: decorator chaining with wraps and metadata.
-# Tests multiple decorators stacked, functools.wraps preservation,
-# and cross-cell decorated function behavior.
 @pytest.mark.timeout(90)
 class TestDecoratorChainWraps:
     """Test decorator chaining with wraps across cells."""
@@ -621,9 +608,6 @@ class TestFunctoolsWrapsChain:
         assert "result=100" in nb_runner.get_output(2)
 
 
-# Interaction test: functools.wraps and update_wrapper for decorator metadata.
-# Tests preserving __name__, __doc__, __module__ across decorated functions,
-# and cross-cell decorator composition with cache invalidation.
 @pytest.mark.timeout(90)
 class TestFunctoolsWrapsUpdate:
     """Test functools.wraps decorator metadata across cells."""

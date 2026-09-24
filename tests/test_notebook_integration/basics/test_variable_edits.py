@@ -5,10 +5,6 @@ import pytest
 pytestmark = [pytest.mark.stress]
 
 
-# Mixed assignment types + cell edit interaction tests.
-#
-# Tests that exercise augmented assignments, tuple/list unpacking,
-# walrus operator, global/nonlocal, and compound assignments.
 @pytest.mark.core
 @pytest.mark.timeout(30)
 class TestAugmentedAssignment:
@@ -232,10 +228,6 @@ class TestMultipleReturnEdits:
         assert "result = 155" in nb_runner.get_output(3)
 
 
-# Variable shadowing, deletion, and scope interaction tests.
-#
-# Tests that exercise variable shadowing, overwriting, deletion,
-# and scope changes combined with cell edits and reruns.
 @pytest.mark.upstream
 @pytest.mark.timeout(30)
 class TestVariableShadowing:

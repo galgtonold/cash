@@ -5,12 +5,6 @@ import textwrap
 import pytest
 
 
-# Complex multi-file module dependency patterns.
-#
-# Tests how cash handles user-defined modules written to disk, imported across
-# cells, modified during a session, and reloaded. These are the most challenging
-# scenarios for the caching system as they involve file tracking, module reload,
-# and cross-cell dependency propagation simultaneously.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.modules
@@ -335,7 +329,6 @@ class TestModuleReloadEdgeCases:
         assert "[widget]" in nb_runner.get_output(3)
 
 
-# Multi-file module system — complex module interdependencies with cash.
 @pytest.mark.stress
 class TestMultiModuleBasics:
     """Test multi-file module systems."""
@@ -594,8 +587,6 @@ class TestCustomModuleReload:
         assert "result = 15" in nb_runner.get_output(2)
 
 
-# Import patterns — dynamic imports, conditional imports, importlib,
-# sys.path manipulation, and star imports across cells.
 @pytest.mark.stress
 @pytest.mark.integration
 @pytest.mark.modules

@@ -5,8 +5,6 @@ import textwrap
 import pytest
 
 
-# Type system and typing patterns — type hints, TypeVar, Generic,
-# Protocol, Union, Optional, Literal across cells.
 @pytest.mark.integration
 @pytest.mark.stress
 class TestTypeHintPatterns:
@@ -36,12 +34,6 @@ class TestTypeHintPatterns:
         assert "idx=1 miss=None" in nb_runner.get_output(3)
 
 
-# Error handling patterns, type annotations, abstract classes,
-# metaclass interactions, and exception flow caching.
-#
-# Tests how cash handles try/except, custom exceptions, type-annotated code,
-# abstract base classes, metaclass-driven class creation, and exception
-# propagation across cells.
 @pytest.mark.integration
 @pytest.mark.stress
 class TestTypeAnnotations:
@@ -65,9 +57,6 @@ class TestTypeAnnotations:
         assert "7" in nb_runner.get_output(1)
 
 
-# Type annotation and typed data patterns.
-#
-# Tests typed function signatures with edits, verifying runtime behavior.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestTypeAnnotationPatterns:
@@ -177,9 +166,6 @@ class TestTypingPatterns:
         assert "result=[1, 2, 3, 4, 5]" in nb_runner.get_output(2)
 
 
-# Interaction test: typing module with TypeVar, Generic, Protocol.
-# Tests type annotation patterns used in data science code,
-# cross-cell generic class usage, and cache invalidation.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestTypingGenericProtocol:
@@ -274,7 +260,6 @@ class TestCallableTypePatterns:
         assert "[100, 200, 300]" in nb_runner.get_output(3)
 
 
-# Typing module & Protocol patterns — cash caching with type annotations.
 @pytest.mark.stress
 class TestProtocolPatterns:
     """Test Protocol-based structural typing."""
@@ -322,10 +307,6 @@ class TestProtocolPatterns:
         assert "91.0" in out2
 
 
-# Protocol/interface interaction tests.
-#
-# Tests editing cells with abstract base class and protocol
-# patterns and verifying downstream propagation.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -389,9 +370,6 @@ class TestProtocolPatternEdits:
         assert "Hello World" in nb_runner.get_output(2)
 
 
-# Protocol / structural subtyping interaction tests.
-# Tests that editing classes implementing protocols properly invalidates
-# downstream cells that use protocol-based operations.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)
@@ -597,10 +575,6 @@ class TestTypeCheckingInstanceSubclass:
         assert "is_num=False" in nb_runner.get_output(2)
 
 
-# Type conversion / coercion chain interaction tests.
-#
-# Tests editing type conversions (int→str→float, etc.),
-# serialization round-trips, and format changes.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -652,8 +626,6 @@ class TestTypeConversionEdits:
         assert "formatted = 0o377" in nb_runner.get_output(2)
 
 
-# Type conversion chain interaction tests.
-# Tests str→int, list→tuple→set, and dict→items→sorted conversion chains.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)

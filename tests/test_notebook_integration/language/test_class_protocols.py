@@ -193,9 +193,6 @@ class TestHashEqualityDunder:
         assert "len=3" in nb_runner.get_output(2)
 
 
-# Custom __hash__/__eq__ interaction tests.
-# Tests that objects with custom hashing/equality properly interact
-# with cash's caching when their definitions or data change.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)
@@ -285,9 +282,6 @@ class TestCustomHashEqInteraction:
         assert "count=1" in out
 
 
-# Interaction test: functools.total_ordering with rich comparison.
-# Tests @total_ordering decorator for auto-generating comparison methods,
-# sorting, and cross-cell usage with min/max.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestFunctoolsTotalOrdering:
@@ -355,9 +349,6 @@ class TestFunctoolsTotalOrdering:
         assert "latest=v2.1" in nb_runner.get_output(2)
 
 
-# Interaction test: class with __call__ and callable protocol.
-# Tests classes implementing __call__, callable checks,
-# and cross-cell callable composition.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestCallableProtocol:
@@ -466,7 +457,6 @@ class TestContainerProtocol:
         assert "a=True b=False" in nb_runner.get_output(2)
 
 
-# Operator overloading & dunder methods — cash caching with custom operators.
 @pytest.mark.stress
 class TestContainerDunders:
     """Test container protocol dunders."""
@@ -523,7 +513,6 @@ class TestContainerDunders:
         assert "total=275 USD" in nb_runner.get_output(2)
 
 
-# Iterator & custom container patterns — __iter__, __getitem__, __contains__.
 @pytest.mark.stress
 class TestCustomContainers:
     """Test custom container classes."""

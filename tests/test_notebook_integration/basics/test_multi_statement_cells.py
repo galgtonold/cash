@@ -3,10 +3,6 @@
 import pytest
 
 
-# Multi-statement cell interaction tests (advanced).
-#
-# Tests that exercise cells with multiple statements and complex
-# interactions between statements within the same cell.
 @pytest.mark.stress
 @pytest.mark.core
 @pytest.mark.timeout(30)
@@ -47,10 +43,6 @@ class TestMultiStatementBasic:
         assert "result = 50" in nb_runner.get_output(2)
 
 
-# Multi-statement cell interaction tests.
-#
-# Tests that exercise cells with multiple statements, where edits
-# modify only some statements within a cell.
 @pytest.mark.stress
 class TestMultiStatementCellEdits:
     """Edit individual statements within multi-statement cells."""
@@ -328,11 +320,6 @@ class TestMultiStatementWithPrint:
         assert "sum = 30" in nb_runner.get_output(1)
 
 
-# Multi-output cell interaction tests.
-#
-# Tests where cells produce multiple outputs, some used by
-# different downstream cells, with edits that affect
-# only some of the outputs.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(45)

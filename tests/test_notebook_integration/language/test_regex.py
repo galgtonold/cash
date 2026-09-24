@@ -5,10 +5,6 @@ import textwrap
 import pytest
 
 
-# Regex and string method chain interaction tests.
-#
-# Tests editing regex patterns, substitutions, and chained
-# string method calls.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -52,7 +48,6 @@ class TestRegexEdits:
         assert "result = foo_bar_baz" in nb_runner.get_output(3)
 
 
-# regex and string processing patterns.
 @pytest.mark.stress
 @pytest.mark.integration
 class TestRegexPatterns:
@@ -116,8 +111,6 @@ class TestCompiledRegexChange:
         assert "Bar" not in output2
 
 
-# Regex compilation interaction tests.
-# Tests that editing regex patterns properly invalidates match results downstream.
 @pytest.mark.stress
 @pytest.mark.integration
 @pytest.mark.timeout(90)
@@ -189,9 +182,6 @@ class TestRegexInteraction:
         assert "user=bob,domain=work.org" in out
 
 
-# Interaction test: regex compile with named groups and finditer.
-# Tests compiled regex patterns with named groups, finditer iteration,
-# and group extraction across cells.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestRegexCompileGroups:
@@ -256,9 +246,6 @@ class TestRegexCompileGroups:
         assert "months=[1, 12]" in nb_runner.get_output(3)
 
 
-# Interaction test: re.findall with groups and re.split.
-# Tests re.findall with capturing groups, re.split with pattern,
-# and cross-cell regex parsing pipelines.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestReFindallSplit:
@@ -410,9 +397,6 @@ class TestReSubFindallComplex:
         assert "nums=['1', '22', '333']" in nb_runner.get_output(2)
 
 
-# Interaction test: re.sub with function replacement.
-# Tests re.sub with callable replacement, groups, backreferences,
-# and cross-cell regex transformation pipelines.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestReSubFunctionReplace:

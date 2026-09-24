@@ -6,13 +6,6 @@ import time
 import pytest
 
 
-# File dependency + cell edit interactions.
-#
-# Tests the interaction between:
-# - Editing cells that read files
-# - Changing file contents between runs
-# - Editing both the file AND the cell code
-# - File changes + kernel restart + cell edits
 @pytest.mark.stress
 @pytest.mark.files
 class TestFileChangeWithCellEdit:
@@ -95,10 +88,6 @@ class TestFileChangeWithCellEdit:
         assert "result = 1500" in nb_runner.get_output(3)
 
 
-# File dependency combined with cell edit tests.
-#
-# Tests where both file content AND code change, verifying
-# that cache correctly invalidates on either trigger.
 @pytest.mark.stress
 @pytest.mark.files
 @pytest.mark.timeout(90)
@@ -212,11 +201,6 @@ class TestFileDependencyWithUpstreamChanges:
         assert "result = 20.0" in out, f"Expected 20.0 after code change, got: {out}"
 
 
-# File dependency + cell edit advanced interaction tests.
-#
-# Tests that exercise file reads (CSV, JSON, text) combined with
-# cell edits, verifying that cache invalidation works correctly
-# when both code and files change.
 @pytest.mark.files
 @pytest.mark.stress
 @pytest.mark.timeout(30)
@@ -460,14 +444,6 @@ class TestMultipleFileReads:
         assert "val = 999" in nb_runner.get_output(2)
 
 
-# File dependency, kernel restart, and module tests.
-#
-# Tests:
-# - Complex file dependency patterns (multiple files, JSON, Parquet, cross-cell)
-# - File creation in one cell, reading in another
-# - Disk persistence and restore after kernel restart
-# - External Python module changes and hot-reload
-# - Module function signature changes
 @pytest.mark.files
 class TestMultiFileDependencies:
     """Test caching with multiple file dependencies."""
@@ -587,17 +563,6 @@ df = pd.read_csv(Path('{data_str}'))""",
         assert "total = 21" in out, f"Got: {out}"
 
 
-# File tracking edge cases, multi-library combos, and stress patterns.
-#
-# Tests focusing on:
-# 1. File tracking with multiple file formats (CSV, JSON, text)
-# 2. File creation + read in same session
-# 3. Multiple DataFrames from same file
-# 4. Complex pandas operations chain
-# 5. Numpy + pandas combined workflows
-# 6. String processing pipelines
-# 7. Mathematical computation chains
-# 8. Cache invalidation stress tests
 @pytest.mark.integration
 @pytest.mark.timeout(30)
 class TestFileTrackingEdgeCases:

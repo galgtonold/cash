@@ -69,9 +69,6 @@ class TestJsonSerialization:
         assert "host=localhost features=3" in nb_runner.get_output(3)
 
 
-# JSON serialization/deserialization interaction tests.
-# Tests that editing data that gets serialized to JSON and then deserialized
-# properly invalidates downstream cells.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)
@@ -190,9 +187,6 @@ class TestJsonCustomEncoders:
         assert second_size > first_size
 
 
-# Interaction test: json loads and dumps with custom encoding.
-# Tests json serialization with custom defaults, indent,
-# sort_keys, and cross-cell data transformation pipelines.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestJsonCustomEncoding:
@@ -424,7 +418,6 @@ class TestCsvStringParsing:
         assert "name,val" in nb_runner.get_output(2)
 
 
-# Pickle/serialization edge cases — cash caching with pickle, struct, json.
 class TestPicklePatterns:
     """Test pickle serialization across cells."""
 

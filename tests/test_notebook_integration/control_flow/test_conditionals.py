@@ -5,10 +5,6 @@ import pytest
 pytestmark = [pytest.mark.stress]
 
 
-# Conditional logic and boolean pattern interaction tests.
-#
-# Tests where users edit conditional logic (if/elif/else),
-# boolean variables, and branch selection patterns.
 @pytest.mark.control
 @pytest.mark.timeout(45)
 class TestIfElseEdits:
@@ -98,10 +94,6 @@ class TestConditionalCellEdits:
         assert "label = neg" in nb_runner.get_output(3)
 
 
-# Conditional logic and branching edit tests.
-#
-# Tests editing cells with conditional logic to switch between
-# branches and verify cache handles the change correctly.
 @pytest.mark.control
 @pytest.mark.timeout(90)
 class TestConditionalBranchEdits:
@@ -176,11 +168,6 @@ class TestConditionalBranchEdits:
         assert "status = needs license" in nb_runner.get_output(2)
 
 
-# Multi-cell conditional branching with shared state.
-#
-# Tests where conditional logic spans multiple cells, with shared
-# state that changes based on which branch was taken, and edits
-# to the condition or branch bodies.
 @pytest.mark.control
 @pytest.mark.timeout(90)
 class TestConditionalStateEdits:
@@ -386,9 +373,6 @@ class TestMultiCellBranching:
         assert "result = 12" in nb_runner.get_output(3)
 
 
-# Ternary and inline conditional edit propagation.
-#
-# Tests ternary expressions and inline conditionals.
 @pytest.mark.timeout(90)
 class TestTernaryEdits:
     """Ternary/inline conditional patterns."""

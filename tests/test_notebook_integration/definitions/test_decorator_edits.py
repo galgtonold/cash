@@ -5,11 +5,6 @@ import pytest
 pytestmark = [pytest.mark.stress]
 
 
-# Decorator pattern interaction tests.
-#
-# Tests where decorators are defined in one cell, applied to functions
-# in another, and edits to either the decorator or the function
-# verify correct cache behavior.
 class TestDecoratorEdits:
     """Decorator definition and application edits."""
 

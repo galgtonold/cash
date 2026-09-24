@@ -3,8 +3,6 @@
 import pytest
 
 
-# textwrap and string formatting patterns with caching.
-# Tests textwrap.dedent, textwrap.fill, indent, and edit propagation.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)
@@ -211,9 +209,6 @@ class TestTextwrapDedentIndent:
         assert "parts=" in out2
 
 
-# Interaction test: textwrap fill and shorten with break_on_hyphens.
-# Tests textwrap.fill with break_long_words, break_on_hyphens,
-# shorten with placeholder, and cross-cell text pipelines.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestTextwrapFillBreak:
@@ -279,9 +274,6 @@ class TestTextwrapFillBreak:
         assert "truncated=False" in nb_runner.get_output(2)
 
 
-# Interaction test: textwrap.wrap and shorten with custom settings.
-# Tests textwrap.wrap with width, initial_indent, subsequent_indent,
-# and textwrap.shorten across cells.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestTextwrapWrapShorten:

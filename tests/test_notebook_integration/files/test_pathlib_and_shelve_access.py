@@ -5,7 +5,6 @@ import textwrap
 import pytest
 
 
-# pathlib and file system operations.
 class TestPathlibPatterns:
     """pathlib usage patterns."""
 
@@ -164,9 +163,6 @@ class TestPathlibPatterns:
         assert "lines=3 first=line1" in nb_runner.get_output(3)
 
 
-# Interaction test: shelve module for persistent dict-like storage.
-# Tests shelve.open with writeback, cross-cell key access,
-# and cache invalidation when shelf contents change.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestShelvePersistentDict:

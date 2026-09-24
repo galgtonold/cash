@@ -7,10 +7,6 @@ import pytest
 pytestmark = [pytest.mark.mutations]
 
 
-# State mutation patterns, global state, class method chains,
-# decorator patterns, generator exhaustion, context managers, and timing-sensitive patterns.
-#
-# These tests focus on tricky mutation/stateful patterns that stress the caching system.
 @pytest.mark.integration
 @pytest.mark.timeout(30)
 class TestMutableObjectMutations:
@@ -139,11 +135,6 @@ class TestClassInstanceMutations:
         assert "Mode:" in out2  # At minimum, we get output
 
 
-# Mutation tracking under re-execution & cell edits.
-#
-# Tests that in-place mutations (list.append, dict update, etc.) are correctly
-# handled when cells are re-run or edited. Mutation detection must not allow
-# stale cached values to be restored when mutations have changed the variable.
 @pytest.mark.stress
 class TestMutationRerunConsistency:
     """Mutations must not accumulate across re-runs."""
@@ -340,11 +331,6 @@ class TestMutationWithCellEdits:
         assert "total = 3" in nb_runner.get_output(3)
 
 
-# Container/collection mutation + cell edit interaction tests.
-#
-# Tests that exercise list/dict/set mutations across cells,
-# combined with cell edits to verify correct cache behavior
-# when mutable objects are modified in place.
 @pytest.mark.stress
 @pytest.mark.timeout(45)
 class TestListMutationWithCellEdits:

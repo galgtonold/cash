@@ -7,7 +7,6 @@ import pytest
 pytestmark = [pytest.mark.stress]
 
 
-# multiple assignment, unpacking, and star expressions.
 @pytest.mark.integration
 class TestUnpacking:
     """Unpacking and multiple assignment patterns."""
@@ -80,10 +79,6 @@ class TestUnpacking:
         assert "total=600" in nb_runner.get_output(3)
 
 
-# Tuple unpacking and multi-return interaction tests.
-#
-# Tests editing functions that return tuples, and editing
-# unpacking patterns in downstream cells.
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
 class TestTupleUnpackingEdits:
@@ -194,9 +189,6 @@ class TestTupleUnpackingStarred:
         assert "x=100 y=200 z=300" in nb_runner.get_output(2)
 
 
-# Star unpacking and extended iterable unpacking.
-#
-# Tests *args, **kwargs, and extended unpacking with edits.
 @pytest.mark.timeout(90)
 class TestStarUnpacking:
     """Star unpacking edit patterns."""
@@ -260,10 +252,6 @@ class TestStarUnpacking:
         assert "result = [2, 4, 30, 60]" in nb_runner.get_output(2)
 
 
-# Unpacking and star expression edit tests.
-#
-# Tests editing cells with tuple unpacking, star expressions,
-# and chained assignments.
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
 class TestUnpackingStarEdits:
@@ -303,9 +291,6 @@ class TestUnpackingStarEdits:
         assert "total = 30" in nb_runner.get_output(2)
 
 
-# Interaction test: multiple return unpacking with nested tuples.
-# Tests complex unpacking patterns with nested structures, star unpacking
-# in function returns, and cross-cell value threading.
 @pytest.mark.timeout(90)
 class TestNestedUnpackReturn:
     """Test complex unpacking patterns across cells."""
@@ -447,10 +432,6 @@ class TestUnpackGeneralization:
         assert "url=https://example.com:443" in nb_runner.get_output(2)
 
 
-# Multi-assignment & augmented assignment interaction tests.
-#
-# Tests editing multi-target assignments, augmented assignments (+=, *=),
-# and walrus operator patterns.
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
 class TestMultiAssignmentEdits:
@@ -489,9 +470,6 @@ class TestMultiAssignmentEdits:
         assert "x=20 y=10" in nb_runner.get_output(2)
 
 
-# Multiple variable assignment and swap patterns.
-#
-# Tests tuple assignment, swap, augmented assignment with edits.
 @pytest.mark.timeout(90)
 class TestMultiAssignSwap:
     """Multiple variable assignment edit patterns."""
@@ -562,8 +540,6 @@ class TestMultiAssignSwap:
         assert "lo=100 hi=300 span=200" in nb_runner.get_output(3)
 
 
-# multiple assignment / unpacking patterns with caching.
-# Tests tuple unpacking, star expressions, swap, and edit propagation.
 @pytest.mark.integration
 @pytest.mark.timeout(90)
 class TestMultipleAssignUnpack:
@@ -630,10 +606,6 @@ class TestMultipleAssignUnpack:
         assert "x=world" in out2
 
 
-# Multi-return function with unpacking interaction tests.
-#
-# Tests editing functions that return multiple values and
-# various unpacking patterns.
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
 class TestMultiReturnEdits:

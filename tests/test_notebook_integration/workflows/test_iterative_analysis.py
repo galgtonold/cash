@@ -5,17 +5,6 @@ import textwrap
 import pytest
 
 
-# Real-world workflows, error recovery, and complex patterns.
-#
-# Tests focusing on:
-# 1. Real-world data science workflows (sklearn, scipy, datetime)
-# 2. Error recovery - cells that error on first run then succeed
-# 3. Complex decorator patterns and closures
-# 4. Multi-cell class definitions and method usage
-# 5. Dynamic variable creation patterns (globals(), exec())
-# 6. Notebook-realistic iteration patterns
-# 7. Complex import patterns (reimport, conditional import)
-# 8. Context managers and resource management
 @pytest.mark.integration
 @pytest.mark.timeout(30)
 class TestRealWorldDataScience:
@@ -128,11 +117,6 @@ class TestNotebookIterativeWorkflow:
         assert "below=2" in output2
 
 
-# Complex realistic interaction scenarios.
-#
-# End-to-end scenarios mimicking real data science workflows
-# where users iterate on their analysis, changing parameters,
-# adding cells, removing cells, and re-running.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(45)
@@ -243,10 +227,6 @@ class TestExploratoryAnalysis:
         assert "result = 24" in nb_runner.get_output(2)
 
 
-# Real-world workflow simulation interaction tests.
-#
-# Tests that simulate realistic data analysis workflows with multiple
-# rounds of exploration, parameter tuning, and iterative refinement.
 @pytest.mark.core
 @pytest.mark.stress
 @pytest.mark.timeout(30)
@@ -325,11 +305,6 @@ class TestDataAnalysisWorkflow:
         assert "total = 1400" in nb_runner.get_output(3)
 
 
-# Real-world workflow simulations — data science, ML preprocessing,
-# report generation, and multi-phase analysis patterns.
-#
-# Tests complete realistic notebook workflows that combine multiple features:
-# data loading, cleaning, transformation, analysis, and visualization prep.
 @pytest.mark.integration
 @pytest.mark.stress
 class TestDataScienceWorkflow:

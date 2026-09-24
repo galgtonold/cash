@@ -5,7 +5,6 @@ import textwrap
 import pytest
 
 
-# Context managers & resource management — cash caching with with-statements.
 @pytest.mark.stress
 class TestContextManagerBasics:
     """Test context manager patterns across cells."""
@@ -45,10 +44,6 @@ class TestContextManagerBasics:
         assert "elapsed_positive=True" in nb_runner.get_output(2)
 
 
-# Context manager pattern interaction tests.
-#
-# Tests editing context manager definitions, with-statements,
-# and resource management patterns.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -293,9 +288,6 @@ class TestResourcePatterns:
         assert "count=5" in nb_runner.get_output(2)
 
 
-# Interaction test: contextmanager decorator for custom context managers.
-# Tests @contextmanager from contextlib with yield-based resource management,
-# exception handling in context, and cross-cell state.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestContextmanagerDecorator:
@@ -396,9 +388,6 @@ class TestContextmanagerAcrossCells:
         assert "has_end=True" in out
 
 
-# Interaction test: contextlib contextmanager and suppress.
-# Tests custom context managers with @contextmanager decorator,
-# suppress() for exception handling, and cross-cell resource management.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestContextlibOps:

@@ -6,10 +6,6 @@ import time
 import pytest
 
 
-# Multi-file dependencies, disk restore after restart,
-# complex module patterns, nested loops, dynamic imports, and advanced caching.
-#
-# These tests push the boundaries of the caching system with intricate patterns.
 @pytest.mark.integration
 @pytest.mark.timeout(30)
 class TestMultiFileDependencies:
@@ -128,17 +124,6 @@ class TestMultiFileDependencies:
         assert "Lines: 5" in out2
 
 
-# Combined complex patterns stressing multiple subsystems.
-#
-# Tests focusing on:
-# 1. File deps + upstream simulation combined
-# 2. Module reload + function tracking + from-import combined
-# 3. Kernel restart + file modification + upstream invalidation
-# 4. Multi-output cells + dependency chain + cache invalidation
-# 5. Complex real-world simulation: data loading → processing → analysis → visualization data
-# 6. Nested function definitions with closures across cells
-# 7. Exception handling interleaved with caching
-# 8. Type conversion chains (str→int→float→list→dict)
 @pytest.mark.integration
 @pytest.mark.timeout(30)
 class TestFileDepsWithUpstream:
@@ -212,10 +197,6 @@ class TestFileDepsWithUpstream:
         assert "result=150" in output2
 
 
-# Complex combined interaction tests.
-#
-# Tests that combine multiple features: functions + files, imports + edits + restart,
-# loops + mutations + edits, etc. These simulate real-world notebook workflows.
 @pytest.mark.stress
 @pytest.mark.timeout(30)
 class TestFunctionPlusFileEdit:

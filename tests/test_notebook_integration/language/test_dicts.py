@@ -5,10 +5,6 @@ import textwrap
 import pytest
 
 
-# Complex data types + cell edit interaction tests.
-#
-# Tests that exercise cache behavior with complex data types:
-# dicts, lists, nested structures, sets, tuples, etc.
 @pytest.mark.core
 @pytest.mark.stress
 @pytest.mark.timeout(30)
@@ -64,7 +60,6 @@ class TestDictEdits:
         assert "val = 99" in nb_runner.get_output(2)
 
 
-# complex dict and set operations.
 @pytest.mark.stress
 @pytest.mark.integration
 class TestDictOperations:
@@ -100,10 +95,6 @@ class TestDictOperations:
         assert "'cache': True" in out
 
 
-# Dictionary manipulation pattern interaction tests.
-#
-# Tests editing dict comprehensions, merges, nested dicts,
-# defaultdict patterns across cells.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -197,9 +188,6 @@ class TestDictMergeEdits:
         assert "'b': [20, 30]" in out
 
 
-# Dict merge/update operator patterns.
-#
-# Tests dict union (|), update, merge patterns with edits.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestDictMergePatterns:
@@ -318,9 +306,6 @@ class TestDictMergeUpdate:
         assert "mode=slow" in nb_runner.get_output(2)
 
 
-# Interaction test: recursive dict merge and nested dict access.
-# Tests recursive dict merging, nested key access with get(),
-# and cross-cell config override patterns.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestRecursiveDictMerge:
@@ -479,9 +464,6 @@ class TestDictSetdefaultGet:
         assert "'y': 1" in nb_runner.get_output(2)
 
 
-# Interaction test: dict.setdefault and dict.update with merge operator.
-# Tests dict.setdefault for conditional insertion, dict update patterns,
-# PEP 584 merge operator (|), and cross-cell dict manipulation.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestDictSetdefaultMerge:
@@ -680,8 +662,6 @@ class TestDictViewsAsSets:
         assert "vals=[100, 200]" in nb_runner.get_output(2)
 
 
-# Tuple/dict function output patterns interaction tests.
-# Tests multiple return value patterns with cache invalidation.
 @pytest.mark.stress
 @pytest.mark.integration
 @pytest.mark.timeout(90)

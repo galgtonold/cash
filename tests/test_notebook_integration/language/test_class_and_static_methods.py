@@ -3,8 +3,6 @@
 import pytest
 
 
-# class method / static method patterns with caching.
-# Tests @classmethod, @staticmethod, and edit propagation.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)
@@ -162,10 +160,6 @@ class TestStaticClassMethods:
         assert "debug=True" in nb_runner.get_output(2)
 
 
-# Property/classmethod/staticmethod interaction tests.
-#
-# Tests editing cells containing class features like properties,
-# classmethods, and staticmethods to verify cache invalidation.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)

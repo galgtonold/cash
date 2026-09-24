@@ -5,9 +5,6 @@ import pytest
 pytestmark = [pytest.mark.stress]
 
 
-# Interaction test: ChainMap for layered dictionaries.
-# Tests collections.ChainMap with multiple layers, new_child,
-# parent traversal, and cross-cell config overlay patterns.
 @pytest.mark.timeout(90)
 class TestChainmapLayers:
     """Test ChainMap layered lookup across cells."""
@@ -213,8 +210,6 @@ class TestChainMapOrderedDict:
         assert "x=99" in nb_runner.get_output(2)
 
 
-# defaultdict patterns with caching.
-# Tests defaultdict(list), defaultdict(int), nested defaultdict, and edit propagation.
 @pytest.mark.integration
 @pytest.mark.timeout(90)
 class TestDefaultdictPatterns:
@@ -377,8 +372,6 @@ class TestDefaultdictNestedFactory:
         assert "p=2" in nb_runner.get_output(2)
 
 
-# collections.deque rotation and operation patterns with caching.
-# Tests deque creation, rotate, appendleft, and edit propagation.
 @pytest.mark.integration
 @pytest.mark.timeout(90)
 class TestDequeRotate:
@@ -489,9 +482,6 @@ class TestDequeMaxlenRotate:
         assert "d=[1, 2, 3, 10, 20, 30]" in nb_runner.get_output(2)
 
 
-# Interaction test: deque appendleft and extendleft operations.
-# Tests collections.deque with appendleft, extendleft, popleft,
-# and cross-cell deque state management.
 @pytest.mark.timeout(90)
 class TestDequeAppendleftExtend:
     """Test deque appendleft and extendleft across cells."""
@@ -683,8 +673,6 @@ class TestOrderedDictBehavior:
         assert "first=z last=m" in nb_runner.get_output(2)
 
 
-# OrderedDict patterns with caching.
-# Tests OrderedDict operations, move_to_end, and edit propagation.
 @pytest.mark.integration
 @pytest.mark.timeout(90)
 class TestOrderedDictOps:
@@ -729,9 +717,6 @@ class TestOrderedDictOps:
         assert "first=z" in out2
 
 
-# Interaction test: OrderedDict equality and reversal.
-# Tests OrderedDict order-sensitive equality, reversed() iteration,
-# and cross-cell dict rebuilding.
 @pytest.mark.timeout(90)
 class TestOrderedDictEqualityReverse:
     """Test OrderedDict equality and reversal across cells."""
@@ -794,9 +779,6 @@ class TestOrderedDictEqualityReverse:
         assert "avg=91.7" in nb_runner.get_output(2)
 
 
-# Interaction test: collections.OrderedDict move_to_end and popitem.
-# Tests OrderedDict ordering operations with move_to_end(last=False),
-# popitem(last=True/False), and cross-cell state tracking.
 @pytest.mark.timeout(90)
 class TestOrderedDictMovePopitem:
     """Test OrderedDict move_to_end and popitem across cells."""
@@ -861,9 +843,6 @@ class TestOrderedDictMovePopitem:
         assert "reversed=['gamma', 'beta', 'alpha']" in nb_runner.get_output(2)
 
 
-# Interaction test: dict subclass with custom default behavior.
-# Tests custom dict subclass with __missing__, __contains__ override,
-# and cross-cell dictionary operations.
 @pytest.mark.timeout(90)
 class TestDictSubclassMissing:
     """Test dict subclass with __missing__ across cells."""
@@ -929,9 +908,6 @@ class TestDictSubclassMissing:
         assert "misses=2" in nb_runner.get_output(2)
 
 
-# Interaction test: collections.UserDict custom dictionary.
-# Tests UserDict subclass with custom __setitem__,
-# __getitem__ override, and cross-cell custom dict behavior.
 @pytest.mark.timeout(90)
 class TestUserDictCustom:
     """Test UserDict custom dictionary across cells."""
@@ -994,8 +970,6 @@ class TestUserDictCustom:
         assert "is_ten=True" in nb_runner.get_output(2)
 
 
-# Collections module interaction tests (Counter, OrderedDict, defaultdict, namedtuple).
-# Tests that editing data fed into collections types properly invalidates downstream.
 @pytest.mark.integration
 @pytest.mark.timeout(90)
 class TestCollectionsInteraction:
@@ -1068,10 +1042,6 @@ class TestCollectionsInteraction:
         assert "dist_sq=25" in out
 
 
-# Collections module interaction tests.
-#
-# Tests editing cells using collections types like defaultdict,
-# Counter, OrderedDict, deque.
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
 class TestCollectionsEdits:
@@ -1136,10 +1106,6 @@ class TestCollectionsEdits:
         assert "result = [0, 1, 2, 3, 4]" in nb_runner.get_output(2)
 
 
-# Mixed-type collection operation interaction tests.
-#
-# Tests editing operations on collections containing mixed types
-# (lists of dicts, dicts of lists, nested structures).
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
 class TestMixedCollectionEdits:

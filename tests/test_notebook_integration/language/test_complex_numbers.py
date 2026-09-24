@@ -85,9 +85,6 @@ class TestComplexNumberArith:
         assert "squared=(-5+12j)" in nb_runner.get_output(2)
 
 
-# Interaction test: complex number arithmetic and polar form.
-# Tests complex addition, multiplication, conjugate,
-# polar conversion, and cross-cell complex math pipelines.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestComplexNumberPolar:
@@ -202,9 +199,6 @@ class TestCmathComplexOps:
         assert "abs=13.0" in nb_runner.get_output(2)
 
 
-# Interaction test: complex number operations with cmath module.
-# Tests complex arithmetic, cmath functions (polar, rect, phase),
-# and cross-cell complex number manipulation.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestComplexCmathOps:

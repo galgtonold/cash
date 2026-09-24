@@ -5,10 +5,6 @@ import pytest
 pytestmark = [pytest.mark.stress]
 
 
-# Dataclass and namedtuple interaction tests.
-#
-# Tests editing dataclass/namedtuple definitions, field changes,
-# and downstream usage after modifications.
 class TestDataclassEdits:
     """Editing dataclass definitions and usage."""
 
@@ -190,10 +186,6 @@ class TestNamedtupleEdits:
         assert "p = Point(x=1, y=2)" in nb_runner.get_output(2)
 
 
-# Dataclass and namedtuple structural change tests.
-#
-# Tests editing dataclass field definitions and namedtuple structures
-# to verify changes propagate through the cache.
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
 class TestStructuralTypeEdits:

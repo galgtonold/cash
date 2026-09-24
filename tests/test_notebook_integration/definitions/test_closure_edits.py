@@ -114,9 +114,6 @@ class TestNestedFunctionClosure:
         assert "result=['hello', 'world', 'python']" in nb_runner.get_output(2)
 
 
-# Nested function definition edit patterns.
-#
-# Tests inner function edits propagating through outer function calls.
 @pytest.mark.timeout(90)
 class TestNestedFunctionEdits:
     """Nested function definition patterns."""

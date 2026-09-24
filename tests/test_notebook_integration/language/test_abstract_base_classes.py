@@ -95,8 +95,6 @@ class TestAbcAbstractMethods:
         assert "result=15" in nb_runner.get_output(2)
 
 
-# abstract base class patterns with caching.
-# Tests ABC, abstractmethod, and edit propagation.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)
@@ -147,9 +145,6 @@ class TestABCAbstractPatterns:
         assert "msg=Hey Bob!" in out2
 
 
-# Abstract base class patterns.
-#
-# Tests ABC with concrete implementations, edit propagation.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestABCPatterns:
@@ -219,9 +214,6 @@ class TestABCPatterns:
         assert "desc=doubler v2" in nb_runner.get_output(3)
 
 
-# Interaction test: abstract base class with multiple implementations.
-# Tests ABC with abstractmethod, concrete methods, isinstance checks,
-# and cross-cell polymorphic dispatch.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestAbcMultipleImpl:
@@ -281,9 +273,6 @@ class TestAbcMultipleImpl:
         assert "result=212.0" in nb_runner.get_output(2)
 
 
-# Interaction test: ABC with virtual subclass registration.
-# Tests abc.ABC with register() for virtual subclasses,
-# __subclasshook__, and cross-cell polymorphism patterns.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestAbcVirtualSubclass:
@@ -347,7 +336,6 @@ class TestAbcVirtualSubclass:
         assert "lists_tuples_are_containers=True" in nb_runner.get_output(2)
 
 
-# Abstract base classes & mixins — cash caching with ABC patterns.
 @pytest.mark.stress
 class TestMixinPatterns:
     """Test mixin patterns across cells."""

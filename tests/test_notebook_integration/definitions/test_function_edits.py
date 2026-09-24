@@ -7,10 +7,6 @@ import pytest
 pytestmark = [pytest.mark.stress]
 
 
-# Function & class redefinition interaction tests.
-#
-# Tests that exercise function/class redefinition across cells,
-# combined with cell edits, reruns, and kernel restarts.
 @pytest.mark.mutations
 @pytest.mark.timeout(30)
 class TestFunctionRedefinition:
@@ -113,10 +109,6 @@ class TestFunctionRedefinition:
         assert "val = 64" in nb_runner.get_output(2)
 
 
-# Nested function and closure interaction tests.
-#
-# Tests where users define functions in one cell and call them in another,
-# then modify the function definition and verify downstream cells update.
 @pytest.mark.upstream
 @pytest.mark.timeout(45)
 class TestFunctionDefinitionEdits:
@@ -279,10 +271,6 @@ class TestFunctionCallingFunction:
         assert "result = 49" in nb_runner.get_output(2)
 
 
-# Inter-cell function call interaction tests.
-#
-# Tests with functions defined in one cell that call functions
-# from another cell, with edits at various levels.
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
 class TestInterCellCalls:
@@ -329,10 +317,6 @@ class TestInterCellCalls:
         assert "result = 216" in nb_runner.get_output(4)
 
 
-# Recursive function interaction tests.
-#
-# Tests editing recursive function definitions, base cases,
-# and recursive steps, verifying correct recomputation.
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
 class TestRecursiveFunctionEdits:
@@ -509,9 +493,6 @@ class TestCallbackEdits:
         assert "result = 30" in nb_runner.get_output(3)
 
 
-# Default parameter and keyword argument edit patterns.
-#
-# Tests functions with default/keyword args, editing defaults.
 @pytest.mark.timeout(90)
 class TestDefaultParamEdits:
     """Default parameter edit propagation."""
@@ -606,9 +587,6 @@ class TestMutableDefaultArguments:
         assert "r3=[10, 20, 3]" in output
 
 
-# Multiple return value patterns.
-#
-# Tests tuple unpacking from function returns and editing the function.
 @pytest.mark.timeout(90)
 class TestMultiReturnEdit:
     """Functions returning multiple values, edit propagation."""

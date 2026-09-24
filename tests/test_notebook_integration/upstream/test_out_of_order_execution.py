@@ -20,14 +20,6 @@ def _fingerprint(output: str) -> str:
     raise AssertionError(f"cell 4 produced no CHK fingerprint line; got:\n{output[:1000]}")
 
 
-# Out-of-order execution & re-execution patterns.
-#
-# Tests that exercise:
-# - Running cells in non-sequential order
-# - Re-running earlier cells after later ones
-# - Skipping cells then coming back to them
-# - Running cell 3 before cell 2 (non-linear workflows)
-# - Re-running cells without changes (idempotency)
 class TestOutOfOrderExecution:
     """Run cells in non-sequential order and check consistency."""
 
@@ -212,18 +204,10 @@ class TestOutOfOrderEdgeCases:
         assert "b=15" in nb_runner.get_output(2)
 
 
-# Tests for out-of-order cell execution in notebooks.
-#
-# When users execute a downstream cell first (e.g., display cell), cash restores
-# variables from disk cache. Then when the user executes an upstream cell, the
-# upstream checker should recognise that the in-memory variable is correct and
-# NOT force expensive re-execution.
-#
-# With _sync_simulation_cache_lineages(), the simulation cache is kept in sync
-# with actual variable lineages after each execution. This means that when
-# cell 2 runs after cell 3 was already executed, the virtual lineages already
-# match the actual lineages — no mismatch is detected, so no downstream
-# advancement check is needed and no broken vars are found.
+# When a downstream cell (a display cell) runs first, cash restores its inputs
+# from the disk cache. When the upstream cell runs after it, the upstream
+# check must see that the variable in memory is current and not re-run the
+# expensive work.
 class TestOutOfOrderDownstreamFirst:
     """Executing a downstream cell before its upstream should use cached data."""
 
@@ -412,11 +396,7 @@ print(f"Display: {df.shape}, cols={list(df.columns)}")"""
         )
 
 
-# Tests for out-of-order execution: display cell → display cell → computation cell.
-#
-# Reproduces the bug where executing display cells out of order before a computation
-# cell causes the computation cell to miss its cache, even though cached data exists
-# on disk.
+# Display cell -> display cell -> computation cell, out of order after a reset.
 #
 # Scenario (from financial_analysis_demo.ipynb):
 #   Cell 1: import + load data (df = pd.read_csv(...))
@@ -425,30 +405,21 @@ print(f"Display: {df.shape}, cols={list(df.columns)}")"""
 #   Cell 4: heavy computation (df['col1'] = ...; df['col2'] = ...)
 #   Cell 5: display df (just `df` again)
 #
-# First run: cells 1 → 2 → 3 → 4 → 5 (populates cache).
-# After reset (simulating fresh session): execute cells 5 → 3 → 4.
+# First run: cells 1 -> 2 -> 3 -> 4 -> 5 (populates cache).
+# After reset (simulating fresh session): execute cells 5 -> 3 -> 4.
 #
-# Originally written for a bug where `cell_code_changed` was computed as "this
-# raw code has not run this session", which is true of EVERY cell in a fresh
-# session, not just edited ones -- so cache lookups were disabled wholesale even
-# though the on-disk data was valid. That mechanism is gone: neither
-# `cell_code_changed` nor `force_recompute` exists in the source anymore.
-#
-# What still needs guarding is the behaviour: running the cells OUT OF ORDER
-# after a reset must reconstruct ``df`` to exactly the value a top-to-bottom run
-# produces. Cell 5 fires first and has to rebuild ``df`` from scratch, including
-# re-establishing the seeded RNG stream, before cell 4's columns can be right.
+# Running the cells out of order after a reset must reconstruct ``df`` to
+# exactly the value a top-to-bottom run produces. Cell 5 fires first and has
+# to rebuild ``df`` from scratch, including re-establishing the seeded RNG
+# stream, before cell 4's columns can be right.
 #
 # Deliberately NOT asserted: that cell 4 restores from cache. Both of its
 # expensive statements are subscript stores on ``df``
 # (``df['rolling_mean'] = ...``), which ``analyze_statement`` reports as
 # ``top_level_mutated_vars={'df'}`` -- the in-place-mutation route sets
 # ``skip_cache``, so those statements re-execute BY DESIGN and the sleep inside
-# cell 4 always runs. The assertion this replaces was ``has_restore or
-# t_elapsed < 0.5``; ``has_restore`` was False on passing runs too, so the test
-# was decided purely by whether 0.3s of sleep plus ~0.15s of work fitted under
-# 0.5s. It failed ~2 runs in 4 under parallel load and passed on an idle box,
-# having never once verified a restore.
+# cell 4 always runs. A timing assertion here would be decided by machine load,
+# not by whether anything was restored.
 @pytest.mark.core
 class TestOutOfOrderDisplayThenCompute:
     """Bug: Display cells executed out-of-order break computation cache restore."""

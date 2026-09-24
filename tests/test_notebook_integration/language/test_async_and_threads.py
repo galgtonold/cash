@@ -294,7 +294,6 @@ def test_queue_drain_isolated_rerun_idempotent(nb_runner):
     )
 
 
-# Concurrency & threading — cash caching with threads, locks, queues.
 @pytest.mark.stress
 class TestThreadingBasics:
     """Test threading patterns across cells."""
@@ -469,7 +468,6 @@ class TestProcessPoolPatterns:
         assert "match=True" in nb_runner.get_output(2)
 
 
-# Async/coroutine patterns — cash caching with asyncio code.
 @pytest.mark.stress
 class TestAsyncBasics:
     """Test async function definition and result caching."""

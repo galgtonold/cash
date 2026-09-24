@@ -93,9 +93,6 @@ class TestBisectBinarySearch:
         assert "grades=['F', 'D', 'C', 'B', 'A']" in nb_runner.get_output(2)
 
 
-# Interaction test: bisect for sorted sequence operations.
-# Tests bisect_left, bisect_right, insort, and cross-cell
-# sorted data maintenance and grade lookup patterns.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestBisectSortedOps:
@@ -286,9 +283,6 @@ class TestHeapqPriorityQueue:
         assert "top2=[200, 100]" in nb_runner.get_output(2)
 
 
-# Interaction test: heapq nlargest nsmallest with key function.
-# Tests heapq.nlargest, heapq.nsmallest with key parameter,
-# heapify, heappush/heappop, and cross-cell priority queue patterns.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestHeapqNlargestKey:
@@ -399,7 +393,6 @@ class TestHeapqNlargestMerge:
         assert "result=[400, 300]" in nb_runner.get_output(2)
 
 
-# Bisect, heapq & algorithm patterns — cash caching with stdlib algorithms.
 @pytest.mark.stress
 class TestHeapqPatterns:
     """Test heapq patterns across cells."""
@@ -437,9 +430,6 @@ class TestHeapqPatterns:
         assert out.index("[1]") < out.index("[3]")
 
 
-# Bisect/heapq interaction tests.
-# Tests that editing sorted data or heap structures properly invalidates
-# downstream lookups and extractions.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)

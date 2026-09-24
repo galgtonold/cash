@@ -5,7 +5,6 @@ import textwrap
 import pytest
 
 
-# Complex f-strings & string formatting — cash caching with advanced formatting.
 @pytest.mark.stress
 class TestFStringPatterns:
     """Test complex f-string patterns across cells."""
@@ -60,10 +59,6 @@ class TestFStringPatterns:
         assert "msg=Hello, Python!" in nb_runner.get_output(2)
 
 
-# Complex f-string interaction tests.
-#
-# Tests editing cells that contain complex f-string
-# expressions and verifying proper output propagation.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -139,8 +134,6 @@ class TestFStringComplexEdits:
         assert "Bob: avg=95.0" in nb_runner.get_output(2)
 
 
-# String formatting, regex, serialization, and I/O patterns
-# across notebook cells.
 @pytest.mark.integration
 @pytest.mark.stress
 class TestStringFormattingPatterns:
@@ -194,9 +187,6 @@ class TestStringProcessingPatterns:
         assert "75.0%" in output
 
 
-# String formatting and template interaction tests.
-# Tests various string formatting patterns (f-strings, format(), Template)
-# with cache invalidation when underlying data changes.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)
@@ -314,9 +304,6 @@ class TestDebugPrintEdits:
         assert "sum=15" in out2
 
 
-# Interaction test: string formatting with format_map and template patterns.
-# Tests str.format_map, custom Mapping classes for format,
-# and cross-cell string formatting pipelines.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestFormatMapCustom:
@@ -422,8 +409,6 @@ class TestStringFormatMapTemplate:
         assert "result=100+200" in nb_runner.get_output(2)
 
 
-# string.Template and format_map patterns with caching.
-# Tests Template substitution, safe_substitute, format_map, and edit propagation.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)
@@ -490,9 +475,6 @@ class TestTemplateFormatMap:
         assert "NYC has 8M people" in out2
 
 
-# Interaction test: string Template substitution.
-# Tests string.Template with safe_substitute, missing keys,
-# custom delimiters, and cross-cell template pipelines.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestStringTemplateSubstitute:
@@ -556,9 +538,6 @@ class TestStringTemplateSubstitute:
         assert "length=9" in nb_runner.get_output(2)
 
 
-# String template and formatting edit patterns.
-#
-# Tests various string formatting approaches with edits.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestStringTemplateEdits:
@@ -636,10 +615,6 @@ class TestStringTemplateEdits:
         assert "result = #1 # #22 # #333" in nb_runner.get_output(2)
 
 
-# String template/formatting interaction tests.
-#
-# Tests editing cells with various string formatting
-# approaches and verifying correct output.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -743,9 +718,6 @@ class TestStringAlignment:
         assert "formatted=['3.14', '2.72', '1.41']" in nb_runner.get_output(2)
 
 
-# Interaction test: string center, ljust, rjust padding operations.
-# Tests fixed-width string formatting with different fill characters,
-# cross-cell alignment pipelines, and cache invalidation on width changes.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestStringCenterLjustRjust:
@@ -870,9 +842,6 @@ class TestStringZfillNumFormat:
         assert "padded=001234" in nb_runner.get_output(2)
 
 
-# Interaction test: pprint formatting with width/depth control.
-# Tests pprint.pformat with various width, depth, compact settings,
-# and cross-cell pretty-printing of complex nested structures.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestPprintFormatWidth:

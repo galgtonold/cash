@@ -133,9 +133,6 @@ class TestStatisticsMeanMedian:
         assert "mean=250" in nb_runner.get_output(2)
 
 
-# Interaction test: statistics module median and stdev.
-# Tests statistics.median, stdev, variance, mode,
-# and cross-cell statistical analysis pipelines.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestStatisticsMedianStdev:
@@ -200,9 +197,6 @@ class TestStatisticsMedianStdev:
         assert "above=[40, 50]" in nb_runner.get_output(2)
 
 
-# Interaction test: statistics module with variance, stdev, correlation.
-# Tests statistics.variance, stdev, correlation (3.10+), and
-# cross-cell statistical analysis.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestStatisticsVarianceCorr:

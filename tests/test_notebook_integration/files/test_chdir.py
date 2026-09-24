@@ -216,10 +216,9 @@ def test_relative_path_from_notebook_dir(nb_runner, tmp_path):
     assert output1 == output2
 
 
-# Integration tests for disk promotion after os.chdir().
-#
-# Reproduces issue where notebooks calling os.chdir() caused FileBackend
-# to silently fail because cache_dir was stored as a relative path.
+# The file backend keeps an absolute cache_dir: a relative one would point
+# somewhere else once the notebook calls os.chdir(), and writes to disk would
+# fail silently.
 @pytest.mark.files
 class TestDiskPromotionAfterChdir:
     """Test that disk caching works correctly after os.chdir() in notebooks."""

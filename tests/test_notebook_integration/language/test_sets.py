@@ -3,10 +3,6 @@
 import pytest
 
 
-# Set operation interaction tests.
-#
-# Tests editing set operations: union, intersection, difference,
-# symmetric difference, with propagation.
 @pytest.mark.stress
 class TestSetOperationEdits:
     """Editing set operations."""
@@ -297,8 +293,6 @@ class TestSetOpsIntersectionDiff:
         assert "result=[]" in nb_runner.get_output(2)
 
 
-# frozenset operations with caching.
-# Tests frozenset creation, set operations (union, intersection, difference), and edit propagation.
 @pytest.mark.stress
 @pytest.mark.integration
 @pytest.mark.timeout(90)

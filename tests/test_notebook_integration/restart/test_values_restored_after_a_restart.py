@@ -5,15 +5,6 @@ import textwrap
 import pytest
 
 
-# Kernel restart + disk restore stress tests.
-#
-# These tests focus on the most fragile part of the caching system: restoring
-# cached results after a kernel restart. Tests verify that:
-# 1. Cached values survive kernel restart via FileBackend
-# 2. Changed code after restart correctly invalidates
-# 3. Complex data types are properly serialized/deserialized
-# 4. Multi-cell dependency chains restore correctly
-# 5. File dependencies are re-checked after restart
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.restore
@@ -183,10 +174,6 @@ class TestKernelRestartComplexTypes:
         assert "75" in nb_runner.get_output(2)
 
 
-# Kernel restart with dirty state interaction tests.
-#
-# Tests that establish cached state, restart the kernel, and verify
-# that cache restoration works correctly after restart.
 @pytest.mark.stress
 @pytest.mark.restore
 @pytest.mark.timeout(90)
@@ -298,16 +285,6 @@ class TestKernelRestartDependencyChains:
         assert "42" in nb_runner.get_output(2)
 
 
-# Kernel restart, disk restore, and complex upstream patterns.
-#
-# Tests focusing on:
-# 1. Kernel restart with disk-backed caching (persist annotation)
-# 2. Complex upstream dependency chains after restart
-# 3. Out-of-order cell execution patterns
-# 4. Upstream simulation with deep dependency graphs
-# 5. Mixed computed/restored states across cells
-# 6. Variable shadowing across cells
-# 7. Cell deletion/insertion simulation
 @pytest.mark.integration
 @pytest.mark.timeout(30)
 class TestKernelRestartDiskRestore:

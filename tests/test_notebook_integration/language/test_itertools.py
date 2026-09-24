@@ -5,9 +5,6 @@ import textwrap
 import pytest
 
 
-# List accumulation and cross-cell aggregation.
-#
-# Tests patterns where data is built across multiple cells then aggregated.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestAccumulationAggregation:
@@ -75,9 +72,6 @@ class TestAccumulationAggregation:
         assert "avg =" in out
 
 
-# Interaction test: itertools accumulate with custom function.
-# Tests itertools.accumulate with operator.mul, custom functions,
-# initial value, and cross-cell running computation pipelines.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestAccumulateCustomFunc:
@@ -230,8 +224,6 @@ class TestFunctoolsReduceAccumulate:
         assert "products=[1, 2, 6, 24, 120]" in out
 
 
-# functools.reduce and accumulate patterns with caching.
-# Tests reduce, accumulate, and edit propagation.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)
@@ -299,9 +291,6 @@ class TestReduceAccumulate:
         assert "last=750" in out2
 
 
-# Interaction test: itertools.chain.from_iterable with nested data.
-# Tests chain.from_iterable for flattening nested structures,
-# combined with map and filter across cells.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestChainFromIterable:
@@ -361,9 +350,6 @@ class TestChainFromIterable:
         assert "strs=['a', 'b', 'c']" in nb_runner.get_output(2)
 
 
-# Interaction test: itertools chain with generators and lazy evaluation.
-# Tests chain with generator expressions, lazy flattening,
-# and cross-cell lazy pipeline patterns.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestChainLazyGenerator:
@@ -599,8 +585,6 @@ class TestCombinationsPermutations:
         assert "count=6" in nb_runner.get_output(2)
 
 
-# itertools combinatorial patterns with caching.
-# Tests combinations, permutations, product, chain, and edit propagation.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)
@@ -713,9 +697,6 @@ class TestItertoolsProductCombs:
         assert "count=9" in nb_runner.get_output(2)
 
 
-# Interaction test: itertools product and combinations_with_replacement.
-# Tests cartesian products, combinations with replacement,
-# and cross-cell combinatorial analysis.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestProductCombReplace:
@@ -783,9 +764,6 @@ class TestProductCombReplace:
         assert "count=6" in nb_runner.get_output(1)
 
 
-# Interaction test: itertools.groupby with key function.
-# Tests groupby with sorted data, key extraction, group aggregation,
-# and cross-cell grouped data processing.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestGroupbyKeyFunction:
@@ -948,9 +926,6 @@ class TestItertoolsGroupbySorted:
         assert "groups=[(1, 3), (2, 1), (3, 2)]" in nb_runner.get_output(2)
 
 
-# Aggregation with groupby interaction tests.
-# Tests that editing groupby logic or data properly invalidates
-# aggregated results downstream.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)
@@ -1043,9 +1018,6 @@ class TestItertoolsSliceTakewhile:
         assert "chunk=[90, 91, 92, 93, 94]" in nb_runner.get_output(2)
 
 
-# Interaction test: itertools.tee and islice with multiple consumers.
-# Tests tee for creating independent iterators, islice for windows,
-# and cross-cell iterator consumption patterns.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestItertoolsTeeIslice:
@@ -1115,9 +1087,6 @@ class TestItertoolsTeeIslice:
         assert "head=[10, 20]" in out
 
 
-# Interaction test: itertools starmap and repeat.
-# Tests starmap for unpacking arguments, repeat for infinite iterators,
-# islice for limiting, and cross-cell functional patterns.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestStarmapRepeat:
@@ -1212,7 +1181,6 @@ class TestItertoolsStarmapRepeat:
         assert "sums=[10, 20]" in nb_runner.get_output(2)
 
 
-# Itertools advanced — cash caching with itertools combinatorial patterns.
 @pytest.mark.stress
 class TestItertoolsInfinite:
     """Test infinite iterator patterns."""

@@ -3,12 +3,6 @@
 import pytest
 
 
-# Complex dependency chains, decorator stacking, context managers,
-# class inheritance MRO, and namespace/scope edge cases.
-#
-# Tests deep multi-cell dependency propagation, complex decorator interactions,
-# context manager state tracking, MRO-based method resolution caching, and
-# subtle namespace scoping issues.
 @pytest.mark.stress
 @pytest.mark.integration
 class TestDeepDependencyChains:
@@ -78,19 +72,6 @@ class TestDeepDependencyChains:
         assert "240" in nb_runner.get_output(5)
 
 
-# Complex scenario integration tests.
-#
-# Tests progressively complex caching interactions including:
-# - Deep dependency chains (5+ cells)
-# - Dataclass and complex object caching
-# - Function redefinition with downstream propagation
-# - Multi-variable assignment patterns
-# - Exception handling and recovery
-# - Cross-cell data transformations
-# - Global state interactions
-# - Nested function closures across cells
-# - Re-execution after code modifications
-# - Complex pandas operations
 @pytest.mark.core
 class TestDeepDependencyChainEdits:
     """Test deep dependency chains spanning many cells."""
@@ -151,10 +132,6 @@ class TestDeepDependencyChainEdits:
         assert "c = 305" in out, f"Expected c=305 after modification, got: {out}"
 
 
-# Long cascade workflow interaction tests.
-#
-# Tests that exercise multi-cell workflows with cascading edits,
-# partial reruns, and complex dependency chains.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(30)
@@ -240,10 +217,6 @@ class TestCascadingEdits:
         assert "d = 130" in nb_runner.get_output(4)
 
 
-# Cross-cell data dependency interaction tests.
-#
-# Tests that exercise complex cross-cell data flows, transitive
-# dependencies, diamond dependencies, and dependency chain changes.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(30)
@@ -293,10 +266,6 @@ class TestTransitiveDependencies:
         assert "f = 33" in nb_runner.get_output(6)
 
 
-# Multi-cell dependency chain stress tests.
-#
-# Tests with longer dependency chains (5-8 cells) where edits
-# at various points in the chain verify cache propagation.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(60)
@@ -371,9 +340,6 @@ class TestLongChainEdits:
         assert "e = 1400" in nb_runner.get_output(6)
 
 
-# Long chain dependency propagation (5+ cells).
-#
-# Tests editing early cell in long chain, verifying final cell updates.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestLongChainPropagation:
@@ -445,10 +411,6 @@ class TestLongChainPropagation:
         assert "combined = 160" in nb_runner.get_output(5)
 
 
-# Deep dependency chain interaction tests.
-#
-# Tests with long chains of cells (5+ cells) where a change at any
-# point in the chain must properly propagate through all downstream cells.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -544,10 +506,6 @@ class TestDeepChainPropagation:
         assert "e = 3660" in nb_runner.get_output(5)
 
 
-# Multiple cell chain edit interaction tests.
-#
-# Tests editing a cell in the middle of a multi-cell pipeline to
-# verify both upstream restoration and downstream propagation work.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)

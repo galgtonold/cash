@@ -3,10 +3,6 @@
 import pytest
 
 
-# List slicing and indexing interaction tests.
-#
-# Tests editing list slice operations, negative indexing,
-# step slicing, and their propagation.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 @pytest.mark.upstream
@@ -247,9 +243,6 @@ class TestListSlicingObject:
         assert "stop=10" in out
 
 
-# Slice and index pattern edits.
-#
-# Tests list slicing, indexing operations with edits.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestSliceIndexEdits:

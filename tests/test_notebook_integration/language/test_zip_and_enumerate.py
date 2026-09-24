@@ -5,10 +5,6 @@ import pytest
 pytestmark = [pytest.mark.stress, pytest.mark.timeout(90)]
 
 
-# Zip and enumerate interaction tests.
-#
-# Tests editing cells with zip, enumerate, and itertools
-# patterns and verifying cache invalidation.
 @pytest.mark.upstream
 class TestZipEnumerateEdits:
     """Editing zip and enumerate patterns."""
@@ -81,9 +77,6 @@ class TestZipUnzipEnumerate:
         assert "result=[(10, 'p'), (20, 'q'), (30, 'r')]" in nb_runner.get_output(2)
 
 
-# Interaction test: enumerate with start parameter and custom step.
-# Tests enumerate with start offset, zip+enumerate patterns,
-# and cross-cell indexed iteration pipelines.
 class TestEnumerateStartStep:
     """Test enumerate with start parameter across cells."""
 
@@ -186,8 +179,6 @@ class TestEnumerateZipUnpack:
         assert "oldest=('Charlie', 35, 'SF')" in nb_runner.get_output(2)
 
 
-# zip-to-dict construction patterns with caching.
-# Tests zip pairing, dict construction, key/value extraction, and edit propagation.
 @pytest.mark.integration
 class TestZipDictConstruct:
     """Test zip-based dict construction caching."""
@@ -289,9 +280,6 @@ class TestZipLongestPatterns:
         assert "'z': '?'" in out
 
 
-# Interaction test: zip_longest with fillvalue and multi-iterator.
-# Tests itertools.zip_longest with custom fillvalue,
-# multiple iterables of different lengths, and cross-cell processing.
 class TestZipLongestFillvalue:
     """Test zip_longest with fillvalue across cells."""
 
@@ -353,9 +341,6 @@ class TestZipLongestFillvalue:
         assert "x_sum=4" in nb_runner.get_output(2)
 
 
-# Interaction test: zip_longest with fillvalue and dict construction.
-# Tests zip_longest for unequal iterables, fillvalue parameter,
-# dict construction from zipped pairs, and cross-cell data alignment.
 class TestZipLongestDict:
     """Test zip_longest with dict construction across cells."""
 

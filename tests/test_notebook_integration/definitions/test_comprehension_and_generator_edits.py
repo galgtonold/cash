@@ -5,10 +5,6 @@ import pytest
 pytestmark = [pytest.mark.stress]
 
 
-# Comprehension interaction tests.
-#
-# Tests editing list, dict, set, and generator comprehensions
-# and verifying cache invalidation and recomputation.
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
 class TestListComprehensionEdits:
@@ -132,10 +128,6 @@ class TestSetComprehensionEdits:
         assert "'w'" in nb_runner.get_output(2)
 
 
-# Generator, iterator, and lazy evaluation interaction tests.
-#
-# Tests where generators and iterators are created in cells,
-# consumed downstream, and cell edits affect the generation logic.
 class TestGeneratorEdits:
     """Generator function edits."""
 
@@ -287,10 +279,6 @@ class TestIteratorProtocol:
         assert "total = 225" in nb_runner.get_output(2)
 
 
-# Map/filter/reduce pattern interaction tests.
-#
-# Tests editing functional programming patterns like map, filter,
-# reduce, and their combinations.
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
 class TestMapEdits:
@@ -485,9 +473,6 @@ class TestMapFilterEdits:
         assert "total = 147" in nb_runner.get_output(4)
 
 
-# Zip and enumerate patterns with edits.
-#
-# Tests zip, enumerate, and parallel iteration with data edits.
 @pytest.mark.timeout(90)
 class TestZipEnumEdits:
     """Zip/enumerate edit patterns."""
@@ -547,9 +532,6 @@ class TestZipEnumEdits:
         assert "('?', 'z')" in out
 
 
-# Itertools patterns with edits.
-#
-# Tests itertools functions with data/function edits.
 @pytest.mark.timeout(90)
 class TestItertoolsEdits:
     """Itertools operation edit patterns."""

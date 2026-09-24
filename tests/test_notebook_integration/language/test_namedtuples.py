@@ -49,9 +49,6 @@ class TestNamedtupleReplace:
         assert "info=Bob is 25" in nb_runner.get_output(2)
 
 
-# Interaction test: namedtuple with _replace and _asdict.
-# Tests namedtuple creation, _replace for immutable update,
-# _asdict conversion, and cross-cell typed tuple pipelines.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestNamedtupleReplaceAsdict:
@@ -160,9 +157,6 @@ class TestNamedtupleAsdictReplace:
         assert "sum=300" in nb_runner.get_output(2)
 
 
-# Interaction test: typing.NamedTuple with methods and defaults.
-# Tests typing.NamedTuple with default values, custom methods,
-# and cross-cell tuple-based computations.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestTypingNamedTuple:
@@ -226,8 +220,6 @@ class TestTypingNamedTuple:
         assert "hex=#ff0000" in nb_runner.get_output(2)
 
 
-# namedtuple and dataclass patterns with caching.
-# Tests namedtuple creation, dataclass fields, and edit propagation.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)

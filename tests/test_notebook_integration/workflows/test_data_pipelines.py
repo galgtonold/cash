@@ -6,12 +6,6 @@ import time
 import pytest
 
 
-# Real-world data science patterns, kernel restart scenarios,
-# out-of-order execution, annotation directives, and complex mutation patterns.
-#
-# These tests focus on realistic notebook workflows that data scientists
-# commonly use, including pandas transformations, numpy array operations,
-# and iterative refinement patterns.
 @pytest.mark.core
 class TestPandasPipelinePatterns:
     """Test realistic pandas workflows across cells."""
@@ -121,10 +115,6 @@ class TestDataTransformWorkflow:
         assert "top student=1 score=99" in nb_runner.get_output(3)
 
 
-# Data pipeline chain interaction tests.
-#
-# Tests editing cells in multi-stage data pipelines
-# where each stage transforms the data.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -203,9 +193,6 @@ class TestPipelineChainEdits:
         assert "keys = ['Y', 'Z']" in nb_runner.get_output(2)
 
 
-# Complex multi-step data pipeline patterns.
-#
-# Tests multi-cell data transformation pipelines with edits at different stages.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestDataPipelineEdits:
@@ -325,9 +312,6 @@ class TestDataPipelineSteps:
         assert "total=300" in nb_runner.get_output(3)
 
 
-# Multi-cell data pipeline interaction tests.
-# Tests complex data transformations spanning multiple cells where
-# edits at different pipeline stages propagate correctly.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)
@@ -405,7 +389,6 @@ class TestMultiCellPipelineInteraction:
         assert "total=3016" in out
 
 
-# Grand finale: full end-to-end data science pipeline stress test.
 @pytest.mark.stress
 @pytest.mark.integration
 class TestFullPipeline:
@@ -624,7 +607,6 @@ class TestFullPipeline:
         assert "Top 5:" in out
 
 
-# complex multi-cell data pipelines with many dependencies.
 @pytest.mark.stress
 @pytest.mark.integration
 class TestMultiCellPipeline:
@@ -700,7 +682,6 @@ class TestMultiCellPipeline:
         assert "final=196.0" in nb_runner.get_output(5)
 
 
-# Complex data transformations — cash caching with multi-step reshaping.
 @pytest.mark.stress
 class TestListTransforms:
     """Test complex list transformation patterns."""
@@ -769,8 +750,6 @@ class TestListTransforms:
         assert "result=[30, 50, 70]" in nb_runner.get_output(2)
 
 
-# Multi-step data transformation pipelines — realistic ETL-like workflows
-# with many intermediate variables and complex data flow.
 @pytest.mark.integration
 @pytest.mark.stress
 class TestETLPipeline:
@@ -852,7 +831,6 @@ class TestETLPipeline:
         assert "sum=90" in nb_runner.get_output(4)
 
 
-# Complex multi-cell ETL pipeline — cash caching with realistic data transforms.
 @pytest.mark.stress
 class TestETLPipelineComplex:
     """Test complex ETL pipeline spanning multiple cells."""
@@ -962,7 +940,6 @@ class TestETLPipelineComplex:
         assert "result=120" in nb_runner.get_output(2)
 
 
-# JSON/CSV data processing chains.
 @pytest.mark.stress
 @pytest.mark.integration
 class TestJsonProcessing:
@@ -1113,10 +1090,6 @@ class TestCsvProcessing:
         assert "C" not in out2
 
 
-# Complex real-world data analysis simulation tests.
-#
-# Tests simulating real data analysis workflows with multiple
-# edit cycles, variable reuse, and result verification.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)

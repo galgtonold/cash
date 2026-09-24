@@ -5,8 +5,6 @@ import textwrap
 import pytest
 
 
-# Config file patterns, environment variables, and dynamic settings
-# across notebook cells — common patterns in data science notebooks.
 @pytest.mark.integration
 @pytest.mark.stress
 class TestConfigFilePatterns:
@@ -186,10 +184,6 @@ class TestDynamicSettings:
         assert "steps=300 model=neural_net" in nb_runner.get_output(2)
 
 
-# Global config pattern interaction tests.
-#
-# Tests editing a global config dict and verifying that
-# downstream cells that depend on it update correctly.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -252,9 +246,6 @@ class TestConfigPatternEdits:
         assert "total = 2200.0" in nb_runner.get_output(3)
 
 
-# Feature flag and conditional logic edits.
-#
-# Tests feature flags that control behavior in downstream cells.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestFeatureFlagEdits:

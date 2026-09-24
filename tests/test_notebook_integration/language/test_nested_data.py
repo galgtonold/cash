@@ -66,10 +66,6 @@ class TestNestedListEdits:
         assert "total = 100" in nb_runner.get_output(3)
 
 
-# Nested data structure interaction tests.
-#
-# Tests where nested dicts, lists, and objects are modified
-# across cells and dependencies must propagate correctly.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -127,10 +123,6 @@ class TestNestedDictEdits:
         assert "'x': 10" in nb_runner.get_output(2)
 
 
-# Deep nesting and complex structure edit tests.
-#
-# Tests editing cells with deeply nested data structures, mixed types,
-# and complex data patterns to verify proper cache invalidation.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)

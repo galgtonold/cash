@@ -5,7 +5,6 @@ import textwrap
 import pytest
 
 
-# Metaclass patterns — cash caching with metaclasses and class hooks.
 @pytest.mark.stress
 class TestMetaclassBasics:
     """Test basic metaclass usage."""
@@ -44,7 +43,6 @@ class TestMetaclassBasics:
         assert "version=2.0" in nb_runner.get_output(2)
 
 
-# metaclass and class factory patterns.
 @pytest.mark.stress
 @pytest.mark.integration
 class TestMetaclass:
@@ -85,9 +83,6 @@ class TestMetaclass:
         assert "port=8080" in out
 
 
-# Metaclass interaction tests.
-# Tests that editing classes using metaclasses properly invalidates
-# downstream cells.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)

@@ -7,9 +7,6 @@ import pytest
 pytestmark = [pytest.mark.stress]
 
 
-# Copy/deepcopy interaction tests.
-# Tests that cache invalidation works correctly when objects are copied
-# and the original is modified vs when the copy is modified.
 @pytest.mark.timeout(90)
 @pytest.mark.integration
 class TestCopyDeepcopyInteraction:
@@ -79,9 +76,6 @@ class TestCopyDeepcopyInteraction:
         assert "val=60" in out
 
 
-# Interaction test: copy module deepcopy with custom classes.
-# Tests copy.copy vs copy.deepcopy behavior with nested structures,
-# __copy__/__deepcopy__ protocols, and cross-cell independence.
 @pytest.mark.timeout(90)
 class TestCopyDeepcopyCross:
     """Test copy/deepcopy across cells with custom objects."""
@@ -281,7 +275,6 @@ class TestCopyDeepModify:
         assert "total=100" in nb_runner.get_output(2)
 
 
-# Weakref, copy, and memory management patterns across cells.
 @pytest.mark.integration
 class TestCopyPatterns:
     """Test shallow/deep copy across cells."""

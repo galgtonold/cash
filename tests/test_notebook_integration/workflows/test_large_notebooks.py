@@ -5,11 +5,6 @@ import textwrap
 import pytest
 
 
-# Large-scale notebook simulation — 15-20 cell notebooks with
-# realistic data science workflows testing end-to-end caching behavior.
-#
-# These tests simulate real notebooks that users would write, with realistic
-# complexity and cell counts.
 @pytest.mark.stress
 @pytest.mark.integration
 class TestLargeFinancialNotebook:
@@ -209,10 +204,6 @@ class TestEndToEndWithRestart:
         assert "2209" in nb_runner.get_output(6)
 
 
-# Large notebook (10+ cells) interaction tests.
-#
-# Tests with larger notebooks that simulate real-world scenarios
-# with many cells, edits at various positions, and full run-through.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -360,10 +351,6 @@ class TestProgressiveNotebookBuilding:
         assert "z = 15" in nb_runner.get_output(4)
 
 
-# Notebook size scaling interaction tests.
-#
-# Tests that exercise notebooks with 10-20 cells simulating
-# real-world data science workflows with multiple phases.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(45)
@@ -504,10 +491,6 @@ class TestWidePipeline:
         assert "total = 240" in nb_runner.get_output(8)
 
 
-# Large notebook workflow interaction tests.
-#
-# Tests that exercise 8+ cell notebooks with complex dependency
-# graphs, simulating real-world data analysis workflows.
 @pytest.mark.upstream
 @pytest.mark.stress
 @pytest.mark.timeout(30)

@@ -97,9 +97,6 @@ class TestPropertySetterDeleter:
         assert "clamped=150" in nb_runner.get_output(2)
 
 
-# Interaction test: property with deleter and validation.
-# Tests property getter/setter/deleter with validation logic,
-# AttributeError handling, and cross-cell state management.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestPropertyDeleterValidation:
@@ -161,8 +158,6 @@ class TestPropertyDeleterValidation:
         assert "r=5" in nb_runner.get_output(2)
 
 
-# property decorator and computed attribute patterns with caching.
-# Tests @property, computed fields, and edit propagation.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)
@@ -273,9 +268,6 @@ class TestPropertyComputedAttrs:
         assert "area=50" in nb_runner.get_output(2)
 
 
-# Interaction test: property with computed cache and validation.
-# Tests @property for computed values with internal caching,
-# setter validation, and cross-cell attribute management.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestPropertyComputedValidation:
@@ -421,7 +413,6 @@ class TestDescriptorProtocol:
         assert "port=3000" in nb_runner.get_output(2)
 
 
-# Descriptor, property, slots, dataclass, and protocol patterns.
 class TestDescriptorPatterns:
     """Test caching with Python descriptors."""
 
@@ -559,9 +550,6 @@ class TestDescriptorPatterns:
         assert "area=96" in nb_runner.get_output(2)
 
 
-# Descriptor protocol interaction tests.
-# Tests that editing descriptor-based attribute access logic
-# properly invalidates downstream cells.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)

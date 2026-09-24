@@ -7,7 +7,6 @@ import pytest
 pytestmark = [pytest.mark.stress]
 
 
-# Datetime, time, and scheduling patterns across cells.
 class TestDatetimePatterns:
     """Test datetime operations across cells."""
 
@@ -125,10 +124,6 @@ class TestDatetimePatterns:
         assert "span_hrs=" in out
 
 
-# Datetime / time-based computation interaction tests.
-#
-# Tests editing datetime computations, timedelta operations,
-# and formatting.
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
 class TestDatetimeEdits:
@@ -260,9 +255,6 @@ class TestDatetimeTimedeltaArith:
         assert "result=2025-01-01" in nb_runner.get_output(2)
 
 
-# Datetime arithmetic and formatting interaction tests.
-# Tests editing datetime operations (beyond the basic datetime edit test).
-# Focus on timedelta chains and date range generation.
 @pytest.mark.integration
 @pytest.mark.timeout(90)
 class TestDatetimeArithmeticInteraction:
@@ -310,9 +302,6 @@ class TestDatetimeArithmeticInteraction:
         assert "count=7" in out
 
 
-# Interaction test: datetime timezone-aware operations with timedelta.
-# Tests timezone creation, conversion, timedelta arithmetic, and
-# cross-cell timezone-aware datetime manipulation.
 @pytest.mark.timeout(90)
 class TestDatetimeTimezoneOps:
     """Test timezone-aware datetime operations across cells."""
@@ -457,9 +446,6 @@ class TestDateFormatEdits:
         assert "final = 2024-03-07" in nb_runner.get_output(5)
 
 
-# Interaction test: calendar module month and week operations.
-# Tests calendar.monthcalendar, weekday calculation,
-# isleap checks, and cross-cell date analysis.
 @pytest.mark.timeout(90)
 class TestCalendarMonthWeek:
     """Test calendar month and week operations across cells."""

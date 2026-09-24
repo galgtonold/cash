@@ -140,9 +140,6 @@ class TestOperatorItemgetterAttrgetter:
         assert "result=[(3, 'a'), (2, 'm'), (1, 'z')]" in nb_runner.get_output(2)
 
 
-# Interaction test: operator methodcaller for dynamic method dispatch.
-# Tests operator.methodcaller for calling methods by name,
-# with arguments, and cross-cell dynamic dispatch patterns.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestOperatorMethodcaller:
@@ -301,9 +298,6 @@ class TestOperatorOverloading:
         assert "a=Acc(30)" in nb_runner.get_output(2)
 
 
-# Operator overloading interaction tests.
-# Tests that editing classes with overloaded operators properly invalidates
-# downstream computations using those operators.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)

@@ -5,10 +5,6 @@ import pytest
 pytestmark = [pytest.mark.stress]
 
 
-# Import statement interaction tests.
-#
-# Tests that exercise import statements combined with cell edits,
-# module reloads, and kernel restarts.
 @pytest.mark.modules
 @pytest.mark.timeout(30)
 class TestImportAndCellEdits:
@@ -116,10 +112,6 @@ class TestImportAndCellEdits:
         assert "val = 4" in nb_runner.get_output(2)
 
 
-# Import and module interaction tests.
-#
-# Tests where users import modules, edit imports, change which
-# modules are used, and verify caching handles module changes.
 @pytest.mark.modules
 @pytest.mark.timeout(45)
 class TestImportStatementEdits:
@@ -181,10 +173,6 @@ class TestImportStatementEdits:
         assert '"b": 2' in output or '"b":2' in output
 
 
-# Import alias and module-level function interaction tests.
-#
-# Tests editing import aliases, switching between import styles,
-# and using module-level functions with edits.
 @pytest.mark.modules
 @pytest.mark.timeout(90)
 class TestImportAliasEdits:
@@ -405,9 +393,6 @@ class TestConditionalImportSwitching:
         assert "output = " in output
 
 
-# Conditional import and lazy loading interaction tests.
-# Tests that editing code with conditional imports and lazy attribute
-# access properly invalidates downstream cells.
 @pytest.mark.integration
 @pytest.mark.timeout(90)
 class TestConditionalImportInteraction:

@@ -3,10 +3,6 @@
 import pytest
 
 
-# Selective cell execution interaction tests.
-#
-# Tests that exercise running specific cells out of order,
-# skipping cells, and running only subsets of cells.
 @pytest.mark.upstream
 @pytest.mark.stress
 @pytest.mark.timeout(30)
@@ -58,8 +54,6 @@ class TestSelectiveCellExecution:
         assert "y = 84" in nb_runner.get_output(2)
 
 
-# Out-of-order execution, selective cell runs, and re-execution
-# patterns that stress the upstream simulation system.
 @pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.upstream
@@ -161,10 +155,6 @@ class TestRunSubsetAfterEdit:
         assert "total = 15" in nb_runner.get_output(3)
 
 
-# Selective cell execution interaction tests.
-#
-# Tests where users run cells out of order, skip cells,
-# run subsets of cells, and verify cache consistency.
 @pytest.mark.upstream
 @pytest.mark.stress
 @pytest.mark.timeout(45)

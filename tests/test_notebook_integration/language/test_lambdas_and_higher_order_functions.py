@@ -5,10 +5,6 @@ import textwrap
 import pytest
 
 
-# Lambda & higher-order function interaction tests.
-#
-# Tests that exercise lambda expressions, map/filter/reduce, and
-# higher-order function patterns with cell edits.
 @pytest.mark.core
 @pytest.mark.stress
 @pytest.mark.timeout(30)
@@ -67,9 +63,6 @@ class TestLambdaEdits:
         assert "sorted = [9, 6, 5, 4, 3, 2, 1, 1]" in nb_runner.get_output(3)
 
 
-# Complex lambda and higher-order function patterns.
-#
-# Tests lambdas, map/filter/reduce with edits.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestLambdaHigherOrder:
@@ -235,7 +228,6 @@ class TestBuiltinHigherOrder:
         assert "by_name=[('a', 3), ('b', 2), ('c', 1)]" in out
 
 
-# Functional programming patterns — compose, pipe, curry, partial application.
 @pytest.mark.stress
 class TestFunctionalComposition:
     """Test function composition and piping."""

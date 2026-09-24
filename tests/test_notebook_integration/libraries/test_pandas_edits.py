@@ -7,11 +7,6 @@ import pytest
 pytestmark = [pytest.mark.stress]
 
 
-# Pandas integration patterns - DataFrame creation, transformation,
-# aggregation, merge/join, and file I/O caching behavior.
-#
-# Tests real-world pandas workflows that are the primary use case for notebook
-# caching: data loading, cleaning, transformation pipelines, and analysis.
 @pytest.mark.integration
 @pytest.mark.files
 class TestPandasFileIO:
@@ -147,10 +142,6 @@ class TestTransformationPipelines:
         assert "450" in nb_runner.get_output(3)
 
 
-# Pandas DataFrame interaction tests.
-#
-# Tests with pandas DataFrames across cells — loading, filtering,
-# transforming, and editing operations while verifying caching.
 @pytest.mark.upstream
 @pytest.mark.timeout(45)
 class TestDataFrameEdits:

@@ -3,14 +3,6 @@
 import pytest
 
 
-# Multi-round cell editing & cache coherence.
-#
-# Tests that exercise the trickiest interaction patterns:
-# - Editing the same cell multiple times in succession
-# - Editing multiple cells between runs
-# - Reverting a cell to its original value (should hit cache)
-# - Editing upstream then downstream then upstream again
-# - Rapid back-and-forth value flipping
 @pytest.mark.stress
 @pytest.mark.upstream
 class TestMultiEditSameCell:
@@ -65,10 +57,6 @@ class TestMultiEditSameCell:
             assert f"result = {expected}" in nb_runner.get_output(3), f"Iteration {i}: expected '{expected}'"
 
 
-# Rapid-fire edit interaction tests.
-#
-# Tests that exercise many rapid successive edits to the same cell(s),
-# verifying cache coherence under high edit frequency.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(30)
@@ -121,10 +109,6 @@ class TestRapidEditsOneCell:
             assert f"result = {10 + offset}" in nb_runner.get_output(2)
 
 
-# Multiple rapid consecutive edits interaction tests.
-#
-# Tests making multiple rapid edits to the same cell and verifying
-# that each edit is properly picked up.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -355,9 +339,6 @@ class TestRapidEditWithRestart:
             assert f"y = {val + 1}" in nb_runner.get_output(2)
 
 
-# Multi-round iterative refinement patterns.
-#
-# Tests multiple sequential edits to same cell, verifying each round.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestMultiRoundRefinement:
