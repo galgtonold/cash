@@ -520,7 +520,7 @@ class _WarmKernel:
         # kernel. The two resets were redundant and each costs ~47ms, but only
         # ONE of them is disposable, and it is this one. Dropping the teardown
         # reset instead looked identical on paper and broke three module-reload
-        # tests (in modules/test_import_edits.py):
+        # tests (in modules/test_helper_module_edits.py):
         # they pass alone and fail behind any other test, so something the
         # previous test leaves in the warm kernel has to be cleared at teardown
         # and not merely before the next test runs. Turning cash off first did
