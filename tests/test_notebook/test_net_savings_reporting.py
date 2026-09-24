@@ -14,6 +14,7 @@ the honest accounting:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 
@@ -121,7 +122,7 @@ class TestOverheadAccountingIsCheap:
         # Overhead was accumulated purely in memory ...
         assert cash_magics._session.stats["total_overhead"] > 0.0
         # ... and NOTHING was committed to disk per cell.
-        with sqlite3.connect(am.db_path) as conn:
+        with contextlib.closing(sqlite3.connect(am.db_path)) as conn:
             committed = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
         assert committed == 0
 

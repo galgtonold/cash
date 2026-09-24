@@ -20,6 +20,7 @@ flush).
 
 from __future__ import annotations
 
+import contextlib
 import gc
 import sqlite3
 
@@ -28,7 +29,7 @@ from tests._cell_driver import run_cash_cell
 
 
 def _committed_row_count(db_path: str) -> int:
-    with sqlite3.connect(db_path) as conn:
+    with contextlib.closing(sqlite3.connect(db_path)) as conn:
         return conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
 
 
