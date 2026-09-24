@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
 
 from . import _log
 from ._active import ACTIVE_CONFIG
+from .analytics import AnalyticsManager
 from .backends import CacheBackend, CacheMetadata
 from .backends._base import entry_expired
 from .backends._writes import in_multiprocessing_child
@@ -82,7 +83,6 @@ from .tracking.file_tracker import install_read_watch
 from .tracking.reader_patches import file_registry
 
 if TYPE_CHECKING:
-    from .analytics import AnalyticsManager
     from .ui.explorer import CacheExplorer
 
 # Configure Logging
@@ -436,8 +436,6 @@ class Cash:
         on and the dashboard reads, so "Current Session" is this one and its
         buffered events are counted. Created on first use."""
         if self._analytics is None:
-            from .analytics import AnalyticsManager
-
             self._analytics = AnalyticsManager(enabled=self.config.analytics)
         return self._analytics
 

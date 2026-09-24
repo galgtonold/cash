@@ -53,7 +53,7 @@ type = "file"
 default_ttl = 3600          # seconds
 ```
 
-<!-- claim: cash/backends/factory.py:tier_specs @e55201d4 -->
+<!-- claim: cash/backends/factory.py:tier_specs @428b03c6 -->
 From the environment: `CASH_TIER_0_TYPE=memory`, `CASH_TIER_1_TYPE=file`,
 `CASH_TIER_1_DEFAULT_TTL=3600`. A decorator's own `ttl=` takes precedence, and
 as with `ttl=`, the shorter of the value an entry was written with and the

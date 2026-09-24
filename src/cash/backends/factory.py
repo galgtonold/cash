@@ -18,6 +18,7 @@ import os
 import weakref
 from typing import TYPE_CHECKING, Any
 
+from ..config import TierConfig
 from ..exceptions import DependencyNotFoundError
 from ._base import CacheBackend
 from .adaptive_caps import resolve_disk_cap, resolve_ram_cap
@@ -29,7 +30,7 @@ from .sqlite_backend import SQLiteBackend
 from .tiered_backend import TieredBackend
 
 if TYPE_CHECKING:
-    from cash.config import CashConfig, TierConfig
+    from cash.config import CashConfig
 
 logger = logging.getLogger(__name__)
 
@@ -88,8 +89,6 @@ def tier_specs(config: CashConfig) -> list[TierSpec]:
 
     Pure: nothing is measured or created, so two configs can be compared.
     """
-    from cash.config import TierConfig
-
     tiers = list(config.tiers) or [TierConfig(type=t) for t in _stack_of(config.backend)]
     return [(t.type, tuple(sorted(_settings(t, config).items()))) for t in tiers]
 
