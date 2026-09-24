@@ -1,4 +1,4 @@
-"""nbconvert preprocessors for stripping cache badges and executing with cash."""
+"""nbconvert preprocessor that strips cash's magics and cache badges from a notebook."""
 
 from __future__ import annotations
 
@@ -129,15 +129,9 @@ class CashStripPreprocessor(Preprocessor):
 
 @cache
 def _magic_line_pattern() -> re.Pattern[str]:
-    """A source line that invokes a cash magic, built from the registered set."""
+    """A source line that invokes a cash magic, built from the registered set.
 
-    def names(kind: str) -> str:
-        return "|".join(sorted(map(re.escape, CashMagics.magics[kind]), key=len, reverse=True))
-
-    # An empty alternation would match a bare ``%``/``%%``, so a kind with no
-    # registered magic (cash has no cell magic) contributes nothing.
-    forms = [
-        f"{prefix}(?:{names(kind)})" for prefix, kind in (("%", "line"), ("%%", "cell")) if CashMagics.magics[kind]
-    ]
-    forms.append(r"%load_ext\s+cash")
-    return re.compile(rf"^\s*(?:{'|'.join(forms)})(?:\s|$)")
+    Cash registers line magics only.
+    """
+    names = "|".join(sorted(map(re.escape, CashMagics.magics["line"]), key=len, reverse=True))
+    return re.compile(rf"^\s*(?:%(?:{names})|%load_ext\s+cash)(?:\s|$)")

@@ -142,7 +142,7 @@ class Restorer:
         """Build a ProcessResult entry for a successfully restored variable.
 
         Carries through the cached ``inputs`` list so downstream observability
-        (provenance.record, audit log) can reconstruct the dependency chain
+        (``%cash_provenance``) can reconstruct the dependency chain
         even when the variable was hydrated from disk rather than freshly
         computed in this session.
         """

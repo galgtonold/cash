@@ -49,8 +49,7 @@ class TestCashStats:
         assert "Gross time saved:" in captured.out
         assert "Cash overhead:" in captured.out
         assert "Net time saved:" in captured.out
-        # "Cache entries:" was removed in the 2026-05-18 overhead pass;
-        # the command now refers users to %cash_admin for backend info.
+        # No "Cache entries:": counting them walks the backend (see cash_stats).
         assert "Tracked variables:" in captured.out
 
 

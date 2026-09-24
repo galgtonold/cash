@@ -684,9 +684,8 @@ def _enclosing_section(headings: list[tuple[int, int]], total_lines: int, line: 
 
     Innermost, not outermost, and that is load-bearing. An anchor under
     ``### %cash_on`` covers its own subsection; taking the enclosing ``##``
-    instead would swallow every sibling subsection under the same parent --
-    including, on ``docs/magics.md``, the ``### %%cash`` section that carried
-    one of the two statements this whole mechanism exists to surface.
+    instead would swallow every sibling subsection under the same parent,
+    and with them the unpinned prose this mechanism exists to surface.
     """
     above = [h for h in headings if h[0] <= line]
     if not above:

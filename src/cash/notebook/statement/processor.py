@@ -839,7 +839,7 @@ class StatementProcessor:
         self._randomness.flag_observed_hidden_draw(metrics, run.code, run.outputs, skip_cache=run.skip_cache)
         metrics["status"] = CacheStatus.COMPUTED
         metrics["evaluated_vars"] = list(run.outputs) if run.outputs else []
-        # Input names, so provenance, audit and badge tooltips can rebuild the
+        # Input names, so provenance and badge tooltips can rebuild the
         # dependency graph. The no-name inputs the AST sometimes emits are dropped.
         metrics["inputs"] = [v for v in (run.inputs or []) if isinstance(v, str)]
         # Attribute the miss for the badge's row-detail drawer when it is cheap:

@@ -82,7 +82,7 @@ class CacheHitServer:
             metrics["status"] = CacheStatus.RESTORED
             metrics["saved_time"] = (metadata.execution_time or 0.0) if metadata else 0.0
             metrics["restored_vars"] = (metadata.outputs or []) if metadata else []
-            # Carry the stored input list through so provenance/audit can
+            # Carry the stored input list through so provenance can
             # reconstruct the dependency graph on a cache hit, not just on
             # a fresh compute.
             metrics["inputs"] = list((metadata.inputs or []) if metadata else [])

@@ -12,7 +12,7 @@ operation, reported as a success.
 what was asked.
 
 The two helpers below are the shared parse, so the gap is closed once rather
-than at each of the ~14 call sites:
+than at each magic:
 
 * :func:`strip_inline_comment` — remove a trailing ``# comment``.
 * :func:`parse_mode` — resolve an arg string to one of a magic's known modes,
