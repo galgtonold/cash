@@ -10,7 +10,7 @@ import logging
 import textwrap
 import types
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .. import _plain_data
 from .._clock import perf_counter as _perf_counter
@@ -37,6 +37,14 @@ from ..value_types import IMMUTABLE_VALUE_TYPES, writable_types
 from .closure_fold import is_immutable_capture, iter_code_scopes, unsafe_uses_of
 from .code_identity import func_key, is_user_module, own_package
 from .globals_fold import stabilize_for_global_hash
+
+if TYPE_CHECKING:
+    from ..config import CashConfig
+    from .arg_hashing import ArgHasher
+    from .frozen import FrozenResults
+    from .globals_fold import GlobalsFold
+    from .registry import FunctionRegistry
+    from .reporting import Notices
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +82,7 @@ def shares_memory(result, value) -> bool:
 def make_opaque_issue(func_name: str, opaque_list: str) -> Any:
     """Build a synthetic `PurityIssue` for opaque callees
     encountered in ``strict`` mode. Defined at module scope so the
-    ``_surface_purity`` import stays local."""
+    ``PurityChecks.surface_purity`` import stays local."""
 
     return PurityIssue(
         kind=ISSUE_IMPURE_CALL,
@@ -208,10 +216,34 @@ class LearnedMutations:
         self._by_code.setdefault((code, scope), set()).add(name)
 
 
-class PurityChecksMixin:
-    """Purity findings, observed effects and argument mutation, per cached function."""
+class PurityChecks:
+    """What a cached function does besides returning its result: the static
+    purity findings, the effects and argument mutations a first call is seen to
+    make, and results that share state with the caller."""
 
-    def _warn_shared_result(self, func, func_name: str, result, args, kwargs) -> None:
+    def __init__(
+        self,
+        config: CashConfig,
+        registry: FunctionRegistry,
+        args: ArgHasher,
+        frozen: FrozenResults,
+        globals_fold: GlobalsFold,
+        mutations: LearnedMutations,
+        notices: Notices,
+    ) -> None:
+        self._config = config
+        self._registry = registry
+        self._args = args
+        self._frozen = frozen
+        self._globals = globals_fold
+        self._mutations = mutations
+        self._notices = notices
+        # Functions the STATIC pass already reported on. The runtime effect
+        # observer stays quiet for these: it would be a second warning about
+        # the same function, and the user has already been told.
+        self._static_flagged: set[str] = set()
+
+    def warn_shared_result(self, func, func_name: str, result, args, kwargs) -> None:
         """Say so when the result shares state with something the caller holds.
 
         A hit hands back a value rebuilt from the stored bytes, so what the
@@ -297,7 +329,7 @@ class PurityChecksMixin:
                     return "is the module global", name
         return None
 
-    def _learn_mutating_captures(self, func: Callable, func_name: str, watched: dict[str, tuple[str, str]]) -> None:
+    def learn_mutating_captures(self, func: Callable, func_name: str, watched: dict[str, tuple[str, str]]) -> None:
         """Demote any provisional global this call was OBSERVED to mutate.
 
         A global merely *passed to a call* (`sum(G)`, `model.predict(G)`) might
@@ -385,7 +417,7 @@ class PurityChecksMixin:
                 "`# @cash:assume-safe` on the line named.",
             )
 
-    def _refuses_identity_coupled(self, func_name: str, result: Any) -> bool:
+    def refuses_identity_coupled(self, func_name: str, result: Any) -> bool:
         """True when *result* must never be stored, because storing it would
         detach a library's global registry from the object the caller holds.
 
@@ -429,12 +461,12 @@ class PurityChecksMixin:
         )
         return True
 
-    def _argument_snapshot(self, func_name: str, args: tuple, kwargs: dict) -> dict[str, str] | None:
+    def argument_snapshot(self, func_name: str, args: tuple, kwargs: dict) -> dict[str, str] | None:
         """``{parameter: hash}`` of the arguments that CAN change, before the body.
 
         An int, a str, a tuple of them: rebinding one inside the body (``n -=
         1``) is invisible to the caller, so they are left out, and most calls
-        snapshot nothing. What remains lets `_check_argument_mutation` name the
+        snapshot nothing. What remains lets `PurityChecks.check_argument_mutation` name the
         argument that moved. None when the check has been retired as too
         costly for this function, or nothing could be hashed.
         """
@@ -474,7 +506,7 @@ class PurityChecksMixin:
             cf.mutation_check_retired = True
         return snapshot
 
-    def _argument_identities(self, func_name: str, args: tuple, kwargs: dict) -> dict[str, tuple[Any, list]]:
+    def argument_identities(self, func_name: str, args: tuple, kwargs: dict) -> dict[str, tuple[Any, list]]:
         """``{parameter: (value, identity snapshot)}`` for the plain lists and
         tuples a call receives, before the body runs.
 
@@ -497,7 +529,7 @@ class PurityChecksMixin:
                     found[name] = (value, snapshot)
         return found
 
-    def _check_argument_mutation(
+    def check_argument_mutation(
         self,
         func_name: str,
         args: tuple,
@@ -569,10 +601,10 @@ class PurityChecksMixin:
             return []
         if len(before) == 1:
             return list(before)
-        now = self._argument_snapshot(func_name, args, kwargs) or {}
+        now = self.argument_snapshot(func_name, args, kwargs) or {}
         return [name for name, digest in before.items() if now.get(name) != digest]
 
-    def _make_effect_observer(self) -> EffectObserver:
+    def make_effect_observer(self) -> EffectObserver:
         """An :class:`EffectObserver` scoped to this instance's cache dir.
 
         Excluding the cache directory is load-bearing: cash writes the entry
@@ -580,10 +612,10 @@ class PurityChecksMixin:
         be observed writing a file and every one of them would warn.
         """
 
-        cache_dir = getattr(self.config, "cache_dir", None)
+        cache_dir = getattr(self._config, "cache_dir", None)
         return EffectObserver(exclude_under=cache_dir)
 
-    def _report_observed_effects(self, func_name: str, observer: EffectObserver | None) -> None:
+    def report_observed_effects(self, func_name: str, observer: EffectObserver | None) -> None:
         """Warn once when the first call did something a hit will not do.
 
         Silent when:
@@ -605,7 +637,7 @@ class PurityChecksMixin:
         if self._registry.purity_mode(func_name) == "silent":
             return
         covered: set[str] = set()
-        if func_name in self._purity_static_flagged:
+        if func_name in self._static_flagged:
             covered = static_effect_kinds(self._registry.purity_reports.get(func_name))
         effects = [(kind, detail) for kind, detail in observer.effects if kind not in covered]
         if not effects:
@@ -645,7 +677,7 @@ class PurityChecksMixin:
         name = getattr(issue, "subject", "")
         if getattr(issue, "kind", None) != ISSUE_MUTABLE_GLOBAL or not name:
             return False
-        func = self.functions.get(func_name)
+        func = self._registry.functions.get(func_name)
         reader: Any = func
         where = getattr(issue, "where", "")
         if where in report.helper_resolution_paths:
@@ -676,7 +708,7 @@ class PurityChecksMixin:
             return False
         return not (callable(value) and not isinstance(value, (dict, list, tuple, set)))
 
-    def _surface_purity(
+    def surface_purity(
         self,
         func_name: str,
         report: PurityReport,
@@ -700,7 +732,7 @@ class PurityChecksMixin:
         if any(getattr(i, "kind", None) == ISSUE_NETWORK_READ for i in issues):
             # Named statically, so the observer does not report the same read
             # as a connection -- whether or not the advisory below is shown.
-            self._purity_static_flagged.add(func_name)
+            self._static_flagged.add(func_name)
             cf = self._registry.cached.get(func_name)
             if self._registry.effective_ttl(func_name, cf.ttl if cf is not None else None) is not None:
                 # `ttl=` is the answer to "how old may a fetched answer be":
@@ -752,7 +784,7 @@ class PurityChecksMixin:
         ambient = [i for i in issues if getattr(i, "kind", None) == ISSUE_AMBIENT_READ]
         if ambient and mode != "strict":
             issues = [i for i in issues if getattr(i, "kind", None) != ISSUE_AMBIENT_READ]
-            self._purity_static_flagged.add(func_name)
+            self._static_flagged.add(func_name)
             self._notices.warn_once(
                 CashImpurityWarning,
                 func_name,
@@ -799,7 +831,7 @@ class PurityChecksMixin:
             return
         summary = format_issues_summary(issues)
 
-        self._purity_static_flagged.add(func_name)
+        self._static_flagged.add(func_name)
 
         if mode == "strict":
             raise CashImpureFunctionError(

@@ -53,13 +53,13 @@ from .decorator.explain import (
     MissHistory,
     MissKind,
 )
-from .decorator.file_deps import FileDepsMixin
+from .decorator.file_deps import FileDeps
 from .decorator.frozen import FrozenResults
 from .decorator.globals_fold import GlobalsFold
-from .decorator.purity_checks import LearnedMutations, PurityChecksMixin
+from .decorator.purity_checks import LearnedMutations, PurityChecks
 from .decorator.registry import FunctionRegistry, warn_inert_dependency
 from .decorator.reporting import CallLog, Notices
-from .decorator.rng import RngMixin
+from .decorator.rng import RngWatch
 from .decorator.runtime import RuntimeMixin
 from .decorator.script_pickling import expose_script_function
 from .decorator.store import StoreMixin
@@ -134,8 +134,8 @@ def _backend_cache_dir(backend: CacheBackend | None) -> str | None:
 
 def _declared_files(file_depends_on: str | list[str] | None) -> tuple[tuple[str, str], ...]:
     """``file_depends_on=`` as ``(as written, absolute)`` pairs. Each miss records
-    the absolute paths as if the body had read them (`_track_declared_files`);
-    the paths as written are in the key (`_fold_declared_files`)."""
+    the absolute paths as if the body had read them (`FileDeps.track_declared_files`);
+    the paths as written are in the key (`FileDeps.fold_declared_files`)."""
     if not file_depends_on:
         return ()
     paths = [file_depends_on] if isinstance(file_depends_on, str) else file_depends_on
@@ -195,9 +195,6 @@ def _in_kernel() -> bool:
 
 
 class Cash(
-    RngMixin,
-    FileDepsMixin,
-    PurityChecksMixin,
     ExplainMixin,
     RuntimeMixin,
     StoreMixin,
@@ -360,11 +357,6 @@ class Cash(
         if debug or verbose:
             _log.enable(logging.DEBUG if debug else logging.INFO)
 
-        # Functions the STATIC pass already reported on. The runtime effect
-        # observer stays quiet for these: it would be a second warning about
-        # the same function, and the user has already been told.
-        self._purity_static_flagged: set[str] = set()
-
         # Deep seam over the registries above: folds source/dependency/
         # helper state into the cache key's ``state_hash`` segment. Borrows
         # the registry dicts by reference so later registrations are seen.
@@ -385,6 +377,15 @@ class Cash(
             self._args, self._captures, self._helpers, self._globals, self._mutations, self._notices
         )
         self._code_args = CodeArgs(self._code, self._globals, self._frozen)
+        self._rng = RngWatch(self._registry, self._backend_slot, self._notices)
+        self._files = FileDeps(self._registry, self._notices)
+        self._purity = PurityChecks(
+            self.config, self._registry, self._args, self._frozen, self._globals, self._mutations, self._notices
+        )
+        # Called by name from each cached function's `stats_wrapper`, whose
+        # code is part of the key of any cached function it is passed to: the
+        # name stays, and it is the RNG watch's method.
+        self._warn_unseeded_estimator_result = self._rng.warn_unseeded_estimator_result
 
         atexit.register(self._exit_work.run)
 
@@ -656,7 +657,7 @@ class Cash(
         # decorated function and adds nothing to the per-call path. Placed after
         # the async-generator early return because that path is not cached at
         # all, and the hazard being warned about is a frozen cached value.
-        self._warn_unseeded_randomness(func, func_name, allow_random)
+        self._rng.warn_unseeded_randomness(func, func_name, allow_random)
 
         # Watch reads from now, not from the first miss: a memo the cached
         # function will use is usually filled before it is first called

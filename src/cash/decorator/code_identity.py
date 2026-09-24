@@ -70,7 +70,7 @@ SOURCE_HASH_MEMO_MAX = 4096
 #: ``id(code) -> (code, path, size, mtime_ns, text digest)``: the stat of the
 #: file whose text a function's key was read from, taken just before reading
 #: it, and that text's digest. The store compares both with the file now
-#: (`Cash._code_moved_since_keyed`).
+#: (`FileDeps.code_moved_since_keyed`).
 CODE_KEYED_STATS: dict[int, tuple[Any, str, int, int, str]] = {}
 
 

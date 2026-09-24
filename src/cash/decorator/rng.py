@@ -10,7 +10,7 @@ import logging
 import textwrap
 import types
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..analysis.annotations import parse_annotation_line
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
@@ -24,6 +24,11 @@ from ..tracking.randomness import (
     seed_epoch_component,
     seed_epochs,
 )
+
+if TYPE_CHECKING:
+    from .backend_slot import BackendSlot
+    from .registry import FunctionRegistry
+    from .reporting import Notices
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +159,7 @@ def capture_rng_pre_state() -> dict | None:
 
 def replay_rng_state(metadata: Any) -> None:
     """Put the global RNG where the computed call left it (see
-    :meth:`_rng_replay_parts`), when it is where that call started."""
+    :meth:`RngWatch.replay_parts`), when it is where that call started."""
     replay = getattr(metadata, "rng_replay", None) or {}
     post, pre = replay.get("rng_post"), replay.get("rng_pre")
     if not post or not pre:
@@ -177,10 +182,17 @@ def replay_rng_state(metadata: Any) -> None:
         logger.debug("[CORE] could not replay the RNG state of a hit", exc_info=True)
 
 
-class RngMixin:
-    """The random-number generators a function draws from, as an input."""
+class RngWatch:
+    """Global random number generators: the seed epoch in the key of a function
+    that draws, replaying where a hit leaves them, and the unseeded-randomness
+    warnings."""
 
-    def _fold_rng_epoch(self, func_name: str, state_hash: str) -> str:
+    def __init__(self, registry: FunctionRegistry, backend_slot: BackendSlot, notices: Notices) -> None:
+        self._registry = registry
+        self._backend_slot = backend_slot
+        self._notices = notices
+
+    def fold_rng_epoch(self, func_name: str, state_hash: str) -> str:
         """Fold the current seed epoch into the key, for RNG-drawing functions.
 
         A function that draws from the global stream has an input the key never
@@ -254,7 +266,7 @@ class RngMixin:
         except Exception:  # noqa: BLE001 - best effort; correctness degrades to today's
             logger.debug("could not persist RNG draw marker for %s", func_name)
 
-    def _note_rng_draw(self, func_name: str, pre_state: dict | None) -> bool:
+    def note_draw(self, func_name: str, pre_state: dict | None) -> bool:
         """Record which global RNG modules *func_name* just advanced."""
         if pre_state is None:
             return False
@@ -285,7 +297,7 @@ class RngMixin:
         # write there would redraw and break the freeze-from-first-call contract.
         return bool(drew & set(seed_epochs()))
 
-    def _rng_replay_parts(self, drew: bool, pre_state: dict | None) -> dict:
+    def replay_parts(self, drew: bool, pre_state: dict | None) -> dict:
         """What a later hit needs to leave the RNG where this call left it.
 
         A hit never runs the body, so the stream it advanced stays where it was
@@ -306,7 +318,7 @@ class RngMixin:
         except Exception:  # noqa: BLE001 - never break a call over this
             return {}
 
-    def _warn_unseeded_randomness(
+    def warn_unseeded_randomness(
         self,
         func: Callable,
         func_name: str,
@@ -417,7 +429,7 @@ class RngMixin:
             "@cash.cache(allow_random=True) to keep it frozen on purpose.",
         )
 
-    def _warn_if_seed_is_none(self, func: Callable, func_name: str, args: tuple, kwargs: dict) -> None:
+    def warn_if_seed_is_none(self, func: Callable, func_name: str, args: tuple, kwargs: dict) -> None:
         """RANDOM-UNSEEDED for a seed that is None in THIS call.
 
         The seed may be a parameter or read from one or from a module
@@ -468,7 +480,7 @@ class RngMixin:
             )
             return
 
-    def _warn_unseeded_estimator_result(
+    def warn_unseeded_estimator_result(
         self,
         func_name: str,
         result: Any,
@@ -476,7 +488,7 @@ class RngMixin:
     ) -> None:
         """Warn when a cached function RETURNS an unseeded fitted estimator.
 
-        ``_warn_unseeded_randomness`` reads the source, and
+        ``RngWatch.warn_unseeded_randomness`` reads the source, and
         ``decorator.md`` is right that this hazard is invisible to it:
         randomness inside sklearn's compiled ``.fit()`` is not in any AST. The
         notebook's statement path solves that by asking the LIVE object

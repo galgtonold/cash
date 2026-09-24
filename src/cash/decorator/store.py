@@ -107,10 +107,10 @@ class StoreMixin:
         # After the body ran, before deciding to store: a provisional global
         # this call moved must stop being folded.
         if capture_watch is not NO_WATCH:
-            self._learn_mutating_captures(func, func_name, capture_watch)
-        if refusal is None and self._refuses_identity_coupled(func_name, res):
+            self._purity.learn_mutating_captures(func, func_name, capture_watch)
+        if refusal is None and self._purity.refuses_identity_coupled(func_name, res):
             refusal = "the result is tied to the identity of an object in memory"
-        if refusal is None and self._inputs_moved_during_call(func_name, tracker):
+        if refusal is None and self._files.inputs_moved_during_call(func_name, tracker):
             refusal = "a file it read changed while it ran"
         stale_memo = getattr(tracker, "stale_memo_reads", None)
         if refusal is None and stale_memo:
@@ -118,7 +118,7 @@ class StoreMixin:
                 f"a memoised helper handed it data read from an earlier version of "
                 f"{sorted(stale_memo)[0]}; a fresh process reads the file as it is now"
             )
-        if refusal is None and self._code_moved_since_keyed(func, func_name):
+        if refusal is None and self._files.code_moved_since_keyed(func, func_name):
             refusal = "its code changed on disk after this process keyed it"
         if refusal is None and observer is not None and observer.mock_called:
             # Wherever the mock sat -- below the library call the body makes,
@@ -475,9 +475,9 @@ class StoreMixin:
                         observer.resume(observer_token)
                         tracker.resume(tracker_token)
 
-            self._check_argument_mutation(func_name, args, kwargs, args_hash, observer)
-            self._report_observed_effects(func_name, observer)
-            self._credit_remembered_reads(func_name, tracker, args, kwargs)
+            self._purity.check_argument_mutation(func_name, args, kwargs, args_hash, observer)
+            self._purity.report_observed_effects(func_name, observer)
+            self._files.credit_remembered_reads(func_name, tracker, args, kwargs)
             auto_file_deps = snapshot_tracked_deps(tracker, spec.func.__module__)
 
             if chunk_index == 0:

@@ -161,7 +161,7 @@ class RuntimeMixin:
                 own_source_override=self._code.pin_own_source(func),
                 note=True,
             )
-            state_hash = self._fold_declared_files(func_name, state_hash)
+            state_hash = self._files.fold_declared_files(func_name, state_hash)
             chain.append(state_hash)
             state_hash = self._closures.fold_closure(func, func_name, state_hash)
             chain.append(state_hash)
@@ -176,7 +176,7 @@ class RuntimeMixin:
             state_hash = self._globals.fold_helper_read_globals(func, func_name, state_hash)
             state_hash = self._globals.fold_dependency_read_globals(func, func_name, state_hash)
             chain.append(state_hash)
-            state_hash = self._fold_rng_epoch(func_name, state_hash)
+            state_hash = self._rng.fold_rng_epoch(func_name, state_hash)
             chain.append(state_hash)
             state_hash = self._globals.fold_environment(func_name, state_hash)
             chain.append(state_hash)
@@ -189,7 +189,7 @@ class RuntimeMixin:
             # logical call -- produced two cache keys and two executions.
             normalized_args = self._args.normalize_call_args(func_name, args, kwargs)
             if self._registry.cached[func_name].seed_params:
-                self._warn_if_seed_is_none(func, func_name, args, kwargs)
+                self._rng.warn_if_seed_is_none(func, func_name, args, kwargs)
             state_hash = self._code_args.fold_code_args(*normalized_args, state_hash, func_name=func_name)
             chain.append(state_hash)
             dynamic_state_hash = resolve_dynamic_dependencies(func_name, dynamic_depends_on, args, kwargs)
@@ -235,7 +235,7 @@ class RuntimeMixin:
                     func_name, cache_key, MissReason(MissKind.TTL, f"the entry is {age:.1f}s old and ttl={ttl}s")
                 )
                 return CACHE_MISS
-            if not self._auto_file_deps_fresh(metadata):
+            if not self._files.auto_file_deps_fresh(metadata):
                 self._misses.note_miss(func_name, cache_key, MissReason(MissKind.FILE, describe_stale_files(metadata)))
                 return CACHE_MISS
             if not self._chunks_are_intact(cache_key, metadata):
@@ -371,7 +371,7 @@ class RuntimeMixin:
         func_name = func_key(func)
         report = self._registry.purity_reports.get(func_name) or PurityReport()
         mode = self._registry.purity_mode(func_name)
-        self._surface_purity(func_name, report, mode)
+        self._purity.surface_purity(func_name, report, mode)
 
     def _lookup(self, spec: CachedFunction, args: tuple, kwargs: dict, *, async_body: bool) -> Call:
         """Everything a call does before the body: analysis, key, lookup.
@@ -434,7 +434,7 @@ class RuntimeMixin:
 
         The SAME validity test as the first lookup, by calling the same
         function -- not a hand-rolled subset of it, which would lose a check
-        (``_chunks_are_intact``, ``_auto_file_deps_fresh``) as they are added.
+        (``_chunks_are_intact``, ``FileDeps.auto_file_deps_fresh``) as they are added.
         One function decides whether an entry may be served.
         """
         raw_metadata, cached_data = self._backend_slot.backend.get(call.cache_key)
@@ -468,9 +468,9 @@ class RuntimeMixin:
         # anything happening inside an installed library. Only on this
         # (missing) path: a hit runs no body, so there is nothing to observe
         # and nothing to pay for.
-        run.observer = self._make_effect_observer()
-        run.observer.arg_snapshot = self._argument_snapshot(func_name, args, kwargs)
-        run.observer.arg_identities = self._argument_identities(func_name, args, kwargs)
+        run.observer = self._purity.make_effect_observer()
+        run.observer.arg_snapshot = self._purity.argument_snapshot(func_name, args, kwargs)
+        run.observer.arg_identities = self._purity.argument_identities(func_name, args, kwargs)
         # Watch the global RNG across the call: a draw inside the body is an
         # input the key cannot see statically.
         run.rng_pre = capture_rng_pre_state()
@@ -480,7 +480,7 @@ class RuntimeMixin:
             nested = [0.0]
             nested_token = NESTED_CASH_SECONDS.set(nested)
             try:
-                self._track_declared_files(run.tracker, func_name)
+                self._files.track_declared_files(run.tracker, func_name)
                 yield run
             except Exception as exc:  # noqa: BLE001 - the user's body can raise anything; logged, then re-raised
                 self._calls.log_raised(func_name, exc, call.call_start)
@@ -492,7 +492,7 @@ class RuntimeMixin:
             # can answer "did caching pay?".
             run.body_seconds = max(0.0, _perf_counter() - body_t0 - run.tracker.read_hash_seconds - nested[0])
             run.saves_seconds = run.body_seconds / max(threads_at_start, THREADS_IN_CALLS[0], 1)
-            run.rng_new = self._note_rng_draw(func_name, run.rng_pre)
+            run.rng_new = self._rng.note_draw(func_name, run.rng_pre)
 
     def _finish_miss(self, spec: CachedFunction, call: Call, run: BodyRun) -> Any:
         """Everything a missed call does after its body: check, store, log."""
@@ -535,13 +535,13 @@ class RuntimeMixin:
                 )
             )
 
-        self._check_argument_mutation(func_name, args, kwargs, call.args_hash, run.observer)
-        self._report_observed_effects(func_name, run.observer)
-        self._credit_remembered_reads(func_name, run.tracker, args, kwargs)
+        self._purity.check_argument_mutation(func_name, args, kwargs, call.args_hash, run.observer)
+        self._purity.report_observed_effects(func_name, run.observer)
+        self._files.credit_remembered_reads(func_name, run.tracker, args, kwargs)
         auto_file_deps = snapshot_tracked_deps(run.tracker, func.__module__)
         execution_time = _perf_counter() - call.call_start
 
-        self._warn_shared_result(func, func_name, res, args, kwargs)
+        self._purity.warn_shared_result(func, func_name, res, args, kwargs)
         refusal = self._store_refusal(
             func, func_name, res, run.rng_new, spec.cache_if, run.tracker, call.capture_watch, observer=run.observer
         )
@@ -564,7 +564,7 @@ class RuntimeMixin:
                 auto_file_deps=auto_file_deps,
                 body_seconds=run.body_seconds,
                 saves_seconds=run.saves_seconds,
-                rng_replay=self._rng_replay_parts(bool(self._registry.cached[func_name].rng_modules), run.rng_pre),
+                rng_replay=self._rng.replay_parts(bool(self._registry.cached[func_name].rng_modules), run.rng_pre),
             )
         # Everything that was not the body: the key and lookup before it, the
         # checks and the store after it.

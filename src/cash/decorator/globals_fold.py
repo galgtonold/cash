@@ -284,7 +284,7 @@ class GlobalsFold:
         # `hard` is that set: mutations visible in this function's own source.
         # `provisional` is the weaker case - a name merely PASSED to a call. Those are folded (so a change
         # invalidates) and confirmed at runtime by
-        # `_learn_mutating_captures`, which demotes any that the call is actually
+        # `PurityChecks.learn_mutating_captures`, which demotes any that the call is actually
         # observed to mutate.
         provisional: frozenset = frozenset()
         if candidates:
@@ -374,7 +374,7 @@ class GlobalsFold:
         ``owner_code`` is the code object the DRIFT GUARD is recorded under.
         It defaults to *func*'s own, which is right when *func* is the cached
         function. When folding a HELPER's globals it must be the CACHED
-        function's code instead: `_learn_mutating_captures` records drift
+        function's code instead: `PurityChecks.learn_mutating_captures` records drift
         against the function whose call was observed, so looking it up under
         the helper's code would never find the entry, fold a drifting
         accumulator anyway, and miss forever.
@@ -645,7 +645,7 @@ class GlobalsFold:
 
         Some of these change when called -- a bound ``rng.normal`` advances
         its generator, ``np.vectorize`` fills a cache -- so every one is
-        watched by `_learn_mutating_captures`, which stops folding it after
+        watched by `PurityChecks.learn_mutating_captures`, which stops folding it after
         the first call that moved it (one extra miss, no warning: the user
         did not write the mutation).
         """

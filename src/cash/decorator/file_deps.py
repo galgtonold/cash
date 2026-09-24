@@ -8,7 +8,7 @@ import json
 import logging
 import os
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .._clock import perf_counter as _perf_counter
 from .._paths import normalize_path
@@ -24,6 +24,10 @@ from ..tracking.file_dep_snapshot import (
 )
 from ..tracking.file_tracker import active_tracker, credited_reads
 from .code_identity import CODE_KEYED_STATS
+
+if TYPE_CHECKING:
+    from .registry import FunctionRegistry
+    from .reporting import Notices
 
 logger = logging.getLogger(__name__)
 
@@ -124,14 +128,19 @@ def argument_paths(args: tuple, kwargs: dict) -> set[str]:
     return found
 
 
-class FileDepsMixin:
-    """Declared and tracked file dependencies of a cached function."""
+class FileDeps:
+    """The files a cached call depends on: declared with ``file_depends_on=``,
+    and read by the body or its helpers."""
 
-    def _fold_declared_files(self, func_name: str, state_hash: str) -> str:
+    def __init__(self, registry: FunctionRegistry, notices: Notices) -> None:
+        self._registry = registry
+        self._notices = notices
+
+    def fold_declared_files(self, func_name: str, state_hash: str) -> str:
         """Fold which files ``file_depends_on=`` names, as written, into the key.
 
         Their content is checked against the entry on lookup
-        (`_track_declared_files`); this is what makes adding, removing or
+        (`FileDeps.track_declared_files`); this is what makes adding, removing or
         re-pointing one a different key, since an entry that recorded file A
         would otherwise keep hitting after the declaration moved to file B.
         As written rather than absolute, so a relative path keys the same on
@@ -144,7 +153,7 @@ class FileDepsMixin:
         names = json.dumps(sorted(raw for raw, _ in declared))
         return hashlib.sha256(f"{state_hash}:files:{names}".encode()).hexdigest()
 
-    def _track_declared_files(self, tracker: Any, func_name: str) -> None:
+    def track_declared_files(self, tracker: Any, func_name: str) -> None:
         """Record *func_name*'s ``file_depends_on=`` paths on *tracker*.
 
         As reads, so the entry snapshots their content and every lookup checks
@@ -161,7 +170,7 @@ class FileDepsMixin:
             else:
                 tracker.add_tracked_absent(normalize_path(path))
 
-    def _auto_file_deps_fresh(self, metadata: CacheMetadata) -> bool:
+    def auto_file_deps_fresh(self, metadata: CacheMetadata) -> bool:
         """Return True if every file recorded in ``metadata.auto_file_deps``
         still matches on disk.
 
@@ -253,7 +262,7 @@ class FileDepsMixin:
             "COUNT.",
         )
 
-    def _credit_remembered_reads(self, func_name: str, tracker: Any, args: tuple, kwargs: dict) -> None:
+    def credit_remembered_reads(self, func_name: str, tracker: Any, args: tuple, kwargs: dict) -> None:
         """Add the files a helper read in an EARLIER call to this call's inputs.
 
         A parse memoised with ``functools.lru_cache`` or a module dict: the
@@ -276,7 +285,7 @@ class FileDepsMixin:
         store is refused.
         """
 
-        func = self.functions.get(func_name)
+        func = self._registry.functions.get(func_name)
         if func is None or tracker is None:
             return
         live = getattr(tracker, "reading_codes", set())
@@ -302,7 +311,7 @@ class FileDepsMixin:
                 if then is not None and tracker.read_stats.get(path, then) != then:
                     tracker.stale_memo_reads.add(path)
 
-    def _code_moved_since_keyed(self, func: Callable, func_name: str) -> bool:
+    def code_moved_since_keyed(self, func: Callable, func_name: str) -> bool:
         """Did a file this call's code came from change after its key was read?
 
         A function is keyed by the text of its file, read once per process;
@@ -362,7 +371,7 @@ class FileDepsMixin:
         )
         return True
 
-    def _inputs_moved_during_call(self, func_name: str, tracker: Any) -> bool:
+    def inputs_moved_during_call(self, func_name: str, tracker: Any) -> bool:
         """Did a file this call read change before the call returned?
 
         The entry's file fingerprints are taken when it is STORED. A file

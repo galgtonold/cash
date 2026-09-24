@@ -62,7 +62,7 @@ def unsafe_uses_of(
 
     Two knobs, and both exist to move a *suspicion* out of the HARD set and
     into the provisional one, where it is folded and then confirmed at
-    runtime by ``_learn_mutating_captures``.
+    runtime by ``PurityChecks.learn_mutating_captures``.
 
     ``bare_args=False`` drops the "passed as an argument" rule. That refusal
     was over-broad and chose the worse failure: `sum(G)`, `len(G)`,
