@@ -5,67 +5,6 @@ import textwrap
 import pytest
 
 
-# String formatting, regex, serialization, and I/O patterns
-# across notebook cells.
-@pytest.mark.integration
-@pytest.mark.stress
-class TestStringFormattingPatterns:
-    """Test string formatting propagation across cells."""
-
-    def test_fstring_with_complex_expressions(self, nb_runner):
-        """f-strings with complex expressions across cells."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                data = {'name': 'Alice', 'scores': [90, 85, 92]}
-            """),
-                textwrap.dedent("""\
-                avg = sum(data['scores']) / len(data['scores'])
-                report = f"{data['name']}: avg={avg:.1f}, total={sum(data['scores'])}"
-                print(report)
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "Alice: avg=89.0, total=267" in nb_runner.get_output(2)
-
-
-@pytest.mark.integration
-@pytest.mark.stress
-class TestRegexPatterns:
-    """Test regex patterns across cells."""
-
-    def test_regex_change_propagation(self, nb_runner):
-        """Change regex pattern → downstream updates."""
-        nb_runner.create_notebook(
-            [
-                "import re",
-                "pattern = re.compile(r'\\b[A-Z][a-z]+\\b')",
-                textwrap.dedent("""\
-                text = "Hello World foo Bar"
-                matches = pattern.findall(text)
-                print(matches)
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        output = nb_runner.get_output(3)
-        assert "Hello" in output
-        assert "World" in output
-        assert "Bar" in output
-
-        # Change to only match 5+ char capitalized words
-        nb_runner.set_cell_source(2, "pattern = re.compile(r'\\b[A-Z][a-z]{4,}\\b')")
-        nb_runner.run_all()
-        output2 = nb_runner.get_output(3)
-        assert "Hello" in output2
-        assert "World" in output2
-        # "Bar" is only 3 chars, should NOT match
-        assert "Bar" not in output2
-
-
 @pytest.mark.integration
 @pytest.mark.stress
 class TestJsonPatterns:
@@ -95,150 +34,6 @@ class TestJsonPatterns:
         nb_runner.run_all()
         output = nb_runner.get_output(3)
         assert "'name': 'test'" in output or '"name": "test"' in output
-
-
-@pytest.mark.integration
-@pytest.mark.stress
-class TestCsvPatterns:
-    """Test CSV reading/writing without pandas."""
-
-    def test_csv_stdlib_across_cells(self, nb_runner, tmp_path):
-        """csv module read/write across cells."""
-        csv_path = tmp_path / "test.csv"
-        csv_path.write_text("name,score\nAlice,90\nBob,85\n", encoding="utf-8")
-        path_str = str(csv_path).replace("\\", "/")
-
-        nb_runner.create_notebook(
-            [
-                "import csv",
-                textwrap.dedent(f"""\
-                with open('{path_str}') as f:
-                    reader = csv.DictReader(f)
-                    rows = list(reader)
-            """),
-                textwrap.dedent("""\
-                avg = sum(int(r['score']) for r in rows) / len(rows)
-                print(f"avg={avg:.1f}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "avg=87.5" in nb_runner.get_output(3)
-
-
-# Pickle/serialization edge cases — cash caching with pickle, struct, json.
-class TestPicklePatterns:
-    """Test pickle serialization across cells."""
-
-    @pytest.mark.integration
-    @pytest.mark.stress
-    def test_pickle_roundtrip(self, nb_runner, tmp_path):
-        """Pickle object and reload it."""
-        pkl_path = tmp_path / "obj.pkl"
-        path_str = str(pkl_path).replace("\\", "/")
-
-        nb_runner.create_notebook(
-            [
-                "import pickle",
-                textwrap.dedent(f"""\
-                data = {{'key': [1, 2, 3], 'nested': {{'x': 42}}}}
-                with open('{path_str}', 'wb') as f:
-                    pickle.dump(data, f)
-            """),
-                textwrap.dedent(f"""\
-                with open('{path_str}', 'rb') as f:
-                    loaded = pickle.load(f)
-                print(loaded['nested']['x'])
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "42" in nb_runner.get_output(3)
-
-    @pytest.mark.stress
-    def test_pickle_roundtrip_reports_save_and_load(self, nb_runner, tmp_path):
-        """Pickle dump and load across cells."""
-        pkl_path = str(tmp_path / "data.pkl").replace("\\", "/")
-        nb_runner.create_notebook(
-            [
-                "import pickle",
-                textwrap.dedent(f"""\
-                data = {{'name': 'test', 'values': [1, 2, 3], 'nested': {{'a': 10}}}}
-                with open('{pkl_path}', 'wb') as f:
-                    pickle.dump(data, f)
-                print("saved")
-            """),
-                textwrap.dedent(f"""\
-                with open('{pkl_path}', 'rb') as f:
-                    loaded = pickle.load(f)
-                print(f"loaded={{loaded}}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "saved" in nb_runner.get_output(2)
-        assert "loaded=" in nb_runner.get_output(3)
-        assert "'name': 'test'" in nb_runner.get_output(3)
-
-    @pytest.mark.stress
-    def test_pickle_custom_class(self, nb_runner, tmp_path):
-        """Pickle custom class instances."""
-        pkl_path = str(tmp_path / "obj.pkl").replace("\\", "/")
-        nb_runner.create_notebook(
-            [
-                "import pickle",
-                textwrap.dedent(f"""\
-                class Config:
-                    def __init__(self, **kwargs):
-                        self.__dict__.update(kwargs)
-                    def __repr__(self):
-                        items = ', '.join(f'{{k}}={{v}}' for k, v in sorted(self.__dict__.items()) if not k.startswith('_cash'))
-                        return f"Config({{items}})"
-
-                cfg = Config(lr=0.01, epochs=100, batch_size=32)
-                with open('{pkl_path}', 'wb') as f:
-                    pickle.dump(cfg, f)
-                print(f"cfg={{cfg}}")
-            """),
-                textwrap.dedent(f"""\
-                with open('{pkl_path}', 'rb') as f:
-                    loaded_cfg = pickle.load(f)
-                print(f"loaded={{loaded_cfg}}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out1 = nb_runner.get_output(2)
-        assert "lr=0.01" in out1
-        out2 = nb_runner.get_output(3)
-        assert "lr=0.01" in out2
-
-    @pytest.mark.stress
-    def test_pickle_bytes_transfer(self, nb_runner):
-        """Pickle to bytes and back across cells."""
-        nb_runner.create_notebook(
-            [
-                "import pickle",
-                textwrap.dedent("""\
-                original = {'key': [1, 2, 3], 'flag': True}
-                pickled_bytes = pickle.dumps(original)
-                byte_count = len(pickled_bytes)
-                print(f"bytes={byte_count}")
-            """),
-                textwrap.dedent("""\
-                restored = pickle.loads(pickled_bytes)
-                print(f"match={restored == original} keys={sorted(restored.keys())}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "bytes=" in nb_runner.get_output(2)
-        assert "match=True" in nb_runner.get_output(3)
 
 
 @pytest.mark.stress
@@ -274,50 +69,80 @@ class TestJsonSerialization:
         assert "host=localhost features=3" in nb_runner.get_output(3)
 
 
+# JSON serialization/deserialization interaction tests.
+# Tests that editing data that gets serialized to JSON and then deserialized
+# properly invalidates downstream cells.
+@pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)
-class TestCsvStringParsing:
-    """csv-like string parsing without file I/O."""
+class TestJsonSerializationInteraction:
+    """Test JSON serialization patterns with cache invalidation."""
 
-    def test_csv_parse(self, nb_runner):
+    def test_json_roundtrip_edit(self, nb_runner):
+        """Editing data before JSON roundtrip should propagate."""
         nb_runner.create_notebook(
             [
-                "import csv\nimport io\ncsv_text = 'name,age,city\\nAlice,30,NY\\nBob,25,LA'",
-                "reader = csv.DictReader(io.StringIO(csv_text))\nrows = list(reader)\nnames = [r['name'] for r in rows]\nprint(f'names={names}')",
+                "import json\ndata = {'name': 'Alice', 'score': 95}",
+                "serialized = json.dumps(data)",
+                "restored = json.loads(serialized)",
+                'print(f\'name={restored["name"]},score={restored["score"]}\')',
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "names=['Alice', 'Bob']" in nb_runner.get_output(2)
+        out = nb_runner.get_output(4)
+        assert "name=Alice,score=95" in out
 
-    def test_csv_edit_data(self, nb_runner):
+        nb_runner.set_cell_source(1, "import json\ndata = {'name': 'Bob', 'score': 88}")
+        nb_runner.run_all()
+        out = nb_runner.get_output(4)
+        assert "name=Bob,score=88" in out
+
+    def test_json_nested_edit(self, nb_runner):
+        """Editing nested JSON structure should propagate through deserialization."""
         nb_runner.create_notebook(
             [
-                "import csv\nimport io\ncsv_text = 'a,b\\n1,2\\n3,4'",
-                "reader = csv.reader(io.StringIO(csv_text))\nheader = next(reader)\ndata = [list(map(int, row)) for row in reader]\ntotal = sum(sum(row) for row in data)\nprint(f'header={header} total={total}')",
+                "import json\nconfig = {'db': {'host': 'localhost', 'port': 5432}, 'debug': True}",
+                "text = json.dumps(config, indent=2)",
+                "parsed = json.loads(text)",
+                "info = f\"{parsed['db']['host']}:{parsed['db']['port']}\"",
+                "print(f'info={info}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "header=['a', 'b']" in nb_runner.get_output(2)
-        assert "total=10" in nb_runner.get_output(2)
-        # Edit
-        nb_runner.set_cell_source(1, "import csv\nimport io\ncsv_text = 'x,y\\n10,20\\n30,40\\n50,60'")
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "header=['x', 'y']" in out
-        assert "total=210" in out
+        out = nb_runner.get_output(5)
+        assert "info=localhost:5432" in out
 
-    def test_csv_write_string(self, nb_runner):
+        nb_runner.set_cell_source(
+            1, "import json\nconfig = {'db': {'host': 'remote.io', 'port': 3306}, 'debug': False}"
+        )
+        nb_runner.run_all()
+        out = nb_runner.get_output(5)
+        assert "info=remote.io:3306" in out
+
+    def test_json_list_of_dicts_edit(self, nb_runner):
+        """Editing a list of dicts serialized as JSON."""
         nb_runner.create_notebook(
             [
-                "import csv\nimport io\nrows = [['name', 'val'], ['a', '1'], ['b', '2']]",
-                "buf = io.StringIO()\nwriter = csv.writer(buf)\nwriter.writerows(rows)\nresult = buf.getvalue().strip()\nprint(f'result={repr(result)}')",
+                "import json\nrecords = [{'id': 1, 'val': 10}, {'id': 2, 'val': 20}]",
+                "blob = json.dumps(records)",
+                "loaded = json.loads(blob)",
+                "total = sum(r['val'] for r in loaded)",
+                "print(f'total={total}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "name,val" in nb_runner.get_output(2)
+        out = nb_runner.get_output(5)
+        assert "total=30" in out
+
+        nb_runner.set_cell_source(
+            1, "import json\nrecords = [{'id': 1, 'val': 100}, {'id': 2, 'val': 200}, {'id': 3, 'val': 300}]"
+        )
+        nb_runner.run_all()
+        out = nb_runner.get_output(5)
+        assert "total=600" in out
 
 
 @pytest.mark.stress
@@ -523,80 +348,194 @@ class TestJsonDumpsLoadsCustom:
         assert '"y": 2' in nb_runner.get_output(2)
 
 
-# JSON serialization/deserialization interaction tests.
-# Tests that editing data that gets serialized to JSON and then deserialized
-# properly invalidates downstream cells.
 @pytest.mark.integration
 @pytest.mark.stress
+class TestCsvPatterns:
+    """Test CSV reading/writing without pandas."""
+
+    def test_csv_stdlib_across_cells(self, nb_runner, tmp_path):
+        """csv module read/write across cells."""
+        csv_path = tmp_path / "test.csv"
+        csv_path.write_text("name,score\nAlice,90\nBob,85\n", encoding="utf-8")
+        path_str = str(csv_path).replace("\\", "/")
+
+        nb_runner.create_notebook(
+            [
+                "import csv",
+                textwrap.dedent(f"""\
+                with open('{path_str}') as f:
+                    reader = csv.DictReader(f)
+                    rows = list(reader)
+            """),
+                textwrap.dedent("""\
+                avg = sum(int(r['score']) for r in rows) / len(rows)
+                print(f"avg={avg:.1f}")
+            """),
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "avg=87.5" in nb_runner.get_output(3)
+
+
+@pytest.mark.stress
 @pytest.mark.timeout(90)
-class TestJsonSerializationInteraction:
-    """Test JSON serialization patterns with cache invalidation."""
+class TestCsvStringParsing:
+    """csv-like string parsing without file I/O."""
 
-    def test_json_roundtrip_edit(self, nb_runner):
-        """Editing data before JSON roundtrip should propagate."""
+    def test_csv_parse(self, nb_runner):
         nb_runner.create_notebook(
             [
-                "import json\ndata = {'name': 'Alice', 'score': 95}",
-                "serialized = json.dumps(data)",
-                "restored = json.loads(serialized)",
-                'print(f\'name={restored["name"]},score={restored["score"]}\')',
+                "import csv\nimport io\ncsv_text = 'name,age,city\\nAlice,30,NY\\nBob,25,LA'",
+                "reader = csv.DictReader(io.StringIO(csv_text))\nrows = list(reader)\nnames = [r['name'] for r in rows]\nprint(f'names={names}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "name=Alice,score=95" in out
+        assert "names=['Alice', 'Bob']" in nb_runner.get_output(2)
 
-        nb_runner.set_cell_source(1, "import json\ndata = {'name': 'Bob', 'score': 88}")
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "name=Bob,score=88" in out
-
-    def test_json_nested_edit(self, nb_runner):
-        """Editing nested JSON structure should propagate through deserialization."""
+    def test_csv_edit_data(self, nb_runner):
         nb_runner.create_notebook(
             [
-                "import json\nconfig = {'db': {'host': 'localhost', 'port': 5432}, 'debug': True}",
-                "text = json.dumps(config, indent=2)",
-                "parsed = json.loads(text)",
-                "info = f\"{parsed['db']['host']}:{parsed['db']['port']}\"",
-                "print(f'info={info}')",
+                "import csv\nimport io\ncsv_text = 'a,b\\n1,2\\n3,4'",
+                "reader = csv.reader(io.StringIO(csv_text))\nheader = next(reader)\ndata = [list(map(int, row)) for row in reader]\ntotal = sum(sum(row) for row in data)\nprint(f'header={header} total={total}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        out = nb_runner.get_output(5)
-        assert "info=localhost:5432" in out
-
-        nb_runner.set_cell_source(
-            1, "import json\nconfig = {'db': {'host': 'remote.io', 'port': 3306}, 'debug': False}"
-        )
+        assert "header=['a', 'b']" in nb_runner.get_output(2)
+        assert "total=10" in nb_runner.get_output(2)
+        # Edit
+        nb_runner.set_cell_source(1, "import csv\nimport io\ncsv_text = 'x,y\\n10,20\\n30,40\\n50,60'")
         nb_runner.run_all()
-        out = nb_runner.get_output(5)
-        assert "info=remote.io:3306" in out
+        out = nb_runner.get_output(2)
+        assert "header=['x', 'y']" in out
+        assert "total=210" in out
 
-    def test_json_list_of_dicts_edit(self, nb_runner):
-        """Editing a list of dicts serialized as JSON."""
+    def test_csv_write_string(self, nb_runner):
         nb_runner.create_notebook(
             [
-                "import json\nrecords = [{'id': 1, 'val': 10}, {'id': 2, 'val': 20}]",
-                "blob = json.dumps(records)",
-                "loaded = json.loads(blob)",
-                "total = sum(r['val'] for r in loaded)",
-                "print(f'total={total}')",
+                "import csv\nimport io\nrows = [['name', 'val'], ['a', '1'], ['b', '2']]",
+                "buf = io.StringIO()\nwriter = csv.writer(buf)\nwriter.writerows(rows)\nresult = buf.getvalue().strip()\nprint(f'result={repr(result)}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        out = nb_runner.get_output(5)
-        assert "total=30" in out
+        assert "name,val" in nb_runner.get_output(2)
 
-        nb_runner.set_cell_source(
-            1, "import json\nrecords = [{'id': 1, 'val': 100}, {'id': 2, 'val': 200}, {'id': 3, 'val': 300}]"
+
+# Pickle/serialization edge cases — cash caching with pickle, struct, json.
+class TestPicklePatterns:
+    """Test pickle serialization across cells."""
+
+    @pytest.mark.integration
+    @pytest.mark.stress
+    def test_pickle_roundtrip(self, nb_runner, tmp_path):
+        """Pickle object and reload it."""
+        pkl_path = tmp_path / "obj.pkl"
+        path_str = str(pkl_path).replace("\\", "/")
+
+        nb_runner.create_notebook(
+            [
+                "import pickle",
+                textwrap.dedent(f"""\
+                data = {{'key': [1, 2, 3], 'nested': {{'x': 42}}}}
+                with open('{path_str}', 'wb') as f:
+                    pickle.dump(data, f)
+            """),
+                textwrap.dedent(f"""\
+                with open('{path_str}', 'rb') as f:
+                    loaded = pickle.load(f)
+                print(loaded['nested']['x'])
+            """),
+            ]
         )
+        nb_runner.start_kernel()
         nb_runner.run_all()
-        out = nb_runner.get_output(5)
-        assert "total=600" in out
+        assert "42" in nb_runner.get_output(3)
+
+    @pytest.mark.stress
+    def test_pickle_roundtrip_reports_save_and_load(self, nb_runner, tmp_path):
+        """Pickle dump and load across cells."""
+        pkl_path = str(tmp_path / "data.pkl").replace("\\", "/")
+        nb_runner.create_notebook(
+            [
+                "import pickle",
+                textwrap.dedent(f"""\
+                data = {{'name': 'test', 'values': [1, 2, 3], 'nested': {{'a': 10}}}}
+                with open('{pkl_path}', 'wb') as f:
+                    pickle.dump(data, f)
+                print("saved")
+            """),
+                textwrap.dedent(f"""\
+                with open('{pkl_path}', 'rb') as f:
+                    loaded = pickle.load(f)
+                print(f"loaded={{loaded}}")
+            """),
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "saved" in nb_runner.get_output(2)
+        assert "loaded=" in nb_runner.get_output(3)
+        assert "'name': 'test'" in nb_runner.get_output(3)
+
+    @pytest.mark.stress
+    def test_pickle_custom_class(self, nb_runner, tmp_path):
+        """Pickle custom class instances."""
+        pkl_path = str(tmp_path / "obj.pkl").replace("\\", "/")
+        nb_runner.create_notebook(
+            [
+                "import pickle",
+                textwrap.dedent(f"""\
+                class Config:
+                    def __init__(self, **kwargs):
+                        self.__dict__.update(kwargs)
+                    def __repr__(self):
+                        items = ', '.join(f'{{k}}={{v}}' for k, v in sorted(self.__dict__.items()) if not k.startswith('_cash'))
+                        return f"Config({{items}})"
+
+                cfg = Config(lr=0.01, epochs=100, batch_size=32)
+                with open('{pkl_path}', 'wb') as f:
+                    pickle.dump(cfg, f)
+                print(f"cfg={{cfg}}")
+            """),
+                textwrap.dedent(f"""\
+                with open('{pkl_path}', 'rb') as f:
+                    loaded_cfg = pickle.load(f)
+                print(f"loaded={{loaded_cfg}}")
+            """),
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out1 = nb_runner.get_output(2)
+        assert "lr=0.01" in out1
+        out2 = nb_runner.get_output(3)
+        assert "lr=0.01" in out2
+
+    @pytest.mark.stress
+    def test_pickle_bytes_transfer(self, nb_runner):
+        """Pickle to bytes and back across cells."""
+        nb_runner.create_notebook(
+            [
+                "import pickle",
+                textwrap.dedent("""\
+                original = {'key': [1, 2, 3], 'flag': True}
+                pickled_bytes = pickle.dumps(original)
+                byte_count = len(pickled_bytes)
+                print(f"bytes={byte_count}")
+            """),
+                textwrap.dedent("""\
+                restored = pickle.loads(pickled_bytes)
+                print(f"match={restored == original} keys={sorted(restored.keys())}")
+            """),
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "bytes=" in nb_runner.get_output(2)
+        assert "match=True" in nb_runner.get_output(3)
 
 
 @pytest.mark.stress

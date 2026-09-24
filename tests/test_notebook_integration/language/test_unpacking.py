@@ -7,105 +7,77 @@ import pytest
 pytestmark = [pytest.mark.stress]
 
 
-# Multi-assignment & augmented assignment interaction tests.
-#
-# Tests editing multi-target assignments, augmented assignments (+=, *=),
-# and walrus operator patterns.
-@pytest.mark.upstream
-@pytest.mark.timeout(90)
-class TestMultiAssignmentEdits:
-    """Editing multi-assignment patterns."""
+# multiple assignment, unpacking, and star expressions.
+@pytest.mark.integration
+class TestUnpacking:
+    """Unpacking and multiple assignment patterns."""
 
-    def test_edit_multi_assign(self, nb_runner):
-        """Edit a multi-assignment statement."""
+    def test_star_unpacking(self, nb_runner):
+        """Star (*) unpacking in assignments."""
         nb_runner.create_notebook(
             [
-                "a = b = c = 10  # multi assign",
-                "total = a + b + c\nprint(f'total = {total}')",
+                textwrap.dedent("""\
+                data = [1, 2, 3, 4, 5, 6, 7]
+                first, *middle, last = data
+                a, b, *rest = data
+                *init, x, y = data
+            """),
+                "print(f'first={first} middle={middle} last={last}')\n"
+                "print(f'a={a} b={b} rest={rest}')\n"
+                "print(f'init={init} x={x} y={y}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "total = 30" in nb_runner.get_output(2)
+        out = nb_runner.get_output(2)
+        assert "first=1" in out
+        assert "middle=[2, 3, 4, 5, 6]" in out
+        assert "last=7" in out
+        assert "rest=[3, 4, 5, 6, 7]" in out
+        assert "x=6" in out
+        assert "y=7" in out
 
-        nb_runner.set_cell_source(1, "a = b = c = 20  # multi assign v2")
-        nb_runner.run_all()
-        assert "total = 60" in nb_runner.get_output(2)
-
-    def test_edit_swap_assignment(self, nb_runner):
-        """Edit a swap assignment."""
+    def test_swap_and_multi_assign(self, nb_runner):
+        """Swap and multiple assignment in one line."""
         nb_runner.create_notebook(
             [
-                "x, y = 1, 2  # swap source",
-                "x, y = y, x\nprint(f'x={x} y={y}')",
+                textwrap.dedent("""\
+                a, b = 10, 20
+                a, b = b, a
+                x = y = z = 42
+                p, q = divmod(100, 7)
+            """),
+                "print(f'a={a} b={b} x={x} y={y} z={z} p={p} q={q}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "x=2 y=1" in nb_runner.get_output(2)
+        out = nb_runner.get_output(2)
+        assert "a=20" in out
+        assert "b=10" in out
+        assert "x=42" in out
+        assert "p=14" in out
+        assert "q=2" in out
 
-        nb_runner.set_cell_source(1, "x, y = 10, 20  # swap source v2")
-        nb_runner.run_all()
-        assert "x=20 y=10" in nb_runner.get_output(2)
-
-
-@pytest.mark.upstream
-@pytest.mark.timeout(90)
-class TestAugmentedAssignmentEdits:
-    """Editing augmented assignment operations."""
-
-    def test_edit_augmented_op(self, nb_runner):
-        """Edit the augmented assignment operator."""
+    def test_unpacking_propagation(self, nb_runner):
+        """Unpacking with upstream data change."""
         nb_runner.create_notebook(
             [
-                "val = 10  # augmented source",
-                "val += 5\nprint(f'val = {val}')",
+                "data = (10, 20, 30)",
+                textwrap.dedent("""\
+                a, b, c = data
+                total = a + b + c
+            """),
+                "print(f'total={total}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "val = 15" in nb_runner.get_output(2)
+        assert "total=60" in nb_runner.get_output(3)
 
-        nb_runner.set_cell_source(2, "val *= 5\nprint(f'val = {val}')")
-        nb_runner.run_all()
-        assert "val = 50" in nb_runner.get_output(2)
-
-    def test_edit_augmented_source(self, nb_runner):
-        """Edit the source value for augmented assignment."""
-        nb_runner.create_notebook(
-            [
-                "base = 100  # augmented base",
-                "base //= 3\nprint(f'base = {base}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "base = 33" in nb_runner.get_output(2)
-
-        nb_runner.set_cell_source(1, "base = 200  # augmented base v2")
-        nb_runner.run_all()
-        assert "base = 66" in nb_runner.get_output(2)
-
-    def test_chain_augmented_assignments(self, nb_runner):
-        """Chain of augmented assignments across cells."""
-        nb_runner.create_notebook(
-            [
-                "n = 1  # chain augmented start",
-                "n += 9  # step 1",
-                "n *= 2  # step 2",
-                "print(f'n = {n}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        # 1+9=10, 10*2=20
-        assert "n = 20" in nb_runner.get_output(4)
-
-        # Edit middle step
-        nb_runner.set_cell_source(2, "n += 99  # step 1 v2")
-        nb_runner.run_all()
-        # 1+99=100, 100*2=200
-        assert "n = 200" in nb_runner.get_output(4)
+        nb_runner.set_cell_source(1, "data = (100, 200, 300)")
+        nb_runner.run_cells([1, 2, 3])
+        assert "total=600" in nb_runner.get_output(3)
 
 
 # Tuple unpacking and multi-return interaction tests.
@@ -176,6 +148,224 @@ class TestTupleUnpackingEdits:
         assert "start=[1, 2, 3, 4] last=5" in nb_runner.get_output(2)
 
 
+@pytest.mark.timeout(90)
+class TestTupleUnpackingStarred:
+    """tuple unpacking and starred assignment."""
+
+    def test_basic_unpack(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "data = (10, 20, 30, 40, 50)",
+                "first, second, *rest = data\nprint(f'first={first} second={second} rest={rest}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(2)
+        assert "first=10" in out
+        assert "second=20" in out
+        assert "rest=[30, 40, 50]" in out
+
+    def test_nested_unpack(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "records = [('Alice', 90), ('Bob', 85), ('Carol', 95)]",
+                "names = []\nscores = []\nfor name, score in records:\n    names.append(name)\n    scores.append(score)\navg = sum(scores) / len(scores)\nprint(f'names={names} avg={avg}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(2)
+        assert "Alice" in out
+        assert "avg=90.0" in out
+
+    def test_unpack_edit(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "coords = (1, 2, 3)",
+                "x, y, z = coords\nprint(f'x={x} y={y} z={z}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "x=1 y=2 z=3" in nb_runner.get_output(2)
+        nb_runner.set_cell_source(1, "coords = (100, 200, 300)")
+        nb_runner.run_all()
+        assert "x=100 y=200 z=300" in nb_runner.get_output(2)
+
+
+# Star unpacking and extended iterable unpacking.
+#
+# Tests *args, **kwargs, and extended unpacking with edits.
+@pytest.mark.timeout(90)
+class TestStarUnpacking:
+    """Star unpacking edit patterns."""
+
+    def test_star_rest_edit(self, nb_runner):
+        """Edit list, star unpack head/*rest changes."""
+        nb_runner.create_notebook(
+            [
+                "data = [10, 20, 30, 40, 50]",
+                "head, *rest = data\nprint(f'head = {head}, rest = {rest}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(2)
+        assert "head = 10" in out
+        assert "rest = [20, 30, 40, 50]" in out
+
+        nb_runner.set_cell_source(1, "data = [99, 88]")
+        nb_runner.run_all()
+        out = nb_runner.get_output(2)
+        assert "head = 99" in out
+        assert "rest = [88]" in out
+
+    def test_dict_merge_unpack_edit(self, nb_runner):
+        """Edit dict, merge with ** changes."""
+        nb_runner.create_notebook(
+            [
+                "base = {'a': 1, 'b': 2}",
+                "extra = {'c': 3}",
+                "merged = {**base, **extra}\nprint(f'merged = {merged}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "'a': 1" in nb_runner.get_output(3)
+
+        nb_runner.set_cell_source(1, "base = {'a': 100, 'b': 200}")
+        nb_runner.run_all()
+        out = nb_runner.get_output(3)
+        assert "'a': 100" in out
+        assert "'c': 3" in out
+
+    def test_function_args_kwargs_edit(self, nb_runner):
+        """Edit function with *args/**kwargs."""
+        nb_runner.create_notebook(
+            [
+                "def combine(*args, **kwargs):\n    return list(args) + list(kwargs.values())",
+                "result = combine(1, 2, x=10, y=20)\nprint(f'result = {result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "result = [1, 2, 10, 20]" in nb_runner.get_output(2)
+
+        nb_runner.set_cell_source(
+            1,
+            "def combine(*args, **kwargs):\n    return [a * 2 for a in args] + [v * 3 for v in kwargs.values()]",
+        )
+        nb_runner.run_all()
+        assert "result = [2, 4, 30, 60]" in nb_runner.get_output(2)
+
+
+# Unpacking and star expression edit tests.
+#
+# Tests editing cells with tuple unpacking, star expressions,
+# and chained assignments.
+@pytest.mark.upstream
+@pytest.mark.timeout(90)
+class TestUnpackingStarEdits:
+    """Editing cells with unpacking and star expressions."""
+
+    def test_edit_star_first_to_last(self, nb_runner):
+        """Switch from first/*rest to *init/last pattern."""
+        nb_runner.create_notebook(
+            [
+                "first, *rest = [1, 2, 3, 4, 5]",
+                "print(f'first={first} rest={rest}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "first=1" in nb_runner.get_output(2)
+
+        nb_runner.set_cell_source(1, "*init, last = [1, 2, 3, 4, 5]")
+        nb_runner.set_cell_source(2, "print(f'init={init} last={last}')")
+        nb_runner.run_all()
+        assert "last=5" in nb_runner.get_output(2)
+
+    def test_edit_chained_value(self, nb_runner):
+        """Edit chained assignment x = y = z = value."""
+        nb_runner.create_notebook(
+            [
+                "x = y = z = 5",
+                "total = x + y + z\nprint(f'total = {total}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "total = 15" in nb_runner.get_output(2)
+
+        nb_runner.set_cell_source(1, "x = y = z = 10")
+        nb_runner.run_all()
+        assert "total = 30" in nb_runner.get_output(2)
+
+
+# Interaction test: multiple return unpacking with nested tuples.
+# Tests complex unpacking patterns with nested structures, star unpacking
+# in function returns, and cross-cell value threading.
+@pytest.mark.timeout(90)
+class TestNestedUnpackReturn:
+    """Test complex unpacking patterns across cells."""
+
+    def test_nested_unpack(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                # Cell 1: define function with complex return
+                "def analyze_data(data):\n    total = sum(data)\n    avg = total / len(data)\n    extremes = (min(data), max(data))\n    spread = extremes[1] - extremes[0]\n    return total, avg, extremes, spread\nprint('analyze_data defined')",
+                # Cell 2: unpack nested results
+                "data = [10, 20, 30, 40, 50]\ntotal, avg, (lo, hi), spread = analyze_data(data)\nprint(f'total={total}')\nprint(f'avg={avg}')\nprint(f'lo={lo} hi={hi}')\nprint(f'spread={spread}')",
+                # Cell 3: use unpacked values
+                "normalized = [(x - lo) / spread * 100 for x in data]\nprint(f'norm={[int(n) for n in normalized]}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out2 = nb_runner.get_output(2)
+        assert "total=150" in out2
+        assert "avg=30.0" in out2
+        assert "lo=10 hi=50" in out2
+        assert "spread=40" in out2
+        out3 = nb_runner.get_output(3)
+        assert "norm=[0, 25, 50, 75, 100]" in out3
+
+    def test_nested_unpack_edit(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "def stats(nums):\n    s = sorted(nums)\n    return s[0], s[-1], s[len(s)//2]\nprint('stats defined')",
+                "lo, hi, med = stats([5, 3, 8, 1, 9])\nprint(f'lo={lo} hi={hi} med={med}')",
+                "rng = hi - lo\nprint(f'range={rng}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "lo=1 hi=9 med=5" in nb_runner.get_output(2)
+        assert "range=8" in nb_runner.get_output(3)
+
+        # Edit data
+        nb_runner.set_cell_source(2, "lo, hi, med = stats([10, 20, 30, 40, 50])\nprint(f'lo={lo} hi={hi} med={med}')")
+        nb_runner.run_cells([2, 3])
+        assert "lo=10 hi=50 med=30" in nb_runner.get_output(2)
+        assert "range=40" in nb_runner.get_output(3)
+
+    def test_nested_unpack_cache(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "def split_name(full):\n    parts = full.split()\n    first, *middle, last = parts\n    return first, middle, last\nprint('split_name defined')",
+                "first, mid, last = split_name('John Michael Smith Jr')\nprint(f'first={first} mid={mid} last={last}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "first=John mid=['Michael', 'Smith'] last=Jr" in nb_runner.get_output(2)
+
+        # Re-run - cache
+        nb_runner.run_all()
+        assert "first=John mid=['Michael', 'Smith'] last=Jr" in nb_runner.get_output(2)
+
+
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
 class TestDictUnpackingEdits:
@@ -212,6 +402,91 @@ class TestDictUnpackingEdits:
         nb_runner.set_cell_source(1, "data = ((10, 20), (30, 40))  # nested tuples bigger")
         nb_runner.run_all()
         assert "total = 100" in nb_runner.get_output(2)
+
+
+@pytest.mark.timeout(90)
+class TestUnpackGeneralization:
+    """unpacking generalization (**kwargs, *args) across cells."""
+
+    def test_kwargs_merge(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "defaults = {'color': 'red', 'size': 10}\noverrides = {'size': 20, 'weight': 5}",
+                "merged = {**defaults, **overrides}\nprint(f'merged={dict(sorted(merged.items()))}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "merged={'color': 'red', 'size': 20, 'weight': 5}" in nb_runner.get_output(2)
+
+    def test_args_spread_edit(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "parts = ([1, 2], [3, 4], [5])",
+                "combined = [*parts[0], *parts[1], *parts[2]]\nprint(f'combined={combined}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "combined=[1, 2, 3, 4, 5]" in nb_runner.get_output(2)
+        # Edit
+        nb_runner.set_cell_source(1, "parts = ([10], [20, 30])")
+        nb_runner.set_cell_source(2, "combined = [*parts[0], *parts[1]]\nprint(f'combined={combined}')")
+        nb_runner.run_all()
+        assert "combined=[10, 20, 30]" in nb_runner.get_output(2)
+
+    def test_func_kwargs(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "def build_url(scheme='http', host='localhost', port=80):\n    return f'{scheme}://{host}:{port}'",
+                "params = {'scheme': 'https', 'host': 'example.com', 'port': 443}\nurl = build_url(**params)\nprint(f'url={url}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "url=https://example.com:443" in nb_runner.get_output(2)
+
+
+# Multi-assignment & augmented assignment interaction tests.
+#
+# Tests editing multi-target assignments, augmented assignments (+=, *=),
+# and walrus operator patterns.
+@pytest.mark.upstream
+@pytest.mark.timeout(90)
+class TestMultiAssignmentEdits:
+    """Editing multi-assignment patterns."""
+
+    def test_edit_multi_assign(self, nb_runner):
+        """Edit a multi-assignment statement."""
+        nb_runner.create_notebook(
+            [
+                "a = b = c = 10  # multi assign",
+                "total = a + b + c\nprint(f'total = {total}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "total = 30" in nb_runner.get_output(2)
+
+        nb_runner.set_cell_source(1, "a = b = c = 20  # multi assign v2")
+        nb_runner.run_all()
+        assert "total = 60" in nb_runner.get_output(2)
+
+    def test_edit_swap_assignment(self, nb_runner):
+        """Edit a swap assignment."""
+        nb_runner.create_notebook(
+            [
+                "x, y = 1, 2  # swap source",
+                "x, y = y, x\nprint(f'x={x} y={y}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "x=2 y=1" in nb_runner.get_output(2)
+
+        nb_runner.set_cell_source(1, "x, y = 10, 20  # swap source v2")
+        nb_runner.run_all()
+        assert "x=20 y=10" in nb_runner.get_output(2)
 
 
 # Multiple variable assignment and swap patterns.
@@ -285,6 +560,74 @@ class TestMultiAssignSwap:
         nb_runner.set_cell_source(2, "nums = [100, 200, 300]")
         nb_runner.run_all()
         assert "lo=100 hi=300 span=200" in nb_runner.get_output(3)
+
+
+# multiple assignment / unpacking patterns with caching.
+# Tests tuple unpacking, star expressions, swap, and edit propagation.
+@pytest.mark.integration
+@pytest.mark.timeout(90)
+class TestMultipleAssignUnpack:
+    """Test multiple assignment and unpacking caching."""
+
+    def test_tuple_unpack(self, nb_runner):
+        """Basic tuple unpacking with caching."""
+        nb_runner.create_notebook(
+            [
+                "data = (10, 20, 30)",
+                "a, b, c = data",
+                "total = a + b + c\nprint(f'total={total}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(3)
+        assert "total=60" in out
+
+        nb_runner.run_all()
+        out2 = nb_runner.get_output(3)
+        assert "total=60" in out2
+
+    def test_star_unpack_edit(self, nb_runner):
+        """Star unpacking with edit propagation."""
+        nb_runner.create_notebook(
+            [
+                "values = [1, 2, 3, 4, 5]",
+                "first, *middle, last = values",
+                "print(f'first={first} middle={middle} last={last}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(3)
+        assert "first=1" in out
+        assert "middle=[2, 3, 4]" in out
+        assert "last=5" in out
+
+        nb_runner.set_cell_source(1, "values = [10, 20, 30]")
+        nb_runner.run_all()
+        out2 = nb_runner.get_output(3)
+        assert "first=10" in out2
+        assert "middle=[20]" in out2
+        assert "last=30" in out2
+
+    def test_swap_pattern(self, nb_runner):
+        """Variable swap pattern with caching."""
+        nb_runner.create_notebook(
+            [
+                "x = 'hello'\ny = 'world'",
+                "x, y = y, x",
+                "print(f'x={x} y={y}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(3)
+        assert "x=world" in out
+        assert "y=hello" in out
+
+        nb_runner.run_all()
+        out2 = nb_runner.get_output(3)
+        assert "x=world" in out2
 
 
 # Multi-return function with unpacking interaction tests.
@@ -367,74 +710,6 @@ class TestMultiReturnEdits:
         )
         nb_runner.run_all()
         assert "value=25 status=success" in nb_runner.get_output(3)
-
-
-# multiple assignment / unpacking patterns with caching.
-# Tests tuple unpacking, star expressions, swap, and edit propagation.
-@pytest.mark.integration
-@pytest.mark.timeout(90)
-class TestMultipleAssignUnpack:
-    """Test multiple assignment and unpacking caching."""
-
-    def test_tuple_unpack(self, nb_runner):
-        """Basic tuple unpacking with caching."""
-        nb_runner.create_notebook(
-            [
-                "data = (10, 20, 30)",
-                "a, b, c = data",
-                "total = a + b + c\nprint(f'total={total}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(3)
-        assert "total=60" in out
-
-        nb_runner.run_all()
-        out2 = nb_runner.get_output(3)
-        assert "total=60" in out2
-
-    def test_star_unpack_edit(self, nb_runner):
-        """Star unpacking with edit propagation."""
-        nb_runner.create_notebook(
-            [
-                "values = [1, 2, 3, 4, 5]",
-                "first, *middle, last = values",
-                "print(f'first={first} middle={middle} last={last}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(3)
-        assert "first=1" in out
-        assert "middle=[2, 3, 4]" in out
-        assert "last=5" in out
-
-        nb_runner.set_cell_source(1, "values = [10, 20, 30]")
-        nb_runner.run_all()
-        out2 = nb_runner.get_output(3)
-        assert "first=10" in out2
-        assert "middle=[20]" in out2
-        assert "last=30" in out2
-
-    def test_swap_pattern(self, nb_runner):
-        """Variable swap pattern with caching."""
-        nb_runner.create_notebook(
-            [
-                "x = 'hello'\ny = 'world'",
-                "x, y = y, x",
-                "print(f'x={x} y={y}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(3)
-        assert "x=world" in out
-        assert "y=hello" in out
-
-        nb_runner.run_all()
-        out2 = nb_runner.get_output(3)
-        assert "x=world" in out2
 
 
 @pytest.mark.timeout(90)
@@ -532,335 +807,60 @@ class TestMultiReturnTupleUnpack:
         assert "q=14 r=2" in nb_runner.get_output(2)
 
 
-# Interaction test: multiple return unpacking with nested tuples.
-# Tests complex unpacking patterns with nested structures, star unpacking
-# in function returns, and cross-cell value threading.
-@pytest.mark.timeout(90)
-class TestNestedUnpackReturn:
-    """Test complex unpacking patterns across cells."""
-
-    def test_nested_unpack(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                # Cell 1: define function with complex return
-                "def analyze_data(data):\n    total = sum(data)\n    avg = total / len(data)\n    extremes = (min(data), max(data))\n    spread = extremes[1] - extremes[0]\n    return total, avg, extremes, spread\nprint('analyze_data defined')",
-                # Cell 2: unpack nested results
-                "data = [10, 20, 30, 40, 50]\ntotal, avg, (lo, hi), spread = analyze_data(data)\nprint(f'total={total}')\nprint(f'avg={avg}')\nprint(f'lo={lo} hi={hi}')\nprint(f'spread={spread}')",
-                # Cell 3: use unpacked values
-                "normalized = [(x - lo) / spread * 100 for x in data]\nprint(f'norm={[int(n) for n in normalized]}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out2 = nb_runner.get_output(2)
-        assert "total=150" in out2
-        assert "avg=30.0" in out2
-        assert "lo=10 hi=50" in out2
-        assert "spread=40" in out2
-        out3 = nb_runner.get_output(3)
-        assert "norm=[0, 25, 50, 75, 100]" in out3
-
-    def test_nested_unpack_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "def stats(nums):\n    s = sorted(nums)\n    return s[0], s[-1], s[len(s)//2]\nprint('stats defined')",
-                "lo, hi, med = stats([5, 3, 8, 1, 9])\nprint(f'lo={lo} hi={hi} med={med}')",
-                "rng = hi - lo\nprint(f'range={rng}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "lo=1 hi=9 med=5" in nb_runner.get_output(2)
-        assert "range=8" in nb_runner.get_output(3)
-
-        # Edit data
-        nb_runner.set_cell_source(2, "lo, hi, med = stats([10, 20, 30, 40, 50])\nprint(f'lo={lo} hi={hi} med={med}')")
-        nb_runner.run_cells([2, 3])
-        assert "lo=10 hi=50 med=30" in nb_runner.get_output(2)
-        assert "range=40" in nb_runner.get_output(3)
-
-    def test_nested_unpack_cache(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "def split_name(full):\n    parts = full.split()\n    first, *middle, last = parts\n    return first, middle, last\nprint('split_name defined')",
-                "first, mid, last = split_name('John Michael Smith Jr')\nprint(f'first={first} mid={mid} last={last}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "first=John mid=['Michael', 'Smith'] last=Jr" in nb_runner.get_output(2)
-
-        # Re-run - cache
-        nb_runner.run_all()
-        assert "first=John mid=['Michael', 'Smith'] last=Jr" in nb_runner.get_output(2)
-
-
-# Star unpacking and extended iterable unpacking.
-#
-# Tests *args, **kwargs, and extended unpacking with edits.
-@pytest.mark.timeout(90)
-class TestStarUnpacking:
-    """Star unpacking edit patterns."""
-
-    def test_star_rest_edit(self, nb_runner):
-        """Edit list, star unpack head/*rest changes."""
-        nb_runner.create_notebook(
-            [
-                "data = [10, 20, 30, 40, 50]",
-                "head, *rest = data\nprint(f'head = {head}, rest = {rest}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "head = 10" in out
-        assert "rest = [20, 30, 40, 50]" in out
-
-        nb_runner.set_cell_source(1, "data = [99, 88]")
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "head = 99" in out
-        assert "rest = [88]" in out
-
-    def test_dict_merge_unpack_edit(self, nb_runner):
-        """Edit dict, merge with ** changes."""
-        nb_runner.create_notebook(
-            [
-                "base = {'a': 1, 'b': 2}",
-                "extra = {'c': 3}",
-                "merged = {**base, **extra}\nprint(f'merged = {merged}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "'a': 1" in nb_runner.get_output(3)
-
-        nb_runner.set_cell_source(1, "base = {'a': 100, 'b': 200}")
-        nb_runner.run_all()
-        out = nb_runner.get_output(3)
-        assert "'a': 100" in out
-        assert "'c': 3" in out
-
-    def test_function_args_kwargs_edit(self, nb_runner):
-        """Edit function with *args/**kwargs."""
-        nb_runner.create_notebook(
-            [
-                "def combine(*args, **kwargs):\n    return list(args) + list(kwargs.values())",
-                "result = combine(1, 2, x=10, y=20)\nprint(f'result = {result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result = [1, 2, 10, 20]" in nb_runner.get_output(2)
-
-        nb_runner.set_cell_source(
-            1,
-            "def combine(*args, **kwargs):\n    return [a * 2 for a in args] + [v * 3 for v in kwargs.values()]",
-        )
-        nb_runner.run_all()
-        assert "result = [2, 4, 30, 60]" in nb_runner.get_output(2)
-
-
-@pytest.mark.timeout(90)
-class TestTupleUnpackingStarred:
-    """tuple unpacking and starred assignment."""
-
-    def test_basic_unpack(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "data = (10, 20, 30, 40, 50)",
-                "first, second, *rest = data\nprint(f'first={first} second={second} rest={rest}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "first=10" in out
-        assert "second=20" in out
-        assert "rest=[30, 40, 50]" in out
-
-    def test_nested_unpack(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "records = [('Alice', 90), ('Bob', 85), ('Carol', 95)]",
-                "names = []\nscores = []\nfor name, score in records:\n    names.append(name)\n    scores.append(score)\navg = sum(scores) / len(scores)\nprint(f'names={names} avg={avg}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "Alice" in out
-        assert "avg=90.0" in out
-
-    def test_unpack_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "coords = (1, 2, 3)",
-                "x, y, z = coords\nprint(f'x={x} y={y} z={z}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "x=1 y=2 z=3" in nb_runner.get_output(2)
-        nb_runner.set_cell_source(1, "coords = (100, 200, 300)")
-        nb_runner.run_all()
-        assert "x=100 y=200 z=300" in nb_runner.get_output(2)
-
-
-@pytest.mark.timeout(90)
-class TestUnpackGeneralization:
-    """unpacking generalization (**kwargs, *args) across cells."""
-
-    def test_kwargs_merge(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "defaults = {'color': 'red', 'size': 10}\noverrides = {'size': 20, 'weight': 5}",
-                "merged = {**defaults, **overrides}\nprint(f'merged={dict(sorted(merged.items()))}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "merged={'color': 'red', 'size': 20, 'weight': 5}" in nb_runner.get_output(2)
-
-    def test_args_spread_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "parts = ([1, 2], [3, 4], [5])",
-                "combined = [*parts[0], *parts[1], *parts[2]]\nprint(f'combined={combined}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "combined=[1, 2, 3, 4, 5]" in nb_runner.get_output(2)
-        # Edit
-        nb_runner.set_cell_source(1, "parts = ([10], [20, 30])")
-        nb_runner.set_cell_source(2, "combined = [*parts[0], *parts[1]]\nprint(f'combined={combined}')")
-        nb_runner.run_all()
-        assert "combined=[10, 20, 30]" in nb_runner.get_output(2)
-
-    def test_func_kwargs(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "def build_url(scheme='http', host='localhost', port=80):\n    return f'{scheme}://{host}:{port}'",
-                "params = {'scheme': 'https', 'host': 'example.com', 'port': 443}\nurl = build_url(**params)\nprint(f'url={url}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "url=https://example.com:443" in nb_runner.get_output(2)
-
-
-# multiple assignment, unpacking, and star expressions.
-@pytest.mark.integration
-class TestUnpacking:
-    """Unpacking and multiple assignment patterns."""
-
-    def test_star_unpacking(self, nb_runner):
-        """Star (*) unpacking in assignments."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                data = [1, 2, 3, 4, 5, 6, 7]
-                first, *middle, last = data
-                a, b, *rest = data
-                *init, x, y = data
-            """),
-                "print(f'first={first} middle={middle} last={last}')\n"
-                "print(f'a={a} b={b} rest={rest}')\n"
-                "print(f'init={init} x={x} y={y}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "first=1" in out
-        assert "middle=[2, 3, 4, 5, 6]" in out
-        assert "last=7" in out
-        assert "rest=[3, 4, 5, 6, 7]" in out
-        assert "x=6" in out
-        assert "y=7" in out
-
-    def test_swap_and_multi_assign(self, nb_runner):
-        """Swap and multiple assignment in one line."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                a, b = 10, 20
-                a, b = b, a
-                x = y = z = 42
-                p, q = divmod(100, 7)
-            """),
-                "print(f'a={a} b={b} x={x} y={y} z={z} p={p} q={q}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "a=20" in out
-        assert "b=10" in out
-        assert "x=42" in out
-        assert "p=14" in out
-        assert "q=2" in out
-
-    def test_unpacking_propagation(self, nb_runner):
-        """Unpacking with upstream data change."""
-        nb_runner.create_notebook(
-            [
-                "data = (10, 20, 30)",
-                textwrap.dedent("""\
-                a, b, c = data
-                total = a + b + c
-            """),
-                "print(f'total={total}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "total=60" in nb_runner.get_output(3)
-
-        nb_runner.set_cell_source(1, "data = (100, 200, 300)")
-        nb_runner.run_cells([1, 2, 3])
-        assert "total=600" in nb_runner.get_output(3)
-
-
-# Unpacking and star expression edit tests.
-#
-# Tests editing cells with tuple unpacking, star expressions,
-# and chained assignments.
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
-class TestUnpackingStarEdits:
-    """Editing cells with unpacking and star expressions."""
+class TestAugmentedAssignmentEdits:
+    """Editing augmented assignment operations."""
 
-    def test_edit_star_first_to_last(self, nb_runner):
-        """Switch from first/*rest to *init/last pattern."""
+    def test_edit_augmented_op(self, nb_runner):
+        """Edit the augmented assignment operator."""
         nb_runner.create_notebook(
             [
-                "first, *rest = [1, 2, 3, 4, 5]",
-                "print(f'first={first} rest={rest}')",
+                "val = 10  # augmented source",
+                "val += 5\nprint(f'val = {val}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "first=1" in nb_runner.get_output(2)
+        assert "val = 15" in nb_runner.get_output(2)
 
-        nb_runner.set_cell_source(1, "*init, last = [1, 2, 3, 4, 5]")
-        nb_runner.set_cell_source(2, "print(f'init={init} last={last}')")
+        nb_runner.set_cell_source(2, "val *= 5\nprint(f'val = {val}')")
         nb_runner.run_all()
-        assert "last=5" in nb_runner.get_output(2)
+        assert "val = 50" in nb_runner.get_output(2)
 
-    def test_edit_chained_value(self, nb_runner):
-        """Edit chained assignment x = y = z = value."""
+    def test_edit_augmented_source(self, nb_runner):
+        """Edit the source value for augmented assignment."""
         nb_runner.create_notebook(
             [
-                "x = y = z = 5",
-                "total = x + y + z\nprint(f'total = {total}')",
+                "base = 100  # augmented base",
+                "base //= 3\nprint(f'base = {base}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "total = 15" in nb_runner.get_output(2)
+        assert "base = 33" in nb_runner.get_output(2)
 
-        nb_runner.set_cell_source(1, "x = y = z = 10")
+        nb_runner.set_cell_source(1, "base = 200  # augmented base v2")
         nb_runner.run_all()
-        assert "total = 30" in nb_runner.get_output(2)
+        assert "base = 66" in nb_runner.get_output(2)
+
+    def test_chain_augmented_assignments(self, nb_runner):
+        """Chain of augmented assignments across cells."""
+        nb_runner.create_notebook(
+            [
+                "n = 1  # chain augmented start",
+                "n += 9  # step 1",
+                "n *= 2  # step 2",
+                "print(f'n = {n}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        # 1+9=10, 10*2=20
+        assert "n = 20" in nb_runner.get_output(4)
+
+        # Edit middle step
+        nb_runner.set_cell_source(2, "n += 99  # step 1 v2")
+        nb_runner.run_all()
+        # 1+99=100, 100*2=200
+        assert "n = 200" in nb_runner.get_output(4)

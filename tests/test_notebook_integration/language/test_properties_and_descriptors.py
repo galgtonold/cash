@@ -5,213 +5,160 @@ import textwrap
 import pytest
 
 
-# Cached property and memoization interaction tests.
-#
-# Tests editing cells with memoization patterns
-# and verifying correct cache invalidation.
-@pytest.mark.stress
-@pytest.mark.upstream
-@pytest.mark.timeout(90)
-class TestMemoizationEdits:
-    """Editing memoization patterns."""
-
-    def test_edit_memoized_function(self, nb_runner):
-        """Edit a function that uses manual memoization."""
-        nb_runner.create_notebook(
-            [
-                "def fib(n, memo={}):\n    if n in memo:\n        return memo[n]\n    if n <= 1:\n        return n\n    memo[n] = fib(n-1, memo) + fib(n-2, memo)\n    return memo[n]",
-                "result = fib(10)\nprint(f'fib(10) = {result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "fib(10) = 55" in nb_runner.get_output(2)
-
-        # Change to call with different arg
-        nb_runner.set_cell_source(2, "result = fib(15)\nprint(f'fib(15) = {result}')")
-        nb_runner.run_all()
-        assert "fib(15) = 610" in nb_runner.get_output(2)
-
-    def test_edit_lru_cache_function(self, nb_runner):
-        """Edit function using lru_cache."""
-        nb_runner.create_notebook(
-            [
-                "from functools import lru_cache\n@lru_cache(maxsize=None)\ndef factorial(n):\n    return 1 if n <= 1 else n * factorial(n - 1)",
-                "result = factorial(5)\nprint(f'5! = {result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "5! = 120" in nb_runner.get_output(2)
-
-        # Change call
-        nb_runner.set_cell_source(2, "result = factorial(7)\nprint(f'7! = {result}')")
-        nb_runner.run_all()
-        assert "7! = 5040" in nb_runner.get_output(2)
-
-    def test_edit_lookup_table(self, nb_runner):
-        """Edit a precomputed lookup table."""
-        nb_runner.create_notebook(
-            [
-                "squares = {i: i**2 for i in range(10)}",
-                "vals = [squares[x] for x in [1, 3, 5, 7]]\nprint(f'vals = {vals}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "vals = [1, 9, 25, 49]" in nb_runner.get_output(2)
-
-        # Change to cubes
-        nb_runner.set_cell_source(1, "squares = {i: i**3 for i in range(10)}")
-        nb_runner.run_all()
-        assert "vals = [1, 27, 125, 343]" in nb_runner.get_output(2)
-
-
-# Descriptor protocol interaction tests.
-# Tests that editing descriptor-based attribute access logic
-# properly invalidates downstream cells.
-@pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)
-class TestDescriptorInteraction:
-    """Test descriptor protocol patterns with cache invalidation."""
+class TestPropertyGetterSetter:
+    """property decorators getters and setters."""
 
-    def test_property_descriptor_edit(self, nb_runner):
-        """Editing a class with property descriptors should propagate."""
+    def test_property_basic(self, nb_runner):
         nb_runner.create_notebook(
             [
-                (
-                    "class Circle:\n"
-                    "    def __init__(self, radius):\n"
-                    "        self._radius = radius\n"
-                    "    @property\n"
-                    "    def area(self):\n"
-                    "        return 3.14159 * self._radius ** 2"
-                ),
-                "c = Circle(5)",
-                "a = round(c.area, 2)",
-                "print(f'area={a}')",
+                "class Circle:\n    def __init__(self, r): self._r = r\n    @property\n    def radius(self): return self._r\n    @radius.setter\n    def radius(self, val):\n        if val < 0: raise ValueError\n        self._r = val\n    @property\n    def area(self): return 3.14159 * self._r ** 2",
+                "c = Circle(5)\na1 = round(c.area, 2)\nc.radius = 10\na2 = round(c.area, 2)\nprint(f'a1={a1} a2={a2}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "area=78.54" in out
+        assert "a1=78.54" in nb_runner.get_output(2)
+        assert "a2=314.16" in nb_runner.get_output(2)
 
-        nb_runner.set_cell_source(2, "c = Circle(10)")
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "area=314.16" in out
-
-    def test_custom_descriptor_edit(self, nb_runner):
-        """Editing a custom descriptor class should propagate."""
+    def test_property_validation(self, nb_runner):
         nb_runner.create_notebook(
             [
-                (
-                    "class Validator:\n"
-                    "    def __init__(self, min_val, max_val):\n"
-                    "        self.min_val = min_val\n"
-                    "        self.max_val = max_val\n"
-                    "    def __set_name__(self, owner, name):\n"
-                    "        self.name = '_' + name\n"
-                    "    def __get__(self, obj, objtype=None):\n"
-                    "        return getattr(obj, self.name, None)\n"
-                    "    def __set__(self, obj, value):\n"
-                    "        if not (self.min_val <= value <= self.max_val):\n"
-                    "            raise ValueError(f'{value} not in [{self.min_val},{self.max_val}]')\n"
-                    "        setattr(obj, self.name, value)"
-                ),
-                (
-                    "class Sensor:\n"
-                    "    temperature = Validator(-50, 150)\n"
-                    "    def __init__(self, temp):\n"
-                    "        self.temperature = temp"
-                ),
-                "s = Sensor(25)\nval = s.temperature",
-                "print(f'temp={val}')",
+                "class Temp:\n    def __init__(self, c): self._c = c\n    @property\n    def fahrenheit(self): return self._c * 9/5 + 32\n    @property\n    def celsius(self): return self._c",
+                "t = Temp(100)\nprint(f'c={t.celsius} f={t.fahrenheit}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "temp=25" in out
+        assert "c=100" in nb_runner.get_output(2)
+        assert "f=212.0" in nb_runner.get_output(2)
 
-        nb_runner.set_cell_source(3, "s = Sensor(99)\nval = s.temperature")
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "temp=99" in out
-
-    def test_cached_property_edit(self, nb_runner):
-        """Editing data used by a cached_property should propagate."""
+    def test_property_edit(self, nb_runner):
         nb_runner.create_notebook(
             [
-                "from functools import cached_property",
-                (
-                    "class Stats:\n"
-                    "    def __init__(self, data):\n"
-                    "        self.data = data\n"
-                    "    @cached_property\n"
-                    "    def mean(self):\n"
-                    "        return sum(self.data) / len(self.data)"
-                ),
-                "st = Stats([10, 20, 30])\nm = st.mean",
-                "print(f'mean={m}')",
+                "class Box:\n    def __init__(self, w, h): self.w, self.h = w, h\n    @property\n    def area(self): return self.w * self.h",
+                "b = Box(3, 4)\nprint(f'area={b.area}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "mean=20.0" in out
-
-        nb_runner.set_cell_source(3, "st = Stats([100, 200, 300])\nm = st.mean")
+        assert "area=12" in nb_runner.get_output(2)
+        nb_runner.set_cell_source(2, "b = Box(10, 20)\nprint(f'area={b.area}')")
         nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "mean=200.0" in out
+        assert "area=200" in nb_runner.get_output(2)
 
 
 @pytest.mark.stress
 @pytest.mark.timeout(90)
-class TestDescriptorProtocol:
-    """descriptor protocol __get__ __set__."""
+class TestPropertySetterDeleter:
+    """class property setter/deleter and computed attrs."""
 
-    def test_validated_descriptor(self, nb_runner):
+    def test_property_getter_setter(self, nb_runner):
         nb_runner.create_notebook(
             [
-                "pass  # setup",
-                "class Positive:\n    def __init__(self, name): self.name = name\n    def __set_name__(self, owner, name): self.name = name\n    def __get__(self, obj, objtype=None):\n        return getattr(obj, f'_{self.name}', 0)\n    def __set__(self, obj, value):\n        if value < 0: raise ValueError\n        setattr(obj, f'_{self.name}', value)\nclass Account:\n    balance = Positive('balance')\na = Account()\na.balance = 100\nprint(f'balance={a.balance}')",
+                "class Temperature:\n    def __init__(self, celsius):\n        self._celsius = celsius\n    @property\n    def fahrenheit(self):\n        return self._celsius * 9/5 + 32\n    @fahrenheit.setter\n    def fahrenheit(self, value):\n        self._celsius = (value - 32) * 5/9",
+                "t = Temperature(100)\nf = t.fahrenheit\nt.fahrenheit = 32\nc = t._celsius\nprint(f'f={f} c={c}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "balance=100" in nb_runner.get_output(2)
+        assert "f=212.0" in nb_runner.get_output(2)
+        assert "c=0.0" in nb_runner.get_output(2)
 
-    def test_cached_property_desc(self, nb_runner):
+    def test_property_edit_class(self, nb_runner):
         nb_runner.create_notebook(
             [
-                "pass  # setup",
-                "class CachedProp:\n    def __init__(self, fn): self.fn = fn; self.name = fn.__name__\n    def __get__(self, obj, objtype=None):\n        if obj is None: return self\n        val = self.fn(obj)\n        setattr(obj, self.name, val)\n        return val\nclass Data:\n    def __init__(self, n): self.n = n\n    @CachedProp\n    def expensive(self): return sum(range(self.n))\nd = Data(100)\nprint(f'result={d.expensive}')",
+                "class Circle:\n    def __init__(self, radius):\n        self.radius = radius\n    @property\n    def area(self):\n        import math\n        return round(math.pi * self.radius ** 2, 2)",
+                "c = Circle(5)\nresult = c.area\nprint(f'area={result}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "result=4950" in nb_runner.get_output(2)
-
-    def test_descriptor_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "pass  # setup",
-                "class TypedField:\n    def __init__(self, typ): self.typ = typ\n    def __set_name__(self, owner, name): self.name = f'_{name}'\n    def __get__(self, obj, t=None): return getattr(obj, self.name, None)\n    def __set__(self, obj, val):\n        if not isinstance(val, self.typ): raise TypeError\n        setattr(obj, self.name, val)\nclass Config:\n    port = TypedField(int)\nc = Config()\nc.port = 8080\nprint(f'port={c.port}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "port=8080" in nb_runner.get_output(2)
+        assert "area=78.54" in nb_runner.get_output(2)
+        # Edit to add circumference
         nb_runner.set_cell_source(
-            2,
-            "class TypedField:\n    def __init__(self, typ): self.typ = typ\n    def __set_name__(self, owner, name): self.name = f'_{name}'\n    def __get__(self, obj, t=None): return getattr(obj, self.name, None)\n    def __set__(self, obj, val):\n        if not isinstance(val, self.typ): raise TypeError\n        setattr(obj, self.name, val)\nclass Config:\n    port = TypedField(int)\nc = Config()\nc.port = 3000\nprint(f'port={c.port}')",
+            1,
+            "class Circle:\n    def __init__(self, radius):\n        self.radius = radius\n    @property\n    def area(self):\n        import math\n        return round(math.pi * self.radius ** 2, 2)\n    @property\n    def circumference(self):\n        import math\n        return round(2 * math.pi * self.radius, 2)",
         )
+        nb_runner.set_cell_source(2, "c = Circle(5)\nresult = c.circumference\nprint(f'circ={result}')")
         nb_runner.run_all()
-        assert "port=3000" in nb_runner.get_output(2)
+        assert "circ=31.42" in nb_runner.get_output(2)
+
+    def test_property_validation(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "class Age:\n    def __init__(self, value):\n        self.value = value\n    @property\n    def value(self):\n        return self._value\n    @value.setter\n    def value(self, v):\n        self._value = max(0, min(150, v))",
+                "a = Age(200)\nresult = a.value\nprint(f'clamped={result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "clamped=150" in nb_runner.get_output(2)
+
+
+# Interaction test: property with deleter and validation.
+# Tests property getter/setter/deleter with validation logic,
+# AttributeError handling, and cross-cell state management.
+@pytest.mark.stress
+@pytest.mark.timeout(90)
+class TestPropertyDeleterValidation:
+    """Test property with deleter and validation across cells."""
+
+    def test_property_validation(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                # Cell 1: define class with validated property
+                "class Temperature:\n    def __init__(self, celsius):\n        self.celsius = celsius\n    @property\n    def celsius(self):\n        return self._celsius\n    @celsius.setter\n    def celsius(self, value):\n        if value < -273.15:\n            raise ValueError('Below absolute zero')\n        self._celsius = value\n    @celsius.deleter\n    def celsius(self):\n        self._celsius = 0.0\n    @property\n    def fahrenheit(self):\n        return self._celsius * 9/5 + 32\nprint('Temperature defined')",
+                # Cell 2: use property
+                "t = Temperature(100)\nprint(f'c={t.celsius}')\nprint(f'f={t.fahrenheit}')\nt.celsius = 0\nprint(f'freezing_f={t.fahrenheit}')",
+                # Cell 3: deleter and validation
+                "del t.celsius\nprint(f'after_del={t.celsius}')\ntry:\n    t.celsius = -300\n    print('no_error')\nexcept ValueError as e:\n    print(f'error={e}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out2 = nb_runner.get_output(2)
+        assert "c=100" in out2
+        assert "f=212.0" in out2
+        assert "freezing_f=32.0" in out2
+        out3 = nb_runner.get_output(3)
+        assert "after_del=0.0" in out3
+        assert "error=Below absolute zero" in out3
+
+    def test_property_edit(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "class Box:\n    def __init__(self, w, h):\n        self.w = w\n        self.h = h\n    @property\n    def area(self):\n        return self.w * self.h\nprint('Box defined')",
+                "b = Box(5, 3)\nprint(f'area={b.area}')",
+                "double_area = b.area * 2\nprint(f'double={double_area}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "area=15" in nb_runner.get_output(2)
+        assert "double=30" in nb_runner.get_output(3)
+
+        # Edit box dimensions
+        nb_runner.set_cell_source(2, "b = Box(10, 7)\nprint(f'area={b.area}')")
+        nb_runner.run_cells([2, 3])
+        assert "area=70" in nb_runner.get_output(2)
+        assert "double=140" in nb_runner.get_output(3)
+
+    def test_property_cache(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "class Circle:\n    def __init__(self, r):\n        self._r = r\n    @property\n    def radius(self):\n        return self._r\n    @radius.setter\n    def radius(self, val):\n        if val < 0:\n            raise ValueError('Negative')\n        self._r = val\nprint('Circle defined')",
+                "c = Circle(5)\nprint(f'r={c.radius}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "r=5" in nb_runner.get_output(2)
+
+        # Re-run - cache
+        nb_runner.run_all()
+        assert "r=5" in nb_runner.get_output(2)
 
 
 # property decorator and computed attribute patterns with caching.
@@ -394,160 +341,84 @@ class TestPropertyComputedValidation:
         assert "has_many=True" in nb_runner.get_output(2)
 
 
-# Interaction test: property with deleter and validation.
-# Tests property getter/setter/deleter with validation logic,
-# AttributeError handling, and cross-cell state management.
 @pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestPropertyDeleterValidation:
-    """Test property with deleter and validation across cells."""
+class TestCachedPropertyPattern:
+    """Test cached_property and similar patterns."""
 
-    def test_property_validation(self, nb_runner):
+    def test_cached_property_class(self, nb_runner):
+        """Class with cached_property (Python 3.8+)."""
         nb_runner.create_notebook(
             [
-                # Cell 1: define class with validated property
-                "class Temperature:\n    def __init__(self, celsius):\n        self.celsius = celsius\n    @property\n    def celsius(self):\n        return self._celsius\n    @celsius.setter\n    def celsius(self, value):\n        if value < -273.15:\n            raise ValueError('Below absolute zero')\n        self._celsius = value\n    @celsius.deleter\n    def celsius(self):\n        self._celsius = 0.0\n    @property\n    def fahrenheit(self):\n        return self._celsius * 9/5 + 32\nprint('Temperature defined')",
-                # Cell 2: use property
-                "t = Temperature(100)\nprint(f'c={t.celsius}')\nprint(f'f={t.fahrenheit}')\nt.celsius = 0\nprint(f'freezing_f={t.fahrenheit}')",
-                # Cell 3: deleter and validation
-                "del t.celsius\nprint(f'after_del={t.celsius}')\ntry:\n    t.celsius = -300\n    print('no_error')\nexcept ValueError as e:\n    print(f'error={e}')",
+                textwrap.dedent("""\
+                from functools import cached_property
+
+                class DataSet:
+                    def __init__(self, data):
+                        self.data = data
+
+                    @cached_property
+                    def mean(self):
+                        return sum(self.data) / len(self.data)
+
+                    @cached_property
+                    def variance(self):
+                        m = self.mean
+                        return sum((x - m) ** 2 for x in self.data) / len(self.data)
+            """),
+                textwrap.dedent("""\
+                ds = DataSet([1, 2, 3, 4, 5])
+                print(f"mean={ds.mean} var={ds.variance}")
+            """),
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        out2 = nb_runner.get_output(2)
-        assert "c=100" in out2
-        assert "f=212.0" in out2
-        assert "freezing_f=32.0" in out2
-        out3 = nb_runner.get_output(3)
-        assert "after_del=0.0" in out3
-        assert "error=Below absolute zero" in out3
-
-    def test_property_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "class Box:\n    def __init__(self, w, h):\n        self.w = w\n        self.h = h\n    @property\n    def area(self):\n        return self.w * self.h\nprint('Box defined')",
-                "b = Box(5, 3)\nprint(f'area={b.area}')",
-                "double_area = b.area * 2\nprint(f'double={double_area}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "area=15" in nb_runner.get_output(2)
-        assert "double=30" in nb_runner.get_output(3)
-
-        # Edit box dimensions
-        nb_runner.set_cell_source(2, "b = Box(10, 7)\nprint(f'area={b.area}')")
-        nb_runner.run_cells([2, 3])
-        assert "area=70" in nb_runner.get_output(2)
-        assert "double=140" in nb_runner.get_output(3)
-
-    def test_property_cache(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "class Circle:\n    def __init__(self, r):\n        self._r = r\n    @property\n    def radius(self):\n        return self._r\n    @radius.setter\n    def radius(self, val):\n        if val < 0:\n            raise ValueError('Negative')\n        self._r = val\nprint('Circle defined')",
-                "c = Circle(5)\nprint(f'r={c.radius}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "r=5" in nb_runner.get_output(2)
-
-        # Re-run - cache
-        nb_runner.run_all()
-        assert "r=5" in nb_runner.get_output(2)
+        assert "mean=3.0 var=2.0" in nb_runner.get_output(2)
 
 
 @pytest.mark.stress
 @pytest.mark.timeout(90)
-class TestPropertyGetterSetter:
-    """property decorators getters and setters."""
+class TestDescriptorProtocol:
+    """descriptor protocol __get__ __set__."""
 
-    def test_property_basic(self, nb_runner):
+    def test_validated_descriptor(self, nb_runner):
         nb_runner.create_notebook(
             [
-                "class Circle:\n    def __init__(self, r): self._r = r\n    @property\n    def radius(self): return self._r\n    @radius.setter\n    def radius(self, val):\n        if val < 0: raise ValueError\n        self._r = val\n    @property\n    def area(self): return 3.14159 * self._r ** 2",
-                "c = Circle(5)\na1 = round(c.area, 2)\nc.radius = 10\na2 = round(c.area, 2)\nprint(f'a1={a1} a2={a2}')",
+                "pass  # setup",
+                "class Positive:\n    def __init__(self, name): self.name = name\n    def __set_name__(self, owner, name): self.name = name\n    def __get__(self, obj, objtype=None):\n        return getattr(obj, f'_{self.name}', 0)\n    def __set__(self, obj, value):\n        if value < 0: raise ValueError\n        setattr(obj, f'_{self.name}', value)\nclass Account:\n    balance = Positive('balance')\na = Account()\na.balance = 100\nprint(f'balance={a.balance}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "a1=78.54" in nb_runner.get_output(2)
-        assert "a2=314.16" in nb_runner.get_output(2)
+        assert "balance=100" in nb_runner.get_output(2)
 
-    def test_property_validation(self, nb_runner):
+    def test_cached_property_desc(self, nb_runner):
         nb_runner.create_notebook(
             [
-                "class Temp:\n    def __init__(self, c): self._c = c\n    @property\n    def fahrenheit(self): return self._c * 9/5 + 32\n    @property\n    def celsius(self): return self._c",
-                "t = Temp(100)\nprint(f'c={t.celsius} f={t.fahrenheit}')",
+                "pass  # setup",
+                "class CachedProp:\n    def __init__(self, fn): self.fn = fn; self.name = fn.__name__\n    def __get__(self, obj, objtype=None):\n        if obj is None: return self\n        val = self.fn(obj)\n        setattr(obj, self.name, val)\n        return val\nclass Data:\n    def __init__(self, n): self.n = n\n    @CachedProp\n    def expensive(self): return sum(range(self.n))\nd = Data(100)\nprint(f'result={d.expensive}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "c=100" in nb_runner.get_output(2)
-        assert "f=212.0" in nb_runner.get_output(2)
+        assert "result=4950" in nb_runner.get_output(2)
 
-    def test_property_edit(self, nb_runner):
+    def test_descriptor_edit(self, nb_runner):
         nb_runner.create_notebook(
             [
-                "class Box:\n    def __init__(self, w, h): self.w, self.h = w, h\n    @property\n    def area(self): return self.w * self.h",
-                "b = Box(3, 4)\nprint(f'area={b.area}')",
+                "pass  # setup",
+                "class TypedField:\n    def __init__(self, typ): self.typ = typ\n    def __set_name__(self, owner, name): self.name = f'_{name}'\n    def __get__(self, obj, t=None): return getattr(obj, self.name, None)\n    def __set__(self, obj, val):\n        if not isinstance(val, self.typ): raise TypeError\n        setattr(obj, self.name, val)\nclass Config:\n    port = TypedField(int)\nc = Config()\nc.port = 8080\nprint(f'port={c.port}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "area=12" in nb_runner.get_output(2)
-        nb_runner.set_cell_source(2, "b = Box(10, 20)\nprint(f'area={b.area}')")
-        nb_runner.run_all()
-        assert "area=200" in nb_runner.get_output(2)
-
-
-@pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestPropertySetterDeleter:
-    """class property setter/deleter and computed attrs."""
-
-    def test_property_getter_setter(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "class Temperature:\n    def __init__(self, celsius):\n        self._celsius = celsius\n    @property\n    def fahrenheit(self):\n        return self._celsius * 9/5 + 32\n    @fahrenheit.setter\n    def fahrenheit(self, value):\n        self._celsius = (value - 32) * 5/9",
-                "t = Temperature(100)\nf = t.fahrenheit\nt.fahrenheit = 32\nc = t._celsius\nprint(f'f={f} c={c}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "f=212.0" in nb_runner.get_output(2)
-        assert "c=0.0" in nb_runner.get_output(2)
-
-    def test_property_edit_class(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "class Circle:\n    def __init__(self, radius):\n        self.radius = radius\n    @property\n    def area(self):\n        import math\n        return round(math.pi * self.radius ** 2, 2)",
-                "c = Circle(5)\nresult = c.area\nprint(f'area={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "area=78.54" in nb_runner.get_output(2)
-        # Edit to add circumference
+        assert "port=8080" in nb_runner.get_output(2)
         nb_runner.set_cell_source(
-            1,
-            "class Circle:\n    def __init__(self, radius):\n        self.radius = radius\n    @property\n    def area(self):\n        import math\n        return round(math.pi * self.radius ** 2, 2)\n    @property\n    def circumference(self):\n        import math\n        return round(2 * math.pi * self.radius, 2)",
+            2,
+            "class TypedField:\n    def __init__(self, typ): self.typ = typ\n    def __set_name__(self, owner, name): self.name = f'_{name}'\n    def __get__(self, obj, t=None): return getattr(obj, self.name, None)\n    def __set__(self, obj, val):\n        if not isinstance(val, self.typ): raise TypeError\n        setattr(obj, self.name, val)\nclass Config:\n    port = TypedField(int)\nc = Config()\nc.port = 3000\nprint(f'port={c.port}')",
         )
-        nb_runner.set_cell_source(2, "c = Circle(5)\nresult = c.circumference\nprint(f'circ={result}')")
         nb_runner.run_all()
-        assert "circ=31.42" in nb_runner.get_output(2)
-
-    def test_property_validation(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "class Age:\n    def __init__(self, value):\n        self.value = value\n    @property\n    def value(self):\n        return self._value\n    @value.setter\n    def value(self, v):\n        self._value = max(0, min(150, v))",
-                "a = Age(200)\nresult = a.value\nprint(f'clamped={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "clamped=150" in nb_runner.get_output(2)
+        assert "port=3000" in nb_runner.get_output(2)
 
 
 # Descriptor, property, slots, dataclass, and protocol patterns.
@@ -688,33 +559,103 @@ class TestDescriptorPatterns:
         assert "area=96" in nb_runner.get_output(2)
 
 
+# Descriptor protocol interaction tests.
+# Tests that editing descriptor-based attribute access logic
+# properly invalidates downstream cells.
 @pytest.mark.integration
 @pytest.mark.stress
-class TestContextManagerPatterns:
-    """Test caching with context managers."""
+@pytest.mark.timeout(90)
+class TestDescriptorInteraction:
+    """Test descriptor protocol patterns with cache invalidation."""
 
-    def test_custom_context_manager_class(self, nb_runner):
-        """Custom __enter__/__exit__ context manager."""
+    def test_property_descriptor_edit(self, nb_runner):
+        """Editing a class with property descriptors should propagate."""
         nb_runner.create_notebook(
             [
-                textwrap.dedent("""\
-                class Timer:
-                    def __enter__(self):
-                        import time
-                        self.start = time.time()
-                        return self
-                    def __exit__(self, *args):
-                        import time
-                        self.elapsed = time.time() - self.start
-            """),
-                textwrap.dedent("""\
-                import time
-                with Timer() as t:
-                    time.sleep(0.01)
-                print(f"elapsed={t.elapsed > 0}")
-            """),
+                (
+                    "class Circle:\n"
+                    "    def __init__(self, radius):\n"
+                    "        self._radius = radius\n"
+                    "    @property\n"
+                    "    def area(self):\n"
+                    "        return 3.14159 * self._radius ** 2"
+                ),
+                "c = Circle(5)",
+                "a = round(c.area, 2)",
+                "print(f'area={a}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "elapsed=True" in nb_runner.get_output(2)
+        out = nb_runner.get_output(4)
+        assert "area=78.54" in out
+
+        nb_runner.set_cell_source(2, "c = Circle(10)")
+        nb_runner.run_all()
+        out = nb_runner.get_output(4)
+        assert "area=314.16" in out
+
+    def test_custom_descriptor_edit(self, nb_runner):
+        """Editing a custom descriptor class should propagate."""
+        nb_runner.create_notebook(
+            [
+                (
+                    "class Validator:\n"
+                    "    def __init__(self, min_val, max_val):\n"
+                    "        self.min_val = min_val\n"
+                    "        self.max_val = max_val\n"
+                    "    def __set_name__(self, owner, name):\n"
+                    "        self.name = '_' + name\n"
+                    "    def __get__(self, obj, objtype=None):\n"
+                    "        return getattr(obj, self.name, None)\n"
+                    "    def __set__(self, obj, value):\n"
+                    "        if not (self.min_val <= value <= self.max_val):\n"
+                    "            raise ValueError(f'{value} not in [{self.min_val},{self.max_val}]')\n"
+                    "        setattr(obj, self.name, value)"
+                ),
+                (
+                    "class Sensor:\n"
+                    "    temperature = Validator(-50, 150)\n"
+                    "    def __init__(self, temp):\n"
+                    "        self.temperature = temp"
+                ),
+                "s = Sensor(25)\nval = s.temperature",
+                "print(f'temp={val}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(4)
+        assert "temp=25" in out
+
+        nb_runner.set_cell_source(3, "s = Sensor(99)\nval = s.temperature")
+        nb_runner.run_all()
+        out = nb_runner.get_output(4)
+        assert "temp=99" in out
+
+    def test_cached_property_edit(self, nb_runner):
+        """Editing data used by a cached_property should propagate."""
+        nb_runner.create_notebook(
+            [
+                "from functools import cached_property",
+                (
+                    "class Stats:\n"
+                    "    def __init__(self, data):\n"
+                    "        self.data = data\n"
+                    "    @cached_property\n"
+                    "    def mean(self):\n"
+                    "        return sum(self.data) / len(self.data)"
+                ),
+                "st = Stats([10, 20, 30])\nm = st.mean",
+                "print(f'mean={m}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(4)
+        assert "mean=20.0" in out
+
+        nb_runner.set_cell_source(3, "st = Stats([100, 200, 300])\nm = st.mean")
+        nb_runner.run_all()
+        out = nb_runner.get_output(4)
+        assert "mean=200.0" in out

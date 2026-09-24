@@ -5,6 +5,46 @@ import textwrap
 import pytest
 
 
+# Context managers & resource management — cash caching with with-statements.
+@pytest.mark.stress
+class TestContextManagerBasics:
+    """Test context manager patterns across cells."""
+
+    def test_custom_context_manager(self, nb_runner):
+        """Custom context manager with __enter__/__exit__."""
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
+                class Timer:
+                    def __init__(self, label):
+                        self.label = label
+                        self.elapsed = None
+                    def __enter__(self):
+                        import time
+                        self._start = time.perf_counter()
+                        return self
+                    def __exit__(self, *args):
+                        import time
+                        self.elapsed = time.perf_counter() - self._start
+                        return False
+
+                with Timer('test') as t:
+                    total = sum(range(100000))
+                print(f"total={total} timed={t.elapsed is not None}")
+            """),
+                textwrap.dedent("""\
+                print(f"label={t.label} elapsed_positive={t.elapsed > 0}")
+            """),
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "total=4999950000" in nb_runner.get_output(1)
+        assert "timed=True" in nb_runner.get_output(1)
+        assert "label=test" in nb_runner.get_output(2)
+        assert "elapsed_positive=True" in nb_runner.get_output(2)
+
+
 # Context manager pattern interaction tests.
 #
 # Tests editing context manager definitions, with-statements,
@@ -57,6 +97,85 @@ class TestContextManagerEdits:
         )
         nb_runner.run_all()
         assert "msg = finished" in nb_runner.get_output(2)
+
+
+@pytest.mark.stress
+@pytest.mark.timeout(90)
+class TestContextManagerClassPattern:
+    """context manager class enter exit pattern."""
+
+    def test_custom_context_manager(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "pass  # setup",
+                "class Timer:\n    def __init__(self, name): self.name = name\n    def __enter__(self):\n        self.log = [f'enter:{self.name}']\n        return self\n    def __exit__(self, *args):\n        self.log.append(f'exit:{self.name}')\n        return False\nwith Timer('test') as t:\n    t.log.append('body')\nprint(f'log={t.log}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "log=['enter:test', 'body', 'exit:test']" in nb_runner.get_output(2)
+
+    def test_nested_context(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "pass  # setup",
+                "class Scope:\n    instances = []\n    def __init__(self, name): self.name = name\n    def __enter__(self):\n        Scope.instances.append(self.name)\n        return self\n    def __exit__(self, *a):\n        Scope.instances.pop()\nwith Scope('outer') as o:\n    with Scope('inner') as i:\n        snapshot = list(Scope.instances)\nprint(f'snapshot={snapshot} after={Scope.instances}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(2)
+        assert "snapshot=['outer', 'inner']" in out
+        assert "after=[]" in out
+
+    def test_context_edit(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "pass  # setup",
+                "class Ctx:\n    def __init__(self, v): self.v = v\n    def __enter__(self): return self.v\n    def __exit__(self, *a): pass\nwith Ctx(42) as val:\n    result = val * 2\nprint(f'result={result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "result=84" in nb_runner.get_output(2)
+        nb_runner.set_cell_source(
+            2,
+            "class Ctx:\n    def __init__(self, v): self.v = v\n    def __enter__(self): return self.v\n    def __exit__(self, *a): pass\nwith Ctx(100) as val:\n    result = val * 3\nprint(f'result={result}')",
+        )
+        nb_runner.run_all()
+        assert "result=300" in nb_runner.get_output(2)
+
+
+@pytest.mark.integration
+@pytest.mark.stress
+class TestCustomContextManagerClass:
+    """Test caching with context managers."""
+
+    def test_custom_context_manager_class(self, nb_runner):
+        """Custom __enter__/__exit__ context manager."""
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
+                class Timer:
+                    def __enter__(self):
+                        import time
+                        self.start = time.time()
+                        return self
+                    def __exit__(self, *args):
+                        import time
+                        self.elapsed = time.time() - self.start
+            """),
+                textwrap.dedent("""\
+                import time
+                with Timer() as t:
+                    time.sleep(0.01)
+                print(f"elapsed={t.elapsed > 0}")
+            """),
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "elapsed=True" in nb_runner.get_output(2)
 
 
 class TestResourcePatterns:
@@ -174,51 +293,107 @@ class TestResourcePatterns:
         assert "count=5" in nb_runner.get_output(2)
 
 
+# Interaction test: contextmanager decorator for custom context managers.
+# Tests @contextmanager from contextlib with yield-based resource management,
+# exception handling in context, and cross-cell state.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
-class TestContextManagerClassPattern:
-    """context manager class enter exit pattern."""
+class TestContextmanagerDecorator:
+    """Test @contextmanager decorator across cells."""
 
-    def test_custom_context_manager(self, nb_runner):
+    def test_contextmanager_basic(self, nb_runner):
         nb_runner.create_notebook(
             [
-                "pass  # setup",
-                "class Timer:\n    def __init__(self, name): self.name = name\n    def __enter__(self):\n        self.log = [f'enter:{self.name}']\n        return self\n    def __exit__(self, *args):\n        self.log.append(f'exit:{self.name}')\n        return False\nwith Timer('test') as t:\n    t.log.append('body')\nprint(f'log={t.log}')",
+                # Cell 1: define context manager
+                "from contextlib import contextmanager\n@contextmanager\ndef track_state(name):\n    state = {'entered': True, 'name': name, 'exited': False}\n    try:\n        yield state\n    finally:\n        state['exited'] = True\nprint('track_state defined')",
+                # Cell 2: use context manager
+                "with track_state('test') as s:\n    s['value'] = 42\n    inside_name = s['name']\nprint(f'name={inside_name}')\nprint(f'exited={s[\"exited\"]}')\nprint(f'value={s[\"value\"]}')",
+                # Cell 3: reference results
+                "summary = f'{inside_name}:{s[\"value\"]}'\nprint(f'summary={summary}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "log=['enter:test', 'body', 'exit:test']" in nb_runner.get_output(2)
+        out2 = nb_runner.get_output(2)
+        assert "name=test" in out2
+        assert "exited=True" in out2
+        assert "value=42" in out2
+        out3 = nb_runner.get_output(3)
+        assert "summary=test:42" in out3
 
-    def test_nested_context(self, nb_runner):
+    def test_contextmanager_edit(self, nb_runner):
         nb_runner.create_notebook(
             [
-                "pass  # setup",
-                "class Scope:\n    instances = []\n    def __init__(self, name): self.name = name\n    def __enter__(self):\n        Scope.instances.append(self.name)\n        return self\n    def __exit__(self, *a):\n        Scope.instances.pop()\nwith Scope('outer') as o:\n    with Scope('inner') as i:\n        snapshot = list(Scope.instances)\nprint(f'snapshot={snapshot} after={Scope.instances}')",
+                "from contextlib import contextmanager\n@contextmanager\ndef counter():\n    c = [0]\n    yield c\n    c[0] += 1  # increment on exit\nprint('counter defined')",
+                "with counter() as c:\n    c[0] = 10\nresult = c[0]\nprint(f'result={result}')",
+                "doubled = result * 2\nprint(f'doubled={doubled}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "result=11" in nb_runner.get_output(2)
+        assert "doubled=22" in nb_runner.get_output(3)
+
+        # Edit initial value
+        nb_runner.set_cell_source(2, "with counter() as c:\n    c[0] = 20\nresult = c[0]\nprint(f'result={result}')")
+        nb_runner.run_cells([2, 3])
+        assert "result=21" in nb_runner.get_output(2)
+        assert "doubled=42" in nb_runner.get_output(3)
+
+    def test_contextmanager_cache(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "from contextlib import contextmanager\n@contextmanager\ndef tag(name):\n    result = [f'<{name}>']\n    yield result\n    result.append(f'</{name}>')\nprint('tag defined')",
+                "with tag('div') as parts:\n    parts.append('content')\nhtml = ''.join(parts)\nprint(f'html={html}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "html=<div>content</div>" in nb_runner.get_output(2)
+
+        # Re-run - cache
+        nb_runner.run_all()
+        assert "html=<div>content</div>" in nb_runner.get_output(2)
+
+
+@pytest.mark.stress
+class TestContextmanagerAcrossCells:
+    """Test context manager patterns."""
+
+    def test_contextlib_contextmanager(self, nb_runner):
+        """@contextmanager decorator across cells."""
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
+                from contextlib import contextmanager
+
+                @contextmanager
+                def timer_context(name):
+                    import time
+                    log = []
+                    log.append(f"start:{name}")
+                    start = time.time()
+                    try:
+                        yield log
+                    finally:
+                        elapsed = time.time() - start
+                        log.append(f"end:{name}:{elapsed:.3f}s")
+            """),
+                textwrap.dedent("""\
+                with timer_context("computation") as log:
+                    result = sum(range(10000))
+                    log.append(f"computed:{result}")
+                print(f"log_count={len(log)} first={log[0]}")
+                print(f"has_end={'end:computation' in log[2]}")
+            """),
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(2)
-        assert "snapshot=['outer', 'inner']" in out
-        assert "after=[]" in out
-
-    def test_context_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "pass  # setup",
-                "class Ctx:\n    def __init__(self, v): self.v = v\n    def __enter__(self): return self.v\n    def __exit__(self, *a): pass\nwith Ctx(42) as val:\n    result = val * 2\nprint(f'result={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result=84" in nb_runner.get_output(2)
-        nb_runner.set_cell_source(
-            2,
-            "class Ctx:\n    def __init__(self, v): self.v = v\n    def __enter__(self): return self.v\n    def __exit__(self, *a): pass\nwith Ctx(100) as val:\n    result = val * 3\nprint(f'result={result}')",
-        )
-        nb_runner.run_all()
-        assert "result=300" in nb_runner.get_output(2)
+        assert "log_count=3" in out
+        assert "start:computation" in out
+        assert "has_end=True" in out
 
 
 # Interaction test: contextlib contextmanager and suppress.
@@ -328,6 +503,37 @@ class TestContextlibPatterns:
 
 @pytest.mark.stress
 @pytest.mark.timeout(90)
+class TestContextlibSuppressRedirect:
+    """contextlib suppress and redirect_stdout."""
+
+    def test_suppress(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "from contextlib import suppress",
+                "with suppress(KeyError):\n    d = {}\n    val = d['missing']\nresult = 'survived'\nprint(f'result={result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "result=survived" in nb_runner.get_output(2)
+
+    def test_suppress_edit(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "from contextlib import suppress\ndata = [1, 2, 3]",
+                "with suppress(IndexError):\n    val = data[10]\nresult = len(data)\nprint(f'result={result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "result=3" in nb_runner.get_output(2)
+        nb_runner.set_cell_source(1, "from contextlib import suppress\ndata = [10, 20, 30, 40, 50]")
+        nb_runner.run_all()
+        assert "result=5" in nb_runner.get_output(2)
+
+
+@pytest.mark.stress
+@pytest.mark.timeout(90)
 class TestContextlibSuppressStringIO:
     """contextlib suppress and redirect to stringio."""
 
@@ -370,137 +576,3 @@ class TestContextlibSuppressStringIO:
         )
         nb_runner.run_all()
         assert "val=5" in nb_runner.get_output(2)
-
-
-# Interaction test: contextmanager decorator for custom context managers.
-# Tests @contextmanager from contextlib with yield-based resource management,
-# exception handling in context, and cross-cell state.
-@pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestContextmanagerDecorator:
-    """Test @contextmanager decorator across cells."""
-
-    def test_contextmanager_basic(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                # Cell 1: define context manager
-                "from contextlib import contextmanager\n@contextmanager\ndef track_state(name):\n    state = {'entered': True, 'name': name, 'exited': False}\n    try:\n        yield state\n    finally:\n        state['exited'] = True\nprint('track_state defined')",
-                # Cell 2: use context manager
-                "with track_state('test') as s:\n    s['value'] = 42\n    inside_name = s['name']\nprint(f'name={inside_name}')\nprint(f'exited={s[\"exited\"]}')\nprint(f'value={s[\"value\"]}')",
-                # Cell 3: reference results
-                "summary = f'{inside_name}:{s[\"value\"]}'\nprint(f'summary={summary}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out2 = nb_runner.get_output(2)
-        assert "name=test" in out2
-        assert "exited=True" in out2
-        assert "value=42" in out2
-        out3 = nb_runner.get_output(3)
-        assert "summary=test:42" in out3
-
-    def test_contextmanager_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "from contextlib import contextmanager\n@contextmanager\ndef counter():\n    c = [0]\n    yield c\n    c[0] += 1  # increment on exit\nprint('counter defined')",
-                "with counter() as c:\n    c[0] = 10\nresult = c[0]\nprint(f'result={result}')",
-                "doubled = result * 2\nprint(f'doubled={doubled}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result=11" in nb_runner.get_output(2)
-        assert "doubled=22" in nb_runner.get_output(3)
-
-        # Edit initial value
-        nb_runner.set_cell_source(2, "with counter() as c:\n    c[0] = 20\nresult = c[0]\nprint(f'result={result}')")
-        nb_runner.run_cells([2, 3])
-        assert "result=21" in nb_runner.get_output(2)
-        assert "doubled=42" in nb_runner.get_output(3)
-
-    def test_contextmanager_cache(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "from contextlib import contextmanager\n@contextmanager\ndef tag(name):\n    result = [f'<{name}>']\n    yield result\n    result.append(f'</{name}>')\nprint('tag defined')",
-                "with tag('div') as parts:\n    parts.append('content')\nhtml = ''.join(parts)\nprint(f'html={html}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "html=<div>content</div>" in nb_runner.get_output(2)
-
-        # Re-run - cache
-        nb_runner.run_all()
-        assert "html=<div>content</div>" in nb_runner.get_output(2)
-
-
-# Context managers & resource management — cash caching with with-statements.
-@pytest.mark.stress
-class TestContextManagerBasics:
-    """Test context manager patterns across cells."""
-
-    def test_custom_context_manager(self, nb_runner):
-        """Custom context manager with __enter__/__exit__."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                class Timer:
-                    def __init__(self, label):
-                        self.label = label
-                        self.elapsed = None
-                    def __enter__(self):
-                        import time
-                        self._start = time.perf_counter()
-                        return self
-                    def __exit__(self, *args):
-                        import time
-                        self.elapsed = time.perf_counter() - self._start
-                        return False
-
-                with Timer('test') as t:
-                    total = sum(range(100000))
-                print(f"total={total} timed={t.elapsed is not None}")
-            """),
-                textwrap.dedent("""\
-                print(f"label={t.label} elapsed_positive={t.elapsed > 0}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "total=4999950000" in nb_runner.get_output(1)
-        assert "timed=True" in nb_runner.get_output(1)
-        assert "label=test" in nb_runner.get_output(2)
-        assert "elapsed_positive=True" in nb_runner.get_output(2)
-
-
-@pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestContextlibSuppressRedirect:
-    """contextlib suppress and redirect_stdout."""
-
-    def test_suppress(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "from contextlib import suppress",
-                "with suppress(KeyError):\n    d = {}\n    val = d['missing']\nresult = 'survived'\nprint(f'result={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result=survived" in nb_runner.get_output(2)
-
-    def test_suppress_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "from contextlib import suppress\ndata = [1, 2, 3]",
-                "with suppress(IndexError):\n    val = data[10]\nresult = len(data)\nprint(f'result={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result=3" in nb_runner.get_output(2)
-        nb_runner.set_cell_source(1, "from contextlib import suppress\ndata = [10, 20, 30, 40, 50]")
-        nb_runner.run_all()
-        assert "result=5" in nb_runner.get_output(2)

@@ -5,6 +5,85 @@ import textwrap
 import pytest
 
 
+# Weakref & memory patterns — cash caching with weak references and GC.
+@pytest.mark.stress
+class TestWeakrefBasics:
+    """Test weak references and garbage collection."""
+
+    def test_weakvalue_dict(self, nb_runner):
+        """WeakValueDictionary pattern."""
+        nb_runner.create_notebook(
+            [
+                "import weakref",
+                textwrap.dedent("""\
+                class CacheEntry:
+                    def __init__(self, data):
+                        self.data = data
+
+                cache = weakref.WeakValueDictionary()
+                entries = []
+                for i in range(3):
+                    e = CacheEntry(f"data_{i}")
+                    cache[f"key_{i}"] = e
+                    entries.append(e)  # keep strong refs
+                print(f"cache_size={len(cache)}")
+            """),
+                textwrap.dedent("""\
+                values = [cache[k].data for k in sorted(cache.keys())]
+                print(f"values={values}")
+            """),
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "cache_size=3" in nb_runner.get_output(2)
+        assert "values=['data_0', 'data_1', 'data_2']" in nb_runner.get_output(3)
+
+
+@pytest.mark.stress
+@pytest.mark.timeout(90)
+class TestWeakrefUsage:
+    """weakref and weak references."""
+
+    def test_weakref_basic(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "import weakref\nclass MyObj:\n    def __init__(self, val): self.val = val\nobj = MyObj(42)",
+                "ref = weakref.ref(obj)\nalive = ref() is not None\nval = ref().val\nprint(f'alive={alive} val={val}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "alive=True" in nb_runner.get_output(2)
+        assert "val=42" in nb_runner.get_output(2)
+
+    def test_weakref_dict(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "import weakref\nclass Item:\n    def __init__(self, name): self.name = name\nd = weakref.WeakValueDictionary()",
+                "item = Item('test')\nd['key'] = item\nfound = 'key' in d\nname = d['key'].name\nprint(f'found={found} name={name}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "found=True" in nb_runner.get_output(2)
+        assert "name=test" in nb_runner.get_output(2)
+
+    def test_weakref_edit(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "import weakref\nclass Box:\n    def __init__(self, v): self.v = v\nb = Box(10)",
+                "r = weakref.ref(b)\nprint(f'v={r().v}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "v=10" in nb_runner.get_output(2)
+        nb_runner.set_cell_source(1, "import weakref\nclass Box:\n    def __init__(self, v): self.v = v\nb = Box(99)")
+        nb_runner.run_all()
+        assert "v=99" in nb_runner.get_output(2)
+
+
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestWeakrefObjects:
@@ -121,50 +200,6 @@ class TestWeakrefOps:
         assert "alive=True" in nb_runner.get_output(2)
 
 
-@pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestWeakrefUsage:
-    """weakref and weak references."""
-
-    def test_weakref_basic(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "import weakref\nclass MyObj:\n    def __init__(self, val): self.val = val\nobj = MyObj(42)",
-                "ref = weakref.ref(obj)\nalive = ref() is not None\nval = ref().val\nprint(f'alive={alive} val={val}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "alive=True" in nb_runner.get_output(2)
-        assert "val=42" in nb_runner.get_output(2)
-
-    def test_weakref_dict(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "import weakref\nclass Item:\n    def __init__(self, name): self.name = name\nd = weakref.WeakValueDictionary()",
-                "item = Item('test')\nd['key'] = item\nfound = 'key' in d\nname = d['key'].name\nprint(f'found={found} name={name}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "found=True" in nb_runner.get_output(2)
-        assert "name=test" in nb_runner.get_output(2)
-
-    def test_weakref_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "import weakref\nclass Box:\n    def __init__(self, v): self.v = v\nb = Box(10)",
-                "r = weakref.ref(b)\nprint(f'v={r().v}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "v=10" in nb_runner.get_output(2)
-        nb_runner.set_cell_source(1, "import weakref\nclass Box:\n    def __init__(self, v): self.v = v\nb = Box(99)")
-        nb_runner.run_all()
-        assert "v=99" in nb_runner.get_output(2)
-
-
 # Weakref interaction tests.
 # Tests that editing objects tracked via weakrefs properly invalidates
 # downstream computations.
@@ -218,38 +253,3 @@ class TestWeakrefInteraction:
         nb_runner.run_all()
         out = nb_runner.get_output(5)
         assert "total=300" in out
-
-
-# Weakref & memory patterns — cash caching with weak references and GC.
-@pytest.mark.stress
-class TestWeakrefBasics:
-    """Test weak references and garbage collection."""
-
-    def test_weakvalue_dict(self, nb_runner):
-        """WeakValueDictionary pattern."""
-        nb_runner.create_notebook(
-            [
-                "import weakref",
-                textwrap.dedent("""\
-                class CacheEntry:
-                    def __init__(self, data):
-                        self.data = data
-
-                cache = weakref.WeakValueDictionary()
-                entries = []
-                for i in range(3):
-                    e = CacheEntry(f"data_{i}")
-                    cache[f"key_{i}"] = e
-                    entries.append(e)  # keep strong refs
-                print(f"cache_size={len(cache)}")
-            """),
-                textwrap.dedent("""\
-                values = [cache[k].data for k in sorted(cache.keys())]
-                print(f"values={values}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "cache_size=3" in nb_runner.get_output(2)
-        assert "values=['data_0', 'data_1', 'data_2']" in nb_runner.get_output(3)

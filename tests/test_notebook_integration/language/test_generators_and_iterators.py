@@ -86,100 +86,6 @@ class TestGeneratorPatterns:
         assert "[1, 1, 2, 3, 5, 8]" in nb_runner.get_output(2)
 
 
-@pytest.mark.integration
-@pytest.mark.stress
-class TestClosurePatterns:
-    """Test caching with closures and higher-order functions."""
-
-    def test_higher_order_map_filter(self, nb_runner):
-        """Higher-order functions: map + filter."""
-        nb_runner.create_notebook(
-            [
-                "data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]",
-                textwrap.dedent("""\
-                evens = list(filter(lambda x: x % 2 == 0, data))
-                squared = list(map(lambda x: x**2, evens))
-                print(squared)
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "[4, 16, 36, 64, 100]" in nb_runner.get_output(2)
-
-
-@pytest.mark.integration
-@pytest.mark.stress
-class TestFunctoolsPatterns:
-    """Test caching with functools utilities."""
-
-    def test_functools_lru_cache(self, nb_runner):
-        """@lru_cache decorator on a function."""
-        nb_runner.create_notebook(
-            [
-                "from functools import lru_cache",
-                textwrap.dedent("""\
-                @lru_cache(maxsize=128)
-                def expensive(n):
-                    return sum(range(n))
-            """),
-                textwrap.dedent("""\
-                result = expensive(1000)
-                print(result)
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "499500" in nb_runner.get_output(3)
-
-
-@pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestCustomIterator:
-    """custom iterator protocol (__iter__, __next__)."""
-
-    def test_range_iterator(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "class CountDown:\n    def __init__(self, start):\n        self.start = start\n    def __iter__(self):\n        self.current = self.start\n        return self\n    def __next__(self):\n        if self.current <= 0:\n            raise StopIteration\n        val = self.current\n        self.current -= 1\n        return val",
-                "result = list(CountDown(5))\nprint(f'result={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result=[5, 4, 3, 2, 1]" in nb_runner.get_output(2)
-
-    def test_iterator_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "class Repeat:\n    def __init__(self, val, times):\n        self.val = val\n        self.times = times\n    def __iter__(self):\n        self.count = 0\n        return self\n    def __next__(self):\n        if self.count >= self.times:\n            raise StopIteration\n        self.count += 1\n        return self.val",
-                "result = list(Repeat('x', 3))\nprint(f'result={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result=['x', 'x', 'x']" in nb_runner.get_output(2)
-        # Edit
-        nb_runner.set_cell_source(
-            1,
-            "class Repeat:\n    def __init__(self, val, times):\n        self.val = val\n        self.times = times\n    def __iter__(self):\n        self.count = 0\n        return self\n    def __next__(self):\n        if self.count >= self.times:\n            raise StopIteration\n        self.count += 1\n        return self.val * self.count",
-        )
-        nb_runner.run_all()
-        assert "result=['x', 'xx', 'xxx']" in nb_runner.get_output(2)
-
-    def test_iter_for_loop(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "class Fibonacci:\n    def __init__(self, limit):\n        self.limit = limit\n    def __iter__(self):\n        a, b = 0, 1\n        while a < self.limit:\n            yield a\n            a, b = b, a + b",
-                "fibs = list(Fibonacci(20))\nprint(f'fibs={fibs}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "fibs=[0, 1, 1, 2, 3, 5, 8, 13]" in nb_runner.get_output(2)
-
-
 # generator/iterator protocol patterns with caching.
 # Tests generator functions, iter/next, StopIteration, and edit propagation.
 @pytest.mark.integration
@@ -242,6 +148,157 @@ class TestGeneratorIterator:
         nb_runner.run_all()
         out2 = nb_runner.get_output(3)
         assert "total=55" in out2
+
+
+# Generator and iterator pipeline patterns.
+#
+# Tests generator functions, chaining, and edit propagation.
+@pytest.mark.stress
+@pytest.mark.timeout(90)
+class TestGeneratorPipeline:
+    """Generator pipeline patterns with edits."""
+
+    def test_chained_generators(self, nb_runner):
+        """Edit first generator in chain, final result updates."""
+        nb_runner.create_notebook(
+            [
+                "def source(n):\n    for i in range(1, n + 1):\n        yield i",
+                "def transform(gen):\n    for x in gen:\n        yield x * 10",
+                "result = list(transform(source(4)))\nprint(f'result = {result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "result = [10, 20, 30, 40]" in nb_runner.get_output(3)
+
+        nb_runner.set_cell_source(
+            1,
+            "def source(n):\n    for i in range(1, n + 1):\n        yield i * 2",
+        )
+        nb_runner.run_all()
+        assert "result = [20, 40, 60, 80]" in nb_runner.get_output(3)
+
+    def test_generator_expression_edit(self, nb_runner):
+        """Edit data fed into generator expression."""
+        nb_runner.create_notebook(
+            [
+                "data = [1, 2, 3, 4, 5]",
+                "squares = list(x**2 for x in data if x > 2)\nprint(f'squares = {squares}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "squares = [9, 16, 25]" in nb_runner.get_output(2)
+
+        nb_runner.set_cell_source(1, "data = [10, 20, 30]")
+        nb_runner.run_all()
+        assert "squares = [100, 400, 900]" in nb_runner.get_output(2)
+
+
+@pytest.mark.stress
+@pytest.mark.timeout(90)
+class TestGeneratorYieldFrom:
+    """generator expressions and yield from."""
+
+    def test_generator_expression(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "data = range(1, 11)",
+                "squares_sum = sum(x**2 for x in data)\neven_sum = sum(x for x in data if x % 2 == 0)\nprint(f'squares_sum={squares_sum} even_sum={even_sum}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(2)
+        assert "squares_sum=385" in out
+        assert "even_sum=30" in out
+
+    def test_yield_from(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "pass  # setup",
+                "def flatten(nested):\n    for item in nested:\n        if isinstance(item, list):\n            yield from flatten(item)\n        else:\n            yield item\ndata = [1, [2, 3], [4, [5, 6]], 7]\nresult = list(flatten(data))\nprint(f'result={result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "result=[1, 2, 3, 4, 5, 6, 7]" in nb_runner.get_output(2)
+
+    def test_generator_edit(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "n = 5",
+                "result = sum(i for i in range(n))\nprint(f'result={result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "result=10" in nb_runner.get_output(2)
+        nb_runner.set_cell_source(1, "n = 10")
+        nb_runner.run_all()
+        assert "result=45" in nb_runner.get_output(2)
+
+
+# advanced generators: send(), throw(), close(), yield from.
+@pytest.mark.stress
+@pytest.mark.integration
+class TestGeneratorProtocol:
+    """Generator send/throw/close protocol."""
+
+    def test_generator_pipeline(self, nb_runner):
+        """Coroutine-style generator pipeline."""
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
+                def producer(n):
+                    for i in range(n):
+                        yield i * i
+
+                def filterer(source, pred):
+                    for item in source:
+                        if pred(item):
+                            yield item
+
+                def mapper(source, fn):
+                    for item in source:
+                        yield fn(item)
+
+                pipe = mapper(filterer(producer(10), lambda x: x % 2 == 0), lambda x: x + 1)
+                output = list(pipe)
+            """),
+                "print(f'output={output}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(2)
+        # 0,1,4,9,16,25,36,49,64,81 → even: 0,4,16,36,64 → +1: 1,5,17,37,65
+        assert "1" in out
+        assert "5" in out
+        assert "17" in out
+
+    def test_generator_propagation(self, nb_runner):
+        """Generator that depends on upstream variable, change propagation."""
+        nb_runner.create_notebook(
+            [
+                "multiplier = 2",
+                textwrap.dedent("""\
+                def scaled_range(n, scale):
+                    for i in range(n):
+                        yield i * scale
+
+                collected = list(scaled_range(5, multiplier))
+            """),
+                "print(f'collected={collected}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "[0, 2, 4, 6, 8]" in nb_runner.get_output(3)
+
+        nb_runner.set_cell_source(1, "multiplier = 10")
+        nb_runner.run_cells([1, 2, 3])
+        assert "[0, 10, 20, 30, 40]" in nb_runner.get_output(3)
 
 
 @pytest.mark.stress
@@ -356,46 +413,48 @@ class TestGeneratorSendThrow:
 
 @pytest.mark.stress
 @pytest.mark.timeout(90)
-class TestGeneratorYieldFrom:
-    """generator expressions and yield from."""
+class TestCustomIterator:
+    """custom iterator protocol (__iter__, __next__)."""
 
-    def test_generator_expression(self, nb_runner):
+    def test_range_iterator(self, nb_runner):
         nb_runner.create_notebook(
             [
-                "data = range(1, 11)",
-                "squares_sum = sum(x**2 for x in data)\neven_sum = sum(x for x in data if x % 2 == 0)\nprint(f'squares_sum={squares_sum} even_sum={even_sum}')",
+                "class CountDown:\n    def __init__(self, start):\n        self.start = start\n    def __iter__(self):\n        self.current = self.start\n        return self\n    def __next__(self):\n        if self.current <= 0:\n            raise StopIteration\n        val = self.current\n        self.current -= 1\n        return val",
+                "result = list(CountDown(5))\nprint(f'result={result}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "squares_sum=385" in out
-        assert "even_sum=30" in out
+        assert "result=[5, 4, 3, 2, 1]" in nb_runner.get_output(2)
 
-    def test_yield_from(self, nb_runner):
+    def test_iterator_edit(self, nb_runner):
         nb_runner.create_notebook(
             [
-                "pass  # setup",
-                "def flatten(nested):\n    for item in nested:\n        if isinstance(item, list):\n            yield from flatten(item)\n        else:\n            yield item\ndata = [1, [2, 3], [4, [5, 6]], 7]\nresult = list(flatten(data))\nprint(f'result={result}')",
+                "class Repeat:\n    def __init__(self, val, times):\n        self.val = val\n        self.times = times\n    def __iter__(self):\n        self.count = 0\n        return self\n    def __next__(self):\n        if self.count >= self.times:\n            raise StopIteration\n        self.count += 1\n        return self.val",
+                "result = list(Repeat('x', 3))\nprint(f'result={result}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "result=[1, 2, 3, 4, 5, 6, 7]" in nb_runner.get_output(2)
+        assert "result=['x', 'x', 'x']" in nb_runner.get_output(2)
+        # Edit
+        nb_runner.set_cell_source(
+            1,
+            "class Repeat:\n    def __init__(self, val, times):\n        self.val = val\n        self.times = times\n    def __iter__(self):\n        self.count = 0\n        return self\n    def __next__(self):\n        if self.count >= self.times:\n            raise StopIteration\n        self.count += 1\n        return self.val * self.count",
+        )
+        nb_runner.run_all()
+        assert "result=['x', 'xx', 'xxx']" in nb_runner.get_output(2)
 
-    def test_generator_edit(self, nb_runner):
+    def test_iter_for_loop(self, nb_runner):
         nb_runner.create_notebook(
             [
-                "n = 5",
-                "result = sum(i for i in range(n))\nprint(f'result={result}')",
+                "class Fibonacci:\n    def __init__(self, limit):\n        self.limit = limit\n    def __iter__(self):\n        a, b = 0, 1\n        while a < self.limit:\n            yield a\n            a, b = b, a + b",
+                "fibs = list(Fibonacci(20))\nprint(f'fibs={fibs}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "result=10" in nb_runner.get_output(2)
-        nb_runner.set_cell_source(1, "n = 10")
-        nb_runner.run_all()
-        assert "result=45" in nb_runner.get_output(2)
+        assert "fibs=[0, 1, 1, 2, 3, 5, 8, 13]" in nb_runner.get_output(2)
 
 
 # Iterator and protocol interaction tests.
@@ -463,186 +522,3 @@ class TestIteratorProtocolEdits:
         nb_runner.set_cell_source(2, "t = Transformer(5)\nresult = t(7)\nprint(f'result = {result}')")
         nb_runner.run_all()
         assert "result = 35" in nb_runner.get_output(2)
-
-
-# Generator and iterator pipeline patterns.
-#
-# Tests generator functions, chaining, and edit propagation.
-@pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestGeneratorPipeline:
-    """Generator pipeline patterns with edits."""
-
-    def test_chained_generators(self, nb_runner):
-        """Edit first generator in chain, final result updates."""
-        nb_runner.create_notebook(
-            [
-                "def source(n):\n    for i in range(1, n + 1):\n        yield i",
-                "def transform(gen):\n    for x in gen:\n        yield x * 10",
-                "result = list(transform(source(4)))\nprint(f'result = {result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result = [10, 20, 30, 40]" in nb_runner.get_output(3)
-
-        nb_runner.set_cell_source(
-            1,
-            "def source(n):\n    for i in range(1, n + 1):\n        yield i * 2",
-        )
-        nb_runner.run_all()
-        assert "result = [20, 40, 60, 80]" in nb_runner.get_output(3)
-
-    def test_generator_expression_edit(self, nb_runner):
-        """Edit data fed into generator expression."""
-        nb_runner.create_notebook(
-            [
-                "data = [1, 2, 3, 4, 5]",
-                "squares = list(x**2 for x in data if x > 2)\nprint(f'squares = {squares}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "squares = [9, 16, 25]" in nb_runner.get_output(2)
-
-        nb_runner.set_cell_source(1, "data = [10, 20, 30]")
-        nb_runner.run_all()
-        assert "squares = [100, 400, 900]" in nb_runner.get_output(2)
-
-
-# advanced generators: send(), throw(), close(), yield from.
-@pytest.mark.stress
-@pytest.mark.integration
-class TestGeneratorProtocol:
-    """Generator send/throw/close protocol."""
-
-    def test_generator_pipeline(self, nb_runner):
-        """Coroutine-style generator pipeline."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                def producer(n):
-                    for i in range(n):
-                        yield i * i
-
-                def filterer(source, pred):
-                    for item in source:
-                        if pred(item):
-                            yield item
-
-                def mapper(source, fn):
-                    for item in source:
-                        yield fn(item)
-
-                pipe = mapper(filterer(producer(10), lambda x: x % 2 == 0), lambda x: x + 1)
-                output = list(pipe)
-            """),
-                "print(f'output={output}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        # 0,1,4,9,16,25,36,49,64,81 → even: 0,4,16,36,64 → +1: 1,5,17,37,65
-        assert "1" in out
-        assert "5" in out
-        assert "17" in out
-
-    def test_generator_propagation(self, nb_runner):
-        """Generator that depends on upstream variable, change propagation."""
-        nb_runner.create_notebook(
-            [
-                "multiplier = 2",
-                textwrap.dedent("""\
-                def scaled_range(n, scale):
-                    for i in range(n):
-                        yield i * scale
-
-                collected = list(scaled_range(5, multiplier))
-            """),
-                "print(f'collected={collected}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "[0, 2, 4, 6, 8]" in nb_runner.get_output(3)
-
-        nb_runner.set_cell_source(1, "multiplier = 10")
-        nb_runner.run_cells([1, 2, 3])
-        assert "[0, 10, 20, 30, 40]" in nb_runner.get_output(3)
-
-
-# Iterator & custom container patterns — __iter__, __getitem__, __contains__.
-@pytest.mark.stress
-class TestCustomContainers:
-    """Test custom container classes."""
-
-    def test_matrix_container(self, nb_runner):
-        """Custom matrix with __getitem__ and __setitem__."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                class Matrix:
-                    def __init__(self, rows, cols, fill=0):
-                        self.rows = rows
-                        self.cols = cols
-                        self.data = [[fill] * cols for _ in range(rows)]
-
-                    def __getitem__(self, key):
-                        r, c = key
-                        return self.data[r][c]
-
-                    def __setitem__(self, key, value):
-                        r, c = key
-                        self.data[r][c] = value
-
-                    def __repr__(self):
-                        return f"Matrix({self.rows}x{self.cols})"
-
-                m = Matrix(3, 3)
-                for i in range(3):
-                    m[i, i] = 1  # identity
-            """),
-                textwrap.dedent("""\
-                diag = [m[i, i] for i in range(3)]
-                off_diag = m[0, 1]
-                print(f"m={m} diag={diag} off={off_diag}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "Matrix(3x3)" in nb_runner.get_output(2)
-        assert "diag=[1, 1, 1]" in nb_runner.get_output(2)
-        assert "off=0" in nb_runner.get_output(2)
-
-    def test_default_dict_like(self, nb_runner):
-        """Custom defaultdict-like with factory across cells."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                class AutoDict(dict):
-                    def __init__(self, factory):
-                        super().__init__()
-                        self.factory = factory
-
-                    def __missing__(self, key):
-                        self[key] = self.factory()
-                        return self[key]
-
-                word_counts = AutoDict(int)
-                words = "the cat sat on the mat the cat".split()
-                for w in words:
-                    word_counts[w] += 1
-            """),
-                textwrap.dedent("""\
-                sorted_counts = sorted(word_counts.items())
-                print(f"counts={sorted_counts}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "('the', 3)" in out
-        assert "('cat', 2)" in out

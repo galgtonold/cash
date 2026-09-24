@@ -1,13 +1,16 @@
 """copy and deepcopy across cells."""
 
+import textwrap
+
 import pytest
 
-pytestmark = [pytest.mark.stress, pytest.mark.timeout(90)]
+pytestmark = [pytest.mark.stress]
 
 
 # Copy/deepcopy interaction tests.
 # Tests that cache invalidation works correctly when objects are copied
 # and the original is modified vs when the copy is modified.
+@pytest.mark.timeout(90)
 @pytest.mark.integration
 class TestCopyDeepcopyInteraction:
     """Test copy/deepcopy patterns with cache invalidation."""
@@ -79,6 +82,7 @@ class TestCopyDeepcopyInteraction:
 # Interaction test: copy module deepcopy with custom classes.
 # Tests copy.copy vs copy.deepcopy behavior with nested structures,
 # __copy__/__deepcopy__ protocols, and cross-cell independence.
+@pytest.mark.timeout(90)
 class TestCopyDeepcopyCross:
     """Test copy/deepcopy across cells with custom objects."""
 
@@ -147,6 +151,7 @@ class TestCopyDeepcopyCross:
         assert "total=3" in nb_runner.get_output(2)
 
 
+@pytest.mark.timeout(90)
 class TestCopyDeepcopyNested:
     """copy deepcopy nested mutable objects."""
 
@@ -199,6 +204,7 @@ class TestCopyDeepcopyNested:
         assert "clone={'x': [1]}" in out2
 
 
+@pytest.mark.timeout(90)
 class TestDeepVsShallowCopy:
     """copy.deepcopy vs shallow copy behaviors."""
 
@@ -242,6 +248,7 @@ class TestDeepVsShallowCopy:
         assert "clone=[10, [20, 30]]" in nb_runner.get_output(2)
 
 
+@pytest.mark.timeout(90)
 class TestCopyDeepModify:
     """object copying (copy, deepcopy) with modifications."""
 
@@ -272,3 +279,31 @@ class TestCopyDeepModify:
         nb_runner.set_cell_source(1, "import copy\ndata = [[10, 20], [30, 40]]")
         nb_runner.run_all()
         assert "total=100" in nb_runner.get_output(2)
+
+
+# Weakref, copy, and memory management patterns across cells.
+@pytest.mark.integration
+class TestCopyPatterns:
+    """Test shallow/deep copy across cells."""
+
+    def test_copy_propagation_on_change(self, nb_runner):
+        """Change original → copy is independent."""
+        nb_runner.create_notebook(
+            [
+                "import copy",
+                "data = [10, 20, 30]",
+                "snapshot = copy.deepcopy(data)",
+                textwrap.dedent("""\
+                print(f"data={data} snap={snapshot}")
+            """),
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "data=[10, 20, 30] snap=[10, 20, 30]" in nb_runner.get_output(4)
+
+        nb_runner.set_cell_source(2, "data = [100, 200, 300]")
+        nb_runner.run_all()
+        output = nb_runner.get_output(4)
+        assert "data=[100, 200, 300]" in output
+        assert "snap=[100, 200, 300]" in output

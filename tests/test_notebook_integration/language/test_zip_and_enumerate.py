@@ -5,6 +5,82 @@ import pytest
 pytestmark = [pytest.mark.stress, pytest.mark.timeout(90)]
 
 
+# Zip and enumerate interaction tests.
+#
+# Tests editing cells with zip, enumerate, and itertools
+# patterns and verifying cache invalidation.
+@pytest.mark.upstream
+class TestZipEnumerateEdits:
+    """Editing zip and enumerate patterns."""
+
+    def test_edit_enumerate_start(self, nb_runner):
+        """Edit list and re-enumerate."""
+        nb_runner.create_notebook(
+            [
+                "items = ['apple', 'banana', 'cherry']",
+                "indexed = list(enumerate(items, start=1))\nfor i, item in indexed:\n    print(f'{i}: {item}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "1: apple" in nb_runner.get_output(2)
+
+        # Edit items
+        nb_runner.set_cell_source(1, "items = ['mango', 'kiwi', 'grape', 'plum']")
+        nb_runner.run_all()
+        out = nb_runner.get_output(2)
+        assert "1: mango" in out
+        assert "4: plum" in out
+
+    def test_edit_multi_zip(self, nb_runner):
+        """Edit cells with multiple zip operations."""
+        nb_runner.create_notebook(
+            [
+                "first = [1, 2, 3]\nsecond = [4, 5, 6]",
+                "sums = [a + b for a, b in zip(first, second)]\nprint(f'sums = {sums}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "sums = [5, 7, 9]" in nb_runner.get_output(2)
+
+        # Double the first list values
+        nb_runner.set_cell_source(1, "first = [10, 20, 30]\nsecond = [4, 5, 6]")
+        nb_runner.run_all()
+        assert "sums = [14, 25, 36]" in nb_runner.get_output(2)
+
+
+class TestZipUnzipEnumerate:
+    """zip unzip and enumerate patterns."""
+
+    def test_zip_and_unzip(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "names = ['Alice', 'Bob', 'Carol']\nages = [30, 25, 35]",
+                "paired = list(zip(names, ages))\nun_names, un_ages = zip(*paired)\nprint(f'paired={paired}')\nprint(f'names={list(un_names)} ages={list(un_ages)}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(2)
+        assert "('Alice', 30)" in out
+        assert "names=['Alice', 'Bob', 'Carol']" in out
+
+    def test_zip_edit(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "a = [1, 2]\nb = ['x', 'y']",
+                "result = list(zip(a, b))\nprint(f'result={result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "result=[(1, 'x'), (2, 'y')]" in nb_runner.get_output(2)
+        nb_runner.set_cell_source(1, "a = [10, 20, 30]\nb = ['p', 'q', 'r']")
+        nb_runner.run_all()
+        assert "result=[(10, 'p'), (20, 'q'), (30, 'r')]" in nb_runner.get_output(2)
+
+
 # Interaction test: enumerate with start parameter and custom step.
 # Tests enumerate with start offset, zip+enumerate patterns,
 # and cross-cell indexed iteration pipelines.
@@ -180,6 +256,103 @@ class TestZipDictConstruct:
         assert "0: apple" in out2
 
 
+class TestZipLongestPatterns:
+    """zip with unequal lengths and zip_longest."""
+
+    def test_zip_strict_truncate(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "names = ['Alice', 'Bob', 'Charlie']\nscores = [90, 85]",
+                "paired = list(zip(names, scores))\ncount = len(paired)\nprint(f'paired={paired} count={count}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(2)
+        assert "count=2" in out
+        assert "('Alice', 90)" in out
+
+    def test_zip_edit(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "from itertools import zip_longest\nk = ['a', 'b']\nv = [1, 2, 3]",
+                "result = dict(zip_longest(k, v, fillvalue='?'))\nprint(f'result={result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "'a': 1" in nb_runner.get_output(2)
+        nb_runner.set_cell_source(1, "from itertools import zip_longest\nk = ['x', 'y', 'z']\nv = [10, 20]")
+        nb_runner.run_all()
+        out = nb_runner.get_output(2)
+        assert "'x': 10" in out
+        assert "'z': '?'" in out
+
+
+# Interaction test: zip_longest with fillvalue and multi-iterator.
+# Tests itertools.zip_longest with custom fillvalue,
+# multiple iterables of different lengths, and cross-cell processing.
+class TestZipLongestFillvalue:
+    """Test zip_longest with fillvalue across cells."""
+
+    def test_zip_longest_ops(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                # Cell 1: zip_longest with fillvalue
+                "from itertools import zip_longest\nnames = ['Alice', 'Bob', 'Charlie']\nscores = [95, 87]\ngrades = ['A', 'B', 'C', 'D']\ncombined = list(zip_longest(names, scores, grades, fillvalue='N/A'))\nprint(f'count={len(combined)}')\nfor name, score, grade in combined:\n    print(f'{name}:{score}:{grade}')",
+                # Cell 2: process combined data
+                "valid = [(n, s, g) for n, s, g in combined if s != 'N/A' and g != 'N/A']\nprint(f'valid_count={len(valid)}')\nprint(f'first_valid={valid[0]}')",
+                # Cell 3: transform
+                "result_dict = {n: {'score': s, 'grade': g} for n, s, g in combined if n != 'N/A'}\nprint(f'entries={len(result_dict)}')\nprint(f'alice_score={result_dict[\"Alice\"][\"score\"]}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out1 = nb_runner.get_output(1)
+        assert "count=4" in out1
+        assert "Alice:95:A" in out1
+        out2 = nb_runner.get_output(2)
+        assert "valid_count=2" in out2
+        out3 = nb_runner.get_output(3)
+        assert "entries=3" in out3
+        assert "alice_score=95" in out3
+
+    def test_zip_longest_edit(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "from itertools import zip_longest\nkeys = ['a', 'b', 'c']\nvals = [1, 2]\npairs = dict(zip_longest(keys, vals, fillvalue=0))\nprint(f'pairs={pairs}')",
+                "total = sum(pairs.values())\nprint(f'total={total}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "total=3" in nb_runner.get_output(2)
+
+        # Edit to add more values
+        nb_runner.set_cell_source(
+            1,
+            "from itertools import zip_longest\nkeys = ['a', 'b', 'c', 'd']\nvals = [1, 2, 3]\npairs = dict(zip_longest(keys, vals, fillvalue=0))\nprint(f'pairs={pairs}')",
+        )
+        nb_runner.run_cells([1, 2])
+        assert "total=6" in nb_runner.get_output(2)
+
+    def test_zip_longest_cache(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "from itertools import zip_longest\ncols = ['x', 'y']\nrow1 = [1, 2]\nrow2 = [3]\nmatrix = [dict(zip_longest(cols, r, fillvalue=0)) for r in [row1, row2]]\nprint(f'rows={len(matrix)}')",
+                "x_sum = sum(row['x'] for row in matrix)\ny_sum = sum(row['y'] for row in matrix)\nprint(f'x_sum={x_sum}')\nprint(f'y_sum={y_sum}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "x_sum=4" in nb_runner.get_output(2)
+        assert "y_sum=2" in nb_runner.get_output(2)
+
+        # Re-run - cache
+        nb_runner.run_all()
+        assert "x_sum=4" in nb_runner.get_output(2)
+
+
 # Interaction test: zip_longest with fillvalue and dict construction.
 # Tests zip_longest for unequal iterables, fillvalue parameter,
 # dict construction from zipped pairs, and cross-cell data alignment.
@@ -248,70 +421,6 @@ class TestZipLongestDict:
         assert "z_vals=[0, 6]" in nb_runner.get_output(2)
 
 
-# Interaction test: zip_longest with fillvalue and multi-iterator.
-# Tests itertools.zip_longest with custom fillvalue,
-# multiple iterables of different lengths, and cross-cell processing.
-class TestZipLongestFillvalue:
-    """Test zip_longest with fillvalue across cells."""
-
-    def test_zip_longest_ops(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                # Cell 1: zip_longest with fillvalue
-                "from itertools import zip_longest\nnames = ['Alice', 'Bob', 'Charlie']\nscores = [95, 87]\ngrades = ['A', 'B', 'C', 'D']\ncombined = list(zip_longest(names, scores, grades, fillvalue='N/A'))\nprint(f'count={len(combined)}')\nfor name, score, grade in combined:\n    print(f'{name}:{score}:{grade}')",
-                # Cell 2: process combined data
-                "valid = [(n, s, g) for n, s, g in combined if s != 'N/A' and g != 'N/A']\nprint(f'valid_count={len(valid)}')\nprint(f'first_valid={valid[0]}')",
-                # Cell 3: transform
-                "result_dict = {n: {'score': s, 'grade': g} for n, s, g in combined if n != 'N/A'}\nprint(f'entries={len(result_dict)}')\nprint(f'alice_score={result_dict[\"Alice\"][\"score\"]}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out1 = nb_runner.get_output(1)
-        assert "count=4" in out1
-        assert "Alice:95:A" in out1
-        out2 = nb_runner.get_output(2)
-        assert "valid_count=2" in out2
-        out3 = nb_runner.get_output(3)
-        assert "entries=3" in out3
-        assert "alice_score=95" in out3
-
-    def test_zip_longest_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "from itertools import zip_longest\nkeys = ['a', 'b', 'c']\nvals = [1, 2]\npairs = dict(zip_longest(keys, vals, fillvalue=0))\nprint(f'pairs={pairs}')",
-                "total = sum(pairs.values())\nprint(f'total={total}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "total=3" in nb_runner.get_output(2)
-
-        # Edit to add more values
-        nb_runner.set_cell_source(
-            1,
-            "from itertools import zip_longest\nkeys = ['a', 'b', 'c', 'd']\nvals = [1, 2, 3]\npairs = dict(zip_longest(keys, vals, fillvalue=0))\nprint(f'pairs={pairs}')",
-        )
-        nb_runner.run_cells([1, 2])
-        assert "total=6" in nb_runner.get_output(2)
-
-    def test_zip_longest_cache(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "from itertools import zip_longest\ncols = ['x', 'y']\nrow1 = [1, 2]\nrow2 = [3]\nmatrix = [dict(zip_longest(cols, r, fillvalue=0)) for r in [row1, row2]]\nprint(f'rows={len(matrix)}')",
-                "x_sum = sum(row['x'] for row in matrix)\ny_sum = sum(row['y'] for row in matrix)\nprint(f'x_sum={x_sum}')\nprint(f'y_sum={y_sum}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "x_sum=4" in nb_runner.get_output(2)
-        assert "y_sum=2" in nb_runner.get_output(2)
-
-        # Re-run - cache
-        nb_runner.run_all()
-        assert "x_sum=4" in nb_runner.get_output(2)
-
-
 class TestZipLongestStarmap:
     """zip_longest and starmap from itertools."""
 
@@ -354,6 +463,33 @@ class TestZipLongestStarmap:
         assert "r=[(1, 10), (2, -1), (3, -1)]" in nb_runner.get_output(2)
 
 
+class TestZipLongestPairwise:
+    """zip_longest, pairwise, and batched iteration patterns."""
+
+    def test_zip_longest(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "from itertools import zip_longest\na = [1, 2, 3]\nb = ['x', 'y']",
+                "result = list(zip_longest(a, b, fillvalue='?'))\nprint(f'result={result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "result=[(1, 'x'), (2, 'y'), (3, '?')]" in nb_runner.get_output(2)
+
+    def test_batched_manual(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "def batched(iterable, n):\n    from itertools import islice\n    it = iter(iterable)\n    while batch := list(islice(it, n)):\n        yield tuple(batch)",
+                "data = list(range(10))\nresult = list(batched(data, 3))\nprint(f'result={result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "(0, 1, 2)" in nb_runner.get_output(2)
+        assert "(9,)" in nb_runner.get_output(2)
+
+
 class TestMatrixTransposeZipStar:
     """matrix transpose and zip star pattern."""
 
@@ -384,139 +520,3 @@ class TestMatrixTransposeZipStar:
         nb_runner.run_all()
         assert "rows=4" in nb_runner.get_output(2)
         assert "cols=2" in nb_runner.get_output(2)
-
-
-# Zip and enumerate interaction tests.
-#
-# Tests editing cells with zip, enumerate, and itertools
-# patterns and verifying cache invalidation.
-@pytest.mark.upstream
-class TestZipEnumerateEdits:
-    """Editing zip and enumerate patterns."""
-
-    def test_edit_enumerate_start(self, nb_runner):
-        """Edit list and re-enumerate."""
-        nb_runner.create_notebook(
-            [
-                "items = ['apple', 'banana', 'cherry']",
-                "indexed = list(enumerate(items, start=1))\nfor i, item in indexed:\n    print(f'{i}: {item}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "1: apple" in nb_runner.get_output(2)
-
-        # Edit items
-        nb_runner.set_cell_source(1, "items = ['mango', 'kiwi', 'grape', 'plum']")
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "1: mango" in out
-        assert "4: plum" in out
-
-    def test_edit_multi_zip(self, nb_runner):
-        """Edit cells with multiple zip operations."""
-        nb_runner.create_notebook(
-            [
-                "first = [1, 2, 3]\nsecond = [4, 5, 6]",
-                "sums = [a + b for a, b in zip(first, second)]\nprint(f'sums = {sums}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "sums = [5, 7, 9]" in nb_runner.get_output(2)
-
-        # Double the first list values
-        nb_runner.set_cell_source(1, "first = [10, 20, 30]\nsecond = [4, 5, 6]")
-        nb_runner.run_all()
-        assert "sums = [14, 25, 36]" in nb_runner.get_output(2)
-
-
-class TestZipLongestPairwise:
-    """zip_longest, pairwise, and batched iteration patterns."""
-
-    def test_zip_longest(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "from itertools import zip_longest\na = [1, 2, 3]\nb = ['x', 'y']",
-                "result = list(zip_longest(a, b, fillvalue='?'))\nprint(f'result={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result=[(1, 'x'), (2, 'y'), (3, '?')]" in nb_runner.get_output(2)
-
-    def test_batched_manual(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "def batched(iterable, n):\n    from itertools import islice\n    it = iter(iterable)\n    while batch := list(islice(it, n)):\n        yield tuple(batch)",
-                "data = list(range(10))\nresult = list(batched(data, 3))\nprint(f'result={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "(0, 1, 2)" in nb_runner.get_output(2)
-        assert "(9,)" in nb_runner.get_output(2)
-
-
-class TestZipLongestPatterns:
-    """zip with unequal lengths and zip_longest."""
-
-    def test_zip_strict_truncate(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "names = ['Alice', 'Bob', 'Charlie']\nscores = [90, 85]",
-                "paired = list(zip(names, scores))\ncount = len(paired)\nprint(f'paired={paired} count={count}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "count=2" in out
-        assert "('Alice', 90)" in out
-
-    def test_zip_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "from itertools import zip_longest\nk = ['a', 'b']\nv = [1, 2, 3]",
-                "result = dict(zip_longest(k, v, fillvalue='?'))\nprint(f'result={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "'a': 1" in nb_runner.get_output(2)
-        nb_runner.set_cell_source(1, "from itertools import zip_longest\nk = ['x', 'y', 'z']\nv = [10, 20]")
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "'x': 10" in out
-        assert "'z': '?'" in out
-
-
-class TestZipUnzipEnumerate:
-    """zip unzip and enumerate patterns."""
-
-    def test_zip_and_unzip(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "names = ['Alice', 'Bob', 'Carol']\nages = [30, 25, 35]",
-                "paired = list(zip(names, ages))\nun_names, un_ages = zip(*paired)\nprint(f'paired={paired}')\nprint(f'names={list(un_names)} ages={list(un_ages)}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "('Alice', 30)" in out
-        assert "names=['Alice', 'Bob', 'Carol']" in out
-
-    def test_zip_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "a = [1, 2]\nb = ['x', 'y']",
-                "result = list(zip(a, b))\nprint(f'result={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result=[(1, 'x'), (2, 'y')]" in nb_runner.get_output(2)
-        nb_runner.set_cell_source(1, "a = [10, 20, 30]\nb = ['p', 'q', 'r']")
-        nb_runner.run_all()
-        assert "result=[(10, 'p'), (20, 'q'), (30, 'r')]" in nb_runner.get_output(2)

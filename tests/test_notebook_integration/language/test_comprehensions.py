@@ -1,14 +1,16 @@
 """List, dict and set comprehensions across cells."""
 
-import pytest
+import textwrap
 
-pytestmark = [pytest.mark.stress, pytest.mark.timeout(90)]
+import pytest
 
 
 # Comprehension filter and transform edit tests.
 #
 # Tests editing filter conditions and transformations in various
 # comprehension expressions.
+@pytest.mark.stress
+@pytest.mark.timeout(90)
 @pytest.mark.upstream
 class TestComprehensionFilterEdits:
     """Editing filters and transforms in comprehensions."""
@@ -82,9 +84,58 @@ class TestComprehensionFilterEdits:
         assert "unique = [4, 5, 6]" in nb_runner.get_output(2)
 
 
+@pytest.mark.stress
+@pytest.mark.timeout(90)
+class TestComprehensionChain:
+    """chain of comprehensions and transformations across cells."""
+
+    def test_chained_comprehensions(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "raw = list(range(20))",
+                "evens = [x for x in raw if x % 2 == 0]",
+                "squared = [x**2 for x in evens]",
+                "result = {x: 'big' if x > 50 else 'small' for x in squared}\nprint(f'result={sorted(result.items())}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "result=" in nb_runner.get_output(4)
+        assert "(64, 'big')" in nb_runner.get_output(4)
+
+    def test_chained_comprehension_edit(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "data = [1, 2, 3, 4, 5]",
+                "filtered = [x for x in data if x > 2]",
+                "doubled = [x * 2 for x in filtered]\nprint(f'doubled={doubled}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "doubled=[6, 8, 10]" in nb_runner.get_output(3)
+        # Edit filter threshold
+        nb_runner.set_cell_source(2, "filtered = [x for x in data if x > 3]")
+        nb_runner.run_all()
+        assert "doubled=[8, 10]" in nb_runner.get_output(3)
+
+    def test_nested_dict_comprehension(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "keys = ['a', 'b', 'c']\nvals = [1, 2, 3]",
+                "mapping = {k: v * 10 for k, v in zip(keys, vals)}\nprint(f'mapping={mapping}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "mapping={'a': 10, 'b': 20, 'c': 30}" in nb_runner.get_output(2)
+
+
 # Comprehension variants interaction tests.
 # Tests dict comprehension, set comprehension, and nested comprehension
 # patterns with cache invalidation.
+@pytest.mark.stress
+@pytest.mark.timeout(90)
 @pytest.mark.integration
 class TestComprehensionVariantsInteraction:
     """Test various comprehension patterns with cache invalidation."""
@@ -153,163 +204,11 @@ class TestComprehensionVariantsInteraction:
         assert "total=100" in out
 
 
-class TestComprehensionChain:
-    """chain of comprehensions and transformations across cells."""
-
-    def test_chained_comprehensions(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "raw = list(range(20))",
-                "evens = [x for x in raw if x % 2 == 0]",
-                "squared = [x**2 for x in evens]",
-                "result = {x: 'big' if x > 50 else 'small' for x in squared}\nprint(f'result={sorted(result.items())}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result=" in nb_runner.get_output(4)
-        assert "(64, 'big')" in nb_runner.get_output(4)
-
-    def test_chained_comprehension_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "data = [1, 2, 3, 4, 5]",
-                "filtered = [x for x in data if x > 2]",
-                "doubled = [x * 2 for x in filtered]\nprint(f'doubled={doubled}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "doubled=[6, 8, 10]" in nb_runner.get_output(3)
-        # Edit filter threshold
-        nb_runner.set_cell_source(2, "filtered = [x for x in data if x > 3]")
-        nb_runner.run_all()
-        assert "doubled=[8, 10]" in nb_runner.get_output(3)
-
-    def test_nested_dict_comprehension(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "keys = ['a', 'b', 'c']\nvals = [1, 2, 3]",
-                "mapping = {k: v * 10 for k, v in zip(keys, vals)}\nprint(f'mapping={mapping}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "mapping={'a': 10, 'b': 20, 'c': 30}" in nb_runner.get_output(2)
-
-
-class TestDictComprehensionConditional:
-    """dict comprehension with conditional logic."""
-
-    def test_dict_comp_filter(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "scores = {'Alice': 95, 'Bob': 67, 'Carol': 82, 'Dave': 45, 'Eve': 91}",
-                "passing = {k: v for k, v in scores.items() if v >= 70}\nfailing = {k: v for k, v in scores.items() if v < 70}\nprint(f'passing={sorted(passing.keys())} failing={sorted(failing.keys())}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "passing=['Alice', 'Carol', 'Eve']" in out
-        assert "failing=['Bob', 'Dave']" in out
-
-    def test_dict_comp_transform(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "words = ['hello', 'world', 'python', 'code']",
-                "lengths = {w: len(w) for w in words}\nuppered = {w: w.upper() for w in words}\nprint(f'lengths={lengths}')\nprint(f'uppered={uppered}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "'hello': 5" in out
-        assert "'HELLO'" in out
-
-    def test_dict_comp_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "nums = [1, 2, 3]",
-                "d = {n: n**2 for n in nums}\nprint(f'd={d}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "d={1: 1, 2: 4, 3: 9}" in nb_runner.get_output(2)
-        nb_runner.set_cell_source(1, "nums = [5, 10, 15]")
-        nb_runner.run_all()
-        assert "d={5: 25, 10: 100, 15: 225}" in nb_runner.get_output(2)
-
-
-# Interaction test: dict comprehension with conditional expressions.
-# Tests dict comprehension with ternary operators, nested conditions,
-# and cross-cell dict transformation pipelines.
-class TestDictCompConditionalExpr:
-    """Test dict comprehension with conditional expressions across cells."""
-
-    def test_dict_comp_ternary(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                # Cell 1: dict comp with ternary
-                "scores = {'Alice': 85, 'Bob': 62, 'Charlie': 91, 'Diana': 45, 'Eve': 78}\ngrades = {name: ('pass' if score >= 60 else 'fail') for name, score in scores.items()}\nprint(f'grades={grades}')",
-                # Cell 2: filter and transform
-                "passing = {k: v for k, v in scores.items() if grades[k] == 'pass'}\navg_pass = sum(passing.values()) / len(passing)\nprint(f'passing_count={len(passing)}')\nprint(f'avg_pass={avg_pass:.1f}')",
-                # Cell 3: categorize
-                "categories = {name: ('A' if s >= 90 else 'B' if s >= 80 else 'C' if s >= 70 else 'D' if s >= 60 else 'F') for name, s in scores.items()}\nprint(f'categories={categories}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out1 = nb_runner.get_output(1)
-        assert "'Alice': 'pass'" in out1
-        assert "'Diana': 'fail'" in out1
-        out2 = nb_runner.get_output(2)
-        assert "passing_count=4" in out2
-        out3 = nb_runner.get_output(3)
-        assert "'Charlie': 'A'" in out3
-        assert "'Alice': 'B'" in out3
-        assert "'Diana': 'F'" in out3
-
-    def test_dict_comp_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "prices = {'apple': 1.5, 'banana': 0.5, 'cherry': 3.0}\ndiscounted = {k: round(v * 0.9, 2) for k, v in prices.items()}\nprint(f'disc={discounted}')",
-                "total = sum(discounted.values())\nprint(f'total={total}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        # Change discount rate
-        nb_runner.set_cell_source(
-            1,
-            "prices = {'apple': 1.5, 'banana': 0.5, 'cherry': 3.0}\ndiscounted = {k: round(v * 0.8, 2) for k, v in prices.items()}\nprint(f'disc={discounted}')",
-        )
-        nb_runner.run_cells([1, 2])
-        assert "'apple': 1.2" in nb_runner.get_output(1)
-        assert "total=4.0" in nb_runner.get_output(2)
-
-    def test_dict_comp_cache(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "data = [('a', 1), ('b', 2), ('c', 3)]\nd = {k: v ** 2 for k, v in data}\nprint(f'd={d}')",
-                "total = sum(d.values())\nprint(f'total={total}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "d={'a': 1, 'b': 4, 'c': 9}" in nb_runner.get_output(1)
-        assert "total=14" in nb_runner.get_output(2)
-
-        # Re-run - cache
-        nb_runner.run_all()
-        assert "total=14" in nb_runner.get_output(2)
-
-
 # Interaction test: list comprehension with multiple for-clauses.
 # Tests nested list comprehensions with multiple iterables,
 # conditions, and cross-cell flattening patterns.
+@pytest.mark.stress
+@pytest.mark.timeout(90)
 class TestMultiForComprehension:
     """Test multi-for comprehensions across cells."""
 
@@ -372,9 +271,212 @@ class TestMultiForComprehension:
         assert "flat=[1, 2, 3, 2, 4, 6, 3, 6, 9]" in nb_runner.get_output(2)
 
 
+@pytest.mark.stress
+@pytest.mark.integration
+class TestNestedComprehensions:
+    """Test deeply nested and complex comprehension patterns."""
+
+    def test_nested_list_comprehension(self, nb_runner):
+        """Nested list comprehension with cross-cell dependency."""
+        nb_runner.create_notebook(
+            [
+                "matrix = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]",
+                textwrap.dedent("""\
+                flat = [x for row in matrix for x in row if x % 2 == 0]
+                print(flat)
+            """),
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "[2, 4, 6, 8]" in nb_runner.get_output(2)
+
+    def test_generator_expression_materialized(self, nb_runner):
+        """Generator expression consumed across cells."""
+        nb_runner.create_notebook(
+            [
+                "numbers = range(1, 11)",
+                textwrap.dedent("""\
+                gen = (x**2 for x in numbers if x % 3 == 0)
+                squares = list(gen)
+                print(squares)
+            """),
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "[9, 36, 81]" in nb_runner.get_output(2)
+
+
+@pytest.mark.stress
+class TestComplexComprehensions:
+    """Test complex comprehension patterns."""
+
+    def test_set_comprehension_with_condition(self, nb_runner):
+        """Set comprehension with multiple conditions."""
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
+                matrix = [[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]]
+                evens = {val for row in matrix for val in row if val % 2 == 0 if val > 4}
+                print(f"evens={sorted(evens)}")
+            """),
+                textwrap.dedent("""\
+                total = sum(evens)
+                print(f"total={total}")
+            """),
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "evens=[6, 8, 10, 12]" in nb_runner.get_output(1)
+        assert "total=36" in nb_runner.get_output(2)
+
+    def test_generator_expression_chain(self, nb_runner):
+        """Chained generator expressions."""
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
+                words = ['Hello World', 'Python Programming', 'Cash Library']
+                letters = list(c.lower() for phrase in words for c in phrase if c.isalpha())
+                freq = {}
+                for ch in letters:
+                    freq[ch] = freq.get(ch, 0) + 1
+                top3 = sorted(freq.items(), key=lambda x: -x[1])[:3]
+                print(f"top3={top3}")
+            """),
+                textwrap.dedent("""\
+                total_letters = len(letters)
+                print(f"total={total_letters}")
+            """),
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out1 = nb_runner.get_output(1)
+        assert "top3=" in out1
+        out2 = nb_runner.get_output(2)
+        assert "total=" in out2
+
+
+@pytest.mark.stress
+@pytest.mark.timeout(90)
+class TestDictComprehensionConditional:
+    """dict comprehension with conditional logic."""
+
+    def test_dict_comp_filter(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "scores = {'Alice': 95, 'Bob': 67, 'Carol': 82, 'Dave': 45, 'Eve': 91}",
+                "passing = {k: v for k, v in scores.items() if v >= 70}\nfailing = {k: v for k, v in scores.items() if v < 70}\nprint(f'passing={sorted(passing.keys())} failing={sorted(failing.keys())}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(2)
+        assert "passing=['Alice', 'Carol', 'Eve']" in out
+        assert "failing=['Bob', 'Dave']" in out
+
+    def test_dict_comp_transform(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "words = ['hello', 'world', 'python', 'code']",
+                "lengths = {w: len(w) for w in words}\nuppered = {w: w.upper() for w in words}\nprint(f'lengths={lengths}')\nprint(f'uppered={uppered}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(2)
+        assert "'hello': 5" in out
+        assert "'HELLO'" in out
+
+    def test_dict_comp_edit(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "nums = [1, 2, 3]",
+                "d = {n: n**2 for n in nums}\nprint(f'd={d}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "d={1: 1, 2: 4, 3: 9}" in nb_runner.get_output(2)
+        nb_runner.set_cell_source(1, "nums = [5, 10, 15]")
+        nb_runner.run_all()
+        assert "d={5: 25, 10: 100, 15: 225}" in nb_runner.get_output(2)
+
+
+# Interaction test: dict comprehension with conditional expressions.
+# Tests dict comprehension with ternary operators, nested conditions,
+# and cross-cell dict transformation pipelines.
+@pytest.mark.stress
+@pytest.mark.timeout(90)
+class TestDictCompConditionalExpr:
+    """Test dict comprehension with conditional expressions across cells."""
+
+    def test_dict_comp_ternary(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                # Cell 1: dict comp with ternary
+                "scores = {'Alice': 85, 'Bob': 62, 'Charlie': 91, 'Diana': 45, 'Eve': 78}\ngrades = {name: ('pass' if score >= 60 else 'fail') for name, score in scores.items()}\nprint(f'grades={grades}')",
+                # Cell 2: filter and transform
+                "passing = {k: v for k, v in scores.items() if grades[k] == 'pass'}\navg_pass = sum(passing.values()) / len(passing)\nprint(f'passing_count={len(passing)}')\nprint(f'avg_pass={avg_pass:.1f}')",
+                # Cell 3: categorize
+                "categories = {name: ('A' if s >= 90 else 'B' if s >= 80 else 'C' if s >= 70 else 'D' if s >= 60 else 'F') for name, s in scores.items()}\nprint(f'categories={categories}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out1 = nb_runner.get_output(1)
+        assert "'Alice': 'pass'" in out1
+        assert "'Diana': 'fail'" in out1
+        out2 = nb_runner.get_output(2)
+        assert "passing_count=4" in out2
+        out3 = nb_runner.get_output(3)
+        assert "'Charlie': 'A'" in out3
+        assert "'Alice': 'B'" in out3
+        assert "'Diana': 'F'" in out3
+
+    def test_dict_comp_edit(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "prices = {'apple': 1.5, 'banana': 0.5, 'cherry': 3.0}\ndiscounted = {k: round(v * 0.9, 2) for k, v in prices.items()}\nprint(f'disc={discounted}')",
+                "total = sum(discounted.values())\nprint(f'total={total}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+
+        # Change discount rate
+        nb_runner.set_cell_source(
+            1,
+            "prices = {'apple': 1.5, 'banana': 0.5, 'cherry': 3.0}\ndiscounted = {k: round(v * 0.8, 2) for k, v in prices.items()}\nprint(f'disc={discounted}')",
+        )
+        nb_runner.run_cells([1, 2])
+        assert "'apple': 1.2" in nb_runner.get_output(1)
+        assert "total=4.0" in nb_runner.get_output(2)
+
+    def test_dict_comp_cache(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "data = [('a', 1), ('b', 2), ('c', 3)]\nd = {k: v ** 2 for k, v in data}\nprint(f'd={d}')",
+                "total = sum(d.values())\nprint(f'total={total}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "d={'a': 1, 'b': 4, 'c': 9}" in nb_runner.get_output(1)
+        assert "total=14" in nb_runner.get_output(2)
+
+        # Re-run - cache
+        nb_runner.run_all()
+        assert "total=14" in nb_runner.get_output(2)
+
+
 # Interaction test: set comprehension with complex filtering.
 # Tests set comprehension with multi-condition filters, set algebra,
 # and cross-cell set-based analysis.
+@pytest.mark.stress
+@pytest.mark.timeout(90)
 class TestSetComprehensionFilter:
     """Test set comprehension with complex filtering across cells."""
 
@@ -433,3 +535,46 @@ class TestSetComprehensionFilter:
         # Re-run - cache
         nb_runner.run_all()
         assert "count=3" in nb_runner.get_output(2)
+
+
+@pytest.mark.core
+@pytest.mark.stress
+@pytest.mark.timeout(30)
+class TestComplexDataFlowEdits:
+    """Complex data flowing through multiple cells with edits."""
+
+    def test_dict_to_list_to_sum(self, nb_runner):
+        """Dict → list extraction → sum, edit the dict."""
+        nb_runner.create_notebook(
+            [
+                "scores = {'math': 90, 'english': 85, 'science': 95}",
+                "values = list(scores.values())",
+                "total = sum(values)\nprint(f'total = {total}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "total = 270" in nb_runner.get_output(3)
+
+        nb_runner.set_cell_source(1, "scores = {'math': 100, 'english': 100, 'science': 100}")
+        nb_runner.run_all()
+        assert "total = 300" in nb_runner.get_output(3)
+
+    def test_list_filter_transform_aggregate(self, nb_runner):
+        """List → filter → transform → aggregate, edit filter."""
+        nb_runner.create_notebook(
+            [
+                "data = list(range(10))",
+                "filtered = [x for x in data if x > 5]",
+                "transformed = [x * 10 for x in filtered]",
+                "result = sum(transformed)\nprint(f'result = {result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "result = 300" in nb_runner.get_output(4)
+
+        # Change filter condition
+        nb_runner.set_cell_source(2, "filtered = [x for x in data if x > 2]")
+        nb_runner.run_all()
+        assert "result = 420" in nb_runner.get_output(4)

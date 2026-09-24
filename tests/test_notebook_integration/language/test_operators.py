@@ -1,99 +1,50 @@
 """The operator module, operator overloading and chained comparisons."""
 
-import textwrap
-
 import pytest
 
 
 @pytest.mark.stress
 @pytest.mark.timeout(90)
-class TestChainedComparison:
-    """chained comparison and identity operators."""
+class TestOperatorModule:
+    """operator module and itemgetter/attrgetter patterns."""
 
-    def test_chained_compare(self, nb_runner):
+    def test_itemgetter_sort(self, nb_runner):
         nb_runner.create_notebook(
             [
-                "x = 5",
-                "in_range = 1 < x < 10\nresult = 'yes' if in_range else 'no'\nprint(f'result={result}')",
+                "from operator import itemgetter\ndata = [('Alice', 85), ('Bob', 92), ('Charlie', 78)]",
+                "by_score = sorted(data, key=itemgetter(1), reverse=True)\nnames = [x[0] for x in by_score]\nprint(f'names={names}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "result=yes" in nb_runner.get_output(2)
+        assert "names=['Bob', 'Alice', 'Charlie']" in nb_runner.get_output(2)
 
-    def test_chained_edit(self, nb_runner):
+    def test_attrgetter_edit(self, nb_runner):
         nb_runner.create_notebook(
             [
-                "a, b, c = 1, 2, 3",
-                "ascending = a < b < c\nresult = 'asc' if ascending else 'not'\nprint(f'result={result}')",
+                "from operator import attrgetter\nclass Student:\n    def __init__(self, name, gpa):\n        self.name = name\n        self.gpa = gpa\n    def __repr__(self):\n        return f'{self.name}:{self.gpa}'",
+                "students = [Student('A', 3.5), Student('B', 3.9), Student('C', 3.2)]",
+                "ranked = sorted(students, key=attrgetter('gpa'), reverse=True)\nprint(f'ranked={ranked}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "result=asc" in nb_runner.get_output(2)
-        # Edit to break chain
-        nb_runner.set_cell_source(1, "a, b, c = 1, 5, 3")
+        assert "ranked=[B:3.9, A:3.5, C:3.2]" in nb_runner.get_output(3)
+        # Edit students
+        nb_runner.set_cell_source(2, "students = [Student('X', 4.0), Student('Y', 2.8)]")
         nb_runner.run_all()
-        assert "result=not" in nb_runner.get_output(2)
+        assert "ranked=[X:4.0, Y:2.8]" in nb_runner.get_output(3)
 
-    def test_is_none_identity(self, nb_runner):
+    def test_methodcaller(self, nb_runner):
         nb_runner.create_notebook(
             [
-                "val = None\nother = 0\nempty = ''",
-                "r1 = val is None\nr2 = other is None\nr3 = empty is not None\nprint(f'r1={r1} r2={r2} r3={r3}')",
+                "from operator import methodcaller\nwords = ['hello', 'WORLD', 'Python']",
+                "upper_words = list(map(methodcaller('upper'), words))\nprint(f'upper={upper_words}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "r1=True r2=False r3=True" in nb_runner.get_output(2)
-
-
-@pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestFunctoolsReduceOperator:
-    """functools reduce and operator module."""
-
-    def test_reduce_sum(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "from functools import reduce\nimport operator",
-                "nums = [1, 2, 3, 4, 5]\nproduct = reduce(operator.mul, nums)\ntotal = reduce(operator.add, nums)\nprint(f'product={product} total={total}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "product=120" in out
-        assert "total=15" in out
-
-    def test_reduce_nested(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "from functools import reduce",
-                "lists = [[1, 2], [3, 4], [5]]\nflat = reduce(lambda a, b: a + b, lists)\nprint(f'flat={flat} len={len(flat)}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "flat=[1, 2, 3, 4, 5]" in out
-        assert "len=5" in out
-
-    def test_reduce_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "from functools import reduce\nimport operator",
-                "vals = [2, 3, 4]\nresult = reduce(operator.mul, vals)\nprint(f'result={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result=24" in nb_runner.get_output(2)
-        nb_runner.set_cell_source(
-            2, "vals = [10, 20, 30]\nresult = reduce(operator.add, vals)\nprint(f'result={result}')"
-        )
-        nb_runner.run_all()
-        assert "result=60" in nb_runner.get_output(2)
+        assert "upper=['HELLO', 'WORLD', 'PYTHON']" in nb_runner.get_output(2)
 
 
 @pytest.mark.stress
@@ -256,46 +207,98 @@ class TestOperatorMethodcaller:
 
 @pytest.mark.stress
 @pytest.mark.timeout(90)
-class TestOperatorModule:
-    """operator module and itemgetter/attrgetter patterns."""
+class TestFunctoolsReduceOperator:
+    """functools reduce and operator module."""
 
-    def test_itemgetter_sort(self, nb_runner):
+    def test_reduce_sum(self, nb_runner):
         nb_runner.create_notebook(
             [
-                "from operator import itemgetter\ndata = [('Alice', 85), ('Bob', 92), ('Charlie', 78)]",
-                "by_score = sorted(data, key=itemgetter(1), reverse=True)\nnames = [x[0] for x in by_score]\nprint(f'names={names}')",
+                "from functools import reduce\nimport operator",
+                "nums = [1, 2, 3, 4, 5]\nproduct = reduce(operator.mul, nums)\ntotal = reduce(operator.add, nums)\nprint(f'product={product} total={total}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "names=['Bob', 'Alice', 'Charlie']" in nb_runner.get_output(2)
+        out = nb_runner.get_output(2)
+        assert "product=120" in out
+        assert "total=15" in out
 
-    def test_attrgetter_edit(self, nb_runner):
+    def test_reduce_nested(self, nb_runner):
         nb_runner.create_notebook(
             [
-                "from operator import attrgetter\nclass Student:\n    def __init__(self, name, gpa):\n        self.name = name\n        self.gpa = gpa\n    def __repr__(self):\n        return f'{self.name}:{self.gpa}'",
-                "students = [Student('A', 3.5), Student('B', 3.9), Student('C', 3.2)]",
-                "ranked = sorted(students, key=attrgetter('gpa'), reverse=True)\nprint(f'ranked={ranked}')",
+                "from functools import reduce",
+                "lists = [[1, 2], [3, 4], [5]]\nflat = reduce(lambda a, b: a + b, lists)\nprint(f'flat={flat} len={len(flat)}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "ranked=[B:3.9, A:3.5, C:3.2]" in nb_runner.get_output(3)
-        # Edit students
-        nb_runner.set_cell_source(2, "students = [Student('X', 4.0), Student('Y', 2.8)]")
-        nb_runner.run_all()
-        assert "ranked=[X:4.0, Y:2.8]" in nb_runner.get_output(3)
+        out = nb_runner.get_output(2)
+        assert "flat=[1, 2, 3, 4, 5]" in out
+        assert "len=5" in out
 
-    def test_methodcaller(self, nb_runner):
+    def test_reduce_edit(self, nb_runner):
         nb_runner.create_notebook(
             [
-                "from operator import methodcaller\nwords = ['hello', 'WORLD', 'Python']",
-                "upper_words = list(map(methodcaller('upper'), words))\nprint(f'upper={upper_words}')",
+                "from functools import reduce\nimport operator",
+                "vals = [2, 3, 4]\nresult = reduce(operator.mul, vals)\nprint(f'result={result}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "upper=['HELLO', 'WORLD', 'PYTHON']" in nb_runner.get_output(2)
+        assert "result=24" in nb_runner.get_output(2)
+        nb_runner.set_cell_source(
+            2, "vals = [10, 20, 30]\nresult = reduce(operator.add, vals)\nprint(f'result={result}')"
+        )
+        nb_runner.run_all()
+        assert "result=60" in nb_runner.get_output(2)
+
+
+@pytest.mark.stress
+@pytest.mark.timeout(90)
+class TestOperatorOverloading:
+    """custom __add__, __mul__ operator overloading."""
+
+    def test_add_mul(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "class Vector:\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\n    def __add__(self, other):\n        return Vector(self.x + other.x, self.y + other.y)\n    def __mul__(self, scalar):\n        return Vector(self.x * scalar, self.y * scalar)\n    def __repr__(self):\n        return f'V({self.x},{self.y})'",
+                "v1 = Vector(1, 2)\nv2 = Vector(3, 4)\nv3 = v1 + v2\nv4 = v1 * 3\nprint(f'v3={v3} v4={v4}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "v3=V(4,6)" in nb_runner.get_output(2)
+        assert "v4=V(3,6)" in nb_runner.get_output(2)
+
+    def test_overload_edit(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "class Money:\n    def __init__(self, amount):\n        self.amount = amount\n    def __add__(self, other):\n        return Money(self.amount + other.amount)\n    def __repr__(self):\n        return f'${self.amount}'",
+                "m1 = Money(10)\nm2 = Money(25)\ntotal = m1 + m2\nprint(f'total={total}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "total=$35" in nb_runner.get_output(2)
+        # Edit class to add sub
+        nb_runner.set_cell_source(
+            1,
+            "class Money:\n    def __init__(self, amount):\n        self.amount = amount\n    def __add__(self, other):\n        return Money(self.amount + other.amount)\n    def __sub__(self, other):\n        return Money(self.amount - other.amount)\n    def __repr__(self):\n        return f'${self.amount}'",
+        )
+        nb_runner.set_cell_source(2, "m1 = Money(50)\nm2 = Money(25)\ndiff = m1 - m2\nprint(f'diff={diff}')")
+        nb_runner.run_all()
+        assert "diff=$25" in nb_runner.get_output(2)
+
+    def test_iadd(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "class Accumulator:\n    def __init__(self, val=0):\n        self.val = val\n    def __iadd__(self, other):\n        self.val += other\n        return self\n    def __repr__(self):\n        return f'Acc({self.val})'",
+                "a = Accumulator()\na += 10\na += 20\nprint(f'a={a}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "a=Acc(30)" in nb_runner.get_output(2)
 
 
 # Operator overloading interaction tests.
@@ -399,104 +402,42 @@ class TestOperatorOverloadInteraction:
 
 @pytest.mark.stress
 @pytest.mark.timeout(90)
-class TestOperatorOverloading:
-    """custom __add__, __mul__ operator overloading."""
+class TestChainedComparison:
+    """chained comparison and identity operators."""
 
-    def test_add_mul(self, nb_runner):
+    def test_chained_compare(self, nb_runner):
         nb_runner.create_notebook(
             [
-                "class Vector:\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\n    def __add__(self, other):\n        return Vector(self.x + other.x, self.y + other.y)\n    def __mul__(self, scalar):\n        return Vector(self.x * scalar, self.y * scalar)\n    def __repr__(self):\n        return f'V({self.x},{self.y})'",
-                "v1 = Vector(1, 2)\nv2 = Vector(3, 4)\nv3 = v1 + v2\nv4 = v1 * 3\nprint(f'v3={v3} v4={v4}')",
+                "x = 5",
+                "in_range = 1 < x < 10\nresult = 'yes' if in_range else 'no'\nprint(f'result={result}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "v3=V(4,6)" in nb_runner.get_output(2)
-        assert "v4=V(3,6)" in nb_runner.get_output(2)
+        assert "result=yes" in nb_runner.get_output(2)
 
-    def test_overload_edit(self, nb_runner):
+    def test_chained_edit(self, nb_runner):
         nb_runner.create_notebook(
             [
-                "class Money:\n    def __init__(self, amount):\n        self.amount = amount\n    def __add__(self, other):\n        return Money(self.amount + other.amount)\n    def __repr__(self):\n        return f'${self.amount}'",
-                "m1 = Money(10)\nm2 = Money(25)\ntotal = m1 + m2\nprint(f'total={total}')",
+                "a, b, c = 1, 2, 3",
+                "ascending = a < b < c\nresult = 'asc' if ascending else 'not'\nprint(f'result={result}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "total=$35" in nb_runner.get_output(2)
-        # Edit class to add sub
-        nb_runner.set_cell_source(
-            1,
-            "class Money:\n    def __init__(self, amount):\n        self.amount = amount\n    def __add__(self, other):\n        return Money(self.amount + other.amount)\n    def __sub__(self, other):\n        return Money(self.amount - other.amount)\n    def __repr__(self):\n        return f'${self.amount}'",
-        )
-        nb_runner.set_cell_source(2, "m1 = Money(50)\nm2 = Money(25)\ndiff = m1 - m2\nprint(f'diff={diff}')")
+        assert "result=asc" in nb_runner.get_output(2)
+        # Edit to break chain
+        nb_runner.set_cell_source(1, "a, b, c = 1, 5, 3")
         nb_runner.run_all()
-        assert "diff=$25" in nb_runner.get_output(2)
+        assert "result=not" in nb_runner.get_output(2)
 
-    def test_iadd(self, nb_runner):
+    def test_is_none_identity(self, nb_runner):
         nb_runner.create_notebook(
             [
-                "class Accumulator:\n    def __init__(self, val=0):\n        self.val = val\n    def __iadd__(self, other):\n        self.val += other\n        return self\n    def __repr__(self):\n        return f'Acc({self.val})'",
-                "a = Accumulator()\na += 10\na += 20\nprint(f'a={a}')",
+                "val = None\nother = 0\nempty = ''",
+                "r1 = val is None\nr2 = other is None\nr3 = empty is not None\nprint(f'r1={r1} r2={r2} r3={r3}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "a=Acc(30)" in nb_runner.get_output(2)
-
-
-# Operator overloading & dunder methods — cash caching with custom operators.
-@pytest.mark.stress
-class TestContainerDunders:
-    """Test container protocol dunders."""
-
-    def test_change_propagation_dunders(self, nb_runner):
-        """Operator result propagation after change."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                class Money:
-                    def __init__(self, amount, currency='USD'):
-                        self.amount = amount
-                        self.currency = currency
-                    def __add__(self, other):
-                        if self.currency != other.currency:
-                            raise ValueError("Currency mismatch")
-                        return Money(self.amount + other.amount, self.currency)
-                    def __repr__(self):
-                        return f"{self.amount} {self.currency}"
-
-                a = Money(100)
-                b = Money(50)
-            """),
-                textwrap.dedent("""\
-                total = a + b
-                print(f"total={total}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "total=150 USD" in nb_runner.get_output(2)
-
-        # Change amount
-        nb_runner.set_cell_source(
-            1,
-            textwrap.dedent("""\
-            class Money:
-                def __init__(self, amount, currency='USD'):
-                    self.amount = amount
-                    self.currency = currency
-                def __add__(self, other):
-                    if self.currency != other.currency:
-                        raise ValueError("Currency mismatch")
-                    return Money(self.amount + other.amount, self.currency)
-                def __repr__(self):
-                    return f"{self.amount} {self.currency}"
-
-            a = Money(200)
-            b = Money(75)
-        """),
-        )
-        nb_runner.run_cells([1, 2])
-        assert "total=275 USD" in nb_runner.get_output(2)
+        assert "r1=True r2=False r3=True" in nb_runner.get_output(2)

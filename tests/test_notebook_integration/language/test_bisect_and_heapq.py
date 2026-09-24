@@ -5,77 +5,6 @@ import textwrap
 import pytest
 
 
-# Bisect/heapq interaction tests.
-# Tests that editing sorted data or heap structures properly invalidates
-# downstream lookups and extractions.
-@pytest.mark.integration
-@pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestBisectHeapqInteraction:
-    """Test bisect/heapq patterns with cache invalidation."""
-
-    def test_bisect_insert_point_edit(self, nb_runner):
-        """Editing sorted data should invalidate bisect lookup."""
-        nb_runner.create_notebook(
-            [
-                "import bisect\nsorted_data = [10, 20, 30, 40, 50]",
-                "target = 25",
-                "pos = bisect.bisect_left(sorted_data, target)",
-                "print(f'pos={pos}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "pos=2" in out
-
-        nb_runner.set_cell_source(2, "target = 45")
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "pos=4" in out
-
-    def test_heapq_nsmallest_edit(self, nb_runner):
-        """Editing data should invalidate heapq nsmallest results."""
-        nb_runner.create_notebook(
-            [
-                "import heapq\nvalues = [5, 1, 8, 3, 9, 2]",
-                "n = 3",
-                "smallest = heapq.nsmallest(n, values)",
-                "result = ','.join(str(x) for x in smallest)",
-                "print(f'smallest={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(5)
-        assert "smallest=1,2,3" in out
-
-        nb_runner.set_cell_source(1, "import heapq\nvalues = [50, 10, 80, 30, 90, 20]")
-        nb_runner.run_all()
-        out = nb_runner.get_output(5)
-        assert "smallest=10,20,30" in out
-
-    def test_heapq_merge_edit(self, nb_runner):
-        """Editing one of the sorted lists to merge should propagate."""
-        nb_runner.create_notebook(
-            [
-                "import heapq\nlist_a = [1, 4, 7]\nlist_b = [2, 5, 8]",
-                "merged = list(heapq.merge(list_a, list_b))",
-                "result = ','.join(str(x) for x in merged)",
-                "print(f'merged={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "merged=1,2,4,5,7,8" in out
-
-        nb_runner.set_cell_source(1, "import heapq\nlist_a = [10, 40, 70]\nlist_b = [2, 5, 8]")
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "merged=2,5,8,10,40,70" in out
-
-
 @pytest.mark.stress
 @pytest.mark.timeout(90)
 class TestBisectInsortSortedKey:
@@ -235,6 +164,128 @@ class TestBisectSortedOps:
         assert "exact_match=False" in nb_runner.get_output(2)
 
 
+@pytest.mark.stress
+@pytest.mark.timeout(90)
+class TestBisectSortedSeq:
+    """bisect module for sorted sequence operations."""
+
+    def test_bisect_grade(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "import bisect\nbreakpoints = [60, 70, 80, 90]\ngrades = 'FDCBA'\nscores = [33, 65, 77, 89, 95]",
+                "results = [grades[bisect.bisect(breakpoints, s)] for s in scores]\nprint(f'results={results}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "results=['F', 'D', 'C', 'B', 'A']" in nb_runner.get_output(2)
+
+    def test_bisect_edit(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "import bisect\ndata = [1, 3, 5, 7, 9]",
+                "idx = bisect.bisect_left(data, 5)\nprint(f'idx={idx}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "idx=2" in nb_runner.get_output(2)
+        nb_runner.set_cell_source(1, "import bisect\ndata = [2, 4, 6, 8, 10]")
+        nb_runner.set_cell_source(2, "idx = bisect.bisect_left(data, 6)\nprint(f'idx={idx}')")
+        nb_runner.run_all()
+        assert "idx=2" in nb_runner.get_output(2)
+
+
+@pytest.mark.stress
+@pytest.mark.timeout(90)
+class TestHeapqPriority:
+    """heapq priority queue operations and edits."""
+
+    def test_heapq_basic(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "import heapq\ndata = [5, 1, 8, 3, 2]\nheapq.heapify(data)\nsmallest = heapq.nsmallest(3, data)\nprint(f'smallest={smallest}')",
+                "heapq.heappush(data, 0)\ntop = heapq.heappop(data)\nprint(f'top={top}')",
+                "merged = list(heapq.merge([1,4,7], [2,5,8], [3,6,9]))\nprint(f'merged={merged}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "smallest=[1, 2, 3]" in nb_runner.get_output(1)
+        assert "top=0" in nb_runner.get_output(2)
+        assert "merged=[1, 2, 3, 4, 5, 6, 7, 8, 9]" in nb_runner.get_output(3)
+
+    def test_heapq_edit_data(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "import heapq\ndata = [5, 1, 8, 3, 2]",
+                "heapq.heapify(data)\ntop3 = heapq.nsmallest(3, data)\nprint(f'top3={top3}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "top3=[1, 2, 3]" in nb_runner.get_output(2)
+        # Edit
+        nb_runner.set_cell_source(1, "import heapq\ndata = [50, 10, 80, 30, 20]")
+        nb_runner.run_all()
+        assert "top3=[10, 20, 30]" in nb_runner.get_output(2)
+
+    def test_heapq_nlargest(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "import heapq\nscores = [88, 92, 75, 100, 63, 95]",
+                "top2 = heapq.nlargest(2, scores)\nprint(f'top2={top2}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "top2=[100, 95]" in nb_runner.get_output(2)
+
+
+@pytest.mark.stress
+@pytest.mark.timeout(90)
+class TestHeapqPriorityQueue:
+    """heapq operations for priority queue patterns."""
+
+    def test_heapq_basic(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "import heapq\ndata = [5, 1, 8, 3, 2]",
+                "heapq.heapify(data)\nsmallest = heapq.heappop(data)\nnext_smallest = heapq.heappop(data)\nprint(f'smallest={smallest} next={next_smallest}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "smallest=1" in nb_runner.get_output(2)
+        assert "next=2" in nb_runner.get_output(2)
+
+    def test_nlargest_nsmallest(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "import heapq\nnums = [10, 1, 8, 3, 5, 7, 2, 9, 4, 6]",
+                "top3 = heapq.nlargest(3, nums)\nbot3 = heapq.nsmallest(3, nums)\nprint(f'top3={top3} bot3={bot3}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "top3=[10, 9, 8]" in nb_runner.get_output(2)
+        assert "bot3=[1, 2, 3]" in nb_runner.get_output(2)
+
+    def test_heapq_edit(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "import heapq\nvals = [7, 3, 9, 1]",
+                "top2 = heapq.nlargest(2, vals)\nprint(f'top2={top2}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "top2=[9, 7]" in nb_runner.get_output(2)
+        nb_runner.set_cell_source(1, "import heapq\nvals = [100, 50, 200, 75]")
+        nb_runner.run_all()
+        assert "top2=[200, 100]" in nb_runner.get_output(2)
+
+
 # Interaction test: heapq nlargest nsmallest with key function.
 # Tests heapq.nlargest, heapq.nsmallest with key parameter,
 # heapify, heappush/heappop, and cross-cell priority queue patterns.
@@ -348,128 +399,6 @@ class TestHeapqNlargestMerge:
         assert "result=[400, 300]" in nb_runner.get_output(2)
 
 
-@pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestHeapqPriority:
-    """heapq priority queue operations and edits."""
-
-    def test_heapq_basic(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "import heapq\ndata = [5, 1, 8, 3, 2]\nheapq.heapify(data)\nsmallest = heapq.nsmallest(3, data)\nprint(f'smallest={smallest}')",
-                "heapq.heappush(data, 0)\ntop = heapq.heappop(data)\nprint(f'top={top}')",
-                "merged = list(heapq.merge([1,4,7], [2,5,8], [3,6,9]))\nprint(f'merged={merged}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "smallest=[1, 2, 3]" in nb_runner.get_output(1)
-        assert "top=0" in nb_runner.get_output(2)
-        assert "merged=[1, 2, 3, 4, 5, 6, 7, 8, 9]" in nb_runner.get_output(3)
-
-    def test_heapq_edit_data(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "import heapq\ndata = [5, 1, 8, 3, 2]",
-                "heapq.heapify(data)\ntop3 = heapq.nsmallest(3, data)\nprint(f'top3={top3}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "top3=[1, 2, 3]" in nb_runner.get_output(2)
-        # Edit
-        nb_runner.set_cell_source(1, "import heapq\ndata = [50, 10, 80, 30, 20]")
-        nb_runner.run_all()
-        assert "top3=[10, 20, 30]" in nb_runner.get_output(2)
-
-    def test_heapq_nlargest(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "import heapq\nscores = [88, 92, 75, 100, 63, 95]",
-                "top2 = heapq.nlargest(2, scores)\nprint(f'top2={top2}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "top2=[100, 95]" in nb_runner.get_output(2)
-
-
-@pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestHeapqPriorityQueue:
-    """heapq operations for priority queue patterns."""
-
-    def test_heapq_basic(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "import heapq\ndata = [5, 1, 8, 3, 2]",
-                "heapq.heapify(data)\nsmallest = heapq.heappop(data)\nnext_smallest = heapq.heappop(data)\nprint(f'smallest={smallest} next={next_smallest}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "smallest=1" in nb_runner.get_output(2)
-        assert "next=2" in nb_runner.get_output(2)
-
-    def test_nlargest_nsmallest(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "import heapq\nnums = [10, 1, 8, 3, 5, 7, 2, 9, 4, 6]",
-                "top3 = heapq.nlargest(3, nums)\nbot3 = heapq.nsmallest(3, nums)\nprint(f'top3={top3} bot3={bot3}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "top3=[10, 9, 8]" in nb_runner.get_output(2)
-        assert "bot3=[1, 2, 3]" in nb_runner.get_output(2)
-
-    def test_heapq_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "import heapq\nvals = [7, 3, 9, 1]",
-                "top2 = heapq.nlargest(2, vals)\nprint(f'top2={top2}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "top2=[9, 7]" in nb_runner.get_output(2)
-        nb_runner.set_cell_source(1, "import heapq\nvals = [100, 50, 200, 75]")
-        nb_runner.run_all()
-        assert "top2=[200, 100]" in nb_runner.get_output(2)
-
-
-@pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestBisectSortedSeq:
-    """bisect module for sorted sequence operations."""
-
-    def test_bisect_grade(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "import bisect\nbreakpoints = [60, 70, 80, 90]\ngrades = 'FDCBA'\nscores = [33, 65, 77, 89, 95]",
-                "results = [grades[bisect.bisect(breakpoints, s)] for s in scores]\nprint(f'results={results}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "results=['F', 'D', 'C', 'B', 'A']" in nb_runner.get_output(2)
-
-    def test_bisect_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "import bisect\ndata = [1, 3, 5, 7, 9]",
-                "idx = bisect.bisect_left(data, 5)\nprint(f'idx={idx}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "idx=2" in nb_runner.get_output(2)
-        nb_runner.set_cell_source(1, "import bisect\ndata = [2, 4, 6, 8, 10]")
-        nb_runner.set_cell_source(2, "idx = bisect.bisect_left(data, 6)\nprint(f'idx={idx}')")
-        nb_runner.run_all()
-        assert "idx=2" in nb_runner.get_output(2)
-
-
 # Bisect, heapq & algorithm patterns — cash caching with stdlib algorithms.
 @pytest.mark.stress
 class TestHeapqPatterns:
@@ -506,3 +435,74 @@ class TestHeapqPatterns:
         assert "[1]" in out
         # urgents come first
         assert out.index("[1]") < out.index("[3]")
+
+
+# Bisect/heapq interaction tests.
+# Tests that editing sorted data or heap structures properly invalidates
+# downstream lookups and extractions.
+@pytest.mark.integration
+@pytest.mark.stress
+@pytest.mark.timeout(90)
+class TestBisectHeapqInteraction:
+    """Test bisect/heapq patterns with cache invalidation."""
+
+    def test_bisect_insert_point_edit(self, nb_runner):
+        """Editing sorted data should invalidate bisect lookup."""
+        nb_runner.create_notebook(
+            [
+                "import bisect\nsorted_data = [10, 20, 30, 40, 50]",
+                "target = 25",
+                "pos = bisect.bisect_left(sorted_data, target)",
+                "print(f'pos={pos}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(4)
+        assert "pos=2" in out
+
+        nb_runner.set_cell_source(2, "target = 45")
+        nb_runner.run_all()
+        out = nb_runner.get_output(4)
+        assert "pos=4" in out
+
+    def test_heapq_nsmallest_edit(self, nb_runner):
+        """Editing data should invalidate heapq nsmallest results."""
+        nb_runner.create_notebook(
+            [
+                "import heapq\nvalues = [5, 1, 8, 3, 9, 2]",
+                "n = 3",
+                "smallest = heapq.nsmallest(n, values)",
+                "result = ','.join(str(x) for x in smallest)",
+                "print(f'smallest={result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(5)
+        assert "smallest=1,2,3" in out
+
+        nb_runner.set_cell_source(1, "import heapq\nvalues = [50, 10, 80, 30, 90, 20]")
+        nb_runner.run_all()
+        out = nb_runner.get_output(5)
+        assert "smallest=10,20,30" in out
+
+    def test_heapq_merge_edit(self, nb_runner):
+        """Editing one of the sorted lists to merge should propagate."""
+        nb_runner.create_notebook(
+            [
+                "import heapq\nlist_a = [1, 4, 7]\nlist_b = [2, 5, 8]",
+                "merged = list(heapq.merge(list_a, list_b))",
+                "result = ','.join(str(x) for x in merged)",
+                "print(f'merged={result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(4)
+        assert "merged=1,2,4,5,7,8" in out
+
+        nb_runner.set_cell_source(1, "import heapq\nlist_a = [10, 40, 70]\nlist_b = [2, 5, 8]")
+        nb_runner.run_all()
+        out = nb_runner.get_output(4)
+        assert "merged=2,5,8,10,40,70" in out

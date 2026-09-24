@@ -7,98 +7,6 @@ import pytest
 pytestmark = [pytest.mark.stress]
 
 
-# Datetime / time-based computation interaction tests.
-#
-# Tests editing datetime computations, timedelta operations,
-# and formatting.
-@pytest.mark.upstream
-@pytest.mark.timeout(90)
-class TestDatetimeEdits:
-    """Editing datetime computations."""
-
-    def test_edit_date_arithmetic(self, nb_runner):
-        """Edit date arithmetic."""
-        nb_runner.create_notebook(
-            [
-                "from datetime import date, timedelta",
-                "start = date(2024, 1, 1)  # date start",
-                "end = start + timedelta(days=30)\nprint(f'end = {end}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "end = 2024-01-31" in nb_runner.get_output(3)
-
-        # Change delta
-        nb_runner.set_cell_source(3, "end = start + timedelta(days=365)\nprint(f'end = {end}')")
-        nb_runner.run_all()
-        assert "end = 2024-12-31" in nb_runner.get_output(3)
-
-    def test_edit_date_source(self, nb_runner):
-        """Edit the source date."""
-        nb_runner.create_notebook(
-            [
-                "from datetime import date, timedelta",
-                "d = date(2024, 6, 15)  # source date",
-                "weekday = d.strftime('%A')\nprint(f'weekday = {weekday}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "weekday = Saturday" in nb_runner.get_output(3)
-
-        # Change date
-        nb_runner.set_cell_source(2, "d = date(2024, 12, 25)  # source date v2")
-        nb_runner.run_all()
-        assert "weekday = Wednesday" in nb_runner.get_output(3)
-
-
-@pytest.mark.upstream
-@pytest.mark.timeout(90)
-class TestDateFormatEdits:
-    """Editing date formatting."""
-
-    def test_edit_format_string(self, nb_runner):
-        """Edit the date format string."""
-        nb_runner.create_notebook(
-            [
-                "from datetime import datetime",
-                "dt = datetime(2024, 3, 14, 9, 26, 53)  # format source",
-                "formatted = dt.strftime('%Y-%m-%d')\nprint(f'formatted = {formatted}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "formatted = 2024-03-14" in nb_runner.get_output(3)
-
-        # Change format
-        nb_runner.set_cell_source(3, "formatted = dt.strftime('%d/%m/%Y %H:%M')\nprint(f'formatted = {formatted}')")
-        nb_runner.run_all()
-        assert "formatted = 14/03/2024 09:26" in nb_runner.get_output(3)
-
-    def test_edit_timedelta_chain(self, nb_runner):
-        """Edit a chain of timedelta operations."""
-        nb_runner.create_notebook(
-            [
-                "from datetime import date, timedelta",
-                "base = date(2024, 1, 1)  # timedelta chain base",
-                "step1 = base + timedelta(weeks=4)  # step 1",
-                "step2 = step1 + timedelta(days=10)  # step 2",
-                "print(f'final = {step2}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        # Jan 1 + 28 days = Jan 29, + 10 = Feb 8
-        assert "final = 2024-02-08" in nb_runner.get_output(5)
-
-        # Change step 1
-        nb_runner.set_cell_source(3, "step1 = base + timedelta(weeks=8)  # step 1 v2")
-        nb_runner.run_all()
-        # Jan 1 + 56 days = Feb 26, + 10 = Mar 7
-        assert "final = 2024-03-07" in nb_runner.get_output(5)
-
-
 # Datetime, time, and scheduling patterns across cells.
 class TestDatetimePatterns:
     """Test datetime operations across cells."""
@@ -217,137 +125,50 @@ class TestDatetimePatterns:
         assert "span_hrs=" in out
 
 
-@pytest.mark.integration
-class TestTimeSeriesPatterns:
-    """Test time series operations with pandas across cells."""
-
-    def test_date_range_change_propagation(self, nb_runner):
-        """Change date range → downstream aggregation updates."""
-        nb_runner.create_notebook(
-            [
-                "import pandas as pd\nimport numpy as np",
-                textwrap.dedent("""\
-                np.random.seed(42)
-                dates = pd.date_range('2024-01-01', periods=10, freq='D')
-                ts = pd.Series(range(10), index=dates, name='val')
-            """),
-                textwrap.dedent("""\
-                total = ts.sum()
-                print(f"total={total}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        # sum(0..9) = 45
-        assert "total=45" in nb_runner.get_output(3)
-
-        nb_runner.set_cell_source(
-            2,
-            textwrap.dedent("""\
-            np.random.seed(42)
-            dates = pd.date_range('2024-01-01', periods=5, freq='D')
-            ts = pd.Series(range(5), index=dates, name='val')
-        """),
-        )
-        nb_runner.run_all()
-        # sum(0..4) = 10
-        assert "total=10" in nb_runner.get_output(3)
-
-
-@pytest.mark.integration
-class TestDatetimeEdgeCases:
-    """Test edge cases with dates."""
-
-    def test_timezone_naive_operations(self, nb_runner):
-        """Timezone-naive datetime operations."""
-        nb_runner.create_notebook(
-            [
-                "from datetime import datetime, timedelta",
-                textwrap.dedent("""\
-                now = datetime(2024, 6, 15, 12, 0, 0)
-                intervals = [timedelta(days=d) for d in range(7)]
-                week = [now + dt for dt in intervals]
-            """),
-                textwrap.dedent("""\
-                weekdays = [d.strftime('%A') for d in week]
-                print(weekdays[0])  # Saturday
-                print(len(weekdays))
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        output = nb_runner.get_output(3)
-        assert "Saturday" in output
-        assert "7" in output
-
-
-# Interaction test: calendar module month and week operations.
-# Tests calendar.monthcalendar, weekday calculation,
-# isleap checks, and cross-cell date analysis.
+# Datetime / time-based computation interaction tests.
+#
+# Tests editing datetime computations, timedelta operations,
+# and formatting.
+@pytest.mark.upstream
 @pytest.mark.timeout(90)
-class TestCalendarMonthWeek:
-    """Test calendar month and week operations across cells."""
+class TestDatetimeEdits:
+    """Editing datetime computations."""
 
-    def test_calendar_ops(self, nb_runner):
+    def test_edit_date_arithmetic(self, nb_runner):
+        """Edit date arithmetic."""
         nb_runner.create_notebook(
             [
-                # Cell 1: month calendar
-                "import calendar\nweeks = calendar.monthcalendar(2024, 2)  # Feb 2024\nnum_weeks = len(weeks)\ndays_in_month = calendar.monthrange(2024, 2)[1]\nprint(f'num_weeks={num_weeks}')\nprint(f'days_in_feb_2024={days_in_month}')",
-                # Cell 2: weekday for specific dates
-                "day_name = calendar.day_name[calendar.weekday(2024, 1, 1)]  # Jan 1 2024\nprint(f'jan1_2024={day_name}')\nis_leap = calendar.isleap(2024)\nprint(f'is_leap_2024={is_leap}')",
-                # Cell 3: count weekdays in month
-                "weekdays_in_feb = sum(1 for week in weeks for day in week if day != 0 and calendar.weekday(2024, 2, day) < 5)\nprint(f'weekdays_feb_2024={weekdays_in_feb}')",
+                "from datetime import date, timedelta",
+                "start = date(2024, 1, 1)  # date start",
+                "end = start + timedelta(days=30)\nprint(f'end = {end}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        out1 = nb_runner.get_output(1)
-        assert "days_in_feb_2024=29" in out1
-        out2 = nb_runner.get_output(2)
-        assert "jan1_2024=Monday" in out2
-        assert "is_leap_2024=True" in out2
-        out3 = nb_runner.get_output(3)
-        assert "weekdays_feb_2024=21" in out3
+        assert "end = 2024-01-31" in nb_runner.get_output(3)
 
-    def test_calendar_edit(self, nb_runner):
+        # Change delta
+        nb_runner.set_cell_source(3, "end = start + timedelta(days=365)\nprint(f'end = {end}')")
+        nb_runner.run_all()
+        assert "end = 2024-12-31" in nb_runner.get_output(3)
+
+    def test_edit_date_source(self, nb_runner):
+        """Edit the source date."""
         nb_runner.create_notebook(
             [
-                "import calendar\nyear = 2023\nis_leap = calendar.isleap(year)\ndays_feb = calendar.monthrange(year, 2)[1]\nprint(f'leap={is_leap}')\nprint(f'feb_days={days_feb}')",
-                "total_days = sum(calendar.monthrange(year, m)[1] for m in range(1, 13))\nprint(f'total_days={total_days}')",
+                "from datetime import date, timedelta",
+                "d = date(2024, 6, 15)  # source date",
+                "weekday = d.strftime('%A')\nprint(f'weekday = {weekday}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "leap=False" in nb_runner.get_output(1)
-        assert "feb_days=28" in nb_runner.get_output(1)
-        assert "total_days=365" in nb_runner.get_output(2)
+        assert "weekday = Saturday" in nb_runner.get_output(3)
 
-        # Change to leap year
-        nb_runner.set_cell_source(
-            1,
-            "import calendar\nyear = 2024\nis_leap = calendar.isleap(year)\ndays_feb = calendar.monthrange(year, 2)[1]\nprint(f'leap={is_leap}')\nprint(f'feb_days={days_feb}')",
-        )
-        nb_runner.run_cells([1, 2])
-        assert "leap=True" in nb_runner.get_output(1)
-        assert "feb_days=29" in nb_runner.get_output(1)
-        assert "total_days=366" in nb_runner.get_output(2)
-
-    def test_calendar_cache(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "import calendar\nfirst_weekday, num_days = calendar.monthrange(2024, 7)\nprint(f'first_weekday={first_weekday}')\nprint(f'num_days={num_days}')",
-                "info = f'July 2024: starts on day {first_weekday}, has {num_days} days'\nprint(f'info={info}')",
-            ]
-        )
-        nb_runner.start_kernel()
+        # Change date
+        nb_runner.set_cell_source(2, "d = date(2024, 12, 25)  # source date v2")
         nb_runner.run_all()
-        assert "num_days=31" in nb_runner.get_output(1)
-
-        # Re-run - cache
-        nb_runner.run_all()
-        assert "num_days=31" in nb_runner.get_output(1)
+        assert "weekday = Wednesday" in nb_runner.get_output(3)
 
 
 @pytest.mark.timeout(90)
@@ -439,6 +260,56 @@ class TestDatetimeTimedeltaArith:
         assert "result=2025-01-01" in nb_runner.get_output(2)
 
 
+# Datetime arithmetic and formatting interaction tests.
+# Tests editing datetime operations (beyond the basic datetime edit test).
+# Focus on timedelta chains and date range generation.
+@pytest.mark.integration
+@pytest.mark.timeout(90)
+class TestDatetimeArithmeticInteraction:
+    """Test datetime arithmetic patterns with cache invalidation."""
+
+    def test_timedelta_chain_edit(self, nb_runner):
+        """Editing chained timedelta operations should propagate."""
+        nb_runner.create_notebook(
+            [
+                "from datetime import datetime, timedelta\nbase = datetime(2024, 1, 1)",
+                "d1 = timedelta(days=10)\nd2 = timedelta(hours=5)",
+                "result_dt = base + d1 + d2",
+                "print(f'result={result_dt.strftime(\"%Y-%m-%d %H:%M\")}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(4)
+        assert "result=2024-01-11 05:00" in out
+
+        nb_runner.set_cell_source(2, "d1 = timedelta(days=100)\nd2 = timedelta(hours=12)")
+        nb_runner.run_all()
+        out = nb_runner.get_output(4)
+        assert "result=2024-04-10 12:00" in out
+
+    def test_date_range_count_edit(self, nb_runner):
+        """Editing number of days in a date range should propagate."""
+        nb_runner.create_notebook(
+            [
+                "from datetime import date, timedelta\nstart = date(2024, 3, 1)",
+                "n_days = 3",
+                "dates = [start + timedelta(days=i) for i in range(n_days)]",
+                "result = len(dates)",
+                "print(f'count={result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(5)
+        assert "count=3" in out
+
+        nb_runner.set_cell_source(2, "n_days = 7")
+        nb_runner.run_all()
+        out = nb_runner.get_output(5)
+        assert "count=7" in out
+
+
 # Interaction test: datetime timezone-aware operations with timedelta.
 # Tests timezone creation, conversion, timedelta arithmetic, and
 # cross-cell timezone-aware datetime manipulation.
@@ -512,51 +383,180 @@ class TestDatetimeTimezoneOps:
         assert "epoch=" in nb_runner.get_output(2)
 
 
-# Datetime arithmetic and formatting interaction tests.
-# Tests editing datetime operations (beyond the basic datetime edit test).
-# Focus on timedelta chains and date range generation.
 @pytest.mark.integration
+class TestDatetimeEdgeCases:
+    """Test edge cases with dates."""
+
+    def test_timezone_naive_operations(self, nb_runner):
+        """Timezone-naive datetime operations."""
+        nb_runner.create_notebook(
+            [
+                "from datetime import datetime, timedelta",
+                textwrap.dedent("""\
+                now = datetime(2024, 6, 15, 12, 0, 0)
+                intervals = [timedelta(days=d) for d in range(7)]
+                week = [now + dt for dt in intervals]
+            """),
+                textwrap.dedent("""\
+                weekdays = [d.strftime('%A') for d in week]
+                print(weekdays[0])  # Saturday
+                print(len(weekdays))
+            """),
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        output = nb_runner.get_output(3)
+        assert "Saturday" in output
+        assert "7" in output
+
+
+@pytest.mark.upstream
 @pytest.mark.timeout(90)
-class TestDatetimeArithmeticInteraction:
-    """Test datetime arithmetic patterns with cache invalidation."""
+class TestDateFormatEdits:
+    """Editing date formatting."""
 
-    def test_timedelta_chain_edit(self, nb_runner):
-        """Editing chained timedelta operations should propagate."""
+    def test_edit_format_string(self, nb_runner):
+        """Edit the date format string."""
         nb_runner.create_notebook(
             [
-                "from datetime import datetime, timedelta\nbase = datetime(2024, 1, 1)",
-                "d1 = timedelta(days=10)\nd2 = timedelta(hours=5)",
-                "result_dt = base + d1 + d2",
-                "print(f'result={result_dt.strftime(\"%Y-%m-%d %H:%M\")}')",
+                "from datetime import datetime",
+                "dt = datetime(2024, 3, 14, 9, 26, 53)  # format source",
+                "formatted = dt.strftime('%Y-%m-%d')\nprint(f'formatted = {formatted}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "result=2024-01-11 05:00" in out
+        assert "formatted = 2024-03-14" in nb_runner.get_output(3)
 
-        nb_runner.set_cell_source(2, "d1 = timedelta(days=100)\nd2 = timedelta(hours=12)")
+        # Change format
+        nb_runner.set_cell_source(3, "formatted = dt.strftime('%d/%m/%Y %H:%M')\nprint(f'formatted = {formatted}')")
         nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "result=2024-04-10 12:00" in out
+        assert "formatted = 14/03/2024 09:26" in nb_runner.get_output(3)
 
-    def test_date_range_count_edit(self, nb_runner):
-        """Editing number of days in a date range should propagate."""
+    def test_edit_timedelta_chain(self, nb_runner):
+        """Edit a chain of timedelta operations."""
         nb_runner.create_notebook(
             [
-                "from datetime import date, timedelta\nstart = date(2024, 3, 1)",
-                "n_days = 3",
-                "dates = [start + timedelta(days=i) for i in range(n_days)]",
-                "result = len(dates)",
-                "print(f'count={result}')",
+                "from datetime import date, timedelta",
+                "base = date(2024, 1, 1)  # timedelta chain base",
+                "step1 = base + timedelta(weeks=4)  # step 1",
+                "step2 = step1 + timedelta(days=10)  # step 2",
+                "print(f'final = {step2}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        out = nb_runner.get_output(5)
-        assert "count=3" in out
+        # Jan 1 + 28 days = Jan 29, + 10 = Feb 8
+        assert "final = 2024-02-08" in nb_runner.get_output(5)
 
-        nb_runner.set_cell_source(2, "n_days = 7")
+        # Change step 1
+        nb_runner.set_cell_source(3, "step1 = base + timedelta(weeks=8)  # step 1 v2")
         nb_runner.run_all()
-        out = nb_runner.get_output(5)
-        assert "count=7" in out
+        # Jan 1 + 56 days = Feb 26, + 10 = Mar 7
+        assert "final = 2024-03-07" in nb_runner.get_output(5)
+
+
+# Interaction test: calendar module month and week operations.
+# Tests calendar.monthcalendar, weekday calculation,
+# isleap checks, and cross-cell date analysis.
+@pytest.mark.timeout(90)
+class TestCalendarMonthWeek:
+    """Test calendar month and week operations across cells."""
+
+    def test_calendar_ops(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                # Cell 1: month calendar
+                "import calendar\nweeks = calendar.monthcalendar(2024, 2)  # Feb 2024\nnum_weeks = len(weeks)\ndays_in_month = calendar.monthrange(2024, 2)[1]\nprint(f'num_weeks={num_weeks}')\nprint(f'days_in_feb_2024={days_in_month}')",
+                # Cell 2: weekday for specific dates
+                "day_name = calendar.day_name[calendar.weekday(2024, 1, 1)]  # Jan 1 2024\nprint(f'jan1_2024={day_name}')\nis_leap = calendar.isleap(2024)\nprint(f'is_leap_2024={is_leap}')",
+                # Cell 3: count weekdays in month
+                "weekdays_in_feb = sum(1 for week in weeks for day in week if day != 0 and calendar.weekday(2024, 2, day) < 5)\nprint(f'weekdays_feb_2024={weekdays_in_feb}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out1 = nb_runner.get_output(1)
+        assert "days_in_feb_2024=29" in out1
+        out2 = nb_runner.get_output(2)
+        assert "jan1_2024=Monday" in out2
+        assert "is_leap_2024=True" in out2
+        out3 = nb_runner.get_output(3)
+        assert "weekdays_feb_2024=21" in out3
+
+    def test_calendar_edit(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "import calendar\nyear = 2023\nis_leap = calendar.isleap(year)\ndays_feb = calendar.monthrange(year, 2)[1]\nprint(f'leap={is_leap}')\nprint(f'feb_days={days_feb}')",
+                "total_days = sum(calendar.monthrange(year, m)[1] for m in range(1, 13))\nprint(f'total_days={total_days}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "leap=False" in nb_runner.get_output(1)
+        assert "feb_days=28" in nb_runner.get_output(1)
+        assert "total_days=365" in nb_runner.get_output(2)
+
+        # Change to leap year
+        nb_runner.set_cell_source(
+            1,
+            "import calendar\nyear = 2024\nis_leap = calendar.isleap(year)\ndays_feb = calendar.monthrange(year, 2)[1]\nprint(f'leap={is_leap}')\nprint(f'feb_days={days_feb}')",
+        )
+        nb_runner.run_cells([1, 2])
+        assert "leap=True" in nb_runner.get_output(1)
+        assert "feb_days=29" in nb_runner.get_output(1)
+        assert "total_days=366" in nb_runner.get_output(2)
+
+    def test_calendar_cache(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "import calendar\nfirst_weekday, num_days = calendar.monthrange(2024, 7)\nprint(f'first_weekday={first_weekday}')\nprint(f'num_days={num_days}')",
+                "info = f'July 2024: starts on day {first_weekday}, has {num_days} days'\nprint(f'info={info}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "num_days=31" in nb_runner.get_output(1)
+
+        # Re-run - cache
+        nb_runner.run_all()
+        assert "num_days=31" in nb_runner.get_output(1)
+
+
+@pytest.mark.integration
+class TestTimeSeriesPatterns:
+    """Test time series operations with pandas across cells."""
+
+    def test_date_range_change_propagation(self, nb_runner):
+        """Change date range → downstream aggregation updates."""
+        nb_runner.create_notebook(
+            [
+                "import pandas as pd\nimport numpy as np",
+                textwrap.dedent("""\
+                np.random.seed(42)
+                dates = pd.date_range('2024-01-01', periods=10, freq='D')
+                ts = pd.Series(range(10), index=dates, name='val')
+            """),
+                textwrap.dedent("""\
+                total = ts.sum()
+                print(f"total={total}")
+            """),
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        # sum(0..9) = 45
+        assert "total=45" in nb_runner.get_output(3)
+
+        nb_runner.set_cell_source(
+            2,
+            textwrap.dedent("""\
+            np.random.seed(42)
+            dates = pd.date_range('2024-01-01', periods=5, freq='D')
+            ts = pd.Series(range(5), index=dates, name='val')
+        """),
+        )
+        nb_runner.run_all()
+        # sum(0..4) = 10
+        assert "total=10" in nb_runner.get_output(3)

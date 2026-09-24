@@ -2,13 +2,13 @@
 
 import pytest
 
-pytestmark = [pytest.mark.stress, pytest.mark.timeout(90)]
-
 
 # List slicing and indexing interaction tests.
 #
 # Tests editing list slice operations, negative indexing,
 # step slicing, and their propagation.
+@pytest.mark.stress
+@pytest.mark.timeout(90)
 @pytest.mark.upstream
 class TestSlicingEdits:
     """Editing list slicing patterns."""
@@ -78,6 +78,47 @@ class TestSlicingEdits:
         assert "first_half = [100, 200, 300]" in nb_runner.get_output(2)
 
 
+@pytest.mark.core
+@pytest.mark.stress
+@pytest.mark.timeout(30)
+class TestListEdits:
+    """List operations with cell edits."""
+
+    def test_list_slice_edit(self, nb_runner):
+        """Edit a list and downstream slice operation."""
+        nb_runner.create_notebook(
+            [
+                "data = [1, 2, 3, 4, 5]",
+                "subset = data[:3]\nprint(f'subset = {subset}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "subset = [1, 2, 3]" in nb_runner.get_output(2)
+
+        nb_runner.set_cell_source(1, "data = [10, 20, 30, 40, 50]")
+        nb_runner.run_all()
+        assert "subset = [10, 20, 30]" in nb_runner.get_output(2)
+
+    def test_list_operation_edit(self, nb_runner):
+        """Edit the list operation."""
+        nb_runner.create_notebook(
+            [
+                "data = [1, 2, 3, 4, 5]",
+                "result = sum(data)\nprint(f'result = {result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "result = 15" in nb_runner.get_output(2)
+
+        nb_runner.set_cell_source(2, "result = max(data)\nprint(f'result = {result}')")
+        nb_runner.run_all()
+        assert "result = 5" in nb_runner.get_output(2)
+
+
+@pytest.mark.stress
+@pytest.mark.timeout(90)
 class TestListSlicingAdvanced:
     """list slicing advanced patterns."""
 
@@ -122,6 +163,8 @@ class TestListSlicingAdvanced:
         assert "first3=[0, 1, 2]" in nb_runner.get_output(2)
 
 
+@pytest.mark.stress
+@pytest.mark.timeout(90)
 class TestListSlicingStep:
     """list slicing with step and negative indices."""
 
@@ -169,6 +212,86 @@ class TestListSlicingStep:
         assert "slice=[30, 40, 50]" in out
 
 
+@pytest.mark.stress
+@pytest.mark.timeout(90)
+class TestListSlicingObject:
+    """list slicing and slice object usage."""
+
+    def test_slice_patterns(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "data = list(range(10))",
+                "first3 = data[:3]\nlast3 = data[-3:]\nevens = data[::2]\nreversed_list = data[::-1]\nprint(f'first3={first3} last3={last3}')\nprint(f'evens={evens}')\nprint(f'rev={reversed_list}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(2)
+        assert "first3=[0, 1, 2]" in out
+        assert "last3=[7, 8, 9]" in out
+        assert "evens=[0, 2, 4, 6, 8]" in out
+        assert "rev=[9, 8, 7, 6, 5, 4, 3, 2, 1, 0]" in out
+
+    def test_slice_object(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "data = list(range(20))",
+                "s = slice(2, 10, 3)\nresult = data[s]\nprint(f'result={result} start={s.start} stop={s.stop} step={s.step}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(2)
+        assert "result=[2, 5, 8]" in out
+        assert "start=2" in out
+        assert "stop=10" in out
+
+
+# Slice and index pattern edits.
+#
+# Tests list slicing, indexing operations with edits.
+@pytest.mark.stress
+@pytest.mark.timeout(90)
+class TestSliceIndexEdits:
+    """Slice and index edit patterns."""
+
+    def test_slice_params_edit(self, nb_runner):
+        """Edit slice parameters, result updates."""
+        nb_runner.create_notebook(
+            [
+                "data = list(range(10, 21))",
+                "start = 2\nstop = 7",
+                "sliced = data[start:stop]\nprint(f'sliced = {sliced}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "sliced = [12, 13, 14, 15, 16]" in nb_runner.get_output(3)
+
+        nb_runner.set_cell_source(2, "start = 0\nstop = 3")
+        nb_runner.run_all()
+        assert "sliced = [10, 11, 12]" in nb_runner.get_output(3)
+
+    def test_step_slice_edit(self, nb_runner):
+        """Edit step in slice."""
+        nb_runner.create_notebook(
+            [
+                "nums = list(range(20))",
+                "step = 2",
+                "selected = nums[::step]\nprint(f'selected = {selected}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "selected = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]" in nb_runner.get_output(3)
+
+        nb_runner.set_cell_source(2, "step = 5")
+        nb_runner.run_all()
+        assert "selected = [0, 5, 10, 15]" in nb_runner.get_output(3)
+
+
+@pytest.mark.stress
+@pytest.mark.timeout(90)
 class TestTupleOpsImmutable:
     """tuple operations immutability and named access."""
 
@@ -211,75 +334,41 @@ class TestTupleOpsImmutable:
         assert "total=600" in nb_runner.get_output(2)
 
 
-class TestListSlicingObject:
-    """list slicing and slice object usage."""
+@pytest.mark.core
+@pytest.mark.stress
+@pytest.mark.timeout(30)
+class TestTupleSetEdits:
+    """Tuples and sets with edits."""
 
-    def test_slice_patterns(self, nb_runner):
+    def test_tuple_unpack_edit(self, nb_runner):
+        """Edit a tuple unpacking cell."""
         nb_runner.create_notebook(
             [
-                "data = list(range(10))",
-                "first3 = data[:3]\nlast3 = data[-3:]\nevens = data[::2]\nreversed_list = data[::-1]\nprint(f'first3={first3} last3={last3}')\nprint(f'evens={evens}')\nprint(f'rev={reversed_list}')",
+                "pair = (10, 20)",
+                "a, b = pair\nprint(f'a = {a}, b = {b}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "first3=[0, 1, 2]" in out
-        assert "last3=[7, 8, 9]" in out
-        assert "evens=[0, 2, 4, 6, 8]" in out
-        assert "rev=[9, 8, 7, 6, 5, 4, 3, 2, 1, 0]" in out
+        assert "a = 10, b = 20" in nb_runner.get_output(2)
 
-    def test_slice_object(self, nb_runner):
+        nb_runner.set_cell_source(1, "pair = (100, 200)")
+        nb_runner.run_all()
+        assert "a = 100, b = 200" in nb_runner.get_output(2)
+
+    def test_set_operations_edit(self, nb_runner):
+        """Edit set operations."""
         nb_runner.create_notebook(
             [
-                "data = list(range(20))",
-                "s = slice(2, 10, 3)\nresult = data[s]\nprint(f'result={result} start={s.start} stop={s.stop} step={s.step}')",
+                "s1 = {1, 2, 3}\ns2 = {2, 3, 4}",
+                "result = s1 & s2\nprint(f'result = {sorted(result)}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "result=[2, 5, 8]" in out
-        assert "start=2" in out
-        assert "stop=10" in out
+        assert "result = [2, 3]" in nb_runner.get_output(2)
 
-
-# Slice and index pattern edits.
-#
-# Tests list slicing, indexing operations with edits.
-class TestSliceIndexEdits:
-    """Slice and index edit patterns."""
-
-    def test_slice_params_edit(self, nb_runner):
-        """Edit slice parameters, result updates."""
-        nb_runner.create_notebook(
-            [
-                "data = list(range(10, 21))",
-                "start = 2\nstop = 7",
-                "sliced = data[start:stop]\nprint(f'sliced = {sliced}')",
-            ]
-        )
-        nb_runner.start_kernel()
+        # Change to union
+        nb_runner.set_cell_source(2, "result = s1 | s2\nprint(f'result = {sorted(result)}')")
         nb_runner.run_all()
-        assert "sliced = [12, 13, 14, 15, 16]" in nb_runner.get_output(3)
-
-        nb_runner.set_cell_source(2, "start = 0\nstop = 3")
-        nb_runner.run_all()
-        assert "sliced = [10, 11, 12]" in nb_runner.get_output(3)
-
-    def test_step_slice_edit(self, nb_runner):
-        """Edit step in slice."""
-        nb_runner.create_notebook(
-            [
-                "nums = list(range(20))",
-                "step = 2",
-                "selected = nums[::step]\nprint(f'selected = {selected}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "selected = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]" in nb_runner.get_output(3)
-
-        nb_runner.set_cell_source(2, "step = 5")
-        nb_runner.run_all()
-        assert "selected = [0, 5, 10, 15]" in nb_runner.get_output(3)
+        assert "result = [1, 2, 3, 4]" in nb_runner.get_output(2)

@@ -81,80 +81,6 @@ class TestClosureEdits:
         assert "result = 24" in nb_runner.get_output(2)
 
 
-@pytest.mark.stress
-@pytest.mark.upstream
-@pytest.mark.timeout(90)
-class TestNonlocalEdits:
-    """Nonlocal variable patterns."""
-
-    def test_nonlocal_counter(self, nb_runner):
-        """Edit a nonlocal counter closure."""
-        nb_runner.create_notebook(
-            [
-                "def make_counter(start=0):\n    count = start\n    def increment():\n        nonlocal count\n        count += 1\n        return count\n    return increment",
-                "c = make_counter()\nvals = [c() for _ in range(3)]\nprint(f'vals = {vals}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "vals = [1, 2, 3]" in nb_runner.get_output(2)
-
-        # Change start value
-        nb_runner.set_cell_source(
-            2,
-            "c = make_counter(10)\nvals = [c() for _ in range(3)]\nprint(f'vals = {vals}')",
-        )
-        nb_runner.run_all()
-        assert "vals = [11, 12, 13]" in nb_runner.get_output(2)
-
-    def test_nonlocal_accumulator_edit(self, nb_runner):
-        """Edit the accumulation logic in a nonlocal pattern."""
-        nb_runner.create_notebook(
-            [
-                "def make_acc():\n    total = 0\n    def add(x):\n        nonlocal total\n        total += x\n        return total\n    return add",
-                "acc = make_acc()\nresults = [acc(i) for i in [10, 20, 30]]\nprint(f'results = {results}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "results = [10, 30, 60]" in nb_runner.get_output(2)
-
-        # Change to multiply accumulator
-        nb_runner.set_cell_source(
-            1,
-            "def make_acc():\n    total = 1\n    def add(x):\n        nonlocal total\n        total *= x\n        return total\n    return add",
-        )
-        nb_runner.run_all()
-        assert "results = [10, 200, 6000]" in nb_runner.get_output(2)
-
-
-@pytest.mark.stress
-@pytest.mark.upstream
-@pytest.mark.timeout(90)
-class TestScopeInteraction:
-    """Variable scope interactions between cells."""
-
-    def test_same_name_different_scope(self, nb_runner):
-        """Same variable name in different scopes."""
-        nb_runner.create_notebook(
-            [
-                "x = 'global_x'  # global scope",
-                "def show_x():\n    x = 'local_x'\n    return x",
-                "local_val = show_x()\nprint(f'global={x} local={local_val}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "global=global_x" in nb_runner.get_output(3)
-        assert "local=local_x" in nb_runner.get_output(3)
-
-        # Edit global
-        nb_runner.set_cell_source(1, "x = 'new_global'  # global scope changed")
-        nb_runner.run_all()
-        assert "global=new_global" in nb_runner.get_output(3)
-        assert "local=local_x" in nb_runner.get_output(3)
-
-
 # Closure factory and scope capture interaction tests.
 #
 # Tests editing cells with closure factories, captured variables,
@@ -235,6 +161,91 @@ class TestClosureFactoryEdits:
         )
         nb_runner.run_all()
         assert "result = 7" in nb_runner.get_output(2)
+
+
+# Closure & scope edge cases — closures, nonlocal, late binding.
+@pytest.mark.stress
+class TestClosureBasics:
+    """Test closure patterns across cells."""
+
+    def test_closure_factory_change(self, nb_runner):
+        """Changing closure factory propagates."""
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
+                def make_greeter(greeting):
+                    def greet(name):
+                        return f"{greeting}, {name}!"
+                    return greet
+
+                hello = make_greeter("Hello")
+            """),
+                textwrap.dedent("""\
+                msg = hello("World")
+                print(f"msg={msg}")
+            """),
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "msg=Hello, World!" in nb_runner.get_output(2)
+
+        # Change factory
+        nb_runner.set_cell_source(
+            1,
+            textwrap.dedent("""\
+            def make_greeter(greeting):
+                def greet(name):
+                    return f"{greeting} to {name}!!"
+                return greet
+
+            hello = make_greeter("Welcome")
+        """),
+        )
+        nb_runner.run_all()
+        assert "msg=Welcome to World!!" in nb_runner.get_output(2)
+
+
+@pytest.mark.stress
+@pytest.mark.timeout(90)
+class TestClosureScopeCapture:
+    """closure scope and nonlocal variable capture."""
+
+    def test_closure_nonlocal(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "def make_counter():\n    count = 0\n    def increment():\n        nonlocal count\n        count += 1\n        return count\n    return increment",
+                "counter = make_counter()\nr1 = counter()\nr2 = counter()\nr3 = counter()\nprint(f'r1={r1} r2={r2} r3={r3}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "r1=1 r2=2 r3=3" in nb_runner.get_output(2)
+
+    def test_closure_captures(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "multiplier = 10",
+                "def scale(x):\n    return x * multiplier\nresult = scale(5)\nprint(f'result={result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "result=50" in nb_runner.get_output(2)
+
+    def test_closure_edit(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "def make_adder(n):\n    def add(x):\n        return x + n\n    return add",
+                "add5 = make_adder(5)\nresult = add5(10)\nprint(f'result={result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "result=15" in nb_runner.get_output(2)
+        nb_runner.set_cell_source(2, "add100 = make_adder(100)\nresult = add100(10)\nprint(f'result={result}')")
+        nb_runner.run_all()
+        assert "result=110" in nb_runner.get_output(2)
 
 
 # Closure and nonlocal interaction tests.
@@ -321,48 +332,6 @@ class TestClosureNonlocalInteraction:
         nb_runner.run_all()
         out = nb_runner.get_output(4)
         assert "results=[1, 3, 6]" in out
-
-
-@pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestClosureScopeCapture:
-    """closure scope and nonlocal variable capture."""
-
-    def test_closure_nonlocal(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "def make_counter():\n    count = 0\n    def increment():\n        nonlocal count\n        count += 1\n        return count\n    return increment",
-                "counter = make_counter()\nr1 = counter()\nr2 = counter()\nr3 = counter()\nprint(f'r1={r1} r2={r2} r3={r3}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "r1=1 r2=2 r3=3" in nb_runner.get_output(2)
-
-    def test_closure_captures(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "multiplier = 10",
-                "def scale(x):\n    return x * multiplier\nresult = scale(5)\nprint(f'result={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result=50" in nb_runner.get_output(2)
-
-    def test_closure_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "def make_adder(n):\n    def add(x):\n        return x + n\n    return add",
-                "add5 = make_adder(5)\nresult = add5(10)\nprint(f'result={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result=15" in nb_runner.get_output(2)
-        nb_runner.set_cell_source(2, "add100 = make_adder(100)\nresult = add100(10)\nprint(f'result={result}')")
-        nb_runner.run_all()
-        assert "result=110" in nb_runner.get_output(2)
 
 
 # advanced closure, nonlocal, and scope edge cases.
@@ -465,49 +434,6 @@ class TestAdvancedClosures:
         assert "[0, 5, 10, 15, 20]" in nb_runner.get_output(3)
 
 
-# Closure & scope edge cases — closures, nonlocal, late binding.
-@pytest.mark.stress
-class TestClosureBasics:
-    """Test closure patterns across cells."""
-
-    def test_closure_factory_change(self, nb_runner):
-        """Changing closure factory propagates."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                def make_greeter(greeting):
-                    def greet(name):
-                        return f"{greeting}, {name}!"
-                    return greet
-
-                hello = make_greeter("Hello")
-            """),
-                textwrap.dedent("""\
-                msg = hello("World")
-                print(f"msg={msg}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "msg=Hello, World!" in nb_runner.get_output(2)
-
-        # Change factory
-        nb_runner.set_cell_source(
-            1,
-            textwrap.dedent("""\
-            def make_greeter(greeting):
-                def greet(name):
-                    return f"{greeting} to {name}!!"
-                return greet
-
-            hello = make_greeter("Welcome")
-        """),
-        )
-        nb_runner.run_all()
-        assert "msg=Welcome to World!!" in nb_runner.get_output(2)
-
-
 @pytest.mark.stress
 class TestLatebinding:
     """Test late binding in closures — a classic Python gotcha."""
@@ -540,6 +466,80 @@ class TestLatebinding:
         out = nb_runner.get_output(2)
         assert "late=[4, 4, 4, 4, 4]" in out
         assert "early=[0, 1, 2, 3, 4]" in out
+
+
+@pytest.mark.stress
+@pytest.mark.upstream
+@pytest.mark.timeout(90)
+class TestNonlocalEdits:
+    """Nonlocal variable patterns."""
+
+    def test_nonlocal_counter(self, nb_runner):
+        """Edit a nonlocal counter closure."""
+        nb_runner.create_notebook(
+            [
+                "def make_counter(start=0):\n    count = start\n    def increment():\n        nonlocal count\n        count += 1\n        return count\n    return increment",
+                "c = make_counter()\nvals = [c() for _ in range(3)]\nprint(f'vals = {vals}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "vals = [1, 2, 3]" in nb_runner.get_output(2)
+
+        # Change start value
+        nb_runner.set_cell_source(
+            2,
+            "c = make_counter(10)\nvals = [c() for _ in range(3)]\nprint(f'vals = {vals}')",
+        )
+        nb_runner.run_all()
+        assert "vals = [11, 12, 13]" in nb_runner.get_output(2)
+
+    def test_nonlocal_accumulator_edit(self, nb_runner):
+        """Edit the accumulation logic in a nonlocal pattern."""
+        nb_runner.create_notebook(
+            [
+                "def make_acc():\n    total = 0\n    def add(x):\n        nonlocal total\n        total += x\n        return total\n    return add",
+                "acc = make_acc()\nresults = [acc(i) for i in [10, 20, 30]]\nprint(f'results = {results}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "results = [10, 30, 60]" in nb_runner.get_output(2)
+
+        # Change to multiply accumulator
+        nb_runner.set_cell_source(
+            1,
+            "def make_acc():\n    total = 1\n    def add(x):\n        nonlocal total\n        total *= x\n        return total\n    return add",
+        )
+        nb_runner.run_all()
+        assert "results = [10, 200, 6000]" in nb_runner.get_output(2)
+
+
+@pytest.mark.stress
+@pytest.mark.upstream
+@pytest.mark.timeout(90)
+class TestScopeInteraction:
+    """Variable scope interactions between cells."""
+
+    def test_same_name_different_scope(self, nb_runner):
+        """Same variable name in different scopes."""
+        nb_runner.create_notebook(
+            [
+                "x = 'global_x'  # global scope",
+                "def show_x():\n    x = 'local_x'\n    return x",
+                "local_val = show_x()\nprint(f'global={x} local={local_val}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "global=global_x" in nb_runner.get_output(3)
+        assert "local=local_x" in nb_runner.get_output(3)
+
+        # Edit global
+        nb_runner.set_cell_source(1, "x = 'new_global'  # global scope changed")
+        nb_runner.run_all()
+        assert "global=new_global" in nb_runner.get_output(3)
+        assert "local=local_x" in nb_runner.get_output(3)
 
 
 @pytest.mark.stress

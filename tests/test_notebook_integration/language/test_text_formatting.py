@@ -1,8 +1,63 @@
-"""f-strings, format(), templates, textwrap and pprint across cells."""
+"""f-strings, str.format, format_map, string.Template, alignment and pprint across cells."""
 
 import textwrap
 
 import pytest
+
+
+# Complex f-strings & string formatting — cash caching with advanced formatting.
+@pytest.mark.stress
+class TestFStringPatterns:
+    """Test complex f-string patterns across cells."""
+
+    def test_format_spec_expressions(self, nb_runner):
+        """Format spec with computed width and precision."""
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
+                values = [3.14159, 2.71828, 1.41421]
+                width = 10
+                precision = 3
+                formatted = [f"{v:{width}.{precision}f}" for v in values]
+                print(f"formatted={formatted}")
+            """),
+                textwrap.dedent("""\
+                joined = ' | '.join(formatted)
+                print(f"table={joined}")
+            """),
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "3.142" in nb_runner.get_output(1)
+        assert " | " in nb_runner.get_output(2)
+
+    def test_fstring_propagation(self, nb_runner):
+        """F-string result propagates when upstream changes."""
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
+                name = "World"
+                greeting = f"Hello, {name}!"
+            """),
+                textwrap.dedent("""\
+                print(f"msg={greeting}")
+            """),
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "msg=Hello, World!" in nb_runner.get_output(2)
+
+        nb_runner.set_cell_source(
+            1,
+            textwrap.dedent("""\
+            name = "Python"
+            greeting = f"Hello, {name}!"
+        """),
+        )
+        nb_runner.run_cells([1, 2])
+        assert "msg=Hello, Python!" in nb_runner.get_output(2)
 
 
 # Complex f-string interaction tests.
@@ -84,84 +139,179 @@ class TestFStringComplexEdits:
         assert "Bob: avg=95.0" in nb_runner.get_output(2)
 
 
-# String template and formatting edit patterns.
-#
-# Tests various string formatting approaches with edits.
+# String formatting, regex, serialization, and I/O patterns
+# across notebook cells.
+@pytest.mark.integration
+@pytest.mark.stress
+class TestStringFormattingPatterns:
+    """Test string formatting propagation across cells."""
+
+    def test_fstring_with_complex_expressions(self, nb_runner):
+        """f-strings with complex expressions across cells."""
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
+                data = {'name': 'Alice', 'scores': [90, 85, 92]}
+            """),
+                textwrap.dedent("""\
+                avg = sum(data['scores']) / len(data['scores'])
+                report = f"{data['name']}: avg={avg:.1f}, total={sum(data['scores'])}"
+                print(report)
+            """),
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "Alice: avg=89.0, total=267" in nb_runner.get_output(2)
+
+
+@pytest.mark.integration
+@pytest.mark.stress
+class TestStringProcessingPatterns:
+    """Test complex string processing and regex patterns."""
+
+    def test_format_spec_patterns(self, nb_runner):
+        """Various format spec patterns."""
+        nb_runner.create_notebook(
+            [
+                "value = 3.14159265",
+                textwrap.dedent("""\
+                results = [
+                    f"{value:.2f}",
+                    f"{value:.4e}",
+                    f"{1000000:,}",
+                    f"{0.75:.1%}",
+                ]
+                print(results)
+            """),
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        output = nb_runner.get_output(2)
+        assert "3.14" in output
+        assert "1,000,000" in output
+        assert "75.0%" in output
+
+
+# String formatting and template interaction tests.
+# Tests various string formatting patterns (f-strings, format(), Template)
+# with cache invalidation when underlying data changes.
+@pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)
-class TestStringTemplateEdits:
-    """String template and formatting edit propagation."""
+class TestStringFormattingInteraction:
+    """Test string formatting patterns with cache invalidation."""
 
-    def test_format_string_template(self, nb_runner):
-        """Edit format template, output updates."""
+    def test_format_method_edit(self, nb_runner):
+        """Editing data used in str.format() should propagate."""
         nb_runner.create_notebook(
             [
-                "template = '{name} has {count} items'",
-                "name = 'Alice'\ncount = 5",
-                "msg = template.format(name=name, count=count)\nprint(f'msg = {msg}')",
+                "name = 'Alice'\nage = 30",
+                "template = '{name} is {age} years old'",
+                "msg = template.format(name=name, age=age)",
+                "print(f'msg={msg}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "msg = Alice has 5 items" in nb_runner.get_output(3)
+        out = nb_runner.get_output(4)
+        assert "msg=Alice is 30 years old" in out
 
-        nb_runner.set_cell_source(1, "template = 'User {name}: {count} items remaining'")
+        nb_runner.set_cell_source(1, "name = 'Bob'\nage = 25")
         nb_runner.run_all()
-        assert "msg = User Alice: 5 items remaining" in nb_runner.get_output(3)
+        out = nb_runner.get_output(4)
+        assert "msg=Bob is 25 years old" in out
 
-    def test_join_pattern_edit(self, nb_runner):
-        """Edit separator in join operation."""
+    def test_string_template_edit(self, nb_runner):
+        """Editing data used in string.Template should propagate."""
         nb_runner.create_notebook(
             [
-                "sep = ', '",
-                "words = ['hello', 'world', 'python']\nresult = sep.join(words)\nprint(f'result = {result}')",
+                "from string import Template\nproduct = 'Widget'\nprice = 9.99",
+                "t = Template('Buy $product for $$$price')",
+                "msg = t.substitute(product=product, price=price)",
+                "print(f'msg={msg}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "result = hello, world, python" in nb_runner.get_output(2)
+        out = nb_runner.get_output(4)
+        assert "msg=Buy Widget for $9.99" in out
 
-        nb_runner.set_cell_source(1, "sep = ' | '")
+        nb_runner.set_cell_source(1, "from string import Template\nproduct = 'Gadget'\nprice = 19.99")
         nb_runner.run_all()
-        assert "result = hello | world | python" in nb_runner.get_output(2)
+        out = nb_runner.get_output(4)
+        assert "msg=Buy Gadget for $19.99" in out
 
-    def test_multiline_string_edit(self, nb_runner):
-        """Edit multiline string template."""
+    def test_multiline_format_edit(self, nb_runner):
+        """Editing data used in multiline formatting should propagate."""
         nb_runner.create_notebook(
             [
-                "header = 'Report'\nfooter = 'End'",
-                "body = 'Data: 42'",
-                "doc = f'{header}\\n{body}\\n{footer}'\nprint(doc)",
+                "items = [('Apple', 3), ('Banana', 5)]",
+                "lines = []\nfor name, qty in items:\n    lines.append(f'{name}: {qty}')",
+                "report = '\\n'.join(lines)",
+                "print(report)",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(4)
+        assert "Apple: 3" in out
+        assert "Banana: 5" in out
+
+        nb_runner.set_cell_source(1, "items = [('Cherry', 10), ('Date', 7), ('Fig', 2)]")
+        nb_runner.run_all()
+        out = nb_runner.get_output(4)
+        assert "Cherry: 10" in out
+        assert "Date: 7" in out
+        assert "Fig: 2" in out
+
+
+@pytest.mark.stress
+@pytest.mark.upstream
+@pytest.mark.timeout(90)
+class TestDebugPrintEdits:
+    """Editing debug print patterns."""
+
+    def test_edit_debug_format(self, nb_runner):
+        """Edit the debug print format."""
+        nb_runner.create_notebook(
+            [
+                "data = [1, 2, 3]  # debug print source",
+                "print(f'len={len(data)} sum={sum(data)}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "len=3 sum=6" in nb_runner.get_output(2)
+
+        # Change to more detailed format
+        nb_runner.set_cell_source(2, "print(f'data={data} len={len(data)} min={min(data)} max={max(data)}')")
+        nb_runner.run_all()
+        out = nb_runner.get_output(2)
+        assert "data=[1, 2, 3]" in out
+        assert "min=1" in out
+        assert "max=3" in out
+
+    def test_add_remove_debug_prints(self, nb_runner):
+        """Edit output content between runs."""
+        nb_runner.create_notebook(
+            [
+                "a = 5\nb = 10  # debug prints source",
+                "c = a + b",
+                "print(f'a={a} b={b} c={c}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out = nb_runner.get_output(3)
-        assert "Report" in out
-        assert "Data: 42" in out
-        assert "End" in out
+        assert "a=5 b=10 c=15" in out
 
-        nb_runner.set_cell_source(1, "header = '=== Summary ==='\nfooter = '=== Done ==='")
+        # Change print format
+        nb_runner.set_cell_source(3, "print(f'sum={c}')")
         nb_runner.run_all()
         out2 = nb_runner.get_output(3)
-        assert "=== Summary ===" in out2
-        assert "=== Done ===" in out2
-
-    def test_regex_sub_edit(self, nb_runner):
-        """Edit regex pattern, substitution updates."""
-        nb_runner.create_notebook(
-            [
-                "import re\npattern = r'\\d+'",
-                "text = 'item1 and item22 plus item333'\nresult = re.sub(pattern, '#', text)\nprint(f'result = {result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result = item# and item# plus item#" in nb_runner.get_output(2)
-
-        nb_runner.set_cell_source(1, "import re\npattern = r'[a-z]+'")
-        nb_runner.run_all()
-        assert "result = #1 # #22 # #333" in nb_runner.get_output(2)
+        assert "sum=15" in out2
 
 
 # Interaction test: string formatting with format_map and template patterns.
@@ -272,72 +422,280 @@ class TestStringFormatMapTemplate:
         assert "result=100+200" in nb_runner.get_output(2)
 
 
-# Interaction test: pprint formatting with width/depth control.
-# Tests pprint.pformat with various width, depth, compact settings,
-# and cross-cell pretty-printing of complex nested structures.
+# string.Template and format_map patterns with caching.
+# Tests Template substitution, safe_substitute, format_map, and edit propagation.
+@pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)
-class TestPprintFormatWidth:
-    """Test pprint formatting across cells."""
+class TestTemplateFormatMap:
+    """Test string Template and format_map caching."""
 
-    def test_pprint_width(self, nb_runner):
+    def test_template_substitute(self, nb_runner):
+        """string.Template substitution with caching."""
         nb_runner.create_notebook(
             [
-                # Cell 1: create nested structure
-                "import pprint\ndata = {'alpha': [1, 2, 3], 'beta': [4, 5, 6], 'gamma': [7, 8, 9]}\nwide = pprint.pformat(data, width=120)\nnarrow = pprint.pformat(data, width=30)\nwide_lines = len(wide.splitlines())\nnarrow_lines = len(narrow.splitlines())\nprint(f'wide_lines={wide_lines}')\nprint(f'narrow_more={narrow_lines > wide_lines}')",
-                # Cell 2: depth control
-                "nested = {'a': {'b': {'c': {'d': 1}}}}\nshallow = pprint.pformat(nested, depth=2)\nhas_ellipsis = '...' in shallow\nprint(f'has_ellipsis={has_ellipsis}')",
-                # Cell 3: compact mode
-                "nums = list(range(15))\ncompact_str = pprint.pformat(nums, width=40, compact=True)\nnormal_str = pprint.pformat(nums, width=40, compact=False)\ncompact_lines = len(compact_str.splitlines())\nnormal_lines = len(normal_str.splitlines())\nprint(f'compact_fewer={compact_lines <= normal_lines}')",
+                "from string import Template",
+                "tmpl = Template('Hello, $name! You are $age years old.')",
+                "data = {'name': 'Alice', 'age': 30}",
+                "result = tmpl.substitute(data)\nprint(f'result={result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(4)
+        assert "Hello, Alice! You are 30 years old." in out
+
+        # Re-run cached
+        nb_runner.run_all()
+        out2 = nb_runner.get_output(4)
+        assert "Hello, Alice!" in out2
+
+    def test_template_edit_data(self, nb_runner):
+        """Edit template data, verify output changes."""
+        nb_runner.create_notebook(
+            [
+                "from string import Template",
+                "tmpl = Template('$item costs $$${price}')",
+                "data = {'item': 'Book', 'price': '25'}",
+                "result = tmpl.substitute(data)\nprint(f'result={result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(4)
+        assert "Book costs $25" in out
+
+        nb_runner.set_cell_source(3, "data = {'item': 'Pen', 'price': '5'}")
+        nb_runner.run_all()
+        out2 = nb_runner.get_output(4)
+        assert "Pen costs $5" in out2
+
+    def test_format_map(self, nb_runner):
+        """str.format_map with caching."""
+        nb_runner.create_notebook(
+            [
+                "template = '{city} has {pop} people'",
+                "data = {'city': 'NYC', 'pop': '8M'}",
+                "result = template.format_map(data)\nprint(f'result={result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(3)
+        assert "NYC has 8M people" in out
+
+        # Re-run cached
+        nb_runner.run_all()
+        out2 = nb_runner.get_output(3)
+        assert "NYC has 8M people" in out2
+
+
+# Interaction test: string Template substitution.
+# Tests string.Template with safe_substitute, missing keys,
+# custom delimiters, and cross-cell template pipelines.
+@pytest.mark.stress
+@pytest.mark.timeout(90)
+class TestStringTemplateSubstitute:
+    """Test string Template substitution across cells."""
+
+    def test_template_ops(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                # Cell 1: basic template
+                "from string import Template\ntpl = Template('Hello $name, you are $age years old')\nresult = tpl.substitute(name='Alice', age=30)\nprint(f'result={result}')",
+                # Cell 2: safe_substitute with missing key
+                "tpl2 = Template('$greeting $name, welcome to $place')\nsafe = tpl2.safe_substitute(greeting='Hi', name='Bob')\nprint(f'safe={safe}')",
+                # Cell 3: template from cell 1 data
+                "report_tpl = Template('Report: $name is $age')\nreport = report_tpl.substitute(name='Alice', age=30)\nprint(f'report={report}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
         out1 = nb_runner.get_output(1)
-        assert "narrow_more=True" in out1
+        assert "result=Hello Alice, you are 30 years old" in out1
         out2 = nb_runner.get_output(2)
-        assert "has_ellipsis=True" in out2
+        assert "safe=Hi Bob, welcome to $place" in out2
         out3 = nb_runner.get_output(3)
-        assert "compact_fewer=True" in out3
+        assert "report=Report: Alice is 30" in out3
 
-    def test_pprint_edit(self, nb_runner):
+    def test_template_edit(self, nb_runner):
         nb_runner.create_notebook(
             [
-                "import pprint\nitems = {'x': 10, 'y': 20, 'z': 30}\nformatted = pprint.pformat(items, width=60)\nprint(f'has_x={\"x\" in formatted}')\nprint(f'has_z={\"z\" in formatted}')",
-                "char_count = len(formatted)\nprint(f'chars={char_count}')",
+                "from string import Template\ntpl = Template('$item costs $$${price}')\nresult = tpl.substitute(item='Widget', price='9.99')\nprint(f'result={result}')",
+                "msg = f'Buy now: {result}'\nprint(f'msg={msg}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        out1a = nb_runner.get_output(1)
-        assert "has_x=True" in out1a
+        out1 = nb_runner.get_output(1)
+        assert "Widget" in out1 and "9.99" in out1
 
-        # Add more items
+        # Edit template
         nb_runner.set_cell_source(
             1,
-            "import pprint\nitems = {'x': 10, 'y': 20, 'z': 30, 'w': 40, 'v': 50}\nformatted = pprint.pformat(items, width=60)\nprint(f'has_x={\"x\" in formatted}')\nprint(f'has_v={\"v\" in formatted}')",
+            "from string import Template\ntpl = Template('$item on sale for $$${price}')\nresult = tpl.substitute(item='Gadget', price='4.99')\nprint(f'result={result}')",
         )
         nb_runner.run_cells([1, 2])
-        out1b = nb_runner.get_output(1)
-        assert "has_v=True" in out1b
+        out2 = nb_runner.get_output(2)
+        assert "Gadget" in out2 and "4.99" in out2
 
-    def test_pprint_cache(self, nb_runner):
+    def test_template_cache(self, nb_runner):
         nb_runner.create_notebook(
             [
-                "import pprint\nobj = [{'key': i, 'val': i * 10} for i in range(5)]\npretty = pprint.pformat(obj, width=50)\nline_count = len(pretty.splitlines())\nprint(f'line_count={line_count}')",
-                "has_key_3 = 'key' in pretty and '3' in pretty\nprint(f'has_key_3={has_key_3}')",
+                "from string import Template\ntpl = Template('$x + $y = $z')\neq = tpl.substitute(x='2', y='3', z='5')\nprint(f'eq={eq}')",
+                "length = len(eq)\nprint(f'length={length}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        out1 = nb_runner.get_output(1)
-        assert "line_count=" in out1
-        out2 = nb_runner.get_output(2)
-        assert "has_key_3=True" in out2
+        assert "eq=2 + 3 = 5" in nb_runner.get_output(1)
+        assert "length=9" in nb_runner.get_output(2)
 
         # Re-run - cache
         nb_runner.run_all()
-        assert "has_key_3=True" in nb_runner.get_output(2)
+        assert "length=9" in nb_runner.get_output(2)
+
+
+# String template and formatting edit patterns.
+#
+# Tests various string formatting approaches with edits.
+@pytest.mark.stress
+@pytest.mark.timeout(90)
+class TestStringTemplateEdits:
+    """String template and formatting edit propagation."""
+
+    def test_format_string_template(self, nb_runner):
+        """Edit format template, output updates."""
+        nb_runner.create_notebook(
+            [
+                "template = '{name} has {count} items'",
+                "name = 'Alice'\ncount = 5",
+                "msg = template.format(name=name, count=count)\nprint(f'msg = {msg}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "msg = Alice has 5 items" in nb_runner.get_output(3)
+
+        nb_runner.set_cell_source(1, "template = 'User {name}: {count} items remaining'")
+        nb_runner.run_all()
+        assert "msg = User Alice: 5 items remaining" in nb_runner.get_output(3)
+
+    def test_join_pattern_edit(self, nb_runner):
+        """Edit separator in join operation."""
+        nb_runner.create_notebook(
+            [
+                "sep = ', '",
+                "words = ['hello', 'world', 'python']\nresult = sep.join(words)\nprint(f'result = {result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "result = hello, world, python" in nb_runner.get_output(2)
+
+        nb_runner.set_cell_source(1, "sep = ' | '")
+        nb_runner.run_all()
+        assert "result = hello | world | python" in nb_runner.get_output(2)
+
+    def test_multiline_string_edit(self, nb_runner):
+        """Edit multiline string template."""
+        nb_runner.create_notebook(
+            [
+                "header = 'Report'\nfooter = 'End'",
+                "body = 'Data: 42'",
+                "doc = f'{header}\\n{body}\\n{footer}'\nprint(doc)",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(3)
+        assert "Report" in out
+        assert "Data: 42" in out
+        assert "End" in out
+
+        nb_runner.set_cell_source(1, "header = '=== Summary ==='\nfooter = '=== Done ==='")
+        nb_runner.run_all()
+        out2 = nb_runner.get_output(3)
+        assert "=== Summary ===" in out2
+        assert "=== Done ===" in out2
+
+    def test_regex_sub_edit(self, nb_runner):
+        """Edit regex pattern, substitution updates."""
+        nb_runner.create_notebook(
+            [
+                "import re\npattern = r'\\d+'",
+                "text = 'item1 and item22 plus item333'\nresult = re.sub(pattern, '#', text)\nprint(f'result = {result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "result = item# and item# plus item#" in nb_runner.get_output(2)
+
+        nb_runner.set_cell_source(1, "import re\npattern = r'[a-z]+'")
+        nb_runner.run_all()
+        assert "result = #1 # #22 # #333" in nb_runner.get_output(2)
+
+
+# String template/formatting interaction tests.
+#
+# Tests editing cells with various string formatting
+# approaches and verifying correct output.
+@pytest.mark.stress
+@pytest.mark.upstream
+@pytest.mark.timeout(90)
+class TestTemplatePatternEdits:
+    """Editing string template/formatting patterns."""
+
+    def test_edit_format_template(self, nb_runner):
+        """Edit data used in string format template."""
+        nb_runner.create_notebook(
+            [
+                "name = 'Alice'\nrole = 'engineer'",
+                "msg = '{} is a {}'.format(name, role)\nprint(msg)",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "Alice is a engineer" in nb_runner.get_output(2)
+
+        # Change data
+        nb_runner.set_cell_source(1, "name = 'Bob'\nrole = 'designer'")
+        nb_runner.run_all()
+        assert "Bob is a designer" in nb_runner.get_output(2)
+
+    def test_edit_template_string(self, nb_runner):
+        """Edit a Template string pattern."""
+        nb_runner.create_notebook(
+            [
+                "from string import Template\ntmpl = Template('Hello, $name! You have $count messages.')",
+                "result = tmpl.substitute(name='Alice', count=5)\nprint(result)",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "Hello, Alice! You have 5 messages." in nb_runner.get_output(2)
+
+        # Change template
+        nb_runner.set_cell_source(1, "from string import Template\ntmpl = Template('Hi $name, $count items in cart.')")
+        nb_runner.run_all()
+        assert "Hi Alice, 5 items in cart." in nb_runner.get_output(2)
+
+    def test_edit_multiline_template(self, nb_runner):
+        """Edit data used in multiline template."""
+        nb_runner.create_notebook(
+            [
+                "items = [('apple', 2), ('banana', 3)]",
+                "lines = []\nfor name, qty in items:\n    lines.append(f'{name}: {qty}')\noutput = ', '.join(lines)\nprint(output)",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "apple: 2, banana: 3" in nb_runner.get_output(2)
+
+        # Change items
+        nb_runner.set_cell_source(1, "items = [('x', 10), ('y', 20), ('z', 30)]")
+        nb_runner.run_all()
+        assert "x: 10, y: 20, z: 30" in nb_runner.get_output(2)
 
 
 @pytest.mark.stress
@@ -452,662 +810,6 @@ class TestStringCenterLjustRjust:
 
 @pytest.mark.stress
 @pytest.mark.timeout(90)
-class TestStringExpandtabs:
-    """string expandtabs and whitespace handling."""
-
-    def test_expandtabs(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "text = 'col1\\tcol2\\tcol3'",
-                "expanded = text.expandtabs(8)\ncols = expanded.split()\nprint(f'cols={cols}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "cols=['col1', 'col2', 'col3']" in nb_runner.get_output(2)
-
-    def test_strip_variations(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "s = '  hello  '",
-                "l = s.lstrip()\nr = s.rstrip()\nb = s.strip()\nprint(f'l=[{l}] r=[{r}] b=[{b}]')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "l=[hello  ]" in out
-        assert "r=[  hello]" in out
-        assert "b=[hello]" in out
-
-    def test_whitespace_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "raw = '  spaces  and\\ttabs  '",
-                "cleaned = ' '.join(raw.split())\nprint(f'cleaned={cleaned}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "cleaned=spaces and tabs" in nb_runner.get_output(2)
-        nb_runner.set_cell_source(1, "raw = '\\t\\thello\\t\\tworld\\t\\t'")
-        nb_runner.run_all()
-        assert "cleaned=hello world" in nb_runner.get_output(2)
-
-
-# String formatting and template interaction tests.
-# Tests various string formatting patterns (f-strings, format(), Template)
-# with cache invalidation when underlying data changes.
-@pytest.mark.integration
-@pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestStringFormattingInteraction:
-    """Test string formatting patterns with cache invalidation."""
-
-    def test_format_method_edit(self, nb_runner):
-        """Editing data used in str.format() should propagate."""
-        nb_runner.create_notebook(
-            [
-                "name = 'Alice'\nage = 30",
-                "template = '{name} is {age} years old'",
-                "msg = template.format(name=name, age=age)",
-                "print(f'msg={msg}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "msg=Alice is 30 years old" in out
-
-        nb_runner.set_cell_source(1, "name = 'Bob'\nage = 25")
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "msg=Bob is 25 years old" in out
-
-    def test_string_template_edit(self, nb_runner):
-        """Editing data used in string.Template should propagate."""
-        nb_runner.create_notebook(
-            [
-                "from string import Template\nproduct = 'Widget'\nprice = 9.99",
-                "t = Template('Buy $product for $$$price')",
-                "msg = t.substitute(product=product, price=price)",
-                "print(f'msg={msg}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "msg=Buy Widget for $9.99" in out
-
-        nb_runner.set_cell_source(1, "from string import Template\nproduct = 'Gadget'\nprice = 19.99")
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "msg=Buy Gadget for $19.99" in out
-
-    def test_multiline_format_edit(self, nb_runner):
-        """Editing data used in multiline formatting should propagate."""
-        nb_runner.create_notebook(
-            [
-                "items = [('Apple', 3), ('Banana', 5)]",
-                "lines = []\nfor name, qty in items:\n    lines.append(f'{name}: {qty}')",
-                "report = '\\n'.join(lines)",
-                "print(report)",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "Apple: 3" in out
-        assert "Banana: 5" in out
-
-        nb_runner.set_cell_source(1, "items = [('Cherry', 10), ('Date', 7), ('Fig', 2)]")
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "Cherry: 10" in out
-        assert "Date: 7" in out
-        assert "Fig: 2" in out
-
-
-# Interaction test: string Template substitution.
-# Tests string.Template with safe_substitute, missing keys,
-# custom delimiters, and cross-cell template pipelines.
-@pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestStringTemplateSubstitute:
-    """Test string Template substitution across cells."""
-
-    def test_template_ops(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                # Cell 1: basic template
-                "from string import Template\ntpl = Template('Hello $name, you are $age years old')\nresult = tpl.substitute(name='Alice', age=30)\nprint(f'result={result}')",
-                # Cell 2: safe_substitute with missing key
-                "tpl2 = Template('$greeting $name, welcome to $place')\nsafe = tpl2.safe_substitute(greeting='Hi', name='Bob')\nprint(f'safe={safe}')",
-                # Cell 3: template from cell 1 data
-                "report_tpl = Template('Report: $name is $age')\nreport = report_tpl.substitute(name='Alice', age=30)\nprint(f'report={report}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out1 = nb_runner.get_output(1)
-        assert "result=Hello Alice, you are 30 years old" in out1
-        out2 = nb_runner.get_output(2)
-        assert "safe=Hi Bob, welcome to $place" in out2
-        out3 = nb_runner.get_output(3)
-        assert "report=Report: Alice is 30" in out3
-
-    def test_template_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "from string import Template\ntpl = Template('$item costs $$${price}')\nresult = tpl.substitute(item='Widget', price='9.99')\nprint(f'result={result}')",
-                "msg = f'Buy now: {result}'\nprint(f'msg={msg}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out1 = nb_runner.get_output(1)
-        assert "Widget" in out1 and "9.99" in out1
-
-        # Edit template
-        nb_runner.set_cell_source(
-            1,
-            "from string import Template\ntpl = Template('$item on sale for $$${price}')\nresult = tpl.substitute(item='Gadget', price='4.99')\nprint(f'result={result}')",
-        )
-        nb_runner.run_cells([1, 2])
-        out2 = nb_runner.get_output(2)
-        assert "Gadget" in out2 and "4.99" in out2
-
-    def test_template_cache(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "from string import Template\ntpl = Template('$x + $y = $z')\neq = tpl.substitute(x='2', y='3', z='5')\nprint(f'eq={eq}')",
-                "length = len(eq)\nprint(f'length={length}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "eq=2 + 3 = 5" in nb_runner.get_output(1)
-        assert "length=9" in nb_runner.get_output(2)
-
-        # Re-run - cache
-        nb_runner.run_all()
-        assert "length=9" in nb_runner.get_output(2)
-
-
-# string.Template and format_map patterns with caching.
-# Tests Template substitution, safe_substitute, format_map, and edit propagation.
-@pytest.mark.integration
-@pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestTemplateFormatMap:
-    """Test string Template and format_map caching."""
-
-    def test_template_substitute(self, nb_runner):
-        """string.Template substitution with caching."""
-        nb_runner.create_notebook(
-            [
-                "from string import Template",
-                "tmpl = Template('Hello, $name! You are $age years old.')",
-                "data = {'name': 'Alice', 'age': 30}",
-                "result = tmpl.substitute(data)\nprint(f'result={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "Hello, Alice! You are 30 years old." in out
-
-        # Re-run cached
-        nb_runner.run_all()
-        out2 = nb_runner.get_output(4)
-        assert "Hello, Alice!" in out2
-
-    def test_template_edit_data(self, nb_runner):
-        """Edit template data, verify output changes."""
-        nb_runner.create_notebook(
-            [
-                "from string import Template",
-                "tmpl = Template('$item costs $$${price}')",
-                "data = {'item': 'Book', 'price': '25'}",
-                "result = tmpl.substitute(data)\nprint(f'result={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "Book costs $25" in out
-
-        nb_runner.set_cell_source(3, "data = {'item': 'Pen', 'price': '5'}")
-        nb_runner.run_all()
-        out2 = nb_runner.get_output(4)
-        assert "Pen costs $5" in out2
-
-    def test_format_map(self, nb_runner):
-        """str.format_map with caching."""
-        nb_runner.create_notebook(
-            [
-                "template = '{city} has {pop} people'",
-                "data = {'city': 'NYC', 'pop': '8M'}",
-                "result = template.format_map(data)\nprint(f'result={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(3)
-        assert "NYC has 8M people" in out
-
-        # Re-run cached
-        nb_runner.run_all()
-        out2 = nb_runner.get_output(3)
-        assert "NYC has 8M people" in out2
-
-
-# String template/formatting interaction tests.
-#
-# Tests editing cells with various string formatting
-# approaches and verifying correct output.
-@pytest.mark.stress
-@pytest.mark.upstream
-@pytest.mark.timeout(90)
-class TestTemplatePatternEdits:
-    """Editing string template/formatting patterns."""
-
-    def test_edit_format_template(self, nb_runner):
-        """Edit data used in string format template."""
-        nb_runner.create_notebook(
-            [
-                "name = 'Alice'\nrole = 'engineer'",
-                "msg = '{} is a {}'.format(name, role)\nprint(msg)",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "Alice is a engineer" in nb_runner.get_output(2)
-
-        # Change data
-        nb_runner.set_cell_source(1, "name = 'Bob'\nrole = 'designer'")
-        nb_runner.run_all()
-        assert "Bob is a designer" in nb_runner.get_output(2)
-
-    def test_edit_template_string(self, nb_runner):
-        """Edit a Template string pattern."""
-        nb_runner.create_notebook(
-            [
-                "from string import Template\ntmpl = Template('Hello, $name! You have $count messages.')",
-                "result = tmpl.substitute(name='Alice', count=5)\nprint(result)",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "Hello, Alice! You have 5 messages." in nb_runner.get_output(2)
-
-        # Change template
-        nb_runner.set_cell_source(1, "from string import Template\ntmpl = Template('Hi $name, $count items in cart.')")
-        nb_runner.run_all()
-        assert "Hi Alice, 5 items in cart." in nb_runner.get_output(2)
-
-    def test_edit_multiline_template(self, nb_runner):
-        """Edit data used in multiline template."""
-        nb_runner.create_notebook(
-            [
-                "items = [('apple', 2), ('banana', 3)]",
-                "lines = []\nfor name, qty in items:\n    lines.append(f'{name}: {qty}')\noutput = ', '.join(lines)\nprint(output)",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "apple: 2, banana: 3" in nb_runner.get_output(2)
-
-        # Change items
-        nb_runner.set_cell_source(1, "items = [('x', 10), ('y', 20), ('z', 30)]")
-        nb_runner.run_all()
-        assert "x: 10, y: 20, z: 30" in nb_runner.get_output(2)
-
-
-@pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestTextwrapDedent:
-    """textwrap, dedent, and multi-line string formatting."""
-
-    def test_wrap_basic(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "import textwrap\nlong_text = 'The quick brown fox jumps over the lazy dog and then runs away'",
-                "wrapped = textwrap.fill(long_text, width=30)\nlines = wrapped.count('\\n') + 1\nprint(f'lines={lines}')\nprint(f'wrapped={repr(wrapped)}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "lines=" in out
-
-    def test_dedent_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "import textwrap\ntext = '    line1\\n    line2\\n    line3'",
-                "dedented = textwrap.dedent(text)\nfirst = dedented.split('\\n')[0]\nprint(f'first={first}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "first=line1" in nb_runner.get_output(2)
-        # Edit text
-        nb_runner.set_cell_source(1, "import textwrap\ntext = '        hello\\n        world'")
-        nb_runner.run_all()
-        assert "first=hello" in nb_runner.get_output(2)
-
-    def test_indent(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "import textwrap\ntext = 'line1\\nline2\\nline3'",
-                "indented = textwrap.indent(text, '>>> ')\nprint(f'indented={repr(indented)}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert ">>> line1" in nb_runner.get_output(2)
-
-
-@pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestTextwrapDedentFill:
-    """textwrap module dedent and fill."""
-
-    def test_dedent(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "import textwrap\nraw = '    hello\\n    world\\n    foo'",
-                "cleaned = textwrap.dedent(raw)\nlines = cleaned.strip().split('\\n')\nprint(f'lines={lines}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "lines=['hello', 'world', 'foo']" in nb_runner.get_output(2)
-
-    def test_fill(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "import textwrap\ntext = 'The quick brown fox jumps over the lazy dog and runs away'",
-                "wrapped = textwrap.fill(text, width=20)\nline_count = len(wrapped.split('\\n'))\nprint(f'line_count={line_count}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        count = int(nb_runner.get_output(2).split("line_count=")[1].strip())
-        assert count >= 3
-
-    def test_textwrap_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "import textwrap\ntext = 'hello world test'",
-                "shortened = textwrap.shorten(text, width=12, placeholder='...')\nprint(f'short={shortened}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "short=hello..." in nb_runner.get_output(2)
-        nb_runner.set_cell_source(1, "import textwrap\ntext = 'foo bar baz qux'")
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "short=foo bar..." in out
-
-
-@pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestTextwrapDedentIndent:
-    """textwrap dedent indent and fill wrapping."""
-
-    def test_dedent(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "import textwrap",
-                "text = '''\n        Hello World\n        This is indented\n        Three lines\n    '''\ndedented = textwrap.dedent(text).strip()\nlines = dedented.split('\\n')\nprint(f'lines={len(lines)} first={lines[0]}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "lines=3" in out
-        assert "first=Hello World" in out
-
-    def test_fill_width(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "import textwrap",
-                "text = 'The quick brown fox jumps over the lazy dog near the river'\nfilled = textwrap.fill(text, width=30)\nlines = filled.split('\\n')\nprint(f'line_count={len(lines)}')\nprint(f'max_len={max(len(l) for l in lines)}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "max_len=" in out
-
-    def test_wrap_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "import textwrap",
-                "text = 'hello world foo bar'\nwrapped = textwrap.wrap(text, width=12)\nprint(f'parts={len(wrapped)}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        nb_runner.get_output(2)
-        nb_runner.set_cell_source(
-            2, "text = 'a b c d e f g h'\nwrapped = textwrap.wrap(text, width=8)\nprint(f'parts={len(wrapped)}')"
-        )
-        nb_runner.run_all()
-        out2 = nb_runner.get_output(2)
-        assert "parts=" in out2
-
-
-# Interaction test: textwrap fill and shorten with break_on_hyphens.
-# Tests textwrap.fill with break_long_words, break_on_hyphens,
-# shorten with placeholder, and cross-cell text pipelines.
-@pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestTextwrapFillBreak:
-    """Test textwrap fill with break options across cells."""
-
-    def test_textwrap_fill_break(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                # Cell 1: fill with break options
-                "import textwrap\ntext = 'This is a very-long-hyphenated-word-that-should-break and some more text after it'\nfilled_break = textwrap.fill(text, width=30, break_on_hyphens=True)\nfilled_no_break = textwrap.fill(text, width=30, break_on_hyphens=False)\nbreak_lines = len(filled_break.split('\\n'))\nno_break_lines = len(filled_no_break.split('\\n'))\nprint(f'break_lines={break_lines}')\nprint(f'no_break_lines={no_break_lines}')",
-                # Cell 2: shorten
-                "long = 'The quick brown fox jumps over the lazy dog near the river'\nshort = textwrap.shorten(long, width=30, placeholder='...')\nprint(f'shortened={short}')\nprint(f'short_len={len(short)}')",
-                # Cell 3: combine
-                "combo = textwrap.shorten(text, width=40, placeholder=' [...]')\nprint(f'combo={combo}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out1 = nb_runner.get_output(1)
-        assert "break_lines=" in out1
-        assert "no_break_lines=" in out1
-        out2 = nb_runner.get_output(2)
-        assert "shortened=" in out2
-        assert len(nb_runner.get_output(2).split("shortened=")[1].split("\n")[0]) <= 30
-        out3 = nb_runner.get_output(3)
-        assert "combo=" in out3
-
-    def test_textwrap_fill_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "import textwrap\nparagraph = 'Python is a versatile language used for web development data science and automation'\nfilled = textwrap.fill(paragraph, width=25)\nline_count = len(filled.split('\\n'))\nprint(f'lines={line_count}')",
-                "first = filled.split('\\n')[0]\nprint(f'first_line={first}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(1)
-        assert "lines=" in out
-
-        # Edit width
-        nb_runner.set_cell_source(
-            1,
-            "import textwrap\nparagraph = 'Python is a versatile language used for web development data science and automation'\nfilled = textwrap.fill(paragraph, width=50)\nline_count = len(filled.split('\\n'))\nprint(f'lines={line_count}')",
-        )
-        nb_runner.run_cells([1, 2])
-        out = nb_runner.get_output(2)
-        assert "first_line=" in out
-
-    def test_textwrap_fill_cache(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "import textwrap\nmsg = 'Hello World'\nresult = textwrap.shorten(msg, width=20, placeholder='...')\nprint(f'result={result}')",
-                "is_truncated = '...' in result\nprint(f'truncated={is_truncated}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result=Hello World" in nb_runner.get_output(1)
-        assert "truncated=False" in nb_runner.get_output(2)
-
-        # Re-run - cache
-        nb_runner.run_all()
-        assert "truncated=False" in nb_runner.get_output(2)
-
-
-# textwrap and string formatting patterns with caching.
-# Tests textwrap.dedent, textwrap.fill, indent, and edit propagation.
-@pytest.mark.integration
-@pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestTextwrapFormat:
-    """Test textwrap formatting operation caching."""
-
-    def test_dedent_basic(self, nb_runner):
-        """Dedent indented text, verify caching."""
-        nb_runner.create_notebook(
-            [
-                "import textwrap",
-                "raw = '    line1\\n    line2\\n    line3'",
-                "cleaned = textwrap.dedent(raw)\nlines = cleaned.strip().split('\\n')",
-                "print(f'count={len(lines)} first={lines[0]}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "count=3" in out
-        assert "first=line1" in out
-
-        # Re-run cached
-        nb_runner.run_all()
-        out2 = nb_runner.get_output(4)
-        assert "count=3" in out2
-
-    def test_fill_wrap_edit(self, nb_runner):
-        """textwrap.fill with width edit."""
-        nb_runner.create_notebook(
-            [
-                "import textwrap",
-                "text = 'The quick brown fox jumps over the lazy dog near the river bank'",
-                "width = 20",
-                "wrapped = textwrap.fill(text, width=width)\nline_count = len(wrapped.split('\\n'))",
-                "print(f'lines={line_count}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(5)
-        lines_narrow = int(out.split("lines=")[1].strip())
-
-        nb_runner.set_cell_source(3, "width = 40")
-        nb_runner.run_all()
-        out2 = nb_runner.get_output(5)
-        lines_wide = int(out2.split("lines=")[1].strip())
-        assert lines_wide < lines_narrow
-
-    def test_indent_pattern(self, nb_runner):
-        """textwrap.indent with prefix."""
-        nb_runner.create_notebook(
-            [
-                "import textwrap",
-                "text = 'line1\\nline2\\nline3'",
-                "indented = textwrap.indent(text, '>>> ')\nfirst_line = indented.split('\\n')[0]",
-                "print(f'first={first_line}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "first=>>> line1" in out
-
-        # Re-run cached
-        nb_runner.run_all()
-        out2 = nb_runner.get_output(4)
-        assert "first=>>> line1" in out2
-
-
-# Interaction test: textwrap.wrap and shorten with custom settings.
-# Tests textwrap.wrap with width, initial_indent, subsequent_indent,
-# and textwrap.shorten across cells.
-@pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestTextwrapWrapShorten:
-    """Test textwrap.wrap and shorten across cells."""
-
-    def test_wrap_shorten(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                # Cell 1: wrap text
-                "import textwrap\ntext = 'The quick brown fox jumps over the lazy dog and continues running through the forest'\nwrapped = textwrap.wrap(text, width=30)\nprint(f'lines={len(wrapped)}')\nfor line in wrapped:\n    print(f'  |{line}|')",
-                # Cell 2: shorten
-                "short = textwrap.shorten(text, width=40, placeholder='...')\nprint(f'short={short}')\nprint(f'short_len={len(short)}')",
-                # Cell 3: indent
-                "indented = textwrap.indent(text, prefix='>>> ')\nprint(f'indented={indented}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out1 = nb_runner.get_output(1)
-        assert "lines=" in out1
-        out2 = nb_runner.get_output(2)
-        assert "..." in out2
-        assert int(nb_runner.get_output(2).split("short_len=")[1].strip()) <= 40
-        out3 = nb_runner.get_output(3)
-        assert ">>> The quick" in out3
-
-    def test_wrap_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "import textwrap\ntext = 'Hello World this is a test of text wrapping'\nlines = textwrap.wrap(text, width=20)\nline_count = len(lines)\nprint(f'lines={line_count}')",
-                "first = lines[0]\nprint(f'first={first}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        # Change width
-        nb_runner.set_cell_source(
-            1,
-            "import textwrap\ntext = 'Hello World this is a test of text wrapping'\nlines = textwrap.wrap(text, width=10)\nline_count = len(lines)\nprint(f'lines={line_count}')",
-        )
-        nb_runner.run_cells([1, 2])
-        # Narrower width = more lines
-        count = int(nb_runner.get_output(1).split("lines=")[1].strip())
-        assert count > 3
-
-    def test_wrap_cache(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "import textwrap\nresult = textwrap.fill('A short sentence for testing.', width=15)\nprint(f'filled={result}')",
-                "line_count = result.count('\\n') + 1\nprint(f'count={line_count}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "count=" in out
-
-        # Re-run - cache
-        nb_runner.run_all()
-        assert "count=" in nb_runner.get_output(2)
-
-
-@pytest.mark.stress
-@pytest.mark.timeout(90)
 class TestStringPaddingFormatting:
     """string ljust rjust center zfill formatting."""
 
@@ -1168,56 +870,69 @@ class TestStringZfillNumFormat:
         assert "padded=001234" in nb_runner.get_output(2)
 
 
-# Complex f-strings & string formatting — cash caching with advanced formatting.
+# Interaction test: pprint formatting with width/depth control.
+# Tests pprint.pformat with various width, depth, compact settings,
+# and cross-cell pretty-printing of complex nested structures.
 @pytest.mark.stress
-class TestFStringPatterns:
-    """Test complex f-string patterns across cells."""
+@pytest.mark.timeout(90)
+class TestPprintFormatWidth:
+    """Test pprint formatting across cells."""
 
-    def test_format_spec_expressions(self, nb_runner):
-        """Format spec with computed width and precision."""
+    def test_pprint_width(self, nb_runner):
         nb_runner.create_notebook(
             [
-                textwrap.dedent("""\
-                values = [3.14159, 2.71828, 1.41421]
-                width = 10
-                precision = 3
-                formatted = [f"{v:{width}.{precision}f}" for v in values]
-                print(f"formatted={formatted}")
-            """),
-                textwrap.dedent("""\
-                joined = ' | '.join(formatted)
-                print(f"table={joined}")
-            """),
+                # Cell 1: create nested structure
+                "import pprint\ndata = {'alpha': [1, 2, 3], 'beta': [4, 5, 6], 'gamma': [7, 8, 9]}\nwide = pprint.pformat(data, width=120)\nnarrow = pprint.pformat(data, width=30)\nwide_lines = len(wide.splitlines())\nnarrow_lines = len(narrow.splitlines())\nprint(f'wide_lines={wide_lines}')\nprint(f'narrow_more={narrow_lines > wide_lines}')",
+                # Cell 2: depth control
+                "nested = {'a': {'b': {'c': {'d': 1}}}}\nshallow = pprint.pformat(nested, depth=2)\nhas_ellipsis = '...' in shallow\nprint(f'has_ellipsis={has_ellipsis}')",
+                # Cell 3: compact mode
+                "nums = list(range(15))\ncompact_str = pprint.pformat(nums, width=40, compact=True)\nnormal_str = pprint.pformat(nums, width=40, compact=False)\ncompact_lines = len(compact_str.splitlines())\nnormal_lines = len(normal_str.splitlines())\nprint(f'compact_fewer={compact_lines <= normal_lines}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "3.142" in nb_runner.get_output(1)
-        assert " | " in nb_runner.get_output(2)
+        out1 = nb_runner.get_output(1)
+        assert "narrow_more=True" in out1
+        out2 = nb_runner.get_output(2)
+        assert "has_ellipsis=True" in out2
+        out3 = nb_runner.get_output(3)
+        assert "compact_fewer=True" in out3
 
-    def test_fstring_propagation(self, nb_runner):
-        """F-string result propagates when upstream changes."""
+    def test_pprint_edit(self, nb_runner):
         nb_runner.create_notebook(
             [
-                textwrap.dedent("""\
-                name = "World"
-                greeting = f"Hello, {name}!"
-            """),
-                textwrap.dedent("""\
-                print(f"msg={greeting}")
-            """),
+                "import pprint\nitems = {'x': 10, 'y': 20, 'z': 30}\nformatted = pprint.pformat(items, width=60)\nprint(f'has_x={\"x\" in formatted}')\nprint(f'has_z={\"z\" in formatted}')",
+                "char_count = len(formatted)\nprint(f'chars={char_count}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "msg=Hello, World!" in nb_runner.get_output(2)
+        out1a = nb_runner.get_output(1)
+        assert "has_x=True" in out1a
 
+        # Add more items
         nb_runner.set_cell_source(
             1,
-            textwrap.dedent("""\
-            name = "Python"
-            greeting = f"Hello, {name}!"
-        """),
+            "import pprint\nitems = {'x': 10, 'y': 20, 'z': 30, 'w': 40, 'v': 50}\nformatted = pprint.pformat(items, width=60)\nprint(f'has_x={\"x\" in formatted}')\nprint(f'has_v={\"v\" in formatted}')",
         )
         nb_runner.run_cells([1, 2])
-        assert "msg=Hello, Python!" in nb_runner.get_output(2)
+        out1b = nb_runner.get_output(1)
+        assert "has_v=True" in out1b
+
+    def test_pprint_cache(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "import pprint\nobj = [{'key': i, 'val': i * 10} for i in range(5)]\npretty = pprint.pformat(obj, width=50)\nline_count = len(pretty.splitlines())\nprint(f'line_count={line_count}')",
+                "has_key_3 = 'key' in pretty and '3' in pretty\nprint(f'has_key_3={has_key_3}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out1 = nb_runner.get_output(1)
+        assert "line_count=" in out1
+        out2 = nb_runner.get_output(2)
+        assert "has_key_3=True" in out2
+
+        # Re-run - cache
+        nb_runner.run_all()
+        assert "has_key_3=True" in nb_runner.get_output(2)

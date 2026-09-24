@@ -5,104 +5,6 @@ import textwrap
 import pytest
 
 
-@pytest.mark.stress
-class TestManualMemoization:
-    """Test manual memoization patterns."""
-
-    def test_dict_memoize(self, nb_runner):
-        """Manual dict-based memoization."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                _memo = {}
-                def memoized_power(base, exp):
-                    key = (base, exp)
-                    if key not in _memo:
-                        _memo[key] = base ** exp
-                    return _memo[key]
-            """),
-                textwrap.dedent("""\
-                r1 = memoized_power(2, 10)
-                r2 = memoized_power(3, 5)
-                r3 = memoized_power(2, 10)  # should be cached
-                cache_size = len(_memo)
-                print(f"r1={r1} r2={r2} r3={r3} cache_size={cache_size}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "r1=1024 r2=243 r3=1024 cache_size=2" in nb_runner.get_output(2)
-
-    def test_memoize_decorator(self, nb_runner):
-        """Custom memoize decorator across cells."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                def memoize(fn):
-                    cache = {}
-                    def wrapper(*args):
-                        if args not in cache:
-                            cache[args] = fn(*args)
-                        return cache[args]
-                    wrapper.cache = cache
-                    wrapper.__name__ = fn.__name__
-                    return wrapper
-            """),
-                textwrap.dedent("""\
-                @memoize
-                def expensive(n):
-                    return sum(i**2 for i in range(n))
-
-                r1 = expensive(100)
-                r2 = expensive(100)  # cached
-                r3 = expensive(50)
-                cache_size = len(expensive.cache)
-                print(f"r1={r1} r3={r3} cache_size={cache_size}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "r1=328350" in nb_runner.get_output(2)
-        assert "cache_size=2" in nb_runner.get_output(2)
-
-
-@pytest.mark.stress
-class TestCachedPropertyPattern:
-    """Test cached_property and similar patterns."""
-
-    def test_cached_property_class(self, nb_runner):
-        """Class with cached_property (Python 3.8+)."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                from functools import cached_property
-
-                class DataSet:
-                    def __init__(self, data):
-                        self.data = data
-
-                    @cached_property
-                    def mean(self):
-                        return sum(self.data) / len(self.data)
-
-                    @cached_property
-                    def variance(self):
-                        m = self.mean
-                        return sum((x - m) ** 2 for x in self.data) / len(self.data)
-            """),
-                textwrap.dedent("""\
-                ds = DataSet([1, 2, 3, 4, 5])
-                print(f"mean={ds.mean} var={ds.variance}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "mean=3.0 var=2.0" in nb_runner.get_output(2)
-
-
 # Metaclass patterns — cash caching with metaclasses and class hooks.
 @pytest.mark.stress
 class TestMetaclassBasics:
@@ -142,77 +44,45 @@ class TestMetaclassBasics:
         assert "version=2.0" in nb_runner.get_output(2)
 
 
+# metaclass and class factory patterns.
 @pytest.mark.stress
-class TestInitSubclass:
-    """Test __init_subclass__ patterns."""
+@pytest.mark.integration
+class TestMetaclass:
+    """Metaclass patterns."""
 
-    def test_init_subclass_auto_register(self, nb_runner):
-        """__init_subclass__ for auto-registration."""
+    def test_metaclass_validation(self, nb_runner):
+        """Metaclass that validates class attributes."""
         nb_runner.create_notebook(
             [
                 textwrap.dedent("""\
-                class Command:
-                    _commands = {}
-                    def __init_subclass__(cls, command_name=None, **kwargs):
-                        super().__init_subclass__(**kwargs)
-                        if command_name:
-                            Command._commands[command_name] = cls
-            """),
-                textwrap.dedent("""\
-                class ListCmd(Command, command_name='list'):
-                    def run(self): return 'listing'
-
-                class CreateCmd(Command, command_name='create'):
-                    def run(self): return 'creating'
-            """),
-                textwrap.dedent("""\
-                cmds = sorted(Command._commands.keys())
-                results = [Command._commands[c]().run() for c in cmds]
-                print(f"commands={cmds} results={results}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "commands=['create', 'list']" in nb_runner.get_output(3)
-        assert "results=['creating', 'listing']" in nb_runner.get_output(3)
-
-
-@pytest.mark.stress
-class TestClassDecorators:
-    """Test class-level decorators."""
-
-    def test_dataclass_like_decorator(self, nb_runner):
-        """Decorator that adds methods like dataclass."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                def auto_init(*fields):
-                    def decorator(cls):
-                        def __init__(self, *args):
-                            for f, v in zip(fields, args):
-                                setattr(self, f, v)
-                        def __repr__(self):
-                            vals = ', '.join(f'{f}={getattr(self, f)!r}' for f in fields)
-                            return f'{cls.__name__}({vals})'
-                        cls.__init__ = __init__
-                        cls.__repr__ = __repr__
+                class ValidatedMeta(type):
+                    def __new__(mcs, name, bases, namespace):
+                        required = namespace.get('_required_attrs', [])
+                        missing = [a for a in required if a not in namespace]
+                        if missing:
+                            raise TypeError(f"{name} missing: {missing}")
+                        cls = super().__new__(mcs, name, bases, namespace)
                         return cls
-                    return decorator
-            """),
-                textwrap.dedent("""\
-                @auto_init('name', 'age', 'city')
-                class Person:
-                    pass
 
-                p = Person('Alice', 30, 'NYC')
-                print(f"p={p}")
+                class Config(metaclass=ValidatedMeta):
+                    _required_attrs = ['host', 'port']
+                    host = 'localhost'
+                    port = 8080
+                    debug = True
+
+                valid = True
+                config_host = Config.host
+                config_port = Config.port
             """),
+                "print(f'valid={valid} host={config_host} port={config_port}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "p=Person(name='Alice', age=30, city='NYC')" in nb_runner.get_output(2)
+        out = nb_runner.get_output(2)
+        assert "valid=True" in out
+        assert "host=localhost" in out
+        assert "port=8080" in out
 
 
 # Metaclass interaction tests.
@@ -297,45 +167,77 @@ class TestMetaclassInteraction:
         assert "same=True" in out
 
 
-# metaclass and class factory patterns.
 @pytest.mark.stress
-@pytest.mark.integration
-class TestMetaclass:
-    """Metaclass patterns."""
+class TestInitSubclass:
+    """Test __init_subclass__ patterns."""
 
-    def test_metaclass_validation(self, nb_runner):
-        """Metaclass that validates class attributes."""
+    def test_init_subclass_auto_register(self, nb_runner):
+        """__init_subclass__ for auto-registration."""
         nb_runner.create_notebook(
             [
                 textwrap.dedent("""\
-                class ValidatedMeta(type):
-                    def __new__(mcs, name, bases, namespace):
-                        required = namespace.get('_required_attrs', [])
-                        missing = [a for a in required if a not in namespace]
-                        if missing:
-                            raise TypeError(f"{name} missing: {missing}")
-                        cls = super().__new__(mcs, name, bases, namespace)
-                        return cls
-
-                class Config(metaclass=ValidatedMeta):
-                    _required_attrs = ['host', 'port']
-                    host = 'localhost'
-                    port = 8080
-                    debug = True
-
-                valid = True
-                config_host = Config.host
-                config_port = Config.port
+                class Command:
+                    _commands = {}
+                    def __init_subclass__(cls, command_name=None, **kwargs):
+                        super().__init_subclass__(**kwargs)
+                        if command_name:
+                            Command._commands[command_name] = cls
             """),
-                "print(f'valid={valid} host={config_host} port={config_port}')",
+                textwrap.dedent("""\
+                class ListCmd(Command, command_name='list'):
+                    def run(self): return 'listing'
+
+                class CreateCmd(Command, command_name='create'):
+                    def run(self): return 'creating'
+            """),
+                textwrap.dedent("""\
+                cmds = sorted(Command._commands.keys())
+                results = [Command._commands[c]().run() for c in cmds]
+                print(f"commands={cmds} results={results}")
+            """),
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "valid=True" in out
-        assert "host=localhost" in out
-        assert "port=8080" in out
+        assert "commands=['create', 'list']" in nb_runner.get_output(3)
+        assert "results=['creating', 'listing']" in nb_runner.get_output(3)
+
+
+@pytest.mark.stress
+class TestClassDecorators:
+    """Test class-level decorators."""
+
+    def test_dataclass_like_decorator(self, nb_runner):
+        """Decorator that adds methods like dataclass."""
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
+                def auto_init(*fields):
+                    def decorator(cls):
+                        def __init__(self, *args):
+                            for f, v in zip(fields, args):
+                                setattr(self, f, v)
+                        def __repr__(self):
+                            vals = ', '.join(f'{f}={getattr(self, f)!r}' for f in fields)
+                            return f'{cls.__name__}({vals})'
+                        cls.__init__ = __init__
+                        cls.__repr__ = __repr__
+                        return cls
+                    return decorator
+            """),
+                textwrap.dedent("""\
+                @auto_init('name', 'age', 'city')
+                class Person:
+                    pass
+
+                p = Person('Alice', 30, 'NYC')
+                print(f"p={p}")
+            """),
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "p=Person(name='Alice', age=30, city='NYC')" in nb_runner.get_output(2)
 
 
 @pytest.mark.stress

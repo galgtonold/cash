@@ -75,205 +75,98 @@ class TestInheritanceEdits:
         assert "val = 20" in nb_runner.get_output(4)
 
 
+# Class inheritance chain edit tests.
+#
+# Tests editing base/parent classes and verifying that changes
+# propagate through inheritance hierarchies.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
-class TestMultipleInheritance:
-    """Multiple inheritance edits."""
+class TestInheritanceChainEdits:
+    """Editing classes in an inheritance hierarchy."""
 
-    def test_mixin_edit(self, nb_runner):
-        """Edit a mixin class in a multiple inheritance chain."""
+    def test_edit_derived_class_override(self, nb_runner):
+        """Edit a derived class to override a base method."""
         nb_runner.create_notebook(
             [
-                "class LogMixin:\n    def log(self):\n        return 'LOG:base'",
-                "class Service:\n    name = 'svc'",
-                "class App(LogMixin, Service):\n    pass",
-                "a = App()\nprint(f'log={a.log()} name={a.name}')",
+                "class Shape:\n    def describe(self):\n        return 'shape'",
+                "class Circle(Shape):\n    pass",
+                "c = Circle()\nresult = c.describe()\nprint(f'result = {result}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "log=LOG:base" in nb_runner.get_output(4)
-        assert "name=svc" in nb_runner.get_output(4)
+        assert "result = shape" in nb_runner.get_output(3)
 
-        # Edit mixin
-        nb_runner.set_cell_source(1, "class LogMixin:\n    def log(self):\n        return 'LOG:v2'")
+        # Add override
+        nb_runner.set_cell_source(2, "class Circle(Shape):\n    def describe(self):\n        return 'circle'")
         nb_runner.run_all()
-        assert "log=LOG:v2" in nb_runner.get_output(4)
+        assert "result = circle" in nb_runner.get_output(3)
 
-    def test_add_class_attribute(self, nb_runner):
-        """Add a class attribute to a parent, use in child."""
+    def test_edit_super_call(self, nb_runner):
+        """Edit a class that uses super()."""
         nb_runner.create_notebook(
             [
-                "class Config:\n    debug = False",
-                "class App(Config):\n    name = 'myapp'",
-                "a = App()\nprint(f'debug={a.debug} name={a.name}')",
+                "class Base:\n    def value(self):\n        return 10",
+                "class Child(Base):\n    def value(self):\n        return super().value() + 5",
+                "obj = Child()\nresult = obj.value()\nprint(f'result = {result}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "debug=False" in nb_runner.get_output(3)
+        assert "result = 15" in nb_runner.get_output(3)
 
-        # Enable debug in parent
-        nb_runner.set_cell_source(1, "class Config:\n    debug = True")
+        # Edit base value
+        nb_runner.set_cell_source(1, "class Base:\n    def value(self):\n        return 100")
         nb_runner.run_all()
-        assert "debug=True" in nb_runner.get_output(3)
+        assert "result = 105" in nb_runner.get_output(3)
 
 
-# Property/classmethod/staticmethod interaction tests.
-#
-# Tests editing cells containing class features like properties,
-# classmethods, and staticmethods to verify cache invalidation.
-@pytest.mark.stress
-@pytest.mark.upstream
-@pytest.mark.timeout(90)
-class TestClassFeatureEdits:
-    """Editing class properties, classmethods, and staticmethods."""
-
-    def test_edit_staticmethod(self, nb_runner):
-        """Edit a staticmethod and verify downstream uses new version."""
-        nb_runner.create_notebook(
-            [
-                "class MathHelper:\n    @staticmethod\n    def double(x):\n        return x * 2",
-                "result = MathHelper.double(5)\nprint(f'result = {result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result = 10" in nb_runner.get_output(2)
-
-        # Edit to triple instead of double
-        nb_runner.set_cell_source(1, "class MathHelper:\n    @staticmethod\n    def double(x):\n        return x * 3")
-        nb_runner.run_all()
-        assert "result = 15" in nb_runner.get_output(2)
-
-    def test_edit_classmethod_factory(self, nb_runner):
-        """Edit a classmethod factory and verify downstream."""
-        nb_runner.create_notebook(
-            [
-                "class Config:\n    def __init__(self, val):\n        self.val = val\n    @classmethod\n    def default(cls):\n        return cls(42)",
-                "cfg = Config.default()\nprint(f'val = {cfg.val}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "val = 42" in nb_runner.get_output(2)
-
-        # Change default value
-        nb_runner.set_cell_source(
-            1,
-            "class Config:\n    def __init__(self, val):\n        self.val = val\n    @classmethod\n    def default(cls):\n        return cls(99)",
-        )
-        nb_runner.run_all()
-        assert "val = 99" in nb_runner.get_output(2)
-
-    def test_edit_property_getter(self, nb_runner):
-        """Edit a property getter and verify downstream."""
-        nb_runner.create_notebook(
-            [
-                "class Box:\n    def __init__(self, w, h):\n        self.w = w\n        self.h = h\n    @property\n    def area(self):\n        return self.w * self.h",
-                "b = Box(3, 4)\nprint(f'area = {b.area}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "area = 12" in nb_runner.get_output(2)
-
-        # Change to perimeter
-        nb_runner.set_cell_source(
-            1,
-            "class Box:\n    def __init__(self, w, h):\n        self.w = w\n        self.h = h\n    @property\n    def area(self):\n        return 2 * (self.w + self.h)",
-        )
-        nb_runner.run_all()
-        assert "area = 14" in nb_runner.get_output(2)
-
-    def test_edit_dunder_repr(self, nb_runner):
-        """Edit __repr__ and verify output changes."""
-        nb_runner.create_notebook(
-            [
-                "class Point:\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\n    def __repr__(self):\n        return f'({self.x}, {self.y})'",
-                "p = Point(1, 2)\nprint(f'p = {p}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "p = (1, 2)" in nb_runner.get_output(2)
-
-        # Edit __repr__
-        nb_runner.set_cell_source(
-            1,
-            "class Point:\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\n    def __repr__(self):\n        return f'Point({self.x}, {self.y})'",
-        )
-        nb_runner.run_all()
-        assert "p = Point(1, 2)" in nb_runner.get_output(2)
-
-
-# Class composition patterns.
-#
-# Tests composition (has-a) relationships with edits.
 @pytest.mark.stress
 @pytest.mark.timeout(90)
-class TestClassComposition:
-    """Composition-based class patterns with edit propagation."""
+class TestInheritanceSuper:
+    """class inheritance with super() and MRO edits."""
 
-    def test_engine_in_car(self, nb_runner):
-        """Edit composed engine class, car reflects change."""
+    def test_super_basic(self, nb_runner):
         nb_runner.create_notebook(
             [
-                "class Engine:\n    def __init__(self, hp):\n        self.hp = hp\n    def describe(self):\n        return f'{self.hp}hp'",
-                "class Car:\n    def __init__(self, name, engine):\n        self.name = name\n        self.engine = engine\n    def spec(self):\n        return f'{self.name}: {self.engine.describe()}'",
-                "e = Engine(200)\nc = Car('Sedan', e)\nprint(f'spec = {c.spec()}')",
+                "class Animal:\n    def __init__(self, name):\n        self.name = name\n    def speak(self):\n        return f'{self.name} makes a sound'\nclass Dog(Animal):\n    def speak(self):\n        return f'{self.name} barks'",
+                "d = Dog('Rex')\nresult = d.speak()\nprint(f'result={result}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "spec = Sedan: 200hp" in nb_runner.get_output(3)
+        assert "result=Rex barks" in nb_runner.get_output(2)
 
+    def test_super_chain_edit(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "class Base:\n    def value(self):\n        return 10\nclass Mid(Base):\n    def value(self):\n        return super().value() + 5\nclass Top(Mid):\n    def value(self):\n        return super().value() * 2",
+                "t = Top()\nresult = t.value()\nprint(f'result={result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "result=30" in nb_runner.get_output(2)
+        # Edit base
         nb_runner.set_cell_source(
             1,
-            "class Engine:\n    def __init__(self, hp):\n        self.hp = hp\n    def describe(self):\n        return f'{self.hp}HP turbo'",
+            "class Base:\n    def value(self):\n        return 100\nclass Mid(Base):\n    def value(self):\n        return super().value() + 5\nclass Top(Mid):\n    def value(self):\n        return super().value() * 2",
         )
         nb_runner.run_all()
-        assert "spec = Sedan: 200HP turbo" in nb_runner.get_output(3)
+        assert "result=210" in nb_runner.get_output(2)
 
-    def test_strategy_pattern(self, nb_runner):
-        """Edit strategy object, context reflects new behavior."""
+    def test_mixin_pattern(self, nb_runner):
         nb_runner.create_notebook(
             [
-                "class AddStrategy:\n    def execute(self, a, b):\n        return a + b",
-                "strategy = AddStrategy()\nresult = strategy.execute(10, 20)\nprint(f'result = {result}')",
+                "class JsonMixin:\n    def to_dict(self):\n        return self.__dict__\nclass Person(JsonMixin):\n    def __init__(self, name, age):\n        self.name = name\n        self.age = age",
+                "p = Person('Alice', 30)\nd = p.to_dict()\nprint(f'd={d}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "result = 30" in nb_runner.get_output(2)
-
-        nb_runner.set_cell_source(
-            1,
-            "class AddStrategy:\n    def execute(self, a, b):\n        return a * b",
-        )
-        nb_runner.run_all()
-        assert "result = 200" in nb_runner.get_output(2)
-
-    def test_nested_composition(self, nb_runner):
-        """Three-level composition: department -> team -> member."""
-        nb_runner.create_notebook(
-            [
-                "class Member:\n    def __init__(self, name):\n        self.name = name",
-                "class Team:\n    def __init__(self, members):\n        self.members = members\n    def names(self):\n        return [m.name for m in self.members]",
-                "t = Team([Member('Alice'), Member('Bob')])\nprint(f'names = {t.names()}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "names = ['Alice', 'Bob']" in nb_runner.get_output(3)
-
-        nb_runner.set_cell_source(
-            3,
-            "t = Team([Member('Charlie'), Member('Diana'), Member('Eve')])\nprint(f'names = {t.names()}')",
-        )
-        nb_runner.run_all()
-        assert "names = ['Charlie', 'Diana', 'Eve']" in nb_runner.get_output(3)
+        assert "'name': 'Alice'" in nb_runner.get_output(2)
+        assert "'age': 30" in nb_runner.get_output(2)
 
 
 @pytest.mark.stress
@@ -322,79 +215,95 @@ class TestClassInheritanceMRO:
         assert "area=100" in nb_runner.get_output(2)
 
 
-# Multi-cell class composition (has-a) interaction tests.
-#
-# Tests where one class has another class as a member,
-# and edits propagate through the composition.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
-class TestCompositionEdits:
-    """Editing composed class structures."""
+class TestMultipleInheritance:
+    """Multiple inheritance edits."""
 
-    def test_edit_component_class(self, nb_runner):
-        """Edit the component class in a composition."""
+    def test_mixin_edit(self, nb_runner):
+        """Edit a mixin class in a multiple inheritance chain."""
         nb_runner.create_notebook(
             [
-                "class Engine:\n    def __init__(self, hp):\n        self.hp = hp\n    def describe(self):\n        return f'{self.hp}hp'",
-                "class Car:\n    def __init__(self, name, engine):\n        self.name = name\n        self.engine = engine\n    def info(self):\n        return f'{self.name}: {self.engine.describe()}'",
-                "e = Engine(200)\nc = Car('Tesla', e)\nprint(f'info = {c.info()}')",
+                "class LogMixin:\n    def log(self):\n        return 'LOG:base'",
+                "class Service:\n    name = 'svc'",
+                "class App(LogMixin, Service):\n    pass",
+                "a = App()\nprint(f'log={a.log()} name={a.name}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "info = Tesla: 200hp" in nb_runner.get_output(3)
+        assert "log=LOG:base" in nb_runner.get_output(4)
+        assert "name=svc" in nb_runner.get_output(4)
 
-        # Edit Engine to include type
-        nb_runner.set_cell_source(
-            1,
-            "class Engine:\n    def __init__(self, hp, typ='gas'):\n        self.hp = hp\n        self.typ = typ\n    def describe(self):\n        return f'{self.hp}hp {self.typ}'",
-        )
-        nb_runner.set_cell_source(3, "e = Engine(300, 'electric')\nc = Car('Tesla', e)\nprint(f'info = {c.info()}')")
+        # Edit mixin
+        nb_runner.set_cell_source(1, "class LogMixin:\n    def log(self):\n        return 'LOG:v2'")
         nb_runner.run_all()
-        assert "info = Tesla: 300hp electric" in nb_runner.get_output(3)
+        assert "log=LOG:v2" in nb_runner.get_output(4)
 
-    def test_edit_container_class(self, nb_runner):
-        """Edit the container class in a composition."""
+    def test_add_class_attribute(self, nb_runner):
+        """Add a class attribute to a parent, use in child."""
         nb_runner.create_notebook(
             [
-                "class Item:\n    def __init__(self, name, price):\n        self.name = name\n        self.price = price",
-                "class Cart:\n    def __init__(self):\n        self.items = []\n    def add(self, item):\n        self.items.append(item)\n    def total(self):\n        return sum(i.price for i in self.items)",
-                "cart = Cart()\ncart.add(Item('A', 10))\ncart.add(Item('B', 20))\nprint(f'total = {cart.total()}')",
+                "class Config:\n    debug = False",
+                "class App(Config):\n    name = 'myapp'",
+                "a = App()\nprint(f'debug={a.debug} name={a.name}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "total = 30" in nb_runner.get_output(3)
+        assert "debug=False" in nb_runner.get_output(3)
 
-        # Edit Cart to add tax
-        nb_runner.set_cell_source(
-            2,
-            "class Cart:\n    def __init__(self, tax=0.1):\n        self.items = []\n        self.tax = tax\n    def add(self, item):\n        self.items.append(item)\n    def total(self):\n        subtotal = sum(i.price for i in self.items)\n        return subtotal * (1 + self.tax)",
-        )
+        # Enable debug in parent
+        nb_runner.set_cell_source(1, "class Config:\n    debug = True")
         nb_runner.run_all()
-        assert "total = 33.0" in nb_runner.get_output(3)
+        assert "debug=True" in nb_runner.get_output(3)
 
-    def test_edit_both_classes(self, nb_runner):
-        """Edit both component and container."""
+
+@pytest.mark.stress
+@pytest.mark.timeout(90)
+class TestMultipleInheritanceMRO:
+    """multiple inheritance and MRO resolution."""
+
+    def test_diamond_mro(self, nb_runner):
         nb_runner.create_notebook(
             [
-                "class Point:\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y",
-                "class Line:\n    def __init__(self, p1, p2):\n        self.p1 = p1\n        self.p2 = p2\n    def length(self):\n        return ((self.p2.x - self.p1.x)**2 + (self.p2.y - self.p1.y)**2) ** 0.5",
-                "a = Point(0, 0)\nb = Point(3, 4)\nline = Line(a, b)\nprint(f'length = {line.length()}')",
+                "pass  # setup",
+                "class A:\n    def who(self): return 'A'\nclass B(A):\n    def who(self): return 'B'\nclass C(A):\n    def who(self): return 'C'\nclass D(B, C):\n    pass\nd = D()\nmro = [c.__name__ for c in D.__mro__]\nprint(f'who={d.who()} mro={mro}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "length = 5.0" in nb_runner.get_output(3)
+        out = nb_runner.get_output(2)
+        assert "who=B" in out
+        assert "mro=['D', 'B', 'C', 'A', 'object']" in out
 
-        # Change points
+    def test_super_chain(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "pass  # setup",
+                "class Base:\n    def greet(self): return 'Base'\nclass Left(Base):\n    def greet(self): return 'Left+' + super().greet()\nclass Right(Base):\n    def greet(self): return 'Right+' + super().greet()\nclass Child(Left, Right):\n    def greet(self): return 'Child+' + super().greet()\nresult = Child().greet()\nprint(f'chain={result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "chain=Child+Left+Right+Base" in nb_runner.get_output(2)
+
+    def test_mro_edit(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "pass  # setup",
+                "class X:\n    val = 10\nclass Y(X):\n    val = 20\nclass Z(Y):\n    pass\nprint(f'val={Z.val}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "val=20" in nb_runner.get_output(2)
         nb_runner.set_cell_source(
-            3,
-            "a = Point(1, 1)\nb = Point(4, 5)\nline = Line(a, b)\nprint(f'length = {line.length()}')",
+            2, "class X:\n    val = 10\nclass Y(X):\n    pass\nclass Z(Y):\n    pass\nprint(f'val={Z.val}')"
         )
         nb_runner.run_all()
-        assert "length = 5.0" in nb_runner.get_output(3)
+        assert "val=10" in nb_runner.get_output(2)
 
 
 @pytest.mark.stress
@@ -443,51 +352,72 @@ class TestDiamondMRO:
         assert "log=['Base', 'Right', 'Left', 'Child']" in nb_runner.get_output(2)
 
 
-@pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestInheritanceSuper:
-    """class inheritance with super() and MRO edits."""
+# Complex inheritance & MRO patterns — diamond, mixin, super() chains.
+class TestDiamondInheritance:
+    """Test diamond inheritance and MRO."""
 
-    def test_super_basic(self, nb_runner):
+    @pytest.mark.stress
+    def test_diamond_change_base(self, nb_runner):
+        """Changing base class propagates through diamond."""
         nb_runner.create_notebook(
             [
-                "class Animal:\n    def __init__(self, name):\n        self.name = name\n    def speak(self):\n        return f'{self.name} makes a sound'\nclass Dog(Animal):\n    def speak(self):\n        return f'{self.name} barks'",
-                "d = Dog('Rex')\nresult = d.speak()\nprint(f'result={result}')",
+                textwrap.dedent("""\
+                class Base:
+                    value = 10
+                class Left(Base): pass
+                class Right(Base): pass
+                class Diamond(Left, Right): pass
+            """),
+                textwrap.dedent("""\
+                result = Diamond.value
+                print(f"result={result}")
+            """),
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "result=Rex barks" in nb_runner.get_output(2)
+        assert "result=10" in nb_runner.get_output(2)
 
-    def test_super_chain_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "class Base:\n    def value(self):\n        return 10\nclass Mid(Base):\n    def value(self):\n        return super().value() + 5\nclass Top(Mid):\n    def value(self):\n        return super().value() * 2",
-                "t = Top()\nresult = t.value()\nprint(f'result={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result=30" in nb_runner.get_output(2)
-        # Edit base
+        # Change base
         nb_runner.set_cell_source(
             1,
-            "class Base:\n    def value(self):\n        return 100\nclass Mid(Base):\n    def value(self):\n        return super().value() + 5\nclass Top(Mid):\n    def value(self):\n        return super().value() * 2",
+            textwrap.dedent("""\
+            class Base:
+                value = 99
+            class Left(Base): pass
+            class Right(Base): pass
+            class Diamond(Left, Right): pass
+        """),
         )
         nb_runner.run_all()
-        assert "result=210" in nb_runner.get_output(2)
+        assert "result=99" in nb_runner.get_output(2)
 
-    def test_mixin_pattern(self, nb_runner):
+    # complex inheritance: diamonds, MRO, super() chains.
+    @pytest.mark.stress
+    @pytest.mark.integration
+    def test_diamond_propagation(self, nb_runner):
+        """Change in base class propagates through diamond."""
         nb_runner.create_notebook(
             [
-                "class JsonMixin:\n    def to_dict(self):\n        return self.__dict__\nclass Person(JsonMixin):\n    def __init__(self, name, age):\n        self.name = name\n        self.age = age",
-                "p = Person('Alice', 30)\nd = p.to_dict()\nprint(f'd={d}')",
+                "base_label = 'v1'",
+                textwrap.dedent("""\
+                class Base:
+                    label = base_label
+                class Left(Base): pass
+                class Right(Base): pass
+                class Diamond(Left, Right): pass
+                d = Diamond()
+            """),
+                "print(f'label={d.label}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "'name': 'Alice'" in nb_runner.get_output(2)
-        assert "'age': 30" in nb_runner.get_output(2)
+        assert "label=v1" in nb_runner.get_output(3)
+
+        nb_runner.set_cell_source(1, "base_label = 'v2'")
+        nb_runner.run_cells([1, 2, 3])
+        assert "label=v2" in nb_runner.get_output(3)
 
 
 # Interaction test: class method resolution order (MRO) with cooperative super().
@@ -647,120 +577,6 @@ class TestMultiLevelInheritanceInteraction:
 
 
 @pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestMultipleInheritanceMRO:
-    """multiple inheritance and MRO resolution."""
-
-    def test_diamond_mro(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "pass  # setup",
-                "class A:\n    def who(self): return 'A'\nclass B(A):\n    def who(self): return 'B'\nclass C(A):\n    def who(self): return 'C'\nclass D(B, C):\n    pass\nd = D()\nmro = [c.__name__ for c in D.__mro__]\nprint(f'who={d.who()} mro={mro}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "who=B" in out
-        assert "mro=['D', 'B', 'C', 'A', 'object']" in out
-
-    def test_super_chain(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "pass  # setup",
-                "class Base:\n    def greet(self): return 'Base'\nclass Left(Base):\n    def greet(self): return 'Left+' + super().greet()\nclass Right(Base):\n    def greet(self): return 'Right+' + super().greet()\nclass Child(Left, Right):\n    def greet(self): return 'Child+' + super().greet()\nresult = Child().greet()\nprint(f'chain={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "chain=Child+Left+Right+Base" in nb_runner.get_output(2)
-
-    def test_mro_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "pass  # setup",
-                "class X:\n    val = 10\nclass Y(X):\n    val = 20\nclass Z(Y):\n    pass\nprint(f'val={Z.val}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "val=20" in nb_runner.get_output(2)
-        nb_runner.set_cell_source(
-            2, "class X:\n    val = 10\nclass Y(X):\n    pass\nclass Z(Y):\n    pass\nprint(f'val={Z.val}')"
-        )
-        nb_runner.run_all()
-        assert "val=10" in nb_runner.get_output(2)
-
-
-# Complex inheritance & MRO patterns — diamond, mixin, super() chains.
-class TestDiamondInheritance:
-    """Test diamond inheritance and MRO."""
-
-    @pytest.mark.stress
-    def test_diamond_change_base(self, nb_runner):
-        """Changing base class propagates through diamond."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                class Base:
-                    value = 10
-                class Left(Base): pass
-                class Right(Base): pass
-                class Diamond(Left, Right): pass
-            """),
-                textwrap.dedent("""\
-                result = Diamond.value
-                print(f"result={result}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result=10" in nb_runner.get_output(2)
-
-        # Change base
-        nb_runner.set_cell_source(
-            1,
-            textwrap.dedent("""\
-            class Base:
-                value = 99
-            class Left(Base): pass
-            class Right(Base): pass
-            class Diamond(Left, Right): pass
-        """),
-        )
-        nb_runner.run_all()
-        assert "result=99" in nb_runner.get_output(2)
-
-    # complex inheritance: diamonds, MRO, super() chains.
-    @pytest.mark.stress
-    @pytest.mark.integration
-    def test_diamond_propagation(self, nb_runner):
-        """Change in base class propagates through diamond."""
-        nb_runner.create_notebook(
-            [
-                "base_label = 'v1'",
-                textwrap.dedent("""\
-                class Base:
-                    label = base_label
-                class Left(Base): pass
-                class Right(Base): pass
-                class Diamond(Left, Right): pass
-                d = Diamond()
-            """),
-                "print(f'label={d.label}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "label=v1" in nb_runner.get_output(3)
-
-        nb_runner.set_cell_source(1, "base_label = 'v2'")
-        nb_runner.run_cells([1, 2, 3])
-        assert "label=v2" in nb_runner.get_output(3)
-
-
-@pytest.mark.stress
 class TestMixinPatterns:
     """Test mixin class patterns."""
 
@@ -855,48 +671,144 @@ class TestMixinPatterns:
         assert "price=9.99" in out2
 
 
-# Class inheritance chain edit tests.
+# Class composition patterns.
 #
-# Tests editing base/parent classes and verifying that changes
-# propagate through inheritance hierarchies.
+# Tests composition (has-a) relationships with edits.
+@pytest.mark.stress
+@pytest.mark.timeout(90)
+class TestClassComposition:
+    """Composition-based class patterns with edit propagation."""
+
+    def test_engine_in_car(self, nb_runner):
+        """Edit composed engine class, car reflects change."""
+        nb_runner.create_notebook(
+            [
+                "class Engine:\n    def __init__(self, hp):\n        self.hp = hp\n    def describe(self):\n        return f'{self.hp}hp'",
+                "class Car:\n    def __init__(self, name, engine):\n        self.name = name\n        self.engine = engine\n    def spec(self):\n        return f'{self.name}: {self.engine.describe()}'",
+                "e = Engine(200)\nc = Car('Sedan', e)\nprint(f'spec = {c.spec()}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "spec = Sedan: 200hp" in nb_runner.get_output(3)
+
+        nb_runner.set_cell_source(
+            1,
+            "class Engine:\n    def __init__(self, hp):\n        self.hp = hp\n    def describe(self):\n        return f'{self.hp}HP turbo'",
+        )
+        nb_runner.run_all()
+        assert "spec = Sedan: 200HP turbo" in nb_runner.get_output(3)
+
+    def test_strategy_pattern(self, nb_runner):
+        """Edit strategy object, context reflects new behavior."""
+        nb_runner.create_notebook(
+            [
+                "class AddStrategy:\n    def execute(self, a, b):\n        return a + b",
+                "strategy = AddStrategy()\nresult = strategy.execute(10, 20)\nprint(f'result = {result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "result = 30" in nb_runner.get_output(2)
+
+        nb_runner.set_cell_source(
+            1,
+            "class AddStrategy:\n    def execute(self, a, b):\n        return a * b",
+        )
+        nb_runner.run_all()
+        assert "result = 200" in nb_runner.get_output(2)
+
+    def test_nested_composition(self, nb_runner):
+        """Three-level composition: department -> team -> member."""
+        nb_runner.create_notebook(
+            [
+                "class Member:\n    def __init__(self, name):\n        self.name = name",
+                "class Team:\n    def __init__(self, members):\n        self.members = members\n    def names(self):\n        return [m.name for m in self.members]",
+                "t = Team([Member('Alice'), Member('Bob')])\nprint(f'names = {t.names()}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "names = ['Alice', 'Bob']" in nb_runner.get_output(3)
+
+        nb_runner.set_cell_source(
+            3,
+            "t = Team([Member('Charlie'), Member('Diana'), Member('Eve')])\nprint(f'names = {t.names()}')",
+        )
+        nb_runner.run_all()
+        assert "names = ['Charlie', 'Diana', 'Eve']" in nb_runner.get_output(3)
+
+
+# Multi-cell class composition (has-a) interaction tests.
+#
+# Tests where one class has another class as a member,
+# and edits propagate through the composition.
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
-class TestInheritanceChainEdits:
-    """Editing classes in an inheritance hierarchy."""
+class TestCompositionEdits:
+    """Editing composed class structures."""
 
-    def test_edit_derived_class_override(self, nb_runner):
-        """Edit a derived class to override a base method."""
+    def test_edit_component_class(self, nb_runner):
+        """Edit the component class in a composition."""
         nb_runner.create_notebook(
             [
-                "class Shape:\n    def describe(self):\n        return 'shape'",
-                "class Circle(Shape):\n    pass",
-                "c = Circle()\nresult = c.describe()\nprint(f'result = {result}')",
+                "class Engine:\n    def __init__(self, hp):\n        self.hp = hp\n    def describe(self):\n        return f'{self.hp}hp'",
+                "class Car:\n    def __init__(self, name, engine):\n        self.name = name\n        self.engine = engine\n    def info(self):\n        return f'{self.name}: {self.engine.describe()}'",
+                "e = Engine(200)\nc = Car('Tesla', e)\nprint(f'info = {c.info()}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "result = shape" in nb_runner.get_output(3)
+        assert "info = Tesla: 200hp" in nb_runner.get_output(3)
 
-        # Add override
-        nb_runner.set_cell_source(2, "class Circle(Shape):\n    def describe(self):\n        return 'circle'")
+        # Edit Engine to include type
+        nb_runner.set_cell_source(
+            1,
+            "class Engine:\n    def __init__(self, hp, typ='gas'):\n        self.hp = hp\n        self.typ = typ\n    def describe(self):\n        return f'{self.hp}hp {self.typ}'",
+        )
+        nb_runner.set_cell_source(3, "e = Engine(300, 'electric')\nc = Car('Tesla', e)\nprint(f'info = {c.info()}')")
         nb_runner.run_all()
-        assert "result = circle" in nb_runner.get_output(3)
+        assert "info = Tesla: 300hp electric" in nb_runner.get_output(3)
 
-    def test_edit_super_call(self, nb_runner):
-        """Edit a class that uses super()."""
+    def test_edit_container_class(self, nb_runner):
+        """Edit the container class in a composition."""
         nb_runner.create_notebook(
             [
-                "class Base:\n    def value(self):\n        return 10",
-                "class Child(Base):\n    def value(self):\n        return super().value() + 5",
-                "obj = Child()\nresult = obj.value()\nprint(f'result = {result}')",
+                "class Item:\n    def __init__(self, name, price):\n        self.name = name\n        self.price = price",
+                "class Cart:\n    def __init__(self):\n        self.items = []\n    def add(self, item):\n        self.items.append(item)\n    def total(self):\n        return sum(i.price for i in self.items)",
+                "cart = Cart()\ncart.add(Item('A', 10))\ncart.add(Item('B', 20))\nprint(f'total = {cart.total()}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "result = 15" in nb_runner.get_output(3)
+        assert "total = 30" in nb_runner.get_output(3)
 
-        # Edit base value
-        nb_runner.set_cell_source(1, "class Base:\n    def value(self):\n        return 100")
+        # Edit Cart to add tax
+        nb_runner.set_cell_source(
+            2,
+            "class Cart:\n    def __init__(self, tax=0.1):\n        self.items = []\n        self.tax = tax\n    def add(self, item):\n        self.items.append(item)\n    def total(self):\n        subtotal = sum(i.price for i in self.items)\n        return subtotal * (1 + self.tax)",
+        )
         nb_runner.run_all()
-        assert "result = 105" in nb_runner.get_output(3)
+        assert "total = 33.0" in nb_runner.get_output(3)
+
+    def test_edit_both_classes(self, nb_runner):
+        """Edit both component and container."""
+        nb_runner.create_notebook(
+            [
+                "class Point:\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y",
+                "class Line:\n    def __init__(self, p1, p2):\n        self.p1 = p1\n        self.p2 = p2\n    def length(self):\n        return ((self.p2.x - self.p1.x)**2 + (self.p2.y - self.p1.y)**2) ** 0.5",
+                "a = Point(0, 0)\nb = Point(3, 4)\nline = Line(a, b)\nprint(f'length = {line.length()}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "length = 5.0" in nb_runner.get_output(3)
+
+        # Change points
+        nb_runner.set_cell_source(
+            3,
+            "a = Point(1, 1)\nb = Point(4, 5)\nline = Line(a, b)\nprint(f'length = {line.length()}')",
+        )
+        nb_runner.run_all()
+        assert "length = 5.0" in nb_runner.get_output(3)

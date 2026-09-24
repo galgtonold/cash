@@ -188,6 +188,117 @@ class TestItertoolsAccumulateTakewhile:
         assert "prods=[1, 2, 6, 24]" in nb_runner.get_output(2)
 
 
+@pytest.mark.stress
+@pytest.mark.timeout(90)
+class TestFunctoolsReduceAccumulate:
+    """functools.reduce and accumulate patterns."""
+
+    def test_reduce_sum(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "from functools import reduce\nnums = [1, 2, 3, 4, 5]",
+                "total = reduce(lambda a, b: a + b, nums)\nproduct = reduce(lambda a, b: a * b, nums)\nprint(f'total={total} product={product}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "total=15" in nb_runner.get_output(2)
+        assert "product=120" in nb_runner.get_output(2)
+
+    def test_reduce_with_initial(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "from functools import reduce\nitems = ['a', 'b', 'c']",
+                "result = reduce(lambda acc, x: acc + '-' + x, items, 'start')\nprint(f'result={result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "result=start-a-b-c" in nb_runner.get_output(2)
+
+    def test_itertools_accumulate(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "from itertools import accumulate\nimport operator\nvals = [1, 2, 3, 4, 5]",
+                "running_sum = list(accumulate(vals))\nrunning_product = list(accumulate(vals, operator.mul))\nprint(f'sums={running_sum} products={running_product}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(2)
+        assert "sums=[1, 3, 6, 10, 15]" in out
+        assert "products=[1, 2, 6, 24, 120]" in out
+
+
+# functools.reduce and accumulate patterns with caching.
+# Tests reduce, accumulate, and edit propagation.
+@pytest.mark.integration
+@pytest.mark.stress
+@pytest.mark.timeout(90)
+class TestReduceAccumulate:
+    """Test functools.reduce and itertools.accumulate caching."""
+
+    def test_reduce_sum(self, nb_runner):
+        """functools.reduce for summation with caching."""
+        nb_runner.create_notebook(
+            [
+                "from functools import reduce",
+                "nums = [1, 2, 3, 4, 5]",
+                "total = reduce(lambda a, b: a + b, nums)",
+                "print(f'total={total}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(4)
+        assert "total=15" in out
+
+        # Re-run cached
+        nb_runner.run_all()
+        out2 = nb_runner.get_output(4)
+        assert "total=15" in out2
+
+    def test_reduce_edit(self, nb_runner):
+        """Edit input, verify reduce result changes."""
+        nb_runner.create_notebook(
+            [
+                "from functools import reduce",
+                "nums = [2, 3, 4]",
+                "product = reduce(lambda a, b: a * b, nums)",
+                "print(f'product={product}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(4)
+        assert "product=24" in out
+
+        nb_runner.set_cell_source(2, "nums = [2, 3, 4, 5]")
+        nb_runner.run_all()
+        out2 = nb_runner.get_output(4)
+        assert "product=120" in out2
+
+    def test_accumulate_pattern(self, nb_runner):
+        """itertools.accumulate running totals."""
+        nb_runner.create_notebook(
+            [
+                "from itertools import accumulate",
+                "payments = [100, 200, 150, 300]",
+                "running = list(accumulate(payments))\nlast = running[-1]",
+                "print(f'last={last}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(4)
+        assert "last=750" in out
+
+        # Re-run cached
+        nb_runner.run_all()
+        out2 = nb_runner.get_output(4)
+        assert "last=750" in out2
+
+
 # Interaction test: itertools.chain.from_iterable with nested data.
 # Tests chain.from_iterable for flattening nested structures,
 # combined with map and filter across cells.
@@ -317,165 +428,6 @@ class TestChainLazyGenerator:
 
 @pytest.mark.stress
 @pytest.mark.timeout(90)
-class TestCombinationsPermutations:
-    """itertools combinations permutations."""
-
-    def test_combinations(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "from itertools import combinations",
-                "items = ['A', 'B', 'C', 'D']\ncomb2 = list(combinations(items, 2))\ncomb3 = list(combinations(items, 3))\nprint(f'comb2_count={len(comb2)} comb3_count={len(comb3)}')\nprint(f'comb2={comb2}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "comb2_count=6" in out
-        assert "comb3_count=4" in out
-
-    def test_permutations(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "from itertools import permutations",
-                "items = [1, 2, 3]\nperms = list(permutations(items))\nprint(f'count={len(perms)} first={perms[0]} last={perms[-1]}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "count=6" in out
-        assert "first=(1, 2, 3)" in out
-        assert "last=(3, 2, 1)" in out
-
-    def test_combinations_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "from itertools import combinations",
-                "result = list(combinations([1, 2, 3], 2))\nprint(f'result={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result=[(1, 2), (1, 3), (2, 3)]" in nb_runner.get_output(2)
-        nb_runner.set_cell_source(2, "result = list(combinations([1, 2, 3, 4], 2))\nprint(f'count={len(result)}')")
-        nb_runner.run_all()
-        assert "count=6" in nb_runner.get_output(2)
-
-
-@pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestFunctoolsReduceAccumulate:
-    """functools.reduce and accumulate patterns."""
-
-    def test_reduce_sum(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "from functools import reduce\nnums = [1, 2, 3, 4, 5]",
-                "total = reduce(lambda a, b: a + b, nums)\nproduct = reduce(lambda a, b: a * b, nums)\nprint(f'total={total} product={product}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "total=15" in nb_runner.get_output(2)
-        assert "product=120" in nb_runner.get_output(2)
-
-    def test_reduce_with_initial(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "from functools import reduce\nitems = ['a', 'b', 'c']",
-                "result = reduce(lambda acc, x: acc + '-' + x, items, 'start')\nprint(f'result={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result=start-a-b-c" in nb_runner.get_output(2)
-
-    def test_itertools_accumulate(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "from itertools import accumulate\nimport operator\nvals = [1, 2, 3, 4, 5]",
-                "running_sum = list(accumulate(vals))\nrunning_product = list(accumulate(vals, operator.mul))\nprint(f'sums={running_sum} products={running_product}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "sums=[1, 3, 6, 10, 15]" in out
-        assert "products=[1, 2, 6, 24, 120]" in out
-
-
-# Interaction test: itertools.groupby with key function.
-# Tests groupby with sorted data, key extraction, group aggregation,
-# and cross-cell grouped data processing.
-@pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestGroupbyKeyFunction:
-    """Test itertools.groupby with key function across cells."""
-
-    def test_groupby_aggregation(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                # Cell 1: sort and group
-                "from itertools import groupby\ndata = [('A', 10), ('B', 20), ('A', 30), ('B', 40), ('C', 50)]\nsorted_data = sorted(data, key=lambda x: x[0])\ngroups = {k: [v for _, v in g] for k, g in groupby(sorted_data, key=lambda x: x[0])}\nprint(f'groups={groups}')",
-                # Cell 2: aggregate per group
-                "sums = {k: sum(v) for k, v in groups.items()}\navgs = {k: sum(v)/len(v) for k, v in groups.items()}\nprint(f'sums={sums}')\nprint(f'avgs={avgs}')",
-                # Cell 3: find best group
-                "best = max(sums, key=sums.get)\nprint(f'best={best}')\nprint(f'best_sum={sums[best]}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out1 = nb_runner.get_output(1)
-        assert "'A': [10, 30]" in out1
-        assert "'B': [20, 40]" in out1
-        assert "'C': [50]" in out1
-        out2 = nb_runner.get_output(2)
-        assert "'A': 40" in out2
-        assert "'B': 60" in out2
-        out3 = nb_runner.get_output(3)
-        assert "best=B" in out3
-        assert "best_sum=60" in out3
-
-    def test_groupby_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "from itertools import groupby\nwords = ['apple', 'avocado', 'banana', 'blueberry', 'cherry']\nby_letter = {k: list(g) for k, g in groupby(sorted(words), key=lambda w: w[0])}\nprint(f'groups={by_letter}')",
-                "counts = {k: len(v) for k, v in by_letter.items()}\nprint(f'counts={counts}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "'a': ['apple', 'avocado']" in nb_runner.get_output(1)
-        assert "'a': 2" in nb_runner.get_output(2)
-
-        # Add more words
-        nb_runner.set_cell_source(
-            1,
-            "from itertools import groupby\nwords = ['apple', 'avocado', 'apricot', 'banana', 'blueberry', 'cherry', 'coconut']\nby_letter = {k: list(g) for k, g in groupby(sorted(words), key=lambda w: w[0])}\nprint(f'groups={by_letter}')",
-        )
-        nb_runner.run_cells([1, 2])
-        assert "'a': 3" in nb_runner.get_output(2)
-        assert "'c': 2" in nb_runner.get_output(2)
-
-    def test_groupby_cache(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "from itertools import groupby\nnums = [1, 1, 2, 2, 2, 3, 3]\nruns = [(k, len(list(g))) for k, g in groupby(nums)]\nprint(f'runs={runs}')",
-                "longest_run = max(runs, key=lambda x: x[1])\nprint(f'longest={longest_run}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "runs=[(1, 2), (2, 3), (3, 2)]" in nb_runner.get_output(1)
-        assert "longest=(2, 3)" in nb_runner.get_output(2)
-
-        # Re-run - cache
-        nb_runner.run_all()
-        assert "longest=(2, 3)" in nb_runner.get_output(2)
-
-
-@pytest.mark.stress
-@pytest.mark.timeout(90)
 class TestItertoolsChainFlat:
     """itertools.chain and chain.from_iterable."""
 
@@ -565,6 +517,88 @@ class TestItertoolsChainFromProduct:
         assert "data=[10, 20, 30]" in nb_runner.get_output(2)
 
 
+@pytest.mark.stress
+@pytest.mark.timeout(90)
+class TestItertoolsChainProduct:
+    """itertools.chain, product, starmap combinations."""
+
+    def test_product_edit(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "from itertools import product\ncolors = ['red', 'blue']\nsizes = ['S', 'M']",
+                "combos = list(product(colors, sizes))\nprint(f'combos={combos}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "('red', 'S')" in nb_runner.get_output(2)
+        assert "('blue', 'M')" in nb_runner.get_output(2)
+        # Edit
+        nb_runner.set_cell_source(1, "from itertools import product\ncolors = ['green']\nsizes = ['L', 'XL']")
+        nb_runner.run_all()
+        out = nb_runner.get_output(2)
+        assert "('green', 'L')" in out
+        assert "('green', 'XL')" in out
+
+    def test_starmap(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "from itertools import starmap\npairs = [(2, 3), (4, 5), (6, 7)]",
+                "products = list(starmap(lambda a, b: a * b, pairs))\nprint(f'products={products}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "products=[6, 20, 42]" in nb_runner.get_output(2)
+
+
+@pytest.mark.stress
+@pytest.mark.timeout(90)
+class TestCombinationsPermutations:
+    """itertools combinations permutations."""
+
+    def test_combinations(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "from itertools import combinations",
+                "items = ['A', 'B', 'C', 'D']\ncomb2 = list(combinations(items, 2))\ncomb3 = list(combinations(items, 3))\nprint(f'comb2_count={len(comb2)} comb3_count={len(comb3)}')\nprint(f'comb2={comb2}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(2)
+        assert "comb2_count=6" in out
+        assert "comb3_count=4" in out
+
+    def test_permutations(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "from itertools import permutations",
+                "items = [1, 2, 3]\nperms = list(permutations(items))\nprint(f'count={len(perms)} first={perms[0]} last={perms[-1]}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(2)
+        assert "count=6" in out
+        assert "first=(1, 2, 3)" in out
+        assert "last=(3, 2, 1)" in out
+
+    def test_combinations_edit(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "from itertools import combinations",
+                "result = list(combinations([1, 2, 3], 2))\nprint(f'result={result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "result=[(1, 2), (1, 3), (2, 3)]" in nb_runner.get_output(2)
+        nb_runner.set_cell_source(2, "result = list(combinations([1, 2, 3, 4], 2))\nprint(f'count={len(result)}')")
+        nb_runner.run_all()
+        assert "count=6" in nb_runner.get_output(2)
+
+
 # itertools combinatorial patterns with caching.
 # Tests combinations, permutations, product, chain, and edit propagation.
 @pytest.mark.integration
@@ -632,6 +666,191 @@ class TestItertoolsCombinatorial:
         nb_runner.run_all()
         out2 = nb_runner.get_output(4)
         assert "total=15" in out2
+
+
+@pytest.mark.stress
+@pytest.mark.timeout(90)
+class TestItertoolsProductCombs:
+    """itertools.product and combinations_with_replacement."""
+
+    def test_product(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "from itertools import product\na = [1, 2]\nb = ['x', 'y']",
+                "result = list(product(a, b))\nprint(f'result={result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "result=[(1, 'x'), (1, 'y'), (2, 'x'), (2, 'y')]" in nb_runner.get_output(2)
+
+    def test_combinations_with_replacement(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "from itertools import combinations_with_replacement\nitems = ['a', 'b', 'c']",
+                "result = list(combinations_with_replacement(items, 2))\ncount = len(result)\nprint(f'count={count} first={result[0]} last={result[-1]}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(2)
+        assert "count=6" in out
+        assert "first=('a', 'a')" in out
+        assert "last=('c', 'c')" in out
+
+    def test_product_edit(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "from itertools import product\ncolors = ['R', 'G']\nsizes = ['S', 'L']",
+                "combos = list(product(colors, sizes))\ncount = len(combos)\nprint(f'count={count}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "count=4" in nb_runner.get_output(2)
+        nb_runner.set_cell_source(1, "from itertools import product\ncolors = ['R', 'G', 'B']\nsizes = ['S', 'M', 'L']")
+        nb_runner.run_all()
+        assert "count=9" in nb_runner.get_output(2)
+
+
+# Interaction test: itertools product and combinations_with_replacement.
+# Tests cartesian products, combinations with replacement,
+# and cross-cell combinatorial analysis.
+@pytest.mark.stress
+@pytest.mark.timeout(90)
+class TestProductCombReplace:
+    """Test itertools product and combinations_with_replacement across cells."""
+
+    def test_product_comb_ops(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                # Cell 1: product
+                "from itertools import product, combinations_with_replacement\ncolors = ['R', 'G', 'B']\nsizes = ['S', 'M', 'L']\ncombos = list(product(colors, sizes))\nprint(f'product_count={len(combos)}')\nprint(f'first={combos[0]}')\nprint(f'last={combos[-1]}')",
+                # Cell 2: combinations with replacement
+                "coins = [1, 5, 10]\nways = list(combinations_with_replacement(coins, 2))\nprint(f'ways_count={len(ways)}')\nfor w in ways:\n    print(f'pair={w} sum={sum(w)}')",
+                # Cell 3: filter products
+                "matching = [(c, s) for c, s in combos if c == 'R' or s == 'L']\nprint(f'matching_count={len(matching)}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out1 = nb_runner.get_output(1)
+        assert "product_count=9" in out1
+        assert "first=('R', 'S')" in out1
+        assert "last=('B', 'L')" in out1
+        out2 = nb_runner.get_output(2)
+        assert "ways_count=6" in out2
+        out3 = nb_runner.get_output(3)
+        assert "matching_count=5" in out3
+
+    def test_product_edit(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "from itertools import product\ndice = [1, 2, 3, 4, 5, 6]\nrolls = list(product(dice, repeat=2))\ntotal = len(rolls)\nprint(f'total={total}')",
+                "sevens = [r for r in rolls if sum(r) == 7]\nprint(f'sevens={len(sevens)}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "total=36" in nb_runner.get_output(1)
+        assert "sevens=6" in nb_runner.get_output(2)
+
+        # Edit to 3 dice
+        nb_runner.set_cell_source(
+            1,
+            "from itertools import product\ndice = [1, 2, 3, 4, 5, 6]\nrolls = list(product(dice, repeat=3))\ntotal = len(rolls)\nprint(f'total={total}')",
+        )
+        nb_runner.set_cell_source(
+            2, "sevens = [r for r in rolls if sum(r) == 7]  # 3-dice\nprint(f'sevens={len(sevens)}')"
+        )
+        nb_runner.run_cells([1, 2])
+        assert "total=216" in nb_runner.get_output(1)
+        assert "sevens=15" in nb_runner.get_output(2)
+
+    def test_product_cache(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "from itertools import combinations_with_replacement\nitems = ['a', 'b', 'c']\npairs = list(combinations_with_replacement(items, 2))\nprint(f'count={len(pairs)}')",
+                "as_strings = ['+'.join(p) for p in pairs]\nprint(f'strings={as_strings}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "count=6" in nb_runner.get_output(1)
+
+        # Re-run - cache
+        nb_runner.run_all()
+        assert "count=6" in nb_runner.get_output(1)
+
+
+# Interaction test: itertools.groupby with key function.
+# Tests groupby with sorted data, key extraction, group aggregation,
+# and cross-cell grouped data processing.
+@pytest.mark.stress
+@pytest.mark.timeout(90)
+class TestGroupbyKeyFunction:
+    """Test itertools.groupby with key function across cells."""
+
+    def test_groupby_aggregation(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                # Cell 1: sort and group
+                "from itertools import groupby\ndata = [('A', 10), ('B', 20), ('A', 30), ('B', 40), ('C', 50)]\nsorted_data = sorted(data, key=lambda x: x[0])\ngroups = {k: [v for _, v in g] for k, g in groupby(sorted_data, key=lambda x: x[0])}\nprint(f'groups={groups}')",
+                # Cell 2: aggregate per group
+                "sums = {k: sum(v) for k, v in groups.items()}\navgs = {k: sum(v)/len(v) for k, v in groups.items()}\nprint(f'sums={sums}')\nprint(f'avgs={avgs}')",
+                # Cell 3: find best group
+                "best = max(sums, key=sums.get)\nprint(f'best={best}')\nprint(f'best_sum={sums[best]}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out1 = nb_runner.get_output(1)
+        assert "'A': [10, 30]" in out1
+        assert "'B': [20, 40]" in out1
+        assert "'C': [50]" in out1
+        out2 = nb_runner.get_output(2)
+        assert "'A': 40" in out2
+        assert "'B': 60" in out2
+        out3 = nb_runner.get_output(3)
+        assert "best=B" in out3
+        assert "best_sum=60" in out3
+
+    def test_groupby_edit(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "from itertools import groupby\nwords = ['apple', 'avocado', 'banana', 'blueberry', 'cherry']\nby_letter = {k: list(g) for k, g in groupby(sorted(words), key=lambda w: w[0])}\nprint(f'groups={by_letter}')",
+                "counts = {k: len(v) for k, v in by_letter.items()}\nprint(f'counts={counts}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "'a': ['apple', 'avocado']" in nb_runner.get_output(1)
+        assert "'a': 2" in nb_runner.get_output(2)
+
+        # Add more words
+        nb_runner.set_cell_source(
+            1,
+            "from itertools import groupby\nwords = ['apple', 'avocado', 'apricot', 'banana', 'blueberry', 'cherry', 'coconut']\nby_letter = {k: list(g) for k, g in groupby(sorted(words), key=lambda w: w[0])}\nprint(f'groups={by_letter}')",
+        )
+        nb_runner.run_cells([1, 2])
+        assert "'a': 3" in nb_runner.get_output(2)
+        assert "'c': 2" in nb_runner.get_output(2)
+
+    def test_groupby_cache(self, nb_runner):
+        nb_runner.create_notebook(
+            [
+                "from itertools import groupby\nnums = [1, 1, 2, 2, 2, 3, 3]\nruns = [(k, len(list(g))) for k, g in groupby(nums)]\nprint(f'runs={runs}')",
+                "longest_run = max(runs, key=lambda x: x[1])\nprint(f'longest={longest_run}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "runs=[(1, 2), (2, 3), (3, 2)]" in nb_runner.get_output(1)
+        assert "longest=(2, 3)" in nb_runner.get_output(2)
+
+        # Re-run - cache
+        nb_runner.run_all()
+        assert "longest=(2, 3)" in nb_runner.get_output(2)
 
 
 @pytest.mark.stress
@@ -729,49 +948,56 @@ class TestItertoolsGroupbySorted:
         assert "groups=[(1, 3), (2, 1), (3, 2)]" in nb_runner.get_output(2)
 
 
+# Aggregation with groupby interaction tests.
+# Tests that editing groupby logic or data properly invalidates
+# aggregated results downstream.
+@pytest.mark.integration
 @pytest.mark.stress
 @pytest.mark.timeout(90)
-class TestItertoolsProductCombs:
-    """itertools.product and combinations_with_replacement."""
+class TestGroupbyAggregationInteraction:
+    """Test groupby/aggregation patterns with cache invalidation."""
 
-    def test_product(self, nb_runner):
+    def test_manual_groupby_edit(self, nb_runner):
+        """Editing data grouped manually should propagate."""
         nb_runner.create_notebook(
             [
-                "from itertools import product\na = [1, 2]\nb = ['x', 'y']",
-                "result = list(product(a, b))\nprint(f'result={result}')",
+                "data = [('a', 1), ('b', 2), ('a', 3), ('b', 4), ('a', 5)]",
+                "groups = {}\nfor key, val in data:\n    groups.setdefault(key, []).append(val)",
+                "sums = {k: sum(v) for k, v in sorted(groups.items())}",
+                "print(f'sums={sums}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "result=[(1, 'x'), (1, 'y'), (2, 'x'), (2, 'y')]" in nb_runner.get_output(2)
+        out = nb_runner.get_output(4)
+        assert "sums={'a': 9, 'b': 6}" in out
 
-    def test_combinations_with_replacement(self, nb_runner):
+        nb_runner.set_cell_source(1, "data = [('x', 10), ('y', 20), ('x', 30)]")
+        nb_runner.run_all()
+        out = nb_runner.get_output(4)
+        assert "sums={'x': 40, 'y': 20}" in out
+
+    def test_itertools_groupby_edit(self, nb_runner):
+        """Editing sorted data for itertools.groupby should propagate."""
         nb_runner.create_notebook(
             [
-                "from itertools import combinations_with_replacement\nitems = ['a', 'b', 'c']",
-                "result = list(combinations_with_replacement(items, 2))\ncount = len(result)\nprint(f'count={count} first={result[0]} last={result[-1]}')",
+                "from itertools import groupby\ndata = sorted([('a', 1), ('b', 2), ('a', 3), ('b', 4)])",
+                "grouped = {k: [v for _, v in g] for k, g in groupby(data, key=lambda x: x[0])}",
+                "counts = {k: len(v) for k, v in sorted(grouped.items())}",
+                "print(f'counts={counts}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "count=6" in out
-        assert "first=('a', 'a')" in out
-        assert "last=('c', 'c')" in out
+        out = nb_runner.get_output(4)
+        assert "counts={'a': 2, 'b': 2}" in out
 
-    def test_product_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "from itertools import product\ncolors = ['R', 'G']\nsizes = ['S', 'L']",
-                "combos = list(product(colors, sizes))\ncount = len(combos)\nprint(f'count={count}')",
-            ]
+        nb_runner.set_cell_source(
+            1, "from itertools import groupby\ndata = sorted([('a', 1), ('a', 2), ('a', 3), ('b', 4)])"
         )
-        nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "count=4" in nb_runner.get_output(2)
-        nb_runner.set_cell_source(1, "from itertools import product\ncolors = ['R', 'G', 'B']\nsizes = ['S', 'M', 'L']")
-        nb_runner.run_all()
-        assert "count=9" in nb_runner.get_output(2)
+        out = nb_runner.get_output(4)
+        assert "counts={'a': 3, 'b': 1}" in out
 
 
 @pytest.mark.stress
@@ -889,145 +1115,6 @@ class TestItertoolsTeeIslice:
         assert "head=[10, 20]" in out
 
 
-# Interaction test: itertools product and combinations_with_replacement.
-# Tests cartesian products, combinations with replacement,
-# and cross-cell combinatorial analysis.
-@pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestProductCombReplace:
-    """Test itertools product and combinations_with_replacement across cells."""
-
-    def test_product_comb_ops(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                # Cell 1: product
-                "from itertools import product, combinations_with_replacement\ncolors = ['R', 'G', 'B']\nsizes = ['S', 'M', 'L']\ncombos = list(product(colors, sizes))\nprint(f'product_count={len(combos)}')\nprint(f'first={combos[0]}')\nprint(f'last={combos[-1]}')",
-                # Cell 2: combinations with replacement
-                "coins = [1, 5, 10]\nways = list(combinations_with_replacement(coins, 2))\nprint(f'ways_count={len(ways)}')\nfor w in ways:\n    print(f'pair={w} sum={sum(w)}')",
-                # Cell 3: filter products
-                "matching = [(c, s) for c, s in combos if c == 'R' or s == 'L']\nprint(f'matching_count={len(matching)}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out1 = nb_runner.get_output(1)
-        assert "product_count=9" in out1
-        assert "first=('R', 'S')" in out1
-        assert "last=('B', 'L')" in out1
-        out2 = nb_runner.get_output(2)
-        assert "ways_count=6" in out2
-        out3 = nb_runner.get_output(3)
-        assert "matching_count=5" in out3
-
-    def test_product_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "from itertools import product\ndice = [1, 2, 3, 4, 5, 6]\nrolls = list(product(dice, repeat=2))\ntotal = len(rolls)\nprint(f'total={total}')",
-                "sevens = [r for r in rolls if sum(r) == 7]\nprint(f'sevens={len(sevens)}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "total=36" in nb_runner.get_output(1)
-        assert "sevens=6" in nb_runner.get_output(2)
-
-        # Edit to 3 dice
-        nb_runner.set_cell_source(
-            1,
-            "from itertools import product\ndice = [1, 2, 3, 4, 5, 6]\nrolls = list(product(dice, repeat=3))\ntotal = len(rolls)\nprint(f'total={total}')",
-        )
-        nb_runner.set_cell_source(
-            2, "sevens = [r for r in rolls if sum(r) == 7]  # 3-dice\nprint(f'sevens={len(sevens)}')"
-        )
-        nb_runner.run_cells([1, 2])
-        assert "total=216" in nb_runner.get_output(1)
-        assert "sevens=15" in nb_runner.get_output(2)
-
-    def test_product_cache(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "from itertools import combinations_with_replacement\nitems = ['a', 'b', 'c']\npairs = list(combinations_with_replacement(items, 2))\nprint(f'count={len(pairs)}')",
-                "as_strings = ['+'.join(p) for p in pairs]\nprint(f'strings={as_strings}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "count=6" in nb_runner.get_output(1)
-
-        # Re-run - cache
-        nb_runner.run_all()
-        assert "count=6" in nb_runner.get_output(1)
-
-
-# functools.reduce and accumulate patterns with caching.
-# Tests reduce, accumulate, and edit propagation.
-@pytest.mark.integration
-@pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestReduceAccumulate:
-    """Test functools.reduce and itertools.accumulate caching."""
-
-    def test_reduce_sum(self, nb_runner):
-        """functools.reduce for summation with caching."""
-        nb_runner.create_notebook(
-            [
-                "from functools import reduce",
-                "nums = [1, 2, 3, 4, 5]",
-                "total = reduce(lambda a, b: a + b, nums)",
-                "print(f'total={total}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "total=15" in out
-
-        # Re-run cached
-        nb_runner.run_all()
-        out2 = nb_runner.get_output(4)
-        assert "total=15" in out2
-
-    def test_reduce_edit(self, nb_runner):
-        """Edit input, verify reduce result changes."""
-        nb_runner.create_notebook(
-            [
-                "from functools import reduce",
-                "nums = [2, 3, 4]",
-                "product = reduce(lambda a, b: a * b, nums)",
-                "print(f'product={product}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "product=24" in out
-
-        nb_runner.set_cell_source(2, "nums = [2, 3, 4, 5]")
-        nb_runner.run_all()
-        out2 = nb_runner.get_output(4)
-        assert "product=120" in out2
-
-    def test_accumulate_pattern(self, nb_runner):
-        """itertools.accumulate running totals."""
-        nb_runner.create_notebook(
-            [
-                "from itertools import accumulate",
-                "payments = [100, 200, 150, 300]",
-                "running = list(accumulate(payments))\nlast = running[-1]",
-                "print(f'last={last}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "last=750" in out
-
-        # Re-run cached
-        nb_runner.run_all()
-        out2 = nb_runner.get_output(4)
-        assert "last=750" in out2
-
-
 # Interaction test: itertools starmap and repeat.
 # Tests starmap for unpacking arguments, repeat for infinite iterators,
 # islice for limiting, and cross-cell functional patterns.
@@ -1092,93 +1179,6 @@ class TestStarmapRepeat:
         # Re-run - cache
         nb_runner.run_all()
         assert "joined=1:a, 2:b, 3:c" in nb_runner.get_output(2)
-
-
-# Aggregation with groupby interaction tests.
-# Tests that editing groupby logic or data properly invalidates
-# aggregated results downstream.
-@pytest.mark.integration
-@pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestGroupbyAggregationInteraction:
-    """Test groupby/aggregation patterns with cache invalidation."""
-
-    def test_manual_groupby_edit(self, nb_runner):
-        """Editing data grouped manually should propagate."""
-        nb_runner.create_notebook(
-            [
-                "data = [('a', 1), ('b', 2), ('a', 3), ('b', 4), ('a', 5)]",
-                "groups = {}\nfor key, val in data:\n    groups.setdefault(key, []).append(val)",
-                "sums = {k: sum(v) for k, v in sorted(groups.items())}",
-                "print(f'sums={sums}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "sums={'a': 9, 'b': 6}" in out
-
-        nb_runner.set_cell_source(1, "data = [('x', 10), ('y', 20), ('x', 30)]")
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "sums={'x': 40, 'y': 20}" in out
-
-    def test_itertools_groupby_edit(self, nb_runner):
-        """Editing sorted data for itertools.groupby should propagate."""
-        nb_runner.create_notebook(
-            [
-                "from itertools import groupby\ndata = sorted([('a', 1), ('b', 2), ('a', 3), ('b', 4)])",
-                "grouped = {k: [v for _, v in g] for k, g in groupby(data, key=lambda x: x[0])}",
-                "counts = {k: len(v) for k, v in sorted(grouped.items())}",
-                "print(f'counts={counts}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "counts={'a': 2, 'b': 2}" in out
-
-        nb_runner.set_cell_source(
-            1, "from itertools import groupby\ndata = sorted([('a', 1), ('a', 2), ('a', 3), ('b', 4)])"
-        )
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "counts={'a': 3, 'b': 1}" in out
-
-
-@pytest.mark.stress
-@pytest.mark.timeout(90)
-class TestItertoolsChainProduct:
-    """itertools.chain, product, starmap combinations."""
-
-    def test_product_edit(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "from itertools import product\ncolors = ['red', 'blue']\nsizes = ['S', 'M']",
-                "combos = list(product(colors, sizes))\nprint(f'combos={combos}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "('red', 'S')" in nb_runner.get_output(2)
-        assert "('blue', 'M')" in nb_runner.get_output(2)
-        # Edit
-        nb_runner.set_cell_source(1, "from itertools import product\ncolors = ['green']\nsizes = ['L', 'XL']")
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "('green', 'L')" in out
-        assert "('green', 'XL')" in out
-
-    def test_starmap(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "from itertools import starmap\npairs = [(2, 3), (4, 5), (6, 7)]",
-                "products = list(starmap(lambda a, b: a * b, pairs))\nprint(f'products={products}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "products=[6, 20, 42]" in nb_runner.get_output(2)
 
 
 @pytest.mark.stress

@@ -1,4 +1,4 @@
-"""Logging & debug patterns — cash caching with logging, warnings, traceback."""
+"""Logging and warnings across cells."""
 
 import textwrap
 
@@ -122,43 +122,3 @@ class TestWarningsPatterns:
         assert "result=10" in out
         assert "warns=1" in out
         assert "deprecated" in out
-
-
-@pytest.mark.stress
-class TestContextManagerPatterns:
-    """Test context manager patterns."""
-
-    def test_contextlib_contextmanager(self, nb_runner):
-        """@contextmanager decorator across cells."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                from contextlib import contextmanager
-
-                @contextmanager
-                def timer_context(name):
-                    import time
-                    log = []
-                    log.append(f"start:{name}")
-                    start = time.time()
-                    try:
-                        yield log
-                    finally:
-                        elapsed = time.time() - start
-                        log.append(f"end:{name}:{elapsed:.3f}s")
-            """),
-                textwrap.dedent("""\
-                with timer_context("computation") as log:
-                    result = sum(range(10000))
-                    log.append(f"computed:{result}")
-                print(f"log_count={len(log)} first={log[0]}")
-                print(f"has_end={'end:computation' in log[2]}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "log_count=3" in out
-        assert "start:computation" in out
-        assert "has_end=True" in out
