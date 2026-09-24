@@ -90,7 +90,7 @@ With no argument it prints the current mode. See [Reading the badge](badges.md).
 ```
 
 ### `%cash_debug`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @fb6167b9 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @29ba1a1b -->
 
 **Usage:** `%cash_debug [on|off|json|file PATH]`
 
@@ -136,7 +136,7 @@ explains each line.
 ```
 
 ### `%cash_status`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @0d042233 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @c4c64c7d -->
 
 **Usage:** `%cash_status [dict|json]`
 
@@ -151,7 +151,7 @@ status = %cash_status dict
 ```
 
 ### `%cash_provenance`
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_provenance @57772837 -->
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_provenance @6ac4d19b -->
 
 **Usage:** `%cash_provenance [NAME|--all|--clear] [--graph] [--time] [--json]`
 

@@ -346,7 +346,7 @@ jupyter labextension enable cash-live-cells
 
 ### `AmbiguousCellError`
 
-<!-- claim: cash/exceptions.py:AmbiguousCellError @267a93a2 broad="the claim is about when this exception is raised at all" -->
+<!-- claim: cash/exceptions.py:AmbiguousCellError @cc4cd1fd broad="the claim is about when this exception is raised at all" -->
 Two cells have byte-identical content and cash cannot get a cell ID to tell
 them apart, so it refuses to guess. JupyterLab and VS Code normally supply cell
 IDs. **Fix:** add a comment to one of the cells, or save the notebook.

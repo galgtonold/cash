@@ -3,7 +3,7 @@
 !!! info "Applies to: both paths"
     Everyone installing cash, for scripts or for notebooks.
 
-<!-- claim: cash/config.py:CashConfig @82e73a8f broad="the requires-python floor and zero-deps claim are properties of the package, checked against pyproject by test_documented_install_extras_exist" -->
+<!-- claim: cash/config.py:CashConfig @9e5fc345 broad="the requires-python floor and zero-deps claim are properties of the package, checked against pyproject by test_documented_install_extras_exist" -->
 cash needs Python 3.10 or newer and has no required dependencies:
 
 ```bash

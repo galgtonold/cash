@@ -48,7 +48,7 @@ Each tier has a size cap, sized to the machine unless you set one:
 | Disk | A quarter of the room on the cache's volume (free space plus what the cache already holds), at least 8 GiB and at most 100 GiB, and never more than 80% of that room. Set `max_cache_size` to fix it. |
 | Memory | A fifth of the memory the process may use (the machine's RAM, or a container's limit if lower), at least 512 MiB and at most 4 GiB. |
 
-<!-- claim: cash/__main__.py:cmd_info @f8794ec8, cash/__main__.py:cmd_clear @a2a0458b -->
+<!-- claim: cash/__main__.py:cmd_info @f8794ec8, cash/__main__.py:cmd_clear @a08b9044 -->
 `cash info` prints the folder in use, where that setting came from, and both
 caps. `cash clear` deletes a cache folder: `cash clear analysis.ipynb` clears
 that notebook's whole cache folder, shared with its neighbours, and
@@ -57,7 +57,7 @@ less; [the CLI page](../cli.md) has every option.
 
 ## The tiers
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @1c90dca6 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @231ca6c0 -->
 | Tier | Where | Survives a restart? |
 |------|-------|---------------------|
 | Memory | RAM | No |

@@ -143,7 +143,7 @@ def load_via_boto3():
 
 ## Teaching cash a new reader
 
-<!-- claim: cash/core.py:Cash.register_file_handler @e2ebcc87 -->
+<!-- claim: cash/core.py:Cash.register_file_handler @15d195a5 -->
 If many functions read through a reader cash doesn't know, register it once
 instead of adding `file_depends_on=` everywhere:
 

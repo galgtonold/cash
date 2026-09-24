@@ -107,7 +107,7 @@ accept it.
 
 ## Limits
 
-<!-- claim: cash/core.py:Cash.cache @75e545d3 -->
+<!-- claim: cash/core.py:Cash.cache @d8475d94 -->
 - **Async generators are not cached.** An `async def` that uses `yield` is
   returned undecorated, with a warning
   ([`CACHE-ASYNC-GENERATOR`](../../warnings.md#cache-async-generator)). To cache

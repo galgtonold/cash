@@ -184,7 +184,7 @@ skip values over 10 MiB, and SQLite tiers values over 100 MiB or their own
 
 ## Config files
 
-<!-- claim: cash/_location.py:default_user_config_path @5fbd345e, cash/_location.py:default_project_config_path @e3dafbf2 -->
+<!-- claim: cash/_location.py:default_user_config_path @5fbd345e, cash/_location.py:default_project_config_path @52360884 -->
 The project file keeps settings under `[tool.cash]` in `pyproject.toml`. The
 user file (paths above) keeps them under `[cash]`:
 
@@ -210,7 +210,7 @@ from cash import Cash
 app = Cash(config_path="./my_special_config.toml")
 ```
 
-<!-- claim: cash/config.py:_resolve_config @afb12473 -->
+<!-- claim: cash/config.py:_resolve_config @18f97088 -->
 The named file ranks above the project and user files and below environment
 variables and code. That lets an installed package ship its own settings: put
 a TOML file inside the package and pass
@@ -218,7 +218,7 @@ a TOML file inside the package and pass
 `[cash]` or `[tool.cash]`. A relative `cache_dir` in it is relative to the
 file, and `~` is your home directory.
 
-<!-- claim: cash/config.py:_resolve_config @afb12473 -->
+<!-- claim: cash/config.py:_resolve_config @18f97088 -->
 A missing file warns [`CONFIG-FILE-MISSING`](../warnings.md#config-file-missing).
 `cash info --config path/to/cash.toml` shows what a file resolves to.
 

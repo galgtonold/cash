@@ -97,7 +97,7 @@ recompute, large, and rarely read. Set `max_cache_size` (or
 `CASH_MAX_CACHE_SIZE`) to a number of bytes or a size such as `"20GB"` to pin
 the disk cap.
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_clear @b5ac9b37, cash/__main__.py:cmd_clear @a2a0458b -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_clear @3135768f, cash/__main__.py:cmd_clear @a08b9044 -->
 **Clearing.** Pick the narrowest tool that does the job:
 
 | To remove | Run |
@@ -203,7 +203,7 @@ see [The decorator path](how-it-works/decorator-path.md).
 
 ## Parameters
 
-<!-- claim: cash/core.py:Cash.cache @75e545d3 -->
+<!-- claim: cash/core.py:Cash.cache @d8475d94 -->
 All parameters are keyword-only and optional:
 
 | Parameter | What it does |
@@ -232,7 +232,7 @@ def rates():
     return requests.get("https://api.example.com/rates").json()
 ```
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._entry_ttl @b7544486, cash/core.py:Cash.cleanup @20df501f -->
+<!-- claim: cash/decorator/runtime.py:RuntimeMixin._entry_ttl @b7544486, cash/core.py:Cash.cleanup @b561dc3e -->
 After the ttl, the next call recomputes and replaces the entry. An entry keeps
 the ttl it was written with, and the decorator's current ttl applies too: the
 shorter one wins. So lengthening `ttl=60` to `ttl=3600` does not rescue entries
@@ -384,7 +384,7 @@ To tell cash about a helper it cannot judge, mark it with `@cash.pure` or
 
 ## Methods on a cached function
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_info @905b7b2b -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_info @72d8b303 -->
 **`f.cache_info()`** returns this process's counters:
 
 ```python

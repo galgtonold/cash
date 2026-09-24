@@ -67,7 +67,7 @@ cash info
   tier stack. `Tool caches` appears when installed command-line tools have
   per-user caches; `--tool NAME` reaches one.
 
-<!-- claim: cash/__main__.py:cmd_inspect @0975006f, cash/__main__.py:_inspect_cache_dir @79ce6b6f, cash/__main__.py:_inspect_notebook @22209429 -->
+<!-- claim: cash/__main__.py:cmd_inspect @0975006f, cash/__main__.py:_inspect_cache_dir @79ce6b6f, cash/__main__.py:_inspect_notebook @d58d3a2b -->
 ## `cash inspect` { #cash-inspect-path }
 
 **Usage:** `cash inspect [--function NAME] [--tool NAME] [path]`
@@ -127,7 +127,7 @@ unless a `pyproject.toml` above it sets `[tool.cash] cache_dir` or
 Unreadable entries are skipped. Inspecting a notebook needs `nbformat`; without
 it, cash says how to install it and exits 0.
 
-<!-- claim: cash/__main__.py:cmd_clear @a2a0458b -->
+<!-- claim: cash/__main__.py:cmd_clear @a08b9044 -->
 ## `cash clear` { #cash-clear-path-all }
 
 **Usage:** `cash clear [--all] [--function NAME] [--entry ID] [--expired] [--tool NAME] [--force] [path]`

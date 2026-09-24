@@ -23,7 +23,7 @@ it is never cached); see the [Notebook guide](../../notebook_caching_api.md#what
 
 ## `@cash.pure`: trust this helper
 
-<!-- claim: cash/purity.py:pure @b3cd5bc3, cash/purity_analyzer.py:PurityAnalyzer.analyze @d21035fe -->
+<!-- claim: cash/purity.py:pure @4b66a8c3, cash/purity_analyzer.py:PurityAnalyzer.analyze @d21035fe -->
 Mark a helper `@cash.pure` when its result depends only on its arguments and it
 has no effect you care about: no writes, no network, no in-place change to its
 arguments. Cash then stops reporting it:
@@ -67,7 +67,7 @@ A built-in or C function can't take the marker, so this raises
 
 ## `@cash.stateful`: this helper has an effect that matters
 
-<!-- claim: cash/purity.py:stateful @d2b97ef0 -->
+<!-- claim: cash/purity.py:stateful @ee349167 -->
 Mark a helper `@cash.stateful` when calling it does something a cache hit must
 not skip silently: it posts a notification, writes to a database, updates a
 model registry. A cached function that calls it warns

@@ -397,7 +397,7 @@ result. If it fires every run, those entries are never stored.
 
 *Both paths.*
 
-<!-- claim: cash/config.py:_resolve_config @afb12473 -->
+<!-- claim: cash/config.py:_resolve_config @18f97088 -->
 **What happened.** Your code passed `Cash(config_path=...)` naming a file that
 does not exist. Cash used the other configuration layers.
 
@@ -684,7 +684,7 @@ tells two such functions apart.
 
 *Decorator.*
 
-<!-- claim: cash/decorator/registry.py:RegistryMixin._register_declared_callable_dep @65dda02c -->
+<!-- claim: cash/decorator/registry.py:RegistryMixin._register_declared_callable_dep @33eccac7 -->
 **What happened.** A callable in `depends_on=` has no source and no Python
 bytecode (a builtin, a NumPy ufunc, or a compiled extension). Cash can key it
 only by its name, so the declaration does next to nothing.
@@ -850,7 +850,7 @@ like `re.compile(p).match`: it cannot change under you.
 **What happened.** A file holding a cached function or a helper was edited
 after this process imported it. The process still runs the old code.
 
-<!-- claim: cash/decorator/code_identity.py:CodeIdentityMixin._pin_own_source @7b4fb07b -->
+<!-- claim: cash/decorator/code_identity.py:CodeIdentityMixin._pin_own_source @8024db55 -->
 **Why it matters.** Cash keys that code by what is actually running, so
 results in this process are correct, and they are not reused after a restart
 on the new code.

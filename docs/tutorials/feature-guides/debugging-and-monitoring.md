@@ -25,7 +25,7 @@ same as text:
 
 ## 2. Turn on `%cash_debug`
 
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @fb6167b9 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @29ba1a1b -->
 `%cash_debug on` logs each step as cells run; `%cash_debug off` stops it.
 `%cash_debug json` logs one JSON object per record, and `%cash_debug file PATH`
 also appends them to a file. The output is long, so run the one cell you are
@@ -148,7 +148,7 @@ explains the size caps.
 
 ## Scripted access
 
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @0d042233 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @c4c64c7d -->
 `status = %cash_status dict` returns the last cell's statements (status, code,
 times) and the session's tracking state, for tools and agents. It uses the enum
 names `COMPUTED` (the badge's EXECUTED) and `RESTORED` (CACHED).

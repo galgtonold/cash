@@ -45,7 +45,7 @@ The reason is `hit` or one of `no_entry`, `ttl_expired`, `file_changed`,
 changed or which argument type could not be hashed. The result is a
 [`CacheExplanation`](../api/cash.md).
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_info @905b7b2b -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_info @72d8b303 -->
 `func.cache_info()` counts the hits and misses of this wrapper since it was
 created, with the reasons for the misses. `explain()` itself is not a call, so
 above it reports one miss and no hits. Its `total_time_saved` adds up the
@@ -79,11 +79,11 @@ the key, so editing one changes what the row shows but still hits.
 
 ### Where a value came from
 
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_provenance @efdb75ad, cash/notebook/provenance.py:ProvenanceTracker._format_graph_section @8089ee0d -->
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_provenance @6ac4d19b, cash/notebook/provenance.py:ProvenanceTracker._format_graph_section @8089ee0d -->
 `%cash_provenance NAME` shows the code that produced a variable, its inputs,
 the files it read and how long it took. `--graph` adds the chain of inputs
 (five levels deep), `--time` the last ten records with whether each step was
-computed, restored or skipped, and `--json` the same records as data.
+`EXECUTED`, `CACHED` or `SKIPPED`, and `--json` the same records as data.
 `%cash_provenance --all` lists every tracked variable.
 
 <!-- test:skip reason="IPython magic command — requires kernel context" -->
@@ -93,7 +93,7 @@ computed, restored or skipped, and `--json` the same records as data.
 
 ### Debug output
 
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @fb6167b9 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @29ba1a1b -->
 `%cash_debug on` prints Cash's reasoning as it happens: keys, lineages,
 upstream checks and restore decisions. `%cash_debug json` prints the same
 records as JSON, `%cash_debug file log.txt` also appends them to a file, and

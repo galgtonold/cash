@@ -71,7 +71,7 @@ chain: each iteration depends only on its own item. See
 [call-level caching](../annotations.md#call-level-caching-default-and-cashno-cache-calls)
 and [reordering a loop's items](../known-limitations.md#reordering-a-loops-items-re-runs-the-tail).
 
-<!-- claim: cash/notebook/control_structures/if_handler.py:IfHandler.process @33f81117, cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @b6c569ea -->
+<!-- claim: cash/notebook/control_structures/if_handler.py:IfHandler.process @75ed4110, cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @b6c569ea -->
 `if`/`elif`/`else` and `try`/`except` bodies are cached statement by
 statement too, and only the branch that ran is stored. `while` and `with`
 blocks are cached as one unit, because they have no list of items to key on,

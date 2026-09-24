@@ -112,7 +112,7 @@ call with the same arguments at once, use a bare `RedisBackend`.
   cash would skip on a hit. It honours `# @cash:assume-safe` on lines you have
   checked, so it works as a standing gate that fails only on new findings. See
   [Side effects](../../decorator.md#side-effects).
-- <!-- claim: cash/__main__.py:cmd_clear @a2a0458b -->
+- <!-- claim: cash/__main__.py:cmd_clear @a08b9044 -->
   **Decide whether the cache survives between runs.** A fresh runner starts
   cold, which is correct but slow. To keep it warm, point `CASH_CACHE_DIR` at a
   folder your CI caches between runs, or share a Redis or S3 backend. To start
@@ -128,7 +128,7 @@ application's cache and configuration: the app's `cash.configure(...)` calls,
 its `[tool.cash]` table and its `CASH_*` variables all apply to your functions.
 Own a private instance instead:
 
-<!-- claim: cash/core.py:Cash.__init__ @38574d29 -->
+<!-- claim: cash/core.py:Cash.__init__ @9c872b72 -->
 <!-- test:skip reason="illustrative: a two-file library layout" -->
 ```python
 # mylib/_cache.py
