@@ -28,9 +28,7 @@ from ..cache_status import CacheStatus
 from ._types import (
     CellCheck,
     ClassificationResult,
-    RestoreCollector,
     SimulationResult,
-    apply_collected_mutations,
 )
 from .virtual_lineage import VirtualLineage, normalize_stmt
 
@@ -75,7 +73,8 @@ class MismatchClassifier:
     """Phase 2 of NotebookSimulator: classify broken / tainted variables.
 
     Restores through, and asks trace questions of, the :class:`VirtualLineage`
-    it is given. Writes to ``TrackingState`` are buffered in ``restores``.
+    it is given. A lineage reset goes to ``TrackingState`` at once, so the
+    names classified after it see it.
     """
 
     def __init__(
@@ -85,9 +84,6 @@ class MismatchClassifier:
     ) -> None:
         self.virtual_lineage = virtual_lineage
         self.tracking_state = tracking_state
-
-        # Buffered TrackingState mutations; orchestrator drains after the phase.
-        self.restores = RestoreCollector()
 
     # --- shell/cash convenience accessors (read-through to VirtualLineage) ---
 
@@ -491,7 +487,7 @@ class MismatchClassifier:
                 actual_lineage[:8],
                 final_virtual_hash[:8],
             )
-            self.restores.record_lineage_reset(var_name=var_name, lineage_hash=final_virtual_hash)
+            self.tracking_state.lineage.reset_to(var_name, final_virtual_hash)
             return True
 
         # A figure this cell saved (``fig.savefig(...)``) is ahead of its
@@ -507,7 +503,7 @@ class MismatchClassifier:
             and not upstream_has_modifications
             and self._is_saved_figure(var_name)
         ):
-            self.restores.record_lineage_reset(var_name=var_name, lineage_hash=final_virtual_hash)
+            self.tracking_state.lineage.reset_to(var_name, final_virtual_hash)
             return True
 
         # Read-only input: reject downstream mutations (e.g., df['SMA']=...)
@@ -599,9 +595,7 @@ class MismatchClassifier:
                 actual_lineage[:8],
                 final_virtual_hash[:8],
             )
-            self.restores.record_lineage_reset(var_name=var_name, lineage_hash=final_virtual_hash)
-            # Caller (_classify_broken_vars) drains between iterations so the
-            # reset is visible to subsequent classification iterations.
+            self.tracking_state.lineage.reset_to(var_name, final_virtual_hash)
             return True
 
         return False
@@ -790,10 +784,8 @@ class MismatchClassifier:
         )
 
         for var_name in vars_to_check:
+            # A lineage reset it makes is seen by the names classified after it.
             self._classify_one_broken_var(var_name, sim, check, result, loop_var_input_lineages)
-            # Drain between iterations: a lineage reset buffered for this var
-            # must be visible when classifying the remaining vars.
-            apply_collected_mutations(self.restores, self.tracking_state)
 
         # Only required inputs matter here; temporary intermediates can stay missing.
         self._check_missing_required_inputs(required_inputs, virtual_lineage, sim.virtual_modules, result.broken_vars)
@@ -1040,10 +1032,6 @@ class MismatchClassifier:
                     sim.virtual_modules,
                     expected_lineages=entry.produced_lineages,
                 )
-                # Drain so subsequent iterations of this reverse-trace loop see
-                # the lineage / file-dep writes buffered by the restore — next
-                # statements may depend on the just-restored variable's lineage.
-                apply_collected_mutations(self.virtual_lineage.restores, self.tracking_state)
             total_restore_time += restore_time
 
             needed_outputs = outputs.intersection(scan.needed)

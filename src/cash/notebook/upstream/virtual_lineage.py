@@ -77,12 +77,10 @@ from ..statement.derivation_edges import bump_derived_lineages
 from ..statement.file_deps import compute_file_hash_component
 from ._types import (
     IncrementalStartResult,
-    RestoreCollector,
     SimulationCache,
     SimulationCacheEntry,
     SimulationResult,
     TraceEntry,
-    apply_collected_mutations,
 )
 
 if TYPE_CHECKING:
@@ -267,7 +265,9 @@ def lineage_confirmed_vars(
 class VirtualLineage:
     """Phase 1 of NotebookSimulator: forward simulation + cache probing.
 
-    Writes to ``TrackingState`` are buffered in ``restores``.
+    What it restores or propagates (an import's lineage, a restored name's
+    lineage and producer) it writes to ``TrackingState`` at once, because
+    the next statement's cache key reads it.
     """
 
     def __init__(
@@ -306,9 +306,6 @@ class VirtualLineage:
         #: The lineage ``_propagate_import_lineage`` last gave each name, so a
         #: later import of that name can replace it -- but not one the runtime set.
         self.propagated_imports: dict[str, str] = {}
-
-        # Buffered TrackingState mutations; orchestrator drains after the phase.
-        self.restores = RestoreCollector()
 
         # Derivation-alias vars bumped during the most recent cache-hit
         # propagation; read back by _update_virtual_lineage.
@@ -1920,14 +1917,13 @@ class VirtualLineage:
                 if out not in self.tracking_state.variable_lineage:
                     lineage_val = output_lineages.get(out)
                     if lineage_val:
-                        self.restores.record_restore(var_name=out, lineage_hash=lineage_val)
+                        # Recorded now: later statements' cache keys read it.
+                        self.tracking_state.lineage.record(out, lineage_val)
                         logger.debug(
                             "[LINEAGE_DEBUG] Propagated module '%s' lineage (from cache): %s...",
                             out,
                             lineage_val[:12],
                         )
-        # Mid-simulation drain: same reasoning as in _propagate_import_lineage.
-        apply_collected_mutations(self.restores, self.tracking_state)
         stmt_file_deps = self._stat_file_deps(hist_files)
         return ("hit", 0.0, stmt_file_deps)
 
@@ -2339,17 +2335,13 @@ class VirtualLineage:
                 continue
             held = self.tracking_state.variable_lineage.get(out)
             if held is None or held == self.propagated_imports.get(out):
-                self.restores.record_restore(var_name=out, lineage_hash=lineage_by_out[out])
+                self.tracking_state.lineage.record(out, lineage_by_out[out])
                 self.propagated_imports[out] = lineage_by_out[out]
                 logger.debug(
                     "[LINEAGE_DEBUG] Propagated module '%s' lineage to variable_lineage: %s...",
                     out,
                     lineage_by_out[out][:12],
                 )
-        # Mid-simulation drain: subsequent statements' compute_cache_key reads
-        # variable_lineage to include module components, so the write must be
-        # visible before the next _update_virtual_lineage call.
-        apply_collected_mutations(self.restores, self.tracking_state)
 
     def _statement_reads_writes(
         self,
@@ -2626,16 +2618,9 @@ class VirtualLineage:
             if "output_lineages" in metadata:
                 new_lineage = metadata["output_lineages"].get(var)
                 if var in self.tracking_state.lineage and new_lineage is not None:
-                    # Buffer a value-coupled restore so apply_collected_mutations
-                    # routes through lineage.record, attaching _cash_lineage_hash
-                    # to the live object. Drain immediately so the attribute is
-                    # visible before _update_tracking_after_restore runs.
-                    self.restores.record_restore(
-                        var_name=var,
-                        lineage_hash=new_lineage,
-                        value=val,
-                    )
-                    apply_collected_mutations(self.restores, self.tracking_state)
+                    # Recorded with the value, so the live object carries
+                    # _cash_lineage_hash too.
+                    self.tracking_state.lineage.record(var, new_lineage, value=val)
                 else:
                     # Variable wasn't tracked in the lineage store before, but
                     # we still want the attribute attached so future cache-key
@@ -2656,12 +2641,10 @@ class VirtualLineage:
         metadata: dict,
         input_hashes: dict[str, str],
     ) -> None:
-        """Buffer one CacheRestore per restored var.
-
-        The orchestrator drains the collector and applies writes to
-        executed_cell_codes, executed_cell_hashes, executed_input_lineages,
-        executed_file_deps, and variable_lineage.
-        """
+        """Record what produced each of *restored_vars*, as running the
+        statement would have: its lineage, code, code hash, input lineages
+        and file dependencies."""
+        state = self.tracking_state
         output_lineages = metadata.get("output_lineages", {}) if "output_lineages" in metadata else {}
         stored_code = metadata.get("code")
         stored_hash = metadata.get("source_hash")
@@ -2677,14 +2660,16 @@ class VirtualLineage:
 
         for var in restored_vars:
             lin = output_lineages.get(var) if output_lineages else None
-            self.restores.record_restore(
-                var_name=var,
-                lineage_hash=lin,  # may be None — apply step skips lineage write if so
-                code=stored_code if stored_code else None,
-                code_hash=stored_hash if stored_hash else None,
-                input_lineages=dict(input_hashes) if input_hashes else None,
-                file_deps=set(resolved_paths) if resolved_paths else None,
-            )
+            if lin is not None:
+                state.lineage.record(var, lin)
+            if stored_code:
+                state.executed_cell_codes[var] = stored_code
+            if stored_hash:
+                state.executed_cell_hashes.setdefault(var, set()).add(stored_hash)
+            if input_hashes:
+                state.executed_input_lineages[var] = dict(input_hashes)
+            if resolved_paths:
+                state.executed_file_deps.setdefault(var, set()).update(resolved_paths)
 
     def drop_probe_placeholders(self) -> None:
         """Unbind the names the forward probe held that no restore filled.
@@ -2817,12 +2802,12 @@ class VirtualLineage:
             # hold each name's place until the restore fills it.
             for var in produced:
                 if var in virtual_lineage:
-                    self.restores.record_restore(var_name=var, lineage_hash=virtual_lineage[var])
+                    # Recorded now, so later statements probing the cache key
+                    # with it.
+                    self.tracking_state.lineage.record(var, virtual_lineage[var])
                 if var not in self.shell.user_ns:
                     self.shell.user_ns[var] = _FORWARD_PROBE_PLACEHOLDER
                     self._probe_placeholders.add(var)
-            # Drain so subsequent statements probing the cache see the lineage.
-            apply_collected_mutations(self.restores, self.tracking_state)
             logger.debug(
                 "[UPSTREAM] Forward probe: cache hit for '%s' resolves broken vars: %s",
                 stmt_code[:50],

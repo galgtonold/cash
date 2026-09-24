@@ -37,7 +37,7 @@ from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from .._trace import is_tracing, trace_event
 from ..cache_key import read_provenance_key
 from ..consumables import consumable_state, has_diverged, is_consumable_unrestorable
-from ._types import CellCheck, ReexecutionPlan, SimulationCache, SimulationResult, apply_collected_mutations
+from ._types import CellCheck, ReexecutionPlan, SimulationCache, SimulationResult
 from .mismatch_classifier import MismatchClassifier
 from .reexecution_planner import ReexecutionPlanner
 from .virtual_lineage import VirtualLineage, loop_derived_vars
@@ -234,7 +234,6 @@ class NotebookSimulator:
             return
         runtime = self.tracking_state.variable_lineage
         imported = self.virtual_lineage.propagated_imports
-        restores = self.virtual_lineage.restores
         binder: dict[str, str] = {}
         for entry in simulation_trace or ():
             for out in entry.outputs or ():
@@ -251,24 +250,12 @@ class NotebookSimulator:
                 # it -- see TrackingState.rerun_bindings.
                 untracked.add(name)
                 continue
-            restores.record_restore(var_name=name, lineage_hash=lineage_hash, value=user_ns[name])
+            self.tracking_state.lineage.record(name, lineage_hash, value=user_ns[name])
             adopted.append(name)
-        apply_collected_mutations(restores, self.tracking_state)
         if adopted and logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "[UPSTREAM_DEBUG] Adopted simulated lineage for names bound before %%cash_on: %s", sorted(adopted)
             )
-
-    def _apply_phase_mutations(self) -> None:
-        """Drain phase RestoreCollectors and apply buffered ops to TrackingState.
-
-        Phases buffer mutations as ``CacheRestore`` / ``LineageReset`` ops and
-        usually drain themselves at method boundaries (so direct callers and
-        mid-simulation reads see writes immediately). This safety-net drain
-        catches anything left over after the full pipeline runs.
-        """
-        apply_collected_mutations(self.virtual_lineage.restores, self.tracking_state)
-        apply_collected_mutations(self.classifier.restores, self.tracking_state)
 
     # --- One statement or cell at a time, as a check does it ---
 
@@ -285,7 +272,6 @@ class NotebookSimulator:
         """
         sim = SimulationResult(virtual_lineage=dict(virtual_lineage or {}), virtual_modules=set(virtual_modules or ()))
         self.virtual_lineage.simulate_one_cell(sim, -1, cell_code)
-        self._apply_phase_mutations()
         return sim
 
     def restore_statement(
@@ -303,7 +289,6 @@ class NotebookSimulator:
         restored, _restore_time, _saved_time = self.virtual_lineage.try_virtual_restore(
             stmt_code, outputs, inputs, input_hashes, virtual_modules, expected_lineages
         )
-        self._apply_phase_mutations()
         return restored
 
     def record_replayed_file_deps(self, rerecorded: set[str]) -> None:
@@ -1123,7 +1108,6 @@ class NotebookSimulator:
                 logger.debug("[UPSTREAM] All broken vars resolved by current cell cache hits — skipping upstream")
 
         if not broken_vars and not has_stale_file_writers:
-            self._apply_phase_mutations()
             return ReexecutionPlan([], [], 0.0)
 
         plan = self.planner.plan(
@@ -1133,7 +1117,6 @@ class NotebookSimulator:
             relevant_read_paths=relevant_read_paths,
             relevant_read_paths_known=relevant_read_paths_known,
         )
-        self._apply_phase_mutations()
         return plan
 
     def _settle_loop_trust(self, sim: SimulationResult) -> None:

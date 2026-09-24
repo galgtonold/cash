@@ -244,8 +244,6 @@ class ReexecutionPlanner:
         self.virtual_lineage = virtual_lineage
         self.classifier = classifier
         self.tracking_state = virtual_lineage.tracking_state
-        #: ``(trace index, paths)`` of the writers the last plan left out of date.
-        self.stale_exports: list[tuple[int, list[str]]] = []
         #: ``(read paths, their count, index)`` -- see ``_read_path_index``.
         self._read_index: tuple[set[str], int, tuple[set[str], list[str], list[str]]] | None = None
         #: ``(trace, its length, defs)`` -- see ``_trace_defs``. Holds the
@@ -286,7 +284,8 @@ class ReexecutionPlanner:
             for i, entry in enumerate(simulation_trace):
                 logger.debug("[UPSTREAM_DEBUG]   [%s] outputs=%s: %s...", i, entry.outputs, entry.stmt_code[:60])
 
-        self.stale_exports = []
+        # ``(trace index, paths)`` of the writers this plan leaves out of date.
+        stale_exports: list[tuple[int, list[str]]] = []
         stmts_to_run_indices, restored_statements_info, total_restore_time = self.classifier.backward_scan_pass(
             sim, result
         )
@@ -322,6 +321,7 @@ class ReexecutionPlanner:
             virtual_lineage,
             relevant_read_paths=relevant_read_paths,
             relevant_read_paths_known=relevant_read_paths_known,
+            stale_exports=stale_exports,
         )
 
         stmts_to_run_indices, restored_statements_info = self._complete_stateful_carrier_history(
@@ -382,7 +382,7 @@ class ReexecutionPlanner:
         )
         restored_statements_info.extend(skipped_metrics)
         restored_statements_info = self._note_stale_exports(
-            simulation_trace, stmts_to_run_indices, restored_statements_info
+            simulation_trace, stmts_to_run_indices, restored_statements_info, stale_exports
         )
 
         stmts_to_run_indices = self._schedule_loop_var_contexts(stmts_to_run_indices, simulation_trace)
@@ -424,12 +424,16 @@ class ReexecutionPlanner:
         return ReexecutionPlan(statements_to_reexecute, restored_statements_info, total_restore_time)
 
     def _note_stale_exports(
-        self, simulation_trace: list, stmts_to_run_indices: list[int], restored_statements_info: list[dict]
+        self,
+        simulation_trace: list,
+        stmts_to_run_indices: list[int],
+        restored_statements_info: list[dict],
+        stale_exports: list[tuple[int, list[str]]],
     ) -> list[dict]:
         """Mark the writers this repair left out of date (see
         :meth:`find_stale_file_writer_indices`) as such, in place of the
         "already current" skipped row they would otherwise get."""
-        stale = {i: paths for i, paths in self.stale_exports if i not in set(stmts_to_run_indices)}
+        stale = {i: paths for i, paths in stale_exports if i not in set(stmts_to_run_indices)}
         if not stale:
             return restored_statements_info
         kept = [
@@ -1352,6 +1356,7 @@ class ReexecutionPlanner:
         virtual_lineage: dict | None = None,
         relevant_read_paths: set[str] | None = None,
         relevant_read_paths_known: bool = True,
+        stale_exports: list | None = None,
     ) -> tuple[list[int], list[dict]]:
         """Schedule upstream file-WRITING statements whose effect is stale.
 
@@ -1375,6 +1380,9 @@ class ReexecutionPlanner:
         plan-time restore was validated against the pre-write file state, and
         re-executing them in trace order (after the writer) overwrites the
         stale restore with a fresh read.
+
+        A writer that is not scheduled but whose file is out of date anyway
+        is added to *stale_exports* (see :meth:`find_stale_file_writer_indices`).
         """
         scheduled = set(stmts_to_run_indices)
         scheduled_outputs: set[str] = set()
@@ -1411,7 +1419,6 @@ class ReexecutionPlanner:
             run = runtime_lineage.get(name)
             return virt is not None and run is not None and virt != run
 
-        self.stale_exports = []
         writer_indices = self.find_stale_file_writer_indices(
             simulation_trace,
             scheduled_outputs=changed_inputs,
@@ -1419,7 +1426,7 @@ class ReexecutionPlanner:
             virtual_lineage=virtual_lineage,
             relevant_read_paths=relevant_read_paths,
             relevant_read_paths_known=relevant_read_paths_known,
-            stale_exports=self.stale_exports,
+            stale_exports=stale_exports,
         )
         if not writer_indices:
             return stmts_to_run_indices, restored_statements_info
