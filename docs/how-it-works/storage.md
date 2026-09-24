@@ -128,10 +128,13 @@ notebook statement also drops its older versions when the new one is written.
 
 ## Turning objects into bytes
 
-<!-- claim: cash/backends/serialization.py:get_serializer @76cf2c1b -->
+<!-- claim: cash/backends/serialization.py:get_serializer @76cf2c1b, cash/backends/serialization.py:ParquetSerializer.serialize @97962311, cash/backends/serialization.py:_parquet_keeps @7d0d2a54 -->
 A pandas `DataFrame` is stored as Parquet when pyarrow or fastparquet is
-installed. Everything else, and a DataFrame without a Parquet engine, is
-pickled.
+installed, and comes back as it was stored, `RangeIndex` included. A frame
+Parquet cannot give back unchanged (non-string, duplicate or multi-level
+column labels, an index with a frequency, no columns, or a column Parquet
+cannot convert) is pickled instead. Everything else, and a DataFrame without a
+Parquet engine, is pickled.
 
 !!! warning "Only use caches you trust"
     Loading a pickle can run arbitrary code. A cache folder, Redis database or
