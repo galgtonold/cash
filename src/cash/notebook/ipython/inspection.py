@@ -7,6 +7,7 @@ so IPython registers them with the rest.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from IPython.core.magic import line_magic
@@ -51,6 +52,198 @@ def _fmt_signed_time(seconds: float) -> str:
     return _fmt_time(seconds)
 
 
+@dataclass(frozen=True)
+class _StatsSummary:
+    """What ``%cash_stats`` reports, derived from the session counters."""
+
+    total_stmts: int
+    #: Hits over every statement, the trivial ones included.
+    hit_rate: float
+    cacheable_hit: int
+    cacheable_total: int
+    #: Hits over the statements worth caching; None when there were none.
+    cacheable_rate: float | None
+    gross_saved: float
+    measured_saved: float
+    overhead: float
+    #: The net credited only from verified and measured savings.
+    net_saved: float
+    #: The net if every restore saved what its entry recorded.
+    net_upper: float
+
+
+def _summarize(stats: dict) -> _StatsSummary:
+    """The rates and nets ``%cash_stats`` reports for the counters *stats*."""
+    total_stmts = stats["statements_computed"] + stats["statements_restored"] + stats["statements_skipped"]
+    hit_rate = (stats["statements_restored"] + stats["statements_skipped"]) / max(total_stmts, 1) * 100
+
+    # The rate over ALL statements answers a question nobody asked: its
+    # denominator is dominated by prints, imports and cheap assignments that
+    # cash deliberately never tried to cache. Counting cash's own correct
+    # "not worth caching" decisions as misses reported 14.9% for a session
+    # in which 100% of the expensive statements hit. Overstating savings is
+    # the same failure inverted, so the same rule binds: the number must not
+    # imply a conclusion the data does not support, in EITHER direction.
+    cacheable_hit = stats.get("statements_cacheable_hit", 0)
+    cacheable_miss = stats.get("statements_cacheable_miss", 0)
+    cacheable_total = cacheable_hit + cacheable_miss
+    cacheable_rate = (cacheable_hit / cacheable_total * 100) if cacheable_total else None
+
+    # Two nets, because two different qualities of evidence.
+    #
+    # ``gross_saved`` is a counterfactual: each restore is credited with the
+    # compute time recorded when the value was FIRST cached. Nothing
+    # re-measures that. If the first run was colder — cold page cache, cold
+    # imports — the credit is stale-high, and a session that was slower by
+    # wall clock still prints a win. That is the lie the verified net fixes, and it
+    # is not fixable by estimating harder: the true recompute cost cannot be
+    # known without doing the recompute.
+    #
+    # So the HEADLINE net is credited only from savings this session
+    # verified by computing the same statement itself. The gross figure is
+    # still shown, explicitly as an unverified upper bound. This
+    # deliberately UNDERSTATES a session that really did save time but never
+    # re-measured a baseline — an understatement is a defensible error here;
+    # an overstatement is the bug.
+    gross_saved = stats["total_time_saved"]
+    verified_saved = stats.get("total_verified_saved", 0.0)
+    # Measured on this machine in an earlier kernel, at the least it ever
+    # cost. Evidence of the same kind as ``verified``, one run older -- and
+    # the only kind a Restart & Run All can have.
+    measured_saved = stats.get("total_measured_saved", 0.0)
+    overhead = stats.get("total_overhead", 0.0)
+    return _StatsSummary(
+        total_stmts=total_stmts,
+        hit_rate=hit_rate,
+        cacheable_hit=cacheable_hit,
+        cacheable_total=cacheable_total,
+        cacheable_rate=cacheable_rate,
+        gross_saved=gross_saved,
+        measured_saved=measured_saved,
+        overhead=overhead,
+        net_saved=verified_saved + measured_saved - overhead,
+        net_upper=gross_saved - overhead,
+    )
+
+
+def _stats_json(stats: dict, summary: _StatsSummary, discarded: list) -> dict:
+    """``%cash_stats json``: the counters with the derived figures."""
+    return {
+        **stats,
+        "discarded_writes": len(discarded),
+        "net_time_saved": summary.net_saved,
+        "net_time_saved_upper_bound": summary.net_upper,
+        "total_measured_saved": summary.measured_saved,
+        # False ⇒ the upper bound rests on baselines nobody re-measured,
+        # so its sign is not evidence of anything.
+        "net_sign_verified": summary.net_saved >= 0 or summary.net_upper < 0,
+        "hit_rate_percent": round(summary.hit_rate, 1),
+        # Hits over the statements caching was ever on the table for.
+        # ``None`` (not 0.0) when nothing this session cleared the
+        # floor: a rate with an empty denominator is undefined, and
+        # emitting 0.0 would read as "cash missed everything".
+        "hit_rate_cacheable_percent": (
+            round(summary.cacheable_rate, 1) if summary.cacheable_rate is not None else None
+        ),
+        "statements_cacheable_total": summary.cacheable_total,
+    }
+
+
+def _print_counts(stats: dict, summary: _StatsSummary) -> None:
+    """The statement counts and the hit rate, each rate with its denominator."""
+    print("Cash Session Statistics")
+    # These reset on a kernel restart and were read as the
+    # project's totals. Name the scope up front.
+    print("  (since this kernel started; a restart resets them)")
+    print("-" * 40)
+    print(f"  Cells executed:      {stats['cells_executed']}")
+    print(f"  Statements computed: {stats['statements_computed']}")
+    print(f"  Statements restored: {stats['statements_restored']}")
+    print(f"  Statements skipped:  {stats['statements_skipped']}")
+    trivial = summary.total_stmts - summary.cacheable_total
+    if summary.cacheable_rate is None:
+        # Honest silence. No statement was expensive enough to cache, so
+        # there is no hit rate to report -- printing "0%" here would blame
+        # cash for correctly declining to cache a notebook of prints.
+        print("  Cache hit rate:      n/a  (no statement was expensive enough to cache)")
+    elif trivial <= 0:
+        print(
+            f"  Cache hit rate:      {summary.cacheable_rate:.1f}%  "
+            f"({summary.cacheable_hit}/{summary.cacheable_total} statements)"
+        )
+    else:
+        # Both numbers, with the meaningful one first and each labelled by
+        # its own denominator so neither can be read as the other.
+        print(
+            f"  Cache hit rate:      {summary.cacheable_rate:.1f}%  "
+            f"({summary.cacheable_hit}/{summary.cacheable_total} statements worth caching)"
+        )
+        print(
+            f"                       {summary.hit_rate:.1f}% counting all {summary.total_stmts} "
+            f"statements -- the other {trivial} were too"
+        )
+        print("                       cheap to cache, so cash never tried: not misses.")
+
+
+def _print_time(stats: dict, summary: _StatsSummary) -> None:
+    """Compute, gross saving, overhead and the net, as certain as the evidence."""
+    net_saved, net_upper = summary.net_saved, summary.net_upper
+    overhead, gross_saved = summary.overhead, summary.gross_saved
+    print(f"  Compute time:        {_fmt_time(stats['total_compute_time'])}")
+    print(f"  Gross time saved:    {_fmt_time(gross_saved)}  (estimated)")
+    print(f"  Cash overhead:       {_fmt_time(overhead)}  (measured)")
+    # NET is the honest headline: what cash actually bought you once its own
+    # tax is paid, counting only savings this session could verify. Show a
+    # negative plainly rather than flooring it.
+    if net_saved >= 0:
+        # "verified" = this kernel recomputed it; "measured" = an earlier
+        # run on this machine did, and the least it ever cost is credited.
+        basis = "verified" if summary.measured_saved <= 0 else "measured"
+        print(f"  Net time saved:      {_fmt_signed_time(net_saved)}  ({basis})")
+    elif net_upper < 0:
+        # Even the most generous reading of the cache's own baselines is a
+        # loss, so the sign is certain without verifying anything.
+        print(
+            f"  Net time saved:      {_fmt_signed_time(net_upper)}  (cash cost you {_fmt_time(-net_upper)} this session)"
+        )
+    else:
+        # The unverified case: gross says win, measurement says nothing.
+        # Report the floor, and the ceiling as a claim rather than a fact.
+        print(f"  Net time saved:      at least {_fmt_signed_time(net_saved)}, at best {_fmt_signed_time(net_upper)}")
+        print(
+            f"    Cash measured only the {_fmt_time(overhead)} it spent. The "
+            f"{_fmt_time(gross_saved)} it avoided is what these values cost"
+        )
+        print("    when first cached; if they would recompute faster today (warm file cache,")
+        print("    warm imports), the real figure is nearer the low end. Time a run with")
+        print("    caching off to settle it.")
+
+
+def _print_discarded(discarded: list) -> None:
+    """The writes that failed, when there were any."""
+    if not discarded:
+        return
+    print()
+    print(f"  Discarded writes:    {len(discarded)}  -- these results were NOT cached")
+    print("    A cache write failed, so that work recomputes every run. Nothing raised")
+    print("    at the time, which is why the numbers above can look healthy anyway.")
+    print(f"    First: {discarded[0][1]}")
+    if len(discarded) > 1:
+        print(f"    ... and {len(discarded) - 1} more.")
+
+
+def _print_footer(tracked: int) -> None:
+    print()
+    print(f"  Tracked variables:   {tracked}")
+    print()
+    # Points at the CLI: there is no magic for the backend. `cash inspect` is
+    # named too: it is the view that answers "is my cache worth what it
+    # costs", and users found it only by hunting through docs/cli.md.
+    print("  The cache on disk outlives this kernel. In a terminal, `cash info`")
+    print("  gives its size and `cash inspect` lists its entries, the time each")
+    print("  saves beside the space it takes (`cash clear` empties it).")
+
+
 class InspectionMagicsMixin:
     """Mixin providing the session-inspection magics.
 
@@ -83,71 +276,12 @@ class InspectionMagicsMixin:
             return
 
         if mode == "reset":
-            # Rebuilt from the same definition a fresh session uses, so a new
-            # counter can never be added to the stats and silently survive a
-            # reset (it already happened once).
-            # Local: import cycle ipython.inspection -> ipython.magics -> ipython.inspection.
-            from .magics import new_session_stats
-
-            self._session.stats.update(new_session_stats())
-            # The verified-saving baselines are part of the stats, not of the
-            # cache: a reset must drop them too or savings would be credited
-            # against measurements the reset claims to have forgotten.
-            self._session.measured_compute.clear()
-            # Same rule for the decorator baselines: a reset that keeps
-            # them would credit a post-reset hit as "verified" against a compute
-            # the reset claims to have forgotten.
-            self._session.measured_decorator_compute.clear()
-            # On disk too: a reset that kept them would credit a later hit
-            # against a measurement it claims to have forgotten.
-            self._baselines().clear()
+            self._reset_session_stats()
             print("[OK] Session statistics reset.")
             return
 
         stats = self._session.stats
-        total_stmts = stats["statements_computed"] + stats["statements_restored"] + stats["statements_skipped"]
-        hit_rate = (stats["statements_restored"] + stats["statements_skipped"]) / max(total_stmts, 1) * 100
-
-        # The rate over ALL statements answers a question nobody asked: its
-        # denominator is dominated by prints, imports and cheap assignments that
-        # cash deliberately never tried to cache. Counting cash's own correct
-        # "not worth caching" decisions as misses reported 14.9% for a session
-        # in which 100% of the expensive statements hit. The earlier fix addressed
-        # an OVERstatement of savings; that is the same failure inverted, so the
-        # same rule binds: the number must not imply a conclusion the data does
-        # not support, in EITHER direction.
-        cacheable_hit = stats.get("statements_cacheable_hit", 0)
-        cacheable_miss = stats.get("statements_cacheable_miss", 0)
-        cacheable_total = cacheable_hit + cacheable_miss
-        cacheable_rate = (cacheable_hit / cacheable_total * 100) if cacheable_total else None
-
-        # Two nets, because two different qualities of evidence.
-        #
-        # ``gross_saved`` is a counterfactual: each restore is credited with the
-        # compute time recorded when the value was FIRST cached. Nothing
-        # re-measures that. If the first run was colder — cold page cache, cold
-        # imports — the credit is stale-high, and a session that was slower by
-        # wall clock still prints a win. That is the lie the verified net fixes, and it
-        # is not fixable by estimating harder: the true recompute cost cannot be
-        # known without doing the recompute.
-        #
-        # So the HEADLINE net is credited only from savings this session
-        # verified by computing the same statement itself. The gross figure is
-        # still shown, explicitly as an unverified upper bound. This
-        # deliberately UNDERSTATES a session that really did save time but never
-        # re-measured a baseline — an understatement is a defensible error here;
-        # an overstatement is the bug.
-        gross_saved = stats["total_time_saved"]
-        verified_saved = stats.get("total_verified_saved", 0.0)
-        # Measured on this machine in an earlier kernel, at the least it ever
-        # cost. Evidence of the same kind as ``verified``, one run older --
-        # and the only kind a Restart & Run All can have, which is where the
-        # net used to print as a range straddling zero.
-        measured_saved = stats.get("total_measured_saved", 0.0)
-        overhead = stats.get("total_overhead", 0.0)
-        net_saved = verified_saved + measured_saved - overhead
-        net_upper = gross_saved - overhead
-
+        summary = _summarize(stats)
         # Deliberately no backend walk here (no ``list_entries()``): on a
         # disk cache with thousands of entries that is an O(N) scan that opens
         # every metadata file. ``cash inspect`` gives the backend-wide view.
@@ -162,110 +296,35 @@ class InspectionMagicsMixin:
         discarded = discarded_writes()
 
         if mode == "json":
-            result = {
-                **stats,
-                "discarded_writes": len(discarded),
-                "net_time_saved": net_saved,
-                "net_time_saved_upper_bound": net_upper,
-                "total_measured_saved": measured_saved,
-                # False ⇒ the upper bound rests on baselines nobody re-measured,
-                # so its sign is not evidence of anything.
-                "net_sign_verified": net_saved >= 0 or net_upper < 0,
-                "hit_rate_percent": round(hit_rate, 1),
-                # Hits over the statements caching was ever on the table for.
-                # ``None`` (not 0.0) when nothing this session cleared the
-                # floor: a rate with an empty denominator is undefined, and
-                # emitting 0.0 would read as "cash missed everything".
-                "hit_rate_cacheable_percent": (round(cacheable_rate, 1) if cacheable_rate is not None else None),
-                "statements_cacheable_total": cacheable_total,
-            }
-            print(json.dumps(result, indent=2))
+            print(json.dumps(_stats_json(stats, summary, discarded), indent=2))
             return
 
-        print("Cash Session Statistics")
-        # These reset on a kernel restart and were read as the
-        # project's totals. Name the scope up front.
-        print("  (since this kernel started; a restart resets them)")
-        print("-" * 40)
-        print(f"  Cells executed:      {stats['cells_executed']}")
-        print(f"  Statements computed: {stats['statements_computed']}")
-        print(f"  Statements restored: {stats['statements_restored']}")
-        print(f"  Statements skipped:  {stats['statements_skipped']}")
-        trivial = total_stmts - cacheable_total
-        if cacheable_rate is None:
-            # Honest silence. No statement was expensive enough to cache, so
-            # there is no hit rate to report -- printing "0%" here would blame
-            # cash for correctly declining to cache a notebook of prints.
-            print("  Cache hit rate:      n/a  (no statement was expensive enough to cache)")
-        elif trivial <= 0:
-            print(f"  Cache hit rate:      {cacheable_rate:.1f}%  ({cacheable_hit}/{cacheable_total} statements)")
-        else:
-            # Both numbers, with the meaningful one first and each labelled by
-            # its own denominator so neither can be read as the other.
-            print(
-                f"  Cache hit rate:      {cacheable_rate:.1f}%  "
-                f"({cacheable_hit}/{cacheable_total} statements worth caching)"
-            )
-            print(
-                f"                       {hit_rate:.1f}% counting all {total_stmts} "
-                f"statements -- the other {trivial} were too"
-            )
-            print("                       cheap to cache, so cash never tried: not misses.")
+        _print_counts(stats, summary)
         print()
-        print(f"  Compute time:        {_fmt_time(stats['total_compute_time'])}")
-        print(f"  Gross time saved:    {_fmt_time(gross_saved)}  (estimated)")
-        print(f"  Cash overhead:       {_fmt_time(overhead)}  (measured)")
-        # NET is the honest headline: what cash actually bought you once its own
-        # tax is paid, counting only savings this session could verify. Show a
-        # negative plainly rather than flooring it.
-        if net_saved >= 0:
-            # "verified" = this kernel recomputed it; "measured" = an earlier
-            # run on this machine did, and the least it ever cost is credited.
-            basis = "verified" if measured_saved <= 0 else "measured"
-            print(f"  Net time saved:      {_fmt_signed_time(net_saved)}  ({basis})")
-        elif net_upper < 0:
-            # Even the most generous reading of the cache's own baselines is a
-            # loss, so the sign is certain without verifying anything.
-            print(
-                f"  Net time saved:      {_fmt_signed_time(net_upper)}"
-                f"  (cash cost you {_fmt_time(-net_upper)} this session)"
-            )
-        else:
-            # The unverified case: gross says win, measurement says nothing.
-            # Report the floor, and the ceiling as a claim rather than a fact.
-            print(
-                f"  Net time saved:      at least {_fmt_signed_time(net_saved)}, at best {_fmt_signed_time(net_upper)}"
-            )
-            print(
-                f"    Cash measured only the {_fmt_time(overhead)} it spent. The "
-                f"{_fmt_time(gross_saved)} it avoided is what these values cost"
-            )
-            print("    when first cached; if they would recompute faster today (warm file cache,")
-            print("    warm imports), the real figure is nearer the low end. Time a run with")
-            print("    caching off to settle it.")
-        if discarded:
-            print()
-            print(f"  Discarded writes:    {len(discarded)}  -- these results were NOT cached")
-            print("    A cache write failed, so that work recomputes every run. Nothing raised")
-            print("    at the time, which is why the numbers above can look healthy anyway.")
-            print(f"    First: {discarded[0][1]}")
-            if len(discarded) > 1:
-                print(f"    ... and {len(discarded) - 1} more.")
+        _print_time(stats, summary)
+        _print_discarded(discarded)
+        _print_footer(len(self.tracking_state.variable_lineage))
 
-        print()
-        tracked = len(self.tracking_state.variable_lineage)
-        print(f"  Tracked variables:   {tracked}")
-        print()
-        # Points at the CLI, not at an admin magic: there has never been
-        # one. Sending a user who is looking at a multi-hundred-MB .cash
-        # to a UsageError is worse than saying nothing, and inspecting the
-        # backend is exactly what they came here to do.
-        # `cash inspect` named too: it is the view that answers "is my cache
-        # worth what it costs", and users found it only by
-        # hunting through docs/cli.md.
-        print("  The cache on disk outlives this kernel. In a terminal, `cash info`")
-        print("  gives its size and `cash inspect` lists its entries, the time each")
-        print("  saves beside the space it takes (`cash clear` empties it).")
+    def _reset_session_stats(self: CashMagics) -> None:
+        """Forget this session's statistics and the baselines behind them."""
+        # Rebuilt from the same definition a fresh session uses, so a new
+        # counter can never be added to the stats and silently survive a
+        # reset.
+        # Local: import cycle ipython.inspection -> ipython.magics -> ipython.inspection.
+        from .magics import new_session_stats
+
+        self._session.stats.update(new_session_stats())
+        # The verified-saving baselines are part of the stats, not of the
+        # cache: a reset must drop them too or savings would be credited
+        # against measurements the reset claims to have forgotten.
+        self._session.measured_compute.clear()
+        # Same rule for the decorator baselines: a reset that keeps
+        # them would credit a post-reset hit as "verified" against a compute
+        # the reset claims to have forgotten.
+        self._session.measured_decorator_compute.clear()
+        # On disk too: a reset that kept them would credit a later hit
+        # against a measurement it claims to have forgotten.
+        self._baselines().clear()
 
     # ------------------------------------------------------------------
     # Provenance
