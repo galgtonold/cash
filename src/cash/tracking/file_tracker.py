@@ -1,11 +1,14 @@
 """File-read tracking for data file dependencies.
 
-Records which files each cached call or notebook statement reads. Python-level
-opens and directory listings arrive as audit events through
-:mod:`cash.tracking.io_watch`; readers that open files in C (pyarrow, polars,
+`FileAccessTracker` records which files each cached call or notebook statement
+reads. Python-level opens and directory listings reach it as audit events
+(`cash.tracking.read_events`); readers that open files in C (pyarrow, polars,
 sqlite3, some pandas readers), existence probes and ``Path.stat`` are wrapped
-while a tracker is open. File hashes are incorporated into cache keys so that
-changed data automatically invalidates dependent cached results.
+while a tracker is open (`cash.tracking.reader_patches`). Reads that are not
+the user's data are left out (`cash.tracking.read_classification`), and each
+read is also credited to the code that made it, for memos
+(`cash.tracking.read_credit`). File hashes are incorporated into cache keys so
+that changed data automatically invalidates dependent cached results.
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ from typing import Any, Optional
 from cash._clock import perf_counter as _perf_counter
 from cash._paths import is_remote_url, normalize_path
 from cash.tracking import io_watch
+from cash.tracking.file_dep_snapshot import file_content_hash, realpath_of_read_this_run
 from cash.tracking.read_classification import (
     RUNTIME_CACHE_SEGMENT,
     RUNTIME_CACHE_SUFFIXES,
@@ -32,14 +36,6 @@ from cash.tracking.read_credit import credit_read_to_stack
 from cash.tracking.read_events import subscribe_read_events
 from cash.tracking.reader_patches import install_patches, remove_patches
 from cash.tracking.tracker_context import active_tracker
-
-# A remote URL handed to a reader (``pd.read_parquet("s3://bucket/key")``)
-# reaches us as the raw first argument. ``os.path.realpath`` would mangle it into
-# a bogus local path, nothing would resolve, and ``snapshot_file_deps`` would
-# drop it — leaving the entry with *no* dependency, hitting forever even after
-# the object changed. URLs are routed to their own channel instead and tracked
-# by the store's own validator (ETag / version id / generation). ``file://`` is
-# excluded: it names a local path that can genuinely be stat'ed.
 
 __all__ = ["FileAccessTracker", "install_read_watch", "tracking_seconds"]
 
@@ -241,9 +237,6 @@ class FileAccessTracker:
             # This resolves symlinks and normalizes the path, making it
             # stable across os.chdir() calls. Resolved once per cell run
             # (``realpath_this_run``): a loop reads the same files again.
-            # Local: import cycle tracking.file_tracker -> tracking.file_dep_snapshot -> ... -> tracking.file_tracker.
-            from cash.tracking.file_dep_snapshot import realpath_of_read_this_run
-
             resolved, read_lstat = realpath_of_read_this_run(raw_path)
             abs_path = normalize_path(resolved)
         except (TypeError, ValueError, OSError) as e:
@@ -343,9 +336,6 @@ class FileAccessTracker:
 
     def _digest_now(self, abs_path: str, size: int) -> str | None:
         """The file's content hash as the body is about to read it."""
-        # Local: import cycle tracking.file_tracker -> tracking.file_dep_snapshot -> ... -> tracking.file_tracker.
-        from cash.tracking.file_dep_snapshot import file_content_hash
-
         t0 = _perf_counter()
         try:
             return file_content_hash(abs_path, size)
