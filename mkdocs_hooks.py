@@ -20,6 +20,12 @@ touch ``src`` attributes inside raw HTML, so the absolute paths survive into the
 built site.  ``on_post_page`` rewrites them at build time to a path relative to
 the page being rendered, so they resolve no matter what base path the site is
 mounted at -- and with no client-side flash.
+
+``on_page_markdown`` removes the ``<!-- docnum:NAME -->`` markers that
+``scripts/doc_numbers.py`` keeps around derived numbers. In prose they are
+invisible HTML comments, but inside inline code or a code block they render
+literally, so the site would show ``cash-lib<!-- docnum:version_pin -->~=...``.
+The value between the markers stays; only the markers go.
 """
 
 from __future__ import annotations
@@ -29,6 +35,14 @@ import re
 # Match the root-absolute badge src and split off the leading slash so we can
 # splice a page-relative prefix in front of the "_badges/..." remainder.
 _ABS_BADGE_SRC = re.compile(r'(<iframe\b[^>]*\bsrc=")/(_badges/[^"]+)(")')
+
+# The opening and closing markers of scripts/doc_numbers.py's MARKER.
+_DOCNUM_MARKER = re.compile(r"<!--\s*(?:docnum:[a-z0-9_]+|/docnum)\s*-->")
+
+
+def strip_docnum_markers(markdown: str) -> str:
+    """Remove ``docnum`` markers, keeping the value between them."""
+    return _DOCNUM_MARKER.sub("", markdown)
 
 
 def rewrite_badge_paths(html: str, page_url: str) -> str:
@@ -42,6 +56,11 @@ def rewrite_badge_paths(html: str, page_url: str) -> str:
     """
     prefix = "../" * page_url.count("/")
     return _ABS_BADGE_SRC.sub(lambda m: m.group(1) + prefix + m.group(2) + m.group(3), html)
+
+
+def on_page_markdown(markdown: str, *, page, config, files, **kwargs) -> str:  # noqa: ARG001
+    """mkdocs hook: drop doc-number markers before the page is rendered."""
+    return strip_docnum_markers(markdown)
 
 
 def on_post_page(output: str, *, page, config, **kwargs) -> str:  # noqa: ARG001
