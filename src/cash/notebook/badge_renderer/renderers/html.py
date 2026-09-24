@@ -316,16 +316,16 @@ def _rng_pill(row: StatementRow) -> str:
     Matches the notification-pill vocabulary — a terse uppercase tag, no emoji —
     so it reads as part of the badge rather than pasted on. Neutral grey for a
     seed or a seeded (reproducible) draw; the warn-red family for an unseeded
-    draw, whose cached value is a frozen replay. A native ``title`` carries the
-    detail on hover.
+    draw, which is not reproducible. A native ``title`` carries the detail on
+    hover.
     """
     if row.random_effect == "seed":
         return '<span class="c3-rng-pill" title="Sets the RNG seed">seed</span>'
     if row.random_effect == "draw" and row.random_unseeded:
         return (
-            '<span class="c3-rng-pill c3-rng-warn" title="Unseeded randomness — the '
-            "cached value is a frozen replay, not a fresh draw. Seed the RNG or "
-            'use @cash:no-cache to redraw.">unseeded</span>'
+            '<span class="c3-rng-pill c3-rng-warn" title="Unseeded randomness: not '
+            "reproducible. Seed the RNG, or put @cash:no-cache on its own line "
+            'above to redraw every run.">unseeded</span>'
         )
     if row.random_effect == "draw":
         return '<span class="c3-rng-pill" title="Random draw (seeded, reproducible)">random</span>'
@@ -458,9 +458,9 @@ def _rowtip_html(row: StatementRow, rp: _RenderPass) -> str:
         dl_parts.append("<dt>Random</dt><dd>sets the RNG seed</dd>")
     elif row.random_effect == "draw" and row.random_unseeded:
         dl_parts.append(
-            "<dt>Random</dt><dd>unseeded — the cached value is a frozen replay, "
-            "not a fresh draw. Seed the RNG for reproducibility, or use "
-            "<code>@cash:no-cache</code> to redraw every run.</dd>"
+            "<dt>Random</dt><dd>unseeded — not reproducible; a cached value is a "
+            "frozen replay. Seed the RNG for reproducibility, or put "
+            "<code>@cash:no-cache</code> on its own line above to redraw every run.</dd>"
         )
     elif row.random_effect == "draw":
         dl_parts.append("<dt>Random</dt><dd>random draw (seeded, reproducible)</dd>")
