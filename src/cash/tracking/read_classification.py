@@ -15,6 +15,7 @@ import stat
 import sys
 import threading
 import zoneinfo
+from collections.abc import Callable
 
 from cash._memo import SOURCE_FILES, LruMemo
 from cash.install_paths import installed_roots, interpreter_roots, norm_dir, normcase_path, site_roots
@@ -273,7 +274,8 @@ def incidental_read(path: str, own_package: str | None = None) -> str | None:
 _CASH_INTERNAL_SEGMENTS: tuple[str, ...] = ("/.cash/", "/_global_cash/")
 
 #: Cache directories that actually exist in this process, registered by the
-#: backends that own them.
+#: backends that own them, each with its owner's test for the files it writes
+#: there.
 #:
 #: The segment list above only recognises cash's storage when the directory is
 #: NAMED ``.cash`` or ``_global_cash``. Any other ``cache_dir`` -- a path from
@@ -284,18 +286,24 @@ _CASH_INTERNAL_SEGMENTS: tuple[str, ...] = ("/.cash/", "/_global_cash/")
 #: the moment a new entry was written in place, because ``O_CREAT`` makes the
 #: file briefly observable at zero length and the next check reports "size
 #: changed".
-_CASH_CACHE_DIRS: set[str] = set()
+_CASH_CACHE_DIRS: set[tuple[str, Callable[[str], bool]]] = set()
 _CASH_CACHE_DIRS_LOCK = threading.Lock()
 
 
-def register_cache_dir(path: str) -> None:
-    """Declare *path* as cash's own storage, whatever it is called."""
+def register_cache_dir(path: str, owns: Callable[[str], bool]) -> None:
+    """Declare *path* as cash's own storage, whatever it is called.
+
+    *owns* tells which files in it cash wrote, given a path relative to it
+    (the backends pass ``cache_dir.is_cash_file``). The owner passes it
+    because the directory layout is the storage layer's, which imports this
+    module.
+    """
     try:
         resolved = os.path.realpath(path)
     except OSError:
         resolved = os.path.abspath(path)
     with _CASH_CACHE_DIRS_LOCK:
-        _CASH_CACHE_DIRS.add(resolved.replace("\\", "/").rstrip("/") + "/")
+        _CASH_CACHE_DIRS.add((resolved.replace("\\", "/").rstrip("/") + "/", owns))
 
 
 def is_cash_internal(path: str) -> bool:
@@ -306,8 +314,9 @@ def is_cash_internal(path: str) -> bool:
     ``Cash(cache_dir=".")`` is enough to do it -- and swallowing a real
     dependency is far worse than the bug this guard exists to prevent. A
     missed dependency serves a stale value silently; an extra one only costs a
-    recompute. So the file must also be one cash writes there
-    (`cache_dir.is_cash_file`, the list ``cash clear`` uses too).
+    recompute. So the file must also be one cash writes there, as the
+    directory's owner decides (`cache_dir.is_cash_file`, the list ``cash
+    clear`` uses too).
     """
     p = str(path).replace("\\", "/")
     if any(seg in p for seg in _CASH_INTERNAL_SEGMENTS):
@@ -319,10 +328,4 @@ def is_cash_internal(path: str) -> bool:
         return False
     # The recorded path may be relative while the registered one is absolute.
     absolute = p if os.path.isabs(p) else os.path.abspath(p).replace("\\", "/")
-    inside = [absolute[len(d) :] for d in dirs if absolute.startswith(d)]
-    if not inside:
-        return False
-    # Imported here: cash.backends imports this module.
-    from cash.backends.cache_dir import is_cash_file
-
-    return any(is_cash_file(rel) for rel in inside)
+    return any(owns(absolute[len(d) :]) for d, owns in dirs if absolute.startswith(d))

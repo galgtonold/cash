@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from ._location import per_user_cache_root
-from .backends.cache_dir import ANALYTICS_DB_FILENAME
+from .backends.cache_dir import ANALYTICS_DB_FILENAME, is_cash_file
 from .tracking.read_classification import register_cache_dir
 
 logger = logging.getLogger(__name__)
@@ -97,7 +97,7 @@ class AnalyticsManager:
                 # cash's own file: the flush below can run from a finalizer in
                 # the middle of a user's statement, and its connect was
                 # recorded as a file that statement read.
-                register_cache_dir(str(Path(self.db_path).parent))
+                register_cache_dir(str(Path(self.db_path).parent), is_cash_file)
                 self._init_db()
         # Buffered events are written when the manager is collected or, on a
         # clean interpreter exit, at exit. A hard kill loses at most one

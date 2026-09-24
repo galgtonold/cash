@@ -155,7 +155,7 @@ names `COMPUTED` (the badge's EXECUTED) and `RESTORED` (CACHED).
 `%cash_provenance NAME` shows how a variable was computed: the code, its inputs
 and its history. See [Magic commands](../../magics.md).
 
-<!-- claim: cash/analytics.py:AnalyticsManager.__init__ @a038a9da -->
+<!-- claim: cash/analytics.py:AnalyticsManager.__init__ @162a2e71 -->
 Cash also records per-session hit and miss events in a small `analytics.db` in
 your user cache folder, which `cash.show_stats()` reads. Deleting it is always
 safe. `CASH_ANALYTICS=0` turns it off.

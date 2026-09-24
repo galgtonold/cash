@@ -27,7 +27,7 @@ from ..tracking.read_classification import register_cache_dir
 from ..tracking.tracker_context import untracked
 from ._base import CacheBackend, MetadataDict, ttl_expired
 from ._writes import PendingWrites
-from .cache_dir import CacheDirStamp, create_temp_file, warn_if_unwritable, write_all
+from .cache_dir import CacheDirStamp, create_temp_file, is_cash_file, warn_if_unwritable, write_all
 from .entry_format import ENTRY_SUFFIX, CorruptEntry, metadata_span, pack_entry, read_entry, update_metadata_in_place
 from .file_eviction import FileEvictor
 from .serialization import PickleSerializer, Serializer
@@ -74,7 +74,7 @@ def _register_writer(cache_dir: str, writes: PendingWrites) -> str:
     # Tell the file tracker this directory is cash's own storage, so its entry
     # files never become dependencies of the user's code whatever it is called.
     try:
-        register_cache_dir(cache_dir)
+        register_cache_dir(cache_dir, is_cash_file)
     except Exception:  # noqa: BLE001 - tracking is best-effort, storage is not
         logger.debug("Could not register %s with the file tracker", cache_dir, exc_info=True)
     with _WRITERS_LOCK:

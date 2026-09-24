@@ -30,6 +30,7 @@ this one through a cache that would not settle.
 
 import pytest
 
+from cash.backends.cache_dir import is_cash_file
 from cash.tracking.file_tracker import FileAccessTracker
 from cash.tracking.read_classification import register_cache_dir
 
@@ -106,7 +107,7 @@ class TestACacheDirectoryNotCalledDotCash:
 
         assert _tracked(tmp_path, entry), "fixture is wrong: this should be tracked before registering"
 
-        register_cache_dir(str(cache))
+        register_cache_dir(str(cache), is_cash_file)
         assert not _tracked(tmp_path, entry), "cash's own entry file is still a user-visible dependency"
 
     def test_user_data_beside_the_cache_is_still_tracked(self, tmp_path):
@@ -120,7 +121,7 @@ class TestACacheDirectoryNotCalledDotCash:
         """
         cache = tmp_path / "workspace"
         cache.mkdir()
-        register_cache_dir(str(cache))
+        register_cache_dir(str(cache), is_cash_file)
 
         data = cache / "data.csv"
         data.write_text("a,b\n1,2\n", encoding="utf-8")
