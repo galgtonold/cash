@@ -18,14 +18,20 @@ import json
 
 import pytest
 
+from cash.notebook import loop_split
 from cash.notebook.loop_split import (
     LoopSplitStore,
     get_store,
     is_split_half,
     loop_source_hash,
     split_nodes,
-    split_sources,
 )
+
+
+def split_sources(node: ast.For, k: int) -> tuple[str, str]:
+    """The halves as source, which is what both sides key."""
+    head, tail = split_nodes(node, k)
+    return ast.unparse(head), ast.unparse(tail)
 
 
 def _for(src: str) -> ast.For:
@@ -147,16 +153,13 @@ class TestLoopSplitStore:
         store.record("abc", 5)
         assert store.get("abc") == 5
 
-    def test_get_store_returns_one_shared_instance(self, tmp_path):
+    def test_get_store_returns_one_shared_instance(self, tmp_path, monkeypatch):
         """Load-bearing, not an optimisation: two instances diverge the moment
         a verdict is recorded, because each loads from disk only once. The
         runtime would then record a split the simulator never applies."""
-        from cash.notebook.loop_split import _reset_stores_for_tests
-
-        _reset_stores_for_tests()
+        monkeypatch.setattr(loop_split._STORES, "_stores", {})
         a = get_store(str(tmp_path))
         b = get_store(str(tmp_path))
         assert a is b
         a.record("abc", 5)
         assert b.get("abc") == 5, "a second lookup did not see a just-recorded verdict"
-        _reset_stores_for_tests()

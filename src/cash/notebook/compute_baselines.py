@@ -137,8 +137,3 @@ def get_store(cache_dir: str | None) -> ComputeBaselineStore:
 def store_for_backend(backend) -> ComputeBaselineStore | None:
     """Shared store for *backend*'s cache dir, or ``None`` if unresolvable."""
     return _STORES.for_backend(backend)
-
-
-def _reset_stores_for_tests() -> None:
-    """Drop cached stores. Tests only -- each tmp_path is a fresh session."""
-    _STORES.reset()

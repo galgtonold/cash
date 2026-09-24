@@ -31,13 +31,12 @@ from cash.notebook.upstream.checker import UpstreamChecker
 
 
 @pytest.fixture(autouse=True)
-def _reset_discovery_state():
+def _reset_discovery_state(monkeypatch):
     """Clear all module-level discovery caches + the once-per-session warn flag."""
     sd.invalidate_notebook_path_cache()
-    sd.reset_notebook_discovery_warning()
+    monkeypatch.setattr(sd, "_warned_notebook_not_found", False)
     yield
     sd.invalidate_notebook_path_cache()
-    sd.reset_notebook_discovery_warning()
 
 
 @pytest.fixture
@@ -259,7 +258,6 @@ def _advisories(fn) -> int:
 def test_a_pushed_snapshot_suppresses_the_disabled_advisory(monkeypatch):
     from cash.notebook import live_cells
 
-    sd.reset_notebook_discovery_warning()
     monkeypatch.setattr(
         live_cells,
         "_store",
@@ -278,7 +276,6 @@ def test_a_pushed_snapshot_suppresses_the_disabled_advisory(monkeypatch):
 
 
 def test_colab_suppresses_the_disabled_advisory(monkeypatch):
-    sd.reset_notebook_discovery_warning()
     monkeypatch.setattr(sd, "in_colab", lambda: True)
 
     assert _advisories(sd.warn_notebook_not_found_once) == 0, (
@@ -297,7 +294,6 @@ def test_suppression_does_not_burn_the_once_per_session_flag(monkeypatch):
     """
     from cash.notebook import live_cells
 
-    sd.reset_notebook_discovery_warning()
     monkeypatch.setattr(
         live_cells,
         "_store",
@@ -322,7 +318,6 @@ def test_no_live_reader_still_warns(monkeypatch):
     """The control arm: the advisory is right whenever it is true."""
     from cash.notebook import live_cells
 
-    sd.reset_notebook_discovery_warning()
     monkeypatch.setattr(live_cells, "_store", {"seq": 0, "cells": None})
     monkeypatch.setattr(sd, "in_colab", lambda: False)
 
@@ -333,7 +328,6 @@ def test_a_broken_live_reader_probe_keeps_the_advisory(monkeypatch):
     """A gate that cannot answer must not swallow the advisory, or a real
     papermill/CI session loses the one signal that its headline feature is off.
     """
-    sd.reset_notebook_discovery_warning()
     monkeypatch.setattr(sd, "in_colab", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
 
     assert _advisories(sd.warn_notebook_not_found_once) == 1

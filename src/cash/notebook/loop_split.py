@@ -103,15 +103,6 @@ def split_nodes(node: ast.For, k: int) -> tuple[ast.For, ast.For]:
     return _half(None, k), _half(k, None)
 
 
-def split_sources(node: ast.For, k: int) -> tuple[str, str]:
-    """:func:`split_nodes` unparsed -- what the simulator keys.
-
-    Routing both sides through one function is what makes them identical.
-    """
-    head, tail = split_nodes(node, k)
-    return ast.unparse(head), ast.unparse(tail)
-
-
 class LoopSplitStore(VersionedJsonStore[int]):
     """Persisted ``source_hash -> k`` verdicts, read by both sides.
 
@@ -173,8 +164,3 @@ def store_for_backend(backend) -> LoopSplitStore | None:
     which directory they are reading. ``None`` means "no loop is split".
     """
     return _STORES.for_backend(backend)
-
-
-def _reset_stores_for_tests() -> None:
-    """Drop cached stores. Tests only -- each tmp_path is a fresh session."""
-    _STORES.reset()

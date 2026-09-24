@@ -23,11 +23,14 @@ import pytest
 from cash.notebook import compute_baselines
 
 
+def _new_session(monkeypatch):
+    """Forget every store, as a new kernel starts without any."""
+    monkeypatch.setattr(compute_baselines._STORES, "_stores", {})
+
+
 @pytest.fixture(autouse=True)
-def _fresh_stores():
-    compute_baselines._reset_stores_for_tests()
-    yield
-    compute_baselines._reset_stores_for_tests()
+def _fresh_stores(monkeypatch):
+    _new_session(monkeypatch)
 
 
 def test_the_minimum_measurement_wins(tmp_path):
@@ -38,11 +41,11 @@ def test_the_minimum_measurement_wins(tmp_path):
     assert store.get("m = fit(x)") == pytest.approx(4.0)
 
 
-def test_a_measurement_outlives_the_kernel(tmp_path):
+def test_a_measurement_outlives_the_kernel(tmp_path, monkeypatch):
     compute_baselines.get_store(str(tmp_path)).record("m = fit(x)", 12.0)
     compute_baselines.get_store(str(tmp_path)).flush()
 
-    compute_baselines._reset_stores_for_tests()  # a new kernel
+    _new_session(monkeypatch)
     assert compute_baselines.get_store(str(tmp_path)).get("m = fit(x)") == pytest.approx(12.0)
 
 

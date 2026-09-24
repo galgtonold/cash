@@ -150,7 +150,3 @@ class StoreRegistry(Generic[S]):
         except Exception:  # noqa: BLE001 - every store here is an optimisation or a nicety
             logger.debug("could not resolve a store", exc_info=True)
             return None
-
-    def reset(self) -> None:
-        """Drop every store. Tests only -- each tmp_path is a fresh session."""
-        self._stores.clear()

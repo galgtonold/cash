@@ -168,12 +168,6 @@ def warn_notebook_not_found_once() -> None:
     )
 
 
-def reset_notebook_discovery_warning() -> None:
-    """Re-arm the once-per-session "notebook not found" advisory (tests)."""
-    global _warned_notebook_not_found
-    _warned_notebook_not_found = False
-
-
 def invalidate_notebook_path_cache() -> None:
     """
     Invalidate the cached notebook path so the next call to

@@ -225,11 +225,6 @@ class EffectivenessLedger:
             )
         return out
 
-    def reset(self) -> None:
-        """Drop all accounting. For tests and ``cash.reset_session()``."""
-        self._ledgers.clear()
-        self._culprits.clear()
-
 
 def _message(
     func_name: str,

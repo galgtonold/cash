@@ -29,17 +29,16 @@ from tests.conftest import MockShell
 
 
 @pytest.fixture
-def kernel(tmp_path):
+def kernel(tmp_path, monkeypatch):
     """A fresh kernel against a cache directory that outlives it."""
-    compute_baselines._reset_stores_for_tests()
+    monkeypatch.setattr(compute_baselines._STORES, "_stores", {})
 
     def _start():
         # Each kernel has its own shell; the cache directory is what they share.
         cash = Cash(backend=FileBackend(cache_dir=str(tmp_path)), register_magic=False)
         return CashMagics(MockShell(), cash)
 
-    yield _start
-    compute_baselines._reset_stores_for_tests()
+    return _start
 
 
 def _stats_json(magics, capsys) -> dict:
