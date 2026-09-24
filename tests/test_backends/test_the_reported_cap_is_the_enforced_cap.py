@@ -175,8 +175,7 @@ def test_cash_info_prints_the_cap_the_backend_would_enforce(volume, capsys, monk
     from types import SimpleNamespace
 
     from cash import __main__ as cli
-    from cash.backends.adaptive_caps import human_bytes
-    from cash.config import get_config
+    from cash.config import get_config, human_bytes
 
     cache, state = volume
     state["own"] = int(21.19 * GIB)

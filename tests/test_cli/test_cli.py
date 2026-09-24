@@ -16,8 +16,8 @@ from cash.__main__ import (
     cmd_version,
     main,
 )
-from cash.backends.adaptive_caps import human_bytes
 from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry
+from cash.config import human_bytes
 
 
 def _autoload_on(*, mode="active", profile="default", force=False):

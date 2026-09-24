@@ -16,10 +16,11 @@ from collections import deque
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from ..config import human_bytes
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning
 from ._base import gdsf_value
-from .adaptive_caps import adaptive_disk_cap_for, free_bytes_on_volume, human_bytes
+from .adaptive_caps import adaptive_disk_cap_for, free_bytes_on_volume
 from .cache_dir import entry_totals
 from .entry_format import ENTRY_SUFFIX
 from .rank_index import RankIndex

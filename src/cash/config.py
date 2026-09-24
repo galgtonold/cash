@@ -395,6 +395,20 @@ def parse_size(raw: str) -> int:
     return int(float(number) * _SIZE_UNITS[unit])
 
 
+def human_bytes(n: int | None) -> str:
+    """Format a byte count with a sensible unit (e.g. ``7.8 KiB``, ``8.0 GiB``).
+
+    Used in the cap warnings so a message never reads ``~0 MiB`` for a small
+    cap or an unwieldy raw byte count for a large one.
+    """
+    size = float(n or 0)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if size < 1024 or unit == "TiB":
+            return f"{int(size)} B" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} TiB"  # unreachable; keeps type-checkers happy
+
+
 def format_size(n: int) -> str:
     """*n* bytes the way `parse_size` reads it back: ``2000000000`` -> ``"2 GB"``.
 
@@ -406,9 +420,6 @@ def format_size(n: int) -> str:
         unit = _SIZE_UNITS[name.lower()]
         if n >= unit and (n * 10) % unit == 0:
             return f"{n / unit:g} {name}"
-    # Local: import cycle config -> backends -> backends.file_backend -> backends._writes -> config.
-    from .backends.adaptive_caps import human_bytes
-
     return human_bytes(n)
 
 

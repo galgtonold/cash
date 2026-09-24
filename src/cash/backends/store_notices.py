@@ -8,9 +8,9 @@ one notice for everything refused meanwhile -- a notebook holds it for a cell.
 
 from __future__ import annotations
 
+from ..config import human_bytes
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning
-from .adaptive_caps import human_bytes
 from .value_policy import WORTH_CEILING_BYTES_PER_SECOND
 
 __all__ = ["StoreNotices"]

@@ -36,22 +36,7 @@ __all__ = [
     "resolve_disk_cap",
     "adaptive_disk_cap_for",
     "resolve_ram_cap",
-    "human_bytes",
 ]
-
-
-def human_bytes(n: int | None) -> str:
-    """Format a byte count with a sensible unit (e.g. ``7.8 KiB``, ``8.0 GiB``).
-
-    Used in the cap warnings so a message never reads ``~0 MiB`` for a small
-    cap or an unwieldy raw byte count for a large one.
-    """
-    size = float(n or 0)
-    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
-        if size < 1024 or unit == "TiB":
-            return f"{int(size)} B" if unit == "B" else f"{size:.1f} {unit}"
-        size /= 1024
-    return f"{size:.1f} TiB"  # unreachable; keeps type-checkers happy
 
 
 _MIB = 1024**2

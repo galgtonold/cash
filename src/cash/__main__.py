@@ -16,7 +16,7 @@ from pathlib import Path
 from cash import __version__
 from cash._location import per_user_cache_root
 from cash.backends._base import effective_ttl
-from cash.backends.adaptive_caps import adaptive_disk_cap_for, human_bytes, resolve_ram_cap
+from cash.backends.adaptive_caps import adaptive_disk_cap_for, resolve_ram_cap
 from cash.backends.cache_dir import DB_FILENAME, KEYS_DIRNAME, VERSION_FILENAME, entry_totals, is_cash_file
 from cash.backends.entry_format import ENTRY_SUFFIX
 from cash.backends.file_backend import FileBackend, StoredEntry
@@ -29,6 +29,7 @@ from cash.config import (
     config_provenance,
     format_size,
     get_config,
+    human_bytes,
 )
 
 logger = logging.getLogger(__name__)
