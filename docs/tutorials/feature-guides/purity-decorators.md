@@ -10,7 +10,7 @@ them, and the footguns that bite people in practice.
 !!! note "Which marker do you need?"
     They act on different mechanisms, and that decides which one is useful to you:
 
-<!-- claim: cash/purity_analyzer.py:PurityAnalyzer._analyze_uncached @4aae266b -->
+<!-- claim: cash/purity_analyzer.py:PurityAnalyzer._analyze_uncached @8dc957f9 -->
 `@cash.pure` and `@cash.stateful` change what cash reports, not what it keys. A
 marked helper's code is part of the key of every cached function that calls it,
 as an unmarked helper's is, so editing it recomputes them.
@@ -24,7 +24,7 @@ To accept one side effect in one place, you don't need a marker: put
 
 ## Why this exists
 
-<!-- claim: cash/purity.py:pure @f53a99f5, cash/purity_analyzer.py:PurityAnalyzer.analyze @f76c48ff -->
+<!-- claim: cash/purity.py:pure @f53a99f5, cash/purity_analyzer.py:PurityAnalyzer.analyze @7dc29215 -->
 Mark a helper `@cash.pure` when its result depends only on its arguments and it
 has no effect you care about: no writes, no network, no in-place change to its
 arguments. Cash then stops reporting it:
