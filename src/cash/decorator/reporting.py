@@ -13,8 +13,8 @@ from collections import deque
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from .._active import EXPLAINING as _EXPLAINING
 from .._clock import perf_counter as _perf_counter
-from ..dependency_state import EXPLAINING as _EXPLAINING
 from ..diagnostics import format_diagnostic, warn_diagnostic, warn_diagnostic_message
 from ..exceptions import CashCacheIneffectiveWarning
 from .cached_function import WARNINGS_MAX

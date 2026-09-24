@@ -12,11 +12,11 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from .._active import EXPLAINING as _EXPLAINING
 from .._memo import STATE_LEDGERS, LruMemo
 from ..backends import CacheMetadata
 from ..backends._base import ttl_expired
 from ..data_source import DataSource
-from ..dependency_state import EXPLAINING as _EXPLAINING
 from ..tracking.file_dep_snapshot import dep_is_fresh, dep_path_for_this_process
 from .arg_hashing import unhashable_arg_fix
 from .cached_function import CachedFunction

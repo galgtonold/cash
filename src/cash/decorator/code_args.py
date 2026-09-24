@@ -9,8 +9,8 @@ import types
 from typing import TYPE_CHECKING, Any
 
 from .. import _plain_data
+from .._active import EXPLAINING as _EXPLAINING
 from .._memo import CODE_OBJECTS, LruMemo
-from ..dependency_state import EXPLAINING as _EXPLAINING
 from ..diagnostics import log_diagnostic, warn_diagnostic
 from ..exceptions import CashImpurityWarning
 from ..purity_analyzer import ISSUE_UNTRACKABLE_DEP, get_analyzer

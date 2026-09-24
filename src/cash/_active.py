@@ -1,8 +1,10 @@
-"""The default ``Cash`` instance, and the config of the code running now.
+"""The default ``Cash`` instance, and the config and mode of the code
+running now.
 
 Modules below ``core`` need these answers (a file snapshot needs the size
-above which it samples a file, a remote source its revalidation window), and
-they ask here rather than importing the ``cash`` package, which imports them.
+above which it samples a file, a remote source its revalidation window, a
+data source whether a warning may fire), and they ask here rather than
+importing the ``cash`` package or ``core``, which import them.
 """
 
 from __future__ import annotations
@@ -16,12 +18,18 @@ if TYPE_CHECKING:
     from cash.config import CashConfig
     from cash.core import Cash
 
-__all__ = ["ACTIVE_CONFIG", "active_config", "default_cash", "set_default_cash"]
+__all__ = ["ACTIVE_CONFIG", "EXPLAINING", "active_config", "default_cash", "set_default_cash"]
 
 #: The config of the `Cash` instance whose call is running, set by its
 #: wrapper, so the settings of a `Cash(...)` of your own are the ones its
 #: calls follow, not the default instance's.
 ACTIVE_CONFIG: contextvars.ContextVar[CashConfig | None] = contextvars.ContextVar("cash_active_config", default=None)
+
+#: Set while ``explain()`` builds a key: the same steps a real call takes, with
+#: every warning they would give held back, because inspecting a call must not
+#: warn. ``Notices.warn_once``, the carrier warnings and ``state_token_of`` check
+#: it.
+EXPLAINING: contextvars.ContextVar[bool] = contextvars.ContextVar("_cash_explaining", default=False)
 
 _default: Cash | None = None
 

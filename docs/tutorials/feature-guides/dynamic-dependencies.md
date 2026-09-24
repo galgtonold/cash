@@ -59,7 +59,7 @@ are pooled. The order of the sources does not matter.
 `state_token()` must return a value that **changes when the data changes**: a
 version, an ETag, a row count with a last-modified time, a digest.
 
-<!-- claim: cash/data_source.py:state_token_of @01fb9637 -->
+<!-- claim: cash/data_source.py:state_token_of @914de552 -->
 - **Return a value, not a `bool`.** A flag like "is it fresh?" has two states
   and cannot tell one version from the next. Cash warns if it sees a `bool`.
 - **Keep it cheap.** The resolver and the token run on every lookup, hits

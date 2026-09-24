@@ -6,6 +6,7 @@ import os
 from abc import ABC, abstractmethod
 from typing import Any
 
+from ._active import EXPLAINING
 from .diagnostics import warn_diagnostic
 from .exceptions import CashCacheIneffectiveWarning
 from .tracking.file_dep_snapshot import file_content_hash
@@ -41,9 +42,6 @@ class DataSource(ABC):
 def state_token_of(source: DataSource) -> str:
     """*source*'s token as it goes into the key, warning once per source type
     when the token is a ``bool``, which cannot track a change."""
-    # Local: import cycle data_source -> dependency_state -> data_source.
-    from .dependency_state import EXPLAINING
-
     token = source.state_token()
     if isinstance(token, bool) and not EXPLAINING.get():
         name = type(source).__qualname__

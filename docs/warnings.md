@@ -629,7 +629,7 @@ line.
 
 *Decorator.*
 
-<!-- claim: cash/data_source.py:state_token_of @01fb9637 -->
+<!-- claim: cash/data_source.py:state_token_of @914de552 -->
 **What happened.** Your `DataSource.state_token()` returned `True` or
 `False`.
 
