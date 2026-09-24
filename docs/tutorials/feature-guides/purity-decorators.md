@@ -16,7 +16,7 @@ marked helper's code is part of the key of every cached function that calls it,
 as an unmarked helper's is, so editing it recomputes them.
 
 To accept one side effect in one place, you don't need a marker: put
-`# @cash:assume-safe` on the line (see [Side effects](../../decorator.md#side-effects)).
+`# @cash:assume-safe` on the line (see [Side effects](../../decorator.md#caching-code-with-side-effects)).
 
     `@pure` does **not** turn caching on for a notebook statement — statements
     that call ordinary helpers already cache. Use `@stateful` when you need to
