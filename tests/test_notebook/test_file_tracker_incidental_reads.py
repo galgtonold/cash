@@ -22,7 +22,7 @@ import textwrap
 
 import pytest
 
-from cash.tracking import file_tracker
+from cash.tracking import read_classification
 from cash.tracking.file_tracker import FileAccessTracker
 
 
@@ -69,10 +69,8 @@ def fake_site(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     root = os.path.normcase(str(site)).replace("\\", "/").rstrip("/") + "/"
-    # raising=False: the fails-first control runs this against a tracker
-    # that has neither function.
-    monkeypatch.setattr(file_tracker, "site_roots", lambda: (root,), raising=False)
-    monkeypatch.setattr(file_tracker, "installed_roots", lambda: (root,), raising=False)
+    monkeypatch.setattr(read_classification, "site_roots", lambda: (root,))
+    monkeypatch.setattr(read_classification, "installed_roots", lambda: (root,))
     monkeypatch.syspath_prepend(str(site))
     for name in ("fakelib", "fakelib_importer"):
         sys.modules.pop(name, None)

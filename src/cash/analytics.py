@@ -23,7 +23,7 @@ from typing import Any
 
 from ._location import per_user_cache_root
 from .backends.cache_dir import ANALYTICS_DB_FILENAME
-from .tracking.file_tracker import register_cache_dir
+from .tracking.read_classification import register_cache_dir
 
 logger = logging.getLogger(__name__)
 

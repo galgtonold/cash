@@ -23,7 +23,7 @@ from cash.exceptions import CacheBackendError
 
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheStoreFailedWarning
-from ..tracking.file_tracker import register_cache_dir
+from ..tracking.read_classification import register_cache_dir
 from ..tracking.tracker_context import untracked
 from ._base import CacheBackend, MetadataDict, ttl_expired
 from ._writes import PendingWrites

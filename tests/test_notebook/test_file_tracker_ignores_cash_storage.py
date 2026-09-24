@@ -30,7 +30,8 @@ this one through a cache that would not settle.
 
 import pytest
 
-from cash.tracking.file_tracker import FileAccessTracker, register_cache_dir
+from cash.tracking.file_tracker import FileAccessTracker
+from cash.tracking.read_classification import register_cache_dir
 
 
 @pytest.fixture
