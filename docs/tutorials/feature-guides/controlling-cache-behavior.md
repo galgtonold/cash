@@ -115,7 +115,10 @@ Or, if non-reproducibility is exactly what you want (you're exploring, you'll re
 noise = np.random.rand(1000)
 ```
 
-The annotation flips `suppress_warning=True` in `check_and_warn_randomness`; **the cell still caches either way.** `allow-random` is advisory — it changes what Cash *says*, never what it *stores*. Unseeded randomness has never blocked caching, and adding the annotation doesn't opt you out of it; if you want the statement to re-run every time, use `@cash:no-cache`.
+<!-- claim: cash/purity.py:stateful @f86f4e92, cash/analysis/cacheability_decision.py:decide_cacheability @420335a6 -->
+Without the marker, a slow `announce` call is cached and a re-run skips the
+message: cash does not look inside `announce` for a chat client. Three things to
+know:
 
 The warning fires once per statement per session, so a re-run of an unchanged cell won't nag you and a loop won't warn per iteration.
 

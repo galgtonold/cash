@@ -10,11 +10,13 @@ them, and the footguns that bite people in practice.
 !!! note "Which marker do you need?"
     They act on different mechanisms, and that decides which one is useful to you:
 
-    | You want to… | Use | Applies to |
-    |---|---|---|
-    | Stop a notebook statement from caching | **`@stateful`** | statements (`%cash_on`) **and** the decorator's analyzer |
-    | Vouch for a function so cash stops warning about it | **`@pure`** | the `@cash.cache` analyzer |
-    | Silence or harden a decorated function wholesale | `assume_safe=` / `strict=` | `@cash.cache` — see the [decorator guide](../../decorator.md#strict-and-assume_safe-purity-gates) |
+<!-- claim: cash/purity_analyzer.py:PurityAnalyzer._analyze_uncached @4aae266b -->
+`@cash.pure` and `@cash.stateful` change what cash reports, not what it keys. A
+marked helper's code is part of the key of every cached function that calls it,
+as an unmarked helper's is, so editing it recomputes them.
+
+To accept one side effect in one place, you don't need a marker: put
+`# @cash:assume-safe` on the line (see [Side effects](../../decorator.md#side-effects)).
 
     `@pure` does **not** turn caching on for a notebook statement — statements
     that call ordinary helpers already cache. Use `@stateful` when you need to
@@ -22,11 +24,10 @@ them, and the footguns that bite people in practice.
 
 ## Why this exists
 
-Cash inspects your code with an AST visitor before deciding what to cache. It
-flags mutations to top-level variables (`data.append(...)`), attribute writes,
-file I/O, network calls, and a long list of "looks side-effectful" patterns —
-because replaying a cached return value when the real call would have written to
-disk or posted to an API would be a serious bug.
+<!-- claim: cash/purity.py:pure @f53a99f5, cash/purity_analyzer.py:PurityAnalyzer.analyze @f76c48ff -->
+Mark a helper `@cash.pure` when its result depends only on its arguments and it
+has no effect you care about: no writes, no network, no in-place change to its
+arguments. Cash then stops reporting it:
 
 But cash can only see what's in front of it. A call into a function it can't
 introspect is a judgement call, and it can be wrong in either direction:
@@ -76,11 +77,14 @@ def featurize(df):
 result = featurize(my_df)      # re-run the cell: the badge reads CACHED
 ```
 
-<iframe class="cash-badge" src="/_badges/purity_restored.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+!!! warning "Cash does not check a `@pure` helper"
+    Cash takes the marker at its word: it reports nothing about the helper or
+    the functions it calls, even an effect it would otherwise warn about. For a
+    helper in your own project you rarely need `@pure`: cash already reads it
+    and reports only real findings.
 
-Now mark a helper `@stateful` — the side effect is the point of calling it, so a
-replayed return value would be wrong. Cash stops caching every statement that
-calls it, and the badge names the reason:
+The marker earns its keep on **library** functions that cash reports but you
+have checked. Call it on the function; it marks the function itself:
 
 <!-- test:skip reason="illustrative — posts to a fake endpoint; the @stateful verdict is the point, not the call" -->
 ```python { .nb-cell }
@@ -99,98 +103,13 @@ That is the whole notebook-statement story: **`@stateful` is the lever; nothing
 else is required.** `@pure` earns its keep on the decorator — see
 [Purity on the decorator](#purity-on-the-decorator-cashcache).
 
-## `@pure` — "trust me, this is safe"
-
-!!! note "`@pure` does not make a notebook statement cacheable"
-    A statement calling an unmarked helper already caches — there is no
-    "refused until you vouch for it" state to rescue. `@pure` is a promise to
-    the **purity analyzer**, and the analyzer is what
-    [`@cash.cache`](#purity-on-the-decorator-cashcache) consults: marking a
-    callee `@pure` silences the `CashImpurityWarning` that would otherwise fire
-    for it. That applies to decorated functions written in a notebook cell too —
-    it's the decorator path that matters, not the file it lives in. In the
-    statement path (`%cash_on`) the marker that stops caching is
-    [`@stateful`](#stateful-this-should-never-cache); `@pure` changes one
-    verdict there — a helper that writes a file caches again when you mark
-    it pure, because you have said its write does not matter.
-
-### When to use it
-
-Use `@pure` when *all* of the following hold for the function:
-
-1. The return value is a deterministic function of the arguments. Same inputs in, same output out.
-2. There are no side effects you care about — no file writes, no network calls, no DB writes, no logging that downstream code depends on, no in-place mutation of arguments.
-3. The function doesn't depend on global state (current time, environment variables, RNG without a fixed seed, module-level mutable objects).
-
-Concrete examples:
-
-- Pure math: `def euclidean(p, q): return math.sqrt(sum((a-b)**2 for a, b in zip(p, q)))`
-- Deterministic transformations on immutable inputs: pandas/polars dataframe transformations that return new frames.
-- Feature engineering helpers that take inputs and return derived columns.
-- Parsers, formatters, validators that don't touch the outside world.
-
-### Example
-
-```python
-import polars as pl
-from cash import pure
-
-@pure
-def featurize(df: pl.DataFrame) -> pl.DataFrame:
-    return df.with_columns(
-        score=pl.col("clicks") * pl.col("dwell_ms") / 1000,
-        bucket=pl.col("score").qcut(10),
-    )
-
-@pure
-def euclidean(p, q):
-    return sum((a - b) ** 2 for a, b in zip(p, q)) ** 0.5
-```
-
-### What it actually does
-
-<!-- claim: cash/purity.py:pure @b3cd5bc3, cash/notebook/statement/processor.py:StatementProcessor._check_callable_stateful @0f704647 -->
-`@pure` is a one-line marker. It sets `_cash_pure = True` on both the original function and the wrapper.
-
-When the statement processor evaluates a cell, it looks at every bare-name call (`foo(x)`, not `obj.foo(x)`). For each name, it consults `_check_callable_stateful`, which:
-
-1. Returns `False` (not stateful) if the name is a known-pure builtin like `len` or `sum`.
-2. Returns `True` if the resolved object has `_cash_stateful = True`.
-3. Otherwise returns `False`.
-
-So **only step 2 changes the outcome**, and `@pure` does not take part in this
-check at all: it is not a switch that turns caching on. The one place it
-matters in the statement path is a helper that writes a file, which
-`decide_cacheability` refuses after this check unless the helper is marked
-`@pure`. Its load-bearing use is on the decorator, below.
-
-### When NOT to use it
-
-Do *not* apply `@pure` to a function that:
-
-- Reads or writes files. `open(...)`, `pd.read_csv(...)`, `df.to_parquet(...)`. Even reads can be problematic if the file on disk changes between runs.
-- Calls the network. `requests.get`, gRPC, message queues — all forbidden.
-- Reads the wall clock or RNG state without a seed. `datetime.utcnow()`, `random.random()`, `np.random.randn()` without `seed`.
-- Reads or writes module globals, environment variables, or any shared mutable state.
-- Mutates its arguments in place. `lst.append(...)`, `df.sort_values(..., inplace=True)`. The first call will cache the side effect, future calls will skip it, and your data won't get sorted.
-- Calls another function you don't trust to be pure.
-
-If you're unsure, leave it undecorated and let Cash's heuristic decide.
-
-## `@stateful` — "this should never cache"
-
-### When to use it
-
-`@stateful` is the opposite assertion: even if Cash *could* cache the cell, you'd rather it didn't. Use it for any function whose *side effect* is the whole point of calling it, not just the return value.
-
-Concrete examples:
-
-- Functions that send notifications, hit dashboards, post to Slack.
-- Functions that write to a production database or a shared store.
-- Functions that train a model and update an external artifact registry.
-- Functions whose return value depends on the current wall clock, network state, or a shared queue.
-
-### Example
+<!-- claim: cash/purity.py:stateful @f86f4e92 -->
+Mark a helper `@cash.stateful` when calling it does something a cache hit must
+not skip silently: it posts a notification, writes to a database, updates a
+model registry. A cached function that calls it warns
+[`IMPURE-SIDE-EFFECTS`](../../warnings.md#impure-side-effects) on its first
+call, naming the helper. It still caches; `strict=True` makes the finding an
+error:
 
 ```python
 import requests

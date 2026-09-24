@@ -28,6 +28,13 @@ your function. They wrap the function and set `_cash_pure` /
 `_cash_stateful` on the returned object so the analyzer trusts your
 declaration.
 
+```python
+import cash
+
+cash.stateful(pd.DataFrame.to_sql)  # pd is pandas
+```
+
+<!-- claim: cash/purity.py:pure @f53a99f5, cash/purity.py:stateful @f86f4e92 -->
 ::: cash.pure
 
 ::: cash.stateful

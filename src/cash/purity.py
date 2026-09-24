@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import functools
 from collections.abc import Callable
 from typing import Any, TypeVar
 
@@ -25,20 +24,17 @@ _STATEFUL_ATTR = "_cash_stateful"
 def pure(func: F) -> F:
     """Mark a function as pure (no side effects) for the purity analyzer.
 
-    This is a promise to the analyzer, not a caching switch. Its load-bearing
-    effect is on the ``@cash.cache`` decorator: a callee marked pure is trusted,
-    so the ``CashImpurityWarning`` that would otherwise fire for it is
-    suppressed (see :mod:`cash.purity_analyzer`). In the notebook *statement*
-    path it changes one verdict: a call to a helper that writes a file (a
-    chart, an export) runs every time, as the write itself would, unless the
-    helper is marked pure. Otherwise an unmarked helper's statements already
-    cache. Use :func:`stateful` when you need to stop a statement from caching.
+    With ``@cash.cache``, cash trusts it: a cached function that calls it
+    is not warned about it. Its code is still part of that function's key,
+    so editing it recomputes the function, as editing any helper does. In a
+    notebook, a statement that calls a helper that writes a file caches only
+    when the helper is marked pure. It is a promise, not a check.
 
     Args:
         func: The function to mark as pure.
 
     Returns:
-        The same function with a ``_cash_pure`` attribute set to True.
+        ``func`` itself, marked.
 
     Example::
 
@@ -47,27 +43,23 @@ def pure(func: F) -> F:
             return x + y
     """
     setattr(func, _PURE_ATTR, True)
-
-    @functools.wraps(func)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        return func(*args, **kwargs)
-
-    setattr(wrapper, _PURE_ATTR, True)
-    return wrapper  # type: ignore[return-value]  # wrapper preserves F's signature via @wraps
+    return func
 
 
 def stateful(func: F) -> F:
     """Mark a function as stateful (has side effects).
 
-    Stateful functions should never be cached because their return value
-    alone does not capture their full effect. The notebook caching system
-    will skip caching for statements that call stateful functions.
+    With ``@cash.cache``, the function (or a cached function that calls it)
+    is reported with `CashImpurityWarning`, and with ``strict=True`` it is
+    refused. Its code is part of a caller's key, as any helper's is. In a
+    notebook, a statement that calls it is never cached, so it runs every
+    time.
 
     Args:
         func: The function to mark as stateful.
 
     Returns:
-        The same function with a ``_cash_stateful`` attribute set to True.
+        ``func`` itself, marked.
 
     Example::
 
@@ -77,13 +69,7 @@ def stateful(func: F) -> F:
             return model.score(data)
     """
     setattr(func, _STATEFUL_ATTR, True)
-
-    @functools.wraps(func)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        return func(*args, **kwargs)
-
-    setattr(wrapper, _STATEFUL_ATTR, True)
-    return wrapper  # type: ignore[return-value]  # wrapper preserves F's signature via @wraps
+    return func
 
 
 def is_pure(func: Any) -> bool:

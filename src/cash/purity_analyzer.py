@@ -1625,26 +1625,11 @@ class PurityAnalyzer:
     def analyze(self, func: Callable[..., Any]) -> PurityReport:
         """Return a :class:`PurityReport` for *func*.
 
-        Idempotent and cached by source hash. Explicit ``@pure``
-        annotation short-circuits to an empty report; ``@stateful``
-        short-circuits to a report flagging the function itself.
+        Idempotent and cached by source hash. A function marked ``@pure`` or
+        ``@stateful`` is walked for the cache key like any other, but its body
+        is not audited: ``@pure`` reports nothing, ``@stateful`` reports the
+        function itself.
         """
-        # Explicit annotations short-circuit (the user has spoken).
-        if is_pure(func):
-            return PurityReport()
-        if is_stateful(func):
-            qualname = _qualname_of(func)
-            return PurityReport(
-                issues=(
-                    PurityIssue(
-                        kind=ISSUE_IMPURE_CALL,
-                        description="explicitly marked @stateful",
-                        where=qualname,
-                        line=0,
-                    ),
-                ),
-            )
-
         source_hash = _try_source_hash(func)
         if source_hash is not None:
             # Keyed by the namespace the names resolve in as well as the text:
@@ -1662,6 +1647,19 @@ class PurityAnalyzer:
                 return cached
 
         report = self._analyze_uncached(func)
+        if is_stateful(func):
+            # The user has spoken: one finding for the function itself.
+            report = dataclasses.replace(
+                report,
+                issues=(
+                    PurityIssue(
+                        kind=ISSUE_IMPURE_CALL,
+                        description="explicitly marked @stateful",
+                        where=_qualname_of(func),
+                        line=0,
+                    ),
+                ),
+            )
 
         if source_hash is not None:
             with self._cache_lock:
@@ -1741,11 +1739,10 @@ class PurityAnalyzer:
                 return
             if getattr(target, "_cash_cached", False):
                 return
-            if is_pure(target) or is_stateful(target):
-                return
             if not _is_user_code(target, root_module):
                 return
-            stack.append((target, depth + 1, True))
+            # ``reported`` is the entry being walked when this runs.
+            stack.append((target, depth + 1, True, reported))
 
         def _queue_annotation_refs(obj: Any, depth: int) -> None:
             """Queue, hash-only, the user classes and functions *obj*'s
@@ -1764,7 +1761,13 @@ class PurityAnalyzer:
                 _queue_hash_only(_resolve_in_class_namespaces(cls, called), cls, depth)
             _queue_annotation_refs(cls, depth)
 
-        stack: list[tuple[Callable[..., Any], int, bool]] = [(root_func, 0, False)]
+        # Each entry is (callable, depth, hash_only, reported). Every entry is
+        # walked for the cache key. ``reported`` is False below a callable marked
+        # ``@pure`` or ``@stateful``: the marker settles what it and everything
+        # it calls may do, so their findings are not reported -- but their code
+        # still decides the result, so it is keyed like any other helper's.
+        root_reported = not (is_pure(root_func) or is_stateful(root_func))
+        stack: list[tuple[Callable[..., Any], int, bool, bool]] = [(root_func, 0, False, root_reported)]
         if (
             isinstance(root_func, types.FunctionType)
             and hasattr(root_func, "__wrapped__")
@@ -1773,27 +1776,42 @@ class PurityAnalyzer:
             # `@cash.cache` over a LIBRARY decorator (`@retry(...)`,
             # `@torch.no_grad()`): the wrapper's own body is someone else's
             # code, so start from the user functions it runs instead.
-            starts = [(layer, 0, False) for layer in callable_layers(root_func) if own_code_is_user(layer, root_module)]
+            starts = [
+                (layer, 0, False, root_reported)
+                for layer in callable_layers(root_func)
+                if own_code_is_user(layer, root_module)
+            ]
             if starts:
                 stack = starts
-        visited_ids: set[int] = set()
+        # id -> whether that walk reported findings, and the name it took.
+        visited_ids: dict[int, bool] = {}
+        walked_names: dict[int, str] = {}
         while stack:
-            func, depth, hash_only = stack.pop()
-            if id(func) in visited_ids:
+            func, depth, hash_only, reported = stack.pop()
+            reported = reported and not (is_pure(func) or is_stateful(func))
+            walked_reported = visited_ids.get(id(func))
+            if walked_reported is not None and (walked_reported or not reported):
                 continue
-            visited_ids.add(id(func))
-            qualname = _qualname_of(func)
-            # Visited by OBJECT: a library wrapper can copy the name of the
-            # function it wraps (`toolz.curry`, `np.vectorize`), and visiting
-            # by name walked only whichever of the two came first. A second
-            # object under a name already taken gets a numbered one, in walk
-            # order, which is the same in every process.
-            if qualname in visited:
-                n = 2
-                while f"{qualname}#{n}" in visited:
-                    n += 1
-                qualname = f"{qualname}#{n}"
-            visited.add(qualname)
+            visited_ids[id(func)] = reported
+            if walked_reported is not None:
+                # Walked below a marker first, reached now from an unmarked
+                # caller too: walk it again so its findings are reported. Its
+                # key part is the same, under the same name.
+                qualname = walked_names[id(func)]
+            else:
+                qualname = _qualname_of(func)
+                # Visited by OBJECT: a library wrapper can copy the name of the
+                # function it wraps (`toolz.curry`, `np.vectorize`), and visiting
+                # by name walked only whichever of the two came first. A second
+                # object under a name already taken gets a numbered one, in walk
+                # order, which is the same in every process.
+                if qualname in visited:
+                    n = 2
+                    while f"{qualname}#{n}" in visited:
+                        n += 1
+                    qualname = f"{qualname}#{n}"
+                visited.add(qualname)
+                walked_names[id(func)] = qualname
 
             # Read source. Failure -> opaque leaf for PURITY: we cannot see
             # what it does, so we decline to judge it.
@@ -1811,7 +1829,8 @@ class PurityAnalyzer:
             try:
                 src = own_source(func)
             except SOURCE_RETRIEVAL_ERRORS:
-                opaque.append(qualname)
+                if reported:
+                    opaque.append(qualname)
                 helper_hashes[qualname] = compiled_identity(func)
                 _record_resolution_path(func, qualname)
                 continue
@@ -1834,7 +1853,8 @@ class PurityAnalyzer:
             try:
                 tree = ast.parse(src)
             except SyntaxError:
-                opaque.append(qualname)
+                if reported:
+                    opaque.append(qualname)
                 continue
 
             if hash_only:
@@ -1842,7 +1862,8 @@ class PurityAnalyzer:
                 # ``self.x = x`` in an ordinary __init__ as a scope mutation
                 # would bury the real findings. Keep walking what IT builds,
                 # so the closure stays transitive.
-                opaque.append(qualname)
+                if reported:
+                    opaque.append(qualname)
                 _queue_class_refs(func, tree, depth)
                 continue
 
@@ -1862,7 +1883,8 @@ class PurityAnalyzer:
                 # Call nodes: annotations are deliberately not consulted,
                 # since ``value: B`` never runs and following it would
                 # invalidate on a type hint.
-                opaque.append(qualname)
+                if reported:
+                    opaque.append(qualname)
                 _queue_class_refs(func, tree, depth)
                 continue
 
@@ -1930,6 +1952,9 @@ class PurityAnalyzer:
             # source: report lines as the FILE numbers them. Relative to the
             # decorator line, "line 4" sent users to the wrong line.
             _anchor_issue_lines(all_issues, own_issues_from, func)
+            if not reported:
+                # Under ``@pure`` / ``@stateful``: walked for the key only.
+                del all_issues[own_issues_from:]
 
             if depth >= self._MAX_DEPTH:
                 continue
@@ -1969,9 +1994,11 @@ class PurityAnalyzer:
                 if getattr(callee, "_cash_cached", False):
                     _note_binding(callee, path)
                     return
-                if is_pure(callee):
-                    return
-                if is_stateful(callee):
+                # A ``@pure`` or ``@stateful`` callee settles what the helper
+                # may DO, not what it computes: it is walked below like any
+                # helper, so an edit to it moves its callers' keys, and only
+                # its findings are left out (``reported`` in the walk).
+                if is_stateful(callee) and reported:  # noqa: B023 - loop var, called within iteration
                     all_issues.append(
                         PurityIssue(
                             kind=ISSUE_IMPURE_CALL,
@@ -1980,7 +2007,6 @@ class PurityAnalyzer:
                             line=line,
                         )
                     )
-                    return
                 # The functions it runs besides its own code: the other half
                 # of a decorated helper, the user function inside a library
                 # wrapper (np.vectorize, toolz.curry, lru_cache), a
@@ -2015,9 +2041,9 @@ class PurityAnalyzer:
                 if own:
                     if path is not None:
                         caller_paths.setdefault(id(callee), path)
-                    stack.append((callee, depth + 1, False))  # noqa: B023 - same
+                    stack.append((callee, depth + 1, False, reported))  # noqa: B023 - same
                 for layer in layers:
-                    stack.append((layer, depth + 1, False))  # noqa: B023 - same
+                    stack.append((layer, depth + 1, False, reported))  # noqa: B023 - same
 
             audited = audited_lines(src)[0] if "@cash:" in src else frozenset()
             for call_node in visitor.called_callable_nodes + visitor.impure_call_nodes:
