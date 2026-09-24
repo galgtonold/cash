@@ -24,11 +24,31 @@ append 3 more lines (all statements live). If it covers only the NEXT statement,
 the re-run appends 1 line and statements 2/3 replay from cache.
 """
 
+import textwrap
+
 import pytest
 
 
 def _last(out: str) -> str:
     return out.strip().splitlines()[-1].strip()
+
+
+SETUP = "import cash\n%cash_on\n%cash_badge print\nimport time"
+
+
+def _bump_def(sink: str) -> str:
+    return (
+        f"SINK = r'{sink}'\n"
+        "def bump(tag):\n"
+        "    time.sleep(0.05)\n"
+        "    with open(SINK, 'a') as f:\n"
+        "        f.write(tag + '\\n')\n"
+        "    return tag"
+    )
+
+
+def _tags(sink):
+    return [ln for ln in sink.read_text(encoding="utf-8").splitlines() if ln.strip()]
 
 
 @pytest.mark.integration
@@ -93,24 +113,6 @@ def test_nocache_inplace_does_not_reexecute_producer(upstream_trace):
     assert t.events("broken_drop_nocache"), "expected log dropped from broken_vars"
 
 
-SETUP = "import cash\n%cash_on\n%cash_badge print\nimport time"
-
-
-def _bump_def(sink: str) -> str:
-    return (
-        f"SINK = r'{sink}'\n"
-        "def bump(tag):\n"
-        "    time.sleep(0.05)\n"
-        "    with open(SINK, 'a') as f:\n"
-        "        f.write(tag + '\\n')\n"
-        "    return tag"
-    )
-
-
-def _tags(sink):
-    return [ln for ln in sink.read_text(encoding="utf-8").splitlines() if ln.strip()]
-
-
 @pytest.mark.timeout(180)
 def test_leading_no_cache_covers_whole_cell(nb_runner, tmp_path):
     sink = tmp_path / "bumps.txt"
@@ -171,3 +173,182 @@ def test_statement_adjacent_no_cache_still_scoped(nb_runner, tmp_path):
     # Record whatever actually happens; s2 must at minimum re-fire.
     assert "s2" in got[3:], f"the statement-adjacent no-cache statement did not re-execute: {got}"
     print(f"[no-cache control] after warm re-run, sink = {got}")
+
+
+# Cash annotation directives (@cash: no-cache, @cash: ttl, etc.)
+# and debug mode behavior.
+#
+# Tests the special comment-based directives that control caching behavior
+# at the statement level.
+@pytest.mark.stress
+@pytest.mark.integration
+class TestNoCacheAnnotation:
+    """Test @cash: no-cache directive."""
+
+    def test_no_cache_always_recomputes(self, nb_runner):
+        """@cash: no-cache prevents caching of a statement."""
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
+                counter = 0
+            """),
+                textwrap.dedent("""\
+                # @cash: no-cache
+                counter = counter + 1
+                print(counter)
+            """),
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        output1 = nb_runner.get_output(2)
+        assert "1" in output1
+
+        # Re-run — should recompute, not use cache
+        nb_runner.run_cell(2)
+        output2 = nb_runner.get_output(2)
+        assert "2" in output2
+
+    def test_no_cache_on_print(self, nb_runner):
+        """@cash: no-cache on a print statement."""
+        nb_runner.create_notebook(
+            [
+                "x = 42",
+                textwrap.dedent("""\
+                # @cash: no-cache
+                print(f"x = {x}")
+            """),
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "x = 42" in nb_runner.get_output(2)
+
+    def test_no_cache_mixed_with_cached(self, nb_runner):
+        """Mix of cached and no-cache statements in same cell."""
+        nb_runner.create_notebook(
+            [
+                textwrap.dedent("""\
+                a = 10
+                # @cash: no-cache
+                b = a + 1
+                c = a * 2
+                print(b, c)
+            """),
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        output = nb_runner.get_output(1)
+        assert "11" in output
+        assert "20" in output
+
+
+# Annotation/directive interaction tests.
+#
+# Tests that exercise @cash: directives (no-cache, ttl, persist)
+# combined with cell edits to verify correct behavior.
+@pytest.mark.stress
+@pytest.mark.core
+@pytest.mark.timeout(30)
+class TestNoCacheDirective:
+    """@cash:no-cache + cell edits."""
+
+    def test_no_cache_always_recomputes(self, nb_runner):
+        """Cell with @cash:no-cache always runs fresh."""
+        nb_runner.create_notebook(
+            [
+                "counter = 0",
+                "# @cash:no-cache\ncounter = counter + 1",
+                "print(f'counter = {counter}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "counter = 1" in nb_runner.get_output(3)
+
+    def test_remove_no_cache_directive(self, nb_runner):
+        """Remove @cash:no-cache directive — cell becomes cacheable."""
+        nb_runner.create_notebook(
+            [
+                "x = 5",
+                "# @cash:no-cache\ny = x * 3\nprint(f'y = {y}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "y = 15" in nb_runner.get_output(2)
+
+        # Remove no-cache
+        nb_runner.set_cell_source(2, "y = x * 3\nprint(f'y = {y}')")
+        nb_runner.run_all()
+        assert "y = 15" in nb_runner.get_output(2)
+
+
+# Annotation interaction tests.
+#
+# Tests combining @cash: annotations (no-cache, ttl, persist)
+# with cell edits to verify annotation handling during edits.
+@pytest.mark.stress
+@pytest.mark.upstream
+@pytest.mark.timeout(45)
+class TestNoCacheAnnotationEdits:
+    """@cash:no-cache annotation with cell edits."""
+
+    def test_add_no_cache_annotation(self, nb_runner):
+        """Add @cash:no-cache annotation to a cell."""
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "y = x * 2\nprint(f'y = {y}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "y = 20" in nb_runner.get_output(2)
+
+        # Add no-cache annotation
+        nb_runner.set_cell_source(2, "# @cash:no-cache\ny = x * 2\nprint(f'y = {y}')")
+        nb_runner.run_all()
+        assert "y = 20" in nb_runner.get_output(2)
+
+    def test_remove_no_cache_annotation(self, nb_runner):
+        """Remove @cash:no-cache annotation."""
+        nb_runner.create_notebook(
+            [
+                "x = 5",
+                "# @cash:no-cache\ny = x + 1\nprint(f'y = {y}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "y = 6" in nb_runner.get_output(2)
+
+        # Remove annotation
+        nb_runner.set_cell_source(2, "y = x + 1\nprint(f'y = {y}')")
+        nb_runner.run_all()
+        assert "y = 6" in nb_runner.get_output(2)
+
+
+@pytest.mark.stress
+@pytest.mark.core
+@pytest.mark.timeout(30)
+class TestMixedDirectives:
+    """Multiple directives + cell edits."""
+
+    def test_no_cache_and_regular_mixed(self, nb_runner):
+        """Mix of no-cache and regular cells."""
+        nb_runner.create_notebook(
+            [
+                "x = 10",
+                "# @cash:no-cache\ny = x + 1",
+                "z = y * 2\nprint(f'z = {z}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "z = 22" in nb_runner.get_output(3)
+
+        nb_runner.set_cell_source(1, "x = 20")
+        nb_runner.run_all()
+        assert "z = 42" in nb_runner.get_output(3)
