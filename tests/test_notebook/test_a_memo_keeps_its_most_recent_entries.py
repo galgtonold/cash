@@ -1,7 +1,7 @@
 """A session-long memo stays within its size, dropping what was used least recently.
 
-The notebook's memos are keyed by code object, statement or cache entry, and
-a long session with many redefined cells keeps producing new keys.
+Memos are keyed by code object, statement, file or cache entry, and a long
+session with many redefined cells keeps producing new keys.
 """
 
 import pytest
@@ -21,6 +21,16 @@ def test_the_least_recently_used_entry_is_dropped():
     assert "b" not in memo
     assert memo.get("a") == 1
     assert memo.get("c") == 3
+
+
+def test_a_full_memo_keeps_taking_new_keys():
+    """A memo that stopped at its size served every later key the slow way."""
+    memo = LruMemo(3)
+    for i in range(10):
+        memo[i] = i
+    assert len(memo) == 3
+    assert memo.get(9) == 9
+    assert memo.keys() == [7, 8, 9]
 
 
 def test_a_miss_returns_the_default():
