@@ -113,13 +113,13 @@ def test_a_rejected_registration_changes_nothing(c):
         return arr[0, 0]
 
     f(np.zeros((4, 4)))
-    assert np.ndarray in c._override_hashers, "the refusal ate a valid override"
+    assert np.ndarray in c._args.override_hashers, "the refusal ate a valid override"
 
 
 def test_registering_on_an_ordinary_type_is_accepted(c):
     """The control. A rule that rejects everything protects nothing."""
     assert _register(c, Tagged, lambda t: str(t.payload)) == []
-    assert Tagged in c._type_hashers
+    assert Tagged in c._args.type_hashers
 
 
 @pytest.mark.parametrize(
@@ -281,7 +281,7 @@ def test_re_registering_with_override_replaces_the_plain_one(c):
 
     f(Tagged(1))
     assert calls, "the plain registration shadowed the new override"
-    assert Tagged not in c._type_hashers
+    assert Tagged not in c._args.type_hashers
 
 
 def test_a_late_registration_is_not_shadowed_by_the_memo(c):

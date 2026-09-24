@@ -48,8 +48,8 @@ def test_same_lineage_reuses_hash_without_recomputing(monkeypatch):
     calls = _count_hashes(monkeypatch)
     df = _df(range(100), lineage="L1")
 
-    k1 = c._serialize_args("f", (df,), {})
-    k2 = c._serialize_args("f", (df,), {})
+    k1 = c._args.serialize_args("f", (df,), {})
+    k2 = c._args.serialize_args("f", (df,), {})
 
     assert k1 == k2
     assert calls["n"] == 1, "second call must hit the memo, not re-hash"
@@ -59,12 +59,12 @@ def test_lineage_bump_recomputes_and_changes_key(monkeypatch):
     c = _cash()
     calls = _count_hashes(monkeypatch)
     df = _df(range(100), lineage="L1")
-    k1 = c._serialize_args("f", (df,), {})
+    k1 = c._args.serialize_args("f", (df,), {})
 
     # A real mutation changes the content AND bumps the lineage cash tracks.
     df["a"] = list(range(100, 200))
     df._cash_lineage_hash = "L2"
-    k2 = c._serialize_args("f", (df,), {})
+    k2 = c._args.serialize_args("f", (df,), {})
 
     assert calls["n"] == 2, "a changed lineage must force a fresh hash (memo miss)"
     assert k1 != k2, "changed content must change the cache key"
@@ -75,8 +75,8 @@ def test_memoised_key_equals_plain_content_hash():
     identically to the same value with no lineage (content hash), so persisted
     entries stay valid and survive a restart (where lineage is gone)."""
     c = _cash()
-    with_lineage = c._serialize_args("f", (_df(range(100), lineage="L1"),), {})
-    plain = _cash()._serialize_args("f", (_df(range(100)),), {})
+    with_lineage = c._args.serialize_args("f", (_df(range(100), lineage="L1"),), {})
+    plain = _cash()._args.serialize_args("f", (_df(range(100)),), {})
     assert with_lineage == plain
 
 
@@ -88,8 +88,8 @@ def test_no_lineage_still_content_hashes_every_call(monkeypatch):
     c = _cash()
     calls = _count_hashes(monkeypatch)
     df = _df(range(100))  # no lineage attribute
-    c._serialize_args("f", (df,), {})
-    c._serialize_args("f", (df,), {})
+    c._args.serialize_args("f", (df,), {})
+    c._args.serialize_args("f", (df,), {})
     assert calls["n"] == 2, "objects without lineage must not be memoised"
 
 
@@ -100,8 +100,8 @@ def test_two_objects_sharing_a_lineage_string_still_track_content():
     c = _cash()
     df_a = _df([1, 2, 3], lineage="same")
     df_b = _df([1, 2, 99], lineage="same")  # different content, same lineage str
-    k_a = c._serialize_args("f", (df_a,), {})
-    k_b = c._serialize_args("f", (df_b,), {})
+    k_a = c._args.serialize_args("f", (df_a,), {})
+    k_b = c._args.serialize_args("f", (df_b,), {})
     assert k_a != k_b
 
 
@@ -111,5 +111,5 @@ def test_memo_is_bounded():
     for i in range(arg_hashing.ARG_HASH_MEMO_CAP + 50):
         df = _df(range(3), lineage=f"L{i}")
         keep.append(df)
-        c._serialize_args("f", (df,), {})
-    assert len(c._arg_hash_memo) <= arg_hashing.ARG_HASH_MEMO_CAP
+        c._args.serialize_args("f", (df,), {})
+    assert len(c._args._memo) <= arg_hashing.ARG_HASH_MEMO_CAP

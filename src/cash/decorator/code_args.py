@@ -51,7 +51,7 @@ def is_user_code_carrier(carrier: Any) -> bool:
     every single one was reported as un-hashable user code.
 
     Judge such an object by what it WRAPS (``.func``, the same attribute
-    ``_class_surface_parts`` already follows for ``singledispatchmethod``
+    ``CodeIdentity.class_surface_parts`` already follows for ``singledispatchmethod``
     and ``cached_property``), else by its TYPE. Measured:
     ``functools.partial(json.dumps)`` and ``weakref.ref(x)`` stop warning,
     while ``functools.partial(<a user function>)`` still warns -- and it
@@ -181,14 +181,14 @@ class CodeArgsMixin:
         if type(value) in CODELESS_PRIMS:
             return
         # A frozen function's list/tuple/dict result is keyed by the call that
-        # produced it (`_remember_frozen_container`), code inside it included:
+        # produced it (`FrozenResults.remember_container`), code inside it included:
         # walking two million rows for functions was most of a hit's cost.
         # Checked BEFORE the plain-data census below, which is itself a walk:
         # in that order frozen=True on a list still cost a linear pass per call.
         if (
-            self._frozen_containers
-            and id(value) in self._frozen_containers
-            and self._frozen_containers[id(value)][0] is value
+            self._frozen.containers
+            and id(value) in self._frozen.containers
+            and self._frozen.containers[id(value)][0] is value
         ):
             return
         # Plain data carries no code (`_plain_data.is_plain`); walking two
@@ -355,7 +355,7 @@ class CodeArgsMixin:
                     continue
                 # Dedup ACROSS arguments too, not just within one walk:
                 # `f(a, b, c)` with three instances of one class reaches
-                # `_is_opaque` + `_code_surface_hash` once instead of three
+                # `_is_opaque` + `CodeIdentity.code_surface_hash` once instead of three
                 # times. Safe by identity because every carrier is
                 # reachable from `args`/`kwargs` for this whole loop, so no
                 # id can be recycled underneath us.
@@ -364,7 +364,7 @@ class CodeArgsMixin:
                 seen_carriers.add(id(carrier))
                 if is_opaque(carrier):
                     continue
-                digest = self._code_surface_hash(carrier)
+                digest = self._code.code_surface_hash(carrier)
                 if digest is not None:
                     parts.append(f"{carrier_name(carrier)}:{digest}")
                     # Its CODE is in the key; the globals that code reads

@@ -137,7 +137,7 @@ def test_the_payload_cost_of_a_list_argument_is_charged_to_it(tmp_path):
     """The list went into the payload as is: the per-argument timer saw a
     lookup that returned at once and blamed 0ms."""
     c = Cash(cache_dir=str(tmp_path / "cache"))
-    c._hash_arg_payload((_rows(100_000), 3), {})
+    c._args.hash_payload((_rows(100_000), 3), {})
     label, seconds, type_name, _producer, _old = ARG_COST.last
     assert (label, type_name) == ("#0", "list")
     assert seconds > 0.005

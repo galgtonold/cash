@@ -96,4 +96,4 @@ def test_a_dead_functions_pin_is_dropped(tmp_path, quiet):
         gc.collect()
     # Pins follow their functions out: only the live registration (the
     # registry holds the last definition) keeps one.
-    assert len(c._own_pins) <= 1
+    assert len(c._code._own_pins) <= 1

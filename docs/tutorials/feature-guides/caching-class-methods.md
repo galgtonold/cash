@@ -17,7 +17,7 @@ any other argument. Two failure modes follow:
 The fix is the same in both cases: tell cash how to summarise your
 type into a cache key.
 
-<!-- claim: cash/core.py:Cash.register_hasher @2ae870d0, cash/decorator/arg_hashing.py:ArgHashingMixin._hash_arg_payload @7bc7e4ca -->
+<!-- claim: cash/core.py:Cash.register_hasher @2ae870d0, cash/decorator/arg_hashing.py:ArgHasher.hash_payload @7bc7e4ca -->
 ## Register a type-level hasher
 
 ```python
@@ -63,7 +63,7 @@ only correct when the instances are truly interchangeable.
 
 ## What `__hash__` won't do
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHashingMixin._hash_arg_payload @7bc7e4ca -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @7bc7e4ca -->
 Defining `__hash__` on your class doesn't help cash. Cash uses a
 256-bit composite cache key (SHA-256). Python's built-in `hash()` is
 a 64-bit value designed for hash-table bucketing, not for collision

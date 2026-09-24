@@ -29,7 +29,7 @@ from .config import CashConfig, get_config
 from .data_source import DataSource
 from .decorator.arg_hashing import (
     CODE_VALUE_TYPES,
-    ArgHashingMixin,
+    ArgHasher,
     mark_opaque,
 )
 from .decorator.backend_slot import BackendSlot
@@ -43,7 +43,7 @@ from .decorator.call_state import (
 from .decorator.closure_fold import ClosureFoldMixin
 from .decorator.code_args import CodeArgsMixin
 from .decorator.code_identity import (
-    CodeIdentityMixin,
+    CodeIdentity,
     func_key,
     hash_callable_source,
 )
@@ -54,7 +54,7 @@ from .decorator.explain import (
     MissKind,
 )
 from .decorator.file_deps import FileDepsMixin
-from .decorator.frozen import FrozenMixin
+from .decorator.frozen import FrozenResults
 from .decorator.globals_fold import (
     GlobalsFoldMixin,
 )
@@ -205,12 +205,9 @@ def _in_kernel() -> bool:
 
 
 class Cash(
-    CodeIdentityMixin,
     CodeArgsMixin,
     ClosureFoldMixin,
     GlobalsFoldMixin,
-    ArgHashingMixin,
-    FrozenMixin,
     RngMixin,
     FileDepsMixin,
     PurityChecksMixin,
@@ -337,24 +334,6 @@ class Cash(
         self._cached: dict[str, CachedFunction] = {}
         self.data_sources: dict[str, DataSource] = {}  # Registry of data sources
         self.source_hashes: dict[str, str] = {}  # Current source hashes
-        # Session-scoped memo: id(arg) -> (weakref, lineage_hash, content_hash).
-        # Lets a repeated ``@cash.cache`` call with the SAME unmutated argument
-        # skip re-hashing a possibly-huge input. See ``_hash_arg_payload`` for
-        # the read-side validation (weakref identity + lineage). Bounded below.
-        self._arg_hash_memo: dict[int, tuple] = {}
-        # id(frame) -> (weakref, shallow copy, signature, content hash): the
-        # pandas copy-on-write memo, see `_frame_memo_store`.
-        self._frame_memo: dict[int, tuple] = {}
-        # id(ndarray) -> [weakref, producer, content hash or None]: numpy
-        # results of frozen functions, which cannot carry a tag.
-        self._frozen_arrays: dict[int, list] = {}
-        # id(obj) -> [weakref, uses, audit baseline or None], see `_audit_frozen`.
-        self._frozen_uses: dict[int, list] = {}
-        # id(obj) -> [obj, producer, lineage, uses, audit baseline]: a frozen
-        # function's list / tuple / dict result, which carries no tag and no
-        # weakref -- so the object is held here, while someone else holds it
-        # too (`_remember_frozen_container`).
-        self._frozen_containers: dict[int, list] = {}
         if self.config.summary:
             # Per instance: two Cash instances are two independent caches, and
             # each accounts for itself. Through a weakref, so the hook does
@@ -386,13 +365,6 @@ class Cash(
         self._populated: set[str] = set()
         self._effective_ttl_cache: dict[str, int | None] = {}
         self._deref_writes: dict = {}  # code object -> frozenset of reassigned freevars
-        # id(func) -> (reference to func, decoration-pinned own-source
-        # identity). The reference is checked on every read: a redefined
-        # function's id can go to a later definition once the old one dies.
-        self._own_pins: dict[int, tuple[Callable[[], Any], str]] = {}
-        # Pins taken at decoration whose file has not yet been compared with
-        # the loaded code; the first call does it once (see _pin_own_source).
-        self._own_pins_unverified: set[int] = set()
         # code object -> global names its decorator expressions read
         self._decorator_names_cache: dict = {}
         # code object -> frozenset of free vars with capture-unsafe uses
@@ -428,22 +400,9 @@ class Cash(
         effectiveness = EffectivenessLedger()
         self._calls = CallLog(self.config, self._cached, self._misses, effectiveness)
         self._exit_work = _ExitWork(self._backend_slot, self._stored_keys, effectiveness)
-        # (first_param, self_attrs, uses_super) per code object; see
-        # _analyze_method_self_deps.
-        self._method_self_dep_cache: dict = {}
-        # user class -> source hash. A class's source cannot change within a
-        # running interpreter, so it is hashed once and reused; see
-        # _user_class_source_hash / _instance_class_source_parts.
-        self._user_class_src_cache: dict = {}
-        # user class or function -> code-surface digest (bytecode-based, class-
-        # aware); see _code_surface_hash. Keyed on the object itself, not
-        # id(), so a redefinition (a new object) is a distinct memo entry.
-        self._code_surface_cache: dict = {}
-        # object -> tuple of (code object, globals dict) it carries. Static for
-        # as long as that object exists (a redefinition makes a new one), so it
-        # is safe to memo; the NAMES those code objects reference are resolved
-        # fresh per call, because what a name is bound to can change.
-        self._code_refs_cache: dict = {}
+        self._frozen = FrozenResults(self.config, self._notices)
+        self._args = ArgHasher(self._cached, self._frozen, self._notices)
+        self._code = CodeIdentity(self._args)
         # function object -> digest of its parameter defaults, for defaults that
         # are immutable and therefore cannot drift between calls.
         # Weak so the memo dies with the function instead of pinning it (and so
@@ -475,16 +434,6 @@ class Cash(
         # configured no logging.
         if debug or verbose:
             _log.enable(logging.DEBUG if debug else logging.INFO)
-
-        # Custom type hasher registry: maps type -> (callable(value) -> str, source hash).
-        # The source hash is embedded in the args_hash composition so that
-        # changing a hasher's body invalidates dependent cache entries.
-        self._type_hashers: dict[type, tuple[Callable[[Any], str], str]] = {}
-        # Same shape, but consulted BEFORE cash's own content hashers rather
-        # than after them. Separate registry rather than a flag in the tuple
-        # above so the hot path can skip the whole question with one empty
-        # check -- overriding is rare, and every cached call pays for this.
-        self._override_hashers: dict[type, tuple[Callable[[Any], str], str]] = {}
 
         # Functions the STATIC pass already reported on. The runtime effect
         # observer stays quiet for these: it would be a second warning about
@@ -766,7 +715,7 @@ class Cash(
             declared_files=_declared_files(file_depends_on),
         )
         func_name = self._register_func(cf, depends_on)
-        self._pin_own_source(func, self.source_hashes[func_name])
+        self._code.pin_own_source(func, self.source_hashes[func_name])
         # A downstream that depends on this function inherits its TTL
         # (effective TTL = min over the dependency closure).
         self._effective_ttl_cache.clear()
@@ -1095,7 +1044,7 @@ class Cash(
     ) -> None:
         """Register a custom hasher for a specific type.
 
-        When ``_serialize_args`` encounters an argument of ``type_``, it will
+        When ``ArgHasher.serialize_args`` encounters an argument of ``type_``, it will
         call ``hasher_fn(value)`` to produce a hash string instead of relying
         on ``pickle.dumps``.
 
@@ -1183,20 +1132,7 @@ class Cash(
                 "place; if you keep this hasher, make it return the captured "
                 "values too.",
             )
-        src_hash = hash_callable_source(hasher_fn)
-        # One type, one registration: re-registering must not leave the
-        # previous entry behind in the other registry, still winning.
-        self._type_hashers.pop(type_, None)
-        self._override_hashers.pop(type_, None)
-        if override:
-            self._override_hashers[type_] = (hasher_fn, src_hash)
-        else:
-            self._type_hashers[type_] = (hasher_fn, src_hash)
-        # A memoized hash was produced by whichever hasher was in effect
-        # before this call; drop them so the new registration is not shadowed
-        # for objects already seen.
-        self._arg_hash_memo.clear()
-        self._frame_memo.clear()
+        self._args.register_hasher(type_, hasher_fn, hash_callable_source(hasher_fn), override=override)
 
     def cleanup(self, max_age: int | None = None) -> int:
         """Remove expired items from the cache.

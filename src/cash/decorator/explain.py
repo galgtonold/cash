@@ -643,7 +643,7 @@ class ExplainMixin:
                 },
             )
         except UnhashableArgs:
-            arg_type_name = self._first_unhashable_arg_type(args, kwargs)
+            arg_type_name = self._args.first_unhashable_arg_type(args, kwargs)
             return CacheExplanation(
                 would_hit=False,
                 reason=EXPLAIN_KEY_UNCOMPUTABLE,
@@ -651,7 +651,7 @@ class ExplainMixin:
                 details={
                     "arg_type": arg_type_name,
                     "hint": (
-                        unhashable_arg_fix(self._first_unhashable_arg(args, kwargs), arg_type_name)
+                        unhashable_arg_fix(self._args.first_unhashable_arg(args, kwargs), arg_type_name)
                         if arg_type_name != "<unknown>"
                         else "Could not identify the offending argument; likely a nested unpicklable value."
                     ),
@@ -677,7 +677,7 @@ class ExplainMixin:
         finally:
             _EXPLAINING.reset(token)
         cache_key = built.cache_key
-        frozen_args = self._frozen_arg_names(built.normalized_args)
+        frozen_args = self._frozen.arg_names(built.normalized_args)
 
         # Looking, not reading: `get` would count this as a use (USES / LAST
         # USED in `cash inspect`) and make the file backend rewrite the entry.

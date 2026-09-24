@@ -1206,7 +1206,7 @@ the `dynamic_depends_on=` argument instead of filtering the warning.
 
 ## KEY-FROZEN-MUTATED {#key-frozen-mutated}
 
-<!-- claim: cash/decorator/frozen.py:FrozenMixin._audit_frozen @12932111 -->
+<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @12932111 -->
 **What happened.** A function is decorated `@cash.cache(frozen=True)` — a
 promise that its result is not modified after it is returned — and one of its
 results was modified anyway: a later audit found it had changed since cash
@@ -1420,7 +1420,7 @@ answering it after the restart. The same happened to the cached function
 itself, in a worker that imported the old code and made its first call after
 the deploy landed.
 
-<!-- claim: cash/decorator/code_identity.py:CodeIdentityMixin._pin_own_source @8024db55 -->
+<!-- claim: cash/decorator/code_identity.py:CodeIdentity.pin_own_source @8024db55 -->
 So cash keys that code by what is **actually running** instead: a cached
 function by the source it was imported with (its identity is taken when the
 decorator runs, not at its first call — and by its loaded bytecode when even

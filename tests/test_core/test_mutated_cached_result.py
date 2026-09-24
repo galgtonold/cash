@@ -178,11 +178,11 @@ def test_the_memo_lets_go_of_a_collected_frame(c):
 
     df = _frame()
     n(df)
-    assert id(df) in c._frame_memo
+    assert id(df) in c._args._frame_memo
     key = id(df)
     del df
     gc.collect()
-    assert key not in c._frame_memo
+    assert key not in c._args._frame_memo
 
 
 def test_a_statement_maintained_tag_is_still_trusted(c, monkeypatch):

@@ -49,7 +49,7 @@ def _args(shape):
 @pytest.fixture
 def key(tmp_path):
     c = Cash(cache_dir=str(tmp_path / "cache"))
-    return lambda *args, **kwargs: c._hash_arg_payload(args, kwargs)
+    return lambda *args, **kwargs: c._args.hash_payload(args, kwargs)
 
 
 def test_equal_content_keys_equal(key):
@@ -152,7 +152,7 @@ def test_which_shapes_take_the_fast_path(tmp_path, monkeypatch, shape):
     unshared = []
     real = _plain_data.pickle_unshared
     monkeypatch.setattr(_plain_data, "pickle_unshared", lambda value: unshared.append(1) or real(value))
-    c._hash_arg_payload(*_args(shape))
+    c._args.hash_payload(*_args(shape))
     assert bool(unshared) == (shape in FAST), shape
 
 
@@ -200,6 +200,6 @@ def test_a_small_dict_beside_a_big_list_leaves_the_list_on_the_fast_path(tmp_pat
     real_pickle, real_canon = _plain_data.pickle_unshared, object_hashing.stable_key_repr
     monkeypatch.setattr(_plain_data, "pickle_unshared", lambda v: unshared.append(v) or real_pickle(v))
     monkeypatch.setattr(object_hashing, "stable_key_repr", lambda *a, **k: walked.append(1) or real_canon(*a, **k))
-    c._hash_arg_payload((rows,), {"opts": {"b": 1, "a": 2}})
+    c._args.hash_payload((rows,), {"opts": {"b": 1, "a": 2}})
     assert any(v is rows for v in unshared), "the list was not keyed on its own"
     assert len(walked) < 100, f"the general path walked the rows ({len(walked)} calls)"

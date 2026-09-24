@@ -151,7 +151,7 @@ def defaults_of(func: Callable) -> tuple[tuple, dict]:
     defaults are typically empty (a ``*args, **kwargs`` passthrough) while the
     values that actually decide the result sit on ``__wrapped__`` — which is
     also what ``inspect.signature`` reports and therefore what
-    ``_normalize_call_args`` binds. Folding every level is the conservative
+    ``ArgHasher.normalize_call_args`` binds. Folding every level is the conservative
     choice: folding a default that turns out not to bind costs at most a
     one-time miss, whereas missing one that does bind is a silent wrong
     answer.
@@ -381,7 +381,7 @@ class ClosureFoldMixin:
                 # Read-only mutable capture: fold its content hash.
                 # Unhashable content is skipped.
                 try:
-                    h = self._hash_arg_payload((v,), {})
+                    h = self._args.hash_payload((v,), {})
                 except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
                     continue
                 captures.append((name, h))
@@ -390,7 +390,7 @@ class ClosureFoldMixin:
                     pending[name] = (h, "closure", None, func)
         if not captures:
             return state_hash
-        clo = self._serialize_args(func_name, tuple(captures), {})
+        clo = self._args.serialize_args(func_name, tuple(captures), {})
         if not clo:
             return state_hash
         return hashlib.sha256(f"{state_hash}:closure:{clo}".encode()).hexdigest()
@@ -439,7 +439,7 @@ class ClosureFoldMixin:
         if not captures:
             return ""
         try:
-            return self._hash_arg_payload(tuple(captures), {})
+            return self._args.hash_payload(tuple(captures), {})
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
             return ""
 
@@ -483,15 +483,15 @@ class ClosureFoldMixin:
             return cached[3]
         pos, kwd = defaults_of(fn)
         try:
-            digest = self._hash_arg_payload(pos, kwd)
+            digest = self._args.hash_payload(pos, kwd)
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
             try:
-                digest = self._hash_arg_payload(
+                digest = self._args.hash_payload(
                     tuple(fingerprint_default(v) for v in pos),
                     {k: fingerprint_default(v) for k, v in kwd.items()},
                 )
             except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
-                bad_type = self._first_unhashable_arg_type(pos, kwd)
+                bad_type = self._args.first_unhashable_arg_type(pos, kwd)
                 name = getattr(fn, "__qualname__", repr(fn))
                 raise KeyBuildFailed(
                     "KEY-UNHASHABLE-DEFAULT",
@@ -557,7 +557,7 @@ class ClosureFoldMixin:
                 return hashlib.sha256(f"{state_hash}:defaults:{digest}".encode("utf-8")).hexdigest()
         pos, kwd = defaults_of(func)
         try:
-            digest = self._hash_arg_payload(pos, kwd)
+            digest = self._args.hash_payload(pos, kwd)
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
             # A callback default (`def f(x, key=lambda v: v)`) is unpicklable but
             # is not opaque: its SOURCE defines it, which is the same fingerprint
@@ -566,7 +566,7 @@ class ClosureFoldMixin:
             # edited lambda now invalidates) and it keeps such functions
             # cacheable, which a bare refuse-to-cache would not.
             try:
-                digest = self._hash_arg_payload(
+                digest = self._args.hash_payload(
                     tuple(self._fingerprint_callable_default(v) for v in pos),
                     {k: self._fingerprint_callable_default(v) for k, v in kwd.items()},
                 )
@@ -595,7 +595,7 @@ class ClosureFoldMixin:
         e: Exception,
     ) -> None:
         """Warn (once) that a default is unhashable; ``None`` = refuse to cache."""
-        bad_type = self._first_unhashable_arg_type(pos, kwd)
+        bad_type = self._args.first_unhashable_arg_type(pos, kwd)
         self._notices.warn_once(
             CashCacheIneffectiveWarning,
             func_name,
@@ -609,7 +609,7 @@ class ClosureFoldMixin:
             "or require it at the call site"
             + (
                 "."
-                if isinstance(self._first_unhashable_arg(pos, kwd), CODE_VALUE_TYPES)
+                if isinstance(self._args.first_unhashable_arg(pos, kwd), CODE_VALUE_TYPES)
                 else f" -- or register a hasher with cash.register_hasher({bad_type}, ...)."
             ),
         )
@@ -675,7 +675,7 @@ class ClosureFoldMixin:
             return state_hash
         owner = func.__self__
         try:
-            self_hash = self._hash_arg_payload((owner,), {})
+            self_hash = self._args.hash_payload((owner,), {})
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
             owner_type = type(owner).__name__
             self._notices.warn_once(

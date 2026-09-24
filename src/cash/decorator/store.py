@@ -8,7 +8,6 @@ import hashlib
 import logging
 import pickle
 import time
-import weakref
 from collections.abc import Callable
 from typing import Any
 
@@ -170,18 +169,13 @@ class StoreMixin:
             return
         frozen = self._is_frozen(func_name)
         if frozen and type(result) in (list, tuple, dict):
-            self._remember_frozen_container(result, func_name, lineage_hash(cache_key, auto_file_deps))
+            self._frozen.remember_container(result, func_name, lineage_hash(cache_key, auto_file_deps))
             return
         if frozen and type(result).__name__ == "ndarray" and (type(result).__module__ or "").startswith("numpy"):
             # An array cannot carry a tag, and read-only is a promise numpy
             # enforces: a write raises instead of going stale.
             try:
-                result.flags.writeable = False
-                self._frozen_arrays[id(result)] = [
-                    weakref.ref(result, lambda _r, k=id(result), m=self._frozen_arrays: m.pop(k, None)),
-                    func_name,
-                    None,
-                ]
+                self._frozen.remember_array(result, func_name)
             except (AttributeError, TypeError, ValueError):
                 pass
             return
@@ -190,7 +184,7 @@ class StoreMixin:
         lineage = lineage_hash(cache_key, auto_file_deps)
         try:
             # Say who wrote it: nothing will move this tag when the value is
-            # mutated, so `_hash_arg_payload` must not take it for the content
+            # mutated, so `ArgHasher.hash_payload` must not take it for the content
             # -- unless the function was declared frozen=True.
             try:
                 result._cash_lineage_src = LINEAGE_SRC_FROZEN if frozen else LINEAGE_SRC_DECORATOR
@@ -199,7 +193,7 @@ class StoreMixin:
                     result._cash_lineage_producer = func_name
             except (AttributeError, TypeError):
                 if frozen:
-                    self._warn_frozen_has_no_effect(func_name, result)
+                    self._frozen.warn_has_no_effect(func_name, result)
             type_name = type(result).__name__
             module = type(result).__module__ or ""
 

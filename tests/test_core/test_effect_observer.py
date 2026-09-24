@@ -412,8 +412,8 @@ def test_an_argument_over_budget_for_the_key_is_not_hashed_again(tmp_path, monke
     c = _cash(tmp_path)
     monkeypatch.setattr(purity_checks, "MUTATION_CHECK_BUDGET_S", 0.0)  # any key's cost is over it
     hashes = []
-    real = c._serialize_args
-    monkeypatch.setattr(c, "_serialize_args", lambda *a, **k: hashes.append(1) or real(*a, **k))
+    real = c._args.serialize_args
+    monkeypatch.setattr(c._args, "serialize_args", lambda *a, **k: hashes.append(1) or real(*a, **k))
 
     def reads(rows):
         return len(rows)

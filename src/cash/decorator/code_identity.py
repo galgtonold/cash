@@ -16,7 +16,7 @@ import textwrap
 import types
 import weakref
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .._annotation_refs import annotation_referents
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
@@ -34,6 +34,9 @@ from ..source_norm import (
     source_digest,
 )
 from .arg_hashing import is_opaque
+
+if TYPE_CHECKING:
+    from .arg_hashing import ArgHasher
 
 logger = logging.getLogger(__name__)
 
@@ -458,8 +461,36 @@ def wraps_code(value: Any) -> bool:
     )
 
 
-class CodeIdentityMixin:
-    """Identity of functions, classes and code objects, for the state segment of a key."""
+class CodeIdentity:
+    """What identifies code for the key: a function's own pinned source, and
+    the code surface of classes, instances and functions reached through
+    arguments and globals."""
+
+    def __init__(self, args: ArgHasher) -> None:
+        self._args = args
+        # id(func) -> (reference to func, decoration-pinned own-source
+        # identity). The reference is checked on every read: a redefined
+        # function's id can go to a later definition once the old one dies.
+        self._own_pins: dict[int, tuple[Callable[[], Any], str]] = {}
+        # Pins taken at decoration whose file has not yet been compared with
+        # the loaded code; the first call does it once (see `pin_own_source`).
+        self._own_pins_unverified: set[int] = set()
+        # (first_param, self_attrs, uses_super) per code object; see
+        # `_analyze_method_self_deps`.
+        self._method_self_dep_cache: dict = {}
+        # user class -> source hash. A class's source cannot change within a
+        # running interpreter, so it is hashed once and reused; see
+        # `user_class_source_hash` / `instance_class_source_parts`.
+        self._user_class_src_cache: dict = {}
+        # user class or function -> code-surface digest (bytecode-based, class-
+        # aware); see `code_surface_hash`. Keyed on the object itself, not
+        # id(), so a redefinition (a new object) is a distinct memo entry.
+        self._code_surface_cache: dict = {}
+        # object -> tuple of (code object, globals dict) it carries. Static for
+        # as long as that object exists (a redefinition makes a new one), so it
+        # is safe to memo; the NAMES those code objects reference are resolved
+        # fresh per call, because what a name is bound to can change.
+        self._code_refs_cache: dict = {}
 
     def _analyze_method_self_deps(self, func: Callable) -> tuple[str | None, tuple[str, ...], bool]:
         """Attributes a method reads on its first parameter, and whether it calls super().
@@ -469,7 +500,7 @@ class CodeIdentityMixin:
         decoration time the class does not exist yet and the analyzer sees only
         an attribute access on a parameter. Recorded here (source-derived,
         cached per code object) and resolved against the real class at call time
-        by :meth:`_fold_method_class_deps`.
+        by :meth:`CodeIdentity.fold_method_class_deps`.
 
         Returns ``(first_param_name, attr_names_accessed_on_it, uses_super)``.
         ``first_param_name`` is ``None`` when there is no source / no parameters.
@@ -533,7 +564,7 @@ class CodeIdentityMixin:
             self._method_self_dep_cache[code] = result
         return result
 
-    def _fold_method_class_deps(self, func: Callable, args: tuple, state_hash: str) -> str:
+    def fold_method_class_deps(self, func: Callable, args: tuple, state_hash: str) -> str:
         """Fold class-level code a cached method reaches into its key.
 
         At call time the real class IS known (``args[0]`` is the instance, or the
@@ -608,7 +639,7 @@ class CodeIdentityMixin:
             elif not isinstance(member, (types.ModuleType, type)) and not callable(member):
                 # A class-level DATA attribute (a constant). Fold its value.
                 try:
-                    parts.append(f"c:{attr}:{self._hash_arg_payload((member,), {})}")
+                    parts.append(f"c:{attr}:{self._args.hash_payload((member,), {})}")
                 except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
                     continue
         if uses_super:
@@ -624,7 +655,7 @@ class CodeIdentityMixin:
         payload = ":".join(sorted(parts))
         return hashlib.sha256(f"{state_hash}:selfdeps:{payload}".encode("utf-8")).hexdigest()
 
-    def _pin_own_source(self, func: Callable, source_hash: str | None = None) -> str:
+    def pin_own_source(self, func: Callable, source_hash: str | None = None) -> str:
         """Identity of *func* itself, pinned per function object.
 
         The state hash's root component must describe the function the
@@ -748,7 +779,7 @@ class CodeIdentityMixin:
         ``co_consts`` and are masked out, so they do not either.
 
         Instance method (not static) because defaults/kwdefaults go through
-        ``_value_identity`` -> ``self._hash_arg_payload``: a default like
+        ``_value_identity`` -> ``self._args.hash_payload``: a default like
         ``def m(self, x=_MISSING)`` reprs as ``<object object at 0x...>``,
         the same address leak as a nested code object, just one layer up.
         """
@@ -798,24 +829,24 @@ class CodeIdentityMixin:
     def _value_identity(self, v: Any) -> str:
         """Address-free identity for a value that is not itself a code object.
 
-        ``_hash_arg_payload`` folds CONTENT and is the established,
+        ``ArgHasher.hash_payload`` folds CONTENT and is the established,
         address-free tool used throughout this file for exactly this. What it
         cannot pickle goes to `_unpicklable_identity`, not to ``repr()``:
         ``repr()`` is a memory ADDRESS for the most ordinary unpicklable
         defaults (``key=lambda r: r``, ``lock=threading.Lock()``), different
         in every process, so the entry would never hit after a restart.
 
-        ``_class_surface_parts`` already refuses a ``repr()`` fallback, on the
+        ``CodeIdentity.class_surface_parts`` already refuses a ``repr()`` fallback, on the
         grounds that it "would reintroduce the address leak this member-content
         fold exists to avoid". This makes the two agree.
         """
         try:
-            return self._hash_arg_payload((v,), {})
+            return self._args.hash_payload((v,), {})
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
             return self._unpicklable_identity(v)
 
     def _unpicklable_identity(self, v: Any, _depth: int = 0) -> str:
-        """Process-stable stand-in for a value ``_hash_arg_payload`` refused.
+        """Process-stable stand-in for a value ``ArgHasher.hash_payload`` refused.
 
         Recursive because ``__defaults__`` is hashed as a WHOLE TUPLE: one
         unpicklable element poisons the entire tuple, so every element that
@@ -856,10 +887,10 @@ class CodeIdentityMixin:
                 + "]"
             )
         try:
-            return self._hash_arg_payload((v,), {})
+            return self._args.hash_payload((v,), {})
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
             pass
-        surface = self._code_surface_hash(v)
+        surface = self.code_surface_hash(v)
         if surface is not None:
             return f"code:{surface}"
         try:
@@ -888,7 +919,7 @@ class CodeIdentityMixin:
         """A digest of the user code *obj* itself carries, or ``None``.
 
         Its OWN surface only -- code merely referenced by that code is folded
-        by :meth:`_code_surface_hash`, which combines these per-object digests.
+        by :meth:`CodeIdentity.code_surface_hash`, which combines these per-object digests.
         The split is what keeps the memo below honest: memoizing a digest that
         included a referenced class would serve a stale answer when only that
         OTHER class is redefined (a notebook cell re-run), because *obj* is
@@ -933,7 +964,7 @@ class CodeIdentityMixin:
         if cached is not None:
             return cached
         if is_type:
-            parts = self._class_surface_parts(obj)
+            parts = self.class_surface_parts(obj)
         else:
             ident = self._code_identity(obj)
             if not ident:
@@ -1058,7 +1089,7 @@ class CodeIdentityMixin:
                     consider(value)
         return targets
 
-    def _code_surface_hash(self, obj: Any) -> str | None:
+    def code_surface_hash(self, obj: Any) -> str | None:
         """A digest of *obj*'s code AND the user code that code reaches.
 
         Folding only what an argument or global directly carries left a real
@@ -1138,7 +1169,7 @@ class CodeIdentityMixin:
         parts: list[tuple] = []
         for fname, f in sorted(field_map.items()):
             try:
-                meta = self._hash_arg_payload((dict(getattr(f, "metadata", {}) or {}),), {})
+                meta = self._args.hash_payload((dict(getattr(f, "metadata", {}) or {}),), {})
             except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
                 # An unpicklable metadata VALUE. Skip the metadata rather than
                 # repr() it: a repr here would leak an object address and make
@@ -1178,7 +1209,7 @@ class CodeIdentityMixin:
         parts: list[tuple] = []
         for fname, info in sorted(fields.items()):
             try:
-                default = self._hash_arg_payload((getattr(info, "default", None),), {})
+                default = self._args.hash_payload((getattr(info, "default", None),), {})
             except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
                 default = None
             parts.append(
@@ -1195,7 +1226,7 @@ class CodeIdentityMixin:
             )
         return parts
 
-    def _class_surface_parts(self, cls: type, _depth: int = 0) -> list[tuple]:
+    def class_surface_parts(self, cls: type, _depth: int = 0) -> list[tuple]:
         """Every user-code member of *cls* and its user base classes.
 
         Walked in reverse MRO so a subclass override lands after the base it
@@ -1287,7 +1318,7 @@ class CodeIdentityMixin:
                         # digest depend on the module it lives in.
                         if target is not member:
                             try:
-                                own = self._hash_arg_payload((member,), {})
+                                own = self._args.hash_payload((member,), {})
                             except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
                                 own = None
                             if own is not None:
@@ -1304,8 +1335,8 @@ class CodeIdentityMixin:
                     # digest unchanged, and ``partial(scale, 3)`` collided
                     # with ``partial(scale, 4)``.
                     #
-                    # The nested walk recurses into ``_class_surface_parts``
-                    # DIRECTLY, not through the memoized ``_code_surface_hash``,
+                    # The nested walk recurses into ``CodeIdentity.class_surface_parts``
+                    # DIRECTLY, not through the memoized ``CodeIdentity.code_surface_hash``,
                     # and is bounded by DEPTH rather than by a cycle set. A
                     # cycle set would make the digest depend on which class
                     # happened to be hashed first (the memo would hold a cut
@@ -1316,13 +1347,13 @@ class CodeIdentityMixin:
                     nested = None
                     inner_cls = member if isinstance(member, type) else type(member)
                     if _depth < 2 and is_user_code_object(inner_cls):
-                        sub_parts = self._class_surface_parts(inner_cls, _depth + 1)
+                        sub_parts = self.class_surface_parts(inner_cls, _depth + 1)
                         if sub_parts:
                             nested = hashlib.sha256(
                                 repr(sub_parts).encode("utf-8"),
                             ).hexdigest()
                     try:
-                        content = self._hash_arg_payload((member,), {})
+                        content = self._args.hash_payload((member,), {})
                     except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
                         content = None
                     if nested is not None or content is not None:
@@ -1355,7 +1386,7 @@ class CodeIdentityMixin:
                     # be folded and no `ident` was found either, dropping the
                     # member is strictly safer than a non-deterministic repr.
                     try:
-                        content = self._hash_arg_payload((member,), {})
+                        content = self._args.hash_payload((member,), {})
                     except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
                         content = None
                     if ident or content is not None:
@@ -1385,7 +1416,7 @@ class CodeIdentityMixin:
                     parts.append((cls.__qualname__, f"field:{fname}:factory", ident))
         return parts
 
-    def _user_class_source_hash(self, cls: type) -> str:
+    def user_class_source_hash(self, cls: type) -> str:
         """Memoized source hash of a USER class.
 
         A class's source cannot change within a running interpreter: editing the
@@ -1395,17 +1426,17 @@ class CodeIdentityMixin:
         a cheap object-graph walk plus dict lookups -- never source I/O.
 
         Source-first, surface-as-fallback. Both of this method's callers
-        (``_instance_class_source_parts``, directly and via
+        (``CodeIdentity.instance_class_source_parts``, directly and via
         ``_fold_read_globals``) gate on ``_is_user_class`` -> ``_is_user_module``,
         which requires ``__file__`` -- so every class actually reachable here
         already has retrievable source, and ``inspect.getsource`` succeeds. The
-        class-aware surface (``_code_surface_hash``) only engages on
+        class-aware surface (``CodeIdentity.code_surface_hash``) only engages on
         ``SOURCE_RETRIEVAL_ERRORS`` -- a class truly without source, e.g. a
         notebook cell's ``__main__`` has no ``__file__`` -- or when this method
         is reached some other way in the future. Preferring it unconditionally
         was measured to regress every file-backed class whose method is wrapped
         by ``@functools.wraps``, ``@lru_cache``, or ``@singledispatchmethod``:
-        ``_class_surface_parts`` walks the WRAPPER, not the wrapped function, so
+        ``CodeIdentity.class_surface_parts`` walks the WRAPPER, not the wrapped function, so
         a body edit under one of those decorators stopped invalidating even
         though whole-class source hashing always saw it (source is just text).
         """
@@ -1417,12 +1448,12 @@ class CodeIdentityMixin:
             # No source to hash (or it doesn't parse). A class has no
             # __code__, so the callable fallback would key it on its name
             # alone; the class-aware surface sees its members.
-            h = self._code_surface_hash(cls) or hash_callable_source(cls)
+            h = self.code_surface_hash(cls) or hash_callable_source(cls)
         if len(self._user_class_src_cache) < 4096:
             self._user_class_src_cache[cls] = h
         return h
 
-    def _instance_class_source_parts(
+    def instance_class_source_parts(
         self,
         value: Any,
         _seen: set | None = None,
@@ -1456,7 +1487,7 @@ class CodeIdentityMixin:
         cls = type(value)
         if is_user_class(cls, own_pkg):
             try:
-                parts.append((cls.__qualname__, self._user_class_source_hash(cls)))
+                parts.append((cls.__qualname__, self.user_class_source_hash(cls)))
             except SOURCE_RETRIEVAL_ERRORS:
                 pass
         held = getattr(value, "__dict__", None)
@@ -1464,5 +1495,5 @@ class CodeIdentityMixin:
             for attr_val in held.values():
                 for item in iter_contained(attr_val):
                     if is_user_class(type(item), own_pkg):
-                        parts.extend(self._instance_class_source_parts(item, _seen, _depth + 1, own_pkg=own_pkg))
+                        parts.extend(self.instance_class_source_parts(item, _seen, _depth + 1, own_pkg=own_pkg))
         return parts

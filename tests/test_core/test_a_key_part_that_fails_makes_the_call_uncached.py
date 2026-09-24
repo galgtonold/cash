@@ -91,8 +91,8 @@ def test_a_fold_that_raises_runs_the_call_uncached(cash_instance, monkeypatch):
 
     # The fold that keys code passed as an argument used to swallow this and
     # key the call without the argument's code.
-    monkeypatch.setattr(cash_instance, "_code_ref_closure", broken)
-    cash_instance._code_surface_cache.clear()
+    monkeypatch.setattr(cash_instance._code, "_code_ref_closure", broken)
+    cash_instance._code._code_surface_cache.clear()
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         assert f(Step()) == 1

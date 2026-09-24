@@ -786,9 +786,9 @@ def _holder_digests(c, prelude, body_a, body_b):
     """
     nb = _nb_module()
     _define(nb, prelude + body_a, name="Holder")
-    before = c._code_surface_hash(nb.Holder)
+    before = c._code.code_surface_hash(nb.Holder)
     _define(nb, prelude + body_b, name="Holder")
-    return before, c._code_surface_hash(nb.Holder)
+    return before, c._code.code_surface_hash(nb.Holder)
 
 
 _HOLDER_PRELUDE = (
@@ -842,9 +842,9 @@ def test_a_callable_instance_attribute_folds_state_and_class_code(c):
     nb = _nb_module()
     holder = "class Holder:\n    op = Op(2)\n"
     _define(nb, _HOLDER_PRELUDE + holder, name="Holder")
-    code_before = c._code_surface_hash(nb.Holder)
+    code_before = c._code.code_surface_hash(nb.Holder)
     _define(nb, edited + holder, name="Holder")
-    assert code_before != c._code_surface_hash(nb.Holder), "__call__ body is not folded"
+    assert code_before != c._code.code_surface_hash(nb.Holder), "__call__ body is not folded"
 
 
 def test_an_unchanged_holder_still_collides(c):
@@ -874,21 +874,23 @@ def test_an_opaque_base_does_not_move_its_subclass_digest(c, opaque_registry):
     )
     nb = _nb_module()
     _define(nb, body.format(v="V1", m=1), name="Derived")
-    unmarked_before = c._code_surface_hash(nb.Derived)
+    unmarked_before = c._code.code_surface_hash(nb.Derived)
     _define(nb, body.format(v="V2", m=1), name="Derived")
-    assert unmarked_before != c._code_surface_hash(nb.Derived), "control: an unmarked base edit must move the digest"
+    assert unmarked_before != c._code.code_surface_hash(nb.Derived), (
+        "control: an unmarked base edit must move the digest"
+    )
 
     nb2 = _nb_module()
     _define(nb2, body.format(v="V1", m=1), name="Derived")
     CashCls.mark_opaque(nb2.VendorBase)
-    marked_before = c._code_surface_hash(nb2.Derived)
+    marked_before = c._code.code_surface_hash(nb2.Derived)
     _define(nb2, body.format(v="V2", m=1), name="Derived")
     CashCls.mark_opaque(nb2.VendorBase)
-    assert marked_before == c._code_surface_hash(nb2.Derived), "an opaque base must not move its subclass's digest"
+    assert marked_before == c._code.code_surface_hash(nb2.Derived), "an opaque base must not move its subclass's digest"
 
     _define(nb2, body.format(v="V2", m=2), name="Derived")
     CashCls.mark_opaque(nb2.VendorBase)
-    assert marked_before != c._code_surface_hash(nb2.Derived), (
+    assert marked_before != c._code.code_surface_hash(nb2.Derived), (
         "control: the subclass's OWN edit must still move the digest"
     )
 

@@ -298,7 +298,9 @@ class GlobalsFoldMixin:
                 if name in self.functions:
                     if name not in self._populated:
                         self._ensure_closure_analyzed(inner)
-                    return "cached:" + self._state_hasher.compute(name, own_source_override=self._pin_own_source(inner))
+                    return "cached:" + self._state_hasher.compute(
+                        name, own_source_override=self._code.pin_own_source(inner)
+                    )
                 fn = inner
         if not isinstance(fn, types.FunctionType):
             return hash_callable_source(fn)
@@ -390,7 +392,7 @@ class GlobalsFoldMixin:
                 continue
             try:
                 stabilized = stabilize_for_global_hash(v, self._data_callable_identity)
-                h = self._hash_arg_payload((stabilized,), {})
+                h = self._args.hash_payload((stabilized,), {})
                 parts.append((name, h))
                 # Free: this is the hash the key already needed. Keeping it is
                 # what makes the post-call check cost one hash instead of two.
@@ -416,14 +418,14 @@ class GlobalsFoldMixin:
             # source too (memoized per class; see _instance_class_source_parts).
             for item in iter_contained(v):
                 if is_user_class(type(item), own_pkg):
-                    for cname, chash in self._instance_class_source_parts(item, own_pkg=own_pkg):
+                    for cname, chash in self._code.instance_class_source_parts(item, own_pkg=own_pkg):
                         parts.append((f"{name}#cls:{cname}", chash))
                 elif isinstance(item, type) and is_user_class(item, own_pkg):
                     # The CLASS itself, not an instance of it: `TABLE = {"fast":
                     # impl.Fast}` pickles by reference, so editing `Fast.run`
                     # moved nothing while the same dict holding a FUNCTION was
                     # followed.
-                    surface = self._code_surface_hash(item)
+                    surface = self._code.code_surface_hash(item)
                     if surface is not None:
                         parts.append((f"{name}#cls:{item.__qualname__}", surface))
         parts.extend(self._module_attr_parts(func, func_name, g, learned=learned_mutating, watch=watch))
@@ -581,7 +583,7 @@ class GlobalsFoldMixin:
             return None
         try:
             stabilized = stabilize_for_global_hash(payload, self._data_callable_identity)
-            return self._hash_arg_payload((stabilized,), {})
+            return self._args.hash_payload((stabilized,), {})
         except Exception:  # noqa: BLE001 - never break a call over this
             return None
 
@@ -665,7 +667,7 @@ class GlobalsFoldMixin:
             elif verdict[1] == "partials":
                 payload = ("wrapped partials", held_partials(value))
             stabilized = stabilize_for_global_hash(payload, self._data_callable_identity)
-            return self._hash_arg_payload((stabilized,), {})
+            return self._args.hash_payload((stabilized,), {})
         except Exception:  # noqa: BLE001 - unkeyable before, never break a call over it
             self._note_carrier_verdict(value, False)
             return None
@@ -925,7 +927,7 @@ class GlobalsFoldMixin:
                 return  # code: the helper walk follows it
             try:
                 stabilized = stabilize_for_global_hash(value, self._data_callable_identity)
-                parts.append((label, self._hash_arg_payload((stabilized,), {})))
+                parts.append((label, self._args.hash_payload((stabilized,), {})))
             except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
                 pass
 
@@ -1041,7 +1043,7 @@ class GlobalsFoldMixin:
         """Hash *value* for the key, warning once and skipping if it cannot be."""
         try:
             stabilized = stabilize_for_global_hash(value, self._data_callable_identity)
-            return self._hash_arg_payload((stabilized,), {})
+            return self._args.hash_payload((stabilized,), {})
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
             self._notices.warn_once(
                 CashImpurityWarning,

@@ -227,13 +227,13 @@ def test_cash_s_own_work_does_not_decide_where_a_result_lands(c, monkeypatch):
     function that returns at once got persisted and a quiet one did not. The
     floor is gone, which retires the bug -- and the test now pins the property
     that made it impossible: slow cash-side work, fast body, still stored."""
-    real = type(c)._serialize_args
+    real = type(c._args).serialize_args
 
     def slow_key(self, *args, **kwargs):
         time.sleep(0.15)
         return real(self, *args, **kwargs)
 
-    monkeypatch.setattr(type(c), "_serialize_args", slow_key)
+    monkeypatch.setattr(type(c._args), "serialize_args", slow_key)
 
     @c.cache(assume_safe=True)
     def fast(n):

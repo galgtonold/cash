@@ -94,13 +94,13 @@ class RuntimeMixin:
             # result.
             return Unkeyable(_UNHASHABLE), watch
         except UnhashableArgs:
-            self._warn_unhashable_args(func_name, args, kwargs)
+            self._args.warn_unhashable_args(func_name, args, kwargs)
             return Unkeyable(_UNHASHABLE), watch
         except KeyBuildFailed as e:
             self._notices.warn_once(CashCacheIneffectiveWarning, func_name, e.code, e.message, code=e.code, fix=e.fix)
             return Unkeyable(_KEY_FAILED), watch
         except Exception as e:  # noqa: BLE001 - any failure building the key means no key
-            self._warn_key_build_failed(func_name, args, kwargs, e)
+            self._args.warn_key_build_failed(func_name, args, kwargs, e)
             return Unkeyable(_KEY_FAILED), watch
         finally:
             CAPTURE_WATCH.reset(watch_token)
@@ -155,7 +155,7 @@ class RuntimeMixin:
             ledger_note("@chain", chain)
             state_hash = self._state_hasher.compute(
                 func_name,
-                own_source_override=self._pin_own_source(func),
+                own_source_override=self._code.pin_own_source(func),
                 note=True,
             )
             state_hash = self._fold_declared_files(func_name, state_hash)
@@ -177,21 +177,21 @@ class RuntimeMixin:
             chain.append(state_hash)
             state_hash = self._fold_environment(func_name, state_hash)
             chain.append(state_hash)
-            state_hash = self._fold_method_class_deps(func, args, state_hash)
+            state_hash = self._code.fold_method_class_deps(func, args, state_hash)
             chain.append(state_hash)
             # ONE canonicalisation, fed to both the code channel and the value
             # channel. `_fold_code_args` on the RAW arguments saw a class
             # passed explicitly but not the identical class arriving as a
             # parameter DEFAULT, so `build()` and `build(Schema)` -- the same
             # logical call -- produced two cache keys and two executions.
-            normalized_args = self._normalize_call_args(func_name, args, kwargs)
+            normalized_args = self._args.normalize_call_args(func_name, args, kwargs)
             if self._cached[func_name].seed_params:
                 self._warn_if_seed_is_none(func, func_name, args, kwargs)
             state_hash = self._fold_code_args(*normalized_args, state_hash, func_name=func_name)
             chain.append(state_hash)
             dynamic_state_hash = self._resolve_dynamic_dependencies(func_name, dynamic_depends_on, args, kwargs)
-            args_hash = self._serialize_args(func_name, args, kwargs, normalized=normalized_args)
-            self._note_arg_cost(func_name)
+            args_hash = self._args.serialize_args(func_name, args, kwargs, normalized=normalized_args)
+            self._args.note_arg_cost(func_name)
         finally:
             PLAIN_CENSUS.memo = previous
         if args_hash is None:

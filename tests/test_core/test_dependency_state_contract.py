@@ -79,7 +79,7 @@ def test_helper_token_format_is_helper_qual_hash(tmp_path):
         if callable(obj):
             live[qual] = hashlib.sha256(normalize_source_for_hash(inspect.getsource(obj)).encode("utf-8")).hexdigest()
 
-    no_defaults = c._hash_arg_payload((), {})
+    no_defaults = c._args.hash_payload((), {})
     parts = [c.source_hashes[name]]
     for qual in sorted(report.helper_source_hashes):
         if qual == name:

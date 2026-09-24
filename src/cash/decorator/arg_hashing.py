@@ -11,7 +11,8 @@ import sys
 import threading
 import types
 import weakref
-from typing import Any
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from .. import _plain_data
 from .._clock import perf_counter as _perf_counter
@@ -19,6 +20,11 @@ from ..exceptions import CashCacheIneffectiveWarning
 from ..lineage_tag import own_tag
 from ..object_hashing import builtin_hash, stable_key_repr
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, IMMUTABLE_PRIMS, PLAIN_SEQS
+
+if TYPE_CHECKING:
+    from .cached_function import CachedFunction
+    from .frozen import FrozenResults
+    from .reporting import Notices
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +77,7 @@ def plain_key_part(value: Any) -> Any:
 #: Values whose identity is code plus what it captures. A hasher registered for
 #: one of these types covers every such value in the process, and the obvious
 #: one -- by name -- gives every closure one factory makes the same identity.
-#: `Cash._first_unhashable_arg` found only built-in-typed arguments.
+#: `ArgHasher.first_unhashable_arg` found only built-in-typed arguments.
 NO_SUSPECT = object()
 
 
@@ -100,12 +106,12 @@ def unhashable_arg_fix(value: Any, type_name: str) -> str:
 
 #: Who wrote a value's ``_cash_lineage_hash``, in ``_cash_lineage_src``. Only the
 #: notebook's statement layer keeps the tag current as the value changes, so
-#: only its tag stands in for the value's content (see `_hash_arg_payload`).
+#: only its tag stands in for the value's content (see `ArgHasher.hash_payload`).
 LINEAGE_SRC_STATEMENT = "statement"
 LINEAGE_SRC_DECORATOR = "decorator"
 #: Written for a function decorated ``frozen=True``: the user's promise that the
 #: result is not modified afterwards, trusted like the statement layer's tag and
-#: audited now and then (`_audit_frozen`).
+#: audited now and then (`FrozenResults.audit`).
 LINEAGE_SRC_FROZEN = "frozen"
 
 
@@ -300,13 +306,50 @@ def is_opaque(obj: Any) -> bool:
         return False
 
 
-class ArgHashingMixin:
+class ArgHasher:
     """Canonical arguments and their content hashes, with the memos that keep
     re-hashing an unchanged argument cheap."""
 
-    def _warn_unhashable_args(self, func_name: str, args: tuple, kwargs: dict) -> None:
+    def __init__(self, cached: dict[str, CachedFunction], frozen: FrozenResults, notices: Notices) -> None:
+        self._cached = cached
+        self._frozen = frozen
+        self._notices = notices
+        # id(arg) -> (weakref, lineage_hash, content_hash). Lets a repeated call
+        # with the SAME unmutated argument skip re-hashing a possibly-huge
+        # input; `hash_payload` validates each read (weakref identity +
+        # lineage). Bounded by ARG_HASH_MEMO_CAP.
+        self._memo: dict[int, tuple] = {}
+        # id(frame) -> (weakref, shallow copy, signature, content hash): the
+        # pandas copy-on-write memo, see `_frame_memo_store`.
+        self._frame_memo: dict[int, tuple] = {}
+        #: type -> (callable(value) -> str, source hash), from
+        #: ``cash.register_hasher``. The source hash is part of the argument
+        #: hash, so editing a hasher's body invalidates what it keyed.
+        self.type_hashers: dict[type, tuple[Callable[[Any], str], str]] = {}
+        #: The same, for ``register_hasher(..., override=True)``: consulted
+        #: BEFORE cash's own content hashers. Separate so the hot path skips
+        #: the question with one empty check.
+        self.override_hashers: dict[type, tuple[Callable[[Any], str], str]] = {}
+
+    def register_hasher(self, type_: type, hasher_fn: Callable[[Any], str], src_hash: str, *, override: bool) -> None:
+        """Make *hasher_fn* the identity of *type_* values, replacing any earlier one."""
+        # One type, one registration: re-registering must not leave the
+        # previous entry behind in the other registry, still winning.
+        self.type_hashers.pop(type_, None)
+        self.override_hashers.pop(type_, None)
+        if override:
+            self.override_hashers[type_] = (hasher_fn, src_hash)
+        else:
+            self.type_hashers[type_] = (hasher_fn, src_hash)
+        # A memoized hash was produced by whichever hasher was in effect
+        # before; drop them so the new registration is not shadowed for
+        # objects already seen.
+        self._memo.clear()
+        self._frame_memo.clear()
+
+    def warn_unhashable_args(self, func_name: str, args: tuple, kwargs: dict) -> None:
         """KEY-UNHASHABLE-ARG, naming the argument when one can be singled out."""
-        arg_type_name = self._first_unhashable_arg_type(args, kwargs)
+        arg_type_name = self.first_unhashable_arg_type(args, kwargs)
         if arg_type_name == "<unknown>":
             which = (
                 "an argument could not be hashed, and cash cannot say which -- the value is nested inside a container"
@@ -318,7 +361,7 @@ class ArgHashingMixin:
             )
         else:
             which = f"an argument of type {arg_type_name} could not be hashed"
-            suggestion = unhashable_arg_fix(self._first_unhashable_arg(args, kwargs), arg_type_name)
+            suggestion = unhashable_arg_fix(self.first_unhashable_arg(args, kwargs), arg_type_name)
         self._notices.warn_once(
             CashCacheIneffectiveWarning,
             func_name,
@@ -328,16 +371,16 @@ class ArgHashingMixin:
             fix=suggestion,
         )
 
-    def _warn_key_build_failed(self, func_name: str, args: tuple, kwargs: dict, e: Exception) -> None:
+    def warn_key_build_failed(self, func_name: str, args: tuple, kwargs: dict, e: Exception) -> None:
         """KEY-BUILD-FAILED: a step of the key build raised where it did not expect to."""
-        arg_type_name = self._first_unhashable_arg_type(args, kwargs)
+        arg_type_name = self.first_unhashable_arg_type(args, kwargs)
         if arg_type_name == "<unknown>":
             hint = (
                 "check the function's arguments -- cash could not identify "
                 "the offending type; if the exception does not belong to "
                 "your code, report it as a bug with the traceback."
             )
-        elif isinstance(self._first_unhashable_arg(args, kwargs), CODE_VALUE_TYPES):
+        elif isinstance(self.first_unhashable_arg(args, kwargs), CODE_VALUE_TYPES):
             hint = CODE_ARG_FIX
         else:
             hint = (
@@ -356,17 +399,17 @@ class ArgHashingMixin:
             fix=hint,
         )
 
-    def _first_unhashable_arg_type(self, args: tuple, kwargs: dict) -> str:
+    def first_unhashable_arg_type(self, args: tuple, kwargs: dict) -> str:
         """Return the qualname of the argument that could not be hashed, or '<unknown>'.
 
         Used to attribute CashCacheIneffectiveWarning to a concrete type name
         so the user knows which register_hasher() call to add. See
-        `_first_unhashable_arg` for how the argument is found.
+        `ArgHasher.first_unhashable_arg` for how the argument is found.
         """
-        suspect = self._first_unhashable_arg(args, kwargs)
+        suspect = self.first_unhashable_arg(args, kwargs)
         return "<unknown>" if suspect is NO_SUSPECT else type(suspect).__qualname__
 
-    def _first_unhashable_arg(self, args: tuple, kwargs: dict) -> Any:
+    def first_unhashable_arg(self, args: tuple, kwargs: dict) -> Any:
         """The argument that could not be hashed, or ``NO_SUSPECT``.
 
         Each candidate is hashed ALONE and the first that fails is named, so
@@ -381,12 +424,12 @@ class ArgHashingMixin:
         candidates = [a for a in (*args, *kwargs.values()) if not isinstance(a, IMMUTABLE_PRIMS + BUILTIN_CONTAINERS)]
         for candidate in candidates:
             try:
-                self._hash_arg_payload((candidate,), {})
+                self.hash_payload((candidate,), {})
             except Exception:  # noqa: BLE001 - exactly what we are looking for
                 return candidate
         return candidates[0] if candidates else NO_SUSPECT
 
-    def _normalize_call_args(
+    def normalize_call_args(
         self,
         func_name: str,
         args: tuple,
@@ -453,7 +496,7 @@ class ArgHashingMixin:
             wref = weakref.ref(arg)
         except TypeError:
             return
-        memo = self._arg_hash_memo
+        memo = self._memo
         if len(memo) >= ARG_HASH_MEMO_CAP:
             memo.clear()
         memo[id(arg)] = (wref, lineage, content_hash)
@@ -496,7 +539,7 @@ class ArgHashingMixin:
             self._frame_memo.clear()
         self._frame_memo[key] = (wref, held, signature, content_hash)
 
-    def _hash_arg_payload(self, args: tuple, kwargs: dict) -> str:
+    def hash_payload(self, args: tuple, kwargs: dict) -> str:
         """Hash one concrete ``(args, kwargs)`` form. May raise on unpicklable
         values; the caller decides whether to retry with a different form."""
 
@@ -541,20 +584,20 @@ class ArgHashingMixin:
             if lineage is not None:
                 src = own_tag(arg, "_cash_lineage_src")
                 if src == LINEAGE_SRC_FROZEN:
-                    if not self._audit_frozen(arg):
+                    if not self._frozen.audit(arg):
                         lineage = None
                 elif src != LINEAGE_SRC_STATEMENT:
                     lineage = None
-            if self._frozen_arrays and id(arg) in self._frozen_arrays:
-                frozen_hash = self._frozen_array_hash(arg)
+            if self._frozen.arrays and id(arg) in self._frozen.arrays:
+                frozen_hash = self._frozen.array_hash(arg)
                 if frozen_hash is not None:
                     return frozen_hash
-            if self._frozen_containers and id(arg) in self._frozen_containers:
-                frozen_hash = self._frozen_container_hash(arg)
+            if self._frozen.containers and id(arg) in self._frozen.containers:
+                frozen_hash = self._frozen.container_hash(arg)
                 if frozen_hash is not None:
                     return frozen_hash
             if lineage is not None:
-                entry = self._arg_hash_memo.get(id(arg))
+                entry = self._memo.get(id(arg))
                 if entry is not None:
                     wref, memo_lineage, content_hash = entry
                     if memo_lineage == lineage and wref() is arg:
@@ -572,8 +615,8 @@ class ArgHashingMixin:
             # hashing, which is the only way to stop re-reading a 800MB array
             # on every call. Guarded by the emptiness check so the ordinary
             # case pays one dict truth test, not a loop.
-            if self._override_hashers:
-                for type_, (hasher_fn, src_hash) in self._override_hashers.items():
+            if self.override_hashers:
+                for type_, (hasher_fn, src_hash) in self.override_hashers.items():
                     if isinstance(arg, type_):
                         return f"{src_hash}:{hasher_fn(arg)}"
 
@@ -591,7 +634,7 @@ class ArgHashingMixin:
             # (test_hasher_priority_cash_hash_first).
             if lineage is not None:
                 return lineage
-            for type_, (hasher_fn, src_hash) in self._type_hashers.items():
+            for type_, (hasher_fn, src_hash) in self.type_hashers.items():
                 if isinstance(arg, type_):
                     # Embed the hasher source hash so that changing the
                     # hasher's body invalidates dependent cache entries
@@ -610,10 +653,10 @@ class ArgHashingMixin:
             seconds = _perf_counter() - t0
             if costliest is None or seconds > costliest[1]:
                 producer = getattr(value, "_cash_lineage_producer", None)
-                if producer is None and self._frozen_arrays and id(value) in self._frozen_arrays:
-                    producer = self._frozen_arrays[id(value)][1]
-                if producer is None and self._frozen_containers and id(value) in self._frozen_containers:
-                    producer = self._frozen_containers[id(value)][1]
+                if producer is None and self._frozen.arrays and id(value) in self._frozen.arrays:
+                    producer = self._frozen.arrays[id(value)][1]
+                if producer is None and self._frozen.containers and id(value) in self._frozen.containers:
+                    producer = self._frozen.containers[id(value)][1]
                 old_pandas = (
                     type(value).__name__ in ("DataFrame", "Series")
                     and (type(value).__module__ or "").startswith("pandas")
@@ -650,13 +693,13 @@ class ArgHashingMixin:
             if costliest is None or payload_seconds > costliest[1]:
                 label, value = max(raw, key=lambda r: len(r[1]) if hasattr(r[1], "__len__") else sys.getsizeof(r[1]))
                 producer = getattr(value, "_cash_lineage_producer", None)
-                if producer is None and self._frozen_containers and id(value) in self._frozen_containers:
-                    producer = self._frozen_containers[id(value)][1]
+                if producer is None and self._frozen.containers and id(value) in self._frozen.containers:
+                    producer = self._frozen.containers[id(value)][1]
                 costliest = (label, payload_seconds, type(value).__name__, producer, False)
         ARG_COST.last = costliest
         return hashlib.sha256(args_bytes).hexdigest()
 
-    def _serialize_args(
+    def serialize_args(
         self, func_name: str, args: tuple, kwargs: dict, normalized: tuple[tuple, dict] | None = None
     ) -> str | None:
         """Hash the arguments, canonicalised.
@@ -670,9 +713,9 @@ class ArgHashingMixin:
         holds by construction rather than by two call sites staying in step.
         """
         if normalized is None:
-            normalized = self._normalize_call_args(func_name, args, kwargs)
+            normalized = self.normalize_call_args(func_name, args, kwargs)
         try:
-            return self._hash_arg_payload(*normalized)
+            return self.hash_payload(*normalized)
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
             # Normalization can fold a default value into the payload (so
             # f(1) keys identically to f(1, y=<default>)). If that default is
@@ -680,7 +723,7 @@ class ArgHashingMixin:
             # caching - retry with the raw, un-normalized form first.
             if normalized[0] is not args or normalized[1] is not kwargs:
                 try:
-                    return self._hash_arg_payload(args, kwargs)
+                    return self.hash_payload(args, kwargs)
                 except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
                     pass
             # Pickle failure here is surfaced via CashCacheIneffectiveWarning in
@@ -690,7 +733,7 @@ class ArgHashingMixin:
             logger.debug("Could not serialize arguments for %s: %s", func_name, e)
             return None
 
-    def _note_arg_cost(self, func_name: str) -> None:
+    def note_arg_cost(self, func_name: str) -> None:
         """Keep the costliest argument to hash seen for *func_name*.
 
         Only its description is kept -- parameter, type, seconds, the cached

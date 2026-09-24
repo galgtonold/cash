@@ -317,7 +317,7 @@ class PurityChecksMixin:
                     cell = cells.get(name)
                     if cell is None:
                         continue
-                    after = self._hash_arg_payload((cell.cell_contents,), {})
+                    after = self._args.hash_payload((cell.cell_contents,), {})
                 elif scope == "carrier":
                     mapping, key = owner
                     if key not in mapping:
@@ -329,7 +329,7 @@ class PurityChecksMixin:
                     g = owner if isinstance(owner, dict) else own_globals
                     if not isinstance(g, dict) or name not in g:
                         continue
-                    after = self._hash_arg_payload(
+                    after = self._args.hash_payload(
                         (stabilize_for_global_hash(g[name], self._data_callable_identity),), {}
                     )
             except Exception:  # noqa: BLE001 - unhashable NOW; treat as unchanged
@@ -425,14 +425,14 @@ class PurityChecksMixin:
         # more than the check may, the check is retired before it pays -- a
         # miss on two million rows hashed them three times, once for the key,
         # once here and once after the body. Read from what
-        # `_note_arg_cost` kept: it has already taken `ARG_COST.last`.
+        # `ArgHasher.note_arg_cost` kept: it has already taken `ARG_COST.last`.
         cost = cf.arg_cost
         if cost is not None and cost[2] > MUTATION_CHECK_BUDGET_S:
             cf.mutation_check_retired = True
             return None
         started = _perf_counter()
         try:
-            canon_args, canon_kwargs = self._normalize_call_args(func_name, args, kwargs)
+            canon_args, canon_kwargs = self._args.normalize_call_args(func_name, args, kwargs)
         except Exception:  # noqa: BLE001 - best effort, like the check itself
             return None
         named = [(f"*args[{i}]", v) for i, v in enumerate(canon_args)] + list(canon_kwargs.items())
@@ -447,7 +447,7 @@ class PurityChecksMixin:
             return {candidates[0][0]: ""}
         for name, value in candidates:
             try:
-                snapshot[name] = self._hash_arg_payload((value,), {})
+                snapshot[name] = self._args.hash_payload((value,), {})
             except Exception:  # noqa: BLE001 - unhashable: the whole-args check still runs
                 continue
         if _perf_counter() - started > MUTATION_CHECK_BUDGET_S:
@@ -465,7 +465,7 @@ class PurityChecksMixin:
         taken whatever the size (`_plain_data.identity_snapshot`).
         """
         try:
-            canon_args, canon_kwargs = self._normalize_call_args(func_name, args, kwargs)
+            canon_args, canon_kwargs = self._args.normalize_call_args(func_name, args, kwargs)
         except Exception:  # noqa: BLE001 - best effort, like the check itself
             return {}
         found: dict[str, tuple[Any, list]] = {}
@@ -494,7 +494,7 @@ class PurityChecksMixin:
         cheapest way to find them is to look.
 
         The argument hash is already computed to build the cache key, so this
-        re-runs exactly that and compares. `_serialize_args` canonicalises
+        re-runs exactly that and compares. `ArgHasher.serialize_args` canonicalises
         (kwargs order included) and is deterministic on unchanged input, which
         is what makes a difference mean *mutation* rather than noise.
 
@@ -511,7 +511,7 @@ class PurityChecksMixin:
             ]
             if moved:
                 for name in moved:
-                    self._forget_frozen_container(identities[name][0])
+                    self._frozen.forget_container(identities[name][0])
                 observer.mutated_args = moved
                 observer.record(
                     "argument mutation",
@@ -524,7 +524,7 @@ class PurityChecksMixin:
             return
         started = _perf_counter()
         try:
-            after = self._serialize_args(func_name, args, kwargs)
+            after = self._args.serialize_args(func_name, args, kwargs)
         except Exception:  # noqa: BLE001 - user arguments' hashing
             # Hashing is best-effort here. An argument that hashed once and
             # not twice (a generator drained by the body, say) is not evidence

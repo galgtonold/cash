@@ -67,8 +67,8 @@ def test_two_identical_models_get_the_same_surface(tmp_path):
     the compiled trio folded they did not, which is why nothing ever hit.
     """
     c = Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
-    first = c._class_surface_parts(_model())
-    second = c._class_surface_parts(_model())
+    first = c._code.class_surface_parts(_model())
+    second = c._code.class_surface_parts(_model())
 
     names = [n for _, n, _ in first]
     assert not any(n.startswith("__pydantic_core") or n.startswith("__pydantic_valid") for n in names), names
@@ -116,4 +116,4 @@ def test_a_class_with_a_hostile_model_fields_property_does_not_break(tmp_path):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         assert use(Hostile()) == 1
-    assert c._class_surface_parts(Hostile) is not None
+    assert c._code.class_surface_parts(Hostile) is not None

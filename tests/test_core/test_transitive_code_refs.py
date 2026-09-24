@@ -51,7 +51,7 @@ BASE = """
 def surface(cash, **over):
     params = dict(b_expr="", factory_arg="0", variable="t1")
     params.update(over)
-    return cash._code_surface_hash(build(BASE.format(**params)))
+    return cash._code.code_surface_hash(build(BASE.format(**params)))
 
 
 # --- the null control --------------------------------------------------
@@ -70,7 +70,7 @@ def test_default_factory_body_change_is_seen(cash):
     a1 = build(BASE.format(b_expr="", factory_arg="0", variable="t1"))
     a2 = build(BASE.format(b_expr="", factory_arg="999", variable="t1"))
     assert a1().value.value != a2().value.value, "premise: behaviour differs"
-    assert cash._code_surface_hash(a1) != cash._code_surface_hash(a2)
+    assert cash._code.code_surface_hash(a1) != cash._code.code_surface_hash(a2)
 
 
 def test_plain_field_default_change_is_seen(cash):
@@ -86,7 +86,7 @@ def test_class_reached_via_default_factory_is_seen(cash):
     a1 = build(BASE.format(b_expr="", factory_arg="10", variable="t1"))
     a2 = build(BASE.format(b_expr="* 100", factory_arg="10", variable="t1"))
     assert a1().value.value != a2().value.value, "premise: behaviour differs"
-    assert cash._code_surface_hash(a1) != cash._code_surface_hash(a2)
+    assert cash._code.code_surface_hash(a1) != cash._code.code_surface_hash(a2)
 
 
 def test_class_referenced_from_a_method_body_is_seen(cash):
@@ -102,7 +102,7 @@ def test_class_referenced_from_a_method_body_is_seen(cash):
         """
     o1 = build(src.format(expr="* 2"), name="Owner")
     o2 = build(src.format(expr="* 3"), name="Owner")
-    assert cash._code_surface_hash(o1) != cash._code_surface_hash(o2)
+    assert cash._code.code_surface_hash(o1) != cash._code.code_surface_hash(o2)
 
 
 # --- controls against over-invalidation --------------------------------
@@ -130,7 +130,7 @@ def test_annotation_only_reference_is_followed(cash):
         """
     o1 = build(src.format(v="1"), name="Owner")
     o2 = build(src.format(v="2"), name="Owner")
-    assert cash._code_surface_hash(o1) != cash._code_surface_hash(o2)
+    assert cash._code.code_surface_hash(o1) != cash._code.code_surface_hash(o2)
 
 
 def test_stdlib_reference_is_not_followed(cash):
@@ -143,7 +143,7 @@ def test_stdlib_reference_is_not_followed(cash):
                 return json.dumps(x) {expr}
         """
     o1 = build(src.format(expr=""), name="Owner")
-    assert cash._code_surface_hash(o1) is not None
+    assert cash._code.code_surface_hash(o1) is not None
 
 
 # --- traversal must terminate ------------------------------------------
@@ -162,8 +162,8 @@ def test_mutual_reference_terminates(cash):
         """
     a1 = build(src.format(expr=""))
     a2 = build(src.format(expr="or 1"))
-    assert cash._code_surface_hash(a1) is not None
-    assert cash._code_surface_hash(a1) != cash._code_surface_hash(a2)
+    assert cash._code.code_surface_hash(a1) is not None
+    assert cash._code.code_surface_hash(a1) != cash._code.code_surface_hash(a2)
 
 
 def test_self_reference_terminates(cash):
@@ -172,7 +172,7 @@ def test_self_reference_terminates(cash):
             def clone(self):
                 return A()
         """
-    assert cash._code_surface_hash(build(src)) is not None
+    assert cash._code.code_surface_hash(build(src)) is not None
 
 
 # --- end to end, through a real cached call ----------------------------
