@@ -34,6 +34,17 @@ exclude_docs: |
 hooks:
   - mkdocs_hooks.py
 
+# Raise link checks to warnings, so `mkdocs build --strict` fails on a link to
+# a missing heading anchor, an unrecognised relative link, or a page that is
+# neither in the nav nor excluded. mkdocs 1.6 leaves anchors at info.
+validation:
+  omitted_files: warn
+  links:
+    not_found: warn
+    anchors: warn
+    absolute_links: info
+    unrecognized_links: warn
+
 extra_css:
   - stylesheets/cash-design.css
 
