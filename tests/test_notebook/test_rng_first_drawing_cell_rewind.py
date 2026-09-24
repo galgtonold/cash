@@ -38,9 +38,8 @@ DRAW = CELLS[1]
 def _checker() -> tuple[UpstreamChecker, TrackingState]:
     shell = MagicMock()
     shell.user_ns = {}
-    checker = UpstreamChecker(shell, MagicMock())
     state = TrackingState()
-    checker.set_tracking_state(state)
+    checker = UpstreamChecker(shell, MagicMock(), tracking_state=state)
     return checker, state
 
 

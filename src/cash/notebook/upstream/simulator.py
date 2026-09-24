@@ -118,8 +118,8 @@ class NotebookSimulator:
         self.cash_instance = cash_instance
         self.compute_hash_fn = compute_hash_fn
 
-        # Shared state refs (same dicts as UpstreamChecker / StatementProcessor).
-        self.set_tracking_state(tracking_state)
+        #: The checker's, shared with the statement processor.
+        self.tracking_state = tracking_state
         #: Set by ``reset_caches`` (``%cash_on``): adopt untracked names once.
         self._adopt_untracked_pending = False
         #: The previous simulation's per-cell snapshots, where the next one starts.
@@ -149,21 +149,6 @@ class NotebookSimulator:
             virtual_lineage=self.virtual_lineage,
             classifier=self.classifier,
         )
-
-    def set_tracking_state(self, state: TrackingState) -> None:
-        """Re-wire shared state refs (mirrors UpstreamChecker.set_tracking_state)."""
-        self.tracking_state = state
-        self.executed_cell_codes = state.executed_cell_codes
-        self.executed_cell_hashes = state.executed_cell_hashes
-        self.variable_lineage = state.variable_lineage
-        self.lineage = state.lineage
-        self.executed_file_deps = state.executed_file_deps
-        self.executed_input_lineages = state.executed_input_lineages
-        # Propagate to the Phase-1 simulator so its dict refs stay in sync.
-        if hasattr(self, "virtual_lineage"):
-            self.virtual_lineage.set_tracking_state(state)
-        if hasattr(self, "classifier"):
-            self.classifier.set_tracking_state(state)
 
     def reset_caches(self) -> None:
         """Forget the previous simulation.
@@ -400,7 +385,7 @@ class NotebookSimulator:
         for var_name in required_inputs:
             # A user variable shadowing a builtin name is tracked in
             # variable_lineage; only skip genuine (untracked) builtins.
-            if var_name in BUILTIN_NAMES and var_name not in self.variable_lineage:
+            if var_name in BUILTIN_NAMES and var_name not in self.tracking_state.variable_lineage:
                 continue
             if var_name not in self_written:
                 continue
@@ -483,7 +468,7 @@ class NotebookSimulator:
                     # stale (own-prior-mutation) value on an isolated re-run, while a
                     # fresh forward run (producer restored the base) leaves them equal.
                     #
-                    base_lineage = self.executed_input_lineages.get(var_name, {}).get(var_name)
+                    base_lineage = self.tracking_state.executed_input_lineages.get(var_name, {}).get(var_name)
                     if base_lineage is not None and live_lineage != base_lineage:
                         broken_vars.add(var_name)
                     else:
@@ -500,7 +485,7 @@ class NotebookSimulator:
                         )
                     trace_event("force_reset", var=var_name, broke=(var_name in broken_vars and not before))
                 continue
-            recorded = self.variable_lineage.get(var_name)
+            recorded = self.tracking_state.variable_lineage.get(var_name)
             if recorded is None:
                 continue
             # A reassigned lineage-carrying input whose live value is a VALID
@@ -516,7 +501,7 @@ class NotebookSimulator:
             # (``df = df.iloc[1:]`` re-run) must still hit the guard, or its
             # isolated re-run would double-apply. [layer 2]
             if virtual_lineage is not None:
-                prod_code = self.executed_cell_codes.get(var_name)
+                prod_code = self.tracking_state.executed_cell_codes.get(var_name)
                 produced_by_current_cell = True
                 if prod_code:
                     # Strip cash's context markers (``# control_context: ...`` /
@@ -567,7 +552,7 @@ class NotebookSimulator:
             # (live == base). Primitives carry no ``_cash_lineage_hash`` and were
             # already skipped above; in-place mutation is excluded via
             # ``effects.reassigned``.
-            base_input = self.executed_input_lineages.get(var_name, {}).get(var_name)
+            base_input = self.tracking_state.executed_input_lineages.get(var_name, {}).get(var_name)
             if base_input is not None and live_lineage != base_input:
                 logger.debug(
                     "[UPSTREAM_DEBUG] '%s' holds its own prior output on re-run "
@@ -645,7 +630,7 @@ class NotebookSimulator:
             return flagged
         bases = getattr(self.tracking_state, "consumable_bases", {})
         for var_name in candidates:
-            if var_name in BUILTIN_NAMES and var_name not in self.variable_lineage:
+            if var_name in BUILTIN_NAMES and var_name not in self.tracking_state.variable_lineage:
                 continue
             live_value = self.shell.user_ns.get(var_name)
             if live_value is None:
@@ -713,9 +698,9 @@ class NotebookSimulator:
         entry never advances past the first assignment, and restoring it to that
         assignment would drop the intermediate cells' contributions.
         """
-        base_lineage = self.executed_input_lineages.get(var_name, {}).get(var_name)
+        base_lineage = self.tracking_state.executed_input_lineages.get(var_name, {}).get(var_name)
         if base_lineage is not None:
-            current_lineage = self.variable_lineage.get(var_name)
+            current_lineage = self.tracking_state.variable_lineage.get(var_name)
             if current_lineage is not None and current_lineage != base_lineage:
                 logger.debug(
                     "[UPSTREAM_DEBUG] no-lineage self-write '%s' holds its own prior "
@@ -1055,7 +1040,7 @@ class NotebookSimulator:
             # Every variable the two engines disagree on, relevant or not. In a
             # plain top-to-bottom run there must be none: each one is a spurious
             # "changed" waiting for a cell that reads it.
-            recorded = self.variable_lineage
+            recorded = self.tracking_state.variable_lineage
             virtual_lineage = sim.virtual_lineage
             trace_event(
                 "lineage_disagreement",

@@ -286,8 +286,10 @@ class VirtualLineage:
         #: and modules exactly as the statement processor does.
         self.function_tracker = function_tracker
 
-        # Shared state refs (same dicts as NotebookSimulator / UpstreamChecker).
-        self.set_tracking_state(tracking_state)
+        #: The checker's. ``mutation_verdicts`` and
+        #: ``observed_rng_statement_draws`` are read from it because the
+        #: simulation must reproduce the runtime's key inputs exactly.
+        self.tracking_state = tracking_state
 
         # Simulator-owned caches.
         # Resolved on first loop-split lookup; None means 'not yet
@@ -313,22 +315,6 @@ class VirtualLineage:
         self._last_hit_bumped: set[str] = set()
         #: Names the forward probe bound to ``_FORWARD_PROBE_PLACEHOLDER``.
         self._probe_placeholders: set[str] = set()
-
-    def set_tracking_state(self, state: TrackingState) -> None:
-        """Re-wire shared state refs (mirrors NotebookSimulator.set_tracking_state)."""
-        self.tracking_state = state
-        self.executed_cell_codes = state.executed_cell_codes
-        self.executed_cell_hashes = state.executed_cell_hashes
-        self.variable_lineage = state.variable_lineage
-        self.lineage = state.lineage
-        self.executed_file_deps = state.executed_file_deps
-        self.executed_input_lineages = state.executed_input_lineages
-        self.mutation_verdicts = state.mutation_verdicts
-        # Runtime-observed hidden RNG draws, keyed by statement source hash.
-        # Read here for the same reason mutation_verdicts is: the simulation
-        # must reproduce the runtime's key inputs EXACTLY, or the two disagree
-        # and every affected statement looks changed.
-        self.observed_rng_statement_draws = state.observed_rng_statement_draws
 
     @staticmethod
     def _build_function_sources(notebook_cells: list[str]) -> dict[str, str]:
@@ -388,7 +374,7 @@ class VirtualLineage:
 
         def load_verdict() -> set[str] | None:
             source_hash = statement_source_hash(stmt_code)
-            verdict = self.mutation_verdicts.get(source_hash)
+            verdict = self.tracking_state.mutation_verdicts.get(source_hash)
             return verdict if verdict is not None else self._persisted_mutation_verdict(source_hash)
 
         # Bare-call arguments: the live ones the runtime watches, and, after a
@@ -446,7 +432,7 @@ class VirtualLineage:
         for entry in self.cache.entries:
             for trace_entry in entry.trace_segment:
                 for var in set(trace_entry.outputs) & rerecorded:
-                    for path in self.executed_file_deps.get(var, ()):
+                    for path in self.tracking_state.executed_file_deps.get(var, ()):
                         if path in entry.cell_file_deps:
                             continue
                         resolved = resolve_file_dep_path(path)
@@ -642,7 +628,7 @@ class VirtualLineage:
         # has already given the name its new lineage; use that one. Module
         # names only: a from-imported name's lineage is cleared on purpose.
         for name in reloaded:
-            live = self.variable_lineage.get(name)
+            live = self.tracking_state.variable_lineage.get(name)
             if live and isinstance(self.shell.user_ns.get(name), types.ModuleType):
                 sim.virtual_lineage[name] = live
 
@@ -718,8 +704,8 @@ class VirtualLineage:
             if var_name in vars_updated_by_trace:
                 continue
 
-            if var_name in self.executed_cell_codes:
-                mem_code = self.executed_cell_codes[var_name]
+            if var_name in self.tracking_state.executed_cell_codes:
+                mem_code = self.tracking_state.executed_cell_codes[var_name]
 
                 is_in_trace = False
                 for entry in simulation_trace:
@@ -871,7 +857,7 @@ class VirtualLineage:
                 stmt_code,
                 key_inputs(inputs, input_hashes),
                 ctx=CacheKeyContext(
-                    variable_lineage=self.variable_lineage,
+                    variable_lineage=self.tracking_state.variable_lineage,
                     user_ns=self.shell.user_ns,
                     function_tracker=self.function_tracker,
                     virtual_lineage=key_lineages(input_hashes),
@@ -1140,9 +1126,9 @@ class VirtualLineage:
         if upstream_has_modifications or not vars_mutated_by_loops:
             return False
         for mv in vars_mutated_by_loops:
-            if mv not in self.executed_cell_codes:
+            if mv not in self.tracking_state.executed_cell_codes:
                 continue
-            exec_code = strip_markers(self.executed_cell_codes[mv]).strip()
+            exec_code = strip_markers(self.tracking_state.executed_cell_codes[mv]).strip()
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("[UPSTREAM_DEBUG] Checking loop trust for '%s': exec_code=%s", mv, repr(exec_code[:60]))
                 matching = [sc for sc in simulation_trace_codes if exec_code in sc or sc in exec_code]
@@ -1271,11 +1257,12 @@ class VirtualLineage:
         for inp in inputs:
             if inp in virtual_lineage:
                 input_hashes[inp] = virtual_lineage[inp]
-            elif inp in self.variable_lineage:
-                input_hashes[inp] = self.variable_lineage[inp]
+            elif inp in self.tracking_state.variable_lineage:
+                input_hashes[inp] = self.tracking_state.variable_lineage[inp]
         callee_lineages = self._virtual_callee_lineages(inputs, virtual_lineage, virtual_modules)
         hidden_lineages = {
-            var: virtual_lineage.get(var, self.variable_lineage.get(var)) for var in key_hidden_reads(stmt_code, self)
+            var: virtual_lineage.get(var, self.tracking_state.variable_lineage.get(var))
+            for var in key_hidden_reads(stmt_code, self.tracking_state)
         }
         if callee_lineages or hidden_lineages:
             input_hashes = _InputHashes(input_hashes, callee_lineages, hidden_lineages)
@@ -1708,8 +1695,8 @@ class VirtualLineage:
         for inp in inputs:
             if inp in virtual_lineage:
                 input_hashes[inp] = virtual_lineage[inp]
-            elif inp in self.variable_lineage:
-                input_hashes[inp] = self.variable_lineage[inp]
+            elif inp in self.tracking_state.variable_lineage:
+                input_hashes[inp] = self.tracking_state.variable_lineage[inp]
         return inputs, input_hashes
 
     def _recorded_control_outcome(
@@ -1756,7 +1743,7 @@ class VirtualLineage:
         if not record or not record.get("mutation_verdict"):
             return None
         verdict = set(record.get("receivers") or ())
-        self.mutation_verdicts.setdefault(source_hash, verdict)
+        self.tracking_state.mutation_verdicts.setdefault(source_hash, verdict)
         return verdict
 
     def _persisted_control_outcome(
@@ -1784,7 +1771,7 @@ class VirtualLineage:
             return None
         try:
             for name, then in (record.get("callees") or {}).items():
-                now = virtual_lineage.get(name) or self.variable_lineage.get(name) or "ABSENT"
+                now = virtual_lineage.get(name) or self.tracking_state.variable_lineage.get(name) or "ABSENT"
                 if now != then:
                     return None
             return (
@@ -1859,7 +1846,7 @@ class VirtualLineage:
             lineage = input_lineage(
                 inp,
                 self.shell.user_ns,
-                (virtual_lineage, self.variable_lineage),
+                (virtual_lineage, self.tracking_state.variable_lineage),
                 compute_hash=self.compute_hash_fn,
                 function_tracker=function_tracker,
                 code=stmt_code,
@@ -1899,7 +1886,7 @@ class VirtualLineage:
     ) -> tuple[str, float, dict[str, float]]:
         """Apply a cache-hit forward propagation and return the 'hit' sentinel tuple.
 
-        Updates *virtual_lineage* (and optionally *self.variable_lineage* for imports)
+        Updates *virtual_lineage* (and optionally *self.tracking_state.variable_lineage* for imports)
         in place.  Returns ``('hit', 0.0, stmt_file_deps)`` where the caller
         should substitute the real ``cache_lookup_time``.
         """
@@ -1921,7 +1908,7 @@ class VirtualLineage:
         )
         if is_import:
             for out in outputs:
-                if out not in self.variable_lineage:
+                if out not in self.tracking_state.variable_lineage:
                     lineage_val = output_lineages.get(out)
                     if lineage_val:
                         self.restores.record_restore(var_name=out, lineage_hash=lineage_val)
@@ -2156,8 +2143,10 @@ class VirtualLineage:
         user_ns = self.shell.user_ns
         if not self._virtual_callables or all(name in user_ns for name in inputs):
             return None
-        virtual = virtual_namespace(self._virtual_callables, virtual_lineage, self.variable_lineage, virtual_modules)
-        deps = called_function_dependencies(sorted(inputs), user_ns, self.variable_lineage, virtual)
+        virtual = virtual_namespace(
+            self._virtual_callables, virtual_lineage, self.tracking_state.variable_lineage, virtual_modules
+        )
+        deps = called_function_dependencies(sorted(inputs), user_ns, self.tracking_state.variable_lineage, virtual)
         found = dict(dep.split(":", 1) for dep in deps)
         return {name: lin for name, lin in found.items() if lin != "ABSENT"} or None
 
@@ -2177,7 +2166,9 @@ class VirtualLineage:
 
         user_ns = self.shell.user_ns
         virtual = (
-            virtual_namespace(self._virtual_callables, virtual_lineage, self.variable_lineage, virtual_modules)
+            virtual_namespace(
+                self._virtual_callables, virtual_lineage, self.tracking_state.variable_lineage, virtual_modules
+            )
             if self._virtual_callables
             else None
         )
@@ -2194,7 +2185,7 @@ class VirtualLineage:
         for name in inputs:
             if name in user_ns:
                 continue
-            lineage = virtual_lineage.get(name) or self.variable_lineage.get(name) or ""
+            lineage = virtual_lineage.get(name) or self.tracking_state.variable_lineage.get(name) or ""
             key = virtual_callable_key(lineage, name)
             virtual = self._virtual_callables.get(key)
             if virtual is not None:
@@ -2254,10 +2245,9 @@ class VirtualLineage:
     def _collect_session_file_deps(self, outputs: set[str]) -> set[str]:
         """Return file dependencies from the current session for *outputs*."""
         file_deps: set[str] = set()
-        if hasattr(self, "executed_file_deps") and self.executed_file_deps:
-            for out in outputs:
-                if out in self.executed_file_deps:
-                    file_deps.update(self.executed_file_deps[out])
+        executed_file_deps = self.tracking_state.executed_file_deps
+        for out in outputs:
+            file_deps.update(executed_file_deps.get(out, ()))
         return file_deps
 
     def _bound_modules(self, outputs: set[str], tree: ast.Module | None, stmt_code: str = "") -> set[str]:
@@ -2319,7 +2309,7 @@ class VirtualLineage:
         virtual_modules: set[str],
         lineage_by_out: dict[str, str],
     ) -> None:
-        """Propagate module lineages to ``self.variable_lineage`` for import statements.
+        """Propagate module lineages to ``self.tracking_state.variable_lineage`` for import statements.
 
         Called after computing the lineage hash for an import so that
         ``compute_cache_key`` can find the module in ``variable_lineage`` and
@@ -2338,7 +2328,7 @@ class VirtualLineage:
         for out in outputs:
             if out not in lineage_by_out:
                 continue
-            held = self.variable_lineage.get(out)
+            held = self.tracking_state.variable_lineage.get(out)
             if held is None or held == self.propagated_imports.get(out):
                 self.restores.record_restore(var_name=out, lineage_hash=lineage_by_out[out])
                 self.propagated_imports[out] = lineage_by_out[out]
@@ -2429,7 +2419,7 @@ class VirtualLineage:
 
             # RNG state is a hidden lineage variable (ADR-018): a draw reads it,
             # a seed produces it. Kept out of the plain ``inputs``.
-            hidden_reads = key_hidden_reads(stmt_code, self)
+            hidden_reads = key_hidden_reads(stmt_code, self.tracking_state)
             hidden_writes = hidden_lineage_writes(stmt_code)
 
             # A bare ``seed()`` carries no output, so it would return below before
@@ -2440,7 +2430,7 @@ class VirtualLineage:
                     stmt_code,
                     inputs,
                     ctx=CacheKeyContext(
-                        variable_lineage=self.variable_lineage,
+                        variable_lineage=self.tracking_state.variable_lineage,
                         user_ns=self.shell.user_ns,
                         function_tracker=self.function_tracker,
                         virtual_lineage=virtual_lineage,
@@ -2476,7 +2466,7 @@ class VirtualLineage:
                 stmt_code,
                 key_lineage_inputs,
                 ctx=CacheKeyContext(
-                    variable_lineage=self.variable_lineage,
+                    variable_lineage=self.tracking_state.variable_lineage,
                     user_ns=self.shell.user_ns,
                     function_tracker=self.function_tracker,
                     virtual_lineage=virtual_lineage,
@@ -2575,7 +2565,7 @@ class VirtualLineage:
             )
             outputs = outputs | bumped
 
-            # CRITICAL: Propagate module lineages to self.variable_lineage immediately.
+            # CRITICAL: Propagate module lineages to self.tracking_state.variable_lineage immediately.
             # Without this, compute_cache_key won't find the module in variable_lineage
             # and will exclude it from module_component, causing key mismatches.
             if is_import:
@@ -2626,7 +2616,7 @@ class VirtualLineage:
             restored_vars.add(var)
             if "output_lineages" in metadata:
                 new_lineage = metadata["output_lineages"].get(var)
-                if var in self.lineage and new_lineage is not None:
+                if var in self.tracking_state.lineage and new_lineage is not None:
                     # Buffer a value-coupled restore so apply_collected_mutations
                     # routes through lineage.record, attaching _cash_lineage_hash
                     # to the live object. Drain immediately so the attribute is
@@ -2698,7 +2688,7 @@ class VirtualLineage:
         for var in self._probe_placeholders:
             if self.shell.user_ns.get(var) is _FORWARD_PROBE_PLACEHOLDER:
                 del self.shell.user_ns[var]
-                self.lineage.discard(var)
+                self.tracking_state.lineage.discard(var)
         self._probe_placeholders.clear()
 
     def eliminate_broken_vars_via_current_cell_probe(
@@ -2780,9 +2770,9 @@ class VirtualLineage:
             try:
                 cache_key, _, _, _, _ = compute_cache_key(
                     stmt_code,
-                    inputs | key_hidden_reads(stmt_code, self),
+                    inputs | key_hidden_reads(stmt_code, self.tracking_state),
                     ctx=CacheKeyContext(
-                        variable_lineage=self.variable_lineage,
+                        variable_lineage=self.tracking_state.variable_lineage,
                         user_ns=self.shell.user_ns,
                         function_tracker=self.function_tracker,
                         virtual_lineage=virtual_lineage,
@@ -2871,7 +2861,7 @@ class VirtualLineage:
                 stmt_code,
                 key_inputs(inputs, input_hashes),
                 ctx=CacheKeyContext(
-                    variable_lineage=self.variable_lineage,
+                    variable_lineage=self.tracking_state.variable_lineage,
                     user_ns=self.shell.user_ns,
                     function_tracker=self.function_tracker,
                     virtual_lineage=key_lineages(input_hashes),
@@ -2967,11 +2957,11 @@ class VirtualLineage:
         """
         directly_mismatched: set[str] = set()
         for vname in virtual_lineage:
-            if vname not in self.variable_lineage:
+            if vname not in self.tracking_state.variable_lineage:
                 continue
-            if virtual_lineage[vname] == self.variable_lineage[vname]:
+            if virtual_lineage[vname] == self.tracking_state.variable_lineage[vname]:
                 continue
-            producing_code = self.executed_cell_codes.get(vname)
+            producing_code = self.tracking_state.executed_cell_codes.get(vname)
             if producing_code is None:
                 continue
             normalized_prod = strip_markers(producing_code).strip()
@@ -3066,9 +3056,9 @@ class VirtualLineage:
 
                 if inp in virtual_lineage:
                     input_lineages.append(virtual_lineage[inp])
-                elif inp in self.variable_lineage:
+                elif inp in self.tracking_state.variable_lineage:
                     # Fallback to memory if virtual missing (external var not in notebook)
-                    input_lineages.append(self.variable_lineage[inp])
+                    input_lineages.append(self.tracking_state.variable_lineage[inp])
                 else:
                     # Input missing entirely. Cannot verify.
                     return False
@@ -3107,7 +3097,11 @@ class VirtualLineage:
         kernel (``variable_lineage``) nor the simulation so far (*bound*) has
         bound? A user's ``max = ...`` or ``id = ...`` is an input like any other,
         as the runtime treats it."""
-        return name in BUILTIN_NAMES and name not in self.variable_lineage and (bound is None or name not in bound)
+        return (
+            name in BUILTIN_NAMES
+            and name not in self.tracking_state.variable_lineage
+            and (bound is None or name not in bound)
+        )
 
 
 def _first_cell_reading(notebook_cells: list[str], limit: int, names: set[str]) -> int | None:

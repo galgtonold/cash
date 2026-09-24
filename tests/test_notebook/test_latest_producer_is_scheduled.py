@@ -22,7 +22,9 @@ from cash.notebook.upstream.reexecution_planner import ReexecutionPlanner
 
 
 def _planner(user_ns: dict) -> ReexecutionPlanner:
-    vl = types.SimpleNamespace(shell=types.SimpleNamespace(user_ns=user_ns))
+    vl = types.SimpleNamespace(
+        shell=types.SimpleNamespace(user_ns=user_ns), tracking_state=types.SimpleNamespace(variable_lineage={})
+    )
     return ReexecutionPlanner(vl, classifier=None)
 
 
@@ -70,7 +72,9 @@ SWEEP_THEN_PICK = [
 
 
 def _planner_with_lineage(user_ns, lineage):
-    vl = types.SimpleNamespace(shell=types.SimpleNamespace(user_ns=user_ns), variable_lineage=lineage)
+    vl = types.SimpleNamespace(
+        shell=types.SimpleNamespace(user_ns=user_ns), tracking_state=types.SimpleNamespace(variable_lineage=lineage)
+    )
     return ReexecutionPlanner(vl, classifier=None)
 
 

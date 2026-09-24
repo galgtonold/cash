@@ -17,7 +17,6 @@ import hashlib
 import unittest
 from unittest.mock import MagicMock
 
-from cash.notebook._protocols import TrackingState
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.upstream import UpstreamChecker
 
@@ -216,7 +215,6 @@ class TestModuleLineagePropagation(unittest.TestCase):
             self.shell,
             cash_instance=self.cash_instance,
         )
-        self.checker.set_tracking_state(TrackingState())
 
     def test_import_propagates_lineage(self):
         """Simulating an import statement should set variable_lineage for the module."""
@@ -226,8 +224,8 @@ class TestModuleLineagePropagation(unittest.TestCase):
         # pd should now be in both virtual_lineage AND variable_lineage
         self.assertIn("pd", virtual_lineage)
         self.assertIn("pd", virtual_modules)
-        self.assertIn("pd", self.checker.variable_lineage)
-        self.assertEqual(self.checker.variable_lineage["pd"], virtual_lineage["pd"])
+        self.assertIn("pd", self.checker.tracking_state.variable_lineage)
+        self.assertEqual(self.checker.tracking_state.variable_lineage["pd"], virtual_lineage["pd"])
 
     def test_from_import_propagates_lineage(self):
         """'from ... import' statements should propagate lineage."""
@@ -237,7 +235,7 @@ class TestModuleLineagePropagation(unittest.TestCase):
         self.assertIn("array", virtual_lineage)
         self.assertIn("array", virtual_modules)
         # array is detected as module output -> propagated
-        self.assertIn("array", self.checker.variable_lineage)
+        self.assertIn("array", self.checker.tracking_state.variable_lineage)
 
     def test_non_import_does_not_propagate(self):
         """Non-import statements should not propagate to variable_lineage."""
@@ -245,7 +243,7 @@ class TestModuleLineagePropagation(unittest.TestCase):
 
         # y should be in virtual_lineage but NOT in variable_lineage
         self.assertIn("y", virtual_lineage)
-        self.assertNotIn("y", self.checker.variable_lineage)
+        self.assertNotIn("y", self.checker.tracking_state.variable_lineage)
 
     def test_existing_variable_lineage_not_overwritten(self):
         """If variable_lineage already has a module, don't overwrite it."""
@@ -255,7 +253,7 @@ class TestModuleLineagePropagation(unittest.TestCase):
         self.checker.simulator.simulate_cell("import pandas as pd")
 
         # Should NOT be overwritten
-        self.assertEqual(self.checker.variable_lineage["pd"], existing_lineage)
+        self.assertEqual(self.checker.tracking_state.variable_lineage["pd"], existing_lineage)
 
 
 class TestSimulationRuntimeKeyMatch(unittest.TestCase):
@@ -280,7 +278,6 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
             self.shell,
             cash_instance=self.cash_instance,
         )
-        self.checker.set_tracking_state(TrackingState())
 
     def _get_cache_key_from_calls(self):
         """Extract the cache key from backend calls."""
@@ -305,7 +302,7 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
         # Step 1: Simulate import (sets variable_lineage['np'])
         sim = self.checker.simulator.simulate_cell("import numpy as np")
         virtual_lineage, virtual_modules = sim.virtual_lineage, sim.virtual_modules
-        np_lineage_from_import = self.checker.variable_lineage["np"]
+        np_lineage_from_import = self.checker.tracking_state.variable_lineage["np"]
 
         # Step 2: Set up df lineage
         virtual_lineage["df"] = df_lineage
@@ -421,7 +418,7 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
         # Step 1: Simulate import to propagate lineage
         sim = self.checker.simulator.simulate_cell("import numpy as np")
         virtual_lineage, virtual_modules = sim.virtual_lineage, sim.virtual_modules
-        np_lineage = self.checker.variable_lineage["np"]
+        np_lineage = self.checker.tracking_state.variable_lineage["np"]
 
         # Step 2: Set up df lineage
         df_lineage = hashlib.sha256(b"df_data").hexdigest()

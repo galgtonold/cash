@@ -1,7 +1,6 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-from cash.notebook._protocols import TrackingState
 from cash.notebook.cache_status import CacheStatus
 from cash.notebook.upstream import UpstreamChecker
 
@@ -26,7 +25,6 @@ class TestIssueReproduction(unittest.TestCase):
         # Configure backend
         self.shell.cash_instance.backend.get.return_value = ({"output_lineages": {}}, {})
         self.checker = UpstreamChecker(self.shell)
-        self.checker.set_tracking_state(TrackingState())
 
     @patch("cash.notebook.upstream.checker.get_notebook_cells")
     def test_unused_broken_var_triggers_restore(self, mock_get_cells):
@@ -63,7 +61,7 @@ class TestIssueReproduction(unittest.TestCase):
             self.shell.user_ns = {"stats": 1, "ticker_stats": 1}
 
             # Set executed codes to match
-            self.checker.executed_cell_codes.update({"stats": cell1_code, "ticker_stats": cell1_code})
+            self.checker.tracking_state.executed_cell_codes.update({"stats": cell1_code, "ticker_stats": cell1_code})
 
             # 3. Checker call
             # Current cell is cell 2.

@@ -143,17 +143,17 @@ class UpstreamChecker:
         self.staleness = StalenessTracker()
         self._notebook_path_for_staleness: str | None = None
 
-        ts = tracking_state or TrackingState()
-        self._wire_state(ts)
+        #: Shared with the statement processor and the simulator: every
+        #: tracking dict is read and written through it.
+        self.tracking_state = tracking_state or TrackingState()
 
         # Simulation lives behind a clear seam — see notebook_simulator.py.
         # UpstreamChecker is the orchestrator; the simulator does the AST +
-        # cache-probing replay. Shared mutable state (tracking dicts) is
-        # passed by reference so writes are visible to both.
+        # cache-probing replay.
         self.simulator = NotebookSimulator(
             shell=shell,
             cash_instance=cash_instance,
-            tracking_state=ts,
+            tracking_state=self.tracking_state,
             compute_hash_fn=compute_hash_fn,
             function_tracker=function_tracker,
         )
@@ -179,33 +179,6 @@ class UpstreamChecker:
         # warning about a file this session no longer even reads from, until
         # the first ID-matched run in the new notebook happens to reset it.
         self.staleness.reset()
-
-    def _wire_state(self, state: TrackingState) -> None:
-        """Internal: alias tracking dicts onto self so existing attribute
-        accesses (``self.executed_cell_codes``, etc.) keep working.
-
-        Kept as a separate method so ``set_tracking_state`` can also forward
-        to the simulator.
-        """
-        self.tracking_state = state
-        self.executed_cell_codes = state.executed_cell_codes
-        self.executed_cell_hashes = state.executed_cell_hashes
-        self.variable_lineage = state.variable_lineage
-        self.lineage = state.lineage
-        self.executed_file_deps = state.executed_file_deps
-        self.executed_input_lineages = state.executed_input_lineages
-
-    def set_tracking_state(self, state: TrackingState) -> None:
-        """Wire all tracking dictionaries from a shared :class:`TrackingState`.
-
-        This is the preferred way to configure tracking state.  All fields
-        are aliases to the same mutable containers so mutations are visible
-        across ``CashMagics``, ``StatementProcessor``, and ``UpstreamChecker``.
-        Also forwards to the simulator so both views stay synchronised.
-        """
-        self._wire_state(state)
-        if hasattr(self, "simulator"):
-            self.simulator.set_tracking_state(state)
 
     def _find_current_cell_index(
         self,
@@ -299,7 +272,10 @@ class UpstreamChecker:
             logger.debug("[UPSTREAM_DEBUG] check_and_reexecute called")
             logger.debug("[UPSTREAM_DEBUG]   cell_code: %s...", cell_code[:50])
             logger.debug("[UPSTREAM_DEBUG]   required_inputs: %s", required_inputs)
-            logger.debug("[UPSTREAM_DEBUG]   current variable_lineage keys: %s", list(self.variable_lineage.keys()))
+            logger.debug(
+                "[UPSTREAM_DEBUG]   current variable_lineage keys: %s",
+                list(self.tracking_state.variable_lineage.keys()),
+            )
             if cell_id:
                 logger.debug("[UPSTREAM_DEBUG]   cell_id: %s", cell_id)
 
@@ -407,10 +383,10 @@ class UpstreamChecker:
             self.last_cell_index,
         )
         for var_name in overlap_vars:
-            if var_name not in cached_virtual_lineage or var_name not in self.variable_lineage:
+            if var_name not in cached_virtual_lineage or var_name not in self.tracking_state.variable_lineage:
                 continue
             virtual_hash = cached_virtual_lineage[var_name]
-            actual_hash = self.variable_lineage[var_name]
+            actual_hash = self.tracking_state.variable_lineage[var_name]
             if actual_hash != virtual_hash:
                 logger.debug(
                     "[UPSTREAM_DEBUG]   -> Downstream advancement fallback: "
@@ -419,7 +395,7 @@ class UpstreamChecker:
                     actual_hash[:8],
                     virtual_hash[:8],
                 )
-                self.lineage.reset_to(var_name, virtual_hash)
+                self.tracking_state.lineage.reset_to(var_name, virtual_hash)
 
     def _handle_downstream_advancement_fallback(
         self,
@@ -588,7 +564,7 @@ class UpstreamChecker:
         user_ns = self.shell.user_ns
         orphaned = {
             v
-            for v in set(self.variable_lineage) - produced
+            for v in set(self.tracking_state.variable_lineage) - produced
             if v in user_ns and not v.startswith("_") and not isinstance(user_ns[v], types.ModuleType)
         }
         if not orphaned:
@@ -599,7 +575,7 @@ class UpstreamChecker:
         changed = True
         while changed:
             changed = False
-            for var, inputs in self.executed_input_lineages.items():
+            for var, inputs in self.tracking_state.executed_input_lineages.items():
                 if var not in to_evict and not inputs.keys().isdisjoint(to_evict):
                     to_evict.add(var)
                     changed = True
@@ -1013,14 +989,17 @@ class UpstreamChecker:
         so ``is`` tells a re-recording apart even when the lineage came out the
         same.
         """
-        return {v: (h, self.executed_input_lineages.get(v)) for v, h in self.variable_lineage.items()}
+        return {
+            v: (h, self.tracking_state.executed_input_lineages.get(v))
+            for v, h in self.tracking_state.variable_lineage.items()
+        }
 
     def _rerecorded_since(self, before: dict[str, tuple]) -> set[str]:
         """Variables this upstream pass recorded again (re-executed or restored)."""
         changed = set()
-        for v, h in self.variable_lineage.items():
+        for v, h in self.tracking_state.variable_lineage.items():
             old = before.get(v)
-            if old is None or old[0] != h or old[1] is not self.executed_input_lineages.get(v):
+            if old is None or old[0] != h or old[1] is not self.tracking_state.executed_input_lineages.get(v):
                 changed.add(v)
         return changed
 
@@ -1037,11 +1016,11 @@ class UpstreamChecker:
         by code within cells 0..idx.  Variables produced by later cells are
         excluded to avoid contaminating earlier cache entries.
         """
-        if var_name not in self.variable_lineage:
+        if var_name not in self.tracking_state.variable_lineage:
             return False
-        if cached_vl[var_name] == self.variable_lineage[var_name]:
+        if cached_vl[var_name] == self.tracking_state.variable_lineage[var_name]:
             return False  # Already matches, nothing to sync
-        producing_code = self.executed_cell_codes.get(var_name)
+        producing_code = self.tracking_state.executed_cell_codes.get(var_name)
         if producing_code is None:
             return True
         normalized_code = strip_markers(producing_code).strip()
@@ -1079,7 +1058,7 @@ class UpstreamChecker:
             vl = self.simulator.virtual_lineage
             planner = self.simulator.planner
             classifier = self.simulator.classifier
-            sim = SimulationResult(virtual_lineage=dict(self.variable_lineage))
+            sim = SimulationResult(virtual_lineage=dict(self.tracking_state.variable_lineage))
             trace = sim.trace
             counts = dict(occurrence_counts)
             for node in nodes:
@@ -1097,7 +1076,7 @@ class UpstreamChecker:
             broken = {
                 name
                 for name, lineage in final.items()
-                if name not in self.shell.user_ns or self.variable_lineage.get(name) != lineage
+                if name not in self.shell.user_ns or self.tracking_state.variable_lineage.get(name) != lineage
             }
             restored_by_index: dict[int, dict] = {}
             run: list[int] = []
@@ -1232,9 +1211,9 @@ class UpstreamChecker:
                     continue
                 # Safe to sync: the runtime lineage was produced by code within
                 # cells 0..idx, so this is a valid forward-propagation correction.
-                if cached_vl[var_name] != self.variable_lineage[var_name]:
-                    moved[var_name] = (cached_vl[var_name], self.variable_lineage[var_name])
-                cached_vl[var_name] = self.variable_lineage[var_name]
+                if cached_vl[var_name] != self.tracking_state.variable_lineage[var_name]:
+                    moved[var_name] = (cached_vl[var_name], self.tracking_state.variable_lineage[var_name])
+                cached_vl[var_name] = self.tracking_state.variable_lineage[var_name]
                 updated = True
 
         if updated and logger.isEnabledFor(logging.DEBUG):
@@ -1444,7 +1423,7 @@ class UpstreamChecker:
             for name in inputs:
                 # A builtin name the user never bound needs no statement; one
                 # they did (`format = "csv"`) is found like any other.
-                if name in live or (name in BUILTIN_NAMES and name not in self.variable_lineage):
+                if name in live or (name in BUILTIN_NAMES and name not in self.tracking_state.variable_lineage):
                     continue
                 if definers is None:
                     definers = {}
@@ -1565,7 +1544,7 @@ class UpstreamChecker:
             if own is not None:
                 own_state, own_fingerprint = own
                 if own_fingerprint == rng_lineage_fingerprint(
-                    self.variable_lineage,
+                    self.tracking_state.variable_lineage,
                     drawing,
                 ):
                     restore_rng_state(own_state)
@@ -1827,7 +1806,7 @@ class UpstreamChecker:
                     f"something wrong with your code - to continue, {run_it} yourself "
                     f"and then this cell again (or Restart & Run All), and please report it"
                 )
-            ran_before = {c for c in (self.executed_cell_codes or {}).values() if isinstance(c, str)}
+            ran_before = {c for c in (self.tracking_state.executed_cell_codes or {}).values() if isinstance(c, str)}
             if stmt_code and stmt_code in ran_before:
                 return (
                     "NOTE: this exact statement ran without error before, so cash most "
@@ -1932,7 +1911,7 @@ class UpstreamChecker:
         something has actually failed.
         """
         pairs: dict[str, set[str]] = {}
-        for var, code in (self.executed_cell_codes or {}).items():
+        for var, code in (self.tracking_state.executed_cell_codes or {}).items():
             if isinstance(code, str):
                 pairs.setdefault(code, set()).add(var)
         return list(pairs.items())

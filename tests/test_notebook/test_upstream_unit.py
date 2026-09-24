@@ -66,12 +66,8 @@ class TestValidateFileFreshness:
         assert VirtualLineage._validate_file_freshness(files) is False
 
 
-class TestUpstreamCheckerSetTrackingState:
-    """Test set_tracking_state method."""
-
-    def test_has_set_tracking_state(self):
-        assert hasattr(UpstreamChecker, "set_tracking_state")
-        assert callable(UpstreamChecker.set_tracking_state)
+class TestIterBodyNodes:
+    """``VirtualLineage._iter_body_nodes`` walks nested control structures."""
 
     def test_iter_body_nodes_recurses_into_nested_control_structures(self):
         """Regression: recursion must resolve within VirtualLineage's own module.
@@ -128,8 +124,8 @@ class TestRestoreRecordsFileDeps:
         )
 
         assert restored == {"df"}
-        assert csv_path in checker.executed_file_deps["df"]
-        assert checker.executed_input_lineages["df"] == {"data_path": "lin1"}
+        assert csv_path in checker.tracking_state.executed_file_deps["df"]
+        assert checker.tracking_state.executed_input_lineages["df"] == {"data_path": "lin1"}
 
     def test_file_deps_empty_when_no_file_deps_in_metadata(self, tmp_path):
         """No file deps should be propagated when metadata lacks file_dependencies."""
@@ -139,7 +135,7 @@ class TestRestoreRecordsFileDeps:
         )
 
         assert restored == {"x"}
-        assert "x" not in checker.executed_file_deps
+        assert "x" not in checker.tracking_state.executed_file_deps
 
     def test_file_deps_resolved_via_fallback(self, tmp_path, monkeypatch):
         """A dependency recorded under a path that moved resolves by name in the CWD."""
@@ -160,7 +156,7 @@ class TestRestoreRecordsFileDeps:
         )
 
         assert restored == {"df"}
-        resolved = next(iter(checker.executed_file_deps["df"]))
+        resolved = next(iter(checker.tracking_state.executed_file_deps["df"]))
         assert os.path.exists(resolved)
         assert resolved != stale_path
 
@@ -177,7 +173,7 @@ class TestRestoreRecordsFileDeps:
         )
 
         assert restored == set()
-        assert not checker.executed_file_deps.get("df")
+        assert not checker.tracking_state.executed_file_deps.get("df")
 
     def test_file_deps_propagated_to_multiple_restored_vars(self, tmp_path):
         """When multiple vars are restored, all get the file deps."""
@@ -196,8 +192,8 @@ class TestRestoreRecordsFileDeps:
         )
 
         assert restored == {"df", "df2"}
-        assert csv_path in checker.executed_file_deps["df"]
-        assert csv_path in checker.executed_file_deps["df2"]
+        assert csv_path in checker.tracking_state.executed_file_deps["df"]
+        assert csv_path in checker.tracking_state.executed_file_deps["df2"]
 
 
 class TestUpstreamFindCellIndex:
@@ -292,7 +288,7 @@ class TestForwardProbePopulatesState:
         # Placeholder should be in user_ns
         assert shell.user_ns.get("df") is PLACEHOLDER
         # Lineage should be set
-        assert checker.variable_lineage.get("df") == "lineage_hash_abc"
+        assert checker.tracking_state.variable_lineage.get("df") == "lineage_hash_abc"
 
     def test_no_placeholder_when_no_cache_hit(self):
         """When there's no cache hit, nothing should be injected."""
@@ -317,7 +313,7 @@ class TestForwardProbePopulatesState:
         assert "df" in broken
         # No placeholder should be injected
         assert "df" not in shell.user_ns
-        assert "df" not in checker.variable_lineage
+        assert "df" not in checker.tracking_state.variable_lineage
 
     def test_existing_value_not_overwritten(self):
         """If user_ns already has the var, don't overwrite with placeholder."""

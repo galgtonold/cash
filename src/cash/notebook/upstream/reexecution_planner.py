@@ -684,7 +684,7 @@ class ReexecutionPlanner:
         as inputs too (``absent_callee_globals``).
         """
         user_ns = self.virtual_lineage.shell.user_ns
-        live_lineage = getattr(self.virtual_lineage, "variable_lineage", None) or {}
+        live_lineage = self.virtual_lineage.tracking_state.variable_lineage
         scheduled = set(stmts_to_run_indices)
         pending = sorted(scheduled)
         while pending:
@@ -983,7 +983,7 @@ class ReexecutionPlanner:
         append is silent and permanent.
         """
         user_ns = getattr(getattr(self.virtual_lineage, "shell", None), "user_ns", None) or {}
-        recorded = getattr(self.virtual_lineage, "variable_lineage", None) or {}
+        recorded = self.virtual_lineage.tracking_state.variable_lineage
 
         extra: set[int] = set()
         frontier = list(pending)

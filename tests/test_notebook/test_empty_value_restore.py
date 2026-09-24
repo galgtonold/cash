@@ -35,7 +35,6 @@ def _make_simulator(shell_ns: dict, metadata=None, variables=None):
     shell = MagicMock()
     shell.user_ns = shell_ns
     checker = UpstreamChecker(shell, cash_instance)
-    checker.variable_lineage = {}
     return checker.simulator, shell
 
 

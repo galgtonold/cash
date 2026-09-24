@@ -26,16 +26,13 @@ from tests._cell_driver import run_cash_cell
 def _snapshot_tracking_state(simulator):
     """Deep-copy the TrackingState fields the simulator can write.
 
-    NotebookSimulator holds references to the same underlying dicts as
-    TrackingState (wired via set_tracking_state), so reading these
-    attributes off the simulator is equivalent to reading them off the
-    TrackingState.
+    The simulator writes through its ``tracking_state``.
     """
     return {
-        "variable_lineage": dict(simulator.variable_lineage),
-        "executed_cell_codes": copy.deepcopy(simulator.executed_cell_codes),
-        "executed_cell_hashes": copy.deepcopy(simulator.executed_cell_hashes),
-        "executed_input_lineages": copy.deepcopy(simulator.executed_input_lineages),
+        "variable_lineage": dict(simulator.tracking_state.variable_lineage),
+        "executed_cell_codes": copy.deepcopy(simulator.tracking_state.executed_cell_codes),
+        "executed_cell_hashes": copy.deepcopy(simulator.tracking_state.executed_cell_hashes),
+        "executed_input_lineages": copy.deepcopy(simulator.tracking_state.executed_input_lineages),
     }
 
 

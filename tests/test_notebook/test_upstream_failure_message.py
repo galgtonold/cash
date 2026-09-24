@@ -18,6 +18,7 @@ import pytest
 
 pytest.importorskip("IPython")
 
+from cash.notebook._protocols import TrackingState
 from cash.notebook.upstream.checker import UpstreamChecker
 
 
@@ -58,7 +59,8 @@ class _Checker(UpstreamChecker):
     """Just enough of a checker to exercise the planning-gap detection."""
 
     def __init__(self, executed_cell_codes):  # noqa: D107 - test double
-        self.executed_cell_codes = executed_cell_codes
+        self.tracking_state = TrackingState()
+        self.tracking_state.executed_cell_codes.update(executed_cell_codes)
         self.debug = False
 
 

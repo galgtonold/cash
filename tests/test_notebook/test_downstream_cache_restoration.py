@@ -11,7 +11,6 @@ import hashlib
 import unittest
 from unittest.mock import MagicMock, patch
 
-from cash.notebook._protocols import TrackingState
 from cash.notebook.upstream import UpstreamChecker
 
 
@@ -31,7 +30,6 @@ class TestDownstreamCacheRestoration(unittest.TestCase):
         self.mock_cash.backend = self.mock_backend
 
         self.checker = UpstreamChecker(self.shell, cash_instance=self.mock_cash)
-        self.checker.set_tracking_state(TrackingState())
 
     def _compute_lineage(self, source_code, input_lineages=None):
         """Helper to compute lineage hash."""
@@ -113,10 +111,7 @@ class TestDownstreamCacheRestoration(unittest.TestCase):
 
         self.mock_backend.get = mock_backend_get
 
-        # Simulate kernel restart: no in-memory tracking
-        self.checker.variable_lineage = {}
-        self.checker.executed_cell_codes = {}
-        self.checker.executed_cell_hashes = {}
+        # A fresh checker holds no in-memory tracking, as after a kernel restart.
 
         # User runs cell_display (index 4)
         # Simulation should simulate cells 0-3 (upstream)
@@ -168,8 +163,7 @@ class TestDownstreamCacheRestoration(unittest.TestCase):
         mock_get_cells.return_value = [cell_1, cell_2]
         mock_get_cells_ids.return_value = [("id_0", cell_1), ("id_1", cell_2)]
 
-        # Empty memory (kernel restart scenario)
-        self.checker.variable_lineage = {}
+        # A fresh checker's memory is empty (kernel restart scenario).
 
         # No cache (for simplicity)
         self.mock_backend.get = MagicMock(return_value=(None, None))
