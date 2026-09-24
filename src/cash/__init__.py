@@ -100,40 +100,13 @@ def _get_global_cash():
 
 
 def reset_session() -> None:
-    """Drop the global ``Cash`` singleton so the next access starts fresh.
+    """Replace the default ``Cash`` with a fresh one, forgetting what the
+    old one tracked in memory.
 
-    Use cases:
-
-    * **Testing fixtures** that need cash to start over without
-      restarting the Python interpreter.
-    * **Benchmark harnesses** doing repeated measurements in one process
-      (without this, cash's in-memory tracking dicts and FileAccess-
-      Tracker monkey-patches survive ``shell.reset()`` and contaminate
-      successive runs).
-    * **Advanced users** who want to discard accumulated lineage state
-      mid-session (e.g. before re-running a notebook against new inputs).
-
-    What this does:
-
-    * Sets ``_global_cash = None`` so the next ``cash.cache`` /
-      ``cash.show_stats`` / ``%load_ext cash`` creates a fresh ``Cash``
-      with empty tracking state.
-    * If an IPython session is active, re-runs the auto-load so the
-      ``%cash_on`` / ``%cash_off`` / ``%cash_stats`` magics rebind to
-      the new singleton. Note that this *builds that singleton eagerly*,
-      so under IPython ``_global_cash`` is a NEW ``Cash`` when this
-      returns, not ``None``. What callers can rely on either way is
-      replacement: nothing from before the reset survives.
-
-    What this does NOT do:
-
-    * It doesn't clear the on-disk cache directory — that's a separate
-      operation (``cash clear --all`` on the command line).
-    * It doesn't touch cash's I/O watch (``cash.tracking.io_watch``): the
-      audit hook, and the reader wrappers on ``pandas.read_csv`` and other
-      tracked entry points, which are installed while a tracker is open
-      and are tracker-agnostic (see
-      ``cash.tracking.file_tracker.active_tracker``).
+    For test fixtures and benchmarks that need cash to start over without
+    restarting Python. Under IPython the magics are re-registered on the
+    new instance. The cache on disk is kept; ``cash clear --all`` deletes
+    it.
     """
     global _global_cash
     _global_cash = None

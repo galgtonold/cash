@@ -23,22 +23,18 @@ _STATEFUL_ATTR = "_cash_stateful"
 
 
 def pure(func: F) -> F:
-    """Mark a function as pure (no side effects) for the purity analyzer.
+    """Promise that a function has no side effects cash needs to know about.
 
-    This is a promise to the analyzer, not a caching switch. Its load-bearing
-    effect is on the ``@cash.cache`` decorator: a callee marked pure is trusted,
-    so the ``CashImpurityWarning`` that would otherwise fire for it is
-    suppressed (see :mod:`cash.purity_analyzer`). In the notebook *statement*
-    path it changes one verdict: a call to a helper that writes a file (a
-    chart, an export) runs every time, as the write itself would, unless the
-    helper is marked pure. Otherwise an unmarked helper's statements already
-    cache. Use :func:`stateful` when you need to stop a statement from caching.
+    With ``@cash.cache``, cash trusts it: a cached function that calls it
+    is not warned about it. In a notebook, a
+    statement that calls a helper that writes a file caches only when the
+    helper is marked pure. It is a promise, not a check.
 
     Args:
-        func: The function to mark as pure.
+        func: The function to mark.
 
     Returns:
-        The same function with a ``_cash_pure`` attribute set to True.
+        A wrapper that calls ``func`` and carries the mark.
 
     Example::
 
@@ -57,17 +53,18 @@ def pure(func: F) -> F:
 
 
 def stateful(func: F) -> F:
-    """Mark a function as stateful (has side effects).
+    """Declare that a function's effects matter beyond its return value.
 
-    Stateful functions should never be cached because their return value
-    alone does not capture their full effect. The notebook caching system
-    will skip caching for statements that call stateful functions.
+    With ``@cash.cache``, the function (or a cached function that calls it)
+    is reported with `CashImpurityWarning`, and with ``strict=True`` it is
+    refused. In a notebook, a statement that calls it is never cached, so
+    it runs every time.
 
     Args:
-        func: The function to mark as stateful.
+        func: The function to mark.
 
     Returns:
-        The same function with a ``_cash_stateful`` attribute set to True.
+        A wrapper that calls ``func`` and carries the mark.
 
     Example::
 
@@ -87,26 +84,12 @@ def stateful(func: F) -> F:
 
 
 def is_pure(func: Any) -> bool:
-    """Check if a function is marked as pure.
-
-    Args:
-        func: The function or callable to check.
-
-    Returns:
-        True if the function has the ``_cash_pure`` attribute set to True.
-    """
+    """Return whether ``func`` was marked with `pure`."""
     return getattr(func, _PURE_ATTR, False) is True
 
 
 def is_stateful(func: Any) -> bool:
-    """Check if a function is marked as stateful.
-
-    Args:
-        func: The function or callable to check.
-
-    Returns:
-        True if the function has the ``_cash_stateful`` attribute set to True.
-    """
+    """Return whether ``func`` was marked with `stateful`."""
     return getattr(func, _STATEFUL_ATTR, False) is True
 
 

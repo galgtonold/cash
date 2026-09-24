@@ -27,17 +27,18 @@ DB_FILENAME = "cache.db"
 
 
 class SQLiteBackend(CacheBackend):
-    """
-    SQLite-based cache backend.
+    """All entries in one SQLite database file; suits many small entries.
 
-    Uses a single SQLite database file for all cache entries.
-    Better than FileBackend for many small entries.
+    Entries are pickled, as with `FileBackend`. As a tier, it does not take
+    values over 100 MiB.
 
     Args:
-        db_path: Path to the SQLite database file.
-        default_ttl: Default time-to-live in seconds. None = no expiration.
-        max_size_bytes: Maximum total data size. None = unlimited.
-        wal_mode: Use WAL journal mode for better concurrency (default: True).
+        db_path: The database file; its directory is created if missing.
+        default_ttl: Seconds an entry stays valid when the caller gives no
+            ``ttl``. ``None``: no expiry.
+        max_size_bytes: Byte cap for stored data. ``None``: no cap.
+        wal_mode: Use SQLite's WAL journal mode, so readers do not block
+            the writer.
     """
 
     source_label: str = "SQLITE"

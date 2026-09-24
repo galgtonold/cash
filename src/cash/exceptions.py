@@ -61,7 +61,7 @@ SOURCE_RETRIEVAL_ERRORS: tuple[type[BaseException], ...] = (
 
 
 class CashError(Exception):
-    """Base exception for all Cash errors."""
+    """Base class of every exception cash raises; catch it to catch them all."""
 
 
 # ---------------------------------------------------------------------------
@@ -70,11 +70,20 @@ class CashError(Exception):
 
 
 class CacheBackendError(CashError):
-    """Raised on backend I/O failures (disk, S3, Redis, SQLite)."""
+    """A backend could not read or write its storage (disk, SQLite, Redis, S3).
+
+    Raised by backend methods you call directly. A cached function does not
+    raise it for a failed write: it returns the result and warns with
+    `CashCacheStoreFailedWarning`.
+    """
 
 
 class CacheSerializationError(CashError):
-    """Raised when a value cannot be serialized or deserialized for caching."""
+    """A stored entry could not be turned back into a value.
+
+    Fix: clear the entry (``cash clear --entry ID``) or the function
+    (``f.cache_clear()``); the next call recomputes it.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -83,10 +92,10 @@ class CacheSerializationError(CashError):
 
 
 class DependencyNotFoundError(CashError, ImportError):
-    """Raised when an optional backend dependency is missing.
+    """A backend needs a package that is not installed.
 
-    Inherits from both `CashError` and `ImportError` so
-    that existing ``except ImportError`` handlers continue to work.
+    The message names the ``pip install`` command. Also an `ImportError`,
+    so ``except ImportError`` catches it.
     """
 
 
@@ -96,42 +105,51 @@ class DependencyNotFoundError(CashError, ImportError):
 
 
 class AmbiguousCellError(CashError):
-    """Raised when a notebook cell cannot be uniquely identified."""
+    """Notebook: the running cell's code appears more than once in the
+    notebook, and cash cannot tell which copy is running.
+
+    Shown as the cell's error. Fix: save the notebook (so cells carry ids),
+    or make the duplicated cells differ.
+    """
 
 
 class UpstreamStateError(CashError):
-    """Raised when upstream cell state cannot be restored or simulated."""
+    """Notebook: an earlier statement this cell needs could not be re-run.
+
+    Shown as the cell's error, with the statement and its own error. Fix
+    that statement, or run the notebook from the top.
+    """
 
 
 class ForwardReferenceError(CashError):
-    """Raised when a cell reads a name only a LATER cell binds.
+    """Notebook: a cell reads a name that only a later cell defines.
 
-    The notebook cannot reproduce itself: it works in this kernel because the
-    later cell has already run, and a run from the top raises ``NameError``.
+    It works in this kernel because the later cell already ran, but a run
+    from the top would raise ``NameError``. Shown as the cell's error. Fix:
+    move the definition above the cell that reads it.
     """
 
 
 class CacheKeyComputationError(CashError):
-    """Raised when a cache key cannot be computed for a statement."""
+    """Notebook: no cache key could be built for a statement.
+
+    Not shown as an error: the statement runs without caching and cash
+    warns with ``NOTEBOOK-BAILOUT``.
+    """
 
 
 class CashImpureFunctionError(CashError):
-    """Raised on first call when caching cannot be guaranteed correct.
+    """Decorator: raised on the first call when cash cannot cache the
+    function safely.
 
-    Two triggers:
+    By default, raised when the function (or a helper in the same module)
+    picks what to call or import at run time, in a way cash cannot track:
+    ``getattr(obj, name)()``, ``importlib.import_module(...)``, ``eval``,
+    ``exec``. With ``strict=True``, also raised for any other purity
+    finding. The message lists each reason.
 
-    * **By default** (plain ``@cash.cache``), when the function -- or a
-      module-bounded helper it calls -- resolves a dependency from a runtime
-      value that cash cannot track: ``getattr(obj, name)()`` dynamic dispatch,
-      ``importlib.import_module(...)``, ``eval`` / ``exec`` / ``compile``
-      (including a dynamic result stored in a local and then called). A cached
-      result could go silently stale, so cash refuses rather than mis-cache.
-    * **Under ``strict=True``**, additionally on any purity issue -- side
-      effects, external-state mutation, opaque callees.
-
-    The body lists each reason with line numbers. Cache it anyway (accepting the
-    staleness risk) with ``@cash.cache(assume_safe=True)``, mark an audited
-    callee with ``cash.pure(callee)``, or refactor to a static call.
+    Fix: call the code directly, mark an audited helper with `pure`, or
+    accept the risk with ``@cash.cache(assume_safe=True)``.
     """
 
 
@@ -141,70 +159,47 @@ class CashImpureFunctionError(CashError):
 
 
 class CashWarning(UserWarning):
-    """Base class for all Cash-emitted warnings.
+    """Base class of every warning cash emits.
 
-    Filter via:
-        import warnings
-        import cash
-        warnings.filterwarnings("error", category=cash.CashWarning)
+    Each warning has a ``code`` attribute, and its message starts with
+    ``[CODE]``; the Warnings page explains every code.
     """
 
 
 class CashCacheIneffectiveWarning(CashWarning):
-    """The cache is not doing anything useful for this call.
+    """Caching is not working here, or not paying off.
 
-    Two distinct shapes, both under this category:
-
-    **Structural** - caching cannot work here. Unpicklable args with no
-    registered hasher; a dynamic dependency resolver that raised;
-    ``@cash.cache`` on an async generator; ``use_locking=True`` on an async
-    function; a value too large for any persistent tier. The function ran
-    (or will run) but its result is not being cached or re-used.
-
-    **Economic** - caching works and costs more than it saves. Raised once
-    per function when cache-key construction and lookup have accumulated
-    seconds of real, measured loss against the work they avoid; the usual
-    cause is a large argument being content-hashed in full on every call.
-    Also raised when remote freshness checking outweighs the compute it
-    protects. The decorator does not stop caching on its own -- it was
-    asked to cache, and the notice is informational.
+    Covers results that cannot be cached (an unhashable argument, a value
+    too large for any tier), caching that costs more than it saves, and
+    configuration or annotation mistakes (``CONFIG-*`` and ``ANNOT-*``
+    codes). The call still returns its result.
     """
 
 
 class CashUpstreamSyntaxWarning(CashWarning):
-    """An upstream notebook cell could not be parsed (a half-written cell the
-    user has saved but not run).
+    """Notebook: an earlier cell has a syntax error.
 
-    The unparseable cell is skipped so downstream cells that do not depend on
-    it keep caching, but a cell that DID depend on it can no longer have its
-    dependency tracked. Emitted by the notebook upstream checker naming the
-    offending cell (1-based), so caching never silently stops mid-edit without
-    telling the user why.
+    Cash skips that cell. Cells that do not depend on it keep caching; the
+    warning names the cell. Fix or run the cell to clear it.
     """
 
 
 class CashCacheStoreFailedWarning(CashWarning):
-    """Compute succeeded but the backend rejected the write.
+    """The result was computed and returned, but could not be stored.
 
-    Typical causes: serializer cannot handle the return type, disk
-    full, Redis disconnected mid-set, S3 credential expiry.
+    Typical causes: a value that cannot be pickled, a full disk, a lost
+    Redis connection, expired S3 credentials. The next call computes again.
     """
 
 
 class CashImpurityWarning(CashCacheIneffectiveWarning):
-    """The decorated function (or a module-bounded helper) has
-    detected side effects, scope mutations, or explicit dynamism.
+    """Decorator: the function does something a cache hit will not repeat.
 
-    Caching may still produce the "right" return value on a hit,
-    but the side effect runs only on the first call. Common causes:
-    network/file writes, ``logging``/``print``, mutation of globals,
-    ``eval``/``exec``, calling a parameter as a function.
+    For example it writes a file, prints, changes a global, reads the
+    environment or the network, or calls ``eval``. On a hit the stored
+    result is returned and none of that happens. Log calls are not
+    reported. A subclass of `CashCacheIneffectiveWarning`.
 
-    Subclasses `CashCacheIneffectiveWarning` so existing
-    ``warnings.filterwarnings('ignore', category=CashCacheIneffective\
-Warning)`` filters continue to catch it. Filter more precisely with
-    ``CashImpurityWarning`` directly.
-
-    Promote to ``error`` in CI to fail the build when an impure
-    function is cached without ``assume_safe=True``.
+    Fix: move the side effect out, mark an audited helper with `pure`, or
+    pass ``assume_safe=True``. Turn it into an error to fail CI.
     """

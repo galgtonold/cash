@@ -131,7 +131,7 @@ directive. Reword it so it does not start `# @cash:`.
 
 *Decorator.*
 
-<!-- claim: cash/core.py:Cash.cache @75e545d3 -->
+<!-- claim: cash/core.py:Cash.cache @d8475d94 -->
 **What happened.** You put `@cash.cache` on an async generator (an
 `async def` that `yield`s). Cash does not cache those, so it returned your
 function unwrapped.
@@ -281,7 +281,7 @@ is a large argument, such as a big DataFrame, being hashed on every call.
 The check also runs at exit, so a script that calls each function once is
 covered, and several small losers are named together.
 
-<!-- claim: cash/core.py:Cash.register_hasher @2ae870d0 -->
+<!-- claim: cash/core.py:Cash.register_hasher @b8ede33d -->
 **What to do.** If a cached function produced the argument and nothing
 changes it afterwards, mark the producer `@cash.cache(frozen=True)`: the
 argument is then keyed by the call that made it. Otherwise register a cheap
@@ -661,7 +661,7 @@ time.
 
 *Decorator.*
 
-<!-- claim: cash/core.py:Cash.register_hasher @2ae870d0 -->
+<!-- claim: cash/core.py:Cash.register_hasher @b8ede33d -->
 **What happened.** You registered a hasher for `types.FunctionType`,
 `types.MethodType` or `functools.partial`. The registration took effect.
 
