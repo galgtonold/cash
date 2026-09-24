@@ -395,7 +395,7 @@ def test_magics_page_states_the_right_count() -> None:
 # read at -- ``core.py:1234@8e5f4ce`` -- because that names a fixed snapshot and
 # therefore cannot rot: `git show 8e5f4ce:src/cash/core.py` resolves it forever.
 # Prefer a symbol even then; reach for the commit form only when the claim is
-# genuinely about a historical state (an ADR, a post-mortem, a CHANGELOG note).
+# genuinely about a historical state (a post-mortem, a CHANGELOG note).
 #
 # annotations.md is the proof this idea was worth doing.
 

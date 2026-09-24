@@ -1,416 +1,196 @@
 # Knowing when *not* to cache
 
-Cash's first rule is **never serve a wrong answer**. When it cannot prove a
-statement is safe to replay, it re-executes instead of guessing. This page
-walks the three things Cash watches for — mutations, side effects, and
-unseeded randomness — and shows the verdict it reaches for real snippets.
+!!! info "Applies to: both paths"
+    Anyone who wants to know why Cash warned about a function or refused to cache a statement.
 
-Two of the three can refuse a cache lookup outright. Randomness never does:
-an unseeded draw is cached *by design*, and the badge says so.
+Some results should not simply be replayed: the code changed a value in place,
+or it did something besides computing a value, such as writing a file or
+sending a request. The two engines handle this differently.
 
-## The mutation problem
+=== "Decorator"
 
-A cached value is a *snapshot*. If a statement mutates a value in place, the
-snapshot and the live object can drift apart:
+    The decorator caches and warns. A function that writes a file or sends a
+    request is cached like any other, with an
+    [`IMPURE-SIDE-EFFECTS`](../warnings.md#impure-side-effects) warning, and a
+    hit skips the effect. Network reads get a
+    [`KEY-NETWORK-READ`](../warnings.md#key-network-read) advisory that `ttl=`
+    silences. A body that picks code from a run-time value (`eval`, `exec`,
+    `getattr(obj, name)()`, `importlib.import_module`) raises
+    `CashImpureFunctionError`. [How `@cash.cache`
+    decides](decorator-path.md#side-effects) has the details, and the
+    [decorator guide](../decorator.md) covers `assume_safe`.
+
+=== "Notebook"
+
+    The notebook refuses. A statement that changes a variable it does not
+    produce, or that writes files, sends requests, reads the clock or asks for
+    input, is not cached: it runs every time, and the badge says why. The rest
+    of this page explains how Cash decides. The full list of what is cached,
+    refused or keyed is in the [notebook guide](../notebook_caching_api.md).
+
+Unseeded randomness is the exception on both paths: it is cached, and the
+first value is kept.
+
+## In a notebook
+
+### The mutation problem
+
+A stored value is a snapshot. If a statement changes a value in place, the
+snapshot and the live object drift apart:
 
 <!-- test:skip reason="illustrative pseudo-code (Cell 1/Cell 2 separators)" -->
 ```python
 # Cell 1
-data = [1, 2, 3]      # cached snapshot: [1, 2, 3]
+data = [1, 2, 3]      # stored: [1, 2, 3]
 
 # Cell 2
-data.append(4)        # data is now [1, 2, 3, 4] — but the snapshot still says [1, 2, 3]
+data.append(4)        # data is now [1, 2, 3, 4]; the stored copy is not
 ```
 
-<!-- claim: cash/analysis/mutations.py:MutationVisitor @7c19f318, cash/analysis/cacheability.py:StatementAnalysis.skip_reasons @2a71487a broad="the claim is about the visitor's whole set of visit_* patterns, not one of them" -->
-Cash answers two questions about every statement, in that order:
+<!-- claim: cash/analysis/mutations.py:MutationVisitor @7c19f318, cash/analysis/mutations.py:MUTATING_METHODS @245ce55b broad="the table lists every pattern the visitor detects" -->
+What decides the verdict is whether the statement also *produces* the variable
+it changed. If it does, the change is a new version of that variable: it is
+stored, its lineage advances, and the statement caches. If it changes some
+other variable, there is nothing to store the new version under, so the
+statement is not cached.
 
-1. **Does it mutate something?** — a pure-AST scan (`analyze_statement`), plus
-   a runtime check for method calls the AST cannot classify.
-2. **Does it also *produce* the thing it mutated?** — i.e. does the statement
-   appear, to the dependency analyzer, to be the definition of that variable?
+| Pattern | Example | Verdict |
+|---------|---------|---------|
+| Augmented assignment | `total += 1` | Cached: `total` is the statement's output |
+| Item or attribute store | `d['k'] = v`, `obj.attr = v` | Cached: `d` or `obj` is the output |
+| pandas in place | `df.dropna(inplace=True)` | Cached: `df` is the output |
+| Known mutating method | `data.append(4)`, `d.update(o)`, `lst.pop()` | Not cached |
+| Other method call that changed its object | `bus.on(fn)`, `model.fit(X, y)` | Not cached |
+| `del` of an item | `del d['k']` | Not cached |
+| numpy `out=` | `np.add(a, 1, out=a)` | Not cached |
 
-The second question is what decides the verdict. A mutation Cash can attribute
-to the statement's own output is a new *version* of that variable: the value is
-captured, the variable's lineage advances, and the statement caches normally. A
-mutation of some *other* variable has nowhere to hang that new version, so the
-statement is refused and re-executes every run.
+<!-- claim: cash/analysis/mutations.py:selfref_inplace_write_vars @c8102f53 -->
+The "Cached" rows hold only when the variable was made in the same cell. A
+variable that comes into the cell from above and is changed in place is reset
+to its value at the start of the cell, so the statement that changes it runs
+again. See
+[mutating an object created in an earlier cell](../known-limitations.md#mutating-an-object-created-in-an-earlier-cell).
 
-<!-- claim: cash/analysis/mutations.py:MUTATING_METHODS @245ce55b, cash/analysis/mutations.py:PANDAS_INPLACE_METHODS @92780608, cash/analysis/mutations.py:MutationVisitor @7c19f318 broad="the table enumerates every pattern the visitor detects; a new visit_* method is a missing row" -->
-| Pattern | Example | How it's detected | Verdict |
-|---------|---------|-------------------|---------|
-| Augmented assignment | `total += 1` | `ast.AugAssign` node | **Cached** — `total` is the statement's output |
-| Subscript store | `d['k'] = v`, `arr[0] = 1` | `ast.Assign` with an `ast.Subscript` target | **Cached** — the base is the output |
-| Attribute store | `obj.attr = v` | `ast.Assign` with an `ast.Attribute` target | **Cached** — the base is the output |
-| Pandas in-place | `df.dropna(inplace=True)` | `inplace=True` keyword | **Cached** — the receiver is the output |
-| Known mutating method | `data.append(4)`, `lst.pop()`, `d.update(o)` | name in `MUTATING_METHODS` | **Not cached** |
-| Any other method call on a live object | `bus.on(fn)`, `model.fit(X, y)` | runtime content observation (below) | **Not cached** when it mutated |
-| `del` on a subscript | `del d['k']` | `ast.Delete` with an `ast.Subscript` | **Not cached** |
-| NumPy `out=` target | `np.add(a, 1, out=a)` | `out=` keyword | **Not cached** |
+#### Method calls
 
-The split looks arbitrary until you write the two forms side by side.
-`d['k'] = v` has a *store target*, so the analyzer already lists `d` among the
-statement's outputs; `d.update(o)` is a bare expression with no target at all.
-The first can be re-derived from the statement that made it; the second cannot.
+<!-- claim: cash/analysis/mutation_effects.py:classify_receivers @704f9e6f, cash/analysis/mutations.py:KNOWN_PURE_METHODS @b44508ae, cash/analysis/mutations.py:chain_is_pure @96104373 -->
+A method call has no assignment target, so Cash classifies its object:
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @328f2f5e, cash/analysis/mutations.py:selfref_inplace_write_vars @c8102f53 -->
-!!! note "…but only when the base was made in the same cell"
-    The **Cached** verdicts above are this classifier's per-statement decision.
-    A separate rule sits on top, in the upstream checker: a variable the cell
-    receives as an *input* and then writes in place is reset to its cell-entry
-    value before the cell runs, so the writing statement re-executes rather than
-    restoring. A variable created in the same cell is not an input, so nothing
-    resets it and the statement caches.
+- **Not a change.** A call on a module (`np.mean(x)`, `time.sleep(1)`), a call
+  that only writes a file from the object (`df.to_csv(path)`), and methods on
+  the known-pure list (`head`, `describe`, `mean`, `groupby`, `plot`, ...).
+  A chain that passes through a pure method is pure, because what follows acts
+  on the new object: `df[mask].groupby("hour").size()` leaves `df` alone. A
+  module setting such as `plt.style.use(...)` or `pd.set_option(...)` counts
+  as changing the module, so it is replayed after a restart.
+- **Always a change.** Any call on a live matplotlib `Figure` or `Axes`, or
+  passing one to a call (`df.plot(ax=ax)`, `draw(axes[0], df)`), draws on it.
+  A call that fits an estimator (`fit`, `fit_transform`, `fit_predict`, ...)
+  changes the estimator, even in `X = vec.fit_transform(texts)`. These
+  statements run every time.
+- **Observed.** Anything else is fingerprinted before and after the call. A
+  DataFrame, array or large collection that can only be sampled cannot be
+  proved unchanged, so it counts as changed. Each variable passed by name to a
+  bare call (`im.add_qc(df)`) is fingerprinted in full the same way.
 
-    So `df['x'] = …` caches when `df` was built in the same cell and re-runs
-    when `df` came from upstream — measurable as a 1.0 s recompute versus a
-    0.01 s restore for the identical statement. See
-    [Known limitations](../known-limitations.md#mutating-an-object-created-in-an-earlier-cell).
+A changed object gets a new lineage from the statement, so everything
+downstream of it misses, and the statement itself is not cached. Restoring it
+would rebind the name to a copy, while every other reference to the object
+kept the unchanged original.
 
-### Method calls: what the AST can't see
+Inside a loop or `if`/`try` body, the loop or branch as a whole owns the
+changes its body makes. Drawing on a `Figure`/`Axes` and fitting an estimator
+still run every time there.
 
-`data.append(4)` is easy — `append` is on the known-mutating list. But
-`bus.on(handler)` or `tracker.record(x)` could do anything, and a method call
-has no store target to give the receiver a fresh lineage. So Cash classifies
-method-call receivers in tiers, in this order:
+An accumulator loop (`out = []`, then `for e in it: out.append(slow(e))`) does
+not cache as a statement, but the expensive call inside it does, so a re-run
+reuses every element already computed. `out = [slow(e) for e in it]` assigns
+its result and caches as a whole.
 
-<!-- claim: cash/analysis/mutation_effects.py:classify_receivers @704f9e6f, cash/notebook/statement/mutations.py:MutationClassifier.classify @19b739eb, cash/analysis/mutations.py:KNOWN_PURE_METHODS @b44508ae, cash/analysis/mutations.py:standalone_method_call_inner_methods @4a62a44e, cash/analysis/mutations.py:chain_is_pure @96104373, cash/analysis/mutations.py:RECEIVER_READONLY_WRITE_METHODS @697bbf7a, cash/notebook/statement/mutations.py:MutationClassifier._receiver_observable @1cca2d82 -->
+<!-- claim: cash/analysis/annotations.py:CacheAnnotation.cache_fit == False -->
+A bare `model.fit(X, y)` runs every time. `# @cash:cache-fit` on the line
+stores the fitted state and restores it into the existing estimator. To cache
+training reliably, put it in a function that returns the model and move it
+into a module; see
+[moving to a module](../tutorials/feature-guides/production-transition.md).
 
-- **Excluded outright.** A module receiver is a plain function call, not a
-  mutation: `np.foo()`, `time.sleep()`, `plt.title()`. The exception is a
-  top-level call that changes a setting the module keeps (`plt.rcParams.update(...)`,
-  `pd.set_option(...)`, `plt.style.use(...)`, `np.seterr(...)`): it counts as
-  changing the module, so a restart replays it. A receiver-pure writer is
-  excluded too — `df.to_csv(path)` *reads* the frame and writes a file, so it must
-  never bump `df`'s lineage — and so is anything on the known-pure list
-  (`head`, `describe`, `value_counts`, `round`, `mean`, `groupby`, `plot`, …).
-  A chain counts as pure when its last method is on that list, or when it
-  passes through one: a known-pure method returns a NEW object, and what
-  follows acts on that, not on your receiver. `df.sort_values('x').head()`
-  and `df[mask].groupby('hour').size()` both leave `df` alone — `size` is not
-  on the list, but it runs on the `GroupBy` that `groupby` made. Anything
-  known to change the object anywhere in the chain still counts:
-  `df.pop('b').round(2)` does.
-  pandas' plotting entry
-  points count as pure on a pandas receiver however they are spelled —
-  `df.plot.bar(...)`, `df.groupby(k)[c].mean().plot(...)`, `df.hist()` — they
-  draw on an Axes and leave the data alone.
-- **Always mutating.** A method call on a live matplotlib `Figure`/`Axes` draws
-  on it whatever it returns. This tier is tested *before* the known-pure list,
-  which is what makes `ax.hist(...)` behave exactly like `ax.bar(...)` even
-  though `hist` is itself a known-pure name on any other receiver. A live
-  `Axes`/`Figure` handed to a call is drawn on too — `df.plot(ax=ax)`,
-  `sns.barplot(data=df, ax=ax)`, or a helper of your own, `draw(axes[0], df)`
-  — so it becomes the statement's mutated output
-  and the statement always runs, never restoring from cache (a restored draw
-  call draws nothing). The same holds for a call that **fits an estimator in
-  place** — `fit`, `partial_fit`, `fit_transform`, `fit_predict`,
-  `fit_resample` on anything with scikit-learn's `fit` and `get_params` — even
-  when its value is captured: `X = vec.fit_transform(texts)` re-runs, because
-  restoring `X` would leave `vec` unfitted.
-- **Observed.** Everything else is content-hashed before and after the call. If
-  the content changed, the receiver mutated. Receivers that can only be
-  *sampled* rather than hashed whole (DataFrames, Series, ndarrays, collections
-  over 200 elements) can't be proved unchanged, so they are assumed to mutate.
-- **Arguments of a bare call.** A module receiver is excluded, but what a
-  bare call statement is handed is not: in `sc.tl.leiden(hv)` or
-  `im.add_qc(df)`, each argument passed by name (not a module, class, function
-  or immutable value) is fingerprinted in full before and after the call —
-  the whole frame or array, not a sample — and one that changed counts as
-  mutated. One that cannot be fingerprinted is assumed to mutate.
-
-When a receiver is classified as mutating, Cash does two things: it adds the
-receiver to the statement's outputs — so the receiver's lineage advances from
-this statement's source, and downstream consumers see a changed input — and it
-**skips the cache** for the statement, so the mutated object is never
-round-tripped through serialization.
-
-The observed verdict is recorded per statement source and read back by the
-upstream simulation, which replays cells without executing them and therefore
-cannot observe anything itself. Both sides compute the bumped lineage from the
-same source text, so a simulated restore and a live run agree.
-
-One exception: statements inside a loop or `if`/`try` body are *not* classified
-this way. The simulation treats a control structure as a single unit, so
-bumping a body statement's receiver from a per-statement source would desync
-the two. The control structure owns its body's mutation lineage instead. Two
-kinds of body statement still skip the cache, so they re-execute on every run:
-a draw on a live `Axes`/`Figure` (including one handed to a helper,
-`draw_panel(ax, ...)`) and a call that fits an estimator
-(`labels = km.fit_predict(Z)`).
-
-??? question "Why skip the cache if the lineage is already bumped?"
-    The lineage bump and the cache skip answer different questions. Bumping
-    tells *downstream* cells that `data` changed, so a consumer cached against
-    the old `data` misses. Skipping is about `data` itself: a hit would rebind
-    the name to a **deserialized copy**, and every other reference to the
-    original object — an alias, an attribute on some other object, an entry in
-    a list — would keep pointing at the un-mutated original. Re-running
-    `data.append(4)` costs microseconds; getting object identity wrong costs
-    a silently wrong notebook.
-
-    This does mean the accumulator *statement* itself (`out = []` then
-    `for e in it: out.append(slow(e))`) never caches — there is no output to
-    cache, only a mutation. The loop is not a total loss, though: by default
-    Cash caches the expensive **call inside** it (`slow(e)`, not the `append`
-    around it), so re-running the loop reuses every element it has already
-    computed. See [Call-level
-    caching](../annotations.md#call-level-caching-default-and-cashno-cache-calls).
-
-    Cash says so in the badge and points at the rewrite that caches the loop
-    as a whole: `out = [slow(e) for e in it]` assigns its result, so it has an
-    output and caches like any other statement.
-
-### A bare `model.fit(X, y)`
-
-<!-- claim: cash/notebook/statement/mutations.py:MutationClassifier.estimator_fit_receivers @6f64bb3f, cash/analysis/namespace_effects.py:is_estimator @7eb88875, cash/analysis/annotations.py:CacheAnnotation.cache_fit == False -->
-A bare fit is a method-call mutation of its receiver, so it takes the default
-path above: **skip-cache, re-execute every run**. That is net-neutral — a fit
-that would keep missing cannot cost more than it saves — and it avoids the
-identity trap, where a cache hit rebinds `model` and leaves `backup = model`
-pointing at the pre-fit object.
-
-Caching the fit is available behind an opt-in annotation:
-
-<!-- test:skip reason="requires sklearn and a live notebook kernel" -->
-```python
-# @cash:cache-fit
-model.fit(X_train, y_train)
-```
-
-With the annotation, the fitted state is cached and restored **in place** onto
-the existing estimator. Without it, nothing about a fit is cached. For reliable
-ML caching, wrap training in a function that *returns* the model and decorate it
-with `@cash.cache` — see [The decorator path](decorator-path.md).
-
-## Side effects
-
-Some statements don't just compute a value — they *do something to the world*.
-Replaying them from cache would skip the action (a file never gets written, a
-request never gets sent). Cash's side-effect analysis flags these statements as
-**uncacheable** so they always run:
-
-<!-- claim: cash/effects.py:MODULE_CALLS @c6f9471b, cash/analysis/file_effects.py:NOTEBOOK_POLICY @5ffd29f3, cash/analysis/file_effects.py:SideEffectVisitor @07c1a65b broad="the table enumerates every call shape the visitor flags; a new branch is a missing row" -->
-| Pattern | Examples | Why it's unsafe to replay |
-|---------|----------|---------------------------|
-| File writes | `open('f', 'w')`, `df.to_csv()`, `df.to_parquet()`, `Path(p).write_text()` | The file wouldn't be written on a cache hit |
-| Serializing writers | `json.dump()`, `pickle.dump()`, `np.save()`, `fig.savefig()` | The artifact wouldn't be produced |
-| Filesystem changes | `os.remove()`, `shutil.move()`, `shutil.copyfile()`, `os.symlink()`, `os.chmod()`, `Path(p).mkdir()`, `Path(p).touch()`, `Path(p).unlink()` | The change to disk wouldn't happen |
-| System calls | `os.system()`, `os.popen()`, `subprocess.run()` | The process wouldn't run |
-| Network writes | `requests.post()`, `requests.put()`, `requests.delete()`, `requests.patch()`, `requests.request("POST", ...)`, `urlopen(url, data)`, and the same verbs on a client object: `session.post()`, `sock.sendall()`, `client.publish()`, `s3.upload_file()`, `s3.put_object()` | The request wouldn't be sent |
-| Database writes | `df.to_sql()`, `cur.execute(sql)`, `cur.executemany(...)`, `conn.commit()` | The rows wouldn't reach the database |
-
-Read-style calls are deliberately **not** treated as side effects:
-`requests.get()`, `requests.head()`, `urlopen(url)` without data, and `open(...)`
-in read mode are safe to cache, exactly like reading a CSV, and so is a query
-written as a literal `SELECT` (`cur.execute("SELECT ...")`, `pd.read_sql(...)`).
-Only the verbs that *change* the world are flagged; `requests.request(method,
-url)` counts as a read only when `method` is a literal `"GET"`, `"HEAD"` or
-`"OPTIONS"`, and an `execute` whose SQL is built at run time counts as a write.
-
-Writing to the console is output, not a file: `os.write(2, ...)`, `sys.stderr.write(...)`
-and `sys.stdout.write(...)` count as a `print` does, so a step marker in a helper does
-not make every statement that calls it a file writer.
-
-<!-- claim: cash/analysis/code_analyzer.py:_forbidden_call @8d78391d, cash/effects.py:CLOCK_WHEN_ARGS_OMITTED @3c78d511 -->
-A statement that reads the clock or makes a fresh id runs every time too:
-`time.time()`, `time.perf_counter()`, `datetime.now()`, `date.today()`,
-`uuid.uuid4()`, `pd.Timestamp.now()`, `pd.to_datetime("today")`, and
-`time.strftime("%Y")`, `time.localtime()` and their kin when the time argument is
-left out. These are recognised by what the names are bound to, so `from time
-import time as now; now()` counts. `time.localtime(ts)` and
-`time.strftime("%Y", t)` only convert the time you give them and are cached. It
-is the same list a `@cash.cache` function is checked against
-([KEY-AMBIENT-READ](../warnings.md#key-ambient-read)).
-
-So does a statement that asks the person at the keyboard — `input()`,
-`getpass.getpass()`, `breakpoint()` — since a hit would replay the first answer
-without asking again.
-
-<!-- claim: cash/notebook/lineage_formula.py:statement_environment_component @d70a1c80 -->
-A statement that reads the environment is cached, with what it read as part of
-its key: `os.getenv("TENANT")`, `os.environ["TENANT"]`,
-`os.environ.get("TENANT")` and `os.getcwd()` add a digest of the current value
-(never the value itself) to the key and to the lineage of what the statement
-binds. A new value runs the statement again, and what is built on its outputs
-follows; going back to an old value restores the entry made for it. The name
-has to be written out — `os.getenv(name)` cannot be keyed — and a read inside
-a function the statement calls is not seen, so such a function's answer stays
-what it was when the statement first ran. A `@cash.cache` function folds the
-same reads, its helpers' included.
+### Side effects
 
 <!-- claim: cash/effects.py:METHOD_VERBS @49934ce1, cash/effects.py:is_open_write_mode @fa37e14b, cash/effects.py:MODULE_CALLS @c6f9471b -->
-Detection is by call shape, so it works without importing anything, with two
-consequences worth knowing. A bare `open(...)` counts only when its mode
-argument is **statically** a write mode: `open(p, 'w')` is flagged, and
-`open(p, mode)` is not, because the analyzer never runs the code to find out
-what `mode` holds. And the write-method names are a **fixed list** matched on
-any receiver — not a `to_*` / `write_*` wildcard. `obj.save(x)` is flagged even
-on a receiver Cash knows nothing about, while `obj.write_thing(x)` and
-`obj.to_widget(x)` are not flagged at all. The list stops where names start
-colliding: `rename` and `replace` are deliberately absent, because
-`str.replace` would otherwise flag half a notebook. `mkdir`, `touch` and `unlink`
-are on it: every type that has one writes to a filesystem, and an
-`OUT.mkdir(exist_ok=True)` restored instead of run leaves an emptied output
-folder missing. The same list is what a `@cash.cache` function is checked
-against, so a call that runs every time in a notebook is reported there too.
+Cash spots side effects from the statement's source, without running it. So:
 
-<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @420335a6 -->
-A name cannot tell a POST that creates an order from one that runs a search.
-When a statement's side effect is harmless to skip, put
-[`# @cash:assume-safe`](../annotations.md#cashassume-safe) on it: the statement
-is cached, and a hit skips the call. It waives side effects only — an in-place
-change, the clock and `input()` still make the statement run every time.
+- `open(p, "w")` counts, but `open(p, mode)` does not, because the mode is
+  only known at run time.
+- Write methods are matched by name on any object: `obj.save(x)` counts even
+  on an object Cash knows nothing about, while `obj.write_thing(x)` does not.
+  `rename` and `replace` are left off the list, because `str.replace` would
+  match them.
+- Reads are not side effects: `requests.get(url)`, `open(p)` for reading and a
+  literal `SELECT` query cache normally. Writing to the console
+  (`sys.stdout.write`) counts as a `print`, not a file.
+- A call to a function of yours whose body writes a file counts as a write
+  (`save(fig, "chart.png")`).
 
-<!-- claim: cash/analysis/file_effects.py:statement_write_repeatability @5af2a939, cash/analysis/file_effects.py:_REPLACING_WRITE_METHODS @b3158e08, cash/analysis/file_effects.py:_is_append_mode_call @d7aef5f5 -->
-Being uncacheable is not the end of the story for a writer. Because a file
-write has no variable edge, nothing in the lineage graph would ever re-run one,
-so Cash separately records which statements wrote which paths and re-fires a
-stale writer when a downstream statement reads its output. It also classifies
-how safe a write is to repeat — an `open(p, 'a')` or `df.to_csv(p, mode='a')`
-*accumulates*, so re-firing it duplicates data, while `to_parquet` and `savefig`
-truncate and land the same bytes. That distinction is what keeps reconstruction
-from corrupting an append-mode audit log.
+<!-- claim: cash/analysis/code_analyzer.py:_forbidden_call @8d78391d, cash/notebook/lineage_formula.py:statement_environment_component @d70a1c80 -->
+A statement that reads the clock (`time.time()`, `datetime.now()`), makes a
+fresh id (`uuid.uuid4()`) or asks for input (`input()`, `getpass.getpass()`)
+runs every time too. A statement that reads an environment variable by name
+(`os.getenv("TENANT")`) or `os.getcwd()` is cached, with a digest of the value
+in its key. A read inside a function the statement calls is not seen.
 
-## Unseeded randomness
+When a side effect is harmless to skip, put `# @cash:assume-safe` on the
+statement: it is cached, and a hit skips the call. It waives side effects
+only; a change in place, the clock and `input()` still make the statement run.
 
-Random calls are *deterministic only if seeded*. Cash's `RandomnessDetector`
-finds unseeded draws and **warns** — the statement is still cached, and the
-first result is simply frozen:
+<!-- claim: cash/analysis/file_effects.py:statement_write_repeatability @5af2a939 -->
+A statement that wrote a file is re-run when a later statement reads that file
+and it is out of date. Cash tells repeatable writes (`to_parquet`, `savefig`,
+which replace the file) from appending ones (`open(p, "a")`,
+`to_csv(p, mode="a")`), so rebuilding does not duplicate rows in an
+append-mode log.
 
-<!-- claim: cash/tracking/randomness/detect.py:RANDOM_FUNCTIONS @5801a3eb, cash/tracking/randomness/detect.py:SEED_FUNCTIONS @2fe6d536 -->
-| Module | Tracked functions |
-|--------|-------------------|
-| `random` | `random()`, `randint()`, `choice()`, `shuffle()`, `sample()`, `uniform()`, … |
-| `numpy.random` | `rand()`, `randn()`, `randint()`, `choice()`, `normal()`, `integers()`, … |
-| `torch` | `rand()`, `randn()`, `randint()`, `randperm()`, `normal()`, … |
-| `tensorflow.random` | `uniform()`, `normal()`, `truncated_normal()`, `shuffle()`, … |
+### Unseeded randomness
 
-<!-- claim: cash/tracking/randomness/detect.py:RandomnessDetector @e549910f broad="the claim is about the detector having exactly two channels, which is a property of the class", cash/tracking/randomness/detect.py:RandomnessDetector.is_seeded @9ff99734, cash/tracking/randomness/detect.py:RNG_CARRIER_CONSTRUCTORS @620106b9 -->
-Two channels feed it, because there are two ways to be random. **Module
-globals** (`np.random.rand()`) are reproducible if the *module* was seeded, so
-the detector tracks `seed()` calls across the session: once a module is seeded,
-later draws from it are treated as deterministic and no warning fires.
-**Carriers** (`rng = np.random.default_rng()`) are reproducible if the *object*
-was constructed with a seed, which only the source can say — `default_rng()`
-and `default_rng(42)` produce indistinguishable objects. A carrier draw is
-therefore never filtered through the module seed ledger: seeding
-`np.random` two cells up says nothing about an independent `Generator`.
+<!-- claim: cash/tracking/randomness/detect.py:RANDOM_FUNCTIONS @5801a3eb, cash/tracking/randomness/detect.py:RandomnessDetector.is_seeded @9ff99734 -->
+Cash spots draws from `random`, `numpy.random`, `torch` and
+`tensorflow.random`. An unseeded draw is cached with a
+[`RANDOM-UNSEEDED`](../warnings.md#random-unseeded) warning, and the first
+value is kept on every re-run. Once a module is seeded with `seed()`, its later
+draws are reproducible and do not warn. A generator object
+(`rng = np.random.default_rng()`) counts as seeded only if it was built with a
+seed; seeding `np.random` says nothing about it.
 
-Freezing is deliberate, and it is the part most worth understanding: the value
-is frozen whether or not the cache holds it, because Cash rewinds the RNG so a
-re-run consumes the same stream position. So Cash announces it twice — once at
-compute time ("cached results may not be reproducible") and again at restore
-time, with a different claim, because by then the number on screen *is*
-definitively a replay rather than a fresh draw.
+<!-- claim: cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded @41fe639f -->
+`# @cash:allow-random` silences the warning and changes nothing else.
+`# @cash:no-cache` draws fresh on every run. The badge marks the row `seed`,
+`random` (a seeded draw) or `unseeded`. A cached fit
+(`# @cash:cache-fit`) of an estimator with `random_state=None` warns the same
+way.
 
-The badge carries the same information as a text pill on the statement row:
-
-<!-- claim: cash/notebook/badge_renderer/renderers/html.py:_rng_pill @ec2cf983, cash/notebook/statement/randomness.py:StatementRandomness.stamp_random_effect @cc319efd -->
-| Pill | Meaning |
-|------|---------|
-| `seed` | The statement sets an RNG seed |
-| `random` | The statement draws, from a seeded (reproducible) source |
-| `unseeded` | The statement draws unseeded — the cached value is a frozen replay |
-
-<!-- claim: cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded @41fe639f, cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @f9c1baa7 -->
-To silence the warning deliberately, annotate the statement with
-`@cash:allow-random` (see [Annotations](../annotations.md)). That is *advisory
-only* — it suppresses the message and changes no caching decision. To actually
-redraw on every run, use `@cash:no-cache`, which switches off both the cache and
-the RNG rewind.
-
-<!-- claim: cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded_estimator_fit @d5d4ca20, cash/notebook/statement/randomness.py:StatementRandomness.unseeded_estimator_fits @6c1cfeff -->
-One hazard the AST cannot see: an sklearn-style `estimator.fit()` draws its
-randomness inside compiled code, with no Python call to scan. When a fit is
-cached (under `# @cash:cache-fit`) and the estimator has `random_state=None`,
-Cash checks the live estimator and warns through the same channel.
-
-## From watching to deciding
-
-<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @420335a6 -->
-The findings above are merged into a single verdict per statement by
-`decide_cacheability`. It has five reason-sources and the first one that
-triggers wins:
-
-```python
-import ast
-
-from cash.analysis.cacheability import analyze_statement
-from cash.analysis.cacheability_decision import decide_cacheability
-
-code = "df.to_parquet('out.pq')"
-tree = ast.parse(code)
-
-cacheable, reasons = decide_cacheability(
-    code=code,
-    tree=tree,
-    inputs={"df"},
-    outputs=set(),               # this statement assigns nothing
-    annotation=None,             # 1. @cash:no-cache
-    analysis=analyze_statement(code, tree),   # 4. mutations + side effects
-    user_ns={"df": object()},
-    variable_lineage={"df": "abc123"},        # 5. inputs missing lineage
-    is_stateful_call=lambda name: False,      # 3. @stateful calls
-    scan_forbidden=lambda code, ns, tree: [], # 2. forbidden calls (input(), ...)
-)
-
-assert cacheable is False
-assert reasons == ["Side effect: df.to_parquet() (file_write)"]
-```
-
-Source 3 also refuses a call to a function of yours — defined in the
-notebook or your project, not an installed package — whose body writes a
-file: `save(fig, "chart.png")` runs every time, exactly as the `savefig`
-inside it would if it were written inline. See
-[Purity decorators](../tutorials/feature-guides/purity-decorators.md).
-
-Note the `outputs` argument: it is what turns "this statement mutates `df`"
-into "this statement *produces* `df`". Pass `outputs={"df"}` for a statement
-like `df.dropna(inplace=True)` and the mutation stops being a reason at all.
+### Values that cannot survive a round trip
 
 <!-- claim: cash/notebook/statement/derivation_edges.py:is_uncacheable_alias @2e425a0f, cash/analysis/cacheability_decision.py:identity_coupled_reason @77bfb1cc -->
-Two more refusals are decided *after* execution, because they are properties of
-the value rather than the source: a live-alias object (a NumPy view, a pandas
-`groupby` ref-holder) would be decoupled from its base by a round trip, and an
-identity-coupled matplotlib `Figure`/`Axes` would be detached from pyplot's
-current-figure registry.
-
-So the decision is simple and conservative: **an unattributable mutation or a
-side effect → always re-run; unseeded randomness → cache but say so; otherwise
-→ cache normally.** Try it on real snippets below.
+Two kinds of value are refused after the statement runs, because restoring a
+copy would break them: a view of another variable (a numpy slice, a pandas
+`groupby` object), which would come back detached from its base, and a
+matplotlib `Figure`/`Axes`, which would come back detached from pyplot.
 
 <div class="cash-cacheability-checker" markdown="0">
   <table>
     <thead><tr><th>Statement</th><th>Verdict</th></tr></thead>
     <tbody>
-      <tr><td><code>df = pd.read_csv('data.csv')</code></td><td>Cached — the file is tracked as a dependency</td></tr>
-      <tr><td><code>result = df.groupby('k').sum()</code></td><td>Cached — pure transformation</td></tr>
-      <tr><td><code>total += 1</code></td><td>Cached — the mutation is the statement's own output</td></tr>
-      <tr><td><code>data.append(4)</code></td><td>Not cached — in-place mutation of a variable this statement doesn't produce</td></tr>
-      <tr><td><code>del lookup['stale']</code></td><td>Not cached — deletion with nothing to attribute it to</td></tr>
-      <tr><td><code>x = np.random.randn(100)</code></td><td>Cached + warning — unseeded randomness</td></tr>
-      <tr><td><code>model.fit(X, y)</code></td><td>Not cached by default — opt in with <code>@cash:cache-fit</code></td></tr>
-      <tr><td><code>df.to_parquet('out.pq')</code></td><td>Not cached — file-write side effect</td></tr>
-      <tr><td><code>r = requests.post(url, json=payload)</code></td><td>Not cached — network side effect</td></tr>
-      <tr><td><code>r = session.post(url, json=payload)</code></td><td>Not cached — the same write through a client object</td></tr>
-      <tr><td><code>r = requests.get(url)</code></td><td>Cached — a read, like reading a file</td></tr>
+      <tr><td><code>df = pd.read_csv('data.csv')</code></td><td>Cached — the file is tracked</td></tr>
+      <tr><td><code>result = df.groupby('k').sum()</code></td><td>Cached — nothing is changed in place</td></tr>
+      <tr><td><code>total += 1</code></td><td>Cached — the change is the statement's own output</td></tr>
+      <tr><td><code>data.append(4)</code></td><td>Not cached — changes a variable it does not produce</td></tr>
+      <tr><td><code>del lookup['stale']</code></td><td>Not cached — a deletion with no output</td></tr>
+      <tr><td><code>x = np.random.randn(100)</code></td><td>Cached + warning — unseeded</td></tr>
+      <tr><td><code>model.fit(X, y)</code></td><td>Not cached unless <code>@cash:cache-fit</code></td></tr>
+      <tr><td><code>df.to_parquet('out.pq')</code></td><td>Not cached — writes a file</td></tr>
+      <tr><td><code>r = requests.post(url, json=payload)</code></td><td>Not cached — sends a request</td></tr>
+      <tr><td><code>r = session.post(url, json=payload)</code></td><td>Not cached — the same request through a client object</td></tr>
+      <tr><td><code>r = requests.get(url)</code></td><td>Cached — a read</td></tr>
       <tr><td><code>tenant = os.getenv('TENANT')</code></td><td>Cached — the value is part of the key</td></tr>
     </tbody>
   </table>
 </div>
-
-Cash also exposes these verdicts at runtime: `@cash:no-cache` forces a
-statement to never cache, and the decorator path has matching **purity
-markers** for functions — see [The decorator path](decorator-path.md).
-
-<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._surface_purity @9fe07f2d, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP @67696b30 -->
-The decorator takes one verdict further than the notebook path: a `@cash.cache`
-function whose body resolves a dependency from a **runtime value** cash can't
-track — `eval`/`exec`/`compile`, dynamic dispatch via `getattr(obj, name)()`,
-`getattr(mod, "exec")(...)`, or `importlib.import_module` — **raises
-`CashImpureFunctionError` by default**
-(caching correctness can't be guaranteed), rather than merely warning. Put
-`# @cash:assume-safe` on that line to accept the risk for it alone, or pass
-`@cash.cache(assume_safe=True)` to waive the whole function. See
-[the decorator's purity gates](../decorator.md).

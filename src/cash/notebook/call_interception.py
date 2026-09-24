@@ -486,8 +486,9 @@ def wrap_eligible_calls(
 
     The copy matters: the caller keeps using the original tree for analysis and
     cache keying, and rewriting in place would desync the runtime's source from
-    the upstream simulator's. That is what keeps ADR-007 satisfied without the
-    simulator needing to know interception exists.
+    the upstream simulator's. That is what keeps the runtime and the
+    simulator computing the same key without the simulator needing to know
+    interception exists.
 
     ``gate``, when given, is consulted for every structurally-eligible call and
     must return ``True`` for the call to actually be wrapped. It is an

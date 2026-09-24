@@ -1,4 +1,4 @@
-"""ADR-017: editing a bare seed() cell without re-running it must
+"""Editing a bare seed() cell without re-running it must
 still give the draw its correct top-to-bottom value.
 
 nb_runner reaches this bug (it writes a real .ipynb and `set_cell_source`

@@ -2419,7 +2419,7 @@ class VirtualLineage:
             if is_import:
                 virtual_modules.update(self._bound_modules(outputs, mutation_tree, stmt_code))
 
-            # RNG state is a hidden lineage variable (ADR-018): a draw reads it,
+            # RNG state is a hidden lineage variable: a draw reads it,
             # a seed produces it. Kept out of the plain ``inputs``.
             hidden_reads = key_hidden_reads(stmt_code, self)
             hidden_writes = hidden_lineage_writes(stmt_code)

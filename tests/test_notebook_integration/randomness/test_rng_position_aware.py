@@ -1,4 +1,4 @@
-"""ADR-018: the global RNG is restored to its position-correct
+"""The global RNG is restored to its position-correct
 state before a re-executed draw.
 
 Both are symptoms of the RNG being tracked by a time-ordered side-channel rather

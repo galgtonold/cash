@@ -1,8 +1,7 @@
 """Notebook simulator: pure-AST + cache-probing replay of upstream cells.
 
-Extracted from ``UpstreamChecker`` so the simulation logic has a clear test
-surface independent of the orchestrator. See ``docs/architecture_decisions.md``
-ADR-009.
+Kept apart from ``UpstreamChecker`` so the simulation can be tested on its
+own, with a ``TrackingState`` and no orchestrator, backend or shell.
 
 The simulator never executes user code via the IPython kernel. It simulates
 statement-by-statement using AST analysis and the cache backend, producing a

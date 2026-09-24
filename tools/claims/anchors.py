@@ -37,9 +37,7 @@ DOCS_ROOT = REPO_ROOT / "docs"
 SRC_ROOT = REPO_ROOT / "src"
 
 # ``superpowers/`` is internal planning (gitignored, not built).
-# ``architecture_decisions.md`` is in mkdocs.yml ``exclude_docs`` — never built.
 _BLACKLIST_DIRS = {"superpowers"}
-_EXCLUDED_FILES = {"architecture_decisions.md"}
 
 
 class AnchorError(Exception):
@@ -52,7 +50,6 @@ def published_pages() -> list[Path]:
         p
         for p in DOCS_ROOT.rglob("*.md")
         if not any(part in _BLACKLIST_DIRS for part in p.relative_to(DOCS_ROOT).parts)
-        and p.relative_to(DOCS_ROOT).as_posix() not in _EXCLUDED_FILES
     )
 
 

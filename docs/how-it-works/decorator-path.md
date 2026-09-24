@@ -1,200 +1,150 @@
-# The decorator path
+# How `@cash.cache` decides
 
-The decorator is the call-level entrance to Cash. Wrap a function with
-`@cash.cache` and every call routes through the same content-addressed core the
-notebook path uses — only the *trigger* differs. Where a notebook statement is
-keyed on its source and its inputs' lineage, a decorated **call** is keyed on
-four segments:
+!!! info "Applies to: decorator"
+    Scripts, services and libraries that use `@cash.cache`, and anyone asking why a call hit or missed.
 
-<div class="cash-keybreak" role="img" aria-label="The decorator cache key is four colon-separated segments: func_name (func), state_hash (state), dynamic_hash (dynamic), and args_hash (args).">
-  <div class="cash-keybreak-seg">
-    <span class="cash-keybreak-val">func_name</span>
-    <span class="cash-keybreak-label">func</span>
-  </div>
-  <span class="cash-keybreak-colon" aria-hidden="true">:</span>
-  <div class="cash-keybreak-seg">
-    <span class="cash-keybreak-val">state_hash</span>
-    <span class="cash-keybreak-label">state</span>
-  </div>
-  <span class="cash-keybreak-colon" aria-hidden="true">:</span>
-  <div class="cash-keybreak-seg">
-    <span class="cash-keybreak-val">dynamic_hash</span>
-    <span class="cash-keybreak-label">dynamic</span>
-  </div>
-  <span class="cash-keybreak-colon" aria-hidden="true">:</span>
-  <div class="cash-keybreak-seg">
-    <span class="cash-keybreak-val">args_hash</span>
-    <span class="cash-keybreak-label">args</span>
-  </div>
-</div>
-
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._compute_cache_key @a3272962 -->
-The segments are joined with colons, and an unused one is simply empty — a
-function with no `dynamic_depends_on` produces a key with an empty `dynamic`
-segment (`__main__.load:ca32…::0bba…`). Each segment answers a different "did
-anything change?" question:
-
-| Segment | Captures | Changes when… |
-|---------|----------|---------------|
-| `func` | The module-qualified function name (`my_module.process`) | …you call a different function |
-| `state` | The **dependency-state hash**, plus everything the function reads that isn't an argument | …you edit the function, a helper it transitively uses, or a value it closes over / defaults to / reads as a global |
-| `dynamic` | Dependencies declared at call time via `dynamic_depends_on` | …a runtime-declared dependency changes |
-| `args` | A hash of the call arguments | …you pass different arguments |
-
-<!-- claim: cash/dependency_state.py:DependencyStateHasher @6d3a4123 broad="the state digest is the hasher class as a whole - own source, graph deps, transitive helpers" -->
-The interesting one is `state`. It starts as a `DependencyStateHasher` digest
-that folds three things together: the node's own source hash, each graph
-dependency's state hash (recursively, in sorted order), and the **transitive
-helper source hashes** captured by the purity analyzer. That last part is what
-makes editing a *plain, undecorated* helper invalidate the caller's key — the
-same "what counts as a change" guarantee the notebook path gives statements,
-extended to the call graph. (The purity analyzer is the same machinery behind
-the function purity markers in [Safety](safety.md).)
-
-Source alone isn't enough, though, because a function can read inputs that never
-appear in `args` and never change its bytes. So Cash folds several more things into
-`state` on every call, each one closing a hole that produced a silent wrong
-answer:
-
-| Folded in | The hole it closes |
-|-----------|--------------------|
-| Captured free variables (closures) | Two closures from the same factory share source *and* qualname, so `make(2)` and `make(5)` collided on one key |
-| Parameter defaults | Editing `n_estimators=300` to `400` lives on the function object, not in the code object — the key stayed byte-identical and returned the 300-tree model |
-| A bound method's `__self__` | With `cash.cache(obj.method)`, `self` never reaches `args`, so two instances shared a key |
-| Module-level **data** globals the body reads | A config constant or dispatch dict changing left every cached result stale, silently |
-| Class-level code a cached **method** reaches, transitively | Editing a method or class-body helper the cached method calls left its result stale |
-| Class constants read via `ClassName.ATTR` / `type(self).ATTR` | Changing a class-level constant the body reads didn't move the key |
-| A helper reached through a **value**, not a bare name (`fn = mod.f; fn(x)`) | A value-indirected call used to slip past the plain-helper source hash |
-| What a callable global or default was **built with**: a factory closure's captured values, a `functools.partial`'s arguments and the function it wraps, a pre-built bound method's instance, what a C callable reduces to (`operator.itemgetter("n")`, `attrgetter`, `methodcaller`), a partial held inside a library wrapper (`np.vectorize(partial(f, k=K))`) | `CLIP = make_clipper(-3, 3)`, `F = partial(base, k=2)` and `F = S(2).f` were keyed by their code alone, so changing what they were built with kept the key; a changed `itemgetter` sort key served the mis-sorted report |
-
-Modules, plain callables (already tracked as helpers) and classes are excluded
-from the globals fold. A capture or global that can't be hashed warns once and is
-skipped rather than silently pretending it doesn't exist.
-
-<!-- claim: cash/decorator/arg_hashing.py:ArgHashingMixin._hash_arg_payload @7bc7e4ca -->
-The `args` segment resolves each argument through its own ladder, and the order
-is deliberate:
-
-1. **Hashers registered with `override=True`** — a type you have explicitly
-   taken over from Cash, so nothing below is consulted for it.
-2. **Built-in content hashers** — pandas, numpy, polars, pyarrow, modin, dask.
-   These hash the argument's *content*, which is byte-stable across processes.
-   A pandas 3 frame's hash is reused while copy-on-write shows the frame
-   unchanged; a `frozen=True` numpy result's is computed once.
-3. **A lineage-tracked `_cash_lineage_hash`**, for values that carry no content
-   hasher (custom objects). Only a tag something keeps current counts: one the notebook's statement layer wrote (it re-tags a variable on every change), or one from a function declared `frozen=True`. The tag a plain `@cash.cache` call puts on its result is not used, because nothing moves it when the object is modified in place. A `frozen=True` function's list, tuple or dict, which cannot carry a tag, is remembered by identity instead and keyed the same way.
-4. **Registered hashers** from `cash.register_hasher(...)`.
-5. **A pickle fallback** over the value itself, in one canonical form: sets
-   and dicts in a stable order, every container tagged with its type.
-
-Content comes first *on purpose*. A notebook lineage hash is recomputed per
-session and is not reproducible across a kernel restart, so keying a persisted
-entry on it would make every decorator call miss after a restart even though the
-argument is byte-identical — which is exactly the "restart and re-run in seconds"
-guarantee Cash exists to provide. Note this is the reverse of the notebook
-statement ladder in [Cache keys, lineage & hashing](cache-keys-and-lineage.md),
-where lineage is checked first; statement entries and decorator entries have
-different lifetimes, so they weigh reproducibility differently.
-
-If an argument can't be hashed at all (a generator, say) the decorator gives up
-gracefully: it emits a `CashCacheIneffectiveWarning` naming the offending
-argument type, and runs the function uncached.
-
-??? question "Why is the `func` segment module-qualified?"
-    <!-- claim: cash/decorator/code_identity.py:CodeIdentityMixin.get_func_key @5014fa8b -->
-    Cash keys functions on `f"{func.__module__}.{func.__qualname__}"`, not
-    `__qualname__` alone. Early on, bare qualnames collided: a notebook cell's
-    `dep()` and a helper module's `dep()` produced the *same* key, so a call to
-    one could return the other's cached result — a silent wrong answer. Folding
-    in `__module__` makes the key unique (`analysis.dep` vs `my_utils.dep`).
-    `__module__` is set correctly by Python for every function type, so it's a
-    stable, free disambiguator.
-
-    **`__main__` is resolved to a filename.** A function defined in the script
-    you ran belongs to module `__main__`, so `python model.py` keyed it
-    `__main__.work` while `import model` keyed the same function, same source,
-    same arguments as `model.work` — two entries for one computation, on the
-    very ordinary path of developing a script behind an
-    `if __name__ == "__main__"` block and later importing it from a driver.
-    Cash resolves `__main__` through the defining file's name so those two
-    agree. It also *reduces* collisions: every script alike used to be
-    `__main__`, so two unrelated scripts with a same-named function met;
-    now only two scripts with the same **filename** do — and the state hash
-    (source, helpers, read globals) still separates those. A worker process
-    started with `spawn` (the default on Windows and macOS) re-imports the
-    script as `__mp_main__`, which is resolved the same way, so a pool's
-    workers and the process that started them share entries.
-
-    A REPL, `python -c`, a frozen app and a Jupyter kernel have no defining
-    file, so they stay `__main__` — there is no import for them to agree with.
-
-## The bridge to notebook caching
-
-The two paths aren't separate worlds. When a notebook statement *calls* a
-decorated function, the decorator's own hit/miss shows up in that statement's
-execution badge. The mechanism is a call log the statement processor drains:
+Every call to a decorated function takes the same route:
 
 ```mermaid
 flowchart TD
-    STMT["<b>Statement:</b> <code>result = my_cached_func(df)</code>"]
-    SP["<b>StatementProcessor.process_statement()</b><br/>executes the statement via <code>exec()</code>"]
-    WRAP["<b>@cash.cache wrapper runs</b><br/>Computes decorator cache key<br/>Checks backend → HIT or MISS<br/>Logs call to <code>_decorator_call_log</code>"]
-    DRAIN["<b>StatementProcessor calls</b><br/><code>cash.drain_decorator_calls()</code>"]
-    MERGE["<b>Decorator metrics merged into badge</b><br/>Grouped by function, hits/total<br/>Condensed once a group exceeds 3 calls"]
-    STMT --> SP --> WRAP --> DRAIN --> MERGE
+    A["Call f(args)"] --> B{"Key built?"}
+    B -->|"No: unhashable argument or default, or the key build failed"| W["Warn, run uncached"]
+    B -->|Yes| C{"Entry stored?"}
+    C -->|No| D["Run the body, store the result"]
+    C -->|Yes| E{"ttl expired?"}
+    E -->|Yes| D
+    E -->|No| F{"Files it read unchanged?"}
+    F -->|No| D
+    F -->|Yes| G["Return the stored value"]
 ```
 
-<!-- claim: cash/decorator/reporting.py:ReportingMixin._log_decorator_call @f23b179b -->
-Every `@cash.cache` call appends an entry to `Cash._decorator_call_log`, which
-keeps the most recent 10,000 (nothing drains it outside a notebook, so it must
-not keep every call of a long-running process). `cache_info()` counts each call
-from its own entry, not from this log:
+The rest of this page explains each box. For the parameters (`ttl=`,
+`file_depends_on=`, `depends_on=`, `assume_safe=` and the rest), see the
+[decorator guide](../decorator.md).
 
-<!-- test:skip reason="illustrative dict literal at top level" -->
-```python
-{
-    'func_name': 'my_module.process',     # module-qualified key
-    'cache_hit': True,                    # whether the cache was hit
-    'execution_time': 0.001,              # wall-clock time of THIS operation
-    'body_seconds': None,                 # on a stored miss: the body's own time
-    'time_saved': 2.3,                    # compute this hit avoided; 0.0 on a miss
-    'args_hash': 'abc123...',             # hash of arguments
-    'cache_key': 'my_module.process:...', # full four-segment key
-    'timestamp': 1718000000.0,
-    # on a miss only:
-    'miss_reason': MissReason(kind=MissKind.ARGS, detail='called with arguments not seen ...', changed=None),
-    'not_stored': None,                   # why the result was not stored
-    'not_persisted': None,                # why it was kept in RAM only
-}
-```
+## The key
 
-`execution_time` and `time_saved` are deliberately different numbers. A hit's
-`execution_time` is the microseconds the lookup cost; its `time_saved` is the
-full compute the lookup stood in for — the execution time measured when the
-entry was first written. Summing `execution_time` would under-report savings by
-orders of magnitude; `time_saved` is an estimate of the *original* cost, not a
-re-measurement of what recomputing would cost today.
+<!-- claim: cash/decorator/runtime.py:RuntimeMixin._compute_cache_key @a3272962, cash/decorator/code_identity.py:CodeIdentityMixin.get_func_key @5014fa8b -->
+A key has four parts, joined by colons: `function:state:dynamic:args`.
 
-<!-- claim: cash/core.py:Cash.drain_decorator_calls @eb8f14d5 -->
-After the statement runs, `drain_decorator_calls()` atomically reads and clears
-the log. The badge groups the calls by function, so a helper called in a loop is
-one line, not fifty:
+| Part | What it holds |
+|---|---|
+| `function` | The module-qualified name, such as `pipeline.train`. A function in the script you ran is named after the script's file, so `python model.py` and `import model` share entries. A REPL or `python -c` keeps `__main__`. |
+| `state` | The function's code and everything it reads that is not an argument ([below](#what-goes-into-the-state)). |
+| `dynamic` | What the `dynamic_depends_on=` resolvers returned for this call; empty without them. |
+| `args` | The arguments, hashed by content ([below](#how-arguments-are-hashed)). |
 
-```
-  @cash.cache:
-    load_features(): 2/2 cached (0.002s)
-    train(): 0/1 cached (4.200s)
-```
+## What goes into the state
 
-<!-- claim: cash/notebook/badge_renderer/view_builder.py:_CONDENSE_THRESHOLD == 3 -->
-In the HTML badge each call gets its own `@cache my_func() HIT` row until a
-group exceeds three calls, at which point it condenses to a single expandable
-row (`3/5 cached, 2 computed`) with a per-call sparkline. Nested calls are all
-captured, at every level.
+<!-- claim: cash/decorator/runtime.py:RuntimeMixin._build_key @bdf9b846, cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe -->
+The state starts from source code and then folds in, on every call, each input
+that can change the result without changing an argument:
 
-So the decorator path inherits the notebook path's visibility for free — see
-[Inspecting what Cash did](inspecting.md) for how to read those badges. And
-because the `state` segment tracks source, editing a decorated function (or its
-helpers) invalidates exactly the calls that depended on it, the same way editing
-a cell invalidates downstream statements in
-[Staying correct: invalidation](invalidation.md).
+| Folded in | Detail |
+|---|---|
+| The function's source | Comments, docstrings, blank lines and indentation width are stripped first, so a reformat keeps the cache. `# @cash:` directives count. |
+| Helpers it calls | Followed transitively through your own modules and your own installed package; other people's libraries are where it stops. `depends_on=` adds more. |
+| Classes its code reaches | Classes it constructs, names or annotates, transitively. For a cached method: the class-level code and constants it reaches. |
+| Module globals it reads | Data globals read by the function or a helper: a threshold, a config dict. Modules, functions and classes are tracked as code instead. |
+| Closures, defaults, a bound method's instance | The values a closure captured, parameter defaults by value, and the `self` of `cash.cache(obj.method)`. |
+| What a callable was built with | The arguments of a `functools.partial`, a factory closure's values, an `operator.itemgetter` key. |
+| Code passed as an argument | A class or function passed in is keyed by its code, not its name, so editing a schema class you pass recomputes. |
+| Files named in `file_depends_on=` | The names only; their content is checked on lookup ([Files](#files)). |
+| Environment reads | A digest of each `os.getenv("NAME")`, `os.environ["NAME"]` or `os.getcwd()` value the function, its helpers or the cached functions it calls read with the name written out. A new value is a new entry. |
+| The random seed | For a function seen drawing from the global `random` or `numpy.random` stream: which seed is in force. Re-seeding recomputes. |
+
+<!-- claim: cash/decorator/globals_fold.py:GlobalsFoldMixin._fold_read_globals @6c43e132 -->
+Two limits. A global that cannot be hashed (a lock, a live connection) is left
+out with a [`KEY-UNHASHABLE-GLOBAL`](../warnings.md#key-unhashable-global)
+warning. And reachability is static: code picked at run time, from a dict or
+through `getattr`, is not seen. Name it with `depends_on=[...]`.
+
+<!-- claim: cash/decorator/rng.py:RngMixin._fold_rng_epoch @03b4b5de -->
+An unseeded draw is not a change. The first value is stored and returned on
+every later call, with a [`RANDOM-UNSEEDED`](../warnings.md#random-unseeded)
+warning; `allow_random=True` accepts that on purpose.
+
+## How arguments are hashed
+
+<!-- claim: cash/decorator/arg_hashing.py:ArgHashingMixin._hash_arg_payload @7bc7e4ca -->
+Each argument is fingerprinted by the first rule that applies:
+
+1. A hasher you registered with `cash.register_hasher(T, fn, override=True)`.
+2. A built-in content hasher: pandas, numpy, polars, pyarrow, modin and dask
+   values are hashed by content.
+3. An identity tag Cash keeps current, such as the one a `frozen=True`
+   cached function puts on its result.
+4. A hasher you registered without `override=True`.
+5. The pickled value, in one canonical form: dicts and sets in sorted order,
+   every container tagged with its type.
+
+Content comes before any in-memory tag, so a stored entry is still found after
+a restart. Equal values share a key (`{"a": 1, "b": 2}` and
+`{"b": 2, "a": 1}`), but the type counts: `[1, 2]` and `(1, 2)`, or `0.5` and
+`np.float64(0.5)`, are separate entries.
+[Custom hashers](../tutorials/feature-guides/custom-hashers.md) covers
+registration.
+
+## When there is no key
+
+<!-- claim: cash/decorator/runtime.py:RuntimeMixin._resolve_cache_key @ec66ad8d -->
+If any part of the key cannot be built, the call runs uncached and Cash warns.
+It never caches under a partial key. The usual causes:
+
+- an argument that cannot be hashed, such as a generator or a lock
+  ([`KEY-UNHASHABLE-ARG`](../warnings.md#key-unhashable-arg));
+- a parameter default that cannot be hashed
+  ([`KEY-UNHASHABLE-DEFAULT`](../warnings.md#key-unhashable-default));
+- any other failure while building the key
+  ([`KEY-BUILD-FAILED`](../warnings.md#key-build-failed)).
+
+## Files
+
+<!-- claim: cash/decorator/file_deps.py:FileDepsMixin._fold_declared_files @15becfc2, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @3dd62608 -->
+A file the body reads through a tracked reader, and every file named in
+`file_depends_on=`, is recorded with its content hash when the entry is
+written. Before a stored value is returned, each file is checked; if one
+changed, the call recomputes and the entry is rewritten. Which readers are
+tracked, and how the check works, is under
+[what counts as a change](invalidation.md#what-counts-as-a-change).
+
+File content is checked, not keyed, so each call has one entry. Switching a
+data file between two versions recomputes on every switch, while switching
+code between two versions hits, because code is in the key. A URL given to
+`file_depends_on=` is treated as a missing local file; use
+[`RemoteFileDataSource`](../tutorials/feature-guides/custom-file-sources.md)
+for remote files.
+
+## Side effects
+
+On the first call, the decorator reads the function's source. It warns about
+side effects and still caches:
+
+- a file write, a POST or a database write warns
+  [`IMPURE-SIDE-EFFECTS`](../warnings.md#impure-side-effects), and a hit
+  skips the effect;
+- a network or database read warns
+  [`KEY-NETWORK-READ`](../warnings.md#key-network-read), which `ttl=`
+  silences;
+- a clock read or a fresh UUID warns
+  [`KEY-AMBIENT-READ`](../warnings.md#key-ambient-read).
+
+<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._surface_purity @9fe07f2d -->
+One case raises instead: a body that picks code from a run-time value
+(`eval`, `exec`, `getattr(obj, name)()`, `importlib.import_module`) raises
+`CashImpureFunctionError`, because Cash cannot tell when that code changes.
+The [decorator guide](../decorator.md) covers
+`assume_safe` and the `# @cash:assume-safe` line marker.
+
+## Storing and returning
+
+<!-- claim: cash/backends/serialization.py:get_serializer @76cf2c1b -->
+A result is written to the RAM tier and to disk, however cheap it was, unless
+a tier's size cap refuses it; see
+[where your cache lives](storage.md). A hit returns a copy rebuilt from the
+stored bytes, not the object the first call returned, and it does not replay
+the body's `print` output.
+
+In a notebook, a statement that calls a decorated function shows that call's
+hits and misses on the statement's badge; see
+[the notebook path](notebook-path.md#decorated-functions-inside-a-cell).

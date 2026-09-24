@@ -1,168 +1,151 @@
 # Contributing to Cash
 
-Thank you for your interest in contributing to Cash! This guide will help you get started.
+!!! info "Applies to: both paths"
+    Contributors: setting up, finding your way around the code, and getting a change through CI.
 
-## Development Setup
+## Setup
 
-### Prerequisites
-
-- Python 3.10+
-- Git
-
-### Clone and Install
+You need Python 3.10 or later and Git.
 
 ```bash
 git clone https://github.com/galgtonold/cash.git
 cd cash
 python -m venv .venv
 source .venv/bin/activate  # or .venv\Scripts\activate on Windows
-pip install -e ".[dev]"
+pip install -e ".[dev,docs-test]"
+pip install ruff==0.15.8 pre-commit   # the ruff version CI uses
+pre-commit install                     # runs ruff on each commit
 ```
 
-### Verify Setup
+`docs-test` holds the packages the documentation's examples import. Without it,
+`pytest tests/docs` fails on real imports.
 
-```bash
-pytest tests/ --ignore=tests/test_notebook_integration --ignore=tests/test_wheel_gate --ignore=tests/docs
-```
+## The code
 
-## Project Structure
-
-A directory-level map (browse `src/cash/` for the individual modules — the
-layout below is intentionally coarse so it doesn't drift as files move within a
-package):
+Cash has two engines: the decorator (`@cash.cache`) and the notebook engine
+(`%cash_on`). They share the hashing, effect rules, file tracking and storage,
+but each builds its own keys. [How Cash works](how-it-works/overview.md)
+describes both.
 
 ```
 src/cash/
-├── core.py             # The Cash class + @cash.cache decorator
-├── config.py           # CashConfig; TOML / env / programmatic resolution
-├── data_source.py      # FileDataSource and the DataSource protocol
-├── remote_source.py    # RemoteFileDataSource: s3/gs/az/http, keyed on the
-│                       #   store's own validator (ETag, version id, generation)
-├── dependency_state.py # Folds source/dep/helper state into the cache key
-├── purity_analyzer.py  # Static purity/impurity analysis for the decorator
-├── purity.py           # @pure / @stateful and the known-pure registry
-├── object_hashing.py   # Hashes and sizes arbitrary Python values
-├── cost_model.py       # Fitted serialize / restore time per type and backend
-├── source_norm.py      # Normalizes source before hashing (drops comments,
-│                       #   blank lines, indentation width) so a reformat keeps
-│                       #   your cache
-├── analytics.py        # Cache-usage analytics
-├── effectiveness.py    # Measures whether caching actually paid off
-├── graph.py            # Dependency-graph utilities
-├── nbconvert.py        # nbconvert preprocessor (strips badges / magics)
-├── logging.py          # Structured logging
-├── exceptions.py       # Public exception types
-├── utils.py            # Shared internal helpers
-├── _agent_guide.py     # The text cash.help() returns — a byte-for-byte copy
-│                       #   of docs/for-coding-agents.md, kept in step by a test
-├── __main__.py         # CLI entry point (python -m cash)
-│
-├── backends/           # Pluggable storage: _base.py (abstract CacheBackend),
-│                       #   memory / file / tiered / sqlite / redis / s3, plus
-│                       #   serialization and the on-disk entry format
-├── tracking/           # What a computation depends on at run time: file
-│                       #   reads, file snapshots, function source, randomness
-├── analysis/           # Static analysis: statement inputs/outputs, the
-│                       #   # @cash: annotations, cacheability
-├── notebook/           # Jupyter integration (imports the layers above;
-│   │                   #   nothing outside it imports it but the magics loaders)
-│   ├── ipython/        #   magics, cell executor, argument parsing
+├── __init__.py         # the public API (cash.__all__) and the default Cash instance
+├── __main__.py         # the `cash` command line
+├── core.py             # the Cash class: registries, configuration, the cache decorator front
+├── decorator/          # what a cached call does: its key (code, globals,
+│                       #   closures, arguments, seed, files), the call itself,
+│                       #   explain() and the warnings it raises
+├── notebook/           # the notebook engine (only the magics loaders import it)
+│   ├── ipython/        #   the magics and the cell executor
 │   ├── statement/      #   statement-level caching
-│   ├── control_structures/  # per-iteration loop / branch caching
-│   ├── upstream/       #   upstream simulation & virtual restore
-│   ├── badge_renderer/ #   the HTML / text cell badge
-│   └── *.py            #   cache keys, lineage, call units, consumables,
-│                       #   provenance, audit, …
-├── ui/                 # Interactive display components (explorer, dashboard)
-└── labextension/       # PREBUILT JupyterLab extension (cash-live-cells), shipped
-                        #   in the wheel. Source is TypeScript under
-                        #   labextension/ at the repo root; this is its build
-                        #   output and is committed, so a plain `pip install`
-                        #   drops it in without Node
+│   ├── control_structures/  # per-iteration loop and branch caching
+│   ├── upstream/       #   upstream simulation and restore
+│   ├── badge_renderer/ #   the HTML and text badge
+│   └── *.py            #   the statement cache key, lineage store, call units,
+│                       #   provenance, live cell sources, ...
+├── analysis/           # static analysis: statement inputs and outputs,
+│                       #   # @cash: annotations, mutations, cacheability
+├── tracking/           # what a computation reads at run time: files,
+│                       #   function source, modules, randomness
+├── backends/           # storage: memory, file, tiered, SQLite, Redis, S3;
+│                       #   serialization, the entry format, eviction, size caps
+├── ui/                 # the dashboard and the cache explorer
+├── labextension/       # the prebuilt JupyterLab extension (source in labextension/ at the repo root)
+├── config.py           # CashConfig and how settings are resolved
+├── effects.py          # which calls write files, send requests, read the clock or environment
+├── effect_observer.py  # side effects a cached function performs on its first call
+├── purity.py           # @pure, @stateful and the known-pure registry
+├── purity_analyzer.py  # static purity analysis of a decorated function
+├── purity_flow.py      #   and the data-flow questions it asks
+├── dependency_state.py # the state hash: own source, dependencies, helpers
+├── object_hashing.py   # content hashes and sizes of values
+├── source_norm.py      # normalises source before hashing (comments, blank lines)
+├── cost_model.py       # predicted serialise and restore time per type and backend
+├── effectiveness.py    # notices when caching costs more than it saves
+├── data_source.py      # FileDataSource and the DataSource protocol
+├── remote_source.py    # RemoteFileDataSource for s3, gs, az and http
+├── diagnostics.py      # the stable code of every warning
+├── exceptions.py       # public exceptions and warnings
+├── analytics.py        # cache-usage analytics
+├── graph.py            # the function dependency graph (Cash.graph)
+├── nbconvert.py        # nbconvert preprocessor that strips badges and magics
+├── reconfigure.py      # cash.configure() on a running instance
+├── _agent_guide.py     # the text cash.help() returns; identical to docs/for-coding-agents.md
+└── _*.py, *.py         # small helpers: logging, console output, paths,
+                        #   where the project and cache are, clocks, type sets
 ```
 
-The default backend is `TieredBackend([InMemoryBackend, FileBackend])` — RAM in
-front of disk. Redis and S3 are optional-dependency backends.
+The JupyterLab extension sends unsaved cell sources to the kernel, so the
+upstream check can see edits not yet saved. Node is needed only to rebuild it
+after changing `labextension/src/index.ts`; the build output is committed.
 
-The labextension is the part most easily missed: it pushes your unsaved cell
-sources to the kernel so an upstream check can see edits you haven't saved.
-What it covers and what it doesn't is documented under
-[editing without saving](known-limitations.md#editing-without-saving).
+## Before you push
 
-## Testing
-
-### Test Structure
-
-- `tests/test_core/` — The decorator, keys, hashing, configuration and the rest of the core library
-- `tests/test_backends/` — Storage backends
-- `tests/test_notebook/` — Notebook unit tests (real IPython, mock shell)
-- `tests/test_ui/` — The dashboard, the cache explorer and the generated UI
-- `tests/test_cli/` — The `python -m cash` command line
-- `tests/test_tooling/` — CI workflows, test selection, repository hygiene and the test harness
-- `tests/test_notebook_integration/` — Integration tests (real notebooks and kernels),
-  one folder per feature (`basics/`, `loops/`, `upstream/`, `restart/`,
-  `files/`, `calls/`, `language/`, ...), each file named after the behaviour
-  it checks
-- `tests/test_wheel_gate/` — Installs the built wheel in a fresh venv and drives a real kernel (skipped unless switched on; see that file)
-- `tests/_nbharness/` — The kernel runner and helpers the integration tests use
-- `tests/docs/` — Executes the documentation's examples and checks its claims
-- `benchmarks/tests/` — Tests for the benchmark tooling, run separately with
-  `pytest benchmarks/tests`
-- `tools/test_selection/` — The integration core set CI runs on every push
-  (`core_set.txt`), the scripts that pick it, and the shard plugin the nightly
-  run of the whole integration suite uses
-- `tools/claims/` — The claim-anchor library behind `scripts/claims.py`
-
-### Running Tests
+CI runs these on every push and pull request; run the ones your change touches.
 
 ```bash
-# All tests
-pytest tests/ -v --tb=short
+ruff check .
+ruff format --check .
 
-# Unit tests only
-pytest tests/test_notebook/ -v
+# Unit tests (the default is 16 xdist workers; add -n 0 -s to debug)
+pytest tests/ --ignore=tests/test_notebook_integration --ignore=tests/test_wheel_gate --ignore=tests/docs -m "not perf"
 
-# Integration tests only (all of them take a long time)
-pytest tests/test_notebook_integration/ -v
-
-# One feature's integration tests
+# Integration tests: the files named after what you changed, then the core set
 pytest tests/test_notebook_integration/loops/ -v
-
-# The integration core set CI runs on every push
 pytest @tools/test_selection/core_set.txt
 
-# Specific test file
-pytest tests/test_notebook/test_magics.py -v
-
-# Specific test
-pytest tests/test_notebook/test_magics.py::TestCashMagics::test_basic_caching -v
-
-# Serially, for pdb or print debugging (the default is 16 xdist workers)
-pytest tests/test_notebook/test_magics.py -n 0 -s
+# Docs
+pytest tests/docs
 ```
 
-Tests marked `perf` assert wall-clock thresholds. CI's unit job leaves them
-out (`-m "not perf"`) and the Benchmarks workflow runs them without blocking;
-a plain local `pytest` still includes them.
+The integration core set is the few hundred integration tests that together
+cover every line, feature and step sequence of the whole suite; the whole
+suite runs nightly. Don't run the whole suite while iterating. To re-pick the
+core set after large changes, see `tools/test_selection/`.
 
+**Show that a new test fails without your fix:**
 
-!!! warning "A bare `pytest tests/` needs more than `[dev]`"
-    `tests/docs/` stubs third-party modules by monkeypatching the real
-    ones, so those packages must be importable — without
-    `pip install -e ".[dev,docs-test]"` several doc pages fail on a real
-    import rather than skipping. CI never runs the suite bare; it uses
-    `--ignore=tests/test_notebook_integration --ignore=tests/test_wheel_gate
-    --ignore=tests/docs` for the fast job and a separately-provisioned job
-    for `tests/docs/`. Mirror that locally, or install both extras.
+```bash
+python scripts/fails_first.py tests/test_core/test_your_change.py
+```
 
-### Writing Tests
+It stashes your changes under `src/`, runs the tests, and fails if they pass
+anyway. A test can pass vacuously when the mechanism never engages (a cached
+function faster than the persistence floor never reaches disk; sleep
+`tests.conftest.ABOVE_PERSISTENCE_FLOOR_S`), when empty input satisfies the
+assertion, or when it checks state instead of behaviour.
 
-#### Unit Tests
+**Changing behaviour the docs describe:**
 
-Use the fixtures from `tests/conftest.py` for testing notebook components:
-`mock_shell`, `clean_backend`, `cash_instance`, `cash_magics` and
-`statement_processor`. Run one cell through cash with `run_cash_cell` from
-`tests/_cell_driver.py`:
+```bash
+python scripts/claims.py --report cash/cost_model.py   # claims resting on a file
+python scripts/claims.py --pin                         # fill new `@?` anchors
+python scripts/claims.py --queue                       # claims to re-read
+python scripts/doc_numbers.py --update                 # refresh test counts and similar
+```
+
+[`tests/docs/README.md`](https://github.com/galgtonold/cash/blob/main/tests/docs/README.md)
+explains claim anchors, skipped examples and derived numbers.
+
+## Writing tests
+
+| Folder | What goes there |
+|---|---|
+| `tests/test_core/` | the decorator, keys, hashing, configuration |
+| `tests/test_backends/` | storage backends |
+| `tests/test_notebook/` | notebook unit tests, with a real IPython shell |
+| `tests/test_ui/`, `tests/test_cli/` | the dashboard and explorer; the `cash` command |
+| `tests/test_tooling/` | CI workflows, test selection, repository hygiene |
+| `tests/test_notebook_integration/<feature>/` | real kernels over real notebooks, one folder per feature |
+| `tests/docs/` | the documentation's examples and claims |
+| `tests/test_wheel_gate/` | the built wheel in a fresh environment; skipped unless switched on |
+
+Name a new file after the behaviour it checks and put it in the folder of the
+feature it covers.
+
+A notebook unit test uses the fixtures in `tests/conftest.py` (`mock_shell`,
+`cash_magics`, `cash_instance`, `clean_backend`, `statement_processor`) and
+runs a cell with `run_cash_cell`:
 
 ```python
 from tests._cell_driver import run_cash_cell
@@ -173,63 +156,42 @@ def test_feature(cash_magics, mock_shell):
     assert mock_shell.user_ns["y"] == 20
 ```
 
-Pass `cells=[...]` to `run_cash_cell` when the test needs the notebook's other
-cells, as the upstream check reads them from the `.ipynb`. When a test needs
-different settings (a disk cache, `persist_all`, a restart), build that one
-difference on these fixtures rather than copying the shell, and read state
-through `cash_magics.tracking_state` or `cash_magics.cash_status("dict")`
-rather than private attributes.
+Pass `cells=[...]` when the upstream check needs the notebook's other cells.
+Read state through `cash_magics.tracking_state` or
+`cash_magics.cash_status("dict")`, not private attributes.
 
-#### Integration Tests
-
-Use the `nb_runner` fixture for end-to-end notebook tests:
+An integration test drives a real kernel with the `nb_runner` fixture:
 
 ```python
 def test_feature(nb_runner):
-    nb_runner.create_notebook([
-        "x = 10",
-        "y = x * 2",
-        "print(f'Result: {y}')"
-    ])
+    nb_runner.create_notebook(["x = 10", "y = x * 2", "print(f'Result: {y}')"])
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "Result: 20" in nb_runner.get_output(3)
 ```
 
-The fixture is a `NotebookTestRunner` from the `tests/_nbharness/` package,
-which also holds the helpers tests import, such as
-`from tests._nbharness.badge import shows_cached`.
+Helpers such as `shows_cached` come from `tests._nbharness`.
 
-### Test Isolation
+The root conftest gives every test its own `CASH_CACHE_DIR` and fails a test
+that leaves a `.cash/` folder in the checkout, or that discards a cache write.
+A test that calls `InteractiveShell.instance()` must call
+`InteractiveShell.clear_instance()` in teardown.
 
-The root `tests/conftest.py` points `CASH_CACHE_DIR` at a fresh directory under
-pytest's temporary directory for every unit test, and fails a test that leaves
-a `.cash/` directory in the checkout. A test of the default cache location sets
-or clears `CASH_CACHE_DIR` itself.
+## Code style
 
-`InteractiveShell.instance()` registers a process-wide IPython shell that
-outlives the test that created it. A test that calls it must call
-`InteractiveShell.clear_instance()` in teardown, or later tests in the same
-worker run as if inside IPython.
+- `ruff check` and `ruff format`, as configured in `pyproject.toml`.
+- Type hints and docstrings on public functions and methods.
+- Every statement cache key goes through `compute_cache_key()` in
+  `cash.notebook.cache_key`, and every lineage write through `LineageStore`.
+  Keys contain code and input lineages; files reach a statement key only
+  through the lineage of the variable they were read into.
 
-## Code Style
+## Pull requests
 
-- **Type hints** on all public methods
-- **Docstrings** for all public APIs
-- **PEP 8** formatting
-- **No trailing whitespace**
+1. Branch from `main`.
+2. Add tests, and show they fail without the fix.
+3. Run the checks above.
+4. Update the documentation the change affects.
+5. Describe what changed and why.
 
-## Pull Request Process
-
-1. Create a feature branch from `main`
-2. Write tests for your changes
-3. Ensure the tests pass (see *Running Tests*; CI runs the unit, docs and lint jobs)
-4. Update documentation if needed
-5. Submit PR with clear description
-
-## Architecture Guidelines
-
-- **Lineage hashes** encode full dependency chains
-- **Cache keys** include code + input lineages + file hashes
-- **Statement-level** granularity, not cell-level
-- **Pluggable backends** via `CacheBackend` abstract class
+Commit messages use Conventional Commits (`fix:`, `feat:`, `docs:`, ...).

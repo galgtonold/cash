@@ -19,7 +19,6 @@ Read these instead of relying on this file for details:
 
 - `docs/contributing.md`: setup, the directory map, running and writing tests.
 - `docs/how-it-works/`: how keys, lineage, invalidation and storage work.
-- `docs/architecture_decisions.md`: the ADRs (not published on the docs site).
 - `pyproject.toml` (`[tool.pytest.ini_options]`) and `tests/conftest.py`,
   `tests/test_notebook_integration/conftest.py`: test settings, markers and fixtures.
   The kernel runner behind the integration fixtures is the `tests/_nbharness/` package.
@@ -34,7 +33,19 @@ Read these instead of relying on this file for details:
 
 ## Architecture
 
-- **`src/cash/core.py`**: the `Cash` class and `@cash.cache`.
+Cash has two engines. The decorator keys a call on
+`{function}:{state}:{dynamic}:{args}` and always writes the result to disk. The
+notebook keys a statement on its source and the lineage of its inputs, and
+decides per statement whether to persist. They share the hashing helpers, the
+storage backends and the effect vocabulary (`effects.py`), not a key builder.
+
+- **`src/cash/core.py`**: the `Cash` class: registries, configuration, and the
+  `cache` decorator front with its wrappers.
+- **`src/cash/decorator/`**: what a cached call does, one concern per module:
+  the parts of its key (`code_identity`, `closure_fold`, `globals_fold`,
+  `code_args`, `arg_hashing`, `rng`, `file_deps`), the call itself (`runtime`,
+  `store`, `iterators`) and what the user is told (`explain`, `reporting`,
+  `purity_checks`).
 - **`src/cash/backends/`**: storage backends. `factory.py` maps a `TierConfig.type`
   (`memory` / `file` / `sqlite` / `redis` / `s3` / `tiered`) to a class. The default is
   `TieredBackend([InMemoryBackend, FileBackend])`.
@@ -43,7 +54,9 @@ Read these instead of relying on this file for details:
   decorator and the notebook share. `tracking/` records what a computation depends
   on at run time (file reads and snapshots, function source, randomness);
   `analysis/` is static analysis (statement inputs and outputs, `# @cash:`
-  annotations, cacheability).
+  annotations, cacheability). `effects.py` names the calls that write files,
+  send requests, read the clock or the environment; the decorator warns on
+  them and the notebook refuses to cache them.
 - **`src/cash/notebook/`**: the notebook subsystem. Its large parts are packages:
   `ipython/` (`CashMagics`, the cell executor), `statement/` (`StatementProcessor`
   and its siblings), `upstream/` (`UpstreamChecker`, `NotebookSimulator`,
@@ -73,7 +86,10 @@ before touching it.
 ### Unified cache-key computation
 
 **Every statement cache key goes through `compute_cache_key()` in
-`cash.notebook.cache_key`.** Never build a key anywhere else.
+`cash.notebook.cache_key`.** Never build a key anywhere else. The decorator's
+key has its own single builder, `RuntimeMixin._build_key` in
+`decorator/runtime.py`, which both a call and `explain()` use, so `explain()`
+predicts the key the call looks up.
 
 Keys are computed at runtime (`_analyze_and_hash` in `statement/processor.py`),
 during upstream simulation and virtual restore (`_update_virtual_lineage` and
@@ -98,6 +114,21 @@ statement's occurrence index in the cell.
   `_cash_lineage_hash` attribute, then `compute_hash_fn(value)`.
 - The simulator also tracks `executed_cell_codes` (variable to the code that last
   produced it) and `executed_input_lineages` (variable to the input lineages used).
+- The runtime and the upstream simulation must derive every lineage from the
+  same strings. A probe that inspects a live object (a mutation observed on a
+  receiver, a drained iterator, a view's base) records its verdict for the
+  simulation to read back; it never recomputes a source hash or feeds
+  `compute_cache_key`.
+
+### Cache metadata
+
+Inside cash, entry metadata is a frozen dataclass (`CacheMetadata` for the
+decorator, `StatementCacheMetadata` for the notebook). Into and out of every
+backend it is a plain dict: `to_dict()` just before `backend.set`, `from_dict()`
+just after `backend.get`. Backends never see the dataclass, and `from_dict`
+ignores keys it does not know. A change to the on-disk format bumps
+`CACHE_FORMAT_VERSION` (`backends/cache_dir.py`); a cache written in another
+format is cleared on first open.
 
 ## Testing
 
@@ -202,9 +233,31 @@ server, then pin the fix with an `nb_runner` test. Keep throwaway scripts in
 
 ## Writing documentation
 
+- **Know the audience.** Every page in the nav outside the *Project* tab is for
+  users: it describes behaviour and what to do about it. No private names
+  (`_anything`), class or method walkthroughs, test-file references or GitHub
+  source links there. Contributor material goes in `docs/contributing.md`,
+  `tests/docs/README.md` or this file.
+- **Keep the two paths apart.** Right after the H1, every page states its path
+  in a box: `!!! info "Applies to: decorator"`, `"Applies to: notebook"` or
+  `"Applies to: both paths"`, plus one line saying who it is for. (Not on the
+  mkdocstrings `api/*` pages, which use one sentence, and not on
+  `for-coding-agents.md`, which must stay byte-identical to `_agent_guide.py`.)
+  A decorator page must be usable without notebook knowledge: no `%cash_*`,
+  `# @cash:` annotations or badges. A notebook page does not wander into the
+  decorator; the bridge is *Moving to a module*. On a both-paths page, put
+  path-specific content in content tabs labelled exactly `=== "Decorator"` then
+  `=== "Notebook"`, so the reader's choice follows them across pages.
+- **Present tense, current behaviour.** No "used to", "no longer",
+  "previously", "was fixed", migration notes for old versions, incident or
+  user-testing stories, or tracker ids. History belongs in `CHANGELOG.md`.
+- **One home per rule.** State a rule once, on the page that owns it, and link
+  there from anywhere else with one sentence.
 - **Never cite a line number** (`` `core.py:1234` ``) in a published page;
-  `tests/docs/test_doc_claims.py` fails on it. Name the symbol instead. The one
-  exception pins a commit (`` `src/cash/core.py:1234@8e5f4ce` ``), for claims about history.
+  `tests/docs/test_doc_claims.py` fails on it. Name the symbol instead.
+- **Derive numbers about the repository** (test counts, the CI matrix) with
+  `<!-- docnum:NAME -->` markers; `python scripts/doc_numbers.py --update`
+  fills them and CI checks them.
 - **Anchor every mechanism claim** to the source that decides it:
   `<!-- claim: cash/core.py:Cash.cache @? -->`, then `python scripts/claims.py --pin`.
   Prefer a value anchor (`== 0.01`) when the prose quotes a constant.

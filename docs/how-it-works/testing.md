@@ -1,205 +1,84 @@
 # How cash is tested
 
-A cache asks you for something unusual: permission to *not* run your code, and
-trust that the answer it hands back instead is the one your code would have
-produced. Every other kind of bug announces itself. A stale cache hit looks
-exactly like a correct one.
+!!! info "Applies to: both paths"
+    Contributors, and anyone deciding how far to trust Cash's results.
 
-So the question worth asking before you adopt this is not "does it work?" but
-"how would they know if it didn't?" This page answers that, including the parts
-where the answer is *we wouldn't, and here is what we do about it*.
+Figures on this page are derived from the repository by
+`scripts/doc_numbers.py` and checked in CI; they are current as of
+<!-- docnum:version -->0.11.0<!-- /docnum -->.
 
-Figures below are derived from the repository by
-[`scripts/doc_numbers.py`](https://github.com/galgtonold/cash/blob/main/scripts/doc_numbers.py)
-and re-checked in CI, so they cannot quietly go stale — they are current as of
-<!-- docnum:version -->0.11.0<!-- /docnum -->. The mechanisms matter more than the counts, and they
-are the part that does not change.
+## The suites
 
-## The shape of the suite
-
-**<!-- docnum:tests_total -->~10,450<!-- /docnum --> tests** across three suites,
-spread over <!-- docnum:test_files -->~990<!-- /docnum --> files:
+**<!-- docnum:tests_total -->~10,450<!-- /docnum --> tests** in
+<!-- docnum:test_files -->~1,000<!-- /docnum --> files:
 
 | Suite | Size | What it covers |
 |---|---|---|
-| Unit | <!-- docnum:tests_unit -->~6,080<!-- /docnum --> | The engine: cache keys, lineage, hashing, backends, invalidation |
-| Notebook integration | <!-- docnum:tests_integration -->~3,960<!-- /docnum --> | Real kernels executing real notebooks, cell by cell, one folder per feature |
-| Docs | <!-- docnum:tests_docs -->~430<!-- /docnum --> | The documentation itself — see [below](#the-docs-are-tested-too) |
+| Unit | <!-- docnum:tests_unit -->~6,080<!-- /docnum --> | keys, lineage, hashing, backends, the decorator, the notebook engine with a real IPython shell |
+| Notebook integration | <!-- docnum:tests_integration -->~3,960<!-- /docnum --> | real kernels running real notebooks, one folder per feature |
+| Docs | <!-- docnum:tests_docs -->~430<!-- /docnum --> | the documentation's examples and claims ([below](#the-docs-are-tested-too)) |
 
-The unit suite runs on **<!-- docnum:platforms -->15<!-- /docnum --> platform combinations** — Python
-3.10 through 3.14, on Linux, Windows and macOS — on every push. The matrix is deliberately kept in
-lockstep with the versions advertised on PyPI, because a version we claim to
-support but never run is a support claim backed by nothing.
+## What runs where
 
-The integration suite takes over two hours of test time, so every push runs its
-core set instead: a few hundred tests, picked to cover every line, feature and
-step sequence the whole suite covers, on Linux for every Python version. The
-whole integration suite runs every night, split into parallel shards. The docs
-suite runs on every push, on Linux.
+| Check | When | Platforms | What it runs |
+|---|---|---|---|
+| Unit | every push and pull request | Linux, Windows and macOS, Python 3.10 to 3.14: <!-- docnum:platforms -->15<!-- /docnum --> combinations | the unit suite, without the tests marked `perf` |
+| Integration core set | every push and pull request | Linux, Python 3.10 to 3.14 | about 340 integration tests (`tools/test_selection/core_set.txt`), chosen to cover every line, feature and step sequence the whole suite covers |
+| Integration, full | nightly | Linux, Python 3.12, in 6 parallel shards | the whole integration suite |
+| Docs | every push and pull request | Linux, Python 3.12 | the docs suite, and a check that the derived numbers are current |
+| Lint | every push and pull request | Linux | `ruff check .` and `ruff format --check .` |
+| Benchmarks | weekly, and when `benchmarks/` changes | Linux | the benchmark tooling tests, and the `perf` tests, which never block |
+| Release | when a release is published | Linux | the claim-drift check, blocking; then the build and `twine check` |
 
-## The suite is a regression corpus, not a coverage target
+Two rules apply to every test run. `xfail_strict` is on, so a test marked as
+an expected failure fails the build once it passes. And a test fails if any
+cache write was discarded while it ran, so a cache that silently stops writing
+cannot pass.
 
-Most of these tests are not there to exercise a feature. They are there because
-something was once wrong, and this is the shape of the thing that was wrong.
+## New tests must fail first
 
-That distinction changes what the suite is *for*. Coverage numbers measure which
-lines ran; this measures which failures cannot come back. Tests are not pruned
-for redundancy — two tests that look alike may pin two genuinely different
-regressions, and the cost of keeping both is a few milliseconds while the cost of
-deleting the wrong one is a bug that returns silently.
-
-`xfail_strict` is on, which means a test marked "expected to fail" that starts
-passing **fails the build**. A limitation that quietly gets fixed cannot sit in
-the suite misreporting itself.
-
-## Tests must prove they can fail
-
-A test that passes against unfixed source is not evidence. It is a green
-checkmark with nothing behind it.
-
-[`scripts/fails_first.py`](https://github.com/galgtonold/cash/blob/main/scripts/fails_first.py)
-exists to catch that: it stashes the fix, runs the new test against the
-*unfixed* source, restores, and reports which tests failed. A test that passes
-there is vacuously green and gets rewritten.
-
-Its docstring enumerates four ways a test can be vacuously green — **all four of
-which have actually shipped in this repository**:
-
-1. **The mechanism never engages.** A decorator test whose function is faster
-   than the persistence floor never writes to disk, so the assertion holds
-   whether or not the bug exists.
-2. **Empty input trivially satisfies the assertion.** "Is this output
-   encodable?" passes for an empty string — so a harness that executed nothing
-   looks like a pass.
-3. **A different gate is substituted for the real one.** `mkdocs build --strict`
-   validates links and never executes a Python fence, so docs whose code raises
-   `NameError` still build green.
-4. **State is checked instead of behaviour.** Asserting a policy object exists
-   passes even when nothing ever calls it.
-
-Publishing that list is the point. Every project has vacuously green tests; most
-have never gone looking.
+`scripts/fails_first.py` stashes your uncommitted changes under `src/`, runs
+the new tests against the unfixed source, and fails if they pass there. A
+test that passes without the fix proves nothing and is rewritten.
 
 ## The docs are tested too
 
-Documentation drifts from code silently, and a caching library's docs are load
-bearing — if the page says a change invalidates and it doesn't, the reader is
-about to trust a stale value.
+- **Python examples run.** The docs suite finds every `.md` file under
+  `docs/`, `examples/` and the repository root and runs its Python code blocks.
+  For a decorated function, it checks that the hits and misses match the
+  example's comments (`# cache hit`, `# cache miss`).
+- **Claims are pinned to the code.** About
+  <!-- docnum:claims -->~370<!-- /docnum --> statements about behaviour carry an
+  anchor naming the source that decides them, with a fingerprint of that
+  source. When the code changes, the claim is listed for re-reading. Pull
+  requests report drift without failing; a release fails on it.
+- **Numbers are derived.** Test counts, the CI matrix and the version are
+  written by `scripts/doc_numbers.py`, and CI fails when one is out of date.
+- **Links, settings and names are checked.** Internal links and anchors,
+  config fields, environment variables and magic names in the docs must exist
+  in the code.
 
-Three mechanisms, all blocking:
+Prose without an anchor is not checked by anything, and an anchor covers one
+function, not the functions it calls.
 
-**Python fences are executed.** The docs suite auto-discovers every `.md` file
-under `docs/`, `examples/` and the repository root, and runs its Python fences
-through a real harness. There is no whitelist to maintain, so a new page is
-covered the day it lands. Sample output in the docs is checked against what the
-code actually prints.
+## Packaging
 
-**Prose is pinned to source.** Around **<!-- docnum:claims -->~400<!-- /docnum --> claims** across
-the documentation carry an anchor naming the function that decides them, plus a
-fingerprint of that function's normalized source:
+The suites run against an editable install with every optional dependency.
+`scripts/wheel_gate.py` checks the package a user gets: it builds a wheel,
+installs it into a fresh virtual environment, and drives a real Jupyter server
+through kernel restarts. It is run by hand; CI skips it.
 
-```markdown
-<!-- claim: cash/core.py:Cash.cache @b3cd263b -->
-```
-
-When the code changes, the fingerprint moves and the claim surfaces in a
-re-verification queue. Clearing that queue is a **release gate** — the publish
-workflow re-runs it with drift promoted from advisory to blocking, so a release
-cannot go out resting on prose nobody re-read.
-
-The tooling refuses to make this easy to fake: re-pinning without reading is
-called out in its own help text as manufacturing the appearance of verification.
-**Numbers are derived, not remembered.** Every figure the docs quote about the
-repository — the version, the test counts, the claim count, the size of the CI
-matrix — is computed from the source by
-[`scripts/doc_numbers.py`](https://github.com/galgtonold/cash/blob/main/scripts/doc_numbers.py)
-and written between invisible markers, with CI failing when a committed value
-no longer matches. This exists because they had all gone wrong at once and
-nothing could notice: the README said ~8,500 tests where this page said ~8,750
-and, further down, ~8,800; the claim count read 164 against an actual 247. A
-wrong number renders exactly as well as a right one, and none of the mechanisms
-above look at arithmetic. Counts are rounded so the gate fires when a figure
-becomes misleading rather than every time somebody adds a test.
-
-In practice most drift is a moved fingerprint on unchanged behaviour — but not
-all of it. Preparing 0.4.1 surfaced three drifted claims about `%cash_stats`, and
-**two of them had genuinely become wrong**: both enumerated what the command
-prints and had gone stale the moment a line was added.
-
-## Independent adversarial rounds
-
-Before a release that widens the audience, cash goes through a round of
-independent testing: people who did not write it, given real workloads, trying to
-make it serve a wrong answer. A round must come back clean before that kind of
-release ships.
-
-This has been the most productive single source of real bugs — roughly one
-correctness defect per five participants, in rounds where the automated suite was
-entirely green. The findings are adjudicated rather than accepted: each is
-reproduced independently before it is believed, because roughly a third of
-reported issues turn out to be stale, environmental, or a misreading of correct
-behaviour.
-
-## Packaging is gated separately
-
-The test suite is **structurally blind** to packaging bugs. It runs against an
-editable install with every optional dependency present — which is not what a
-user gets.
-
-So the wheel is gated on its own terms: built, checked, and installed into a bare
-virtual environment with **no optional dependencies at all**, from both the wheel
-and a rebuild from the sdist, then exercised. A separate harness drives a real
-Jupyter server against the built wheel, because driving cells through a test
-client is not the same as a kernel a user would start.
-
-## What this does *not* catch
-
-This is the section that matters, and the reason the rest is worth believing.
-
-**Silent degradation is the hard class.** When cash catches a problem, handles
-it, and recomputes instead, everything stays green — because recomputing *is*
-correct. The result is right. It just cost you the thing you installed cash for.
-
-That is not hypothetical. In 0.4.1 we fixed a bug where **every Windows run was
-silently discarding cache writes**. Windows refuses to replace a file while any
-handle has it open; cash expects concurrent readers by design and writes on a
-background thread, so the collision was routine. Each occurrence threw the entry
-away and recomputed the work.
-
-It survived the entire suite, on every platform combination, through multiple
-adversarial rounds. Nothing raised. Nothing went red. It was found by reading
-the full logs of jobs that had *passed*.
-
-Two things came out of that, both shipped in 0.4.1:
-
-- Discarded writes are now recorded when they happen and reported by
-  [`%cash_stats`](../magics.md#cash_stats), so the failure is visible to you
-  rather than inferred from savings that never arrive.
-- **CI now fails if any cache write was discarded during a test run.** The class
-  can no longer pass silently.
-
-**Other things we know we do not catch.** Prose drift in tables and narrative
-text — only Python fences and pinned claims are checked, so a wrong sentence
-about behaviour is caught by a human or not at all. Timing-dependent behaviour on
-hardware unlike CI's. And the long tail of interactions between a real user's
-libraries that no fixture anticipates.
-
-The [known limitations](../known-limitations.md) page is where the specific ones
-live. It runs to several hundred lines, deliberately — it is easier to trust a
-tool that tells you where it breaks than one that implies it never does.
-
-## Reproducing any of this
-
-Nothing above needs special access:
+## Running the suites
 
 ```bash
 pytest tests/ --ignore=tests/test_notebook_integration --ignore=tests/test_wheel_gate --ignore=tests/docs
-pytest tests/test_notebook_integration
+pytest @tools/test_selection/core_set.txt     # the integration core set
+pytest tests/test_notebook_integration        # the whole integration suite (slow)
 pytest tests/docs
 python scripts/claims.py --queue
-python scripts/fails_first.py <your new test>
+python scripts/fails_first.py <your new test file>
 ```
 
-The CI configuration is
-[in the repository](https://github.com/galgtonold/cash/blob/main/.github/workflows/ci.yml),
-and every run's full logs are public.
+[Contributing](../contributing.md) covers setup and which tests to run for a
+change. [Known limitations](../known-limitations.md) lists the cases Cash is
+known to get wrong or not see.

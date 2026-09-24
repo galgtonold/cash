@@ -1,181 +1,102 @@
 # Knowing when to recompute
 
-Cash never silently serves a stale result: it propagates every change through the lineage chain so that a modification anywhere upstream triggers recomputation of everything downstream.
+!!! info "Applies to: both paths"
+    Anyone who wants to know which changes make Cash recompute, and how it notices them.
 
-## Lineage propagation
-
-A change in any cell propagates transitively through the lineage chain: if `raw` changes, every variable derived from `raw` — `clean`, `features`, `model` — is also invalidated, regardless of how many steps separate them. This follows directly from the way lineage hashes are built: a variable's lineage encodes the full history of everything that fed into it, so editing anything upstream produces a new lineage hash downstream without any explicit dependency declaration. See [cache keys and lineage](cache-keys-and-lineage.md#the-lineage-chain) for the full definition of the lineage hash.
-
-## Finding your notebook
-
-<!-- claim: cash/notebook/server_discovery.py:_NOTEBOOK_PATH_CACHE_TTL == 300.0, cash/notebook/server_discovery.py:NotebookCellReaders.read @d0b4a970, cash/notebook/upstream/checker.py:UpstreamChecker._load_notebook_and_find_cell @77d10a76, cash/notebook/upstream/checker.py:UpstreamChecker._resolve_notebook_path @9abe9193 -->
-To check upstream cells, Cash needs the notebook's current cell sources — which is not always the same as needing the file. Path discovery — resolving the notebook's location on disk — runs on every cell check regardless of whether a live reader ends up supplying the cells; it is never skipped just because one will answer, because the two are separate steps. What a live reader changes is narrower: the upstream simulation reads the cell sources it supplied instead of opening the notebook file, but the resolved path is still produced and still used elsewhere in the same check (below). Discovery itself locates the file through a prioritised fallback chain: first it reads the **VS Code injected variable** (`__vsc_ipynb_file__`) set by the Jupyter extension; if that is absent it tries the **`ipynbname` library** when installed; and finally it queries the **Jupyter Server REST API** (reliable inside JupyterLab or the classic Notebook). The resolved path is cached in memory for five minutes, and the cache is cleared whenever you switch notebooks via `%cash_on`.
-
-Graceful degradation is by design. If notebook discovery fails entirely — for example in a plain IPython REPL or an environment where none of the three mechanisms succeed — **and no live reader answers either** — Cash disables upstream checking rather than guessing. Notably, it does **not** fall back to scanning the filesystem for the most-recently-modified `.ipynb`: that heuristic can silently pick the wrong notebook, so Cash skips upstream detection instead. The current cell still uses its own code and input hashes, but stale-upstream detection is simply skipped. Cash never invalidates against a notebook it cannot see.
-
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._notebook_cells_for @97d09e98, cash/notebook/server_discovery.py:warn_notebook_not_found_once @f1dad161 -->
-A failed lookup is also what triggers Cash's once-per-session notice that "upstream dependency tracking is disabled for this session" — but only when no live reader can supply the cells either. Two environments reach a failed lookup with a perfectly good live reader behind it: Colab, which has never had a discoverable notebook path, and a remote or containerised kernel whose JupyterLab extension is pushing while path discovery fails. The notice is suppressed in both, because the check is about to run on live frontend cells and the notice would simply be wrong. Suppression is judged per check rather than per session, so a frontend that later stops pushing can still raise the notice.
-
-One thing genuinely does stay disabled whenever the path fails to resolve, live reader or not, and it is narrower than the notice would suggest: the notebook-wide search for a helper function's or class's source defined in another cell has no live-reader fallback of its own. It reads only from the resolved path, and comes back empty, silently, when there is none.
-
-<!-- claim: cash/notebook/server_discovery.py:_NOTEBOOK_PATH_NEGATIVE_TTL == 2.0 -->
-A *failed* lookup is memoised too, but for two seconds rather than five minutes — long enough to stop a dead Jupyter runtime entry from being probed once per statement, short enough that a notebook which becomes discoverable is picked up on the next cell.
-
-## Upstream simulation
-
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker @30c8bf78, cash/notebook/upstream/simulator.py:NotebookSimulator @a7f20c2a, cash/notebook/server_discovery.py:NotebookCellReaders.read @d0b4a970 broad="the simulation story is the two orchestrating classes, not one method" -->
-The classic problem: you edited cell 1 but then ran cell 3 directly. Cash solves this with a virtual-lineage approach. When cell 3 runs, Cash reads the notebook's current cell state — from a live source when one is available, the saved file otherwise — and *simulates* the upstream cells — cells 1 and 2 — without executing them. It parses each upstream statement's AST to compute what its lineage hash *should* be given the current code, then compares those virtual lineages against the in-memory lineages stored from the last actual run. Only the cells whose simulated lineage differs from what is in memory are re-executed. A value that matches is used as it is, and one missing from memory is restored straight from cache — which is how a variable you never computed this session appears in the namespace without its cell running. Only what the cell you run depends on is considered: a stale chart, export or model fit above it that the cell does not read stays as it is until a cell that needs it runs. A statement that writes a file counts as needed when something the cell depends on reads that file, even through a helper function, and even when the path is only reached at run time — a loop or comprehension over a list of paths (`[pd.read_csv(f) for f in FILES]`) reads the paths in that list. A read cash cannot pin down at all rules nothing out, so an unrelated writer above may be re-run to be safe.
-
-<!-- claim: cash/notebook/server_discovery.py:NotebookCellReaders.read @d0b4a970, cash/notebook/server_discovery.py:CellRead @67c7c89b broad="the claim is which reader answered and whether it sees unsaved edits, which is all CellRead records" -->
-"A live source when one is available" means, in the order Cash tries them: cell sources **pushed by cash's JupyterLab extension**, which the frontend flushes to the kernel before every execution; **Colab's frontend** (`get_ipynb`); and **VS Code's hot-exit backup**. Each of the three sees edits you have not saved. When none answers, Cash reads the saved `.ipynb` — the fallback that makes an unsaved upstream edit invisible. See [editing without saving](../known-limitations.md#editing-without-saving) for what each reader covers and what it does not.
-
-```mermaid
-flowchart TD
-    START(["User runs Cell 3<br/>(requires variable 'df')"])
-    READ["<b>Read Current Cell Sources</b><br/>Live source if one answers,<br/>saved .ipynb otherwise"]
-    SIM["<b>Simulate Cells 1, 2 (upstream)</b><br/>Compute virtual lineages<br/>from notebook code"]
-    CMP{"<b>Compare Lineages</b><br/>Virtual vs Actual"}
-    OK["<b>Continue</b><br/>with cached values"]
-    REX["<b>Re-execute</b><br/>changed cells"]
-    START --> READ --> SIM --> CMP
-    CMP -- Match --> OK
-    CMP -- Mismatch --> REX
-```
-
-??? question "Why AST analysis, not bytecode?"
-    Cash reads each statement's inputs and outputs from Python's Abstract Syntax
-    Tree — the canonical, version-stable representation — using the standard
-    library `ast` module. It needs no execution, decomposes loops and conditionals
-    cleanly, and stays readable. Bytecode inspection is more precise but
-    version-dependent and opaque; runtime tracing is precise but far too slow.
-
-??? question "Why simulate upstream cells instead of re-running them?"
-    Simulation computes virtual lineage hashes by parsing upstream code and probing
-    the cache — no user code runs, which is why it is worth doing on every cell.
-    Cash re-executes only the cells whose simulated lineage differs from what's in
-    memory, and it works correctly even if you reorder cells.
-
-??? note "Under the hood"
-    The orchestration lives in `UpstreamChecker`, which owns a `NotebookSimulator`.
-    The forward simulation itself — walking each upstream cell's AST, inferring the
-    names each statement reads and writes, and building the virtual lineage hashes —
-    lives in `VirtualLineage`; `MismatchClassifier` decides what a divergence means
-    and `ReexecutionPlanner` turns that into the list of statements to run. The
-    simulator calls the *same* `compute_cache_key` the runtime does, so the two
-    cannot compute different keys for the same statement.
-
-The notebook path applies these rules per statement — see [what happens when you run a cell](notebook-path.md#what-happens-when-you-run-a-cell).
+Cash recomputes when something it tracks has changed since the result was
+stored. This page lists what it tracks and how it checks.
+[Known limitations](../known-limitations.md) lists what it does not see.
 
 ## What counts as a change
 
-Several independent signals can cause a miss. The first four feed the [cache key](cache-keys-and-lineage.md#content-addressing), so any one of them is enough to produce a different key; the last three invalidate an entry that the key would otherwise have found.
+=== "Decorator"
 
-=== "Code"
-    The statement's own source hash changes → new key → recompute.
+    A call recomputes when any of these changed:
 
-=== "Inputs"
-    Any input variable's lineage changed → new key (this is lineage propagation).
+    - **Its code:** the function's source, the helpers and classes it reaches,
+      the module globals it or its helpers read, captured values and defaults.
+      [What goes into the state](decorator-path.md#what-goes-into-the-state)
+      has the full list.
+    - **Its arguments**, compared by content.
+    - **A file it read**, or a file named in `file_depends_on=`
+      ([files](#files), below).
+    - **An environment variable it reads** by name, or the working directory
+      it reads with `os.getcwd()`.
+    - **The random seed in force**, for a function that draws from a global
+      random stream.
+    - **Its age**, when `ttl=` is set and the entry is older.
 
-=== "Functions / modules"
-    Editing a helper function or an imported local module changes its source hash;
-    caches that called it miss. Changes expand transitively across imported modules.
+=== "Notebook"
 
-=== "Callee globals"
-    A call site is also keyed on the globals its callees reach for at call time —
-    including names bound *below* it, which the ordinary input path cannot see. A
-    deleted callee contributes `ABSENT`, so the call re-runs and raises rather than
-    reprinting a cached value.
+    A statement recomputes when any of these changed:
 
-=== "Files"
-<!-- claim: cash/tracking/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456, cash/tracking/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @3dd62608 -->
-    A file you read (CSV, parquet, …) is snapshotted as mtime, size **and a content
-    hash**. On every lookup the size is compared first. If it matches and so does
-    everything else the snapshot recorded — the mtime to the nanosecond, which file
-    it is, and on Linux and macOS the inode change time — and the file had been left
-    alone for ten seconds before it was hashed, it is unchanged and is not read.
-    Otherwise the content hash decides — so a bare `touch` does not invalidate, and a
-    same-size edit within the same second does not slip through. The one edit this
-    lets through is on Windows: a same-size write that puts the mtime back, or a
-    `np.memmap` write, which moves no timestamp at all (see
-    [known limitations](../known-limitations.md#an-edit-that-keeps-the-size-and-timestamps)).
-    Files over 256 MiB are hashed
-    by sampling three size-derived regions rather than in full; since that partial
-    hash can't see an edit *outside* those regions, sampled files additionally
-    require the timestamps to match — to the **nanosecond**, not to a tolerance,
-    because here the timestamp stands in for bytes the hash never read. That
-    narrows the remaining gap to one shape, measured: an edit whose mtime is
-    afterwards restored *at full nanosecond precision*, which `cp -p` and
-    `shutil.copystat` do. A tool whose format carries only whole seconds — a
-    plain `tar` ustar header, rsync's protocol — drops the sub-second part, so
-    the restored value differs and the edit is caught. Linux and macOS catch even the exact
-    case through the inode change time; Windows has no second timestamp to fall
-    back on. The check runs
-    against the file deps of the statement itself *and* those inherited from its
-    input variables, so a changed CSV invalidates the whole chain that read it.
+    - **Its source.**
+    - **An input's lineage**, which changes whenever anything upstream of that
+      input changed ([below](#lineage-propagation)).
+    - **A function or local module it calls.** An imported module of yours
+      (outside the standard library and `site-packages`) is tracked as soon
+      as a cell imports it, and Cash reloads it in the kernel when you edit
+      it. Editing one function in a module re-runs only what uses that
+      function.
+    - **A global that a called function reads**, even one bound below the
+      statement.
+    - **A file it or an input read** ([files](#files), below).
+    - **An environment variable it reads** by name.
+    - **Its age**, when a `ttl` applies. A statement that calls a
+      `@cash.cache` function with a shorter `ttl` takes that shorter one.
+    - **An in-place change** to a variable it reads
+      ([below](#mutation-bumps-the-receivers-lineage)).
 
-=== "TTL"
-    An entry older than its `ttl` is dropped. `ttl=0` means "never fresh" and is
-    honoured without consulting the clock; a statement calling a `@cash.cache`
-    function with a shorter TTL inherits that shorter TTL.
+### Files
 
-=== "Mutation"
-    A method call that mutates its receiver bumps the receiver's lineage, so
-    everything downstream of it misses.
+<!-- claim: cash/tracking/file_tracker.py:FileDependencyRegistry._initialize_defaults @b63601b2, cash/tracking/file_tracker.py:_is_read_mode @238e2cb8 -->
+Cash records a file when your code reads it through one of these:
 
-File tracking is covered in depth in [Dynamic Dependencies](../tutorials/feature-guides/dynamic-dependencies.md). Local modules — ones outside the standard library and `site-packages` — are tracked automatically as soon as a cell imports them; installed packages are not watched for edits.
+| Library | Readers |
+|---|---|
+| built-in | `open()` in a read mode (`'r'`, `'rb'`, `'r+'`, `'a+'`), and `pathlib.Path.read_text()`, `read_bytes()`, `open()` |
+| pandas | every `read_*` function |
+| polars | `read_csv`, `read_parquet`, `read_json`, `read_ndjson`, `read_ipc`, `read_avro`, `read_excel`, and `scan_csv`, `scan_parquet`, `scan_ipc`, `scan_ndjson` |
+| pyarrow | `csv.read_csv`, `csv.open_csv`, `parquet.read_table`, `parquet.read_pandas`, `feather.read_table`, `feather.read_feather`, `json.read_json` |
+| numpy | `load`, `loadtxt`, `genfromtxt`, `fromfile`, `memmap` |
+| others | `joblib.load`, `pickle.load` and `json.load` of an opened file, `sqlite3.connect` |
+| directories | `glob.glob`, `glob.iglob`, `os.listdir`, `os.scandir`: the directory, so a new matching file counts |
+| missing files | `os.path.exists` and `os.path.isfile` when they return `False`, so a file that appears counts |
 
-```mermaid
-flowchart TD
-    DEF["<b>Cell defines helper function</b><br/><code>def process(df): return df.dropna()</code>"]
-    HASH["<b>FunctionTracker hashes source</b><br/><code>source_hash = SHA256(inspect.getsource(process))</code>"]
-    USE["<b>Cell uses the function</b><br/><code>result = process(df)</code>"]
-    KEY["<b>Cache key includes function hash</b><br/><code>key = SHA256(code + input_lineages + func_source_hashes)</code>"]
-    EDIT["<b>User changes <code>process()</code> definition</b><br/><code>def process(df): return df.fillna(0)</code>  &nbsp;changed!"]
-    MISS["<b>New source_hash differs</b><br/>cache MISS → recompute"]
-    DEF --> HASH --> USE --> KEY --> EDIT --> MISS
-```
+A file opened for writing only (`'w'`, `'x'`) is not a dependency. For a file
+read another way, name it with `file_depends_on=` on the decorator, or see
+[custom file sources](../tutorials/feature-guides/custom-file-sources.md).
 
-??? note "Finer points"
-    <!-- claim: cash/notebook/lineage_formula.py:module_read_lineage @1bde3c78, cash/tracking/module_symbols.py:closure_digest @a9f3aa5d -->
-    - **Editing one function re-runs only what uses it.** A statement that reads `helpers.load` — or `load`, after `from helpers import load` — depends on `load` and on everything `load` reaches inside the module: the helpers it calls, the constants it reads, the decorators on it, and any code that runs at import time. Editing `report` in the same file leaves it cached, and so is everything built on it. Every `# @cash:` line in the file still counts, because those are instructions to Cash rather than comments. Another local module the file imports counts in full.
-    - **When Cash cannot say, the whole module counts.** That happens if the statement uses the module other than by reading attributes — passing it to a function, `getattr(helpers, name)` — or if the module reaches its own namespace dynamically (`globals()`, `exec`, `setattr`, `from x import *`, a module-level `__getattr__`). It also happens if something the name reaches computes a different value on every run, such as `STAMP = time.time()` at import time: an edit anywhere in the file reloads the module and recomputes it. A clock read inside a function -- a helper timing its own steps -- does not count unless code run at import time calls that function: it runs when the function is called, and a reload gives it nothing new. The whole module is always correct; it is only slower.
-    - **Cash reloads an edited module in your kernel.** A plain kernel keeps the module it first imported until you restart it or turn on `%autoreload`; under Cash the edit takes effect in the next cell you run.
-    - **From-import constants**: `from mymodule import VALUE` is tracked; if `VALUE` changes in the source module, downstream caches miss.
-    - **Notebook TTL / freshness**: the resolved notebook path is considered fresh for five minutes; subsequent runs within that window skip the discovery step entirely, keeping overhead near zero.
+<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @3dd62608, cash/tracking/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456 -->
+When the result is stored, each file is recorded with its size, modification
+time and a content hash. Before the result is reused:
 
-## Mutation bumps the receiver's lineage
+1. A different size means changed.
+2. If the size, the modification time (to the nanosecond), the file's identity
+   and, on Linux and macOS, the inode change time all match, and the file had
+   been left alone for ten seconds before it was hashed, it is unchanged and
+   is not read.
+3. Otherwise the content hash decides. A bare `touch` does not count as a
+   change; a same-size edit within the same second does.
 
-<!-- claim: cash/analysis/mutations.py @0e630c4c broad="the three-tier mutation classification spans the module, not one function", cash/analysis/mutation_effects.py:classify_receivers @704f9e6f -->
-`items.append(x)` names `items` as a *receiver*, not as an assignment target, so nothing about it would ordinarily move. Cash classifies every standalone method call and, when the call mutates, routes the receiver into the statement's outputs — its lineage is rebuilt from the statement's source, and everything downstream misses.
+Files over 256 MiB (`file_hash_full_max_bytes`) are hashed from three sampled
+regions, so for them the timestamps must also match exactly. The one edit this
+misses is on Windows: a same-size write that puts the old modification time
+back, or a write through `np.memmap`, which moves no timestamp. See
+[an edit that keeps the size and timestamps](../known-limitations.md#an-edit-that-keeps-the-size-and-timestamps).
 
-The classification runs in three tiers, because "does this method mutate?" is not statically decidable in general:
+In a notebook, a statement is checked against the files it read itself and
+the files its inputs were built from, so a changed CSV invalidates the whole
+chain that read it.
 
-1. **Statically known** — `list.append`, `dict.update`, `inplace=True`, and friends, plus known-*pure* methods (`df.mean()`) that are excluded outright — and a chain that merely passes through one is pure too, since what follows acts on the new object (`df[mask].groupby('hour').size()` leaves `df` alone). `df.to_csv(path)` sits in a third static set: it reads the frame and writes a file, so it must *not* bump the frame's lineage. A call that fits an estimator (`fit`, `fit_transform`, `fit_predict`, …) mutates the estimator even when its value is captured: `X = vec.fit_transform(texts)` bumps `vec`.
-2. **Identity-coupled receivers** — a method call on a live matplotlib `Axes`/`Figure` draws on it whatever it returns, so it always counts as a mutation; so does handing one to a call (`df.plot(ax=ax)`), which mutates the *axes*, not `df` — pandas' plotting calls leave the frame's lineage alone.
-3. **Observed** — for everything else Cash content-hashes the receiver before and after execution and records the verdict, keyed by the statement's source hash. A name handed straight to a bare call (`im.add_qc(df)`) is observed the same way, because the call may change it in place.
+## In a notebook
 
-That verdict dictionary is shared with the upstream simulation, which cannot observe execution and therefore reads the runtime's recorded answer; an unknown verdict is treated as mutating for a receiver, and as not mutating for a bare call's argument. Because the bump is derived from the statement's *source* in both engines, the runtime and the simulation compute byte-identical lineages — the invariant the whole restore path rests on. Module receivers are excluded (`time.sleep()` is a module function call, not a mutation), except for a top-level call that changes a setting the module keeps — `plt.rcParams.update(...)`, `pd.set_option(...)`, `plt.style.use(...)` — which bumps the module so the setting is replayed after a restart.
+### Lineage propagation
 
-## Randomness: re-seeding invalidates the draws below it
-
-`x = np.random.rand(3)` has stable source and no tracked inputs. Editing `np.random.seed(0)` to `seed(1)` above it therefore moved nothing, and Cash replayed the first seed's numbers — following the documented advice for reproducibility produced provably wrong values. Three mechanisms now cover this, and they are separate on purpose:
-
-<!-- claim: cash/tracking/randomness/lineage.py:hidden_lineage_writes @1369d609, cash/tracking/randomness/lineage.py:hidden_lineage_reads @e9ddd20b -->
-- **The seed is a hidden lineage variable.** A `seed()` writes `__cash_rng__<module>`, a draw reads it, and that lineage flows through the ordinary input path — so a re-seed re-keys the draw *and* propagates to everything cached downstream of it.
-- **A stale RNG replay is suppressed.** Restoring a cached statement also restores the RNG state it left behind, which keeps the stream coherent when a restore stands in for an execution. After a re-seed that replay would rewind the generator to the old regime, so entries record the seed epoch they were written under and are only replayed while it still holds. Keying the draw was necessary but not sufficient — both halves are required.
-- **The stream is repositioned before a re-executed draw.** If reconstruction re-runs a draw because one of its *ordinary* inputs changed, the unchanged `seed()` above it is not scheduled, so the draw would continue from wherever the live stream happened to be. Cash restores the position that draw holds top-to-bottom before running it.
-
-!!! warning "An unseeded draw is frozen, not blocked"
-    Cash caches unseeded randomness deliberately. The first value you drew is the value
-    you keep: on a re-run the statement lands on the same stream position and redraws the
-    same number, whether or not the value was ever written to the cache. That is the
-    point — a notebook stays reproducible — but it means an unseeded draw does **not**
-    give you a fresh number on re-run. `# @cash:allow-random` only silences the warning;
-    `# @cash:no-cache` is what switches the freeze off.
-
-## Try it: the invalidation playground
-
-Mark a change on any cell below and watch which downstream cells go stale.
+Each variable's lineage hash encodes everything that fed into it
+([the lineage chain](cache-keys-and-lineage.md#the-lineage-chain)). So if
+`raw` changes, `clean`, `features` and `model`, built from it, all get new
+lineages and miss, however many cells separate them.
 
 <div class="cash-invalidation-playground" markdown="1">
 
@@ -187,3 +108,64 @@ Mark a change on any cell below and watch which downstream cells go stale.
 | `model = train(features)` | recompute | recompute |
 
 </div>
+
+### Upstream simulation
+
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @328f2f5e, cash/notebook/upstream/simulator.py:NotebookSimulator.simulate_upstream @877db1a9 -->
+You edit cell 1, then run cell 3 directly. Before cell 3 runs, Cash reads the
+notebook's current cells and *simulates* the cells above: it computes, from
+their code alone and without running them, the lineage each statement would
+produce, and compares it with the lineage from the last real run. Statements
+whose lineage differs run again; a value that matches is used as it is, and one
+missing from memory is restored from the cache.
+
+Only what the cell you run depends on is considered. A stale chart or export
+above it that it does not read stays as it is. A statement that writes a file
+counts as needed when something the cell depends on reads that file, even
+through a helper or a loop over a list of paths.
+
+### Finding your notebook
+
+<!-- claim: cash/notebook/server_discovery.py:NotebookCellReaders.read @d0b4a970 -->
+To simulate, Cash needs the notebook's current cells. It tries, in order:
+cells pushed by Cash's JupyterLab extension before each run, Colab's
+frontend, and VS Code's unsaved-changes backup. All three see edits you have
+not saved. Otherwise it reads the saved `.ipynb`, found through VS Code's
+notebook variable, the `ipynbname` package or the Jupyter server API. See
+[editing without saving](../known-limitations.md#editing-without-saving).
+
+If none of these works (a plain IPython shell, for example), upstream checking
+is off for the session and Cash says so once
+([`NOTEBOOK-NOT-FOUND`](../warnings.md#notebook-not-found)). Each cell still
+uses its own code and inputs. Cash never guesses the notebook from the files
+on disk.
+
+### Mutation bumps the receiver's lineage
+
+<!-- claim: cash/analysis/mutation_effects.py:classify_receivers @704f9e6f -->
+`items.append(x)` assigns nothing, but it changes `items`. When Cash decides a
+method call changed its receiver, the receiver gets a new lineage from that
+statement, so everything built from it downstream misses. How Cash decides
+which calls change their receiver is under
+[the mutation problem](safety.md#the-mutation-problem).
+
+### Randomness: re-seeding invalidates the draws below it
+
+<!-- claim: cash/tracking/randomness/lineage.py:hidden_lineage_writes @1369d609 -->
+Three rules keep random draws right when you edit a seed:
+
+- **A seed is an input.** A `seed()` call sets a hidden lineage variable that
+  every later draw from that module reads, so a re-seed changes the draw's key
+  and everything built from it.
+- **A restored draw restores the generator.** A cached draw also stores the
+  generator state it left behind, and restores it only while the same seed is
+  in force.
+- **A re-run draw starts from the right place.** If a draw re-runs because an
+  ordinary input changed, Cash first puts the generator where it would be in a
+  top-to-bottom run.
+
+!!! warning "An unseeded draw is frozen, not redrawn"
+    The first value of an unseeded draw is the value you keep: a re-run gives
+    the same number, whether or not it was stored. `# @cash:allow-random`
+    only silences the warning; `# @cash:no-cache` makes the statement draw
+    fresh every run.

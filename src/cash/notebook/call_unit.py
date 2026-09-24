@@ -236,7 +236,7 @@ def call_cache_key(
 ) -> str | None:
     """The cache key for one intercepted call, or ``None`` to refuse caching it.
 
-    Built by :func:`compute_cache_key` (ADR-007's only key assembler) from
+    Built by :func:`compute_cache_key` (the only place a key is assembled) from
     the *call's* source and free names, under the ``"call"`` namespace. The
     callee is one of the free names, so editing it re-keys the call and the
     globals it reaches are folded in; bare-name arguments resolve through the

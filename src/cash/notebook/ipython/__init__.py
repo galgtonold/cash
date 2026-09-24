@@ -10,8 +10,8 @@ Public surface:
 
 Everything else (`CashAdminMagicsMixin`, `CellExecutor`, `BadgePresenter`, the value types
 `TimingBreakdown` / `StatementSummary` / `CellMetrics` / `CashSession`,
-`show_clean_error`, the internal pipeline sentinels) is package-internal.
-See ADR-013 for the package-extraction rationale.
+`show_clean_error`, the internal pipeline sentinels) is package-internal:
+code outside the package imports only `CashMagics`.
 """
 
 from __future__ import annotations

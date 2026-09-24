@@ -17,8 +17,8 @@ Public surface:
       :func:`compute_context_hash`.
 
 Handler classes (`ForLoopHandler`, `IfHandler`, `TryHandler`) and the
-contents of :mod:`.helpers` are internal to this package. See ADR-012
-for the package-extraction rationale.
+contents of :mod:`.helpers` are internal to this package: code outside it
+imports only the names above.
 """
 
 from __future__ import annotations

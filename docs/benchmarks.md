@@ -1,41 +1,21 @@
 # Benchmarks
 
-Cash does **not** speed up the first run — it pays a small cost to fill the
-cache. What it speeds up is every **re-run** afterwards: restoring a result that
-hasn't changed instead of recomputing it.
+!!! info "Applies to: both paths"
+    Anyone deciding whether caching will pay off for their workload.
 
-## Why this page doesn't lead with an "N× faster" number
-
-The obvious headline would be a speedup. We've deliberately not written one,
-because the number would mostly not be about cash:
+Cash does not speed up the first run; it pays a small cost to fill the cache.
+It speeds up every later run, by restoring a result instead of recomputing it.
+What you gain is:
 
 ```
-speedup  =  your compute time  ÷  cash's restore cost
+your compute time  −  restore cost
 ```
 
-The denominator is a property of cash and your result size. The numerator is a
-property of *your workload*. So a quoted speedup is dominated by the term cash
-has nothing to do with — pick a slower computation and the number goes up, with
-no change to the tool. It is a claim that can't really be wrong, which makes it
-close to useless.
-
-It also **inverts** the thing you care about:
-
-| workload | speedup | actually saved |
-|---|---|---|
-| a 2-second cell | 190× | 2 seconds |
-| a 10-hour pipeline | 1.4× | 3 hours |
-
-The bigger ratio is the smaller saving. So instead of asserting a multiplier,
-this page publishes the half of the equation cash actually determines — what a
-restore costs — and lets you supply the other half.
+Your compute time is a property of your workload, so this page does not quote
+an "N× faster" figure. It publishes the half Cash controls, what a restore
+costs, and shows how to measure the other half.
 
 ## What a restore costs
-
-Measured by `benchmarks/measure_ser_deser.py` across result types and sizes. The
-frozen matrix is committed at `benchmarks/results/ser_deser_matrix.frozen.csv`,
-so these figures are reproducible from a clean checkout rather than quoted from
-a session someone else ran.
 
 **Deserialise time — restoring a cached value back into your session:**
 
@@ -46,213 +26,157 @@ a session someone else ran.
 | 10 MB | 2.2 ms | 13 ms | 12 ms | 13 ms |
 | 100 MB | 21 ms | 70 ms | 79 ms | 72 ms |
 
-A disk restore is timed the way a later session performs one: in a fresh
-process, reading an entry no process has read before. That is what a persisted
-value is FOR -- within a session the RAM tier answers first -- and it is a
-different number from re-reading a file you just wrote, which is several times
-faster and flattered every earlier version of this table.
+Source: `python benchmarks/measure_ser_deser.py`, three repeats per cell,
+committed as `benchmarks/results/ser_deser_matrix.frozen.csv`. The file does
+not record the machine it was measured on, so read the table as shape and
+order of magnitude, and run the script on your own machine for figures you can
+act on. A disk restore is timed in a fresh process reading an entry no process
+has read before, as a later session would.
 
-Three things to read off it:
+- **Below about 1 MB, a disk restore costs what opening the file costs:**
+  about 6 ms, whatever the size.
+- **Above that it grows with the size:** a 100 MB DataFrame comes back in
+  about 70 ms.
+- **The memory tier is cheaper, most of all for small values** (0.23 ms
+  against 6.7 ms at 1 MB), but it lasts only as long as the process. A `@cash.cache` result is always written to disk too; for a
+  notebook statement, the [cost model](cost-model.md) decides.
 
-- **Below about a megabyte, a disk restore costs what it costs to open the
-  file.** Roughly 6 ms here, whatever the payload; the size barely registers.
-- **Above that it is linear and still modest.** A 100 MB DataFrame comes back
-  in about 70 ms.
-- **The RAM tier is one to two orders of magnitude cheaper.** Which tier a
-  value lands in is the [cost model's](cost-model.md) decision for a notebook
-  statement; a `@cash.cache` result is written to disk either way.
+Writing costs more than reading: the same 100 MB DataFrame took about 180 ms
+to write to disk in that matrix. You pay the write once, on the run that
+computes the value, and the read on every run after it.
 
 ## Working out your own number
 
-Take your compute time and divide:
+Subtract the restore cost from your compute time:
 
-```
-your compute time  ÷  restore cost from the table  =  your speedup
-```
-
-Three workloads, same arithmetic:
-
-| Your work | Result size | Restore | Reclaimed per re-run |
+| Your work | Result size | Restore (disk) | Saved per re-run |
 |---|---|---|---|
-| A 0.5 s groupby | 10 MB | 22 ms | 0.48 s — real, but you won't feel it |
-| A 4-minute feature build | 100 MB | 70 ms | ~4 minutes, every iteration |
-| A 30-minute metric pass over a 1 GB input | ~1 GB | ~1.7 s | ~30 minutes (≈1000×) |
+| A 0.5 s groupby | 10 MB | 13 ms | about 0.49 s |
+| A 4-minute feature build | 100 MB | 70 ms | about 4 minutes |
+| A 30-minute metric pass | about 1 GB | about 0.7 s (estimated) | about 30 minutes |
 
-That last row is where this kind of caching earns its keep, and it is worth
-being explicit about why. If a pipeline computes expensive per-item metrics and
-*later* stages aggregate across many items, then every time you change the
-aggregation — a different grouping, one more chart, a fixed bug in the report —
-you would otherwise re-run the whole metric pass. With the per-item results
-cached, the aggregation becomes something you can iterate on directly.
+The 1 GB row goes past the measured sizes; its restore cost extends the
+100 MB figure linearly and is an estimate.
 
-The multiplier isn't really the point there. **The threshold crossing is**: work
-that took long enough to context-switch away from becomes work you can sit in
-front of. That is a different activity, not just a faster one.
+Caching pays when compute is expensive relative to the result's size. Results
+that are large but quick to produce (a few hundred megabytes made in a second)
+cost more to write and read back than to recompute. The notebook's cost model
+declines to write such results to disk; a `@cash.cache` result is written
+anyway, so do not decorate such a function.
 
-Note that you didn't need us to assert ≈1000× — it fell out of your compute time
-and our restore cost. That is the arithmetic worth trusting, because you supplied
-the part that varies.
+## What Cash costs you
 
-## What cash costs you
+Each cached call or statement costs some bookkeeping (hashing, lineage, the
+key lookup) on top of the write. On a notebook of trivially fast statements
+there is nothing to win, and the bookkeeping is all you see:
+`benchmarks/synthetic_micro.ipynb` is 100 one-line statements such as
+`a_0 = 0 + 1`.
 
-The honest other direction:
+```bash
+python benchmarks/bench_notebook_overhead.py benchmarks/synthetic_micro.ipynb --mode off --repeats 5
+python benchmarks/bench_notebook_overhead.py benchmarks/synthetic_micro.ipynb --mode cold --repeats 5
+```
 
-**The first run is slower**, because cash has to fill the cache before it can
-pay you back. The cost is not a multiplier — it is roughly **5–30 ms per cached
-statement** for lineage and cache-key hashing, plus the write, which scales with
-your result size. Those are the terms to think in:
-
-- On a notebook of small results, the overhead is the per-statement figure and
-  little else. Tens of milliseconds across a cell you wait seconds for is not
-  something you will notice.
-- On a notebook of large results, the write dominates, and it is the same
-  serialisation cost as the restore-cost table above — read it in reverse. A
-  100 MB DataFrame costs about 180 ms to write, once -- more than the 70 ms it
-  costs to read back, which is the usual shape: you pay the write on the run
-  that computes the value and the read on every run after it.
-
-Quoting a single "first run is N× slower" number would be the same mistake as
-quoting a speedup: the ratio is set by how cheap your compute is, not by how
-expensive cash is.
-
-**Where it buys you nothing: notebooks made of very fast statements.** Our
-own negative control (`benchmarks/synthetic_micro.ipynb`) is 100 statements of
-microsecond work. With caching on it goes from 7.5 ms to 261 ms — a quarter of
-a second added, on a notebook that finishes instantly either way. That is the
-per-statement bookkeeping and nothing is malfunctioning; the
-[cost model](cost-model.md) correctly declines to store any of it, but it
-cannot make the decision itself free.
-
-Read that as neither "35× slower" — which sounds alarming and means very
-little — nor as a cost you are paying. A quarter of a second spread across a
-whole notebook sits below what anyone perceives interactively, where you are
-already absorbing kernel round-trips of the same order. Cash gives you nothing
-here, but it does not take anything you would feel either.
-
-The same per-statement cost *does* become visible at scale: tens of thousands
-of statements, or `@cash.cache` on a function called in a hot loop. There the
-bookkeeping stops being noise — in that control it is ~2.5 ms per statement
-even though the cost model stores none of them, and a statement that *is*
-stored pays the 5–30 ms above instead. That is a reason to put
-[`# @cash:no-cache`](annotations.md) on the cheap parts, not a reason to leave
-caching off.
-
-**The shape that genuinely costs you is the opposite one: results that are
-large but cheap to produce.** A few hundred megabytes that took a second to
-generate costs more to write and read back than to recompute, so there is
-nothing for caching to win. Cash's [cost model](cost-model.md) declines to
-*persist* results like these — which is what stops the loss compounding —
-but the work of sizing and hashing them still happens.
-
-The pattern behind both: caching pays when compute is expensive relative to
-the result's size. Cheap-and-small and cheap-and-huge are the two ways to be
-on the wrong side of that — but they are not equally bad. Cheap-and-small
-wastes nothing you can feel; cheap-and-huge spends real I/O on results you
-would have been better off recomputing. If your notebook is mostly the second
-shape, cash is not the tool for it — and `%cash_stats` will say so plainly
-rather than reporting a phantom win. Measure your own case (below) rather
-than trusting a figure from someone else's machine.
+On a 4-core 2.1 GHz Xeon virtual machine (Linux, Python 3.11, cash 0.11.0), it
+took about 17 ms with Cash off and 0.2 to 0.7 s on a first run with Cash on:
+2 to 7 ms per statement. Nothing is stored, because every statement is below
+the cost model's floor. That is below what you notice in an interactive
+session, but it adds up for tens of thousands of statements, or for a
+`@cash.cache` function called in a hot loop. Put
+[`# @cash:no-cache`](annotations.md) on cheap statements, and decorate
+functions whose work is worth more than a few milliseconds.
 
 ## Measuring your own workload
 
-You don't need the repo to get numbers for the thing you actually care about.
-Time the cell once without cash, then let cash cache it and run it again:
+=== "Decorator"
 
-<!-- test:skip reason="IPython magic command — requires kernel context" -->
-```python
-%cash_off
-```
+    Time a call that computes and a call that restores:
 
-<!-- test:skip reason="IPython magic command — requires kernel context" -->
-```python
-%%time
-df = pd.read_csv("big.csv").groupby("region").sum()   # uncached cost
-```
+    ```python
+    import time
 
-<!-- test:skip reason="IPython magic command — requires kernel context" -->
-```python
-%cash_on
-```
+    import cash
 
-Now run the same cell (without `%%time`) twice. The first run computes and
-stores the result, the second restores it, and the badge on each shows the time
-each statement took. `%cash_stats` then reports the session's time saved net
-of cash's own overhead, counting only savings it measured.
+    @cash.cache
+    def build(n):
+        time.sleep(0.2)          # stands in for your real work
+        return list(range(n))
 
-That number is the one worth quoting internally.
+    start = time.perf_counter()
+    build(1000)                  # first call: cache miss
+    compute = time.perf_counter() - start
+
+    start = time.perf_counter()
+    build(1000)                  # second call: cache hit
+    restore = time.perf_counter() - start
+
+    print(f"compute {compute:.3f} s, restore {restore:.4f} s")
+    ```
+
+    The second call is served from memory. For the restore cost a later run
+    pays, run the script a second time: its first call reads from disk.
+    `build.cache_info()["total_time_saved"]` adds up the compute time recorded
+    when each entry was written, so treat it as an upper bound, not a
+    measurement.
+
+=== "Notebook"
+
+    Time the cell once without Cash, then let Cash cache it:
+
+    <!-- test:skip reason="IPython magic command — requires kernel context" -->
+    ```python
+    %cash_off
+    ```
+
+    <!-- test:skip reason="IPython magic command — requires kernel context" -->
+    ```python
+    %%time
+    df = pd.read_csv("big.csv").groupby("region").sum()   # uncached cost
+    ```
+
+    <!-- test:skip reason="IPython magic command — requires kernel context" -->
+    ```python
+    %cash_on
+    ```
+
+    Now run the same cell, without `%%time`, twice. The first run computes and
+    stores the result, the second restores it, and the badge shows each
+    statement's time. `%cash_stats` reports the session's time saved, net of
+    Cash's own overhead, counting only savings it measured.
+
+## Re-running in the same session or after a restart
+
+"Re-running" means two things, and they give different numbers:
+
+| Case | What can come back |
+|---|---|
+| The same kernel or process, again | memory and disk |
+| After a restart, or in a new process | disk only |
+
+In a notebook, statements that took under 0.1 s stay in memory and do not
+survive a restart. So a notebook of many quick statements restores far more
+in the same session than after a restart. Say which case you measured when
+you quote a number. `benchmarks/bench_notebook_overhead.py` measures both
+(`--mode warm-session` and `--mode warm-restart`).
+
+A restore count is not a speedup either. A notebook that restores seventy
+cheap statements around one uncacheable ten-second loop saves nothing you can
+feel. Look at wall-clock time to decide whether caching pays.
 
 ## Reproducing these numbers
 
 The `benchmarks/` directory holds the harness:
 
-- `benchmarks/measure_ser_deser.py` — the restore-cost matrix above.
-- `benchmarks/bench_core.py` — core decorator + hashing microbenchmarks.
-- `benchmarks/bench_notebook_overhead.py` — per-statement notebook overhead.
-- `benchmarks/_rerun_sweep.py` — the full notebook sweep, all modes.
-- `benchmarks/compare_modes.py` — reads a sweep's results into a per-cell table.
-
-### The two warm modes
-
-"Re-running" means two different things, and they give different numbers:
-
-| mode | models | what can come back |
-|---|---|---|
-| `warm-session` | same kernel, run the cells again | RAM **and** disk |
-| `warm-restart` | kernel restarted, or a fresh process | disk only |
-
-The distinction is the [cost model's](cost-model.md) tiering. A result whose
-compute time is under ~0.1s is kept in memory and never written to disk —
-cheap to recompute, not worth the write. Those values survive re-running a cell
-in a live kernel and do not survive a restart.
-
-So `warm-restart` is the pessimistic bound and `warm-session` the optimistic
-one; your day is somewhere between. If you quote one number, say which.
-
-Across our reference suite the gap is wide wherever results are mostly
-sub-0.1 s — these are counts of statements restored rather than recomputed, on
-the same notebook in the same sweep:
-
-| notebook | warm-session | warm-restart |
-|---|---|---|
-| `cfd_simulation_demo` | 71 of 286 | 1 of 286 |
-| `financial_analysis_demo` | 65 of 141 | 16 of 141 |
-| `bench_cost_model_validation` | 13 of 44 | 5 of 44 |
-
-**A restore count is not a speedup.** `cfd_simulation_demo` restores 71
-statements against 1 and takes the same wall-clock time either way, because
-its cost is a single sequential solver loop that cash declines to cache at
-all. Restoring seventy cheap statements around an uncacheable ten-second loop
-saves nothing you can feel. Count restores to understand *what the tiers do*;
-look at wall clock to decide whether you care.
-
-**Treat end-to-end ratios from this suite as orders of magnitude.** The
-cash-off baseline for `synthetic_heavy` has measured between 3.9 s and 7.3 s
-across repeated sweeps of identical code on one machine — enough to move its
-warm-session ratio between roughly 20× and 45×. Nothing changed but the
-weather. This is the same reason the page leads with restore cost: that number
-is stable and it is the half cash actually determines.
-
-!!! note "Read the end-to-end sweep per notebook, not as one number"
-    The reference notebooks differ enormously in how much of their work is
-    cacheable at all, so averaging them produces a figure that describes no
-    workload. `synthetic_heavy` restores nearly everything; `synthetic_micro`
-    restores nothing *by design* (it is the negative control — every statement
-    is below the cost-model floor); and the solver notebooks are dominated by
-    sequential loops that accumulate with `.append()`, which cash declines to
-    cache and says so.
-
-    Each run's JSON records `uncacheable_reasons` per statement, so a notebook
-    that restores little will tell you why rather than leaving you to guess.
-    Check that field before reading an end-to-end ratio as a statement about
-    cash.
-
-Restore costs depend on hardware and storage speed, so treat the table as shape
-and order of magnitude, and run the harness on your own machine for figures you
-can act on.
+- `benchmarks/measure_ser_deser.py`: the restore-cost matrix above.
+- `benchmarks/bench_notebook_overhead.py`: one notebook in `off`, `cold`,
+  `warm-session` or `warm-restart` mode; each result records the Python
+  version, cash version and platform.
+- `benchmarks/bench_core.py`: decorator and hashing microbenchmarks.
+- `benchmarks/_rerun_sweep.py` and `benchmarks/compare_modes.py`: a sweep over
+  the reference notebooks and a per-cell comparison of its results.
 
 ## Related
 
-- [Cost model](cost-model.md) — how cash predicts restore vs recompute cost and
-  decides what reaches disk.
-- [Why Cash?](why-cash.md) — the capability comparison against other caching
-  tools, and the same arithmetic as a slider you can drag.
+- [Cost model](cost-model.md): how Cash predicts restore and recompute cost
+  and decides what reaches disk in a notebook.
+- [Why Cash?](why-cash.md): how Cash compares with other caching tools.

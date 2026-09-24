@@ -116,7 +116,7 @@ class StatementLineageBuilder:
                 frozenset(accessed_remote or ()),
             )
 
-        # A draw READS its module's hidden RNG variable (ADR-018): fold that
+        # A draw READS its module's hidden RNG variable: fold that
         # variable's lineage into every output's lineage so a re-seed upstream
         # propagates to everything cached downstream. Kept OUT of the plain
         # ``inputs`` set so cacheability / derivation-edge / function-source logic

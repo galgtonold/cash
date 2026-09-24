@@ -15,8 +15,8 @@ Public surface:
     - :func:`is_control_body` -- whether a statement is one statement of a
       loop or branch body rather than a cell-level statement.
 
-Everything else in this package is internal to it. See ADR-011 for the
-package-extraction rationale.
+Everything else in this package is internal to it: code outside it imports
+only the names above.
 
 The file-snapshot helper (`snapshot_file_deps`) lives in
 :mod:`cash.tracking.file_dep_snapshot`, not here: it has cross-subsystem

@@ -19,10 +19,9 @@ only when a caller does not pass it. Consumed by:
 - :class:`cash.notebook.statement.CacheFreshnessChecker` — the post-execution
   freshness check for statement-level caching.
 
-These helpers used to live alongside ``CacheFreshnessChecker`` in
-``cache_freshness.py``. They were extracted before the ``statement/`` package
-was formed (ADR-011) so callers outside the statement subsystem don't end up
-reaching into ``cash.notebook.statement.freshness`` for them.
+They live here, outside the notebook's ``statement/`` package, so the
+decorator and other callers never import
+``cash.notebook.statement.freshness`` for them.
 
 **Content-hash freshness.** ``(mtime, size)`` alone is an
 ambiguous freshness signal and fails two opposite ways: a touch-only change

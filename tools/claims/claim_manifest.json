@@ -97,36 +97,36 @@
     "audited": "2026-07-27"
   },
   "docs/how-it-works/cache-keys-and-lineage.md": {
-    "anchors": 14,
-    "audited": "2026-07-27"
+    "anchors": 11,
+    "audited": "2026-09-23"
   },
   "docs/how-it-works/decorator-path.md": {
-    "anchors": 7,
-    "audited": "2026-07-27"
+    "anchors": 12,
+    "audited": "2026-09-23"
   },
   "docs/how-it-works/inspecting.md": {
-    "anchors": 26,
-    "audited": "2026-07-27"
+    "anchors": 13,
+    "audited": "2026-09-23"
   },
   "docs/how-it-works/invalidation.md": {
-    "anchors": 18,
-    "audited": "2026-07-27"
+    "anchors": 9,
+    "audited": "2026-09-23"
   },
   "docs/how-it-works/notebook-path.md": {
-    "anchors": 10,
-    "audited": "2026-07-27"
+    "anchors": 11,
+    "audited": "2026-09-23"
   },
   "docs/how-it-works/overview.md": {
-    "anchors": 11,
-    "audited": "2026-07-27"
+    "anchors": 3,
+    "audited": "2026-09-23"
   },
   "docs/how-it-works/safety.md": {
-    "anchors": 38,
-    "audited": "2026-07-27"
+    "anchors": 18,
+    "audited": "2026-09-23"
   },
   "docs/how-it-works/storage.md": {
-    "anchors": 21,
-    "audited": "2026-07-27"
+    "anchors": 27,
+    "audited": "2026-09-23"
   },
   "docs/how-it-works/testing.md": {
     "anchors": 0,

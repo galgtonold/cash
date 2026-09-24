@@ -1,5 +1,5 @@
 """A draw re-executed because an ORDINARY input changed must still land at its
-top-to-bottom stream position (ADR-017).
+top-to-bottom stream position.
 
 The RNG state is a side-effect dependency a draw consumes, but it binds no
 variable, so nothing in the lineage graph links a draw back to its ``seed()``.
