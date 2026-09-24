@@ -177,9 +177,8 @@ class StatementProcessor:
         # Perpetual-miss guard: learns which statements can never hit
         # (unstable cache key -> a new key every run -> zero hits) and stops
         # SERIALISING them, while keeping the hash + the lookup. Verdicts persist
-        # to the cache dir so a restart doesn't re-pay the learning. Resolved
-        # defensively: the backend is a MagicMock in a good number of tests, and
-        # an unresolvable dir just means session-scoped verdicts.
+        # to the cache dir so a restart doesn't re-pay the learning. An
+        # unresolvable dir just means session-scoped verdicts.
         try:
             _guard_dir = resolve_cache_dir(cash_instance.backend if cash_instance is not None else None)
         except (AttributeError, TypeError):

@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import pandas as pd
 
+from cash.backends import CacheBackend
 from cash.core import Cash
 from cash.notebook.statement import StatementProcessor
 
@@ -15,9 +16,11 @@ class TestFileTracking(unittest.TestCase):
         self.mock_shell = MagicMock()
         self.mock_shell.user_ns = {}
 
-        # Use an in-memory backend for testing logic, but we need Cash instance
-        self.cash = Cash(backend=MagicMock())
-        # Mock backend methods to behave like a dict
+        # A backend double that keeps entries in a dict. Specced, and with no
+        # cache dir, like the in-memory backend it stands in for.
+        backend = MagicMock(spec=CacheBackend)
+        backend.local_dir = None
+        self.cash = Cash(backend=backend)
         self._cache_storage = {}
         self.cash.backend.get.side_effect = lambda k: self._cache_storage.get(k, (None, None))
         self.cash.backend.set.side_effect = self._mock_set

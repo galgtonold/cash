@@ -27,28 +27,26 @@ import json
 import logging
 import os
 from collections.abc import Callable
-from typing import Any, ClassVar, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
 
 from cash._paths import replace_with_retry
 from cash.backends.cache_dir import recreate_cache_dir
+
+if TYPE_CHECKING:
+    from cash.backends import CacheBackend
 
 logger = logging.getLogger(__name__)
 
 V = TypeVar("V")
 
 
-def resolve_cache_dir(backend: Any) -> str | None:
+def resolve_cache_dir(backend: CacheBackend | None) -> str | None:
     """The on-disk cache directory behind *backend* (``local_dir``), or None.
 
     None means there is nowhere to persist — a pure in-memory backend, which
     has no restart to survive anyway, so a store there is session-scoped.
-
-    The ``isinstance`` check is for the ``MagicMock`` backends a good number of
-    tests use: a mock answers any attribute with another mock, which must not
-    pass for a path.
     """
-    cache_dir = backend.local_dir if backend is not None else None
-    return cache_dir if isinstance(cache_dir, str) and cache_dir else None
+    return (backend.local_dir or None) if backend is not None else None
 
 
 class VersionedJsonStore(Generic[V]):

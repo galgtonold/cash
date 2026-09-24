@@ -136,13 +136,13 @@ class TestSizeAwareCaching:
     @staticmethod
     def _make_processor():
         """Create a minimal StatementProcessor for testing."""
+        from cash.backends import InMemoryBackend
+        from cash.core import Cash
         from cash.notebook.statement import StatementProcessor
 
         mock_shell = MagicMock()
         mock_shell.user_ns = {}
-        mock_cash = MagicMock()
-        mock_cash.config = None
-        return StatementProcessor(mock_shell, mock_cash)
+        return StatementProcessor(mock_shell, Cash(backend=InMemoryBackend(), register_magic=False))
 
 
 class TestSizeAwareConfig:

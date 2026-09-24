@@ -26,7 +26,6 @@ from __future__ import annotations
 import itertools
 import json
 import os
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -262,10 +261,7 @@ class TestResolveCacheDir:
 
         assert resolve_cache_dir(InMemoryBackend()) is None
 
-    def test_a_mock_backend_does_not_masquerade_as_a_path(self):
-        """A MagicMock answers every getattr with another mock; a good number of
-        tests pass one as the cash instance."""
-        assert resolve_cache_dir(MagicMock()) is None
+    def test_no_backend_has_nowhere_to_persist(self):
         assert resolve_cache_dir(None) is None
 
 
