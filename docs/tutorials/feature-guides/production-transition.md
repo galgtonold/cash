@@ -6,8 +6,9 @@
 
 In a notebook, `%cash_on` caches every statement. Outside a notebook there are no
 cells, so you tell cash which **functions** to cache with `@cash.cache`. The
-same engine does the work: it tracks the files a function reads and the
-functions it calls, and stores results in the same kind of `.cash` folder.
+decorator has its own engine, but it also tracks the files a function reads
+and the functions it calls, and stores results in the same kind of `.cash`
+folder.
 
 ## The steps
 
@@ -47,16 +48,24 @@ show on the cell's badge, so you can move code into the module step by step.
 
 ## What does not carry over
 
-- **`# @cash:` comments do not steer a decorated function.** Use decorator
-  arguments instead: `ttl=` for expiry, `file_depends_on=` for a file cash cannot
-  see being read. The one comment the decorator reads is
-  `# @cash:assume-safe`, which waives a purity finding for one line.
+Most `# @cash:` comments do not steer a decorated function. Use these instead:
+
+| In the notebook | In a decorated function |
+|---|---|
+| `# @cash:ttl=N` | `@cash.cache(ttl=N)` |
+| `# @cash:no-cache` | Leave the function undecorated. |
+| `# @cash:persist` | Nothing: every result is written to disk. |
+| `# @cash:assume-safe` | The same comment on a line in the function, or `assume_safe=True`. |
+| `# @cash:allow-random` | The same comment in the function, or `allow_random=True`. |
+| A file cash cannot see being read | `file_depends_on=` |
+
 - **Every result is written to disk**, however quick it was to compute. The
   0.1 s threshold and the [cost model](../../cost-model.md) apply to notebook
   statements only.
 - **The function is the unit.** Its key is its code, the functions it calls,
   its arguments and the globals it reads. Statements inside it are not cached
-  one by one.
+  one by one, and notebook lineage does not carry over: a decorated function
+  sees only its arguments, not how they were computed.
 - **Side effects are not refused.** A decorated function that writes a file or
   sends a request is still cached, with a warning at its first call; a hit skips
   the effect. Keep such effects outside cached functions.
@@ -72,4 +81,4 @@ show on the cell's badge, so you can move code into the module step by step.
 
 - [Decorator guide](../../decorator.md): every argument, what invalidates a
   result, and how to see what cash did.
-- <a id="running-as-a-service-or-a-worker-pool"></a>[Deploying](deploying.md): services, worker pools, CI and shared backends.
+- [Deploying](deploying.md): services, worker pools, CI and shared backends.

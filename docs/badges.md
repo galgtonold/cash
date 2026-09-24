@@ -11,8 +11,9 @@ was not stored, why.
 !!! warning "Read the badge, not your prints"
     A restored statement replays what it printed last time. A marker you add to
     see what ran (`print("loading...")`, a timestamp) shows up on a cache hit
-    exactly as it did on the run that produced it. Only the badge tells you what
-    actually ran.
+    exactly as it did on the run that produced it. (A `@cash.cache` function
+    that hits prints nothing: only restored statements replay output.) Only the
+    badge tells you what actually ran.
 
 !!! tip "Running headless? Use the text badge"
     The HTML badge is about 20 kB per cell, most of it styling. `nbconvert`, CI
