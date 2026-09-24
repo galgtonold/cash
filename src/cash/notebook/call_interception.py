@@ -52,6 +52,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..analysis.cacheability_decision import identity_coupled_reason
 from .cache_key import CacheKeyContext
+from .call_key import global_names_reached
 from .consumables import is_consumable_unrestorable
 from .lineage_formula import is_cash_instrumentation
 
@@ -146,7 +147,7 @@ class CallSite:
     #: These
     #: are also in ``computed_arg_positions``, and are hashed in full, never
     #: sampled, for the reason a loop variable is (see
-    #: ``call_unit._loop_var_digest``): the argument's value is then all that
+    #: ``call_key._loop_var_digest``): the argument's value is then all that
     #: tells the elements apart. That holds for an argument computed from the
     #: name too -- ``fit_score(make_features(cleaned[mid], W))``: a
     #: frame's sample is its shape, dtypes and first five rows, and rolling
@@ -155,7 +156,7 @@ class CallSite:
     #: Free names the call reads only inside computed arguments -- ``cleaned``
     #: and ``make_features`` in ``fit_score(make_features(cleaned[mid], W))``.
     #: What they contribute is the argument's value, which the key can hash
-    #: instead of their lineage (see ``call_unit.call_cache_key``'s
+    #: instead of their lineage (see ``call_key.call_cache_key``'s
     #: *by_content*): a change to ``cleaned`` that leaves this element's
     #: features as they were then keeps the call's result.
     content_names: frozenset[str] = frozenset()
@@ -163,7 +164,7 @@ class CallSite:
     #: call reads nowhere else -- ``PARAMS`` and ``cutoff`` in
     #: ``fit_series(g, PARAMS, cutoff)``. Under content keying the key may
     #: hold such a value instead of the name's lineage (see
-    #: ``call_unit.call_cache_key``'s *name_digests*).
+    #: ``call_key.call_cache_key``'s *name_digests*).
     name_arg_positions: tuple[tuple[str, int], ...] = ()
     #: The call as its content key sees it: each computed argument replaced by
     #: a placeholder for its position (``fit_score(_arg0)``). Under content
@@ -764,9 +765,6 @@ def _eligible_calls_in_loop(
     the loop): nothing in the key could see it. A callee that cannot be found
     statically is not taken either.
     """
-    # Local: import cycle call_interception -> call_unit -> call_interception.
-    from cash.notebook.call_unit import global_names_reached
-
     written = frozenset(_loop_bound_names(loop))
     # And every plain name an argument reads. The unit updates no lineage
     # between iterations, so a global some other call in the loop mutates

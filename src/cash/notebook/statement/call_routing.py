@@ -101,7 +101,7 @@ class CallRouting:
         # iteration context, pushed/popped by ``for_handler.py`` around each
         # iteration's body statements (see ``ForLoopHandler._process_one_iteration``)
         # and read by an intercepted call's key build
-        # (``call_unit.call_cache_key``'s ``loop_vars``) via
+        # (``call_key.call_cache_key``'s ``loop_vars``) via
         # :meth:`current_loop_vars_for_call_key`. A stack rather than a single
         # slot because loop bodies nest; the stack depth is the lexical nesting
         # depth (see :meth:`_depth_keyed_loop_scope`). Empty outside any loop,
@@ -113,7 +113,7 @@ class CallRouting:
         # whichever loop-target names ``for_handler.py`` bound THIS push (its
         # own names only -- deliberately NOT pre-merged with an ancestor
         # loop's digests, unlike ``_loop_vars``). Exists so
-        # ``call_unit._loop_var_digest`` can look a digest up instead of
+        # ``call_key._loop_var_digest`` can look a digest up instead of
         # recomputing ``compute_hash_full`` on every intercepted call --
         # ``for_handler.py`` already computes this exact hash once per
         # iteration for ``variable_lineage``, and this reuses it.
@@ -193,7 +193,7 @@ class CallRouting:
         site that only cares about values -- direct tests, anything that
         predates this parameter -- keeps working unchanged; a missing digest
         for a given name just means the read side has nothing for it, and
-        ``call_unit._loop_var_digest`` falls through to computing one fresh.
+        ``call_key._loop_var_digest`` falls through to computing one fresh.
 
         That read side is :meth:`_depth_keyed_loop_scope` (via
         :meth:`current_loop_vars_for_call_key` /
@@ -241,7 +241,7 @@ class CallRouting:
 
         Each depth contributes the union of its values' and digests' names:
         a value with no digest keeps its slot and is hashed fresh (see
-        :func:`call_unit._loop_var_digest`) rather than dropping out of the
+        :func:`call_key._loop_var_digest`) rather than dropping out of the
         key. ``for_handler`` strips dunder names before either stack is
         pushed.
         """

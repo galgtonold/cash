@@ -3,7 +3,7 @@ not re-run every iteration."""
 
 from cash.notebook.cache_key import CacheKeyContext
 from cash.notebook.call_interception import CallSite
-from cash.notebook.call_unit import call_cache_key
+from cash.notebook.call_key import call_cache_key
 
 
 def _site(

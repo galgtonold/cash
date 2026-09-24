@@ -11,13 +11,13 @@ import pytest
 
 from cash.notebook.cache_key import CacheKeyContext
 from cash.notebook.call_interception import wrap_eligible_calls
-from cash.notebook.call_unit import (
+from cash.notebook.call_key import (
     _CONTENT_KEY_MAX_BYTES,
     _NAME_CONTENT_MAX_BYTES,
-    CallUnit,
     _keys_by_content,
     call_cache_key,
 )
+from cash.notebook.call_unit import CallUnit
 
 np = pytest.importorskip("numpy")
 

@@ -14,12 +14,11 @@ import pytest
 
 from cash.notebook.cache_key import CacheKeyContext
 from cash.notebook.call_interception import CallSite
+from cash.notebook.call_key import call_cache_key, callee_mutated_globals
 from cash.notebook.call_unit import (
     _UNWRAP_FAILED,
     CallUnit,
     _unwrap_callee_globals,
-    call_cache_key,
-    callee_mutated_globals,
 )
 
 
