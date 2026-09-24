@@ -1,6 +1,6 @@
 """A prepended RNG statement must bring its own ordinary inputs with it.
 
-``UpstreamChecker._prepend_rng_chain_for_reexecuted_draws`` re-runs the RNG
+``RngRewind._prepend_rng_chain_for_reexecuted_draws`` re-runs the RNG
 chain ahead of a re-executed draw so that draw lands at the stream position it
 holds top-to-bottom. It selects statements by whether they
 touch an RNG module and has no notion of what those statements *read*, so a
@@ -49,7 +49,7 @@ class TestPrependedStatementInputs:
         """``n = 500`` must be scheduled ahead of the draw that reads ``n``."""
         checker = _checker(live={"np": object(), "MULT": 3})
 
-        out = checker._prepend_rng_chain_for_reexecuted_draws(
+        out = checker.rng._prepend_rng_chain_for_reexecuted_draws(
             NOTEBOOK,
             [REEXECUTED_DRAW],
             4,
@@ -69,7 +69,7 @@ class TestPrependedStatementInputs:
         """
         checker = _checker(live={"np": object(), "MULT": 3, "n": 500})
 
-        out = checker._prepend_rng_chain_for_reexecuted_draws(
+        out = checker.rng._prepend_rng_chain_for_reexecuted_draws(
             NOTEBOOK,
             [REEXECUTED_DRAW],
             4,
@@ -91,7 +91,7 @@ class TestPrependedStatementInputs:
         ]
         checker = _checker(live={"np": object(), "MULT": 3})
 
-        out = checker._prepend_rng_chain_for_reexecuted_draws(
+        out = checker.rng._prepend_rng_chain_for_reexecuted_draws(
             notebook,
             ["arr = np.random.randn(5) * MULT"],
             6,
@@ -111,7 +111,7 @@ class TestPrependedStatementInputs:
         ]
         checker = _checker(live={})
 
-        out = checker._prepend_rng_chain_for_reexecuted_draws(
+        out = checker.rng._prepend_rng_chain_for_reexecuted_draws(
             notebook,
             ["import numpy as np", "x = float(np.random.rand()) + 1"],
             2,
@@ -124,7 +124,7 @@ class TestPrependedStatementInputs:
         checker = _checker(live={"np": object()})
 
         statements = ["total = 1 + 2"]
-        out = checker._prepend_rng_chain_for_reexecuted_draws(
+        out = checker.rng._prepend_rng_chain_for_reexecuted_draws(
             NOTEBOOK,
             statements,
             4,

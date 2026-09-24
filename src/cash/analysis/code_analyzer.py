@@ -27,7 +27,14 @@ from .callee_effects import callee_global_mutations
 from .file_effects import NOTEBOOK_POLICY, SCANNED_KINDS
 from .namespace_effects import capturable_globals
 
-__all__ = ["CodeAnalyzer", "clean_cell_source", "parse_cell_source"]
+__all__ = [
+    "CodeAnalyzer",
+    "clean_cell_source",
+    "expr_has_trailing_semicolon",
+    "parse_cell_source",
+    "splitlines_like_the_parser",
+    "statement_code",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -888,3 +895,98 @@ def parse_cell_source(cell_code: str) -> ast.Module | None:
     parse of each cell: read the tree, never change it.
     """
     return parse_cached(clean_cell_source(cell_code))
+
+
+# Characters ``str.splitlines()`` treats as line breaks that the CPython
+# parser does not -- the parser (and therefore ``node.lineno`` /
+# ``node.end_lineno``) recognizes only "\r\n", "\r" and "\n". Built with
+# ``chr()`` rather than escape literals so the exact code points stay
+# unambiguous on the page: vertical tab, form feed, FILE/GROUP/RECORD
+# SEPARATOR (U+001C-U+001E), NEL (U+0085), LINE SEPARATOR (U+2028) and
+# PARAGRAPH SEPARATOR (U+2029). See ``splitlines_like_the_parser`` below.
+_PARSER_INCOMPATIBLE_LINEBREAKS = "".join(chr(c) for c in (0x0B, 0x0C, 0x1C, 0x1D, 0x1E, 0x85, 0x2028, 0x2029))
+_LINEBREAK_MASK = str.maketrans(_PARSER_INCOMPATIBLE_LINEBREAKS, " " * len(_PARSER_INCOMPATIBLE_LINEBREAKS))
+
+
+def splitlines_like_the_parser(raw_cell: str) -> list[str]:
+    """Split ``raw_cell`` into lines using the parser's line-ending rules,
+    not ``str.splitlines()``'s.
+
+    ``str.splitlines(keepends=True)`` breaks on more characters than the
+    CPython tokenizer does -- see ``_PARSER_INCOMPATIBLE_LINEBREAKS`` above
+    -- so indexing its result by ``node.lineno`` desyncs the moment any of
+    those appear anywhere earlier in the cell (observed: a vertical tab
+    inside one string literal silently truncated that statement's display;
+    a form feed at the end of one line corrupted the display of the NEXT
+    statement). Fixed here by masking those characters to a plain space --
+    one-for-one, so every position keeps its original index -- before
+    calling ``str.splitlines()``, then slicing the boundaries it finds back
+    out of the ORIGINAL (unmasked) ``raw_cell``. The returned lines contain
+    the real original characters verbatim; only the *decision of where a
+    line ends* used the masked copy.
+
+    Both ``str.translate`` and ``str.splitlines`` are single C-level passes
+    over the whole string, so this stays cheap enough for the fast path
+    of ``cell_executor._statement_source`` to keep its measured win over
+    always calling ``ast.get_source_segment`` (see that docstring for the
+    numbers).
+    """
+    masked = raw_cell.translate(_LINEBREAK_MASK)
+    lines = []
+    pos = 0
+    for masked_line in masked.splitlines(keepends=True):
+        length = len(masked_line)
+        lines.append(raw_cell[pos : pos + length])
+        pos += length
+    return lines
+
+
+def expr_has_trailing_semicolon(raw_cell: str, node: ast.stmt) -> bool:
+    """True if expression statement *node* is followed by a ``;`` in the raw
+    source (IPython display suppression). ``ast.unparse`` discards it, so we
+    recover it from the original cell text.
+
+    Both coordinates must be read the way the PARSER wrote them, or this
+    silently answers ``False`` and echoes a repr the user suppressed:
+
+    * the line index needs the parser's line-break rules, not
+      ``str.splitlines()``'s wider set -- see
+      ``splitlines_like_the_parser``. One vertical tab or form feed
+      anywhere earlier in the cell shifts every later index.
+    * ``end_col_offset`` is a UTF-8 *byte* offset, not a character index,
+      so the line is sliced as bytes. Reading it as characters slid the
+      slice past the ``;`` whenever anything non-ASCII sat earlier on the
+      same line (``df[df.city == "Zürich"];``).
+
+    Lines here keep their endings, so the remainder of the cell appends
+    verbatim rather than being rebuilt with ``"\\n".join``.
+    """
+    if not isinstance(node, ast.Expr):
+        return False
+    end_line = getattr(node, "end_lineno", None)
+    end_col = getattr(node, "end_col_offset", None)
+    if end_line is None or end_col is None:
+        return False
+    lines = splitlines_like_the_parser(raw_cell)
+    if end_line > len(lines):
+        return False
+    rest = lines[end_line - 1].encode()[end_col:].decode()
+    rest += "".join(lines[end_line:])
+    return rest.lstrip().startswith(";")
+
+
+def statement_code(node: ast.stmt, raw_cell: str | None = None) -> str:
+    """The text a top-level statement is keyed and run as: ``ast.unparse``,
+    plus the ``;`` that followed an expression in *raw_cell*, the text *node*
+    was parsed from.
+
+    IPython reads that ``;`` as "show no repr", and ``ast.unparse`` drops it,
+    so it is put back: a cached re-run would show a repr the user suppressed,
+    and the upstream simulation, keying the statement without it, would
+    disagree with the runtime about its key. The runtime and the simulation
+    both key a statement through here. Raises what ``ast.unparse`` raises.
+    """
+    code = ast.unparse(node)
+    if raw_cell is not None and expr_has_trailing_semicolon(raw_cell, node):
+        code += ";"
+    return code

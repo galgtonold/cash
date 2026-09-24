@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import ast
 import builtins
-import collections
 import logging
 import os
 import sys
@@ -24,71 +23,20 @@ from typing import Any
 
 from cash.control_markers import strip_markers
 
-from ...analysis.ast_util import parse_cached, resolve_callee
-from ...analysis.cacheability import analyze_statement
-from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source
+from ...analysis.ast_util import resolve_callee
 from ...analysis.mutation_effects import CellEffects
-from ...analysis.mutations import consumed_input_names
-from ...analysis.namespace_effects import resolve_literal_path, resolve_path_list, statement_read_paths
 from ...tracking.function_tracker import FunctionTracker, is_local_module
-from ...value_types import BUILTIN_NAMES
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from .._trace import is_tracing, trace_event
-from ..cache_key import read_provenance_key
-from ..consumables import consumable_state, has_diverged, is_consumable_unrestorable
-from ._types import CellCheck, ReexecutionPlan, SimulationCache, SimulationResult, apply_collected_mutations
+from ..cache_status import CacheStatus
+from ._types import CellCheck, ClassificationResult, ReexecutionPlan, SimulationCache, SimulationResult
 from .mismatch_classifier import MismatchClassifier
+from .read_scope import ReadScope
 from .reexecution_planner import ReexecutionPlanner
+from .stale_values import StaleValueGuard
 from .virtual_lineage import VirtualLineage, loop_derived_vars
 
 __all__ = ["NotebookSimulator"]
-
-
-def _statement_codes(cell_source: str) -> list[str]:
-    """The cell's top-level statements as the runtime keys them (unparsed,
-    with an expression's trailing ``;`` kept); the raw text if it does not parse."""
-    try:
-        clean = clean_cell_source(cell_source)
-        tree = parse_cell_source(cell_source)
-    except (ValueError, TypeError):
-        return [cell_source]
-    if tree is None:
-        return [cell_source]
-    # Local: import cycle upstream.simulator -> ipython.cell_executor -> ... -> upstream.simulator.
-    from ..ipython.cell_executor import CellExecutor
-
-    codes = []
-    for node in tree.body:
-        code = ast.unparse(node)
-        if CellExecutor.expr_has_trailing_semicolon(clean, node):
-            code += ";"
-        codes.append(code)
-    return codes
-
-
-def _bind_literal_paths(stmt: str, bound: dict, namespace) -> None:
-    """Record in *bound* a name *stmt* binds to a path or a list of paths.
-
-    ``TF = [Path('other.csv')]`` binds ``TF``; any other binding of a name
-    drops it, so a later statement never reads a stale value from here.
-    """
-
-    try:
-        tree = ast.parse(CodeAnalyzer.strip_magics(stmt))
-    except (SyntaxError, ValueError, TypeError):
-        return
-    node = tree.body[0] if len(tree.body) == 1 else None
-    if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-        name = node.targets[0].id
-        value = resolve_path_list(node.value, namespace)
-        if value is None:
-            value = resolve_literal_path(node.value, namespace)
-        if value is not None:
-            bound[name] = value
-            return
-    for n in ast.walk(tree):
-        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
-            bound[n.id] = None
 
 
 logger = logging.getLogger(__name__)
@@ -100,7 +48,7 @@ class NotebookSimulator:
     Owned by :class:`UpstreamChecker`, with which it shares the
     ``TrackingState``. :meth:`simulate_upstream` runs the three phases --
     :class:`VirtualLineage`, :class:`MismatchClassifier`,
-    :class:`ReexecutionPlanner` -- and applies what they buffered.
+    :class:`ReexecutionPlanner` -- in order.
     :meth:`simulate_cell` and :meth:`restore_statement` do one cell or one
     statement the same way.
     """
@@ -117,8 +65,8 @@ class NotebookSimulator:
         self.cash_instance = cash_instance
         self.compute_hash_fn = compute_hash_fn
 
-        # Shared state refs (same dicts as UpstreamChecker / StatementProcessor).
-        self.set_tracking_state(tracking_state)
+        #: The checker's, shared with the statement processor.
+        self.tracking_state = tracking_state
         #: Set by ``reset_caches`` (``%cash_on``): adopt untracked names once.
         self._adopt_untracked_pending = False
         #: The previous simulation's per-cell snapshots, where the next one starts.
@@ -148,22 +96,10 @@ class NotebookSimulator:
             virtual_lineage=self.virtual_lineage,
             classifier=self.classifier,
         )
-
-    def set_tracking_state(self, state: TrackingState) -> None:
-        """Re-wire shared state refs (mirrors UpstreamChecker.set_tracking_state)."""
-        self.tracking_state = state
-        self.executed_cell_codes = state.executed_cell_codes
-        self.executed_cell_hashes = state.executed_cell_hashes
-        self.variable_lineage = state.variable_lineage
-        self.lineage = state.lineage
-        self.executed_file_deps = state.executed_file_deps
-        self.vars_with_mutation_lineage = state.vars_with_mutation_lineage
-        self.executed_input_lineages = state.executed_input_lineages
-        # Propagate to the Phase-1 simulator so its dict refs stay in sync.
-        if hasattr(self, "virtual_lineage"):
-            self.virtual_lineage.set_tracking_state(state)
-        if hasattr(self, "classifier"):
-            self.classifier.set_tracking_state(state)
+        #: Inputs stale in memory though their lineage matches.
+        self.stale_values = StaleValueGuard(shell, tracking_state, self.virtual_lineage, compute_hash_fn)
+        #: The files the checked cell depends on.
+        self.read_scope = ReadScope(shell, tracking_state, self.virtual_lineage)
 
     def reset_caches(self) -> None:
         """Forget the previous simulation.
@@ -187,7 +123,7 @@ class NotebookSimulator:
         keys the module's readers on its source.
         """
         ft = self.virtual_lineage.function_tracker
-        user_ns = getattr(self.shell, "user_ns", None)
+        user_ns = self.shell.user_ns
         if ft is None or not user_ns:
             return
 
@@ -244,12 +180,11 @@ class NotebookSimulator:
         if not self._adopt_untracked_pending:
             return
         self._adopt_untracked_pending = False
-        user_ns = getattr(self.shell, "user_ns", None)
+        user_ns = self.shell.user_ns
         if not user_ns:
             return
         runtime = self.tracking_state.variable_lineage
         imported = self.virtual_lineage.propagated_imports
-        restores = self.virtual_lineage.restores
         binder: dict[str, str] = {}
         for entry in simulation_trace or ():
             for out in entry.outputs or ():
@@ -266,24 +201,12 @@ class NotebookSimulator:
                 # it -- see TrackingState.rerun_bindings.
                 untracked.add(name)
                 continue
-            restores.record_restore(var_name=name, lineage_hash=lineage_hash, value=user_ns[name])
+            self.tracking_state.lineage.record(name, lineage_hash, value=user_ns[name])
             adopted.append(name)
-        apply_collected_mutations(restores, self.tracking_state)
         if adopted and logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "[UPSTREAM_DEBUG] Adopted simulated lineage for names bound before %%cash_on: %s", sorted(adopted)
             )
-
-    def _apply_phase_mutations(self) -> None:
-        """Drain phase RestoreCollectors and apply buffered ops to TrackingState.
-
-        Phases buffer mutations as ``CacheRestore`` / ``LineageReset`` ops and
-        usually drain themselves at method boundaries (so direct callers and
-        mid-simulation reads see writes immediately). This safety-net drain
-        catches anything left over after the full pipeline runs.
-        """
-        apply_collected_mutations(self.virtual_lineage.restores, self.tracking_state)
-        apply_collected_mutations(self.classifier.restores, self.tracking_state)
 
     # --- One statement or cell at a time, as a check does it ---
 
@@ -300,7 +223,6 @@ class NotebookSimulator:
         """
         sim = SimulationResult(virtual_lineage=dict(virtual_lineage or {}), virtual_modules=set(virtual_modules or ()))
         self.virtual_lineage.simulate_one_cell(sim, -1, cell_code)
-        self._apply_phase_mutations()
         return sim
 
     def restore_statement(
@@ -315,694 +237,13 @@ class NotebookSimulator:
         """Restore *stmt_code*'s outputs from the cache entry its simulated
         inputs key; the names restored (none when the entry is missing, stale
         or for other lineages)."""
-        restored, _restore_time, _saved_time = self.virtual_lineage.try_virtual_restore(
+        restored, _restore_time, _saved_time = self.virtual_lineage.restorer.try_virtual_restore(
             stmt_code, outputs, inputs, input_hashes, virtual_modules, expected_lineages
         )
-        self._apply_phase_mutations()
         return restored
 
     def record_replayed_file_deps(self, rerecorded: set[str]) -> None:
         self.virtual_lineage.record_replayed_file_deps(rerecorded)
-
-    def _mark_stale_value_inputs_broken(
-        self,
-        required_inputs: set[str] | None,
-        effects: CellEffects,
-        broken_vars: set[str],
-        notebook_cells: list[str] | None = None,
-        current_cell_idx: int | None = None,
-        virtual_lineage: dict[str, str] | None = None,
-    ) -> None:
-        """Flag self-modifying required inputs whose live value is stale.
-
-        ``variable_lineage[var]`` can be reset to a pre-cell base (downstream
-        advancement / forward simulation) WITHOUT touching the in-memory value,
-        whose own ``_cash_lineage_hash`` still reflects the later (advanced)
-        version. The recorded lineage then *looks* consistent with the virtual
-        state, so Pass 2 does not flag the variable — yet the cell would
-        re-execute on a stale value. This is the self-referential re-run case:
-        ``df = df.sort(); ...; df = df.rename()`` re-run reads the
-        already-renamed frame and raises ``KeyError``. Modelling ``df`` as
-        distinct versions (df_in -> df_out), the cell consumes the input
-        version; when the live value's lineage disagrees with the recorded one
-        the input version is not actually present, so mark it broken and let the
-        normal restore / upstream-re-execution machinery re-derive its base.
-
-        Two regimes, split on whether the live value carries a
-        ``_cash_lineage_hash``:
-
-        * **Lineage-carrying objects** (DataFrame/Series — branches (a)/(b)
-          below). Restricted to variables the current cell **reassigns** with a
-          fresh value (a ``Name`` store, ``df = ...``). In-place mutation of a
-          such a var (``df['c'] = ...`` / ``df.attr = ...``) is deliberately
-          excluded: it replays through the mutation-lineage restoration path,
-          and its live value legitimately runs ahead of the reset base —
-          flagging it here would force needless recompute of the whole cell (and
-          wrongly defeat per-statement cache hits, e.g. an unchanged
-          ``df['VolAdj']`` when only a later ``df['SMA']`` window changed).
-        * **No-lineage values** (primitives / builtin containers / ndarray —
-          ``_mark_nolineage_self_write_broken``). These cannot hold the attribute
-          and their self-modifying statements skip the per-statement cache for
-          missing input lineage, so an isolated re-run computes on the cell's own
-          prior output (``lst.append`` doubles, ``total = total + k`` doubles).
-          Both pure reassignment *and* in-place mutation are eligible here —
-          there is no per-statement cache to defeat.
-
-        Builtins are skipped.
-        """
-        # A called function that carries mutable state on its own object (a
-        # mutated mutable-default arg, a function-attribute counter) must have its
-        # ``def`` re-run to recreate fresh state — force its producer to re-run by
-        # marking it broken. On ``run_all`` the def re-runs to the same fresh
-        # object first, so this only adds a cheap redundant redefine (B).
-        for fn in effects.stateful_funcs:
-            if fn in self.shell.user_ns:
-                broken_vars.add(fn)
-        if not required_inputs:
-            return
-        reassigned = effects.reassigned
-        # A no-lineage var the current cell mutates in place (``lst.append`` /
-        # ``arr += 1`` / ``d.update``) is *self-written* even though it is not a
-        # ``Name``-store reassignment.  Treat both as self-modifying inputs.
-        inplace_self = effects.mutated & required_inputs
-        self_written = reassigned | inplace_self
-        if not self_written:
-            return
-        # Vars that an *upstream* cell also mutates in place. A no-lineage var
-        # mutated across several cells (``results.append(..)`` once per cell) has
-        # no recorded per-cell base — current_session_hashes never advances past
-        # the first assignment — so the content-base check below would wrongly
-        # reset it to that assignment and drop the intermediate cells' mutations.
-        # Computed lazily (only when an in-place no-lineage candidate exists).
-        upstream_inplace_mutated: set[str] | None = None
-        # Names this cell changes without producing them again; lazily too.
-        lineage_invisible: set[str] | None = None
-        for var_name in required_inputs:
-            # A user variable shadowing a builtin name is tracked in
-            # variable_lineage; only skip genuine (untracked) builtins.
-            if var_name in BUILTIN_NAMES and var_name not in self.variable_lineage:
-                continue
-            if var_name not in self_written:
-                continue
-            # A swap / rotate / temp-swap target (``a, b = b, a``) reads its own
-            # pre-cell value but on an isolated re-run holds the swapped OUTPUT,
-            # whose content and lineage both equal the recorded output — so the
-            # lineage-base and content-base signals below are BOTH fooled. The
-            # staleness is lineage-invisible, so force the reset from the static
-            # detector: mark broken and let the producers restore the cell-entry
-            # base. On ``run_all`` the producers re-run to the same base first, so
-            # this only adds a cheap redundant restore there.
-            if var_name in effects.crossref_reassigned:
-                broken_vars.add(var_name)
-                continue
-            live_value = self.shell.user_ns.get(var_name)
-            live_lineage = getattr(live_value, "_cash_lineage_hash", None)
-            # The value is the one the simulation of the cells above says this
-            # cell starts from: current, and not this cell's own earlier output.
-            # The checks below compare it with what the LAST statement writing
-            # it read -- this cell's starting state only when that statement
-            # is in this cell. When it is in a cell above (``df['b'] = ...``
-            # there, ``df['a'] = ...`` here), a first run looked stale and the
-            # value was rebuilt.
-            # Only when each write this cell makes moves the value's lineage:
-            # ``del df['b']`` or ``lst.append(x)`` changes it in place and
-            # leaves the lineage where it was, so a re-run would pass for a
-            # first run -- those keep the checks below.
-            if (
-                live_lineage is not None
-                and virtual_lineage is not None
-                and live_lineage == virtual_lineage.get(var_name)
-                and var_name not in effects.method_receivers
-            ):
-                if lineage_invisible is None:
-                    lineage_invisible = self._lineage_invisible_writes(notebook_cells, current_cell_idx)
-                if var_name not in lineage_invisible:
-                    continue
-            if live_lineage is None:
-                # Primitives / builtin containers / ndarray carry no
-                # ``_cash_lineage_hash`` and their self-modifying statements skip
-                # the per-statement cache (missing input lineage), so an isolated
-                # re-run would compute on the cell's own prior output. Restore the
-                # cell-entry base by marking the input broken (producer re-runs).
-                if upstream_inplace_mutated is None:
-                    upstream_inplace_mutated = self._scan_upstream_inplace_mutations(
-                        notebook_cells,
-                        current_cell_idx,
-                    )
-                self._mark_nolineage_self_write_broken(
-                    var_name,
-                    live_value,
-                    broken_vars,
-                    upstream_inplace_mutated,
-                )
-                continue
-            if var_name not in reassigned:
-                # A lineage-carrying var mutated in place -- not a Name
-                # reassignment -- whose isolated re-run is non-idempotent and would
-                # accumulate unless restored to its cell-entry base. Two cases:
-                #   * METHOD receivers (``b.items.append(..)``): no-output method
-                #     statements skip the per-statement cache (``results.append(x)``
-                # + ``obj.total += x``).
-                #   * SELF-REFERENTIAL subscript/attr writes (``df['a']=df['a']*2``,
-                # ``df['a']+=1``, ``df.iloc[i,j]+=x``).
-                # Restore via the same content/lineage-base machinery used for
-                # no-lineage self-writes. Scoped so that a write to a NEW column read
-                # from OTHER columns (``df['VolAdj']=df.groupby('Close')..``) is NOT
-                # included and keeps its per-statement cache (preserved).
-                force_reset = var_name in effects.method_receivers or var_name in effects.selfref
-                if force_reset:
-                    before = var_name in broken_vars
-                    # The live VALUE's own lineage (``_cash_lineage_hash``) reflects
-                    # the object actually in memory. When the mutation is nested in a
-                    # control structure (``if c: df['a']=df['a']*2``) the runtime
-                    # advances it past the cell-entry base, but the downstream-
-                    # advancement fallback collapses the recorded ``variable_lineage``
-                    # back to the base via ``reset_to`` (which leaves the value's
-                    # attribute intact). So compare the VALUE's lineage against the
-                    # cell-entry base — it survives the collapse and still betrays the
-                    # stale (own-prior-mutation) value on an isolated re-run, while a
-                    # fresh forward run (producer restored the base) leaves them equal.
-                    #
-                    base_lineage = self.executed_input_lineages.get(var_name, {}).get(var_name)
-                    if base_lineage is not None and live_lineage != base_lineage:
-                        broken_vars.add(var_name)
-                    else:
-                        if upstream_inplace_mutated is None:
-                            upstream_inplace_mutated = self._scan_upstream_inplace_mutations(
-                                notebook_cells,
-                                current_cell_idx,
-                            )
-                        self._mark_nolineage_self_write_broken(
-                            var_name,
-                            live_value,
-                            broken_vars,
-                            upstream_inplace_mutated,
-                        )
-                    trace_event("force_reset", var=var_name, broke=(var_name in broken_vars and not before))
-                continue
-            recorded = self.variable_lineage.get(var_name)
-            if recorded is None:
-                continue
-            # A reassigned lineage-carrying input whose live value is a VALID
-            # EXTENSION of the notebook state — executing its recorded producing
-            # code on the simulated inputs reproduces the live lineage — is a
-            # legitimate fresh value produced UPSTREAM, not the current cell's own
-            # stale self-referential output. Pass 2 already kept it via this exact
-            # check; the stale-value guard must not override that, or the forward
-            # probe would restore a stale cache entry keyed on the outdated virtual
-            # lineage (the unsaved cell edit routing through a user function).
-            # Scoped to vars produced by an UPSTREAM cell: a genuine
-            # self-modification whose producer is a statement of the CURRENT cell
-            # (``df = df.iloc[1:]`` re-run) must still hit the guard, or its
-            # isolated re-run would double-apply. [layer 2]
-            if virtual_lineage is not None:
-                prod_code = self.executed_cell_codes.get(var_name)
-                produced_by_current_cell = True
-                if prod_code:
-                    # Strip cash's context markers (``# control_context: ...`` /
-                    # ``# __iteration_context__: ...``) so a control-nested
-                    # self-write still matches its cell's source text.
-                    norm_prod = strip_markers(prod_code).strip()
-                    cur_src = (
-                        notebook_cells[current_cell_idx]
-                        if notebook_cells is not None
-                        and current_cell_idx is not None
-                        and 0 <= current_cell_idx < len(notebook_cells)
-                        else ""
-                    )
-                    produced_by_current_cell = (not norm_prod) or (norm_prod in cur_src)
-                if (
-                    prod_code is not None
-                    and not produced_by_current_cell
-                    and self.virtual_lineage.is_valid_extension(
-                        prod_code, recorded, virtual_lineage, required_dependency=var_name
-                    )
-                ):
-                    continue
-            # (a) ``variable_lineage[var]`` was reset to a pre-cell base (the
-            # downstream-advancement reset, e.g. test_134's multi-statement
-            # chain) but the live value still carries the advanced lineage: the
-            # recorded/live disagreement betrays the stale value directly.
-            if live_lineage != recorded:
-                logger.debug(
-                    "[UPSTREAM_DEBUG] '%s' has a stale in-memory value "
-                    "(recorded lineage %s but value lineage %s); marking broken "
-                    "so its input version is restored before the cell re-runs.",
-                    var_name,
-                    recorded[:8],
-                    live_lineage[:8],
-                )
-                broken_vars.add(var_name)
-                continue
-            # (b) Self-modifying single statement (``df = df.iloc[1:]``): the
-            # forward simulation reproduces the advanced lineage exactly, so
-            # recorded == live == virtual and the reset in (a) never fires.
-            # ``executed_input_lineages[var][var]`` is the version this cell
-            # *consumed* the last time it ran (its cell-entry base). When the
-            # live value's lineage differs from that base, the namespace holds
-            # the cell's own prior OUTPUT rather than the base it must
-            # re-consume on an isolated re-run -- mark it broken so the same
-            # restore machinery re-derives the base. Self-disables on the first
-            # run (no recorded input version yet) and on legitimate forward runs
-            # (live == base). Primitives carry no ``_cash_lineage_hash`` and were
-            # already skipped above; in-place mutation is excluded via
-            # ``effects.reassigned``.
-            base_input = self.executed_input_lineages.get(var_name, {}).get(var_name)
-            if base_input is not None and live_lineage != base_input:
-                logger.debug(
-                    "[UPSTREAM_DEBUG] '%s' holds its own prior output on re-run "
-                    "(value lineage %s but cell-entry base %s); marking broken "
-                    "so its base is restored before the cell re-runs.",
-                    var_name,
-                    live_lineage[:8],
-                    base_input[:8],
-                )
-                broken_vars.add(var_name)
-
-    def _mark_consumed_unrestorable_inputs_broken(
-        self,
-        required_inputs: set[str] | None,
-        broken_vars: set[str],
-        notebook_cells: list[str] | None = None,
-        current_cell_idx: int | None = None,
-    ) -> set[str]:
-        """Flag consumed, unrestorable inputs whose live object is already drained.
-
-        Returns the subset of vars flagged here, so the planner can also schedule
-        the upstream statements that FILL them (a consumable's filler statements
-        are usually not its trace ``outputs`` — see
-        ``ReexecutionPlanner._schedule_consumable_producer_touches``).
-
-        The sibling guard above only ever examines variables the current cell
-        **writes** (``self_written``; it returns early otherwise). A drained
-        ``queue.Queue`` or an exhausted generator is a READ-ONLY input, so it is
-        never looked at — the cell re-runs against the leftovers of its own
-        previous run and prints ``got=[]`` / ``total=0`` where ``run_all`` (which
-        re-runs the producer first) prints ``got=[0, 1, 2]`` / ``total=55``.
-
-
-        Neither existing staleness signal can see this. The var carries no
-        ``_cash_lineage_hash`` and its lineage never advances (the producer's
-        record still points at ``q = Queue()``), so the lineage-base check is
-        blind; and because a consumable drains IN PLACE its identity is constant,
-        so ``compute_hash``'s ``sha256(str(id(obj)))`` fallback returns the SAME
-        hash before and after draining and the content-base check is blind too.
-        Hence the dedicated per-type probes in ``consumables.py``.
-
-        Marking the var broken is most of the fix: the planner's backward scan
-        then re-executes the statements that OWN it as a trace output. The
-        remainder — scheduling the statements that FILL it, which typically do
-        not own it — is the returned set's job (see the planner method named
-        above).
-
-        Self-disabling by construction: the probe compares against a baseline
-        recorded at this cell's ENTRY on its previous run, so a ``run_all``
-        (producer re-ran, object fresh) compares equal and this is a no-op, and
-        a first run has no baseline at all.
-
-        The cross-cell-accumulator hazard does not apply: that reset
-        re-derives an object that another cell also mutates in place, whereas
-        here re-executing the producer chain is exactly what ``run_all`` does.
-        """
-        flagged: set[str] = set()
-        if not required_inputs:
-            return flagged
-        cell_src = (
-            notebook_cells[current_cell_idx]
-            if notebook_cells is not None
-            and current_cell_idx is not None
-            and 0 <= current_cell_idx < len(notebook_cells)
-            else None
-        )
-        if not cell_src:
-            return flagged
-        try:
-            consumed = consumed_input_names(parse_cached(cell_src))
-        except (SyntaxError, ValueError, TypeError):
-            return flagged
-        candidates = required_inputs & consumed
-        if not candidates:
-            return flagged
-        bases = getattr(self.tracking_state, "consumable_bases", {})
-        for var_name in candidates:
-            if var_name in BUILTIN_NAMES and var_name not in self.variable_lineage:
-                continue
-            live_value = self.shell.user_ns.get(var_name)
-            if live_value is None:
-                continue
-            try:
-                if not is_consumable_unrestorable(live_value):
-                    continue
-                diverged = has_diverged(
-                    live_value,
-                    bases.get(var_name),
-                    had_baseline=(var_name in bases),
-                )
-            except (TypeError, ValueError, AttributeError, RecursionError):
-                continue
-            if not diverged:
-                continue
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "[UPSTREAM_DEBUG] consumed unrestorable input '%s' (%s) is already "
-                    "drained on re-run (cell-entry base %r but live %r); marking broken "
-                    "so its producer re-runs.",
-                    var_name,
-                    type(live_value).__name__,
-                    bases.get(var_name),
-                    consumable_state(live_value),
-                )
-            broken_vars.add(var_name)
-            flagged.add(var_name)
-            trace_event("consumable_broken", var=var_name)
-        return flagged
-
-    def _mark_nolineage_self_write_broken(
-        self,
-        var_name: str,
-        live_value: Any,
-        broken_vars: set[str],
-        upstream_inplace_mutated: set[str] | None = None,
-    ) -> None:
-        """Mark a no-lineage self-modifying input broken if its live value is stale.
-
-        Values with no ``_cash_lineage_hash`` (int/str, builtin list/dict/set,
-        ndarray) cannot be tracked by the lineage branches (a)/(b). Two staleness
-        signals, each of which self-disables on a fresh forward run (where the
-        producer has already restored the cell-entry base) and only fires on an
-        isolated re-run (where it has not):
-
-        * **Lineage-base** — the var is a self-modifying *output*
-          (``total = total + k``, ``arr += 1``). ``executed_input_lineages[var]
-          [var]`` is the lineage of the version this cell *consumed* last run (the
-          cell-entry base). After the cell ran, ``variable_lineage[var]`` advanced
-          to the output lineage; on an isolated re-run the producer has not reset
-          it, so base != current betrays the stale value. (On ``run_all`` the
-          producer runs first and resets ``variable_lineage[var]`` to the base, so
-          base == current and nothing is flagged.)
-        * **Content-base** — pure in-place mutation (``lst.append``) produces no
-          output, so ``executed_input_lineages[var]`` is absent and
-          ``current_session_hashes[var]`` still holds the upstream producer's
-          *content* hash (the base, never advanced by the mutation). A live
-          content hash that differs means the namespace holds this cell's own
-          prior mutation.
-
-        The content-base check is suppressed when an *upstream* cell also mutates
-        the var in place: such a var is accumulated across cells
-        (``results.append(..)`` once per cell), its ``current_session_hashes``
-        entry never advances past the first assignment, and restoring it to that
-        assignment would drop the intermediate cells' contributions.
-        """
-        base_lineage = self.executed_input_lineages.get(var_name, {}).get(var_name)
-        if base_lineage is not None:
-            current_lineage = self.variable_lineage.get(var_name)
-            if current_lineage is not None and current_lineage != base_lineage:
-                logger.debug(
-                    "[UPSTREAM_DEBUG] no-lineage self-write '%s' holds its own prior "
-                    "output on re-run (cell-entry base lineage %s but current %s); "
-                    "marking broken so its base is restored before the cell re-runs.",
-                    var_name,
-                    base_lineage[:8],
-                    current_lineage[:8],
-                )
-                broken_vars.add(var_name)
-            return
-
-        if upstream_inplace_mutated and var_name in upstream_inplace_mutated:
-            return
-        if self.compute_hash_fn is None:
-            return
-        session_hashes = getattr(self.tracking_state, "current_session_hashes", {})
-        base_content = session_hashes.get(var_name)
-        if base_content is None:
-            return
-        try:
-            live_content = self.compute_hash_fn(live_value)
-        except (TypeError, ValueError, AttributeError, RecursionError):
-            return
-        if live_content != base_content:
-            logger.debug(
-                "[UPSTREAM_DEBUG] no-lineage in-place mutation '%s' holds its own prior "
-                "output on re-run (cell-entry base content %s but live %s); marking "
-                "broken so its base is restored before the cell re-runs.",
-                var_name,
-                base_content[:8],
-                live_content[:8],
-            )
-            broken_vars.add(var_name)
-
-    @staticmethod
-    def _lineage_invisible_writes(
-        notebook_cells: list[str] | None,
-        current_cell_idx: int | None,
-    ) -> set[str]:
-        """Names a statement of the current cell changes without producing them.
-
-        ``del df['b']``, ``lst.append(x)``: the value changes in place and its
-        lineage does not move, unlike ``df['b'] = ...``, which binds ``df`` as
-        an output. Every simple statement is looked at on its own, so one
-        nested in a loop or a branch counts; a ``def`` or ``class`` body is
-        not the cell writing anything. A cell that does not parse never ran,
-        so it has nothing to report.
-        """
-        if not notebook_cells or current_cell_idx is None or not 0 <= current_cell_idx < len(notebook_cells):
-            return set()
-        tree = parse_cached(notebook_cells[current_cell_idx].replace("\r\n", "\n"))
-        if tree is None:
-            return set()
-        invisible: set[str] = set()
-        pending: list[ast.stmt] = list(tree.body)
-        while pending:
-            node = pending.pop()
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                continue
-            if hasattr(node, "body"):  # for / while / if / with / try / match
-                for field in ("body", "orelse", "finalbody"):
-                    pending.extend(getattr(node, field, ()) or ())
-                for part in [*getattr(node, "handlers", ()), *getattr(node, "cases", ())]:
-                    pending.extend(part.body)
-                continue
-            try:
-                code = ast.unparse(node)
-                _, outputs = CodeAnalyzer.analyze_code_block(code)
-                mutated = analyze_statement(code, None).top_level_mutated_vars
-            except (SyntaxError, ValueError, TypeError):
-                continue
-            invisible |= set(mutated) - set(outputs)
-        return invisible
-
-    def _scan_upstream_inplace_mutations(
-        self,
-        notebook_cells: list[str] | None,
-        current_cell_idx: int | None,
-    ) -> set[str]:
-        """Return the set of names mutated in place by any cell *before* the current one.
-
-        Used to suppress the content-base staleness check for variables
-        accumulated across several cells (see ``_mark_nolineage_self_write_broken``).
-        """
-        if not notebook_cells or not current_cell_idx:
-            return set()
-        muts: set[str] = set()
-        for code in notebook_cells[:current_cell_idx]:
-            try:
-                # top-level only: a cell that merely DEFINES a function whose body
-                # mutates ``g`` (``def bump(): global g; g += 1``) does not itself
-                # accumulate ``g`` across cells, so it must not suppress the
-                # content-base reset for a later cell that CALLS it.
-                muts |= set(analyze_statement(code, None).top_level_mutated_vars)
-            except (SyntaxError, ValueError, TypeError):
-                continue
-        return muts
-
-    def _persisted_reads(self, code: str) -> set[str] | None:
-        """Files *code* read when it last ran, from the backend, or ``None``."""
-        cash = getattr(self.virtual_lineage, "cash_instance", None)
-        backend = getattr(cash, "backend", None) if cash is not None else None
-        if backend is None:
-            return None
-
-        try:
-            record = backend.get_metadata(read_provenance_key(code))
-        except (OSError, TypeError, ValueError, AttributeError):
-            return None
-        if not record or not record.get("read_provenance"):
-            return None
-        return set(record.get("paths") or ())
-
-    @staticmethod
-    def _statements_the_cell_depends_on(
-        required_inputs: set[str] | None,
-        simulation_trace: list,
-    ) -> set[int]:
-        """Trace positions whose outputs the current cell's inputs derive from.
-
-        Only these can make a file the cell's reconstruction reads. Before this
-        scope, one unresolvable read anywhere above -- a helper's
-        ``pd.read_parquet(path)`` -- let every stale writer in the notebook
-        re-fire, and with them the fits feeding their charts: a sanity-check
-        cell reading only the loaded frame took 309 s.
-        """
-        if required_inputs is None:
-            return set(range(len(simulation_trace)))
-        needed = set(required_inputs)
-        relevant: set[int] = set()
-        for i in range(len(simulation_trace) - 1, -1, -1):
-            outputs, inputs = simulation_trace[i].outputs, simulation_trace[i].inputs
-            if outputs & needed:
-                relevant.add(i)
-                needed |= set(inputs)
-        return relevant
-
-    def _defs_whose_callers_recorded_reads(
-        self,
-        simulation_trace: list,
-        relevant: set[int],
-        efd: dict,
-    ) -> set[int]:
-        """Relevant ``def`` statements whose reads are already known elsewhere.
-
-        Defining a function reads nothing; its body reads when a statement
-        calls it, and the tracker records that against the caller's outputs
-        (or, after a restart, the caller's persisted reads). A path the body
-        leaves unresolvable (``pd.read_csv(path)``) then says nothing unknown.
-        A caller that is itself such a ``def`` counts when it is covered.
-        """
-        defs: dict[int, str] = {}
-        for i in relevant:
-            code = simulation_trace[i].stmt_code
-            if not code.lstrip().startswith(("def ", "async def ", "@")):
-                continue
-            try:
-                body = ast.parse(code).body
-            except SyntaxError:
-                continue
-            if len(body) == 1 and isinstance(body[0], (ast.FunctionDef, ast.AsyncFunctionDef)):
-                defs[i] = body[0].name
-
-        def recorded(i: int) -> bool:
-            outputs = simulation_trace[i].outputs
-            if outputs and all(efd.get(o) for o in outputs):
-                return True
-            return self._persisted_reads(simulation_trace[i].stmt_code) is not None
-
-        covered: set[int] = set()
-        changed = True
-        while changed:
-            changed = False
-            for i, name in defs.items():
-                if i in covered:
-                    continue
-                callers = [j for j in relevant if j > i and name in simulation_trace[j].inputs]
-                if callers and all((j in covered) if j in defs else recorded(j) for j in callers):
-                    covered.add(i)
-                    changed = True
-        return covered
-
-    def _compute_relevant_read_paths(
-        self,
-        required_inputs: set[str] | None,
-        simulation_trace: list,
-        notebook_cells: list[str] | None,
-        current_cell_idx: int | None,
-    ) -> tuple[set[str], bool]:
-        """File paths this cell's reconstruction actually READS.
-
-        A file-writer is only worth re-firing during reconstruction when a
-        consumer relevant to the current cell reads the file it writes. This
-        collects those consumed paths from three sources:
-
-        * the recorded file-deps of the current cell's required inputs (the
-          within-session, already-propagated read edges), and
-        * every file READ statically named by an upstream trace statement, and
-        * every file READ statically named by the current cell itself (the only
-          signal that survives a kernel restart, when the tracking dicts are
-          empty and the reader is the cell the user ran).
-
-        Returns ``(paths, fully_known)``. ``fully_known`` is ``False`` when any
-        recognised read target could not be statically resolved (an f-string /
-        computed path) — the caller must then suppress no writer, since it cannot
-        prove the writer's output is unread. A writer whose resolvable output
-        path is in none of these paths is an unrelated / terminal side-effect and
-        must not be re-fired for THIS cell.
-        """
-
-        paths: set[str] = set()
-        fully_known = True
-        user_ns = getattr(self.shell, "user_ns", None)
-
-        efd = getattr(self.tracking_state, "executed_file_deps", None) or {}
-        for v in required_inputs or ():
-            dep = efd.get(v)
-            if not dep:
-                continue
-            # Recorded file deps are usually {path: snapshot} but some code paths
-            # store a plain set/list of paths -- accept either shape.
-            paths.update(dep.keys() if hasattr(dep, "keys") else dep)
-
-        def _collect(src: str, outputs=(), namespace=None) -> None:
-            nonlocal fully_known
-            try:
-                clean = CodeAnalyzer.strip_magics(src.replace("\r\n", "\n"))
-            except (ValueError, TypeError):
-                return
-            if not clean.strip():
-                return
-            try:
-                r = statement_read_paths(clean, namespace=user_ns if namespace is None else namespace)
-            except (SyntaxError, ValueError, TypeError):
-                r = None
-            if r is None and outputs and all(o in efd for o in outputs):
-                # Not resolvable from the code (``pd.read_csv(f)`` over a glob
-                # result), but the statement ran this session and the tracker
-                # recorded what fed its outputs -- a superset of what it read.
-                # Without this one comprehension switched the scope gate off
-                # for the whole notebook, and a chart nothing reads was re-drawn
-                # for every downstream cell.
-                r = set()
-                for o in outputs:
-                    dep = efd[o]
-                    r.update(dep.keys() if hasattr(dep, "keys") else dep)
-            if r is None:
-                # After a restart the session record is empty; what the
-                # statement read when it last ran was persisted for this.
-                r = self._persisted_reads(src)
-            if r is None:
-                trace_event("read_path_unknown", stmt=src[:90])
-                fully_known = False
-            else:
-                paths.update(r)
-
-        relevant = self._statements_the_cell_depends_on(required_inputs, simulation_trace)
-        covered_defs = self._defs_whose_callers_recorded_reads(simulation_trace, relevant, efd)
-        for i, entry in enumerate(simulation_trace):
-            if i not in relevant:
-                continue
-            code = entry.stmt_code
-            if i not in covered_defs and ("read" in code or "open(" in code or "load" in code):
-                _collect(code, entry.outputs)
-            # What the tracker recorded behind this statement's outputs counts
-            # too, whatever the code looks like: a reader static analysis does
-            # not recognise (``PIL.Image.open(p)``) must not make its file look
-            # unread now that more write paths resolve.
-            for o in entry.outputs:
-                dep = efd.get(o)
-                if dep:
-                    paths.update(dep.keys() if hasattr(dep, "keys") else dep)
-
-        if notebook_cells and current_cell_idx is not None and 0 <= current_cell_idx < len(notebook_cells):
-            # One statement at a time, keyed as the runtime keys them, so a
-            # statement's persisted read record is found after a restart (the
-            # whole cell's text is no statement's key).
-            # The cell has not run yet, so a path its own earlier statement
-            # binds (``TF = [Path('other.csv')]``) is in no namespace; resolve
-            # it from the code.
-            bound: dict = {}
-            for stmt in _statement_codes(notebook_cells[current_cell_idx]):
-                _collect(stmt, namespace=collections.ChainMap(bound, user_ns or {}))
-                _bind_literal_paths(stmt, bound, collections.ChainMap(bound, user_ns or {}))
-
-        return paths, fully_known
 
     def simulate_upstream(
         self,
@@ -1055,7 +296,7 @@ class NotebookSimulator:
             # Every variable the two engines disagree on, relevant or not. In a
             # plain top-to-bottom run there must be none: each one is a spurious
             # "changed" waiting for a cell that reads it.
-            recorded = self.variable_lineage
+            recorded = self.tracking_state.variable_lineage
             virtual_lineage = sim.virtual_lineage
             trace_event(
                 "lineage_disagreement",
@@ -1067,7 +308,7 @@ class NotebookSimulator:
                 },
             )
 
-        self._mark_stale_value_inputs_broken(
+        self.stale_values.mark_stale_value_inputs_broken(
             required_inputs,
             effects,
             broken_vars,
@@ -1080,7 +321,7 @@ class NotebookSimulator:
         # Read-only consumable inputs (drained queue / exhausted generator) are
         # invisible to the guard above, which only examines self-WRITTEN vars.
         # Same ``broken_vars`` set, so the planner handles both identically.
-        result.consumable_broken_vars = self._mark_consumed_unrestorable_inputs_broken(
+        result.consumable_broken_vars = self.stale_values.mark_consumed_unrestorable_inputs_broken(
             required_inputs,
             broken_vars,
             notebook_cells=notebook_cells,
@@ -1104,7 +345,7 @@ class NotebookSimulator:
         # Scope the writer-scheduling to files THIS cell's reconstruction reads
         #: a writer whose output no relevant consumer reads is
         # an unrelated / terminal side-effect that must never be re-fired here.
-        relevant_read_paths, relevant_read_paths_known = self._compute_relevant_read_paths(
+        relevant_read_paths, relevant_read_paths_known = self.read_scope.relevant_read_paths(
             required_inputs,
             sim.trace,
             notebook_cells,
@@ -1116,7 +357,7 @@ class NotebookSimulator:
         # depends on is stale. The plan must still be built so
         # the planner can schedule the writer.
         has_stale_file_writers = bool(
-            self.planner.find_stale_file_writer_indices(
+            self.planner.file_writers.find_stale_file_writer_indices(
                 sim.trace,
                 virtual_lineage=sim.virtual_lineage,
                 relevant_read_paths=relevant_read_paths,
@@ -1128,7 +369,7 @@ class NotebookSimulator:
             # A current-cell statement that is a cache hit restores what it
             # reads as well as what it writes: a broken ``df`` that the cell's
             # first ``df[...] = f(df)`` restores needs nothing upstream.
-            self.virtual_lineage.eliminate_broken_vars_via_current_cell_probe(
+            self.virtual_lineage.restorer.eliminate_broken_vars_via_current_cell_probe(
                 broken_vars,
                 notebook_cells,
                 current_cell_idx,
@@ -1139,7 +380,6 @@ class NotebookSimulator:
                 logger.debug("[UPSTREAM] All broken vars resolved by current cell cache hits — skipping upstream")
 
         if not broken_vars and not has_stale_file_writers:
-            self._apply_phase_mutations()
             return ReexecutionPlan([], [], 0.0)
 
         plan = self.planner.plan(
@@ -1149,8 +389,263 @@ class NotebookSimulator:
             relevant_read_paths=relevant_read_paths,
             relevant_read_paths_known=relevant_read_paths_known,
         )
-        self._apply_phase_mutations()
         return plan
+
+    # --- After the repair ran ---
+
+    def resync_after_replay(self, records_before: dict[str, tuple]) -> None:
+        """Bring the simulation's snapshots in line with what the replay recorded.
+
+        After upstream statements run or are restored, ``variable_lineage``
+        holds the authoritative lineage of each. A snapshot may hold a
+        simulated one that differs (a control structure simulated as one
+        unit), and without the sync the next check sees a mismatch and
+        repairs again.
+        """
+        rerecorded = self._rerecorded_since(records_before)
+        self._sync_simulation_cache_lineages(rerecorded)
+        # The snapshots of the cells replayed here may not know the files
+        # behind what the replay restored (see record_replayed_file_deps).
+        self.record_replayed_file_deps(rerecorded)
+
+    def lineage_records(self) -> dict[str, tuple]:
+        """Each variable's recorded lineage and input-lineage map, as held now.
+
+        The map object is kept (not copied): recording a variable replaces it,
+        so ``is`` tells a re-recording apart even when the lineage came out the
+        same.
+        """
+        return {
+            v: (h, self.tracking_state.executed_input_lineages.get(v))
+            for v, h in self.tracking_state.variable_lineage.items()
+        }
+
+    def _rerecorded_since(self, before: dict[str, tuple]) -> set[str]:
+        """Variables this upstream pass recorded again (re-executed or restored)."""
+        changed = set()
+        for v, h in self.tracking_state.variable_lineage.items():
+            old = before.get(v)
+            if old is None or old[0] != h or old[1] is not self.tracking_state.executed_input_lineages.get(v):
+                changed.add(v)
+        return changed
+
+    def _should_sync_cache_var(
+        self,
+        var_name: str,
+        cumulative_stmt_codes: set[str],
+        cached_vl: dict[str, str],
+        idx: int,
+    ) -> bool:
+        """Return True if *var_name*'s cached lineage should be synced at cache index *idx*.
+
+        A variable is synced only when its current runtime lineage was produced
+        by code within cells 0..idx.  Variables produced by later cells are
+        excluded to avoid contaminating earlier cache entries.
+        """
+        if var_name not in self.tracking_state.variable_lineage:
+            return False
+        if cached_vl[var_name] == self.tracking_state.variable_lineage[var_name]:
+            return False  # Already matches, nothing to sync
+        producing_code = self.tracking_state.executed_cell_codes.get(var_name)
+        if producing_code is None:
+            return True
+        normalized_code = strip_markers(producing_code).strip()
+        if normalized_code not in cumulative_stmt_codes:
+            logger.debug(
+                "[UPSTREAM_DEBUG] Skipping sync for '%s' in cache entry %d: producing code not in cells 0..%d",
+                var_name,
+                idx,
+                idx,
+            )
+            return False
+        return True
+
+    def plan_cell_run(
+        self,
+        nodes: list,
+        raw_cell: str,
+        occurrence_counts: dict[str, int],
+    ) -> dict[int, dict] | None:
+        """Which of a run of assignments in the cell being run need not run.
+
+        A cell rebuilding ``sales`` through a dozen steps
+        writes only the last version to disk (``_written_later_in_cell``), and
+        after a restart Run All re-ran every step to get back to it. Here the
+        run is simulated the way the upstream repair simulates a cell above,
+        and the same backward scan finds the latest versions it can restore;
+        what they cover need not run.
+
+        Returns ``{index in nodes: metric}`` for each statement that need not
+        run -- restored, or skipped because what it built is current or
+        overwritten -- or ``None`` to run them all. Every statement not in the
+        result runs as it would have, in order, after the restores.
+        """
+        try:
+            vl = self.virtual_lineage
+            planner = self.planner
+            classifier = self.classifier
+            sim = SimulationResult(virtual_lineage=dict(self.tracking_state.variable_lineage))
+            trace = sim.trace
+            counts = dict(occurrence_counts)
+            for node in nodes:
+                before = len(trace)
+                vl.simulate_one_node(sim, 0, node, counts, {}, raw_cell=raw_cell)
+                if len(trace) != before + 1:
+                    return None
+            if any(entry.files_stale for entry in trace):
+                return None  # a file it reads changed: run it
+            final: dict[str, str] = {}
+            for entry in trace:
+                final.update(entry.produced_lineages)
+            if set(final) != set().union(*(entry.outputs for entry in trace)):
+                return None
+            broken = {
+                name
+                for name, lineage in final.items()
+                if name not in self.shell.user_ns or self.tracking_state.variable_lineage.get(name) != lineage
+            }
+            restored_by_index: dict[int, dict] = {}
+            run: list[int] = []
+            if broken:
+                run, restored, _ = classifier.backward_scan_pass(
+                    sim,
+                    ClassificationResult(
+                        broken_vars=broken,
+                        tainted_vars=set(),
+                        trace_codes={entry.stmt_code for entry in trace},
+                    ),
+                )
+                while True:
+                    size = len(run)
+                    # Stricter than the repair's own pass: a statement that runs
+                    # reads the version its run made before it, so that version's
+                    # producer runs too. The live value may be a LATER version the
+                    # scan restored -- ``is_big = sales['a'] > ...`` ran on the
+                    # final ``sales`` otherwise.
+                    run = sorted(
+                        set(run)
+                        | {
+                            p
+                            for i in run
+                            for v in (trace[i].inputs or ())
+                            if (p := planner.latest_producer(trace, v, before=i)) is not None
+                        }
+                    )
+                    run = planner.complete_later_producers(run, trace)
+                    if len(run) == size:
+                        break
+                for info in restored:
+                    position = info.get("position")
+                    if isinstance(position, int):
+                        info["is_upstream"] = False
+                        restored_by_index[position] = info
+            run_set = set(run)
+            planned: dict[int, dict] = {}
+            for i, entry in enumerate(trace):
+                if i in run_set:
+                    continue
+                planned[i] = restored_by_index.get(i) or {
+                    "code": entry.stmt_code,
+                    "status": CacheStatus.SKIPPED,
+                    "is_upstream": False,
+                    "saved_time": 0.0,
+                    "total_time": 0.0,
+                }
+            if broken and not restored_by_index:
+                return None  # nothing on disk to jump to: run as usual
+            return planned
+        except Exception:  # noqa: BLE001 - a plan that cannot be made is the ordinary run
+            logger.debug("[UPSTREAM] cell run plan failed", exc_info=True)
+            return None
+
+    def _sync_simulation_cache_lineages(self, rerecorded: set[str]) -> None:
+        """Sync simulation cache virtual lineages with actual runtime lineages.
+
+        Only the *rerecorded* variables -- the ones this upstream pass just
+        re-executed or restored -- are synced. Their runtime lineage is fresh.
+        Any other variable's runtime lineage is only as fresh as its last run:
+        after an upstream edit, a sibling the pass did not need (``a = f(x)``
+        when only ``b = g(x)`` was asked for) still holds the value computed
+        from the old ``x``, and its snapshot is the only place that knows.
+        Syncing it laundered the stale value into a match, and the next cell
+        that read it was served the old result.
+
+        After upstream statements are executed/restored/skipped, ``variable_lineage``
+        holds the authoritative lineage for each variable.  The simulation cache
+        may store stale ``virtual_lineage`` values from an earlier run where
+        forward propagation failed (e.g., the fallback lineage computed
+        differently than the runtime lineage because a control structure was
+        simulated as a single unit, or ``inspect.getsource`` returned different
+        results).
+
+        This method patches every cached ``virtual_lineage`` snapshot so that
+        variables get their lineage updated to the authoritative value — but
+        **only if the runtime lineage was produced by code within cells 0..idx**.
+        Variables whose runtime lineage was produced by a *later* cell (beyond
+        idx) are NOT synced.  This prevents downstream mutations from
+        contaminating earlier cache entries.
+
+        For example, if cell 2 produces ``df`` via ``df.sort_values(...)`` and
+        cell 5 mutates it via ``df['SMA'] = ...``, after cell 5 executes the
+        runtime lineage for ``df`` reflects the SMA mutation.  Without the
+        scoping fix, syncing would update cell 2's cached virtual_lineage for
+        ``df`` to the SMA-mutated lineage.  Then when cell 4 (a display cell)
+        runs, reusing cache for cells 0-2 yields a virtual lineage that
+        already matches the mutated actual lineage → no restoration → bug.
+
+        With scoping, we check ``executed_cell_codes['df']`` to see which
+        statement last produced ``df``'s runtime lineage.  If that statement
+        is ``df['SMA'] = ...`` (from cell 5), it won't be found in cells
+        0..2's trace segments, so cell 2's cache entry is NOT synced for
+        ``df``.
+        """
+        if not len(self.cache):
+            return
+
+        updated = False
+        # For each cache entry at index idx, collect ALL statement codes that
+        # appear in the trace segments of cells 0..idx.  We only sync a
+        # variable's lineage if the code that produced the current runtime
+        # lineage (from executed_cell_codes) is among these statements.
+        cumulative_stmt_codes = set()
+        #: ``{var: (old, new)}`` synced so far; later entries' recorded inputs
+        #: follow (below).
+        moved: dict[str, tuple[str, str]] = {}
+        for idx in range(len(self.cache)):
+            entry = self.cache.entry(idx)
+            if entry is None:
+                continue
+            cell_trace = entry.trace_segment
+            for trace_entry in cell_trace:
+                cumulative_stmt_codes.add(trace_entry.stmt_code)
+                # A statement below a synced one read the value it now names.
+                # Left behind, a loop there compared its recorded inputs with
+                # the old lineage and read as reading changed data on every run
+                # after a repair: ``results = {}`` and everything built on it
+                # re-ran each time.
+                input_hashes = trace_entry.input_hashes
+                if moved and isinstance(input_hashes, dict):
+                    for var_name, (old, new) in moved.items():
+                        if input_hashes.get(var_name) == old:
+                            input_hashes[var_name] = new
+
+            cached_vl = entry.virtual_lineage
+            for var_name in list(cached_vl.keys()):
+                if var_name not in rerecorded:
+                    continue
+                if not self._should_sync_cache_var(var_name, cumulative_stmt_codes, cached_vl, idx):
+                    continue
+                # Safe to sync: the runtime lineage was produced by code within
+                # cells 0..idx, so this is a valid forward-propagation correction.
+                if cached_vl[var_name] != self.tracking_state.variable_lineage[var_name]:
+                    moved[var_name] = (cached_vl[var_name], self.tracking_state.variable_lineage[var_name])
+                cached_vl[var_name] = self.tracking_state.variable_lineage[var_name]
+                updated = True
+
+        if updated and logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "[UPSTREAM_DEBUG] Synced simulation cache lineages with runtime state (scoped to producing code)"
+            )
 
     def _settle_loop_trust(self, sim: SimulationResult) -> None:
         """Decide which loop outputs memory is trusted for (``vars_mutated_by_loops``
@@ -1163,7 +658,7 @@ class NotebookSimulator:
         # such accumulators so they follow the baseline lineage-mismatch path
         # (which re-executes correctly); a constant-init accumulator keeps the
         # new trust so one-shot iterables are not re-drained.
-        externally_tainted = self.virtual_lineage.loop_accumulators_with_external_init(
+        externally_tainted = self.virtual_lineage.loop_rules.loop_accumulators_with_external_init(
             sim.vars_mutated_by_loops, sim.trace, sim.loop_target_vars
         )
         if externally_tainted:
@@ -1177,7 +672,7 @@ class NotebookSimulator:
 
         # A loop whose data changed underneath it (a new file, not a code
         # edit) loses the trust, and so does everything built from it.
-        changed_loops = self.virtual_lineage.loops_reading_changed_data(
+        changed_loops = self.virtual_lineage.loop_rules.loops_reading_changed_data(
             sim.vars_mutated_by_loops,
             sim.trace,
             sim.loop_target_vars,

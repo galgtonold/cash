@@ -4,7 +4,9 @@ A check is a :class:`CellCheck`. :class:`VirtualLineage` simulates the cells
 above it into a :class:`SimulationResult`; :class:`MismatchClassifier` reads
 that and returns a :class:`ClassificationResult`; :class:`ReexecutionPlanner`
 reads both and returns the :class:`ReexecutionPlan`. Data one phase hands the
-next is a field here, not another parameter.
+next is a field here, not another parameter. A trace entry's input lineages
+(``InputHashes``) and the helpers that read them live here too, since every
+part of the package reads them.
 """
 
 from __future__ import annotations
@@ -12,8 +14,54 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from cash.control_markers import strip_markers
+
 if TYPE_CHECKING:
     from ...analysis.mutation_effects import CellEffects
+
+
+def normalize_stmt(s: str) -> str:
+    """Strip iteration-context comments and whitespace for code comparison."""
+    return strip_markers(s).strip()
+
+
+class InputHashes(dict):
+    """A trace entry's input lineages, plus what only its cache key reads.
+
+    ``input_hashes`` names the statement's own inputs, and other code copies
+    it as such (a restore records it as the variable's input lineages). Two
+    more things belong in the key, at the statement's position, but nowhere
+    else, so they ride alongside and are read back only when the key is
+    rebuilt from the trace: the globals a simulated-only callee reads (see
+    ``VirtualCallable``), and the hidden RNG variables the statement reads
+    (``lineage_formula.key_hidden_reads``).
+    """
+
+    __slots__ = ("callee_lineages", "hidden_lineages")
+
+    def __init__(
+        self,
+        own: dict[str, str],
+        callee_lineages: dict[str, str] | None = None,
+        hidden_lineages: dict[str, str | None] | None = None,
+    ) -> None:
+        super().__init__(own)
+        self.callee_lineages = callee_lineages or {}
+        self.hidden_lineages = hidden_lineages or {}
+
+
+def key_lineages(input_hashes: dict[str, str]) -> dict[str, str]:
+    """*input_hashes* plus the key-only lineages riding on it (``InputHashes``)."""
+    callee = getattr(input_hashes, "callee_lineages", None) or {}
+    hidden = {k: v for k, v in (getattr(input_hashes, "hidden_lineages", None) or {}).items() if v is not None}
+    return {**callee, **hidden, **input_hashes} if callee or hidden else input_hashes
+
+
+def key_inputs(inputs: set[str], input_hashes: dict[str, str]) -> set[str]:
+    """The names a trace entry's cache key reads: its inputs plus the hidden
+    variables riding on *input_hashes*, as the runtime keys it."""
+    hidden = getattr(input_hashes, "hidden_lineages", None)
+    return set(inputs) | set(hidden) if hidden else set(inputs)
 
 
 class SimulationCacheEntry(NamedTuple):
@@ -118,118 +166,6 @@ class IncrementalStartResult(NamedTuple):
 
     simulation: SimulationResult
     """The simulation state at the end of the cells taken from the cache."""
-
-
-@dataclass
-class CacheRestore:
-    """A var-restore mutation buffered by VirtualLineage during simulation.
-
-    Captures one restore event. The orchestrator applies it to TrackingState
-    after the phase completes.
-    """
-
-    var_name: str
-    lineage_hash: str | None
-    code: str | None = None
-    code_hash: str | None = None
-    input_lineages: dict[str, str] | None = None
-    file_deps: set[str] | None = None
-    value: Any = None
-    """When provided, apply uses lineage.record(...) instead of a direct dict
-    write so ``_cash_lineage_hash`` is attached to the live object."""
-
-
-@dataclass
-class LineageReset:
-    """A LineageStore.reset_to mutation buffered by MismatchClassifier.
-
-    Used when a current-cell output's lineage advances downstream after
-    a mismatch resolution.
-    """
-
-    var_name: str
-    lineage_hash: str
-
-
-class RestoreCollector:
-    """Buffer of TrackingState mutations from a phase, drained by the orchestrator.
-
-    Phases call ``record_restore()`` / ``record_lineage_reset()`` instead of
-    writing directly. After each phase, ``NotebookSimulator`` calls
-    ``drain()`` to flush ops to TrackingState. This concentrates all
-    phase-emitted mutations in one auditable site.
-    """
-
-    def __init__(self) -> None:
-        self._restores: list[CacheRestore] = []
-        self._resets: list[LineageReset] = []
-
-    def record_restore(
-        self,
-        var_name: str,
-        lineage_hash: str | None,
-        *,
-        code: str | None = None,
-        code_hash: str | None = None,
-        input_lineages: dict[str, str] | None = None,
-        file_deps: set[str] | None = None,
-        value: Any = None,
-    ) -> None:
-        self._restores.append(
-            CacheRestore(
-                var_name=var_name,
-                lineage_hash=lineage_hash,
-                code=code,
-                code_hash=code_hash,
-                input_lineages=input_lineages,
-                file_deps=file_deps,
-                value=value,
-            )
-        )
-
-    def record_lineage_reset(self, var_name: str, lineage_hash: str) -> None:
-        self._resets.append(LineageReset(var_name=var_name, lineage_hash=lineage_hash))
-
-    def drain(self) -> tuple[list[CacheRestore], list[LineageReset]]:
-        """Return all buffered ops and clear the collector."""
-        restores, resets = self._restores, self._resets
-        self._restores, self._resets = [], []
-        return restores, resets
-
-    def __len__(self) -> int:
-        return len(self._restores) + len(self._resets)
-
-
-def apply_collected_mutations(collector: "RestoreCollector", state: Any) -> None:
-    """Apply buffered phase mutations to *state* (a TrackingState).
-
-    Single auditable site for phase-emitted writes. Called by
-    NotebookSimulator after each phase, and by phase methods themselves
-    at well-defined boundaries where mid-phase visibility is required
-    (e.g. so subsequent statements see import lineages in cache-key
-    computation).
-    """
-    restores, resets = collector.drain()
-    for op in restores:
-        if op.lineage_hash is not None:
-            if op.value is not None:
-                state.lineage.record(op.var_name, op.lineage_hash, value=op.value)
-            else:
-                state.lineage.record(op.var_name, op.lineage_hash)
-        if op.code is not None:
-            state.executed_cell_codes[op.var_name] = op.code
-        if op.code_hash is not None:
-            existing = state.executed_cell_hashes.get(op.var_name)
-            if existing is None:
-                state.executed_cell_hashes[op.var_name] = {op.code_hash}
-            else:
-                existing.add(op.code_hash)
-        if op.input_lineages is not None:
-            state.executed_input_lineages[op.var_name] = dict(op.input_lineages)
-        if op.file_deps:
-            state.executed_file_deps.setdefault(op.var_name, set()).update(op.file_deps)
-    for op in resets:
-        state.lineage.reset_to(op.var_name, op.lineage_hash)
 
 
 @dataclass

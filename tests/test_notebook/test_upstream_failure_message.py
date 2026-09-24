@@ -18,11 +18,12 @@ import pytest
 
 pytest.importorskip("IPython")
 
-from cash.notebook.upstream.checker import UpstreamChecker
+from cash.notebook._protocols import TrackingState
+from cash.notebook.upstream.replay import StatementReplay
 
 
 def _msg(stmt: str, error: str) -> str:
-    return UpstreamChecker._format_upstream_failure(stmt, error)
+    return StatementReplay._format_upstream_failure(stmt, error)
 
 
 def test_a_missing_name_points_at_the_cell_that_defines_it():
@@ -54,12 +55,11 @@ def test_the_message_stays_embeddable():
     assert "'''" not in m
 
 
-class _Checker(UpstreamChecker):
-    """Just enough of a checker to exercise the planning-gap detection."""
-
-    def __init__(self, executed_cell_codes):  # noqa: D107 - test double
-        self.executed_cell_codes = executed_cell_codes
-        self.debug = False
+def _Checker(executed_cell_codes) -> StatementReplay:  # noqa: N802 - reads as the double it replaced
+    """Just enough of a replay to exercise the planning-gap detection."""
+    state = TrackingState()
+    state.executed_cell_codes.update(executed_cell_codes)
+    return StatementReplay(state)
 
 
 def test_a_missing_name_with_a_known_producer_names_it_as_a_cash_gap():
@@ -99,7 +99,7 @@ def test_a_non_nameerror_never_claims_a_gap():
 
 
 def test_the_gap_note_rides_along_in_the_message():
-    m = UpstreamChecker._format_upstream_failure(
+    m = StatementReplay._format_upstream_failure(
         "ax.plot(sub['month'])",
         "NameError: name 'sub' is not defined",
         planning_gap="NOTE: 'sub' is set by 'sub = mm[...]'",
@@ -124,7 +124,7 @@ def _fail_with(checker, stmt, error, cells, scheduled=()):
         return {"error": error} if code == stmt else {"status": "computed"}
 
     with pytest.raises(UpstreamStateError) as raised:
-        checker._reexecute_statements([*scheduled, stmt], process, None, notebook_cells=cells)
+        checker.reexecute([*scheduled, stmt], process, None, notebook_cells=cells)
     return str(raised.value)
 
 

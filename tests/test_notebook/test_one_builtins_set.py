@@ -45,7 +45,7 @@ def test_no_module_keeps_its_own_copy():
 
 
 def test_a_name_the_user_bound_is_not_a_builtin_to_the_simulation():
-    sim = SimpleNamespace(variable_lineage={"max": "lineage-of-max"})
+    sim = SimpleNamespace(tracking_state=SimpleNamespace(variable_lineage={"max": "lineage-of-max"}))
     unbound = VirtualLineage._unbound_builtin
     assert unbound(sim, "abs")
     assert not unbound(sim, "max"), "the kernel holds a max of the user's"

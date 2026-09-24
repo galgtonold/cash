@@ -93,7 +93,7 @@ class TestDownstreamAdvancementFallback:
             required_inputs = {"df"}
             current_cell_outputs = {"df"}
 
-            metrics, restore_time, exec_time = upstream._check_notebook_based(
+            metrics, restore_time, exec_time = upstream._bring_up_to_date(
                 cell_code,
                 required_inputs,
                 MagicMock(),  # process_statement_callback
@@ -103,9 +103,9 @@ class TestDownstreamAdvancementFallback:
 
         # The key assertion: df's lineage should be reset to the virtual hash,
         # not the "ahead" hash from previous execution
-        assert upstream.variable_lineage["df"] == virtual_lineage_df, (
+        assert upstream.tracking_state.variable_lineage["df"] == virtual_lineage_df, (
             f"Expected df lineage to be reset to virtual {virtual_lineage_df[:8]}... "
-            f"but got {upstream.variable_lineage['df'][:8]}..."
+            f"but got {upstream.tracking_state.variable_lineage['df'][:8]}..."
         )
 
     def test_no_reset_when_variable_only_input(self, cash_magics):
@@ -133,7 +133,7 @@ class TestDownstreamAdvancementFallback:
             patch("cash.notebook.upstream.checker.get_notebook_cells_with_ids", return_value=[("#id1", "x = 10")]),
             patch("cash.notebook.upstream.checker.invalidate_notebook_path_cache"),
         ):
-            upstream._check_notebook_based(
+            upstream._bring_up_to_date(
                 cell_code,
                 {"x"},  # required_inputs
                 # A bare MagicMock's result carries a truthy .get('error'),
@@ -145,7 +145,7 @@ class TestDownstreamAdvancementFallback:
             )
 
         # x should NOT be reset — it's only an input, not an output
-        assert upstream.variable_lineage["x"] == actual_lineage_x
+        assert upstream.tracking_state.variable_lineage["x"] == actual_lineage_x
 
     def test_no_reset_without_simulation_cache(self, cash_magics):
         """
@@ -166,7 +166,7 @@ class TestDownstreamAdvancementFallback:
             patch("cash.notebook.upstream.checker.get_notebook_cells_with_ids", return_value=[("#id1", "x = 10")]),
             patch("cash.notebook.upstream.checker.invalidate_notebook_path_cache"),
         ):
-            upstream._check_notebook_based(
+            upstream._bring_up_to_date(
                 cell_code,
                 {"df"},
                 MagicMock(),
@@ -175,7 +175,7 @@ class TestDownstreamAdvancementFallback:
             )
 
         # No cache → no reset
-        assert upstream.variable_lineage["df"] == actual_lineage_df
+        assert upstream.tracking_state.variable_lineage["df"] == actual_lineage_df
 
     def test_no_reset_when_lineages_already_match(self, cash_magics):
         """
@@ -199,7 +199,7 @@ class TestDownstreamAdvancementFallback:
             patch("cash.notebook.upstream.checker.get_notebook_cells_with_ids", return_value=[("#id1", "x = 10")]),
             patch("cash.notebook.upstream.checker.invalidate_notebook_path_cache"),
         ):
-            upstream._check_notebook_based(
+            upstream._bring_up_to_date(
                 cell_code,
                 {"df"},
                 MagicMock(),
@@ -208,7 +208,7 @@ class TestDownstreamAdvancementFallback:
             )
 
         # Lineage should remain the same (it was already correct)
-        assert upstream.variable_lineage["df"] == same_lineage
+        assert upstream.tracking_state.variable_lineage["df"] == same_lineage
 
     @pytest.mark.xfail(reason="Known failure: downstream advancement fallback multi-var reset")
     def test_multiple_overlap_vars_reset(self, cash_magics):
@@ -238,7 +238,7 @@ class TestDownstreamAdvancementFallback:
             patch("cash.notebook.upstream.checker.get_notebook_cells_with_ids", return_value=[("#id1", "x = 10")]),
             patch("cash.notebook.upstream.checker.invalidate_notebook_path_cache"),
         ):
-            upstream._check_notebook_based(
+            upstream._bring_up_to_date(
                 cell_code,
                 {"df1", "df2"},
                 MagicMock(),
@@ -246,8 +246,8 @@ class TestDownstreamAdvancementFallback:
                 effects=CellEffects(outputs=frozenset({"df1", "df2"})),
             )
 
-        assert upstream.variable_lineage["df1"] == virtual_df1
-        assert upstream.variable_lineage["df2"] == virtual_df2
+        assert upstream.tracking_state.variable_lineage["df1"] == virtual_df1
+        assert upstream.tracking_state.variable_lineage["df2"] == virtual_df2
 
     def test_end_to_end_partial_cell_caching_after_edit(self, cash_magics, mock_shell, statement_processor):
         """
@@ -273,7 +273,7 @@ class TestDownstreamAdvancementFallback:
         assert metrics2["status"] == CacheStatus.COMPUTED
 
         # Record the lineage state after both statements ran
-        df_lineage_after_both = upstream.variable_lineage.get("df")
+        df_lineage_after_both = upstream.tracking_state.variable_lineage.get("df")
 
         # Step 4: Simulate "cell not found" scenario for the second run
         # The cell was edited (SMA_60 → SMA_61) but notebook not saved.
@@ -310,7 +310,7 @@ class TestDownstreamAdvancementFallback:
         # Set df's lineage to the "ahead" value (as if both statements already ran)
         upstream.tracking_state.lineage.record("df", df_lineage_after_both)
 
-        # Now run _check_notebook_based with cell code that won't match notebook
+        # Now run _bring_up_to_date with cell code that won't match notebook
         edited_cell_code = "df['VolAdj'] = df['Close'] * df['Volume']\ndf['SMA_61'] = df['Close'].rolling(2).mean()"
         old_cell_code = "df['VolAdj'] = df['Close'] * df['Volume']\ndf['SMA_60'] = df['Close'].rolling(2).mean()"
 
@@ -322,7 +322,7 @@ class TestDownstreamAdvancementFallback:
             ),
             patch("cash.notebook.upstream.checker.invalidate_notebook_path_cache"),
         ):
-            upstream._check_notebook_based(
+            upstream._bring_up_to_date(
                 edited_cell_code,
                 {"df"},  # required_inputs
                 MagicMock(),  # process_statement_callback
@@ -331,7 +331,7 @@ class TestDownstreamAdvancementFallback:
             )
 
         # df's lineage should be reset to the pre-cell value
-        assert upstream.variable_lineage["df"] == pre_cell_df_lineage, (
+        assert upstream.tracking_state.variable_lineage["df"] == pre_cell_df_lineage, (
             f"Expected df lineage to be reset to pre-cell value, "
-            f"but it's still '{upstream.variable_lineage['df'][:20]}...'"
+            f"but it's still '{upstream.tracking_state.variable_lineage['df'][:20]}...'"
         )

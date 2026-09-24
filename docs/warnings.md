@@ -940,7 +940,7 @@ cell, that cell is never cached.
 
 *Notebook.*
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._warn_broken_upstream_cells @6ebee167 -->
+<!-- claim: cash/notebook/upstream/notebook_vetting.py:NotebookVetter._warn_broken_upstream_cells @6ebee167 -->
 **What happened.** An earlier cell in the notebook has a syntax error. The
 message gives its number (counting code cells from the top, not the `[7]`
 execution count) and quotes its first line.
@@ -998,7 +998,7 @@ file on disk is the one you want.
 
 *Notebook.*
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._opts_out_of_rng_rewind @bb37e3c0 -->
+<!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind._opts_out_of_rng_rewind @bb37e3c0 -->
 **What happened.** A restored value came from an unseeded random source (a
 named call such as `np.random.normal()`, or an estimator fitted with
 `random_state=None`). You are seeing an earlier draw.
@@ -1025,7 +1025,7 @@ below it cannot follow.
 **Why it matters.** New draws and restored values from the old stream appear
 side by side with nothing to tell them apart.
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._opts_out_of_rng_rewind @bb37e3c0 -->
+<!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind._opts_out_of_rng_rewind @bb37e3c0 -->
 **What to do.** If the values below must follow the new stream, put
 `# @cash:no-cache` on a line of its own above them. If you want them
 reproducible, seed with a fixed number instead.
@@ -1054,7 +1054,7 @@ The message for a generator draw says both.
 for a stable, reproducible value. Or accept the frozen value and silence the
 warning, as below.
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._opts_out_of_rng_rewind @bb37e3c0, cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded @71ddf96a -->
+<!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind._opts_out_of_rng_rewind @bb37e3c0, cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded @71ddf96a -->
 In a notebook: for a fresh draw every run, put `# @cash:no-cache` on a line of
 its own above the statement. Only that turns the rewind off. A statement marked
 `no-cache` never raises this warning, wherever the directive sits, so a

@@ -66,6 +66,7 @@ from ...tracking.file_tracker import FileAccessTracker
 from ...tracking.function_tracker import FunctionTracker
 from ..consumables import is_consumable_unrestorable
 from ..lineage_formula import key_hidden_reads
+from ..run_memo import forget_file_state_this_run
 from ..write_observer import observe_writes
 from .derivation_edges import is_uncacheable_alias
 
@@ -1072,7 +1073,6 @@ class StatementProcessor:
         # second pass of AST visitors over the same tree.
         pure_mutations = run.analysis.all_mutated_vars - run.outputs
         if pure_mutations:
-            self.tracking_state.vars_with_mutation_lineage.update(pure_mutations)
             logger.debug("%s Detected in-place mutations on: %s", _LOG_MUTATION, pure_mutations)
 
         miss_guarded = self._miss_guarded(run, execution, captured_vars)
@@ -1206,9 +1206,6 @@ class StatementProcessor:
                 self.tracking_state.executed_write_stmt_codes.add(code)
                 # The upstream check's per-file answers for this cell run were
                 # taken before this write; nothing checked after it may use them.
-                # Local: import cycle statement.processor -> upstream.virtual_lineage -> statement.processor.
-                from ..upstream.virtual_lineage import forget_file_state_this_run
-
                 forget_file_state_this_run()
                 # Persist write provenance so a post-restart isolated reader can
                 # tell an already-on-disk writer effect (skip it) from a stale

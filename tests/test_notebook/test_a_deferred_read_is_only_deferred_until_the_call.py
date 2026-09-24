@@ -27,9 +27,9 @@ allowed, and so must a lambda that is stored rather than invoked.
 
 from __future__ import annotations
 
-from cash.notebook.upstream.checker import UpstreamChecker
+from cash.notebook.upstream.notebook_vetting import NotebookVetter
 
-reads = UpstreamChecker._module_level_reads
+reads = NotebookVetter._module_level_reads
 
 
 class TestReadNow:

@@ -17,12 +17,13 @@ import warnings
 import pytest
 
 from cash.exceptions import CashWarning
+from cash.notebook._protocols import TrackingState
 from cash.notebook.upstream._types import TraceEntry
 from cash.notebook.upstream.reexecution_planner import ReexecutionPlanner
 
 
 def _planner(user_ns: dict) -> ReexecutionPlanner:
-    vl = types.SimpleNamespace(shell=types.SimpleNamespace(user_ns=user_ns))
+    vl = types.SimpleNamespace(shell=types.SimpleNamespace(user_ns=user_ns), tracking_state=TrackingState())
     return ReexecutionPlanner(vl, classifier=None)
 
 
@@ -149,7 +150,7 @@ class TestHealthyShapeUntouched:
             _entry("fig, ax = plt.subplots()", outputs=("fig", "ax")),
             _entry("plt.savefig('x.png')", inputs=("plt",)),
         ]
-        vl = types.SimpleNamespace(shell=types.SimpleNamespace(user_ns=None))
+        vl = types.SimpleNamespace(shell=types.SimpleNamespace(user_ns=None), tracking_state=TrackingState())
         planner = ReexecutionPlanner(vl, classifier=None)
         # producer [0] not scheduled -> refuse the write [1]
         with pytest.warns(CashWarning):

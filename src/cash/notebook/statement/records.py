@@ -259,7 +259,7 @@ class StatementRecords:
         Persists ``{paths, file_deps snapshot, input lineages}`` to the backend
         under a writer-specific key derived from the statement source, so a
         post-restart isolated downstream reader can short-circuit an
-        already-fresh writer (:meth:`ReexecutionPlanner._writer_output_already_fresh`)
+        already-fresh writer (:meth:`FileWriterScheduler._writer_output_already_fresh`)
         instead of re-firing a non-idempotent side effect and re-deriving stale
         data. Best-effort and CONSERVATIVE: a writer whose output paths neither
         resolve from the code nor were *written* as it ran records nothing,

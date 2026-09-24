@@ -20,7 +20,7 @@ from .mutations import (
     iter_store_targets,
 )
 
-__all__ = ["ObjectProtocolResets", "object_protocol_mutations"]
+__all__ = ["object_protocol_mutations"]
 
 
 # ---------------------------------------------------------------------------

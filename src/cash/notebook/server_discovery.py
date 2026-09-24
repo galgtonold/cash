@@ -63,7 +63,7 @@ class CashNotebookDiscoveryWarning(CashWarning):
 # Lifecycle:
 #   Created: lazily, on the first call to get_notebook_path().
 #   Invalidated: explicitly via invalidate_notebook_path_cache() — called by
-#     %cash_on to handle notebook switches and by _check_notebook_based() when
+#     %cash_on to handle notebook switches and by _bring_up_to_date() when
 #     the current cell cannot be found (possible stale session from Jupyter
 #     Server returning the wrong active notebook path).
 #   Overridden: via set_notebook_path() when a reliable path is available from

@@ -356,7 +356,7 @@ IDs. **Fix:** add a comment to one of the cells, or save the notebook.
 
 ### `ForwardReferenceError`
 
-<!-- claim: cash/exceptions.py:ForwardReferenceError, cash/notebook/upstream/checker.py:UpstreamChecker._refuse_forward_references -->
+<!-- claim: cash/exceptions.py:ForwardReferenceError, cash/notebook/upstream/notebook_vetting.py:NotebookVetter._refuse_forward_references -->
 A cell reads, at module level, a name that only a later cell binds. It works now
 because that cell already ran, but a top-to-bottom run would raise `NameError`.
 A name used inside a `def` does not count; a decorator, default argument or base

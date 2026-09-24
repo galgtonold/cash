@@ -24,7 +24,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from cash.notebook.upstream import UpstreamChecker
-from cash.notebook.upstream.virtual_lineage import lineage_confirmed_vars
+from cash.notebook.upstream.cache_restore import lineage_confirmed_vars
 
 METADATA = {"output_lineages": {"rows": "h1"}, "execution_time": 1.0}
 
@@ -35,7 +35,6 @@ def _make_simulator(shell_ns: dict, metadata=None, variables=None):
     shell = MagicMock()
     shell.user_ns = shell_ns
     checker = UpstreamChecker(shell, cash_instance)
-    checker.variable_lineage = {}
     return checker.simulator, shell
 
 

@@ -1,7 +1,6 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-from cash.notebook._protocols import TrackingState
 from cash.notebook.cache_status import CacheStatus
 from cash.notebook.upstream import UpstreamChecker
 
@@ -26,7 +25,6 @@ class TestIssueReproduction(unittest.TestCase):
         # Configure backend
         self.shell.cash_instance.backend.get.return_value = ({"output_lineages": {}}, {})
         self.checker = UpstreamChecker(self.shell)
-        self.checker.set_tracking_state(TrackingState())
 
     @patch("cash.notebook.upstream.checker.get_notebook_cells")
     def test_unused_broken_var_triggers_restore(self, mock_get_cells):
@@ -63,7 +61,7 @@ class TestIssueReproduction(unittest.TestCase):
             self.shell.user_ns = {"stats": 1, "ticker_stats": 1}
 
             # Set executed codes to match
-            self.checker.executed_cell_codes.update({"stats": cell1_code, "ticker_stats": cell1_code})
+            self.checker.tracking_state.executed_cell_codes.update({"stats": cell1_code, "ticker_stats": cell1_code})
 
             # 3. Checker call
             # Current cell is cell 2.
@@ -73,7 +71,7 @@ class TestIssueReproduction(unittest.TestCase):
             required_inputs = {"ticker_stats"}
 
             # We also need try_virtual_restore to work so it reports success if attempted
-            with patch.object(self.checker.simulator.virtual_lineage, "try_virtual_restore") as mock_restore:
+            with patch.object(self.checker.simulator.virtual_lineage.restorer, "try_virtual_restore") as mock_restore:
                 mock_restore.return_value = ({"stats", "ticker_stats"}, 0.1, 0.1)
 
                 # Only the producer's simulation is stubbed; the cells parse
@@ -83,7 +81,7 @@ class TestIssueReproduction(unittest.TestCase):
                 ) as mock_is_cs:
                     # Execute Check for cell2
                     # Note: cell_code=cell2_code. REQUIRED INPUTS match what we setup.
-                    all_metrics, _, _ = self.checker._check_notebook_based(cell2_code, required_inputs, None, None)
+                    all_metrics, _, _ = self.checker._bring_up_to_date(cell2_code, required_inputs, None, None)
 
                     # The patches must reach the code under test: without the
                     # notebook cells the check returns before simulating

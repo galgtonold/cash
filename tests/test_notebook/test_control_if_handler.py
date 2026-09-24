@@ -36,7 +36,6 @@ def mock_statement_processor():
         }
     )
     processor.tracking_state.variable_lineage = {}
-    processor.tracking_state.vars_with_mutation_lineage = set()
     processor.compute_hash = MagicMock(return_value="fakehash")
     return processor
 

@@ -166,11 +166,6 @@ class TrackingState:
     # R: StatementProcessor (observed mutations), UpstreamChecker.
     current_session_hashes: dict[str, str] = field(default_factory=dict)
 
-    # Variables mutated in place (``list.append``, ``d[k] = v``).
-    # W: StatementProcessor, the control-structure helpers, UpstreamChecker.
-    # R: the upstream check (skips lineage staleness for them).
-    vars_with_mutation_lineage: set[str] = field(default_factory=set)
-
     # Variable -> the lineage of each input when its statement last ran.
     # W: StatementLineageBuilder, StatementRestorer, the simulator's restore
     # drain. R: the upstream check, ModuleInvalidator, miss attribution.

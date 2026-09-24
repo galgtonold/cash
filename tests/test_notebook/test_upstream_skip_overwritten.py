@@ -11,7 +11,6 @@ from unittest.mock import patch
 import pytest
 
 from cash.analysis.mutation_effects import CellEffects
-from cash.notebook._protocols import TrackingState
 from cash.notebook.upstream import UpstreamChecker
 
 
@@ -19,7 +18,6 @@ from cash.notebook.upstream import UpstreamChecker
 def upstream_checker(mock_shell, cash_instance, clean_backend):
     """An UpstreamChecker on its own, with an empty tracking state."""
     checker = UpstreamChecker(mock_shell, cash_instance=cash_instance)
-    checker.set_tracking_state(TrackingState())
     return checker, mock_shell, clean_backend
 
 

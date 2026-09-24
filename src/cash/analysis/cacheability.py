@@ -61,7 +61,6 @@ class StatementAnalysis:
     decision.
 
     ``all_mutated_vars`` — every variable mutated anywhere in the code.
-    Used post-execution to update ``vars_with_mutation_lineage``.
 
     ``side_effects`` — I/O and system calls that make caching unsound.
 

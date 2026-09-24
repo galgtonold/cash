@@ -14,12 +14,13 @@ from __future__ import annotations
 
 import types
 
+from cash.notebook._protocols import TrackingState
 from cash.notebook.upstream._types import TraceEntry
 from cash.notebook.upstream.reexecution_planner import ReexecutionPlanner
 
 
 def _planner(user_ns: dict) -> ReexecutionPlanner:
-    vl = types.SimpleNamespace(shell=types.SimpleNamespace(user_ns=user_ns))
+    vl = types.SimpleNamespace(shell=types.SimpleNamespace(user_ns=user_ns), tracking_state=TrackingState())
     return ReexecutionPlanner(vl, classifier=None)
 
 
@@ -61,7 +62,7 @@ def test_a_last_producer_needs_nothing_after_it():
 # `results[...] =`. `def draw_roc` iterating `results.items()` matched, so the
 # init was scheduled to stop the loop's writes doubling -- and the loop was
 # never scheduled at all.
-from cash.notebook.upstream.virtual_lineage import VirtualLineage  # noqa: E402
+from cash.notebook.upstream.loop_rules import LoopRules  # noqa: E402
 
 
 def test_a_function_reading_an_accumulator_is_not_a_rerun_of_its_loop():
@@ -74,6 +75,6 @@ def test_a_function_reading_an_accumulator_is_not_a_rerun_of_its_loop():
             "def draw_roc(ax):\n    for name, r in results.items():\n        ax.plot(r)", ("draw_roc",), ("results",)
         ),
     ]
-    fully = VirtualLineage._loop_vars_fully_rescheduled(None, [2], trace, {"results"})
+    fully = LoopRules._loop_vars_fully_rescheduled(None, [2], trace, {"results"})
     assert fully == set(), "reading results.items() was taken for re-running the loop"
-    assert VirtualLineage._loop_vars_fully_rescheduled(None, [1], trace, {"results"}) == {"results"}
+    assert LoopRules._loop_vars_fully_rescheduled(None, [1], trace, {"results"}) == {"results"}

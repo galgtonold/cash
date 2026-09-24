@@ -1,6 +1,6 @@
 """Which runs of a cell's assignments a restore of a later version may jump.
 
-See ``UpstreamChecker.plan_cell_run``. A jump skips or
+See ``NotebookSimulator.plan_cell_run``. A jump skips or
 restores statements, so every write they make must land in an object the run
 itself made: ``y = x; y[0] += 5`` changes ``x`` too, and ``v = arr[1:]; v += 1``
 changes ``arr``.

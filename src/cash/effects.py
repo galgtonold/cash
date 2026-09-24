@@ -44,24 +44,17 @@ from typing import Any, NamedTuple
 
 __all__ = [
     "Action",
-    "Effect",
     "EffectKind",
     "MODULE_CALLS",
     "METHOD_VERBS",
     "MUTATOR_METHODS",
     "CLOCK_WHEN_ARG_CALLS",
-    "CLOCK_ARG_VALUES",
-    "CLOCK_WHEN_ARGS_OMITTED",
     "ENVIRON_NAMES",
-    "PYPLOT_MODULE_ALIASES",
     "classify_call",
     "dotted_name",
     "environment_component",
     "environment_input",
-    "environment_label",
-    "is_environ_read",
     "is_open_write_mode",
-    "is_read_only_sql",
     "writes_to_console",
 ]
 

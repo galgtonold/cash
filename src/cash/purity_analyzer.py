@@ -359,7 +359,6 @@ class _PurityVisitor(ast.NodeVisitor):
         "called_callable_nodes",
         "_param_names",
         "_qualname",
-        "_line_offset",
         "read_names",
         "_assign_kinds",
         "_name_call_nodes",
@@ -374,7 +373,6 @@ class _PurityVisitor(ast.NodeVisitor):
         self,
         qualname: str,
         param_names: frozenset[str],
-        line_offset: int = 0,
         fresh_nodes: frozenset[int] = frozenset(),
         log_only: frozenset[int] = frozenset(),
         namespace: dict[str, Any] | None = None,
@@ -411,11 +409,8 @@ class _PurityVisitor(ast.NodeVisitor):
         #: changes an element of the caller's object.
         self._param_elements: dict[str, str] = {}
         self._qualname = qualname
-        # When source comes from inspect.getsource on a method, line
-        # numbers in the parsed AST are 1-based relative to the
-        # dedented source, not the original file. We just report them
-        # as-is - the qualname tells the user where to look.
-        self._line_offset = line_offset
+        # Line numbers are those of the parsed (dedented) source, not the
+        # file; the qualname tells the user where to look.
         # Fresh locals: in-place mutation of these is pure (escape analysis).
         # The same question per POINT (`purity_flow.fresh_name_nodes`): ids of
         # the Name nodes that hold an object this function made, where read.

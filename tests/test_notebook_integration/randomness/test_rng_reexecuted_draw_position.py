@@ -7,7 +7,7 @@ When reconstruction re-executes a draw because a *deterministic* upstream value
 changed (not the seed), the unchanged seed is not re-run, so the draw would
 re-draw from wherever the live stream was last left -- yielding a value that
 matches NEITHER a cache-off run NOR a clean top-to-bottom run (a silent wrong
-value). ``UpstreamChecker._prepend_rng_chain_for_reexecuted_draws`` re-runs the
+value). ``RngRewind._prepend_rng_chain_for_reexecuted_draws`` re-runs the
 seed (and any draws ahead of the re-executed one) so the draw lands correctly.
 
 Oracle = the notebook's current sources run top-to-bottom with no cash.

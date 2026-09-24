@@ -18,7 +18,7 @@ checks, freshness), execute statements, or replay output.  Those are
 
 All :class:`TrackingState` access happens through the ``tracking_state``
 method parameter on the public entries.  The builder holds no aliased
-dict references and has no ``set_tracking_state`` re-wiring step.
+dict references, so there is nothing to re-wire when the state is replaced.
 """
 
 from __future__ import annotations

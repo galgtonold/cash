@@ -1131,7 +1131,7 @@ class RandomnessDetector:
 #
 # "on a line of its own above the statement", NOT "on the statement". The
 # spelling is load-bearing and the difference is silent:
-# ``UpstreamChecker._opts_out_of_rng_rewind`` skips any line that does not
+# ``RngRewind._opts_out_of_rng_rewind`` skips any line that does not
 # ``strip().startswith('#')``, so a TRAILING ``x = random.random()  #
 # @cash:no-cache`` turns caching off and leaves the RNG rewind ON -- the
 # statement re-executes and redraws the identical number, which is the exact

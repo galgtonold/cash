@@ -53,7 +53,6 @@ class TestTransitiveLoopMutation:
         )
 
         checker = UpstreamChecker(shell, cash_instance)
-        checker.variable_lineage = {}
 
         restored = checker.simulator.restore_statement(
             "my_list = compute_data()",
@@ -83,7 +82,6 @@ class TestTransitiveLoopMutation:
         )
 
         checker = UpstreamChecker(shell, cash_instance)
-        checker.variable_lineage = {}
 
         restored = checker.simulator.restore_statement(
             "x = compute()",

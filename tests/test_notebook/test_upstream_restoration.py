@@ -1,7 +1,6 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-from cash.notebook._protocols import TrackingState
 from cash.notebook.upstream import UpstreamChecker
 
 # Helper for mocking CodeAnalyzer inputs if needed
@@ -15,7 +14,6 @@ class TestUpstreamRestoration(unittest.TestCase):
         # Configure backend to return empty metadata/data by default to avoid Truthy mocks
         self.shell.cash_instance.backend.get.return_value = ({"output_lineages": {}}, {})
         self.checker = UpstreamChecker(self.shell)
-        self.checker.set_tracking_state(TrackingState())
 
     @patch("cash.notebook.upstream.checker.get_notebook_cells")
     def test_restore_unsaved_extension(self, mock_get_cells):
@@ -32,13 +30,13 @@ class TestUpstreamRestoration(unittest.TestCase):
 
         # Setup Memory (Old State + Extension) aka Broken
         code_extension = "x = x + 1"
-        self.checker.executed_cell_codes["x"] = code_extension
+        self.checker.tracking_state.executed_cell_codes["x"] = code_extension
         # Lineage setup logic (simplified for test logic flow):
         # We assume Lineage Check detects mismatch.
         # So we manually populate 'broken_vars' or simulate Pass 2 failure.
 
-        # Actually we need to set up lineage so _check_notebook_based finds the mismatch.
-        # But _check_notebook_based is integration testing logic.
+        # Actually we need to set up lineage so _bring_up_to_date finds the mismatch.
+        # But _bring_up_to_date is integration testing logic.
         # Let's test simulate_upstream LOGIC directly.
 
         # To simulate mismatch:

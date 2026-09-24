@@ -10,7 +10,7 @@ Tests cover:
 - _stat_file_deps
 - restore_statement's file and lineage checks
 - reset_caches
-- set_tracking_state
+- the tracking state every phase shares
 """
 
 import os
@@ -23,7 +23,8 @@ import pytest
 from cash.notebook._protocols import TrackingState
 from cash.notebook.upstream import UpstreamChecker
 from cash.notebook.upstream._types import CellCheck, SimulationResult, TraceEntry
-from cash.notebook.upstream.virtual_lineage import VirtualLineage, lineage_conflict
+from cash.notebook.upstream.cache_restore import lineage_conflict
+from cash.notebook.upstream.virtual_lineage import VirtualLineage
 from cash.tracking.file_dep_snapshot import snapshot_file_deps
 
 # ---------------------------------------------------------------------------
@@ -94,7 +95,7 @@ def _resolve(checker, name, virtual):
     return input_lineage(
         name,
         checker.shell.user_ns,
-        (virtual, checker.variable_lineage),
+        (virtual, checker.tracking_state.variable_lineage),
         compute_hash=checker.compute_hash_fn,
         function_tracker=None,
         code=None,
@@ -334,31 +335,21 @@ class TestResetCaches:
 
 
 # ===========================================================================
-# set_tracking_state
+# The tracking state is shared
 # ===========================================================================
 
 
-class TestSetTrackingState:
-    """Test tracking state wiring."""
+class TestTrackingStateIsShared:
+    """The checker and every phase of its simulation use the state it is given."""
 
-    def test_wires_all_dicts(self):
+    def test_every_phase_uses_the_given_state(self):
         state = TrackingState()
         state.lineage.record("x", "hash")
-        state.executed_cell_codes["x"] = "x = 1"
         checker = _make_checker(tracking_state=state)
-        assert checker.variable_lineage is state.variable_lineage
-        assert checker.executed_cell_codes is state.executed_cell_codes
-        assert checker.variable_lineage["x"] == "hash"
-
-    def test_new_state_replaces_old(self):
-        state1 = TrackingState()
-        state1.lineage.record("x", "old")
-        state2 = TrackingState()
-        state2.lineage.record("y", "new")
-        checker = _make_checker(tracking_state=state1)
-        checker.set_tracking_state(state2)
-        assert "x" not in checker.variable_lineage
-        assert checker.variable_lineage["y"] == "new"
+        simulator = checker.simulator
+        for holder in (checker, simulator, simulator.virtual_lineage, simulator.classifier):
+            assert holder.tracking_state is state
+        assert checker.tracking_state.variable_lineage["x"] == "hash"
 
 
 # ===========================================================================
@@ -422,27 +413,27 @@ class TestResetAdvancedLineages:
         checker.tracking_state.lineage.record("x", "runtime_ahead")
         cached_virtual = {"x": "virtual_correct"}
         checker._reset_advanced_lineages({"x"}, cached_virtual, 0)
-        assert checker.variable_lineage["x"] == "virtual_correct"
+        assert checker.tracking_state.variable_lineage["x"] == "virtual_correct"
 
     def test_skips_matching_lineage(self):
         checker = _make_checker()
         checker.tracking_state.lineage.record("x", "same_hash")
         cached_virtual = {"x": "same_hash"}
         checker._reset_advanced_lineages({"x"}, cached_virtual, 0)
-        assert checker.variable_lineage["x"] == "same_hash"
+        assert checker.tracking_state.variable_lineage["x"] == "same_hash"
 
     def test_skips_variables_not_in_virtual(self):
         checker = _make_checker()
         checker.tracking_state.lineage.record("x", "runtime_hash")
         checker._reset_advanced_lineages({"x"}, {}, 0)
-        assert checker.variable_lineage["x"] == "runtime_hash"
+        assert checker.tracking_state.variable_lineage["x"] == "runtime_hash"
 
     def test_skips_variables_not_in_runtime(self):
         checker = _make_checker()
         cached_virtual = {"x": "virtual_hash"}
         checker._reset_advanced_lineages({"x"}, cached_virtual, 0)
         # x was not in variable_lineage, should still not be there
-        assert "x" not in checker.variable_lineage
+        assert "x" not in checker.tracking_state.variable_lineage
 
 
 # ===========================================================================
@@ -564,14 +555,14 @@ class TestUpstreamCheckerInit:
 
     def test_default_tracking_state(self):
         checker = _make_checker()
-        assert isinstance(checker.variable_lineage, Mapping)
-        assert isinstance(checker.executed_cell_codes, dict)
+        assert isinstance(checker.tracking_state.variable_lineage, Mapping)
+        assert isinstance(checker.tracking_state.executed_cell_codes, dict)
 
     def test_custom_tracking_state(self):
         state = TrackingState()
         state.lineage.record("test", "hash")
         checker = _make_checker(tracking_state=state)
-        assert checker.variable_lineage["test"] == "hash"
+        assert checker.tracking_state.variable_lineage["test"] == "hash"
 
     def test_simulation_cache_starts_empty(self):
         checker = _make_checker()
