@@ -55,6 +55,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ._annotation_refs import annotation_referents
+from ._memo import CODE_OBJECTS, PURITY_REPORTS, LruMemo
 from ._paths import MAIN_MODULE_NAMES, resolve_main_module
 from .analysis.ast_util import called_names, resolve_callee
 from .analysis.file_effects import get_base_name, get_call_module, get_call_name
@@ -1378,8 +1379,9 @@ def _clock_helper_read(value: Any) -> str | None:
     code = getattr(value, "__code__", None)
     if not isinstance(value, types.FunctionType) or code is None:
         return None
-    if code in _CLOCK_HELPER_CACHE:
-        return _CLOCK_HELPER_CACHE[code]
+    known = _CLOCK_HELPER_CACHE.get(code, _NOT_JUDGED)
+    if known is not _NOT_JUDGED:
+        return known
     _CLOCK_HELPER_CACHE[code] = None  # a helper that calls itself
     found = None
     try:
@@ -1408,14 +1410,14 @@ def _clock_helper_read(value: Any) -> str | None:
                 found = _ambient_call(body[-1].value, namespace)
     except SOURCE_RETRIEVAL_ERRORS + (SyntaxError, ValueError):
         found = None
-    if len(_CLOCK_HELPER_CACHE) >= 4096:
-        _CLOCK_HELPER_CACHE.clear()
     _CLOCK_HELPER_CACHE[code] = found
     return found
 
 
 #: code object -> the ambient read that clock helper returns, or None.
-_CLOCK_HELPER_CACHE: dict[Any, str | None] = {}
+_CLOCK_HELPER_CACHE: LruMemo[Any, str | None] = LruMemo(CODE_OBJECTS)
+#: A miss in `_CLOCK_HELPER_CACHE`, whose entries may be None.
+_NOT_JUDGED = object()
 
 
 def is_mock(obj: Any) -> bool:
@@ -1610,11 +1612,9 @@ class PurityAnalyzer:
     # bounds pathological cases (recursive helpers that resolve
     # through different code paths).
 
-    _CACHE_SIZE_LIMIT = 500
-
     def __init__(self) -> None:
         # memo key -> (report, the closure it belongs to, or None)
-        self._cache: dict[str, tuple[PurityReport, weakref.ref | None]] = {}
+        self._cache: LruMemo[str, tuple[PurityReport, weakref.ref | None]] = LruMemo(PURITY_REPORTS)
         self._cache_lock = threading.Lock()
 
     def analyze(self, func: Callable[..., Any]) -> PurityReport:
@@ -1678,10 +1678,6 @@ class PurityAnalyzer:
 
         if source_hash is not None:
             with self._cache_lock:
-                if len(self._cache) >= self._CACHE_SIZE_LIMIT:
-                    # Drop the oldest entry; insertion-order dict.
-                    oldest = next(iter(self._cache))
-                    del self._cache[oldest]
                 self._cache[source_hash] = (report, owner)
         return report
 
@@ -2300,15 +2296,13 @@ def _is_log_helper_function(value: Any) -> bool:
             known = bool(tree.body) and is_log_helper(tree.body[0])
         except SOURCE_RETRIEVAL_ERRORS + (SyntaxError, ValueError):
             known = False
-        if len(_LOG_HELPER_CACHE) >= 4096:  # a notebook redefines freely
-            _LOG_HELPER_CACHE.clear()
         _LOG_HELPER_CACHE[code] = known
     return known
 
 
 #: code object -> "is it a log helper?". Code objects are immutable, so a
 #: redefined helper is a new key.
-_LOG_HELPER_CACHE: dict[Any, bool] = {}
+_LOG_HELPER_CACHE: LruMemo[Any, bool] = LruMemo(CODE_OBJECTS)
 
 
 def _describe_subscript(node: ast.Subscript) -> str:

@@ -17,6 +17,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from .._memo import STATEMENTS, LruMemo
 from ..effects import EffectKind
 from .aliases import aliased_sources, bare_alias_targets, cell_alias_map, reference_alias_targets
 from .ast_util import called_names
@@ -162,10 +163,7 @@ def alias_mutation_sources(tree: ast.Module | None) -> frozenset[str]:
 
 #: ``(code, the identifiers in it that name a module) -> StatementAnalysis``.
 #: See ``analyze_statement``.
-_ANALYSIS_MEMO: dict[tuple[str, frozenset], StatementAnalysis] = {}
-
-
-_ANALYSIS_MEMO_MAX = 4096
+_ANALYSIS_MEMO: LruMemo[tuple[str, frozenset], StatementAnalysis] = LruMemo(STATEMENTS)
 
 
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -197,8 +195,6 @@ def analyze_statement(
     found = _ANALYSIS_MEMO.get(key)
     if found is None:
         found = _analyze_statement(code, tree, modules, resolve_source)
-        if len(_ANALYSIS_MEMO) >= _ANALYSIS_MEMO_MAX:
-            _ANALYSIS_MEMO.clear()
         _ANALYSIS_MEMO[key] = found
     return found
 

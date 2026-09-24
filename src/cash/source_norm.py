@@ -45,6 +45,7 @@ import textwrap
 import tokenize
 import types
 
+from ._memo import COMPILED_MODULES, LruMemo
 from .analysis.annotations import ANNOTATION_PATTERN
 from .exceptions import SOURCE_RETRIEVAL_ERRORS
 from .tracking.tracker_context import untracked
@@ -725,8 +726,7 @@ def _callable_identity(fn: object, depth: int) -> str:
 import time as _time
 
 _IMPORT_TIME = _time.time()
-_MODULE_CODE_CACHE: dict[str, tuple[int, int, types.CodeType | None]] = {}
-_MODULE_CODE_CACHE_MAX = 256
+_MODULE_CODE_CACHE: LruMemo[str, tuple[int, int, types.CodeType | None]] = LruMemo(COMPILED_MODULES)
 _PROCESS_START: float | None = None
 
 #: How long a file must have been left alone before something read from it is
@@ -847,8 +847,6 @@ def _compiled_module(path: str) -> types.CodeType | None:
         code = None
     if not settled:
         return code
-    if len(_MODULE_CODE_CACHE) >= _MODULE_CODE_CACHE_MAX:
-        _MODULE_CODE_CACHE.clear()
     _MODULE_CODE_CACHE[path] = (st.st_mtime_ns, st.st_size, code)
     return code
 

@@ -18,6 +18,7 @@ import types
 from collections.abc import Mapping
 from typing import Any
 
+from .._memo import USER_CALLEES, LruMemo
 from ..effects import is_open_write_mode
 from ..install_paths import installed_roots, normcase_path
 from ..purity import is_pure
@@ -98,7 +99,9 @@ _MAX_CALLEE_DEPTH = 3
 #: or None. Keyed on the depth the function was examined at: below the cap a
 #: search sees fewer calls, and its "no" must not answer a question asked from
 #: higher up.
-_callee_write_cache: dict[tuple[str, int, str, int], str | None] = {}
+_callee_write_cache: LruMemo[tuple[str, int, str, int], str | None] = LruMemo(USER_CALLEES)
+#: A miss in `_callee_write_cache`, whose entries may be None.
+_NOT_SEEN = object()
 
 
 def user_callee_writing_files(func: Any, _depth: int = 0) -> str | None:
@@ -134,8 +137,9 @@ def user_callee_writing_files(func: Any, _depth: int = 0) -> str | None:
     except (OSError, TypeError):
         return None
     key = (code_obj.co_filename, code_obj.co_firstlineno, source, _depth)
-    if key in _callee_write_cache:
-        return _callee_write_cache[key]
+    known = _callee_write_cache.get(key, _NOT_SEEN)
+    if known is not _NOT_SEEN:
+        return known
     try:
         tree = ast.parse(source)
     except SyntaxError:
@@ -154,8 +158,6 @@ def user_callee_writing_files(func: Any, _depth: int = 0) -> str | None:
                     found = user_callee_writing_files(callee, _depth + 1)
                     if found:
                         break
-    if len(_callee_write_cache) > 500:
-        _callee_write_cache.clear()
     _callee_write_cache[key] = found
     return found
 

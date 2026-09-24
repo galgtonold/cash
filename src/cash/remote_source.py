@@ -48,6 +48,7 @@ import urllib.parse
 from typing import Any
 
 from ._clock import perf_counter as _perf_counter
+from ._memo import REMOTE_URLS, LruMemo
 from .data_source import DataSource
 from .diagnostics import warn_diagnostic
 from .exceptions import CashCacheIneffectiveWarning, DependencyNotFoundError
@@ -102,7 +103,7 @@ class RemoteLedger:
         self.warned_failures: set[str] = set()
         self.warned_weak_tokens: set[str] = set()
         self.warned_validation_cost: set[str] = set()
-        self.tokens: dict[str, tuple[float, str]] = {}
+        self.tokens: LruMemo[str, tuple[float, str]] = LruMemo(REMOTE_URLS)
 
     def first_time(self, marks: set[str], mark: str) -> bool:
         """Is *mark* new to *marks*? Records it, while the set has room."""
@@ -113,8 +114,6 @@ class RemoteLedger:
         return True
 
     def keep_token(self, url: str, token: str) -> None:
-        if len(self.tokens) >= self.MAX and url not in self.tokens:
-            self.tokens.clear()
         self.tokens[url] = (time.monotonic(), token)
 
     def reset(self) -> None:

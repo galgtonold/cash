@@ -18,6 +18,7 @@ from typing import Generic, TypeVar
 __all__ = [
     "ARGUMENTS",
     "CODE_OBJECTS",
+    "COMPILED_MODULES",
     "FILE_DIGESTS",
     "FRAMES",
     "FROZEN_RESULTS",
@@ -25,11 +26,15 @@ __all__ = [
     "MODULE_READ_DIGESTS",
     "NOTEBOOK_FUNCTIONS",
     "PATCH_SITES",
+    "PURITY_REPORTS",
     "READ_PATHS",
     "RECORDS",
+    "REMOTE_URLS",
     "RESULT_TYPES",
     "SOURCE_FILES",
+    "STATEMENTS",
     "STATE_LEDGERS",
+    "USER_CALLEES",
     "LruMemo",
 ]
 
@@ -144,6 +149,23 @@ RECORDS = 256
 
 #: One key-build ledger per function and state, for `explain()`.
 STATE_LEDGERS = 512
+
+#: One purity report per function source; each holds the helper tree it walked.
+PURITY_REPORTS = 500
+
+#: One compiled module per source file compared with the code it loaded; each
+#: holds the file's whole tree of code objects.
+COMPILED_MODULES = 256
+
+#: One revalidation token per remote URL.
+REMOTE_URLS = 1024
+
+#: One analysis per statement text: a loop body's statements are analysed on
+#: every iteration.
+STATEMENTS = 4096
+
+#: One "does it write files?" verdict per user function and call depth.
+USER_CALLEES = 500
 
 #: One source digest per function the notebook's cells reference.
 NOTEBOOK_FUNCTIONS = 500

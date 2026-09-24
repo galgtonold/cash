@@ -23,6 +23,7 @@ import site
 import sys
 import sysconfig
 
+from ._memo import SOURCE_FILES, LruMemo
 from ._paths import normalize_path
 
 __all__ = [
@@ -156,7 +157,7 @@ def is_installed_path(path: str | os.PathLike[str]) -> bool:
     return _is_installed(normcase_path(os.path.abspath(os.fspath(path))))
 
 
-_USER_PATH: dict[str, bool] = {}
+_USER_PATH: LruMemo[str, bool] = LruMemo(SOURCE_FILES)
 
 
 def is_user_path(path: str | os.PathLike[str] | None) -> bool:
@@ -174,8 +175,7 @@ def is_user_path(path: str | os.PathLike[str] | None) -> bool:
     else:
         path_nc = normcase_path(os.path.abspath(path))
         verdict = not _is_installed(path_nc) and not path_nc.startswith(_CASH_DIR)
-    if len(_USER_PATH) < 8192:
-        _USER_PATH[path] = verdict
+    _USER_PATH[path] = verdict
     return verdict
 
 
