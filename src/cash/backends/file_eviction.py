@@ -11,7 +11,6 @@ from __future__ import annotations
 import heapq
 import logging
 import os
-import threading
 import time
 from collections import deque
 from collections.abc import Callable
@@ -27,6 +26,7 @@ from .rank_index import RankIndex
 
 if TYPE_CHECKING:
     from ._writes import PendingWrites
+    from .touched_entries import TouchedEntries
 
 logger = logging.getLogger(__name__)
 
@@ -45,11 +45,10 @@ def _priority(metadata: dict, size: int, base: float) -> float:
 class FileEvictor:
     """Size accounting and value-per-byte eviction for one cache directory.
 
-    It borrows the backend's per-key bookkeeping by reference -- the metadata
-    of the keys this process touched, the way back from an entry's path to its
-    key, and the keys with unflushed reads -- because a filename is a SHA-256
-    of the key, and eviction, which ranks by walking the directory, has no
-    other way back to it. All shared state is guarded by the backend's lock.
+    It reads the backend's per-key bookkeeping through *touched* (see
+    `TouchedEntries`) and forgets an entry there when it removes one. Its own
+    accounting is guarded by ``touched.lock``, so a removal updates both in one
+    step.
     """
 
     #: Seconds between re-readings of the volume's free space for an adaptive
@@ -70,11 +69,8 @@ class FileEvictor:
         max_size_bytes: int | None,
         adaptive: bool,
         *,
-        metadata: dict[str, dict],
-        paths: dict[str, str],
-        dirty: set[str],
+        touched: TouchedEntries,
         writes: PendingWrites,
-        lock: threading.RLock,
         untracked: Callable[[], Any],
     ) -> None:
         self.cache_dir = cache_dir
@@ -88,11 +84,9 @@ class FileEvictor:
         self.current_bytes = 0
         self.size_scanned = False
         self.rank_index = RankIndex(cache_dir, untracked)
-        self._metadata = metadata
-        self._paths = paths
-        self._dirty = dirty
+        self._touched = touched
         self._writes = writes
-        self._lock = lock
+        self._lock = touched.lock
         self._untracked = untracked
         # Write order, so eviction can tell it is dropping something written
         # only a couple of writes ago.
@@ -134,13 +128,6 @@ class FileEvictor:
         """A read: re-based at its next use, so a read never loads the index."""
         with self._lock:
             self.base[key] = None
-
-    def forget(self, key: str | None, freed: int) -> None:
-        """An entry of *freed* bytes is gone. Called under the backend's lock."""
-        if key is not None:
-            self.write_seq_by_key.pop(key, None)
-            self.base.pop(key, None)
-        self.current_bytes -= freed
 
     def clear(self) -> None:
         """The directory was emptied."""
@@ -296,8 +283,8 @@ class FileEvictor:
             clock = self.clock
             for path, (mtime, size) in ranks.items():
                 recency[path] = stamps[path] = mtime
-                key = self._paths.get(path)
-                meta = self._metadata.get(key) if key is not None else None
+                key = self._touched.key_for(path)
+                meta = self._touched.metadata(key)
                 if meta is not None:
                     last_access = meta.get("last_access")
                     if last_access is not None and last_access > mtime:
@@ -307,7 +294,7 @@ class FileEvictor:
                         # written, mtime is the entry's recency as for every
                         # other entry, and the header's own stamp runs ahead of
                         # the filesystem clock.
-                        if key in self._dirty:
+                        if self._touched.has_unflushed_read(key):
                             recency[path] = last_access
                     seqs[path] = self.write_seq_by_key.get(key, 0)
                 # Only a write or a read in this process re-bases an entry;
@@ -364,7 +351,7 @@ class FileEvictor:
         because a read in this process shows first as ``last_access`` in
         memory, and one in another process only as mtime.
         """
-        meta = self._metadata.get(key) if key else None
+        meta = self._touched.metadata(key) if key else None
         last_access = meta.get("last_access") if meta else None
         if last_access is not None and last_access > ranked_at:
             return True
@@ -373,21 +360,26 @@ class FileEvictor:
         except OSError:
             return False  # gone: let the eviction no-op and clean the bookkeeping
 
-    def remove_path(self, path: str) -> int:
-        """Remove one entry by path, with the backend's bookkeeping for it, and
-        return the bytes freed."""
+    def remove_path(self, path: str, key: str | None = None) -> int:
+        """Remove the entry at *path* (*key*'s, looked up when not given), with
+        its bookkeeping, and return the bytes freed.
+
+        Measured from the file: the bookkeeping only knows the keys this
+        process touched.
+        """
         try:
             freed = os.path.getsize(path)
         except OSError:
             freed = 0
 
-        key = self._paths.get(path)
         with self._lock:
+            if key is None:
+                key = self._touched.key_for(path)
+            self._touched.forget(key, path)
             if key is not None:
-                self._metadata.pop(key, None)
-                self._dirty.discard(key)
-                self._paths.pop(path, None)
-            self.forget(key, freed)
+                self.write_seq_by_key.pop(key, None)
+                self.base.pop(key, None)
+            self.current_bytes -= freed
 
         try:
             os.remove(path)
@@ -426,7 +418,7 @@ class FileEvictor:
                 continue
 
             path, _size, ranked_at, priority = candidate
-            key = self._paths.get(path)
+            key = self._touched.key_for(path)
 
             if self.touched_since(path, key, ranked_at):
                 continue

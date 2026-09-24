@@ -27,7 +27,7 @@ class TestFileBackendEnhanced:
         # But we want to ensure it DOES happen eventually.
 
         # In-memory metadata should be updated immediately
-        assert backend._metadata_cache["key1"]["last_access"] > meta_initial["last_access"]
+        assert backend._touched.metadata("key1")["last_access"] > meta_initial["last_access"]
 
         # Wait for flush
         time.sleep(1.0)

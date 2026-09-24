@@ -226,8 +226,7 @@ class TestFileBackendAdvanced:
         b._writes.wait_all()
         with open(b._get_path("key1"), "wb") as f:
             f.write(b"corrupted data")
-        if hasattr(b, "_metadata_cache"):
-            b._metadata_cache.clear()
+        b._touched.clear()
         meta, data = b.get("key1")
         assert data is None or meta is None
 
@@ -248,7 +247,7 @@ class TestFileBackendAdvanced:
             f.truncate(os.path.getsize(path) - len(payload))
             f.seek(0, os.SEEK_END)
             f.write(b"corrupted data")
-        b._metadata_cache.clear()
+        b._touched.clear()
         meta, data = b.get("key1")
         assert data is None
 

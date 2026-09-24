@@ -30,6 +30,7 @@ from .cache_dir import CacheDirStamp, create_temp_file, warn_if_unwritable, writ
 from .entry_format import ENTRY_SUFFIX, CorruptEntry, metadata_span, pack_entry, read_entry, update_metadata_in_place
 from .file_eviction import FileEvictor
 from .serialization import PickleSerializer, Serializer
+from .touched_entries import TouchedEntries
 from .versions import VersionIndex, superseded_to_drop
 
 logger = logging.getLogger(__name__)
@@ -143,19 +144,13 @@ class FileBackend(CacheBackend):
         self.cache_dir = os.path.abspath(cache_dir)
         self.compress = compress
         self._default_ttl = default_ttl
-        #: Keys read since their metadata was last written back.
-        self._dirty_metadata: set[str] = set()
         #: key -> when its access stamp was last written, for the flusher's rate limit.
         self._access_flushed: dict[str, float] = {}
-        #: Metadata for the keys this process has touched, and the way back from
-        #: an entry's path to its key (a filename is a SHA-256 of the key).
-        self._metadata_cache: dict[str, dict] = {}
-        self._paths: dict[str, str] = {}
+        self._touched = TouchedEntries()
         #: Each statement's versions, pruned as they are written (versions.py).
         #: A key this process has read is in use and never pruned.
         self._versions = VersionIndex(self.cache_dir, _untracked)
         self._read_keys: set[str] = set()
-        self._lock = threading.RLock()
         self._flush_interval = flush_interval
         self._stop_event = threading.Event()
 
@@ -167,11 +162,8 @@ class FileBackend(CacheBackend):
             self.cache_dir,
             max_size_bytes,
             adaptive_cap,
-            metadata=self._metadata_cache,
-            paths=self._paths,
-            dirty=self._dirty_metadata,
+            touched=self._touched,
             writes=self._writes,
-            lock=self._lock,
             untracked=_untracked,
         )
 
@@ -275,19 +267,15 @@ class FileBackend(CacheBackend):
         synced folder re-uploads the whole file. Shutdown flushes everything.
         """
         now = time.time()
-        with self._lock:
-            if not self._dirty_metadata:
-                return
-            if periodic:
-                keys_to_flush = [
-                    k
-                    for k in self._dirty_metadata
-                    if now - self._access_flushed.get(k, 0.0) >= self._ACCESS_FLUSH_MIN_INTERVAL
-                ]
-                self._dirty_metadata.difference_update(keys_to_flush)
-            else:
-                keys_to_flush = list(self._dirty_metadata)
-                self._dirty_metadata.clear()
+        due = None
+        if periodic:
+
+            def due(k: str) -> bool:
+                return now - self._access_flushed.get(k, 0.0) >= self._ACCESS_FLUSH_MIN_INTERVAL
+
+        keys_to_flush = self._touched.take_unflushed(due)
+        if not keys_to_flush:
+            return
 
         # A read raises an entry's priority, so a flushed access is also a
         # rank-index record; that is how an old entry still in use gets ranked.
@@ -297,7 +285,7 @@ class FileBackend(CacheBackend):
         records: list[tuple[str, float]] = []
         for key in keys_to_flush:
             try:
-                meta = self._metadata_cache.get(key)
+                meta = self._touched.metadata(key)
                 path = self._get_path(key)
                 if meta and not update_metadata_in_place(path, meta):
                     logger.debug(
@@ -314,17 +302,8 @@ class FileBackend(CacheBackend):
         self.evictor.rank_index.append(records)
 
     def _remember(self, key: str, metadata: dict) -> None:
-        """Cache one entry's metadata, and the way back from its filename.
-
-        Eviction ranks entries by walking the directory, which yields paths.
-        A filename is a SHA-256 of the key, so nothing recovers the key from
-        it -- this map is how an evicted path finds the in-process bookkeeping
-        that belongs to it. It only ever holds the keys this process has
-        touched, which is exactly the set that HAS any bookkeeping.
-        """
-        with self._lock:
-            self._metadata_cache[key] = metadata
-            self._paths[self._get_path(key)] = key
+        """Hold one entry's metadata, and the way back from its filename."""
+        self._touched.remember(key, self._get_path(key), metadata)
 
     def _get_path(self, key: str) -> str:
         safe_name = hashlib.sha256(key.encode("utf-8")).hexdigest()
@@ -356,7 +335,7 @@ class FileBackend(CacheBackend):
         # Wait for any in-flight write so the metadata we report reflects
         # the most recent ``set()`` for this key.
         self._writes.wait(key)
-        cached_meta = self._metadata_cache.get(key)
+        cached_meta = self._touched.metadata(key)
 
         path = self._get_path(key)
 
@@ -394,16 +373,14 @@ class FileBackend(CacheBackend):
         # anyway: callers hold it, `get` mutates it in place, and the flusher
         # writes THAT object back. Replacing it with a fresh dict per read
         # would drop every unflushed access update on the floor.
-        cached_meta = self._metadata_cache.get(key)
+        cached_meta = self._touched.metadata(key)
 
         path = self._get_path(key)
 
         try:
             on_disk, payload = read_entry(path, with_payload=True)
         except FileNotFoundError:
-            if key in self._metadata_cache:
-                with self._lock:
-                    self._metadata_cache.pop(key, None)
+            self._touched.drop_metadata(key)
             return None, None
         except (OSError, CorruptEntry) as exc:
             logger.debug("Cache get failed for key %r: %s", key, exc)
@@ -432,9 +409,8 @@ class FileBackend(CacheBackend):
             metadata["last_access"] = time.time()
             metadata["access_count"] = metadata.get("access_count", 0) + 1
 
-            with self._lock:
-                self._dirty_metadata.add(key)
-                self._read_keys.add(key)
+            self._touched.note_read(key)
+            self._read_keys.add(key)
             self.evictor.note_read(key)
 
             if metadata.get("compressed", False):
@@ -601,7 +577,7 @@ class FileBackend(CacheBackend):
             if not self._write_new_in_place(path, blob):
                 self._atomic_write(path, blob)
 
-        with self._lock:
+        with self._touched.lock:
             self._remember(key, metadata)
             self.evictor.note_write(key, old_entry_bytes, len(blob))
 
@@ -737,7 +713,7 @@ class FileBackend(CacheBackend):
         # no disk read (slow on Windows, and a cheap statement rewrites its
         # entry on every run). If another process has put a full entry there
         # since, this overwrites it -- a later miss, never a wrong value.
-        known = self._metadata_cache.get(key)
+        known = self._touched.metadata(key)
         if known is not None and known.get("metadata_only"):
             existing = known
         else:
@@ -761,8 +737,7 @@ class FileBackend(CacheBackend):
             # A new key takes the cheaper in-place write, as a full entry does.
             if existing is not None or not self._write_new_in_place(path, blob):
                 self._atomic_write(path, blob)
-            with self._lock:
-                self._remember(key, metadata)
+            self._remember(key, metadata)
         except OSError as exc:
             logger.debug("Failed to write metadata-only entry for key %r: %s", key, exc)
 
@@ -773,27 +748,7 @@ class FileBackend(CacheBackend):
         # Drain any pending write for this key — otherwise the write
         # could fire after the delete and leave a ghost entry.
         self._writes.drain(key)
-        path = self._get_path(key)
-
-        # Measured from the file: the metadata cache only knows the keys this
-        # process touched.
-        try:
-            size_to_remove = os.path.getsize(path)
-        except OSError:
-            size_to_remove = 0
-
-        with self._lock:
-            self._metadata_cache.pop(key, None)
-            self._dirty_metadata.discard(key)
-            self._paths.pop(path, None)
-            self.evictor.forget(key, size_to_remove)
-
-        try:
-            os.remove(path)
-        except FileNotFoundError:
-            pass
-        except OSError as exc:
-            logger.debug("Failed to remove cache entry %s: %s", path, exc)
+        self.evictor.remove_path(self._get_path(key), key)
 
     def promotion_size_cap(self) -> int | None:
         """Refuse (skip) only an object larger than this tier's WHOLE cap.
@@ -825,10 +780,7 @@ class FileBackend(CacheBackend):
         # The priorities and versions describe entries that no longer exist.
         self.evictor.clear()
         self._versions.remove()
-        with self._lock:
-            self._metadata_cache.clear()
-            self._dirty_metadata.clear()
-            self._paths.clear()
+        self._touched.clear()
 
     def shutdown(self) -> None:
         # Drain any in-flight async writes before stopping the flusher,

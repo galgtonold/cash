@@ -84,9 +84,9 @@ def timed_meta_read(backend, key: str) -> float:
     would not scale with the payload; a single file only works because the
     header lets the read stop after the metadata region.
     """
-    cache = getattr(backend, "_metadata_cache", None)
-    if cache is not None:
-        cache.pop(key, None)  # force a real read, not the cache
+    touched = getattr(backend, "_touched", None)
+    if touched is not None:
+        touched.drop_metadata(key)  # force a real read, not the cache
     t = time.perf_counter()
     backend.get_metadata(key)
     return time.perf_counter() - t

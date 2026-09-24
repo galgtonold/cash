@@ -2,7 +2,7 @@
 
 ``_init_stats`` runs once per process on the first cache operation. It used to
 ``open()`` and unpickle every ``.meta`` in the directory to prefill
-``_metadata_cache`` -- linear in the entry count, and it dominated startup:
+the in-process metadata -- linear in the entry count, and it dominated startup:
 98ms at 1k entries, 490ms at 5k, 2.1s at 20k, so roughly 10s at 100k and 100s
 at 1M. Every process paid it, however few keys it went on to touch.
 
@@ -78,8 +78,8 @@ def test_opening_a_cache_does_not_read_every_entry(tmp_path):
     backend = FileBackend(str(cache))
     backend.get("mod.f:state:0:args")  # forces _ensure_initialized
 
-    assert len(backend._metadata_cache) <= 1, (
-        f"init loaded {len(backend._metadata_cache)} metadata entries; it should "
+    assert len(backend._touched) <= 1, (
+        f"init loaded {len(backend._touched)} metadata entries; it should "
         f"load none, and `get` should have cached only the key it was asked for"
     )
     assert not backend.evictor.queue, (
@@ -121,7 +121,7 @@ def test_a_key_is_still_readable_without_being_preloaded(tmp_path):
     metadata, value = reader.get("mod.f:state:7:args")
     assert value == {"payload": 7}
     assert metadata is not None and metadata["key"] == "mod.f:state:7:args"
-    assert len(reader._metadata_cache) == 1, "reading one key preloaded others"
+    assert len(reader._touched) == 1, "reading one key preloaded others"
 
 
 def test_eviction_reaches_entries_this_process_never_touched(tmp_path):
@@ -143,8 +143,8 @@ def test_eviction_reaches_entries_this_process_never_touched(tmp_path):
 
     after = len(list(cache.glob(f"*{ENTRY_SUFFIX}")))
     assert after < before, "eviction freed nothing: it can only see keys this process touched"
-    assert len(tight._metadata_cache) <= 1, (
-        f"eviction pulled {len(tight._metadata_cache)} entries into memory; it "
+    assert len(tight._touched) <= 1, (
+        f"eviction pulled {len(tight._touched)} entries into memory; it "
         f"ranks from the directory now and should hold nothing extra"
     )
     assert tight.evictor.current_bytes <= 100_000 * 1.1
@@ -387,7 +387,7 @@ def test_ranking_reads_no_entry_files(tmp_path):
 
     assert len(backend.evictor.queue) == 40, f"{len(backend.evictor.queue)} ranked"
     assert opened == [], f"ranking opened {len(opened)} entry files"
-    assert backend._metadata_cache == {}, "ranking pulled metadata into memory"
+    assert len(backend._touched) == 0, "ranking pulled metadata into memory"
 
 
 def test_ranking_is_oldest_first(tmp_path):
@@ -400,14 +400,14 @@ def test_ranking_is_oldest_first(tmp_path):
         time.sleep(0.02)
 
     backend.evictor.rebuild_queue()
-    order = [backend._paths[p] for p, _size, _m in backend.evictor.queue]
+    order = [backend._touched.key_for(p) for p, _size, _m in backend.evictor.queue]
     assert order == ["old", "mid", "new"], order
 
     # Reading the oldest must move it to the back.
     time.sleep(0.02)
     backend.get("old")
     backend.evictor.rebuild_queue()
-    order = [backend._paths[p] for p, _size, _m in backend.evictor.queue]
+    order = [backend._touched.key_for(p) for p, _size, _m in backend.evictor.queue]
     assert order == ["mid", "new", "old"], f"a read did not refresh the ranking: {order}"
     backend.shutdown()
 
@@ -583,7 +583,7 @@ def test_a_read_protects_an_entry_already_queued_for_eviction(tmp_path):
     b = FileBackend(str(cache), max_size_bytes=10 * size, flush_interval=0)
     b.evictor.ensure_size_scanned()
     b.evictor.rebuild_queue()
-    assert b._paths.get(b.evictor.queue[0][0]) is None or True  # queue is built
+    assert b.evictor.queue, "the queue is built"
 
     b.get("e0")  # the oldest, and at the head of the queue
     b._flush_metadata()
@@ -662,8 +662,7 @@ def test_another_processs_read_protects_through_mtime(tmp_path):
     b.evictor.rebuild_queue()
 
     victim = b._get_path("e0")
-    b._metadata_cache.clear()  # nothing known in-process
-    b._paths.clear()
+    b._touched.clear()  # nothing known in-process
     os.utime(victim, (time.time(), time.time()))  # "another process read it"
 
     for i in range(4):
@@ -847,7 +846,7 @@ def test_eviction_breaks_mtime_ties_by_write_order(tmp_path):
         os.utime(path, (stamp, stamp))
 
     b.evictor.rebuild_queue()
-    order = [b._paths.get(p) for p, _s, _m in b.evictor.queue]
+    order = [b._touched.key_for(p) for p, _s, _m in b.evictor.queue]
 
     assert order == [f"k{i}" for i in range(10)], (
         f"eviction ranked a tied-mtime burst by directory order, not by when the entries were written; got {order}"

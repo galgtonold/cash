@@ -214,7 +214,7 @@ class TestUnreadableEntryDegradesToMiss:
 
         with open(backend._get_path("k"), "wb"):
             pass
-        backend._metadata_cache.pop("k", None)
+        backend._touched.drop_metadata("k")
 
         metadata, value = backend.get("k")
         assert value is None and metadata is None
@@ -235,7 +235,7 @@ class TestUnreadableEntryDegradesToMiss:
         assert payload, "fixture is wrong: there was no payload to remove"
         with open(path, "r+b") as fh:
             fh.truncate(os.path.getsize(path) - len(payload))
-        backend._metadata_cache.pop("k", None)
+        backend._touched.drop_metadata("k")
 
         assert backend.get("k") == (None, None)
 
@@ -247,7 +247,7 @@ class TestUnreadableEntryDegradesToMiss:
 
         with open(backend._get_path("k"), "wb"):
             pass
-        backend._metadata_cache.pop("k", None)
+        backend._touched.drop_metadata("k")
         assert backend.get("k") == (None, None)
 
         backend.set("k", "recomputed")
@@ -349,7 +349,7 @@ class TestAFailedWriteDoesNotDestroyWhatWasThere:
 
         backend.set("k", "v2")
         backend._writes.wait_all()  # this write fails
-        backend._metadata_cache.pop("k", None)  # force a read from disk
+        backend._touched.drop_metadata("k")  # force a read from disk
 
         assert backend.get("k")[1] == "v1", (
             "a failed rewrite destroyed the value that was already cached -- "
@@ -423,7 +423,7 @@ class TestAFailedWriteDoesNotDestroyWhatWasThere:
         backend._writes.wait_all()
         armed["on"] = False
 
-        backend._metadata_cache.pop("k", None)  # force a read from disk
+        backend._touched.drop_metadata("k")  # force a read from disk
         assert backend.get("k")[1] == "v1", (
             "a write that died halfway destroyed the value that was already "
             "cached; the destination must not be touched until the swap"
@@ -526,7 +526,7 @@ class TestNewEntriesSkipTheRename:
             fh.write(b"\x00" * 64)
         assert backend.get("k") == (None, None)
 
-        backend._metadata_cache.pop("k", None)
+        backend._touched.drop_metadata("k")
         backend.set("k", "v2")
         backend._writes.wait_all()
         assert backend.get("k")[1] == "v2", "the entry did not heal"
