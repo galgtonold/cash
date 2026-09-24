@@ -243,7 +243,7 @@ class UpstreamChecker:
 
         # Simulate the notebook statement by statement and compare the virtual
         # lineage with the in-memory state to find changed code.
-        all_metrics, total_restore_time, total_execution_time = self._check_notebook_based(
+        all_metrics, total_restore_time, total_execution_time = self._bring_up_to_date(
             cell_code,
             required_inputs,
             process_statement_callback,
@@ -475,7 +475,7 @@ class UpstreamChecker:
             return self._handle_unsaved_cell(cell_code, cell_id, required_inputs, current_cell_outputs, notebook_cells)
         return current_cell_idx
 
-    def _check_notebook_based(
+    def _bring_up_to_date(
         self,
         cell_code: str,
         required_inputs: set[str],
@@ -554,5 +554,5 @@ class UpstreamChecker:
         except (RuntimeError, SyntaxError):
             raise
         except (KeyError, TypeError, ValueError, OSError) as e:
-            logger.debug("[UPSTREAM] Error in notebook-based checking: %s", e)
+            logger.debug("[UPSTREAM] Error in the upstream check: %s", e)
             raise UpstreamStateError(f"Failed to restore or simulate upstream state: {e}") from e

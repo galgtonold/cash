@@ -35,8 +35,8 @@ class TestUpstreamRestoration(unittest.TestCase):
         # We assume Lineage Check detects mismatch.
         # So we manually populate 'broken_vars' or simulate Pass 2 failure.
 
-        # Actually we need to set up lineage so _check_notebook_based finds the mismatch.
-        # But _check_notebook_based is integration testing logic.
+        # Actually we need to set up lineage so _bring_up_to_date finds the mismatch.
+        # But _bring_up_to_date is integration testing logic.
         # Let's test simulate_upstream LOGIC directly.
 
         # To simulate mismatch:

@@ -93,7 +93,7 @@ class TestDownstreamAdvancementFallback:
             required_inputs = {"df"}
             current_cell_outputs = {"df"}
 
-            metrics, restore_time, exec_time = upstream._check_notebook_based(
+            metrics, restore_time, exec_time = upstream._bring_up_to_date(
                 cell_code,
                 required_inputs,
                 MagicMock(),  # process_statement_callback
@@ -133,7 +133,7 @@ class TestDownstreamAdvancementFallback:
             patch("cash.notebook.upstream.checker.get_notebook_cells_with_ids", return_value=[("#id1", "x = 10")]),
             patch("cash.notebook.upstream.checker.invalidate_notebook_path_cache"),
         ):
-            upstream._check_notebook_based(
+            upstream._bring_up_to_date(
                 cell_code,
                 {"x"},  # required_inputs
                 # A bare MagicMock's result carries a truthy .get('error'),
@@ -166,7 +166,7 @@ class TestDownstreamAdvancementFallback:
             patch("cash.notebook.upstream.checker.get_notebook_cells_with_ids", return_value=[("#id1", "x = 10")]),
             patch("cash.notebook.upstream.checker.invalidate_notebook_path_cache"),
         ):
-            upstream._check_notebook_based(
+            upstream._bring_up_to_date(
                 cell_code,
                 {"df"},
                 MagicMock(),
@@ -199,7 +199,7 @@ class TestDownstreamAdvancementFallback:
             patch("cash.notebook.upstream.checker.get_notebook_cells_with_ids", return_value=[("#id1", "x = 10")]),
             patch("cash.notebook.upstream.checker.invalidate_notebook_path_cache"),
         ):
-            upstream._check_notebook_based(
+            upstream._bring_up_to_date(
                 cell_code,
                 {"df"},
                 MagicMock(),
@@ -238,7 +238,7 @@ class TestDownstreamAdvancementFallback:
             patch("cash.notebook.upstream.checker.get_notebook_cells_with_ids", return_value=[("#id1", "x = 10")]),
             patch("cash.notebook.upstream.checker.invalidate_notebook_path_cache"),
         ):
-            upstream._check_notebook_based(
+            upstream._bring_up_to_date(
                 cell_code,
                 {"df1", "df2"},
                 MagicMock(),
@@ -310,7 +310,7 @@ class TestDownstreamAdvancementFallback:
         # Set df's lineage to the "ahead" value (as if both statements already ran)
         upstream.tracking_state.lineage.record("df", df_lineage_after_both)
 
-        # Now run _check_notebook_based with cell code that won't match notebook
+        # Now run _bring_up_to_date with cell code that won't match notebook
         edited_cell_code = "df['VolAdj'] = df['Close'] * df['Volume']\ndf['SMA_61'] = df['Close'].rolling(2).mean()"
         old_cell_code = "df['VolAdj'] = df['Close'] * df['Volume']\ndf['SMA_60'] = df['Close'].rolling(2).mean()"
 
@@ -322,7 +322,7 @@ class TestDownstreamAdvancementFallback:
             ),
             patch("cash.notebook.upstream.checker.invalidate_notebook_path_cache"),
         ):
-            upstream._check_notebook_based(
+            upstream._bring_up_to_date(
                 edited_cell_code,
                 {"df"},  # required_inputs
                 MagicMock(),  # process_statement_callback

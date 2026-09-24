@@ -81,7 +81,7 @@ class TestIssueReproduction(unittest.TestCase):
                 ) as mock_is_cs:
                     # Execute Check for cell2
                     # Note: cell_code=cell2_code. REQUIRED INPUTS match what we setup.
-                    all_metrics, _, _ = self.checker._check_notebook_based(cell2_code, required_inputs, None, None)
+                    all_metrics, _, _ = self.checker._bring_up_to_date(cell2_code, required_inputs, None, None)
 
                     # The patches must reach the code under test: without the
                     # notebook cells the check returns before simulating
