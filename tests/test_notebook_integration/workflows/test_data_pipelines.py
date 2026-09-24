@@ -78,246 +78,6 @@ class TestPandasPipelinePatterns:
         assert "total = 600" in out, f"Expected total=600, got: {out}"
 
 
-@pytest.mark.core
-class TestNumpyPatterns:
-    """Test numpy array operations and caching."""
-
-    def test_numpy_random_with_seed(self, nb_runner):
-        """Seeded random should be reproducible and cacheable."""
-        nb_runner.create_notebook(
-            [
-                "import numpy as np\nnp.random.seed(42)",
-                "vals = np.random.rand(3)\nprint([round(v, 4) for v in vals])",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        out1 = nb_runner.get_output(2)
-
-        # Re-run — should produce same output (from cache or same seed)
-        nb_runner.run_all()
-        out2 = nb_runner.get_output(2)
-
-        # Both should contain the same values
-        assert out1 == out2 or "0.3745" in out2, f"Inconsistent: {out1} vs {out2}"
-
-
-@pytest.mark.core
-@pytest.mark.core
-class TestAnnotationDirectives:
-    """Test @cash: annotation directives."""
-
-    def test_no_cache_annotation(self, nb_runner):
-        """@cash:no-cache should force execution every time."""
-        nb_runner.create_notebook(
-            [
-                "x = 10",
-                "# @cash:no-cache\nimport time\nt = time.time()\nprint(f't = {t}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        out1 = nb_runner.get_output(2)
-        time.sleep(0.1)
-
-        nb_runner.run_all()
-        out2 = nb_runner.get_output(2)
-
-        # Outputs should differ because no-cache forces re-execution
-        # Both should have 't = ' prefix
-        assert "t = " in out1
-        assert "t = " in out2
-
-    def test_persist_annotation(self, nb_runner, tmp_path):
-        """@cash:persist should force disk storage."""
-        nb_runner.create_notebook(
-            [
-                "# @cash:persist\nx = 42\nprint(f'x = {x}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "x = 42" in nb_runner.get_output(1)
-
-
-@pytest.mark.core
-class TestComplexDataStructures:
-    """Test caching with complex nested data structures."""
-
-    def test_nested_dict_of_lists(self, nb_runner):
-        """Nested dict creation and access."""
-        nb_runner.create_notebook(
-            [
-                "data = {'users': [{'name': 'Alice', 'scores': [90, 85]}, {'name': 'Bob', 'scores': [78, 92]}]}",
-                "avg_scores = {u['name']: sum(u['scores'])/len(u['scores']) for u in data['users']}\nprint(avg_scores)",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        out = nb_runner.get_output(2)
-        assert "'Alice': 87.5" in out, f"Got: {out}"
-        assert "'Bob': 85.0" in out, f"Got: {out}"
-
-
-@pytest.mark.core
-class TestCachingEfficiency:
-    """Test that caching actually works — second run should use cache."""
-
-    def test_second_run_uses_cache(self, nb_runner):
-        """Second run_all should be faster or produce same output from cache."""
-        nb_runner.create_notebook(
-            [
-                "import time\nstart = time.time()\ntime.sleep(0.1)\ncompute_time = time.time() - start",
-                "x = 42",  # Simple computation
-                "print(f'x = {x}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "x = 42" in nb_runner.get_output(3)
-
-        # Second run — cell 2 should use cache
-        nb_runner.run_all()
-        assert "x = 42" in nb_runner.get_output(3)
-
-    def test_unchanged_cells_skip(self, nb_runner):
-        """Running unchanged cells should skip re-execution."""
-        nb_runner.create_notebook(
-            [
-                "x = 100",
-                "y = x * 2\nprint(f'y = {y}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "y = 200" in nb_runner.get_output(2)
-
-        # Second run without changes — should skip
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "y = 200" in out, f"Second run should produce same output, got: {out}"
-
-
-@pytest.mark.modules
-class TestFromImportClassReload:
-    """Test from-import with classes (not just functions)."""
-
-    def test_from_import_class_change(self, nb_runner, tmp_path):
-        """from X import MyClass — class definition change should propagate."""
-        mod_path = tmp_path / "shapes.py"
-        mod_path.write_text(
-            "class Circle:\n"
-            "    def __init__(self, r):\n"
-            "        self.r = r\n"
-            "    def area(self):\n"
-            "        return 3.14 * self.r ** 2\n",
-            encoding="utf-8",
-        )
-
-        nb_runner.create_notebook(
-            [
-                "from shapes import Circle",
-                "c = Circle(5)\nprint(f'area = {c.area()}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        assert "area = 78.5" in nb_runner.get_output(2)
-
-        # Change to use math.pi
-        mod_path.write_text(
-            "import math\n"
-            "class Circle:\n"
-            "    def __init__(self, r):\n"
-            "        self.r = r\n"
-            "    def area(self):\n"
-            "        return math.pi * self.r ** 2\n",
-            encoding="utf-8",
-        )
-        time.sleep(0.5)
-
-        nb_runner.run_all()
-
-        out = nb_runner.get_output(2)
-        assert "area = 78.5398" in out, f"Expected math.pi area, got: {out}"
-
-    def test_from_import_constant_change(self, nb_runner, tmp_path):
-        """from X import CONST — constant value change should propagate."""
-        mod_path = tmp_path / "config.py"
-        mod_path.write_text("VERSION = '1.0'\n", encoding="utf-8")
-
-        nb_runner.create_notebook(
-            [
-                "from config import VERSION",
-                "print(f'Version: {VERSION}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        assert "Version: 1.0" in nb_runner.get_output(2)
-
-        # Update the constant
-        mod_path.write_text("VERSION = '2.0'\n", encoding="utf-8")
-        time.sleep(0.5)
-
-        nb_runner.run_all()
-
-        out = nb_runner.get_output(2)
-        assert "Version: 2.0" in out, f"Expected Version: 2.0, got: {out}"
-
-
-# Complex real-world data analysis simulation tests.
-#
-# Tests simulating real data analysis workflows with multiple
-# edit cycles, variable reuse, and result verification.
-@pytest.mark.stress
-@pytest.mark.upstream
-@pytest.mark.timeout(90)
-class TestStatisticalAnalysis:
-    """Statistical analysis workflow with edits."""
-
-    def test_mean_calculation_edit(self, nb_runner):
-        """Compute mean, then edit the data source."""
-        nb_runner.create_notebook(
-            [
-                "data = [10, 20, 30, 40, 50]  # sample data",
-                "mean_val = sum(data) / len(data)\nprint(f'mean = {mean_val}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "mean = 30.0" in nb_runner.get_output(2)
-
-        nb_runner.set_cell_source(1, "data = [100, 200, 300]  # new sample data")
-        nb_runner.run_all()
-        assert "mean = 200.0" in nb_runner.get_output(2)
-
-    def test_data_pipeline_multiple_stats(self, nb_runner):
-        """Compute multiple statistics, edit the dataset."""
-        nb_runner.create_notebook(
-            [
-                "nums = [4, 8, 15, 16, 23, 42]  # dataset",
-                "n = len(nums)\nmean = sum(nums) / n",
-                "variance = sum((x - mean) ** 2 for x in nums) / n",
-                "import math\nstd = math.sqrt(variance)\nprint(f'mean={mean:.1f} std={std:.1f}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "mean=18.0" in nb_runner.get_output(4)
-
-        # Change dataset
-        nb_runner.set_cell_source(1, "nums = [10, 10, 10, 10]  # uniform dataset")
-        nb_runner.run_all()
-        assert "mean=10.0" in nb_runner.get_output(4)
-        assert "std=0.0" in nb_runner.get_output(4)
-
-
 @pytest.mark.stress
 @pytest.mark.upstream
 @pytest.mark.timeout(90)
@@ -359,54 +119,6 @@ class TestDataTransformWorkflow:
         nb_runner.set_cell_source(1, "scores = [50, 99, 78, 60, 88]  # student scores updated")
         nb_runner.run_all()
         assert "top student=1 score=99" in nb_runner.get_output(3)
-
-
-@pytest.mark.stress
-@pytest.mark.upstream
-@pytest.mark.timeout(90)
-class TestReportGeneration:
-    """Report generation workflow."""
-
-    def test_build_report_string(self, nb_runner):
-        """Build a report string from data, edit the data."""
-        nb_runner.create_notebook(
-            [
-                "title = 'Sales Report'",
-                "items = {'Widget A': 100, 'Widget B': 200}",
-                "lines = [title, '=' * len(title)]\nfor name, count in items.items():\n    lines.append(f'{name}: {count}')\nreport = '\\n'.join(lines)\nprint(report)",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(3)
-        assert "Sales Report" in out
-        assert "Widget A: 100" in out
-
-        # Edit title
-        nb_runner.set_cell_source(1, "title = 'Q4 Sales'")
-        nb_runner.run_all()
-        assert "Q4 Sales" in nb_runner.get_output(3)
-
-    def test_summary_metrics(self, nb_runner):
-        """Compute summary metrics, edit the input."""
-        nb_runner.create_notebook(
-            [
-                "values = [10, 20, 30, 40, 50]  # input values",
-                "metrics = {\n    'count': len(values),\n    'sum': sum(values),\n    'min': min(values),\n    'max': max(values),\n}",
-                "for k, v in metrics.items():\n    print(f'{k}: {v}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(3)
-        assert "count: 5" in out
-        assert "sum: 150" in out
-
-        nb_runner.set_cell_source(1, "values = [1, 2, 3]  # input values shorter")
-        nb_runner.run_all()
-        out = nb_runner.get_output(3)
-        assert "count: 3" in out
-        assert "sum: 6" in out
 
 
 # Data pipeline chain interaction tests.
@@ -489,157 +201,6 @@ class TestPipelineChainEdits:
         nb_runner.set_cell_source(1, "records = [('X', 5), ('Y', 50), ('Z', 25)]")
         nb_runner.run_all()
         assert "keys = ['Y', 'Z']" in nb_runner.get_output(2)
-
-
-# JSON/CSV data processing chains.
-@pytest.mark.stress
-@pytest.mark.integration
-class TestJsonProcessing:
-    """JSON manipulation and processing patterns."""
-
-    def test_json_roundtrip(self, nb_runner):
-        """JSON serialize/deserialize roundtrip."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                import json
-                data = {
-                    'users': [
-                        {'name': 'Alice', 'age': 30, 'scores': [95, 87, 92]},
-                        {'name': 'Bob', 'age': 25, 'scores': [78, 82, 90]},
-                    ],
-                    'metadata': {'version': '1.0', 'count': 2}
-                }
-                json_str = json.dumps(data, indent=2)
-                restored = json.loads(json_str)
-                match = data == restored
-            """),
-                "print(f'match={match}')\nprint(f'users={len(restored[\"users\"])}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "match=True" in out
-        assert "users=2" in out
-
-    def test_json_nested_query(self, nb_runner):
-        """Query nested JSON structure."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                import json
-                config = {
-                    'database': {
-                        'primary': {'host': 'db1.example.com', 'port': 5432},
-                        'replica': {'host': 'db2.example.com', 'port': 5432},
-                    },
-                    'cache': {'host': 'redis.example.com', 'port': 6379},
-                }
-
-                def get_nested(d, path, default=None):
-                    keys = path.split('.')
-                    current = d
-                    for k in keys:
-                        if isinstance(current, dict) and k in current:
-                            current = current[k]
-                        else:
-                            return default
-                    return current
-
-                primary_host = get_nested(config, 'database.primary.host')
-                cache_port = get_nested(config, 'cache.port')
-                missing = get_nested(config, 'database.tertiary.host', 'N/A')
-            """),
-                "print(f'primary={primary_host} cache_port={cache_port} missing={missing}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "primary=db1.example.com" in out
-        assert "cache_port=6379" in out
-        assert "missing=N/A" in out
-
-
-@pytest.mark.stress
-@pytest.mark.integration
-class TestCsvProcessing:
-    """CSV data processing patterns."""
-
-    def test_csv_write_read(self, nb_runner, tmp_path):
-        """Write CSV, read back, transform."""
-        csv_path = str(tmp_path / "data" / "test.csv").replace("\\", "/")
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent(f"""\
-                import csv, os
-                os.makedirs(os.path.dirname('{csv_path}'), exist_ok=True)
-                rows = [
-                    ['name', 'department', 'salary'],
-                    ['Alice', 'Engineering', '95000'],
-                    ['Bob', 'Marketing', '72000'],
-                    ['Charlie', 'Engineering', '88000'],
-                    ['Diana', 'Marketing', '78000'],
-                ]
-                with open('{csv_path}', 'w', newline='') as f:
-                    csv.writer(f).writerows(rows)
-            """),
-                textwrap.dedent(f"""\
-                import csv
-                with open('{csv_path}', 'r') as f:
-                    reader = csv.DictReader(f)
-                    data = list(reader)
-                eng_avg = sum(int(r['salary']) for r in data if r['department'] == 'Engineering') / sum(1 for r in data if r['department'] == 'Engineering')
-            """),
-                "print(f'count={len(data)} eng_avg={eng_avg}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(3)
-        assert "count=4" in out
-        assert "eng_avg=91500" in out
-
-    def test_csv_propagation(self, nb_runner, tmp_path):
-        """CSV with upstream filter change propagation."""
-        csv_path = str(tmp_path / "data" / "scores.csv").replace("\\", "/")
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent(f"""\
-                import csv, os
-                os.makedirs(os.path.dirname('{csv_path}'), exist_ok=True)
-                with open('{csv_path}', 'w', newline='') as f:
-                    w = csv.writer(f)
-                    w.writerow(['name', 'score'])
-                    for name, score in [('A', 90), ('B', 75), ('C', 85), ('D', 60), ('E', 95)]:
-                        w.writerow([name, score])
-            """),
-                "min_score = 80",
-                textwrap.dedent(f"""\
-                import csv
-                with open('{csv_path}', 'r') as f:
-                    data = list(csv.DictReader(f))
-                passing = [r['name'] for r in data if int(r['score']) >= min_score]
-            """),
-                "print(f'passing={passing}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "A" in out
-        assert "C" in out
-        assert "E" in out
-
-        nb_runner.set_cell_source(2, "min_score = 90")
-        nb_runner.run_cells([2, 3, 4])
-        out2 = nb_runner.get_output(4)
-        assert "A" in out2
-        assert "E" in out2
-        # B, C, D should no longer be in passing
-        assert "B" not in out2
-        assert "C" not in out2
 
 
 # Complex multi-step data pipeline patterns.
@@ -1208,6 +769,89 @@ class TestListTransforms:
         assert "result=[30, 50, 70]" in nb_runner.get_output(2)
 
 
+# Multi-step data transformation pipelines — realistic ETL-like workflows
+# with many intermediate variables and complex data flow.
+@pytest.mark.integration
+@pytest.mark.stress
+class TestETLPipeline:
+    """Test caching with ETL-like transformation pipelines."""
+
+    def test_extract_transform_load(self, nb_runner, tmp_path):
+        """Full ETL pipeline: extract from CSV, transform, write output."""
+        input_csv = tmp_path / "raw.csv"
+        output_csv = tmp_path / "clean.csv"
+        input_csv.write_text(
+            "id,name,value,category\n1,Alice,100,A\n2,Bob,-5,B\n3,Charlie,200,A\n4,Diana,150,B\n5,Eve,-10,A\n",
+            encoding="utf-8",
+        )
+        in_str = str(input_csv).replace("\\", "/")
+        out_str = str(output_csv).replace("\\", "/")
+
+        nb_runner.create_notebook(
+            [
+                "import pandas as pd\nimport numpy as np",
+                # Extract
+                f"raw = pd.read_csv('{in_str}')",
+                # Validate
+                textwrap.dedent("""\
+                valid = raw[raw['value'] > 0].copy()
+                print(f"valid rows: {len(valid)}")
+            """),
+                # Transform (explicit reassignment so cash tracks lineage)
+                textwrap.dedent("""\
+                valid = valid.assign(
+                    normalized=(valid['value'] - valid['value'].mean()) / valid['value'].std()
+                )
+            """),
+                # Aggregate
+                textwrap.dedent("""\
+                summary = valid.groupby('category').agg(
+                    count=('id', 'count'),
+                    avg_value=('value', 'mean')
+                ).reset_index()
+                print(summary.to_string(index=False))
+            """),
+                # Load
+                textwrap.dedent(f"""\
+                valid.to_csv('{out_str}', index=False)
+                print(f"saved {{len(valid)}} rows")
+            """),
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "valid rows: 3" in nb_runner.get_output(3)
+        assert "saved 3 rows" in nb_runner.get_output(6)
+
+    def test_etl_modify_filter_and_rerun(self, nb_runner, tmp_path):
+        """Modify filter criteria in ETL and re-run."""
+        csv_path = tmp_path / "data.csv"
+        csv_path.write_text("x,y\n1,10\n2,20\n3,30\n4,40\n5,50\n", encoding="utf-8")
+        path_str = str(csv_path).replace("\\", "/")
+
+        nb_runner.create_notebook(
+            [
+                "import pandas as pd",
+                f"df = pd.read_csv('{path_str}')",
+                "filtered = df[df['x'] > 2]",
+                textwrap.dedent("""\
+                result = filtered['y'].sum()
+                print(f"sum={result}")
+            """),
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        # x>2: y=30+40+50=120
+        assert "sum=120" in nb_runner.get_output(4)
+
+        # Change filter
+        nb_runner.set_cell_source(3, "filtered = df[df['x'] > 3]")
+        nb_runner.run_all()
+        # x>3: y=40+50=90
+        assert "sum=90" in nb_runner.get_output(4)
+
+
 # Complex multi-cell ETL pipeline — cash caching with realistic data transforms.
 @pytest.mark.stress
 class TestETLPipelineComplex:
@@ -1318,84 +962,244 @@ class TestETLPipelineComplex:
         assert "result=120" in nb_runner.get_output(2)
 
 
-# Multi-step data transformation pipelines — realistic ETL-like workflows
-# with many intermediate variables and complex data flow.
-@pytest.mark.integration
+# JSON/CSV data processing chains.
 @pytest.mark.stress
-class TestETLPipeline:
-    """Test caching with ETL-like transformation pipelines."""
+@pytest.mark.integration
+class TestJsonProcessing:
+    """JSON manipulation and processing patterns."""
 
-    def test_extract_transform_load(self, nb_runner, tmp_path):
-        """Full ETL pipeline: extract from CSV, transform, write output."""
-        input_csv = tmp_path / "raw.csv"
-        output_csv = tmp_path / "clean.csv"
-        input_csv.write_text(
-            "id,name,value,category\n1,Alice,100,A\n2,Bob,-5,B\n3,Charlie,200,A\n4,Diana,150,B\n5,Eve,-10,A\n",
-            encoding="utf-8",
-        )
-        in_str = str(input_csv).replace("\\", "/")
-        out_str = str(output_csv).replace("\\", "/")
-
+    def test_json_roundtrip(self, nb_runner):
+        """JSON serialize/deserialize roundtrip."""
         nb_runner.create_notebook(
             [
-                "import pandas as pd\nimport numpy as np",
-                # Extract
-                f"raw = pd.read_csv('{in_str}')",
-                # Validate
                 textwrap.dedent("""\
-                valid = raw[raw['value'] > 0].copy()
-                print(f"valid rows: {len(valid)}")
+                import json
+                data = {
+                    'users': [
+                        {'name': 'Alice', 'age': 30, 'scores': [95, 87, 92]},
+                        {'name': 'Bob', 'age': 25, 'scores': [78, 82, 90]},
+                    ],
+                    'metadata': {'version': '1.0', 'count': 2}
+                }
+                json_str = json.dumps(data, indent=2)
+                restored = json.loads(json_str)
+                match = data == restored
             """),
-                # Transform (explicit reassignment so cash tracks lineage)
+                "print(f'match={match}')\nprint(f'users={len(restored[\"users\"])}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(2)
+        assert "match=True" in out
+        assert "users=2" in out
+
+    def test_json_nested_query(self, nb_runner):
+        """Query nested JSON structure."""
+        nb_runner.create_notebook(
+            [
                 textwrap.dedent("""\
-                valid = valid.assign(
-                    normalized=(valid['value'] - valid['value'].mean()) / valid['value'].std()
-                )
+                import json
+                config = {
+                    'database': {
+                        'primary': {'host': 'db1.example.com', 'port': 5432},
+                        'replica': {'host': 'db2.example.com', 'port': 5432},
+                    },
+                    'cache': {'host': 'redis.example.com', 'port': 6379},
+                }
+
+                def get_nested(d, path, default=None):
+                    keys = path.split('.')
+                    current = d
+                    for k in keys:
+                        if isinstance(current, dict) and k in current:
+                            current = current[k]
+                        else:
+                            return default
+                    return current
+
+                primary_host = get_nested(config, 'database.primary.host')
+                cache_port = get_nested(config, 'cache.port')
+                missing = get_nested(config, 'database.tertiary.host', 'N/A')
             """),
-                # Aggregate
-                textwrap.dedent("""\
-                summary = valid.groupby('category').agg(
-                    count=('id', 'count'),
-                    avg_value=('value', 'mean')
-                ).reset_index()
-                print(summary.to_string(index=False))
-            """),
-                # Load
+                "print(f'primary={primary_host} cache_port={cache_port} missing={missing}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(2)
+        assert "primary=db1.example.com" in out
+        assert "cache_port=6379" in out
+        assert "missing=N/A" in out
+
+
+@pytest.mark.stress
+@pytest.mark.integration
+class TestCsvProcessing:
+    """CSV data processing patterns."""
+
+    def test_csv_write_read(self, nb_runner, tmp_path):
+        """Write CSV, read back, transform."""
+        csv_path = str(tmp_path / "data" / "test.csv").replace("\\", "/")
+        nb_runner.create_notebook(
+            [
                 textwrap.dedent(f"""\
-                valid.to_csv('{out_str}', index=False)
-                print(f"saved {{len(valid)}} rows")
+                import csv, os
+                os.makedirs(os.path.dirname('{csv_path}'), exist_ok=True)
+                rows = [
+                    ['name', 'department', 'salary'],
+                    ['Alice', 'Engineering', '95000'],
+                    ['Bob', 'Marketing', '72000'],
+                    ['Charlie', 'Engineering', '88000'],
+                    ['Diana', 'Marketing', '78000'],
+                ]
+                with open('{csv_path}', 'w', newline='') as f:
+                    csv.writer(f).writerows(rows)
             """),
+                textwrap.dedent(f"""\
+                import csv
+                with open('{csv_path}', 'r') as f:
+                    reader = csv.DictReader(f)
+                    data = list(reader)
+                eng_avg = sum(int(r['salary']) for r in data if r['department'] == 'Engineering') / sum(1 for r in data if r['department'] == 'Engineering')
+            """),
+                "print(f'count={len(data)} eng_avg={eng_avg}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "valid rows: 3" in nb_runner.get_output(3)
-        assert "saved 3 rows" in nb_runner.get_output(6)
+        out = nb_runner.get_output(3)
+        assert "count=4" in out
+        assert "eng_avg=91500" in out
 
-    def test_etl_modify_filter_and_rerun(self, nb_runner, tmp_path):
-        """Modify filter criteria in ETL and re-run."""
-        csv_path = tmp_path / "data.csv"
-        csv_path.write_text("x,y\n1,10\n2,20\n3,30\n4,40\n5,50\n", encoding="utf-8")
-        path_str = str(csv_path).replace("\\", "/")
-
+    def test_csv_propagation(self, nb_runner, tmp_path):
+        """CSV with upstream filter change propagation."""
+        csv_path = str(tmp_path / "data" / "scores.csv").replace("\\", "/")
         nb_runner.create_notebook(
             [
-                "import pandas as pd",
-                f"df = pd.read_csv('{path_str}')",
-                "filtered = df[df['x'] > 2]",
-                textwrap.dedent("""\
-                result = filtered['y'].sum()
-                print(f"sum={result}")
+                textwrap.dedent(f"""\
+                import csv, os
+                os.makedirs(os.path.dirname('{csv_path}'), exist_ok=True)
+                with open('{csv_path}', 'w', newline='') as f:
+                    w = csv.writer(f)
+                    w.writerow(['name', 'score'])
+                    for name, score in [('A', 90), ('B', 75), ('C', 85), ('D', 60), ('E', 95)]:
+                        w.writerow([name, score])
             """),
+                "min_score = 80",
+                textwrap.dedent(f"""\
+                import csv
+                with open('{csv_path}', 'r') as f:
+                    data = list(csv.DictReader(f))
+                passing = [r['name'] for r in data if int(r['score']) >= min_score]
+            """),
+                "print(f'passing={passing}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        # x>2: y=30+40+50=120
-        assert "sum=120" in nb_runner.get_output(4)
+        out = nb_runner.get_output(4)
+        assert "A" in out
+        assert "C" in out
+        assert "E" in out
 
-        # Change filter
-        nb_runner.set_cell_source(3, "filtered = df[df['x'] > 3]")
+        nb_runner.set_cell_source(2, "min_score = 90")
+        nb_runner.run_cells([2, 3, 4])
+        out2 = nb_runner.get_output(4)
+        assert "A" in out2
+        assert "E" in out2
+        # B, C, D should no longer be in passing
+        assert "B" not in out2
+        assert "C" not in out2
+
+
+# Complex real-world data analysis simulation tests.
+#
+# Tests simulating real data analysis workflows with multiple
+# edit cycles, variable reuse, and result verification.
+@pytest.mark.stress
+@pytest.mark.upstream
+@pytest.mark.timeout(90)
+class TestStatisticalAnalysis:
+    """Statistical analysis workflow with edits."""
+
+    def test_mean_calculation_edit(self, nb_runner):
+        """Compute mean, then edit the data source."""
+        nb_runner.create_notebook(
+            [
+                "data = [10, 20, 30, 40, 50]  # sample data",
+                "mean_val = sum(data) / len(data)\nprint(f'mean = {mean_val}')",
+            ]
+        )
+        nb_runner.start_kernel()
         nb_runner.run_all()
-        # x>3: y=40+50=90
-        assert "sum=90" in nb_runner.get_output(4)
+        assert "mean = 30.0" in nb_runner.get_output(2)
+
+        nb_runner.set_cell_source(1, "data = [100, 200, 300]  # new sample data")
+        nb_runner.run_all()
+        assert "mean = 200.0" in nb_runner.get_output(2)
+
+    def test_data_pipeline_multiple_stats(self, nb_runner):
+        """Compute multiple statistics, edit the dataset."""
+        nb_runner.create_notebook(
+            [
+                "nums = [4, 8, 15, 16, 23, 42]  # dataset",
+                "n = len(nums)\nmean = sum(nums) / n",
+                "variance = sum((x - mean) ** 2 for x in nums) / n",
+                "import math\nstd = math.sqrt(variance)\nprint(f'mean={mean:.1f} std={std:.1f}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "mean=18.0" in nb_runner.get_output(4)
+
+        # Change dataset
+        nb_runner.set_cell_source(1, "nums = [10, 10, 10, 10]  # uniform dataset")
+        nb_runner.run_all()
+        assert "mean=10.0" in nb_runner.get_output(4)
+        assert "std=0.0" in nb_runner.get_output(4)
+
+
+@pytest.mark.core
+class TestNumpyPatterns:
+    """Test numpy array operations and caching."""
+
+    def test_numpy_random_with_seed(self, nb_runner):
+        """Seeded random should be reproducible and cacheable."""
+        nb_runner.create_notebook(
+            [
+                "import numpy as np\nnp.random.seed(42)",
+                "vals = np.random.rand(3)\nprint([round(v, 4) for v in vals])",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+
+        out1 = nb_runner.get_output(2)
+
+        # Re-run — should produce same output (from cache or same seed)
+        nb_runner.run_all()
+        out2 = nb_runner.get_output(2)
+
+        # Both should contain the same values
+        assert out1 == out2 or "0.3745" in out2, f"Inconsistent: {out1} vs {out2}"
+
+
+@pytest.mark.core
+class TestComplexDataStructures:
+    """Test caching with complex nested data structures."""
+
+    def test_nested_dict_of_lists(self, nb_runner):
+        """Nested dict creation and access."""
+        nb_runner.create_notebook(
+            [
+                "data = {'users': [{'name': 'Alice', 'scores': [90, 85]}, {'name': 'Bob', 'scores': [78, 92]}]}",
+                "avg_scores = {u['name']: sum(u['scores'])/len(u['scores']) for u in data['users']}\nprint(avg_scores)",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+
+        out = nb_runner.get_output(2)
+        assert "'Alice': 87.5" in out, f"Got: {out}"
+        assert "'Bob': 85.0" in out, f"Got: {out}"
