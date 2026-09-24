@@ -303,3 +303,44 @@ def test_fence_body_keeps_its_markdown_line_numbers(tmp_path, expect_raises):
     while tb.tb_next:
         tb = tb.tb_next
     assert tb.tb_lineno == raising
+
+
+def test_extract_fences_reads_indented_fences(tmp_path):
+    """A fence in a content tab or admonition is indented; it is still code on the page."""
+    page = tmp_path / "tabs.md"
+    page.write_text(
+        '=== "Decorator"\n'
+        "\n"
+        "    ```python\n"
+        "    def f(x):\n"
+        "        return x\n"
+        "\n"
+        "    y = f(1)\n"
+        "    ```\n"
+        "\n"
+        '=== "Notebook"\n'
+        "\n"
+        "    ```python { .nb-cell }\n"
+        "    %cash_on\n"
+        "    ```\n",
+        encoding="utf-8",
+    )
+    fences = extract_fences(page)
+    assert [f.code for f in fences] == ["def f(x):\n    return x\n\ny = f(1)", "%cash_on"]
+    assert [(f.line_start, f.line_end) for f in fences] == [(3, 8), (12, 14)]
+    assert fences[1].is_nb_cell
+
+
+def test_every_pending_fence_entry_still_matches_a_fence():
+    """PENDING_FENCES only shrinks: an entry whose fence was fixed or removed must go."""
+    from tests.docs._harness import _REPO_ROOT, PENDING_FENCES
+
+    stale = []
+    for rel, entries in PENDING_FENCES.items():
+        page = _REPO_ROOT / rel
+        fences = extract_fences(page) if page.is_file() else []
+        reasons = {f.skip_reason for f in fences}
+        for prefix, reason in entries.items():
+            if f"pending page edit: {reason}" not in reasons:
+                stale.append(f"{rel}: {prefix!r}")
+    assert not stale, "remove these PENDING_FENCES entries from tests/docs/_harness.py:\n  " + "\n  ".join(stale)

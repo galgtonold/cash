@@ -40,11 +40,10 @@ from tests.docs._annotations import (
 _ENV_ARTIFACT_WARNING_NAMES: frozenset[str] = frozenset({"CashNotebookDiscoveryWarning"})
 
 
-_FENCE_RE = re.compile(
-    r"^```python(?P<attrs>(?:\s+\{[^}]*\})?)\s*$"
-    r"(?P<body>.*?)^```\s*$",
-    re.MULTILINE | re.DOTALL,
-)
+# An opening ```python line, at any indent: fences nested in a content tab
+# (``=== "Notebook"``), an admonition or a list item are indented, and they
+# are as much a part of the page as the ones at column 0.
+_FENCE_OPEN_RE = re.compile(r"^(?P<indent>[ \t]*)```python(?P<attrs>(?:\s+\{[^}]*\})?)\s*$")
 
 
 @dataclass
@@ -65,8 +64,64 @@ class Fence:
         return ".nb-cell" in self.attrs
 
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+#: Fences that do not run as written and wait on an edit to their page (a
+#: setup line, or a ``test:skip`` with a reason). Until then the harness skips
+#: them with the reason given here. Keyed by the page's repository path and by
+#: the start of the fence's code, so an edit elsewhere on the page does not
+#: move the entry. ``test_harness.py`` fails on an entry that matches no fence,
+#: so the list only shrinks: when a page is fixed, delete its entries.
+PENDING_FENCES: dict[str, dict[str, str]] = {
+    "CHANGELOG.md": {
+        'if getattr(w.message, "code", None)': "fragment: w is a caught warning the entry does not create",
+    },
+    "docs/decorator.md": {
+        "%cash_stats": "a notebook magic on a decorator page: it sends the whole page through IPython",
+    },
+    "docs/for-coding-agents.md": {
+        "@cash.cache(assume_safe=True)": "fragment: needs `import cash` and a scikit-learn import",
+    },
+    "docs/tutorials/feature-guides/async-caching.md": {
+        "@cash.cache\nasync def make_iter": "top-level await: the page's later asyncio.run() then runs inside a loop",
+    },
+    "docs/tutorials/feature-guides/controlling-cache-behavior.md": {
+        "# @cash:persist\n# @cash:ttl=86400": "fragment: train_lightgbm, X and y are not defined",
+    },
+    "docs/why-cash.md": {
+        "import pickle, os": "illustrative: pd is not imported and large_file.csv does not exist",
+        "# IPython %store has no granularity": "illustrative: large_file.csv does not exist",
+        "%cash_on\n\ndf = pd.read_csv": "illustrative: large_file.csv does not exist",
+    },
+}
+
+
+def pending_reason(md_path: Path, code: str) -> str | None:
+    """The ``PENDING_FENCES`` reason for this fence, or ``None``."""
+    try:
+        rel = md_path.resolve().relative_to(_REPO_ROOT).as_posix()
+    except ValueError:
+        return None
+    body = code.lstrip("\n")
+    for prefix, reason in PENDING_FENCES.get(rel, {}).items():
+        if body.startswith(prefix):
+            return reason
+    return None
+
+
+def _dedent_line(line: str, indent: int) -> str:
+    """Drop up to *indent* leading whitespace characters from *line*."""
+    k = 0
+    while k < indent and k < len(line) and line[k] in " \t":
+        k += 1
+    return line[k:]
+
+
 def extract_fences(md_path: Path) -> list[Fence]:
-    """Extract every ```python ... ``` fence from a markdown file in source order."""
+    """Extract every ```python ... ``` fence from a markdown file in source order.
+
+    Indented fences count too; their body is dedented by the fence's indent.
+    """
     text = md_path.read_text(encoding="utf-8")
     fences: list[Fence] = []
     # Walk line-by-line so we get accurate line numbers.
@@ -74,27 +129,31 @@ def extract_fences(md_path: Path) -> list[Fence]:
     i = 0
     while i < len(lines):
         line = lines[i]
-        m = re.match(r"^```python(?P<attrs>(?:\s+\{[^}]*\})?)\s*$", line)
+        m = _FENCE_OPEN_RE.match(line)
         if m:
             attrs = m.group("attrs").strip()
+            indent = len(m.group("indent"))
             start_line = i + 1  # 1-based
             body_lines: list[str] = []
             j = i + 1
-            while j < len(lines) and lines[j].rstrip() != "```":
-                body_lines.append(lines[j])
+            while j < len(lines) and lines[j].strip() != "```":
+                # Remove the fence's own indent, keeping the code's indentation.
+                body_lines.append(_dedent_line(lines[j], indent))
                 j += 1
             end_line = j + 1  # 1-based line of closing ```
             skip_ann = find_skip_for_fence(lines, start_line)
             expect_raises = find_expect_raises_for_fence(lines, start_line)
             expect_warning = find_expect_warning_for_fence(lines, start_line)
+            code = "\n".join(body_lines)
+            pending = None if skip_ann else pending_reason(md_path, code)
             fences.append(
                 Fence(
-                    code="\n".join(body_lines),
+                    code=code,
                     line_start=start_line,
                     line_end=end_line,
                     attrs=attrs,
-                    skip=skip_ann is not None,
-                    skip_reason=skip_ann.reason if skip_ann else None,
+                    skip=skip_ann is not None or pending is not None,
+                    skip_reason=skip_ann.reason if skip_ann else (f"pending page edit: {pending}" if pending else None),
                     expect_raises=expect_raises,
                     expect_warning=expect_warning,
                 )
