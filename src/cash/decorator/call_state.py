@@ -103,7 +103,7 @@ def run_to_completion(make_coroutine: Callable[[], Any]) -> Any:
 PROCESS_STARTED = time.time()
 
 
-#: The stats wrapper's slot for the call it is running: `_log_decorator_call`
+#: The stats wrapper's slot for the call it is running: `CallLog.log`
 #: puts the call's entry there, and the stats wrapper counts it once the call
 #: returns or raises. Per context (thread or asyncio task), and set afresh by
 #: every cached call, so a nested call fills its own slot and never the

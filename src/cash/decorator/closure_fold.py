@@ -596,7 +596,7 @@ class ClosureFoldMixin:
     ) -> None:
         """Warn (once) that a default is unhashable; ``None`` = refuse to cache."""
         bad_type = self._first_unhashable_arg_type(pos, kwd)
-        self._warn_once(
+        self._notices.warn_once(
             CashCacheIneffectiveWarning,
             func_name,
             bad_type,
@@ -678,7 +678,7 @@ class ClosureFoldMixin:
             self_hash = self._hash_arg_payload((owner,), {})
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
             owner_type = type(owner).__name__
-            self._warn_once(
+            self._notices.warn_once(
                 CashCacheIneffectiveWarning,
                 func_name,
                 owner_type,

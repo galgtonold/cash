@@ -17,7 +17,7 @@ Net result: the computation ran twice instead of once. Both threads return the r
 
 ## The fix: double-checked locking
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._compute_with_lock @3b0babd9, cash/decorator/reporting.py:ReportingMixin._warn_lock_failed @bb3cefef -->
+<!-- claim: cash/decorator/runtime.py:RuntimeMixin._compute_with_lock @3b0babd9, cash/decorator/reporting.py:Notices.lock_failed @bb3cefef -->
 When `use_locking=True`, the miss path routes through `Cash._compute_with_lock` instead of calling the compute closure directly. The helper does three things:
 
 1. **Acquire `self.backend.lock(cache_key)`** as a context manager.
@@ -178,7 +178,7 @@ from another module.
 | `CacheBackend.lock(key)` (base) | Per-key `threading.RLock` from a process-local registry — **in-process single-flight**. Inherited by every backend except Redis. |
 | `RedisBackend.lock(key)` | Returns `client.lock(f"{prefix}lock:{key}", timeout=60, blocking_timeout=10)` — a real **distributed** lock. The only backend that coordinates across processes. |
 | `SQLiteBackend.lock(key)`, `FileBackend.lock(key)`, `InMemoryBackend.lock(key)`, `S3Backend.lock(key)`, `TieredBackend.lock(key)` | Inherit the base in-process `RLock`. The default `Cash()` backend is `TieredBackend`. |
-| `CashCacheIneffectiveWarning` (lock failed) | Emitted once per `(func_name, "lock_failed")` when lock acquisition raises (`Cash._warn_lock_failed`). The call proceeds without the lock. |
+| `CashCacheIneffectiveWarning` (lock failed) | Emitted once per `(func_name, "lock_failed")` when lock acquisition raises (`Notices.lock_failed`). The call proceeds without the lock. |
 
 ## Related
 

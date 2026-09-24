@@ -68,7 +68,7 @@ class Model:
 
 
 def test_net_loss_names_the_argument_and_suggests_frozen_on_its_producer(c):
-    c._effectiveness = EffectivenessLedger(waste_threshold_seconds=0.0)
+    c._calls.effectiveness = EffectivenessLedger(waste_threshold_seconds=0.0)
 
     @c.cache
     def train(n):

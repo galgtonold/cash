@@ -31,7 +31,7 @@ from .call_state import (
     UnhashableDefault,
     run_to_completion,
 )
-from .explain import MissKind, MissReason
+from .explain import MissKind, MissReason, describe_stale_files
 from .file_deps import propagate_file_deps_to_active_tracker, snapshot_tracked_deps
 from .iterators import ChunkedCachedIterator, StreamingCachedIterator, is_one_shot_iterator
 from .rng import capture_rng_pre_state, replay_rng_state
@@ -97,7 +97,7 @@ class RuntimeMixin:
             self._warn_unhashable_args(func_name, args, kwargs)
             return Unkeyable(_UNHASHABLE), watch
         except KeyBuildFailed as e:
-            self._warn_once(CashCacheIneffectiveWarning, func_name, e.code, e.message, code=e.code, fix=e.fix)
+            self._notices.warn_once(CashCacheIneffectiveWarning, func_name, e.code, e.message, code=e.code, fix=e.fix)
             return Unkeyable(_KEY_FAILED), watch
         except Exception as e:  # noqa: BLE001 - any failure building the key means no key
             self._warn_key_build_failed(func_name, args, kwargs, e)
@@ -107,14 +107,14 @@ class RuntimeMixin:
             STATE_LEDGER.reset(ledger_token)
         if ledger:
             slot = (func_name, built.state_hash)
-            if slot not in self._state_ledgers:
-                self._keep_state_ledger(slot, ledger)
+            if not self._misses.has_ledger(slot):
+                self._misses.keep_state_ledger(slot, ledger)
         return built, watch
 
     def _run_uncached(self, spec: CachedFunction, call: Call, why: MissReason) -> Any:
         """Run a call that has no key, log it as a miss, and hand back its result."""
         result = spec.func(*call.args, **call.kwargs)
-        self._log_decorator_call(
+        self._calls.log(
             spec.name,
             cache_hit=False,
             execution_time=_perf_counter() - call.call_start,
@@ -222,21 +222,21 @@ class RuntimeMixin:
         function re-reads the changed file.
         """
         if metadata is None:
-            self._note_miss(func_name, cache_key, self._absent_entry_reason(func_name, cache_key))
+            self._misses.note_miss(func_name, cache_key, self._misses.absent_entry_reason(func_name, cache_key))
             return CACHE_MISS
         ttl = self._entry_ttl(ttl, metadata)
         try:
             if entry_expired(metadata, ttl):
                 age = time.time() - (metadata.timestamp or 0)
-                self._note_miss(
+                self._misses.note_miss(
                     func_name, cache_key, MissReason(MissKind.TTL, f"the entry is {age:.1f}s old and ttl={ttl}s")
                 )
                 return CACHE_MISS
             if not self._auto_file_deps_fresh(metadata):
-                self._note_miss(func_name, cache_key, MissReason(MissKind.FILE, self._describe_stale_files(metadata)))
+                self._misses.note_miss(func_name, cache_key, MissReason(MissKind.FILE, describe_stale_files(metadata)))
                 return CACHE_MISS
             if not self._chunks_are_intact(cache_key, metadata):
-                self._note_miss(
+                self._misses.note_miss(
                     func_name, cache_key, MissReason(MissKind.INCOMPLETE, "a chunk of the stored result is missing")
                 )
                 return CACHE_MISS
@@ -257,7 +257,7 @@ class RuntimeMixin:
             self._attach_lineage(cached_data, cache_key, metadata.auto_file_deps, ttl=ttl, func_name=func_name)
             replay_rng_state(metadata)
             self._cached[func_name].last_key = cache_key
-            self._log_decorator_call(
+            self._calls.log(
                 func_name,
                 cache_hit=True,
                 execution_time=_perf_counter() - call_start,
@@ -269,15 +269,16 @@ class RuntimeMixin:
             )
             return cached_data
         except (TypeError, KeyError) as e:
-            self._warn_metadata_invalid(func_name, e)
-            self._note_miss(
+            self._notices.metadata_invalid(func_name, e)
+            self._misses.note_miss(
                 func_name, cache_key, MissReason(MissKind.INCOMPLETE, "the stored entry's metadata did not validate")
             )
         return CACHE_MISS
 
     def _tier_default_ttl(self) -> int | None:
         """The ``default_ttl`` of the first tier that has one, as configured now."""
-        return self._backend.default_ttl if self._backend is not None else None
+        backend = self._backend_slot.built
+        return backend.default_ttl if backend is not None else None
 
     def _entry_ttl(self, ttl: int | None, metadata: Any) -> int | None:
         """The ttl a stored entry is judged by.
@@ -315,7 +316,7 @@ class RuntimeMixin:
             return True
         try:
             for index in range(metadata.n_chunks or 0):
-                if self.backend.get_metadata(f"{cache_key}:chunk_{index}") is None:
+                if self._backend_slot.backend.get_metadata(f"{cache_key}:chunk_{index}") is None:
                     logger.debug(
                         "[CORE] chunk %d of %s is missing; treating the entry "
                         "as a miss rather than serving a short result",
@@ -386,14 +387,14 @@ class RuntimeMixin:
             return call
         call.cache_key, call.state_hash, call.args_hash = built.cache_key, built.state_hash, built.args_hash
 
-        raw_metadata, cached_data = self.backend.get(call.cache_key)
+        raw_metadata, cached_data = self._backend_slot.backend.get(call.cache_key)
         call.metadata = CacheMetadata.from_dict(raw_metadata) if raw_metadata is not None else None
         hit = self._try_get_cached(
             call.cache_key, call.metadata, cached_data, call.call_start, call.args_hash, func_name, call.ttl
         )
         call.cash_overhead = _perf_counter() - overhead_t0
         if hit is not CACHE_MISS:
-            self._note_effectiveness(
+            self._calls.note_effectiveness(
                 func_name,
                 call.cash_overhead,
                 body_seconds=getattr(call.metadata, "body_seconds", None),
@@ -411,7 +412,7 @@ class RuntimeMixin:
         (``_chunks_are_intact``, ``_auto_file_deps_fresh``) as they are added.
         One function decides whether an entry may be served.
         """
-        raw_metadata, cached_data = self.backend.get(call.cache_key)
+        raw_metadata, cached_data = self._backend_slot.backend.get(call.cache_key)
         if raw_metadata is None:
             return CACHE_MISS
         metadata = CacheMetadata.from_dict(raw_metadata)
@@ -457,7 +458,7 @@ class RuntimeMixin:
                 self._track_declared_files(run.tracker, func_name)
                 yield run
             except Exception as exc:  # noqa: BLE001 - the user's body can raise anything; logged, then re-raised
-                self._log_raised(func_name, exc, call.call_start)
+                self._calls.log_raised(func_name, exc, call.call_start)
                 raise
             finally:
                 NESTED_CASH_SECONDS.reset(nested_token)
@@ -486,7 +487,7 @@ class RuntimeMixin:
             # miss is a fact about the LOOKUP, which has already happened. The
             # produce time still reaches the entry, via the manifest, which is
             # what a later hit reports as saved.
-            self._log_decorator_call(
+            self._calls.log(
                 func_name,
                 cache_hit=False,
                 execution_time=_perf_counter() - call.call_start,
@@ -520,7 +521,7 @@ class RuntimeMixin:
             func, func_name, res, run.rng_new, spec.cache_if, run.tracker, call.capture_watch, observer=run.observer
         )
         if refusal is not None:
-            self._note_not_stored(call.cache_key, refusal)
+            self._misses.note_not_stored(call.cache_key, refusal)
         else:
             # Attach lineage only when the value is actually stored: a lineage
             # hash points downstream at THIS cache entry, so a cache_if-rejected
@@ -543,7 +544,7 @@ class RuntimeMixin:
         # Everything that was not the body: the key and lookup before it, the
         # checks and the store after it.
         miss_overhead = max(call.cash_overhead, _perf_counter() - call.call_start - run.body_seconds)
-        self._log_decorator_call(
+        self._calls.log(
             func_name,
             cache_hit=False,
             execution_time=execution_time,
@@ -552,7 +553,7 @@ class RuntimeMixin:
             body_seconds=run.body_seconds,
             cash_seconds=miss_overhead,
         )
-        self._note_effectiveness(func_name, miss_overhead, body_seconds=run.body_seconds, was_hit=False)
+        self._calls.note_effectiveness(func_name, miss_overhead, body_seconds=run.body_seconds, was_hit=False)
         return res
 
     async def _single_flight(self, spec: CachedFunction, call: Call, compute: Callable[[], Any]) -> Any:
@@ -611,11 +612,11 @@ class RuntimeMixin:
         propagates normally (it is not mistaken for a lock failure). Under the
         lock the key is looked up again by `_reread`, the same test as the first
         lookup."""
-        lock_cm = self.backend.lock(call.cache_key)
+        lock_cm = self._backend_slot.backend.lock(call.cache_key)
         try:
             lock_cm.__enter__()
         except Exception as e:  # noqa: BLE001 - any acquisition failure -> unlocked
-            self._warn_lock_failed(spec.name, e)
+            self._notices.lock_failed(spec.name, e)
             return compute()
         try:
             hit = self._reread(spec, call)

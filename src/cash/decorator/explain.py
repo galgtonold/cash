@@ -6,10 +6,11 @@ from __future__ import annotations
 import hashlib
 import os
 import time
+from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from ..backends import CacheMetadata
 from ..backends._base import ttl_expired
@@ -19,6 +20,9 @@ from ..tracking.file_dep_snapshot import dep_is_fresh, dep_path_for_this_process
 from .arg_hashing import unhashable_arg_fix
 from .cached_function import CachedFunction
 from .call_state import PROCESS_STARTED, KeyBuildFailed, UnhashableArgs, UnhashableDefault
+
+if TYPE_CHECKING:
+    from .stored_keys import StoredKeyRecord
 
 # Reason codes returned by `Cash._explain_call` / ``f.explain(...)``.
 # Kept as module-level constants so external code can match against them
@@ -325,8 +329,259 @@ def not_persisted_reason(stored_meta: dict[str, Any]) -> str | None:
     return None
 
 
+def describe_dynamic_dependencies(
+    dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None,
+    args: tuple,
+    kwargs: dict,
+) -> list[str]:
+    """Best-effort list of the ``DataSource`` ids a function's
+    ``dynamic_depends_on`` resolves to for these args - so ``explain()`` can
+    report *what* is being tracked. Returns ``[]`` when there are none or
+    resolution fails (introspection must never raise)."""
+    if not dynamic_depends_on:
+        return []
+    resolvers = dynamic_depends_on if isinstance(dynamic_depends_on, list) else [dynamic_depends_on]
+    ids: list[str] = []
+    for resolver in resolvers:
+        try:
+            ds_result = resolver(*args, **kwargs)
+        except Exception:  # noqa: BLE001 - explain() is best-effort
+            continue
+        dss = ds_result if isinstance(ds_result, list) else [ds_result]
+        for ds in dss:
+            if isinstance(ds, DataSource):
+                try:
+                    ids.append(ds.get_id())
+                except Exception:  # noqa: BLE001 - a user DataSource; explain() is best-effort
+                    ids.append(repr(ds))
+    return ids
+
+
+def describe_stale_files(metadata: CacheMetadata) -> str:
+    """The first file a stale entry read that has changed since, and why."""
+    stale = stale_file_deps(metadata)
+    if not stale:
+        return "a file it read"
+    path, why = next(iter(stale.items()))
+    more = f" and {len(stale) - 1} more" if len(stale) > 1 else ""
+    return f"{path} ({why}){more}"
+
+
+class MissHistory:
+    """What this process remembers about the keys it looked up and stored, so
+    that a miss can say why it missed.
+
+    In-process memory only, and bounded: it explains, it never decides
+    anything. (The last key per function is on its `CachedFunction`.)
+    """
+
+    def __init__(self, cached: dict[str, CachedFunction], stored_keys: StoredKeyRecord) -> None:
+        self._cached = cached
+        self._stored_keys = stored_keys
+        #: cache_key -> what happened when it was last computed here.
+        self.outcomes: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        # cache_key -> the reason for a lookup that just missed, taken by the
+        # `CallLog.log` that reports it (`take_pending`).
+        self._pending: dict[str, MissReason] = {}
+        # (func_name, state segment) -> the ledger of the key build that first
+        # produced it (`keep_state_ledger`).
+        self._ledgers: dict[tuple[str, str], dict] = {}
+
+    def note_miss(self, func_name: str, cache_key: str, reason: MissReason) -> None:
+        """Hold *reason* for the `CallLog.log` that reports this miss."""
+        if len(self._pending) > STORE_OUTCOMES_MAX:
+            # Only a call that raised leaves one behind; never let those pile up.
+            self._pending.clear()
+        self._pending[cache_key] = reason
+        cf = self._cached.get(func_name)
+        if cf is not None:
+            cf.last_key = cache_key
+
+    def take_pending(self, cache_key: str) -> MissReason | None:
+        """The reason `note_miss` held for *cache_key*, removed."""
+        return self._pending.pop(cache_key, None)
+
+    def outcome(self, cache_key: str) -> dict[str, Any] | None:
+        """What happened when *cache_key* was last computed here, if known."""
+        return self.outcomes.get(cache_key)
+
+    def absent_entry_reason(self, func_name: str, cache_key: str) -> MissReason:
+        """Why there is no entry for *cache_key*. Reads state; changes none.
+
+        This process's own history first. With none -- the first call of a
+        function in a fresh process, which is where a script's misses are --
+        the keys earlier runs stored for this function, recorded beside the
+        cache (`StoredKeyRecord`). Without them every such miss read "no
+        earlier run left one on disk", including after a code edit and a TTL
+        expiry, whose entries were in fact on disk.
+        """
+        outcome = self.outcomes.get(cache_key)
+        if outcome is not None:
+            if outcome.get("not_stored"):
+                return MissReason(MissKind.NOT_STORED, outcome["not_stored"])
+            written_ttl = outcome.get("ttl")
+            age = time.time() - outcome.get("stored_at", 0)
+            if ttl_expired(outcome.get("stored_at", 0), written_ttl):
+                return MissReason(MissKind.TTL, f"written {age:.1f}s ago with ttl={written_ttl}s")
+            return MissReason(MissKind.GONE, "stored earlier in this process and since evicted or cleared")
+        cf = self._cached.get(func_name)
+        previous = cf.last_key if cf is not None else None
+        since = "since the last call"
+        doc = self._stored_keys.read(func_name)
+        record = doc["keys"]
+        if cache_key in record:
+            stored_at, written_ttl = record[cache_key][:2]
+            age = time.time() - stored_at
+            if ttl_expired(stored_at, written_ttl):
+                return MissReason(MissKind.TTL, f"stored {age:.0f}s ago by an earlier run, with ttl={written_ttl}s")
+            return MissReason(MissKind.GONE, "an earlier run stored it; it has since been evicted or cleared")
+        if cache_key in doc["ram_only"]:
+            why = doc["ram_only"][cache_key][1]
+            return MissReason(
+                MissKind.NOT_STORED,
+                f"an earlier run computed it but kept it in RAM only ({why}), so this process recomputed it",
+            )
+        # The same arguments stored under another state: the code or a value
+        # it reads changed. Asked of the record BEFORE the call-to-call
+        # comparison, which after a code edit blamed "new arguments" on every
+        # call of a loop but the first.
+        new_parts = cache_key.rsplit(":", 3)
+        if len(new_parts) == 4:
+            for key in reversed([*record, *doc["ram_only"]]):
+                old_parts = key.rsplit(":", 3)
+                if len(old_parts) == 4 and old_parts[2:] == new_parts[2:] and old_parts[1] != new_parts[1]:
+                    return self._code_changed(
+                        func_name, old_parts[1], new_parts[1], doc, "since an earlier run stored it"
+                    )
+            # Earlier runs stored entries, and none under the state this
+            # process computes: every one of them is out of date, whatever the
+            # arguments. A changed DEFAULT moves the arguments too (they are
+            # keyed with defaults applied), so the match above cannot see it,
+            # and the call-to-call comparison below called 3 of 4 such misses
+            # "new arguments".
+            earlier = {
+                key: value
+                for kind in ("keys", "ram_only")
+                for key, value in doc[kind].items()
+                if value and isinstance(value[0], (int, float)) and value[0] < PROCESS_STARTED
+            }
+            states = {key.rsplit(":", 3)[1] for key in earlier if key.count(":") >= 3}
+            if states and new_parts[1] not in states:
+                newest = max(earlier, key=lambda key: earlier[key][0])
+                return self._code_changed(
+                    func_name,
+                    newest.rsplit(":", 3)[1],
+                    new_parts[1],
+                    doc,
+                    "since an earlier run stored its entries, so none of them applies",
+                )
+        if previous is None or previous == cache_key:
+            others = [key for key in record if key != cache_key]
+            if previous is None and others:
+                previous = others[-1]
+                since = "since an earlier run stored it"
+            if previous is None or previous == cache_key:
+                return MissReason(
+                    MissKind.FIRST, "the first call with these arguments in this process, and no earlier run stored one"
+                )
+        # Keys are `func:state:dynamic:args`; the parts that moved say why.
+        old = previous.rsplit(":", 3)
+        new = cache_key.rsplit(":", 3)
+        if len(old) != 4 or len(new) != 4:
+            return MissReason(MissKind.FIRST, "no entry for this key")
+        moved: list[tuple[MissKind, str]] = []
+        what = None
+        if old[1] != new[1]:
+            moved.append((MissKind.CODE, f"{_CODE_CHANGED} {since}"))
+            what = self._what_changed(func_name, old[1], new[1], doc)
+        if old[2] != new[2]:
+            moved.append((MissKind.DYNAMIC, "a dynamic_depends_on source changed"))
+        if old[3] != new[3]:
+            last = "on the last call" if since == "since the last call" else "in the last run"
+            moved.append((MissKind.ARGS, f"called with arguments not seen {last}"))
+        if not moved:
+            return MissReason(MissKind.FIRST, "no entry for this key")
+        return MissReason(moved[0][0], "; and ".join(detail for _, detail in moved), what)
+
+    def _code_changed(self, func_name: str, old_state: str, new_state: str, doc: dict, since: str) -> MissReason:
+        """A "code or state changed" reason, naming what changed when known."""
+        return MissReason(
+            MissKind.CODE, f"{_CODE_CHANGED} {since}", self._what_changed(func_name, old_state, new_state, doc)
+        )
+
+    def keep_state_ledger(self, slot: tuple[str, str], ledger: dict) -> None:
+        """Keep the ledger of the first key build that produced this
+        ``(func_name, state)``."""
+        ledgers = self._ledgers
+        ledgers[slot] = ledger
+        if len(ledgers) > 512:
+            try:
+                ledgers.pop(next(iter(ledgers)))
+            except (RuntimeError, StopIteration, KeyError):
+                pass  # another thread trimmed it first
+
+    def has_ledger(self, slot: tuple[str, str]) -> bool:
+        """Is a ledger kept for ``(func_name, state)``?"""
+        return slot in self._ledgers
+
+    def flat_ledger(self, func_name: str, state: str, doc: dict | None = None) -> dict[str, str] | None:
+        """``{part: short digest}`` for *state*: this process's ledger, else the record's."""
+        ledger = self._ledgers.get((func_name, state))
+        if ledger is None:
+            recorded = (doc or {}).get("states", {}).get(state)
+            return recorded if isinstance(recorded, dict) else None
+
+        def short(value: Any) -> str:
+            return hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:10]
+
+        flat: dict[str, str] = {}
+        grouped: dict[str, list] = {}
+        for label, value in list(ledger.items()):
+            if label == "@chain":
+                for i, link in enumerate(value):
+                    flat[f"@{i}"] = short(link)
+            elif label == "source":
+                flat["source"] = short(value)
+            elif isinstance(label, tuple) and label[0] == "globals":
+                via = f" (read by {label[1]})" if label[1] else ""
+                for name, digest in value:
+                    # `X#carried`, `X#cls:C`: more of what global X is.
+                    grouped.setdefault(f"global {name.split('#', 1)[0]}{via}", []).append((name, digest))
+            elif isinstance(label, tuple) and label[0] == "env":
+                # Already worded: "environment variable TENANT".
+                flat[label[1]] = short(value)
+            elif isinstance(label, tuple):
+                kind = "cached function" if label[0] == "calls" else label[0]
+                flat[f"{kind} {label[1]}"] = short(value)
+        for name, parts in grouped.items():
+            flat[name] = short(sorted(parts))
+        return flat
+
+    def _what_changed(self, func_name: str, old_state: str, new_state: str, doc: dict | None = None) -> str | None:
+        """Name what moved between two states of *func_name*, or None if unknown.
+
+        "code or state changed" alone sends the user to diff their own edits: a moved helper, an edited constant, a changed default, a
+        path whose case differed by launch mode all read the same.
+        """
+        old = self.flat_ledger(func_name, old_state, doc)
+        new = self.flat_ledger(func_name, new_state, doc)
+        if not old or not new:
+            return None
+        return describe_state_change(old, new)
+
+    def remember_outcome(self, cache_key: str, outcome: dict[str, Any]) -> None:
+        outcome.setdefault("at", time.time())
+        self.outcomes[cache_key] = outcome
+        self.outcomes.move_to_end(cache_key)
+        while len(self.outcomes) > STORE_OUTCOMES_MAX:
+            self.outcomes.popitem(last=False)
+
+    def note_not_stored(self, cache_key: str, refusal: str) -> None:
+        self.remember_outcome(cache_key, {"not_stored": refusal})
+
+
 class ExplainMixin:
-    """``f.explain()`` and the reason recorded for each miss."""
+    """``f.explain()``: why the next call with some arguments would hit or miss."""
 
     def _explain_call(self, cf: CachedFunction, args: tuple, kwargs: dict) -> CacheExplanation:
         """Return why a call with these args would hit or miss the cache.
@@ -426,7 +681,7 @@ class ExplainMixin:
 
         # Looking, not reading: `get` would count this as a use (USES / LAST
         # USED in `cash inspect`) and make the file backend rewrite the entry.
-        raw_metadata = self.backend.peek_metadata(cache_key)
+        raw_metadata = self._backend_slot.backend.peek_metadata(cache_key)
         if raw_metadata is not None and raw_metadata.get("metadata_only"):
             raw_metadata = None  # nothing to restore: a real call misses
         if raw_metadata is None:
@@ -436,7 +691,7 @@ class ExplainMixin:
             # A tracked dynamic dependency that changed produces a NEW cache key,
             # so the miss surfaces as no_entry rather than file_changed. Make the
             # explanation say so and list what's tracked.
-            dyn_ids = self._describe_dynamic_dependencies(dynamic_depends_on, args, kwargs)
+            dyn_ids = describe_dynamic_dependencies(dynamic_depends_on, args, kwargs)
             if dyn_ids:
                 details["dynamic_dependencies"] = dyn_ids
                 details["hint"] = (
@@ -450,7 +705,7 @@ class ExplainMixin:
             # or cleared": that it was never stored, why, or that it expired
             # under the ttl it was WRITTEN with -- which a backend drops on
             # read, so the entry looks absent.
-            missed = self._absent_entry_reason(func_name, cache_key)
+            missed = self._misses.absent_entry_reason(func_name, cache_key)
             if missed.kind is MissKind.TTL:
                 return CacheExplanation(
                     would_hit=False,
@@ -524,219 +779,3 @@ class ExplainMixin:
             cache_key=cache_key,
             details=details,
         )
-
-    def _describe_dynamic_dependencies(
-        self,
-        dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None,
-        args: tuple,
-        kwargs: dict,
-    ) -> list[str]:
-        """Best-effort list of the ``DataSource`` ids a function's
-        ``dynamic_depends_on`` resolves to for these args - so ``explain()`` can
-        report *what* is being tracked. Returns ``[]`` when there are none or
-        resolution fails (introspection must never raise)."""
-        if not dynamic_depends_on:
-            return []
-        resolvers = dynamic_depends_on if isinstance(dynamic_depends_on, list) else [dynamic_depends_on]
-        ids: list[str] = []
-        for resolver in resolvers:
-            try:
-                ds_result = resolver(*args, **kwargs)
-            except Exception:  # noqa: BLE001 - explain() is best-effort
-                continue
-            dss = ds_result if isinstance(ds_result, list) else [ds_result]
-            for ds in dss:
-                if isinstance(ds, DataSource):
-                    try:
-                        ids.append(ds.get_id())
-                    except Exception:  # noqa: BLE001 - a user DataSource; explain() is best-effort
-                        ids.append(repr(ds))
-        return ids
-
-    def _note_miss(self, func_name: str, cache_key: str, reason: MissReason) -> None:
-        """Hold *reason* for the `_log_decorator_call` that reports this miss."""
-        if len(self._pending_miss) > STORE_OUTCOMES_MAX:
-            # Only a call that raised leaves one behind; never let those pile up.
-            self._pending_miss.clear()
-        self._pending_miss[cache_key] = reason
-        cf = self._cached.get(func_name)
-        if cf is not None:
-            cf.last_key = cache_key
-
-    def _absent_entry_reason(self, func_name: str, cache_key: str) -> MissReason:
-        """Why there is no entry for *cache_key*. Reads state; changes none.
-
-        This process's own history first. With none -- the first call of a
-        function in a fresh process, which is where a script's misses are --
-        the keys earlier runs stored for this function, recorded beside the
-        cache (`StoredKeyRecord`). Without them every such miss read "no
-        earlier run left one on disk", including after a code edit and a TTL
-        expiry, whose entries were in fact on disk.
-        """
-        outcome = self._store_outcomes.get(cache_key)
-        if outcome is not None:
-            if outcome.get("not_stored"):
-                return MissReason(MissKind.NOT_STORED, outcome["not_stored"])
-            written_ttl = outcome.get("ttl")
-            age = time.time() - outcome.get("stored_at", 0)
-            if ttl_expired(outcome.get("stored_at", 0), written_ttl):
-                return MissReason(MissKind.TTL, f"written {age:.1f}s ago with ttl={written_ttl}s")
-            return MissReason(MissKind.GONE, "stored earlier in this process and since evicted or cleared")
-        cf = self._cached.get(func_name)
-        previous = cf.last_key if cf is not None else None
-        since = "since the last call"
-        doc = self._stored_keys.read(func_name)
-        record = doc["keys"]
-        if cache_key in record:
-            stored_at, written_ttl = record[cache_key][:2]
-            age = time.time() - stored_at
-            if ttl_expired(stored_at, written_ttl):
-                return MissReason(MissKind.TTL, f"stored {age:.0f}s ago by an earlier run, with ttl={written_ttl}s")
-            return MissReason(MissKind.GONE, "an earlier run stored it; it has since been evicted or cleared")
-        if cache_key in doc["ram_only"]:
-            why = doc["ram_only"][cache_key][1]
-            return MissReason(
-                MissKind.NOT_STORED,
-                f"an earlier run computed it but kept it in RAM only ({why}), so this process recomputed it",
-            )
-        # The same arguments stored under another state: the code or a value
-        # it reads changed. Asked of the record BEFORE the call-to-call
-        # comparison, which after a code edit blamed "new arguments" on every
-        # call of a loop but the first.
-        new_parts = cache_key.rsplit(":", 3)
-        if len(new_parts) == 4:
-            for key in reversed([*record, *doc["ram_only"]]):
-                old_parts = key.rsplit(":", 3)
-                if len(old_parts) == 4 and old_parts[2:] == new_parts[2:] and old_parts[1] != new_parts[1]:
-                    return self._code_changed(
-                        func_name, old_parts[1], new_parts[1], doc, "since an earlier run stored it"
-                    )
-            # Earlier runs stored entries, and none under the state this
-            # process computes: every one of them is out of date, whatever the
-            # arguments. A changed DEFAULT moves the arguments too (they are
-            # keyed with defaults applied), so the match above cannot see it,
-            # and the call-to-call comparison below called 3 of 4 such misses
-            # "new arguments".
-            earlier = {
-                key: value
-                for kind in ("keys", "ram_only")
-                for key, value in doc[kind].items()
-                if value and isinstance(value[0], (int, float)) and value[0] < PROCESS_STARTED
-            }
-            states = {key.rsplit(":", 3)[1] for key in earlier if key.count(":") >= 3}
-            if states and new_parts[1] not in states:
-                newest = max(earlier, key=lambda key: earlier[key][0])
-                return self._code_changed(
-                    func_name,
-                    newest.rsplit(":", 3)[1],
-                    new_parts[1],
-                    doc,
-                    "since an earlier run stored its entries, so none of them applies",
-                )
-        if previous is None or previous == cache_key:
-            others = [key for key in record if key != cache_key]
-            if previous is None and others:
-                previous = others[-1]
-                since = "since an earlier run stored it"
-            if previous is None or previous == cache_key:
-                return MissReason(
-                    MissKind.FIRST, "the first call with these arguments in this process, and no earlier run stored one"
-                )
-        # Keys are `func:state:dynamic:args`; the parts that moved say why.
-        old = previous.rsplit(":", 3)
-        new = cache_key.rsplit(":", 3)
-        if len(old) != 4 or len(new) != 4:
-            return MissReason(MissKind.FIRST, "no entry for this key")
-        moved: list[tuple[MissKind, str]] = []
-        what = None
-        if old[1] != new[1]:
-            moved.append((MissKind.CODE, f"{_CODE_CHANGED} {since}"))
-            what = self._what_changed(func_name, old[1], new[1], doc)
-        if old[2] != new[2]:
-            moved.append((MissKind.DYNAMIC, "a dynamic_depends_on source changed"))
-        if old[3] != new[3]:
-            last = "on the last call" if since == "since the last call" else "in the last run"
-            moved.append((MissKind.ARGS, f"called with arguments not seen {last}"))
-        if not moved:
-            return MissReason(MissKind.FIRST, "no entry for this key")
-        return MissReason(moved[0][0], "; and ".join(detail for _, detail in moved), what)
-
-    def _code_changed(self, func_name: str, old_state: str, new_state: str, doc: dict, since: str) -> MissReason:
-        """A "code or state changed" reason, naming what changed when known."""
-        return MissReason(
-            MissKind.CODE, f"{_CODE_CHANGED} {since}", self._what_changed(func_name, old_state, new_state, doc)
-        )
-
-    def _keep_state_ledger(self, slot: tuple[str, str], ledger: dict) -> None:
-        """Keep the ledger of the first key build that produced this
-        ``(func_name, state)``."""
-        ledgers = self._state_ledgers
-        ledgers[slot] = ledger
-        if len(ledgers) > 512:
-            try:
-                ledgers.pop(next(iter(ledgers)))
-            except (RuntimeError, StopIteration, KeyError):
-                pass  # another thread trimmed it first
-
-    def _flat_ledger(self, func_name: str, state: str, doc: dict | None = None) -> dict[str, str] | None:
-        """``{part: short digest}`` for *state*: this process's ledger, else the record's."""
-        ledger = self._state_ledgers.get((func_name, state))
-        if ledger is None:
-            recorded = (doc or {}).get("states", {}).get(state)
-            return recorded if isinstance(recorded, dict) else None
-
-        def short(value: Any) -> str:
-            return hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:10]
-
-        flat: dict[str, str] = {}
-        grouped: dict[str, list] = {}
-        for label, value in list(ledger.items()):
-            if label == "@chain":
-                for i, link in enumerate(value):
-                    flat[f"@{i}"] = short(link)
-            elif label == "source":
-                flat["source"] = short(value)
-            elif isinstance(label, tuple) and label[0] == "globals":
-                via = f" (read by {label[1]})" if label[1] else ""
-                for name, digest in value:
-                    # `X#carried`, `X#cls:C`: more of what global X is.
-                    grouped.setdefault(f"global {name.split('#', 1)[0]}{via}", []).append((name, digest))
-            elif isinstance(label, tuple) and label[0] == "env":
-                # Already worded: "environment variable TENANT".
-                flat[label[1]] = short(value)
-            elif isinstance(label, tuple):
-                kind = "cached function" if label[0] == "calls" else label[0]
-                flat[f"{kind} {label[1]}"] = short(value)
-        for name, parts in grouped.items():
-            flat[name] = short(sorted(parts))
-        return flat
-
-    def _what_changed(self, func_name: str, old_state: str, new_state: str, doc: dict | None = None) -> str | None:
-        """Name what moved between two states of *func_name*, or None if unknown.
-
-        "code or state changed" alone sends the user to diff their own edits: a moved helper, an edited constant, a changed default, a
-        path whose case differed by launch mode all read the same.
-        """
-        old = self._flat_ledger(func_name, old_state, doc)
-        new = self._flat_ledger(func_name, new_state, doc)
-        if not old or not new:
-            return None
-        return describe_state_change(old, new)
-
-    def _describe_stale_files(self, metadata: CacheMetadata) -> str:
-        stale = stale_file_deps(metadata)
-        if not stale:
-            return "a file it read"
-        path, why = next(iter(stale.items()))
-        more = f" and {len(stale) - 1} more" if len(stale) > 1 else ""
-        return f"{path} ({why}){more}"
-
-    def _remember_outcome(self, cache_key: str, outcome: dict[str, Any]) -> None:
-        outcome.setdefault("at", time.time())
-        self._store_outcomes[cache_key] = outcome
-        self._store_outcomes.move_to_end(cache_key)
-        while len(self._store_outcomes) > STORE_OUTCOMES_MAX:
-            self._store_outcomes.popitem(last=False)
-
-    def _note_not_stored(self, cache_key: str, refusal: str) -> None:
-        self._remember_outcome(cache_key, {"not_stored": refusal})

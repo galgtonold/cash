@@ -319,7 +319,7 @@ class ArgHashingMixin:
         else:
             which = f"an argument of type {arg_type_name} could not be hashed"
             suggestion = unhashable_arg_fix(self._first_unhashable_arg(args, kwargs), arg_type_name)
-        self._warn_once(
+        self._notices.warn_once(
             CashCacheIneffectiveWarning,
             func_name,
             arg_type_name,
@@ -345,7 +345,7 @@ class ArgHashingMixin:
                 f"cash.register_hasher({arg_type_name}, ...) if "
                 f"{arg_type_name} is the unhashable argument."
             )
-        self._warn_once(
+        self._notices.warn_once(
             CashCacheIneffectiveWarning,
             func_name,
             arg_type_name,

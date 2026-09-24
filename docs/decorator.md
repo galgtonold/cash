@@ -197,7 +197,7 @@ The id in brackets is the one `cash inspect --function` lists and
 `CASH_VERBOSE=1` or `verbose = true` give these lines without the other debug
 records.
 
-<!-- claim: cash/decorator/explain.py:ExplainMixin._absent_entry_reason @69e58ae2, cash/decorator/stored_keys.py:StoredKeyRecord.note_ram_only @39a4e46a -->
+<!-- claim: cash/decorator/explain.py:MissHistory.absent_entry_reason @69e58ae2, cash/decorator/stored_keys.py:StoredKeyRecord.note_ram_only @39a4e46a -->
 A reason is not limited to what this process saw: each function's recently
 stored keys are recorded beside the cache (in `.keys/`), so the first call of a
 new run can still say that the code changed, that the arguments are new, that
@@ -209,7 +209,7 @@ arguments new. After a code edit, every call says `code or state changed`, not
 just the first — including after a changed parameter default, which moves the
 arguments as well because they are keyed with defaults applied.
 
-<!-- claim: cash/decorator/explain.py:describe_state_change @7b3bcda1, cash/decorator/explain.py:ExplainMixin._flat_ledger @cd04a090 -->
+<!-- claim: cash/decorator/explain.py:describe_state_change @7b3bcda1, cash/decorator/explain.py:MissHistory.flat_ledger @cd04a090 -->
 After `--` it says *what* changed: `its own source changed`, `global
 THRESHOLD changed`, `helper model._rank changed`, `cached function
 model.load changed`, `environment variable TENANT changed`, `it now uses
@@ -829,7 +829,7 @@ After the TTL elapses, the next call recomputes and replaces the entry.
 Entries whose calls never come back stay on disk until you reclaim them —
 call `cash.cleanup()`, or run `python -m cash clear` from the CLI.
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._entry_ttl @b7544486, cash/decorator/explain.py:ExplainMixin._absent_entry_reason @69e58ae2 -->
+<!-- claim: cash/decorator/runtime.py:RuntimeMixin._entry_ttl @b7544486, cash/decorator/explain.py:MissHistory.absent_entry_reason @69e58ae2 -->
 An entry remembers the `ttl` it was written with, and the decorator's
 current `ttl` applies too, so the **shorter** of the two wins. Lengthening
 `ttl=60` to `ttl=3600` does not rescue entries already written under 60 s:

@@ -225,9 +225,9 @@ def test_naming_it_does_not_build_a_backend(tmp_path):
     defect of exactly the kind the line is there to diagnose.
     """
     c = _cash(tmp_path)
-    assert c._backend is None, "the fixture must start with the backend unbuilt"
+    assert c.backend_if_built is None, "the fixture must start with the backend unbuilt"
 
     c.run_summary()
 
-    assert c._backend is None
+    assert c.backend_if_built is None
     assert not (tmp_path / "cache").exists()

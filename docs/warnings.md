@@ -271,7 +271,7 @@ exception when Cash called it with the function's return value. The message
 names the exception and its text. Your call itself returned normally — only the
 storing was abandoned.
 
-<!-- claim: cash/decorator/reporting.py:ReportingMixin._warn_cache_if_raised @fa0df2cc -->
+<!-- claim: cash/decorator/reporting.py:Notices.cache_if_raised @fa0df2cc -->
 **Why it matters.** Cash treats a predicate that raises as "do not cache", so
 every call whose *result* makes it raise goes uncached and recomputes. This is
 scoped to the result, not to the function: calls returning a shape the predicate
@@ -945,7 +945,7 @@ response than a warning filter, because it leaves the rest of the function
 watched. Do not ignore a `mutable_global` or a `dynamic_pattern` line — those
 two are the stale-result kinds, and nothing else will tell you when they bite.
 
-<!-- claim: cash/decorator/reporting.py:ReportingMixin._first_showing @40e2378f -->
+<!-- claim: cash/decorator/reporting.py:Notices._first_showing @40e2378f -->
 This warning and [KEY-AMBIENT-READ](#key-ambient-read) are shown **once per
 cache**, not once per process: the next run on the same cache, finding the
 same lines, records them in `f.cache_info()["warnings"]` without printing them
@@ -2131,7 +2131,7 @@ bookkeeping stored alongside it — the record holding the timestamp, the TTL an
 which serialiser wrote the value. It treated the entry as absent and
 recomputed. The message names the exception.
 
-<!-- claim: cash/decorator/reporting.py:ReportingMixin._warn_metadata_invalid @ccb82f0d -->
+<!-- claim: cash/decorator/reporting.py:Notices.metadata_invalid @ccb82f0d -->
 **Why it matters.** Mostly it does not, and that is worth saying plainly. The
 fallback is the right one: an unreadable entry is ignored rather than
 half-trusted, so you get a fresh, correct result. What it costs is one

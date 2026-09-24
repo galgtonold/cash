@@ -236,7 +236,7 @@ class FileDepsMixin:
             return
         label = metadata.func_name or "a cached call"
         against = f", against {saved:.2f}s of compute it avoids" if saved and saved > 0 else ""
-        self._warn_once(
+        self._notices.warn_once(
             CashCacheIneffectiveWarning,
             label,
             "local-freshness-cost",
@@ -347,7 +347,7 @@ class FileDepsMixin:
         if not moved:
             return False
         shown = ", ".join(moved[:3]) + (f" and {len(moved) - 3} more" if len(moved) > 3 else "")
-        self._warn_once(
+        self._notices.warn_once(
             CashCacheStoreFailedWarning,
             func_name,
             "code_changed",
@@ -387,7 +387,7 @@ class FileDepsMixin:
         if not moved:
             return False
         shown = ", ".join(moved[:3]) + (f" and {len(moved) - 3} more" if len(moved) > 3 else "")
-        self._warn_once(
+        self._notices.warn_once(
             CashCacheStoreFailedWarning,
             func_name,
             "input_changed",

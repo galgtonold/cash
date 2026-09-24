@@ -168,7 +168,7 @@ class FrozenMixin:
 
     def _warn_frozen_has_no_effect(self, func_name: str, result: Any) -> None:
         """Say so when ``frozen=True`` cannot apply to what the function returned."""
-        self._warn_once(
+        self._notices.warn_once(
             CashCacheIneffectiveWarning,
             func_name,
             "frozen_no_effect",

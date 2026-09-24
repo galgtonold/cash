@@ -399,7 +399,7 @@ class GlobalsFoldMixin:
                     # helper's module (see `_fold_helper_read_globals`).
                     watch[name] = (h, "global", g, func)
             except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
-                self._warn_once(
+                self._notices.warn_once(
                     CashImpurityWarning,
                     func_name,
                     name,
@@ -1043,7 +1043,7 @@ class GlobalsFoldMixin:
             stabilized = stabilize_for_global_hash(value, self._data_callable_identity)
             return self._hash_arg_payload((stabilized,), {})
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
-            self._warn_once(
+            self._notices.warn_once(
                 CashImpurityWarning,
                 func_name,
                 label,

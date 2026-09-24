@@ -33,11 +33,11 @@ def test_warn_once_dedupes_per_func_and_arg_type(tmp_path):
 
     with warnings.catch_warnings(record=True) as captured:
         warnings.simplefilter("always")  # bypass Python's built-in dedup
-        c._warn_once(CashCacheIneffectiveWarning, "f", "MyType", "msg one", **CODED)
-        c._warn_once(CashCacheIneffectiveWarning, "f", "MyType", "msg one", **CODED)  # dup
-        c._warn_once(CashCacheIneffectiveWarning, "g", "MyType", "msg one", **CODED)  # new func
-        c._warn_once(CashCacheIneffectiveWarning, "f", "OtherType", "msg one", **CODED)  # new type
-        c._warn_once(CashCacheStoreFailedWarning, "f", "MyType", "msg one", **CODED)  # new category
+        c._notices.warn_once(CashCacheIneffectiveWarning, "f", "MyType", "msg one", **CODED)
+        c._notices.warn_once(CashCacheIneffectiveWarning, "f", "MyType", "msg one", **CODED)  # dup
+        c._notices.warn_once(CashCacheIneffectiveWarning, "g", "MyType", "msg one", **CODED)  # new func
+        c._notices.warn_once(CashCacheIneffectiveWarning, "f", "OtherType", "msg one", **CODED)  # new type
+        c._notices.warn_once(CashCacheStoreFailedWarning, "f", "MyType", "msg one", **CODED)  # new category
 
     # Expect 4 unique emissions
     assert len(captured) == 4, [str(w.message) for w in captured]
@@ -48,7 +48,7 @@ def test_warn_once_does_not_emit_when_already_seen(tmp_path):
     with warnings.catch_warnings(record=True) as captured:
         warnings.simplefilter("always")
         for _ in range(10):
-            c._warn_once(CashCacheIneffectiveWarning, "f", "X", "boom", **CODED)
+            c._notices.warn_once(CashCacheIneffectiveWarning, "f", "X", "boom", **CODED)
     assert len(captured) == 1
     assert "boom" in str(captured[0].message)
     assert captured[0].category is CashCacheIneffectiveWarning
@@ -62,7 +62,7 @@ def test_warn_once_blames_the_nearest_frame_outside_cash(tmp_path):
 
     with warnings.catch_warnings(record=True) as captured:
         warnings.simplefilter("always")
-        c._warn_once(CashCacheIneffectiveWarning, "g", "X", "from-test", **CODED)
+        c._notices.warn_once(CashCacheIneffectiveWarning, "g", "X", "from-test", **CODED)
 
     assert len(captured) == 1
     assert captured[0].filename.endswith("test_warnings_ineffective.py"), captured[0].filename

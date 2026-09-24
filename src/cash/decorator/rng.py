@@ -232,7 +232,7 @@ class RngMixin:
             return cf.rng_modules
         modules: set[str] = set()
         try:
-            stored = self.backend.get(rng_marker_key(func_name))
+            stored = self._backend_slot.backend.get(rng_marker_key(func_name))
             # Backends answer with ``(metadata, value)``; unwrap before reading.
             # Treating the pair itself as the payload silently yielded an empty
             # set, so every restart re-learned nothing and the stale value came
@@ -250,7 +250,7 @@ class RngMixin:
     def _store_rng_draw_marker(self, func_name: str, modules: set[str]) -> None:
         """Persist the verdict so the next process applies it on its first call."""
         try:
-            self.backend.set(rng_marker_key(func_name), set(modules))
+            self._backend_slot.backend.set(rng_marker_key(func_name), set(modules))
         except Exception:  # noqa: BLE001 - best effort; correctness degrades to today's
             logger.debug("could not persist RNG draw marker for %s", func_name)
 
@@ -402,11 +402,11 @@ class RngMixin:
             f"call - the RNG is never consulted again, so the value is frozen "
             f"and not reproducible across a cleared cache."
         )
-        # ``_warn_once`` gives one warning per decorated function for the life
+        # ``Notices.warn_once`` gives one warning per decorated function for the life
         # of this Cash instance, and it also
         # files the message into ``f.cache_info()['warnings']`` so it stays
         # discoverable if the user missed the stderr emission.
-        self._warn_once(
+        self._notices.warn_once(
             CashRandomnessWarning,
             func_name,
             "",
@@ -453,7 +453,7 @@ class RngMixin:
                 if is_param and not path
                 else f"set {expr} to an integer, or pass the seed as an argument."
             )
-            self._warn_once(
+            self._notices.warn_once(
                 CashRandomnessWarning,
                 func_name,
                 f"seed-param:{expr}",
@@ -497,11 +497,11 @@ class RngMixin:
         if allow_random:
             return
         # This runs on EVERY call, hits included, so it must stay cheap once it
-        # has had its say. `_warn_once` would dedupe the emission but not the
+        # has had its say. `Notices.warn_once` would dedupe the emission but not the
         # `get_params()` that precedes it, and sklearn's `get_params` walks the
         # signature -- a per-hit cost on exactly the functions people cache to
         # avoid paying for a fit. Check the same key first and leave.
-        if (CashRandomnessWarning, func_name, "_estimator_result", "RANDOM-UNSEEDED") in self._warning_keys_seen:
+        if self._notices.has_warned((CashRandomnessWarning, func_name, "_estimator_result", "RANDOM-UNSEEDED")):
             return
         get_params = getattr(result, "get_params", None)
         if get_params is None or not callable(get_params):
@@ -513,7 +513,7 @@ class RngMixin:
         except Exception:  # noqa: BLE001 - advisory only; never break a call
             return
 
-        self._warn_once(
+        self._notices.warn_once(
             CashRandomnessWarning,
             func_name,
             "_estimator_result",

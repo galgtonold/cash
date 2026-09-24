@@ -98,7 +98,7 @@ class RegistryMixin:
         """
         snapshot = hash_callable_source(dep)
         if bytecode_identity(dep) is None and snapshot == compiled_identity(dep):
-            self._warn_once(
+            self._notices.warn_once(
                 CashCacheIneffectiveWarning,
                 func_name,
                 "",

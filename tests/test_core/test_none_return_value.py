@@ -100,5 +100,5 @@ class TestNoneReturnValueCaches:
         # The second call's args_hash matches the first; if the backend
         # genuinely held None, the cache_hit_log entry should reflect that.
         # Spot-check via show_stats which iterates the decorator_call_log.
-        hits = [e for e in c._decorator_call_log if e["cache_hit"]]
+        hits = [e for e in c._calls.entries if e["cache_hit"]]
         assert len(hits) == 1, f"expected 1 hit log entry, got {len(hits)}"

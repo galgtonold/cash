@@ -431,7 +431,7 @@ def test_a_call_that_ran_a_mock_says_so(c, mods):
     app = _json_app(c, mods)
     with mock.patch.object(json.decoder.JSONDecoder, "decode", return_value={"v": 9}):
         app.total('{"v": 2}')
-    outcome = next(iter(c._store_outcomes.values()))
+    outcome = next(iter(c._misses.outcomes.values()))
     assert "mock" in (outcome.get("not_stored") or ""), outcome
 
 

@@ -217,7 +217,7 @@ class PurityChecksMixin:
         if shared is None:
             return
         what, name = shared
-        self._warn_once(
+        self._notices.warn_once(
             CashImpurityWarning,
             func_name,
             "shared-result",
@@ -351,7 +351,7 @@ class PurityChecksMixin:
                     module = resolve_main_module(reader)
                 where = f"module global '{module}.{name}'" if module else f"module global '{name}'"
             site = describe_scope_use(reader, name, func)
-            self._warn_once(
+            self._notices.warn_once(
                 CashImpurityWarning,
                 func_name,
                 name,
@@ -398,7 +398,7 @@ class PurityChecksMixin:
         reason = identity_coupled_reason("the returned value", result)
         if reason is None:
             return False
-        self._warn_once(
+        self._notices.warn_once(
             CashCacheIneffectiveWarning,
             func_name,
             "",
@@ -591,7 +591,7 @@ class PurityChecksMixin:
         if not effects:
             return
         summary = "\n".join(dict.fromkeys(f"  {kind}: {detail}" for kind, detail in effects))
-        self._warn_once(
+        self._notices.warn_once(
             CashImpurityWarning,
             func_name,
             "observed_effect",
@@ -733,7 +733,7 @@ class PurityChecksMixin:
         if ambient and mode != "strict":
             issues = [i for i in issues if getattr(i, "kind", None) != ISSUE_AMBIENT_READ]
             self._purity_static_flagged.add(func_name)
-            self._warn_once(
+            self._notices.warn_once(
                 CashImpurityWarning,
                 func_name,
                 "ambient",
@@ -758,7 +758,7 @@ class PurityChecksMixin:
         remote = [i for i in issues if getattr(i, "kind", None) == ISSUE_NETWORK_READ]
         if remote and mode != "strict":
             issues = [i for i in issues if getattr(i, "kind", None) != ISSUE_NETWORK_READ]
-            self._warn_once(
+            self._notices.warn_once(
                 CashImpurityWarning,
                 func_name,
                 "network_read",
@@ -789,7 +789,7 @@ class PurityChecksMixin:
                 f"have audited, or relax to assume_safe=True.\n{summary}"
             )
         # mode == "warn"
-        self._warn_once(
+        self._notices.warn_once(
             CashImpurityWarning,
             func_name,
             "purity",

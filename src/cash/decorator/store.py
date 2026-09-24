@@ -103,7 +103,7 @@ class StoreMixin:
             try:
                 refusal = None if cache_if(res) else "cache_if returned False"
             except Exception as e:  # noqa: BLE001 - user predicate
-                self._warn_cache_if_raised(func_name, e)
+                self._notices.cache_if_raised(func_name, e)
                 refusal = "cache_if raised"
         # After the body ran, before deciding to store: a provisional global
         # this call moved must stop being folded.
@@ -337,7 +337,7 @@ class StoreMixin:
             # Kept, not a temporary: TieredBackend writes back where the value
             # landed, and "RAM only" is the answer to the next process's miss.
             meta_dict = meta.to_dict()
-            self.backend.set(cache_key, result, meta_dict, serializer=serializer)
+            self._backend_slot.backend.set(cache_key, result, meta_dict, serializer=serializer)
             # A tiered backend catches each tier's failure so one bad tier
             # cannot break a call; it reports them here instead, and a result
             # nothing could store is a STORE-FAILED like any other.
@@ -345,7 +345,7 @@ class StoreMixin:
             if store_errors and not [t for t in (meta_dict.get("storage") or []) if t != "RAM"]:
                 raise CacheBackendError("; ".join(str(e) for e in store_errors))
             not_persisted = not_persisted_reason(meta_dict)
-            self._remember_outcome(
+            self._misses.remember_outcome(
                 cache_key,
                 {
                     "stored_at": time.time(),
@@ -353,15 +353,15 @@ class StoreMixin:
                     "not_persisted": not_persisted,
                 },
             )
-            ledger = functools.partial(self._flat_ledger, func_name)
+            ledger = functools.partial(self._misses.flat_ledger, func_name)
             if not_persisted is None:
                 self._stored_keys.note_stored(func_name, cache_key, ttl, ledger)
             else:
                 self._stored_keys.note_ram_only(func_name, cache_key, not_persisted, ledger)
         except (OSError, TypeError, pickle.PicklingError, RuntimeError, CacheBackendError) as e:
-            self._note_not_stored(cache_key, "the backend refused the write")
-            backend_name = type(self.backend).__name__
-            self._warn_once(
+            self._misses.note_not_stored(cache_key, "the backend refused the write")
+            backend_name = type(self._backend_slot.backend).__name__
+            self._notices.warn_once(
                 CashCacheStoreFailedWarning,
                 func_name,
                 "",
@@ -385,7 +385,7 @@ class StoreMixin:
         thresholds would produce more chunks and so guarantee the very bypass
         it is warning about.
         """
-        self._warn_once(
+        self._notices.warn_once(
             CashCacheIneffectiveWarning,
             spec.name,
             "",
@@ -492,7 +492,7 @@ class StoreMixin:
                 # already received.
                 refusal = self._store_refusal(None, func_name, buffer, rng_new, cache_if, tracker, observer=observer)
                 if refusal is not None:
-                    self._note_not_stored(cache_key, refusal)
+                    self._misses.note_not_stored(cache_key, refusal)
                 else:
                     if buffer:
                         self._write_one_chunk(cache_key, 0, buffer, ttl=ttl, execution_time=produced_seconds)
@@ -533,7 +533,7 @@ class StoreMixin:
                 # killed process can still leave some behind.
                 for index in range(chunk_index):
                     try:
-                        self.backend.delete(f"{cache_key}:chunk_{index}")
+                        self._backend_slot.backend.delete(f"{cache_key}:chunk_{index}")
                     except Exception:  # noqa: BLE001 - cleanup must not raise
                         logger.debug("[CORE] could not drop orphan chunk %d", index)
 
@@ -573,10 +573,10 @@ class StoreMixin:
             ttl=ttl,
         ).to_dict()
         try:
-            self.backend.set(chunk_key, chunk_buffer, chunk_metadata, serializer=serializer)
+            self._backend_slot.backend.set(chunk_key, chunk_buffer, chunk_metadata, serializer=serializer)
         except (OSError, TypeError, pickle.PicklingError, RuntimeError) as e:
-            backend_name = type(self.backend).__name__
-            self._warn_once(
+            backend_name = type(self._backend_slot.backend).__name__
+            self._notices.warn_once(
                 CashCacheStoreFailedWarning,
                 f"{cache_key}:chunk_{chunk_index}",
                 "",
@@ -625,10 +625,10 @@ class StoreMixin:
                 n_chunks=manifest_data["n_chunks"],
                 auto_file_deps=auto_file_deps or None,
             ).to_dict()
-            self.backend.set(cache_key, manifest_data, metadata, serializer=serializer)
+            self._backend_slot.backend.set(cache_key, manifest_data, metadata, serializer=serializer)
         except (OSError, TypeError, pickle.PicklingError, RuntimeError) as e:
-            backend_name = type(self.backend).__name__
-            self._warn_once(
+            backend_name = type(self._backend_slot.backend).__name__
+            self._notices.warn_once(
                 CashCacheStoreFailedWarning,
                 func_name,
                 "",

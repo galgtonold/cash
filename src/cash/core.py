@@ -17,7 +17,6 @@ import sys
 import threading
 import time
 import weakref
-from collections import OrderedDict, deque
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
 
@@ -25,7 +24,7 @@ from . import _log
 from .backends import CacheBackend, CacheMetadata
 from .backends._base import entry_expired
 from .backends._writes import in_multiprocessing_child
-from .backends.factory import build_backend_from_config, build_tiered
+from .backends.factory import build_tiered
 from .config import CashConfig, get_config
 from .data_source import DataSource
 from .decorator.arg_hashing import (
@@ -33,6 +32,7 @@ from .decorator.arg_hashing import (
     ArgHashingMixin,
     mark_opaque,
 )
+from .decorator.backend_slot import BackendSlot
 from .decorator.cached_function import CHUNK_MAX_BYTES, CHUNK_MAX_ITEMS, CachedFunction, new_stats
 from .decorator.call_state import (
     CACHE_MISS,
@@ -50,8 +50,8 @@ from .decorator.code_identity import (
 from .decorator.explain import (
     CacheExplanation,
     ExplainMixin,
+    MissHistory,
     MissKind,
-    MissReason,
 )
 from .decorator.file_deps import FileDepsMixin
 from .decorator.frozen import FrozenMixin
@@ -62,7 +62,7 @@ from .decorator.purity_checks import (
     PurityChecksMixin,
 )
 from .decorator.registry import RegistryMixin
-from .decorator.reporting import ReportingMixin
+from .decorator.reporting import CallLog, Notices
 from .decorator.rng import RngMixin
 from .decorator.runtime import RuntimeMixin
 from .decorator.script_pickling import expose_script_function
@@ -142,18 +142,6 @@ def _backend_cache_dir(backend: CacheBackend | None) -> str | None:
     return os.path.abspath(directory) if directory else None
 
 
-def _local_dir_of(ref: weakref.ref[Cash]) -> Callable[[], str | None]:
-    """The built backend's local directory, read through *ref* so the
-    stored-key record does not keep its `Cash` alive."""
-
-    def local_dir() -> str | None:
-        cash = ref()
-        backend = cash._backend if cash is not None else None
-        return backend.local_dir if backend is not None else None
-
-    return local_dir
-
-
 def _declared_files(file_depends_on: str | list[str] | None) -> tuple[tuple[str, str], ...]:
     """``file_depends_on=`` as ``(as written, absolute)`` pairs. Each miss records
     the absolute paths as if the body had read them (`_track_declared_files`);
@@ -174,10 +162,12 @@ class _ExitWork:
     on -- a writer thread, which would wait on itself.
     """
 
-    __slots__ = ("backend", "effectiveness", "stored_keys")
+    __slots__ = ("backend_slot", "effectiveness", "stored_keys")
 
-    def __init__(self, stored_keys: StoredKeyRecord, effectiveness: EffectivenessLedger) -> None:
-        self.backend: CacheBackend | None = None
+    def __init__(
+        self, backend_slot: BackendSlot, stored_keys: StoredKeyRecord, effectiveness: EffectivenessLedger
+    ) -> None:
+        self.backend_slot = backend_slot
         self.stored_keys = stored_keys
         self.effectiveness = effectiveness
 
@@ -193,21 +183,16 @@ class _ExitWork:
                 warn_diagnostic(CashCacheIneffectiveWarning, "CACHE-NET-LOSS", what, fix)
             except Exception:  # noqa: BLE001 - -W error at exit, or teardown
                 pass
-        if self.backend is not None:
+        backend = self.backend_slot.built
+        if backend is not None:
             self.stored_keys.close()
-            self.backend.shutdown()
+            backend.shutdown()
 
 
 def _summary_at_exit(ref: weakref.ref[Cash]) -> None:
     cash = ref()
     if cash is not None:
         cash._print_run_summary()
-
-
-#: How many call events `Cash._decorator_call_log` holds. The notebook drains it
-#: after every statement; nothing drains it in a script or a service, so it
-#: keeps only the most recent calls rather than one entry per call forever.
-_CALL_LOG_MAX = 10_000
 
 
 def _in_kernel() -> bool:
@@ -232,7 +217,6 @@ class Cash(
     ExplainMixin,
     RuntimeMixin,
     StoreMixin,
-    ReportingMixin,
     RegistryMixin,
 ):
     """Smart caching framework for Python functions and Jupyter notebooks.
@@ -340,21 +324,11 @@ class Cash(
 
         debug = self.config.debug
 
-        # Store params for lazy backend construction. If an explicit
-        # backend (or list of backends) was provided, that wins - those
-        # are concrete objects, not config - and we skip the factory.
-        self._backend: CacheBackend | None = None
-        if backend is not None:
-            self._backend = backend
-        elif backends:
-            if len(backends) > 1:
-                self._backend = build_tiered(backends, self.config)
-            else:
-                self._backend = backends[0]
-        # Set with the stored-key record below; `_backend` is mirrored into it.
-        self._exit_work: _ExitWork | None = None
-
-        self._backend_lock = threading.Lock()
+        # An explicit backend (or list of backends) wins over the config: those
+        # are concrete objects, not settings, and the factory is skipped.
+        if backend is None and backends:
+            backend = build_tiered(backends, self.config) if len(backends) > 1 else backends[0]
+        self._backend_slot = BackendSlot(self.config, backend)
         self._analytics: AnalyticsManager | None = None
 
         self.graph = DependencyGraph()
@@ -381,9 +355,6 @@ class Cash(
         # weakref -- so the object is held here, while someone else holds it
         # too (`_remember_frozen_container`).
         self._frozen_containers: dict[int, list] = {}
-        # Running account of what caching cost vs what it saved, per function.
-        # The decorator always caches by design -- this only ever informs.
-        self._effectiveness = EffectivenessLedger()
         if self.config.summary:
             # Per instance: two Cash instances are two independent caches, and
             # each accounts for itself. Through a weakref, so the hook does
@@ -450,12 +421,13 @@ class Cash(
         # `_warn_untrackable_in_carrier_once`): once per carrier and function.
         self._warned_unhashable_code: set[tuple] = set()
         self._warned_untrackable_carrier: set[tuple] = set()
-        # (func_name, state segment) -> the ledger of the key build that first
-        # produced it (`_keep_state_ledger`).
-        self._state_ledgers: dict[tuple[str, str], dict] = {}
-        self._stored_keys = StoredKeyRecord(_local_dir_of(weakref.ref(self)))
-        self._exit_work = _ExitWork(self._stored_keys, self._effectiveness)
-        self._exit_work.backend = self._backend
+        # The keys earlier runs stored, recorded beside the cache.
+        self._stored_keys = StoredKeyRecord(self._backend_slot.local_dir)
+        self._notices = Notices(self._cached, self.functions, self._stored_keys, self._backend_slot)
+        self._misses = MissHistory(self._cached, self._stored_keys)
+        effectiveness = EffectivenessLedger()
+        self._calls = CallLog(self.config, self._cached, self._misses, effectiveness)
+        self._exit_work = _ExitWork(self._backend_slot, self._stored_keys, effectiveness)
         # (first_param, self_attrs, uses_super) per code object; see
         # _analyze_method_self_deps.
         self._method_self_dep_cache: dict = {}
@@ -504,24 +476,6 @@ class Cash(
         if debug or verbose:
             _log.enable(logging.DEBUG if debug else logging.INFO)
 
-        # What a miss was, for the people asking "why did that recompute?".
-        # Both are in-process memory only, and bounded: they explain, they
-        # never decide anything. (The last key per function is on its
-        # `CachedFunction`.)
-        #: cache_key -> what happened when it was last computed here.
-        self._store_outcomes: OrderedDict[str, dict[str, Any]] = OrderedDict()
-        #: cache_key -> (kind, detail) for a lookup that just missed, taken
-        #: by the `_log_decorator_call` that reports it.
-        self._pending_miss: dict[str, MissReason] = {}
-
-        # Decorator call log for notebook integration.
-        # Each entry is a dict with: func_name, cache_hit (bool), execution_time,
-        # args_hash, cache_key, timestamp.  The notebook statement processor
-        # drains this after executing each statement so it can include
-        # decorator metrics in the badge. Bounded: outside a notebook nothing
-        # drains it, and a long-running process must not keep every call.
-        self._decorator_call_log: deque[dict[str, Any]] = deque(maxlen=_CALL_LOG_MAX)
-        self._decorator_call_log_lock = threading.Lock()
         # Custom type hasher registry: maps type -> (callable(value) -> str, source hash).
         # The source hash is embedded in the args_hash composition so that
         # changing a hasher's body invalidates dependent cache entries.
@@ -531,10 +485,6 @@ class Cash(
         # above so the hot path can skip the whole question with one empty
         # check -- overriding is rare, and every cached call pays for this.
         self._override_hashers: dict[type, tuple[Callable[[Any], str], str]] = {}
-
-        # Dedup keys for _warn_once: (category, func_name, arg_type_name, code).
-        # Guarded by _decorator_call_log_lock (already exists for thread safety).
-        self._warning_keys_seen: set[tuple[type[Warning], str, str, str]] = set()
 
         # Functions the STATIC pass already reported on. The runtime effect
         # observer stays quiet for these: it would be a second warning about
@@ -579,26 +529,18 @@ class Cash(
 
     @property
     def backend(self) -> CacheBackend:
-        """Lazily build the cache backend from ``self.config`` on first access.
+        """The cache backend, built from ``self.config`` on first access.
 
         This avoids filesystem I/O, thread creation, and directory
         scanning at ``Cash()`` construction time. The heavy lifting
         happens only when the cache is actually used.
         """
-        if self._backend is not None:
-            return self._backend
-        with self._backend_lock:
-            if self._backend is not None:
-                return self._backend
-            self._backend = build_backend_from_config(self.config)
-            self._exit_work.backend = self._backend
-            return self._backend
+        return self._backend_slot.backend
 
     @backend.setter
     def backend(self, value: CacheBackend) -> None:
         """Allow direct assignment (e.g. ``c.backend = MyBackend()``)."""
-        self._backend = value
-        self._exit_work.backend = value
+        self._backend_slot.backend = value
 
     @property
     def analytics(self) -> AnalyticsManager:
@@ -614,7 +556,7 @@ class Cash(
     @property
     def backend_if_built(self) -> CacheBackend | None:
         """The backend if one has been built, else ``None``; never builds one."""
-        return self._backend
+        return self._backend_slot.built
 
     @property
     def debug(self) -> bool:
@@ -640,7 +582,8 @@ class Cash(
         apply_overrides(self, overrides)
 
     def __repr__(self) -> str:
-        backend_name = type(self._backend).__name__ if self._backend is not None else "<deferred>"
+        built = self._backend_slot.built
+        backend_name = type(built).__name__ if built is not None else "<deferred>"
         n_funcs = len(self.functions)
         return f"Cash(backend={backend_name}, functions={n_funcs}, debug={self.debug})"
 
@@ -830,7 +773,7 @@ class Cash(
 
         # Async generators are not cached; warn once and return unwrapped.
         if inspect.isasyncgenfunction(func):
-            self._warn_once(
+            self._notices.warn_once(
                 CashCacheIneffectiveWarning,
                 func_name,
                 "",
@@ -952,7 +895,7 @@ class Cash(
         """Wrap *wrapper* with hit/miss stat tracking and attach introspection API.
 
         Dispatches on whether *func* is a coroutine function so the stats
-        update (from the entry `_log_decorator_call` left in this call's
+        update (from the entry `CallLog.log` left in this call's
         `CALL_ENTRY` slot) happens AFTER the await for async, and
         synchronously otherwise.
 
@@ -1069,8 +1012,7 @@ class Cash(
             """
             total = _stats["hits"] + _stats["misses"]
             hit_rate = _stats["hits"] / total if total > 0 else 0.0
-            with self._decorator_call_log_lock:
-                warnings_log = list(cf.warnings)
+            warnings_log = self._notices.log_of(cf)
             return {
                 "hits": _stats["hits"],
                 "misses": _stats["misses"],
@@ -1085,16 +1027,12 @@ class Cash(
 
             Removes all cache entries whose key starts with the function name.
             Resets hit/miss statistics, drops the per-function warnings log,
-            and forgets ``_warn_once`` dedup marks for this function so the
+            and forgets ``Notices.warn_once`` dedup marks for this function so the
             next misbehavior re-warns instead of being silently swallowed.
             """
             _stats.update(new_stats())
             self._delete_backend_entries(func_name)
-            with self._decorator_call_log_lock:
-                cf.warnings.clear()
-                # Drop dedup marks for this function so future misbehavior
-                # re-warns the user instead of staying silent.
-                self._warning_keys_seen = {k for k in self._warning_keys_seen if k[1] != func_name}
+            self._notices.forget(cf)
 
         def explain(*args: Any, **kwargs: Any) -> CacheExplanation:
             """Return why the next call with these args would hit or miss.
@@ -1146,10 +1084,7 @@ class Cash(
             an estimate carried forward from the write, not a measurement of
             this call.
         """
-        with self._decorator_call_log_lock:
-            calls = list(self._decorator_call_log)
-            self._decorator_call_log.clear()
-        return calls
+        return self._calls.drain()
 
     def register_hasher(
         self,
@@ -1397,7 +1332,7 @@ class Cash(
         creates a cache directory, and it runs from an ``atexit`` handler where
         building one is worse than saying nothing.
         """
-        path = self._backend.local_dir if self._backend is not None else None
+        path = self._backend_slot.local_dir()
         if path:
             return path
         configured = getattr(self.config, "cache_dir", None)
