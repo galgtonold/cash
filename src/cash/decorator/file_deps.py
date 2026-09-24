@@ -22,7 +22,7 @@ from ..tracking.file_dep_snapshot import (
     snapshot_dependencies,
     snapshot_is_fresh,
 )
-from ..tracking.file_tracker import credited_reads
+from ..tracking.read_credit import credited_reads
 from ..tracking.tracker_context import active_tracker
 from .code_identity import CODE_KEYED_STATS
 
