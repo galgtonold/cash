@@ -24,7 +24,7 @@ import ast
 
 import pytest
 
-from cash.notebook.ipython.cell_executor import CellExecutor
+from cash.analysis.code_analyzer import expr_has_trailing_semicolon
 
 VT = chr(0x0B)  # vertical tab
 FF = chr(0x0C)  # form feed
@@ -60,7 +60,7 @@ def semicolon_follows(source: str, node: ast.stmt) -> bool:
 )
 def test_matches_the_parsers_own_coordinates(label, source):
     node = ast.parse(source).body[-1]
-    assert CellExecutor.expr_has_trailing_semicolon(source, node) == semicolon_follows(source, node), label
+    assert expr_has_trailing_semicolon(source, node) == semicolon_follows(source, node), label
 
 
 def test_a_non_expression_statement_is_never_suppressed():
@@ -68,4 +68,4 @@ def test_a_non_expression_statement_is_never_suppressed():
     followed by ``;`` has no repr to suppress."""
     source = "x = 1;\n"
     node = ast.parse(source).body[0]
-    assert CellExecutor.expr_has_trailing_semicolon(source, node) is False
+    assert expr_has_trailing_semicolon(source, node) is False

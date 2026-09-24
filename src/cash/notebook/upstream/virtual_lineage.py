@@ -20,7 +20,7 @@ import re
 import sys
 import time as time_module
 import types
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from cash.control_markers import iteration_digest, strip_markers
@@ -28,7 +28,7 @@ from cash.control_markers import iteration_digest, strip_markers
 from ..._paths import resolve_file_dep_path
 from ...analysis.ast_util import called_names, parse_cached
 from ...analysis.cacheability import statement_writes_files
-from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source
+from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source, statement_code
 from ...analysis.mutation_effects import (
     StatementEffects,
     classify_receivers,
@@ -38,8 +38,7 @@ from ...analysis.mutation_effects import (
 )
 from ...analysis.namespace_effects import bare_call_argument_names, bare_call_arguments
 from ...source_norm import source_identity_digest
-from ...tracking import file_dep_snapshot as _fds
-from ...tracking.file_dep_snapshot import LISTING_MIN_FILES, FreshnessMemo, snapshot_is_fresh, stats_from_listings
+from ...tracking.file_dep_snapshot import snapshot_is_fresh
 from ...tracking.randomness import (
     hidden_lineage_writes,
     hidden_write_lineage,
@@ -72,6 +71,7 @@ from ..lineage_formula import (
     statement_environment_component,
 )
 from ..loop_split import is_split_half, loop_source_hash, split_nodes, store_for_backend
+from ..run_memo import file_state_this_run, known_fresh_entry, note_fresh_entry, stats_this_run
 from ..statement import is_control_body
 from ..statement.derivation_edges import bump_derived_lineages
 from ..statement.file_deps import compute_file_hash_component
@@ -140,79 +140,6 @@ def key_inputs(inputs: set[str], input_hashes: dict[str, str]) -> set[str]:
     variables riding on *input_hashes*, as the runtime keys it."""
     hidden = getattr(input_hashes, "hidden_lineages", None)
     return set(inputs) | set(hidden) if hidden else set(inputs)
-
-
-#: Cache keys whose file dependencies were found fresh in the current cell run
-#: (see VirtualLineage._validate_file_freshness).
-_FRESH_ENTRY_VERDICTS: dict = {}
-
-#: Per cell run, per FILE: the freshness answer for each (path, recorded
-#: snapshot) pair, and each path's resolution and mtime. The same run-long trust the entry verdicts
-#: above already take, one level down: upstream entries share their files -- in
-#: one notebook every entry depended on the same 5,222 documents, in two spellings --
-#: and each entry checked all of them again, twice (freshness, then mtime):
-#: 7-11 s before every cell of a notebook that runs in 30 s uncached.
-_FILE_STATE_THIS_RUN: dict = {}
-
-
-def _file_state_this_run() -> dict | None:
-    """This cell run's per-file memo, or None outside a run."""
-
-    epoch = _fds.HASH_EPOCH
-    if epoch is None:
-        return None
-    if _FILE_STATE_THIS_RUN.get("epoch") != epoch:
-        _FILE_STATE_THIS_RUN.clear()
-        _FILE_STATE_THIS_RUN.update(epoch=epoch, memo=FreshnessMemo(), where={})
-    return _FILE_STATE_THIS_RUN
-
-
-def forget_file_state_this_run() -> None:
-    """A statement of this cell run wrote files: answers taken before it are
-    not answers for entries checked after it."""
-    _FILE_STATE_THIS_RUN.clear()
-
-
-def _locate_files(paths: Iterable[str], run: dict | None) -> dict[str, tuple[str | None, Any]]:
-    """``{path: (resolved or None, stat or None)}`` for *paths*, this run's answers first.
-
-    A crowded directory is read with one listing (``stats_from_listings``); a
-    listed path is where it was recorded. The rest go through
-    ``resolve_file_dep_path``'s relocation fallbacks, as before.
-    """
-    where = run["where"] if run is not None else {}
-    paths = list(paths)
-    todo = [p for p in paths if p not in where]
-    listed = stats_from_listings(todo) if len(todo) >= LISTING_MIN_FILES else {}
-    found: dict[str, tuple[str | None, Any]] = {}
-    for p in todo:
-        st = listed.get(p)
-        found[p] = (p, st) if st is not None else (resolve_file_dep_path(p), None)
-    if run is not None and len(where) < 200_000:
-        where.update(found)
-    return {p: found[p] if p in found else where[p] for p in paths}
-
-
-def _stats_this_run(paths: Iterable[str]) -> dict[str, tuple[str | None, Any]]:
-    """``{path: (resolved or None, stat or None)}``, one stat per path per cell run.
-
-    The resolution is ``resolve_file_dep_path``'s (relocation fallbacks
-    included); the stat is the listing's where the directory was listed.
-    """
-    run = _file_state_this_run()
-    stats = run.setdefault("stat", {}) if run is not None else {}
-    paths = list(paths)
-    todo = [p for p in paths if p not in stats]
-    if todo:
-        for p, (resolved, listed) in _locate_files(todo, run).items():
-            st = listed
-            if st is None and resolved is not None:
-                try:
-                    st = os.stat(resolved)
-                except OSError:
-                    st = None
-            stats[p] = (resolved, st)
-    return {p: stats[p] for p in paths}
 
 
 def loop_derived_vars(vars_mutated_by_loops: set[str], simulation_trace: list[TraceEntry]) -> set[str]:
@@ -456,8 +383,8 @@ class VirtualLineage:
     ) -> bool:
         """Return True if any file dep for the cached cell at *idx* has changed.
 
-        One stat per file per cell run (``_stats_this_run``)."""
-        current = _stats_this_run(cached_file_deps)
+        One stat per file per cell run (``run_memo.stats_this_run``)."""
+        current = stats_this_run(cached_file_deps)
         for fpath, stored_mtime in cached_file_deps.items():
             resolved, st = current[fpath]
             if resolved is None or st is None:
@@ -1241,13 +1168,7 @@ class VirtualLineage:
                 self._simulate_control_structure(node, sim)
                 return
 
-            stmt_code = ast.unparse(node)
-            if raw_cell is not None:
-                # Local: import cycle upstream.virtual_lineage -> ipython.cell_executor -> ... -> upstream.virtual_lineage.
-                from ..ipython.cell_executor import CellExecutor
-
-                if CellExecutor.expr_has_trailing_semicolon(raw_cell, node):
-                    stmt_code += ";"
+            stmt_code = statement_code(node, raw_cell)
         except (ValueError, TypeError, AttributeError) as e:
             logger.debug("[UPSTREAM] Error processing node in cell %d: %s", i, e)
             raise
@@ -1813,30 +1734,18 @@ class VirtualLineage:
         some ext4 configs).
 
         *memo_key* -- the entry's cache key. A "fresh" verdict holds for the
-        rest of the cell run: the simulation re-validated the same upstream
-        entry for every statement of the cell, twice -- 5,222 files x 2 x 24
-        statements of one notebook. Within one run the upstream values are
-        what a from-the-top run gives even if this cell later writes one of
-        their files (upstream ran before the write), so re-checking can only
-        repeat the answer.
+        rest of the cell run (see :mod:`cash.notebook.run_memo`): the
+        simulation re-validated the same upstream entry for every statement
+        of the cell, twice -- 5,222 files x 2 x 24 statements of one notebook.
         """
-
-        epoch = _fds.HASH_EPOCH
-        memo = _FRESH_ENTRY_VERDICTS
-        if memo_key is not None and epoch is not None:
-            if memo.get("epoch") != epoch:
-                memo.clear()
-                memo["epoch"] = epoch
-                memo["keys"] = set()
-            if memo_key in memo["keys"]:
-                return True
-        run = _file_state_this_run()
+        if known_fresh_entry(memo_key):
+            return True
+        run = file_state_this_run()
         fresh, stale = snapshot_is_fresh(hist_files, run["memo"] if run is not None else None)
         if not fresh:
             logger.debug("[UPSTREAM] Forward prop failed: stale file dependency (%s)", stale)
             return False
-        if memo_key is not None and epoch is not None:
-            memo["keys"].add(memo_key)
+        note_fresh_entry(memo_key)
         return True
 
     def _resolve_virtual_input_lineages(
@@ -1873,9 +1782,9 @@ class VirtualLineage:
     def _stat_file_deps(hist_files: dict[str, float]) -> dict[str, float]:
         """Stat each path in *hist_files* and return ``{path: mtime}`` for existing files.
 
-        Once per path per cell run (``_stats_this_run``), and from a directory
+        Once per path per cell run (``run_memo.stats_this_run``), and from a directory
         listing where many share a directory."""
-        return {p: st.st_mtime for p, (_resolved, st) in _stats_this_run(hist_files).items() if st is not None}
+        return {p: st.st_mtime for p, (_resolved, st) in stats_this_run(hist_files).items() if st is not None}
 
     def _apply_cache_hit_propagation(
         self,
@@ -2031,7 +1940,7 @@ class VirtualLineage:
             return ""
 
         present: set[str] = set()
-        current = _stats_this_run(file_deps_to_check)
+        current = stats_this_run(file_deps_to_check)
         for file_path in file_deps_to_check:
             resolved, stat = current[file_path]
             # Only a file that is where it was recorded, as before: the
@@ -2717,9 +2626,6 @@ class VirtualLineage:
         if tree is None:
             return
         clean_cell = clean_cell_source(raw_cell)
-        # Local: import cycle upstream.virtual_lineage -> ipython.cell_executor -> ... -> upstream.virtual_lineage.
-        from ..ipython.cell_executor import CellExecutor
-
         # Track which broken vars are resolved by forward cache hits.
         # We simulate forward through the current cell's statements:
         # if a statement (a) would cache-hit and (b) its outputs overlap
@@ -2746,11 +2652,9 @@ class VirtualLineage:
             # hidden ones (an RNG a draw reads), and its writes with the
             # globals its callees write.
             try:
-                stmt_code = ast.unparse(node)
+                stmt_code = statement_code(node, clean_cell)
             except (ValueError, TypeError):
                 continue
-            if CellExecutor.expr_has_trailing_semicolon(clean_cell, node):
-                stmt_code += ";"
             occurrence_index = occurrences.get(stmt_code, 0)
             occurrences[stmt_code] = occurrence_index + 1
 

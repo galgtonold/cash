@@ -27,7 +27,7 @@ from cash.control_markers import strip_markers
 
 from ...analysis.ast_util import parse_cached, resolve_callee
 from ...analysis.cacheability import analyze_statement
-from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source
+from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source, statement_code
 from ...analysis.mutation_effects import CellEffects
 from ...analysis.mutations import consumed_input_names
 from ...analysis.namespace_effects import resolve_literal_path, resolve_path_list, statement_read_paths
@@ -55,16 +55,7 @@ def _statement_codes(cell_source: str) -> list[str]:
         return [cell_source]
     if tree is None:
         return [cell_source]
-    # Local: import cycle upstream.simulator -> ipython.cell_executor -> ... -> upstream.simulator.
-    from ..ipython.cell_executor import CellExecutor
-
-    codes = []
-    for node in tree.body:
-        code = ast.unparse(node)
-        if CellExecutor.expr_has_trailing_semicolon(clean, node):
-            code += ";"
-        codes.append(code)
-    return codes
+    return [statement_code(node, clean) for node in tree.body]
 
 
 def _bind_literal_paths(stmt: str, bound: dict, namespace) -> None:

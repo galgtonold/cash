@@ -14,8 +14,9 @@ import os
 
 import pytest
 
-from cash.notebook.upstream import virtual_lineage
-from cash.notebook.upstream.virtual_lineage import VirtualLineage, forget_file_state_this_run
+from cash.notebook import run_memo
+from cash.notebook.run_memo import forget_file_state_this_run
+from cash.notebook.upstream.virtual_lineage import VirtualLineage
 from cash.tracking import file_dep_snapshot
 from cash.tracking.file_dep_snapshot import snapshot_file_deps
 
@@ -28,8 +29,8 @@ def _one_cell_run(monkeypatch):
     monkeypatch.setattr(file_dep_snapshot, "_EPOCH_DEPTH", 0)
     monkeypatch.setattr(file_dep_snapshot, "_HASH_MEMO_TTL_SECONDS", 0.0)
     file_dep_snapshot._HASH_MEMO.clear()
-    virtual_lineage._FILE_STATE_THIS_RUN.clear()
-    virtual_lineage._FRESH_ENTRY_VERDICTS.clear()
+    run_memo._FILE_STATE_THIS_RUN.clear()
+    run_memo._FRESH_ENTRY_VERDICTS.clear()
     file_dep_snapshot.begin_file_state_epoch()
     yield
     file_dep_snapshot.end_file_state_epoch()
