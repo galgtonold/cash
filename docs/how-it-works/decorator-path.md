@@ -36,7 +36,7 @@ A key has four parts, joined by colons: `function:state:dynamic:args`.
 
 ## What goes into the state
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @070ed402, cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @8a590f3b, cash/dependency_state.py:DependencyStateHasher.compute @3825a447 -->
 The state starts from source code and then folds in, on every call, each input
 that can change the result without changing an argument:
 
@@ -46,7 +46,7 @@ that can change the result without changing an argument:
 | Helpers it calls | Followed transitively through your own modules and your own installed package; other people's libraries are where it stops. `depends_on=` adds more. |
 | Classes its code reaches | Classes it constructs, names or annotates, transitively. For a cached method: the class-level code and constants it reaches. |
 | Module globals it reads | Data globals read by the function or a helper: a threshold, a config dict. Modules, functions and classes are tracked as code instead. |
-| Closures, defaults, a bound method's instance | The values a closure captured, parameter defaults by value, and the `self` of `cash.cache(obj.method)`. |
+| Closures, defaults, a bound method's instance | The values a closure captured (a captured module: its name and the code of the functions and classes read from it), parameter defaults by value, and the `self` of `cash.cache(obj.method)`. |
 | What a callable was built with | The arguments of a `functools.partial`, a factory closure's values, an `operator.itemgetter` key. |
 | Code passed as an argument | A class or function passed in is keyed by its code, not its name, so editing a schema class you pass recomputes. |
 | Files named in `file_depends_on=` | The names only; their content is checked on lookup ([Files](#files)). |

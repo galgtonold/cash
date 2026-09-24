@@ -181,7 +181,7 @@ last use; `cash inspect --function NAME` lists one function's entries. See the
 With a bare `@cash.cache`, a call recomputes when any input below changed. The
 left column is tracked for you. The right column is not, and says what to do.
 
-<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe, cash/decorator/runtime.py:CallRunner._analyze_dependencies @b5ed0470, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @3068be4c, cash/decorator/code_args.py:CodeArgs.fold_code_args @3190707c -->
+<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @3825a447, cash/decorator/runtime.py:CallRunner._analyze_dependencies @2412d23d, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @3068be4c, cash/decorator/code_args.py:CodeArgs.fold_code_args @3190707c -->
 | Tracked: a change recomputes | Not tracked: what to do |
 |---|---|
 | The **arguments**, by content and type. Equal values share an entry | **Library code** (`site-packages`, the standard library). Pin versions |

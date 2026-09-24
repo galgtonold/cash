@@ -595,7 +595,7 @@ not once per process.
 `pd.Timestamp.now()`), or an environment variable whose name is only known at
 run time (`os.getenv(name)`).
 
-<!-- claim: cash/effects.py:environment_input @bed3e42a, cash/decorator/globals_fold.py:GlobalsFold.fold_environment @f7aa5f7b -->
+<!-- claim: cash/effects.py:environment_input @bed3e42a, cash/decorator/globals_fold.py:GlobalsFold.fold_environment @0398e851 -->
 <!-- claim: cash/purity_flow.py:is_log_helper @6bf250bd, cash/purity_analyzer.py:_log_helper_names @c43afd2c -->
 <!-- claim: cash/purity_analyzer.py:_clock_helper_read @c1abcb81 -->
 An environment read with the name written out (`os.getenv("TENANT")`) and
@@ -1153,7 +1153,7 @@ call.
 
 *Decorator.*
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.code_moved_since_keyed @34c666d8, cash/decorator/registry.py:FunctionRegistry.code_functions @03ca226c -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.code_moved_since_keyed @34c666d8, cash/decorator/registry.py:FunctionRegistry.code_functions @031ca888 -->
 **What happened.** A file holding the function, a helper, or a cached function
 it depends on changed on disk during the call, in code this call runs. The
 result was returned but not stored.

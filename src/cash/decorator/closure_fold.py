@@ -215,6 +215,25 @@ def iter_code_scopes(code: types.CodeType) -> Iterator[types.CodeType]:
             yield from iter_code_scopes(const)
 
 
+def module_capture_identity(module: types.ModuleType, attrs: frozenset[str]) -> tuple:
+    """What a captured *module* stands for in a closure's key.
+
+    Its name, which is the same in every process (never its ``id``), and the
+    code of each function or class in *attrs* the module holds, so editing
+    ``cap.helper`` moves the key while editing something the closure never
+    reads does not. The data among *attrs* is folded by the local-binding
+    channel of the globals fold, and code outside the user's own files is
+    left out, as a module global's is.
+    """
+    namespace = getattr(module, "__dict__", {})
+    code = []
+    for attr in sorted(attrs):
+        value = namespace.get(attr)
+        if isinstance(value, (types.FunctionType, type)) and is_user_code_object(value):
+            code.append((attr, hash_callable_source(value)))
+    return ("module", module.__name__, tuple(code))
+
+
 class CaptureAnalysis:
     """Which of a closure's captured variables the function body may change,
     read from its code and source once per code object (closures from one
@@ -227,6 +246,8 @@ class CaptureAnalysis:
         # only provisionally: passed to a call, so folded and then confirmed
         # by observation). One entry, so the two never disagree.
         self._use_cache: LruMemo[Any, tuple[frozenset, frozenset]] = LruMemo(CODE_OBJECTS)
+        # code object -> {free var: attributes read from it}; see `attr_reads`.
+        self._attr_reads: LruMemo[Any, dict[str, frozenset[str]]] = LruMemo(CODE_OBJECTS)
 
     def written_freevars(self, code: Any) -> frozenset:
         """Free-variable names the function reassigns (``STORE_DEREF`` /
@@ -242,6 +263,37 @@ class CaptureAnalysis:
         )
         cache[code] = written
         return written
+
+    def attr_reads(self, code: Any) -> dict[str, frozenset[str]]:
+        """The attributes the function reads from each captured variable.
+
+        ``cap.helper(x)`` compiles to ``LOAD_DEREF cap`` followed by
+        ``LOAD_ATTR helper`` (``LOAD_METHOD`` before 3.12), in the function
+        or in a genexp or lambda nested in it. ``getattr(cap, "helper")``
+        names the attribute as a string constant instead, so every
+        identifier-shaped constant of a scope that loads the variable counts
+        too, as the ``module.ATTR`` channel of the globals fold does. Cached
+        per code object (closures from one factory share it).
+        """
+        cached = self._attr_reads.get(code)
+        if cached is not None:
+            return cached
+        reads: dict[str, set[str]] = {}
+        for scope in iter_code_scopes(code):
+            instrs = list(dis.get_instructions(scope))
+            loaded = {i.argval for i in instrs if i.opname == "LOAD_DEREF" and isinstance(i.argval, str)}
+            if not loaded:
+                continue
+            consts = [c for c in scope.co_consts or () if isinstance(c, str) and c.isidentifier()]
+            for name in loaded:
+                reads.setdefault(name, set()).update(consts)
+            for prev, nxt in zip(instrs, instrs[1:]):
+                if prev.opname == "LOAD_DEREF" and nxt.opname in ("LOAD_ATTR", "LOAD_METHOD"):
+                    if isinstance(nxt.argval, str) and not nxt.argval.startswith("__"):
+                        reads.setdefault(prev.argval, set()).add(nxt.argval)
+        result = {name: frozenset(attrs) for name, attrs in reads.items()}
+        self._attr_reads[code] = result
+        return result
 
     def unsafe_uses(self, func: Callable) -> frozenset:
         """Free-variable names whose captured object *may be mutated* by the
@@ -475,6 +527,9 @@ class ClosureFold:
         (accumulators) are skipped, so their keys don't drift call-to-call.
         A side effect of per-call content hashing: externally mutating a
         folded capture correctly invalidates the closure's entries.
+
+        A captured MODULE is folded by its name and the code of the functions
+        and classes the body reads from it (`module_capture_identity`).
         """
         closure = getattr(func, "__closure__", None)
         code = getattr(func, "__code__", None)
@@ -497,6 +552,14 @@ class ClosureFold:
             try:
                 v = cell.cell_contents
             except ValueError:
+                continue
+            if isinstance(v, types.ModuleType):
+                # A module pickles as nothing, so it fell to the content-hash
+                # path below, failed, and was skipped: `make(ha)` and
+                # `make(hb)`, each reading `cap.helper`, shared one key and
+                # returned each other's results.
+                attrs = self._captures.attr_reads(code).get(name, frozenset())
+                captures.append((name, module_capture_identity(v, attrs)))
                 continue
             if getattr(v, "_cash_cached", False):
                 # A captured CACHED function is what it computes: its

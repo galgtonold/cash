@@ -191,6 +191,7 @@ class KeyBuilder:
             state_hash = self._state_hasher.compute(
                 func_name,
                 own_source_override=self._code.pin_own_source(func),
+                own_report=self._registry.report_for(func, func_name),
                 note=True,
             )
             state_hash = self._files.fold_declared_files(func_name, state_hash)
@@ -210,7 +211,7 @@ class KeyBuilder:
             chain.append(state_hash)
             state_hash = self._rng.fold_rng_epoch(func_name, state_hash)
             chain.append(state_hash)
-            state_hash = self._globals.fold_environment(func_name, state_hash)
+            state_hash = self._globals.fold_environment(func, func_name, state_hash)
             chain.append(state_hash)
             state_hash = self._code.fold_method_class_deps(func, args, state_hash)
             chain.append(state_hash)
@@ -438,7 +439,7 @@ class CallRunner:
         """
         self._registry.ensure_closure_analyzed(func)
         func_name = func_key(func)
-        report = self._registry.purity_reports.get(func_name) or PurityReport()
+        report = self._registry.report_for(func, func_name) or PurityReport()
         mode = self._registry.purity_mode(func_name)
         self._purity.surface_purity(func_name, report, mode)
 
@@ -459,6 +460,11 @@ class CallRunner:
                 if func_name not in self._registry.analyzed:
                     self._analyze_dependencies(func)
                     self._registry.analyzed.add(func_name)
+        elif self._registry.needs_population(func, func_name):
+            # Another closure from a factory already called: it is keyed by
+            # the helpers it captures, not its sibling's. Its findings were
+            # surfaced under the shared name.
+            self._registry.ensure_closure_analyzed(func)
         # Inherit the shortest TTL of any TTL'd dependency (computed after
         # analysis populates the graph).
         call.ttl = self._registry.effective_ttl(func_name, spec.ttl)

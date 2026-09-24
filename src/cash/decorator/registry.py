@@ -7,6 +7,7 @@ import hashlib
 import logging
 import sys
 import threading
+import weakref
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -116,7 +117,15 @@ class FunctionRegistry:
         self.graph = DependencyGraph()
         #: func_name -> its purity report. Helper source hashes from it fold
         #: into the key's state hash, so cross-process helper edits invalidate.
+        #: For a closure this is only the latest one analysed under the name;
+        #: read a function's own through `report_for`.
         self.purity_reports: dict[str, PurityReport] = {}
+        #: closure -> its own purity report. Two closures from one factory
+        #: share a name but can call different helpers through what they
+        #: capture (``make(ha)`` and ``make(hb)`` reading ``cap.helper``), and
+        #: the analyzer reports each closure on its own; filed under the name
+        #: alone, the first report keyed both.
+        self._closure_reports: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
         #: Functions whose purity findings have been *surfaced*, on their
         #: first call.
         self.analyzed: set[str] = set()
@@ -150,6 +159,29 @@ class FunctionRegistry:
         #: invalidates the parent key.
         self.declared_dep_snapshots: dict[str, str] = {}
         self._declared_dep_paths: dict[str, tuple[str, tuple[str, ...]]] = {}
+
+    def report_for(self, func: Callable[..., Any], func_name: str) -> PurityReport | None:
+        """*func*'s own purity report: a closure's, else the one under *func_name*."""
+        if getattr(func, "__closure__", None):
+            try:
+                report = self._closure_reports.get(func)
+            except TypeError:
+                report = None
+            if report is not None:
+                return report
+        return self.purity_reports.get(func_name)
+
+    def needs_population(self, func: Callable[..., Any], func_name: str) -> bool:
+        """Has *func* no report yet: its name was never analysed, or it is a
+        closure analysed only through a sibling from the same factory?"""
+        if func_name not in self.populated:
+            return True
+        if not getattr(func, "__closure__", None):
+            return False
+        try:
+            return func not in self._closure_reports
+        except TypeError:
+            return False
 
     def purity_mode(self, func_name: str) -> PurityMode:
         cf = self.cached.get(func_name)
@@ -300,7 +332,7 @@ class FunctionRegistry:
             seen_names.add(name)
             if fn is not None:
                 found.append(fn)
-            report = self.purity_reports.get(name)
+            report = self.report_for(fn, name) if fn is not None else self.purity_reports.get(name)
             if report is not None:
                 for ref in report.helper_objects.values():
                     helper = ref()
@@ -346,7 +378,7 @@ class FunctionRegistry:
             if fname in seen:
                 continue
             seen.add(fname)
-            if fname not in self.populated:
+            if self.needs_population(f, fname):
                 self.populate(f, fname)
             for dep in self.graph.get_dependencies(fname):
                 dep_func = self.functions.get(dep)
@@ -381,11 +413,11 @@ class FunctionRegistry:
                 if name in seen:
                     continue
                 seen.add(name)
-                report = self.purity_reports.get(name)
+                report = self.report_for(f, name)
                 if report is not None and report.helper_bindings and bindings_changed(report):
                     with self.analysis_lock:
                         self.populate(f, name)
-                    report = self.purity_reports.get(name)
+                    report = self.report_for(f, name)
                 if report is not None and report.unkeyable and reason is None:
                     reason = report.unkeyable[0]
                 for dep in self.graph.get_dependencies(name):
@@ -415,3 +447,8 @@ class FunctionRegistry:
             logger.debug("Purity analyzer failed for %s: %s", func_name, e)
             report = PurityReport()
         self.purity_reports[func_name] = report
+        if getattr(func, "__closure__", None):
+            try:
+                self._closure_reports[func] = report
+            except TypeError:
+                pass  # not weak-referenceable: the name's report stands for it

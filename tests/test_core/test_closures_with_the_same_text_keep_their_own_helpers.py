@@ -1,8 +1,9 @@
 """Two closures with the same text in one module are keyed by their own helpers.
 
 A closure's names resolve in its cells as well as its module. Two factories
-whose inner functions read the same can capture different modules, and each
-cached closure must follow the helper it calls: editing that helper
+whose inner functions read the same can capture different modules, and so
+can two closures made by ONE factory, which also share a qualified name.
+Each cached closure must follow the helper it calls: editing that helper
 recomputes it, and editing the other one does not.
 """
 
@@ -38,6 +39,13 @@ def make_a():
 def make_b():
     cap = {b}
 
+    def total(x):
+        return cap.helper(x)
+
+    return total
+
+
+def make(cap):
     def total(x):
         return cap.helper(x)
 
@@ -87,3 +95,39 @@ def test_editing_the_helper_a_closure_calls_recomputes_it(tmp_path, modules):
 
         assert total_b(1) == 201
         assert total_a(1) == 2
+
+
+def test_one_factory_closing_over_two_modules_keeps_them_apart(tmp_path, modules):
+    a, b, caller = modules
+    c = Cash(cache_dir=str(tmp_path / "cache"), register_magic=False)
+    total_a = c.cache(caller.make(a))
+    total_b = c.cache(caller.make(b))
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        assert total_a(1) == 2
+        assert total_b(1) == 3  # not the entry `total_a` wrote
+        assert total_a(1) == 2
+        assert total_b(1) == 3
+        assert total_a.cache_info()["hits"] == 1
+        assert total_b.cache_info()["hits"] == 1
+
+
+def test_editing_one_captured_module_recomputes_only_its_closure(tmp_path, modules):
+    a, b, caller = modules
+    c = Cash(cache_dir=str(tmp_path / "cache"), register_magic=False)
+    total_a = c.cache(caller.make(a))
+    total_b = c.cache(caller.make(b))
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        assert total_a(1) == 2
+        assert total_b(1) == 3
+
+        (tmp_path / f"{a.__name__}.py").write_text(HELPER.format(step=100), encoding="utf-8")
+        importlib.reload(a)
+
+        assert total_a(1) == 101
+        assert total_a.cache_info()["misses"] == 2
+        assert total_b(1) == 3
+        assert total_b.cache_info()["hits"] == 1  # its key did not move

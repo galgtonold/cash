@@ -195,7 +195,7 @@ class GlobalsFold:
         self._local_binding_cache: LruMemo[Any, tuple | None] = LruMemo(CODE_OBJECTS)
         self._carrier_verdicts: LruMemo[int, tuple[Any, bool | str]] = LruMemo(CODE_OBJECTS)
 
-    def fold_environment(self, func_name: str, state_hash: str) -> str:
+    def fold_environment(self, func: Callable, func_name: str, state_hash: str) -> str:
         """Fold the current value of every environment read into the key.
 
         ``os.environ["TENANT"]`` in a cached body served the first tenant's
@@ -208,19 +208,23 @@ class GlobalsFold:
 
         Nothing is added when there are none, so such a key is unchanged.
         """
-        entries = self._environment_reads(func_name, set())
+        entries = self._environment_reads(func_name, set(), self._registry.report_for(func, func_name))
         if not entries:
             return state_hash
         component = environment_component(entries, note=lambda label, digest: ledger_note(("env", label), digest))
         return hashlib.sha256(f"{state_hash}{component}".encode("utf-8")).hexdigest()
 
-    def _environment_reads(self, func_name: str, visited: set[str]) -> set[tuple[str, str]]:
+    def _environment_reads(
+        self, func_name: str, visited: set[str], report: PurityReport | None = None
+    ) -> set[tuple[str, str]]:
         """The environment reads of *func_name* and every cached function it
-        (transitively) depends on (cycle-guarded)."""
+        (transitively) depends on (cycle-guarded). *report* is *func_name*'s
+        own, when the caller has it (`FunctionRegistry.report_for`)."""
         if func_name in visited:
             return set()
         visited.add(func_name)
-        report = self._registry.purity_reports.get(func_name)
+        if report is None:
+            report = self._registry.purity_reports.get(func_name)
         found = set(getattr(report, "environment_reads", ()) or ())
         for dep in self._registry.graph.get_dependencies(func_name):
             found |= self._environment_reads(dep, visited)
@@ -338,10 +342,12 @@ class GlobalsFold:
             if inner is not None:
                 name = func_key(inner)
                 if name in self._registry.functions:
-                    if name not in self._registry.populated:
+                    if self._registry.needs_population(inner, name):
                         self._registry.ensure_closure_analyzed(inner)
                     return "cached:" + self._state_hasher.compute(
-                        name, own_source_override=self._code.pin_own_source(inner)
+                        name,
+                        own_source_override=self._code.pin_own_source(inner),
+                        own_report=self._registry.report_for(inner, name),
                     )
                 fn = inner
         if not isinstance(fn, types.FunctionType):
@@ -503,7 +509,7 @@ class GlobalsFold:
         ``SysModulesHelperResolver``: a redefined helper reads the redefined
         module's globals.
         """
-        report = self._registry.purity_reports.get(func_name)
+        report = self._registry.report_for(func, func_name)
         if report is None or not (report.helper_resolution_paths or report.helper_objects):
             return state_hash
         owner_code = getattr(func, "__code__", None)

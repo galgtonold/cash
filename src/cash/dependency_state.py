@@ -167,6 +167,7 @@ class DependencyStateHasher:
         visited: set[str] | None = None,
         *,
         own_source_override: str | None = None,
+        own_report: PurityReport | None = None,
         note: bool = False,
     ) -> str:
         """Return the dependency state hash for *node*.
@@ -183,6 +184,10 @@ class DependencyStateHasher:
         identity (and two same-qualname lambdas collide outright).
         Recursive dependency calls never receive the override, so helper
         and dependency state stays live.
+
+        ``own_report`` is the ROOT's purity report, for the same reason: two
+        closures from one factory share a name but not their helpers
+        (`FunctionRegistry.report_for`).
 
         ``note`` records the root's parts in `STATE_LEDGER`; only the
         decorator's key build asks, never a nested identity lookup.
@@ -225,7 +230,7 @@ class DependencyStateHasher:
         # 3. Transitive helper source hashes, re-resolved live per call.
         #    The node's own qualname is skipped (its source is already in
         #    step 1); unresolved helpers fall back to the recorded snapshot.
-        report = self._purity_reports.get(node)
+        report = own_report if own_report is not None else self._purity_reports.get(node)
         if report is not None and report.helper_source_hashes:
             current = self._helper_resolver.current_hashes(report)
             for qual in sorted(report.helper_source_hashes):
