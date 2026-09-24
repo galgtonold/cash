@@ -21,7 +21,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from cash import cost_model
-from cash._memo import LruMemo
+from cash._memo import PRODUCER_SNAPSHOTS, LruMemo
 from cash.backends.persistence_policy import PersistencePolicy, restore_kind
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON
@@ -120,7 +120,7 @@ class StatementStore:
         self.written_later_in_cell: frozenset[str] = frozenset()
         #: The file snapshots each producing entry recorded, by cache key,
         #: under the ``"__epoch__"`` of the hash scheme they were taken with.
-        self._producer_snapshots: LruMemo[str, dict[str, dict]] = LruMemo(64)
+        self._producer_snapshots: LruMemo[str, dict[str, dict]] = LruMemo(PRODUCER_SNAPSHOTS)
         self._producer_snapshots_epoch: Any = None
 
     def set_written_later_in_cell(self, names: frozenset[str]) -> None:

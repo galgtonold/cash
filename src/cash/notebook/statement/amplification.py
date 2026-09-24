@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from cash._memo import LruMemo
+from cash._memo import STATEMENTS, LruMemo
 from cash.backends.adaptive_caps import human_bytes
 from cash.control_markers import has_marker, strip_markers
 from cash.diagnostics import warn_diagnostic
@@ -54,13 +54,10 @@ class AmplificationGuard:
     statement warns once, not once per iteration.
     """
 
-    #: Statements tracked at once; the least recently written drops out.
-    MAX_STATEMENTS = 4096
-
     def __init__(self) -> None:
-        self._bytes_by_stmt: LruMemo[str, int] = LruMemo(self.MAX_STATEMENTS)
-        self._last_size_by_stmt: LruMemo[str, int] = LruMemo(self.MAX_STATEMENTS)
-        self._warned: LruMemo[str, bool] = LruMemo(self.MAX_STATEMENTS)
+        self._bytes_by_stmt: LruMemo[str, int] = LruMemo(STATEMENTS)
+        self._last_size_by_stmt: LruMemo[str, int] = LruMemo(STATEMENTS)
+        self._warned: LruMemo[str, bool] = LruMemo(STATEMENTS)
 
     @staticmethod
     def _size(prediction: dict[str, Any] | None) -> int:

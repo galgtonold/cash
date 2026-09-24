@@ -26,7 +26,7 @@ from collections.abc import Callable, Mapping
 from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING, Any
 
-from cash._memo import LruMemo
+from cash._memo import CODE_OBJECTS, LruMemo
 from cash.analysis.callee_effects import source_global_mutations
 from cash.analysis.namespace_effects import capturable_globals
 from cash.exceptions import SOURCE_RETRIEVAL_ERRORS
@@ -87,7 +87,7 @@ def _loop_var_digest(name: str, value: object, loop_var_digests: Mapping[str, st
 #: never served the old verdict. It is the code of the function ``getsource``
 #: reads, after ``inspect.unwrap``: every function one ``functools.wraps``
 #: decorator returns shares the wrapper's code.
-_GLOBAL_MUTATION_CACHE: LruMemo[Any, tuple[str, ...]] = LruMemo(4096)
+_GLOBAL_MUTATION_CACHE: LruMemo[Any, tuple[str, ...]] = LruMemo(CODE_OBJECTS)
 
 
 def callee_mutated_globals(fn) -> tuple[str, ...]:

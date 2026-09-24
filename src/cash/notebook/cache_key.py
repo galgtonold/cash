@@ -17,7 +17,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple, Protocol, runtime_checkable
 
-from cash._memo import LruMemo
+from cash._memo import CODE_OBJECTS, LruMemo
 from cash.notebook.lineage_store import resolve_lineage
 from cash.source_norm import unparse_without_docstrings
 
@@ -391,7 +391,7 @@ _NAME_OPS = frozenset(dis.hasname)
 #: code object -> its global names. A code object never changes, and a call
 #: made per element of a comprehension disassembled its callee every time:
 #: 1,470 walks for 355 calls, a quarter of what caching them cost.
-_GLOBAL_NAMES_MEMO: LruMemo[Any, frozenset[str]] = LruMemo(4096)
+_GLOBAL_NAMES_MEMO: LruMemo[Any, frozenset[str]] = LruMemo(CODE_OBJECTS)
 
 
 def _global_names(code_obj: Any) -> frozenset[str]:

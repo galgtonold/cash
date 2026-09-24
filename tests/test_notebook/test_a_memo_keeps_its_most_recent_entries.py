@@ -6,7 +6,7 @@ session with many redefined cells keeps producing new keys.
 
 import pytest
 
-from cash._memo import LruMemo
+from cash._memo import STATEMENTS, LruMemo
 from cash.notebook.statement.amplification import AmplificationGuard
 
 
@@ -46,5 +46,5 @@ def test_a_memo_needs_room_for_one_entry():
 
 def test_the_amplification_guard_tracks_a_bounded_number_of_statements():
     guard = AmplificationGuard()
-    assert guard._bytes_by_stmt.maxsize == AmplificationGuard.MAX_STATEMENTS
-    assert guard._warned.maxsize == AmplificationGuard.MAX_STATEMENTS
+    assert guard._bytes_by_stmt.maxsize == STATEMENTS
+    assert guard._warned.maxsize == STATEMENTS

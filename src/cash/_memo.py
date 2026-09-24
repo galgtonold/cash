@@ -26,6 +26,7 @@ __all__ = [
     "MODULE_READ_DIGESTS",
     "NOTEBOOK_FUNCTIONS",
     "PATCH_SITES",
+    "PRODUCER_SNAPSHOTS",
     "PURITY_REPORTS",
     "READ_PATHS",
     "RECORDS",
@@ -160,12 +161,16 @@ COMPILED_MODULES = 256
 #: One revalidation token per remote URL.
 REMOTE_URLS = 1024
 
-#: One analysis per statement text: a loop body's statements are analysed on
-#: every iteration.
+#: One entry per statement text: a loop body's statements are analysed and
+#: accounted on every iteration.
 STATEMENTS = 4096
 
 #: One "does it write files?" verdict per user function and call depth.
 USER_CALLEES = 500
+
+#: One set of file snapshots per producing cache entry: a folder read's set
+#: runs to thousands of files.
+PRODUCER_SNAPSHOTS = 64
 
 #: One source digest per function the notebook's cells reference.
 NOTEBOOK_FUNCTIONS = 500
