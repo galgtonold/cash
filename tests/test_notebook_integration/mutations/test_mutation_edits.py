@@ -139,405 +139,6 @@ class TestClassInstanceMutations:
         assert "Mode:" in out2  # At minimum, we get output
 
 
-@pytest.mark.integration
-@pytest.mark.timeout(30)
-class TestDecoratorPatterns:
-    """Test caching with various decorator patterns."""
-
-    def test_decorator_change_propagates(self, nb_runner):
-        """Changing the decorator definition should invalidate decorated functions."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                def multiplier(factor):
-                    def decorator(func):
-                        def wrapper(*args, **kwargs):
-                            return func(*args, **kwargs) * factor
-                        return wrapper
-                    return decorator"""),
-                textwrap.dedent("""\
-                @multiplier(2)
-                def compute(x):
-                    return x + 1"""),
-                "result = compute(5)\nprint(f'Result: {result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out1 = nb_runner.get_output(3)
-        assert "Result: 12" in out1  # (5+1)*2
-
-        # Change the decorator factor
-        nb_runner.set_cell_source(2, "@multiplier(3)\ndef compute(x):\n    return x + 1")
-        nb_runner.run_all()
-        out2 = nb_runner.get_output(3)
-        assert "Result: 18" in out2  # (5+1)*3
-
-
-@pytest.mark.integration
-@pytest.mark.timeout(30)
-class TestGeneratorPatterns:
-    """Test caching with generator patterns."""
-
-    def test_generator_expression_caching(self, nb_runner):
-        """Generator expression converted to list — should cache the list."""
-        nb_runner.create_notebook(
-            [
-                "data = [1, 2, 3, 4, 5]",
-                "squares = list(x**2 for x in data)",
-                "print(f'Squares: {squares}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(3)
-        assert "Squares: [1, 4, 9, 16, 25]" in out
-
-        # Change source data
-        nb_runner.set_cell_source(1, "data = [10, 20, 30]")
-        nb_runner.run_all()
-        out2 = nb_runner.get_output(3)
-        assert "Squares: [100, 400, 900]" in out2
-
-
-@pytest.mark.integration
-@pytest.mark.timeout(30)
-class TestContextManagerPatterns:
-    """Test caching with context manager patterns."""
-
-    def test_custom_context_manager(self, nb_runner):
-        """Custom context manager that tracks state."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                class Timer:
-                    def __init__(self):
-                        self.elapsed = 0
-                    def __enter__(self):
-                        import time
-                        self._start = time.time()
-                        return self
-                    def __exit__(self, *args):
-                        import time
-                        self.elapsed = time.time() - self._start"""),
-                textwrap.dedent("""\
-                import time
-                t = Timer()
-                with t:
-                    time.sleep(0.01)
-                result = t.elapsed > 0"""),
-                "print(f'Timer worked: {result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(3)
-        assert "Timer worked: True" in out
-
-
-@pytest.mark.integration
-@pytest.mark.timeout(30)
-class TestComplexDependencyChains:
-    """Test complex dependency patterns that stress the caching system."""
-
-    def test_long_chain_middle_change(self, nb_runner):
-        """8-cell chain, change middle cell — downstream should update."""
-        nb_runner.create_notebook(
-            [
-                "x1 = 1",
-                "x2 = x1 + 1",
-                "x3 = x2 + 1",
-                "x4 = x3 + 1",
-                "x5 = x4 + 1",
-                "x6 = x5 + 1",
-                "x7 = x6 + 1",
-                "x8 = x7 + 1\nprint(f'x8: {x8}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out1 = nb_runner.get_output(8)
-        assert "x8: 8" in out1
-
-        # Change x4's computation
-        nb_runner.set_cell_source(4, "x4 = x3 + 100")
-        nb_runner.run_all()
-        out2 = nb_runner.get_output(8)
-        assert "x8: 107" in out2  # 1+1+1+100+1+1+1+1
-
-    def test_wide_fan_out(self, nb_runner):
-        """One variable feeds many downstream cells."""
-        nb_runner.create_notebook(
-            [
-                "base = 10",
-                "a = base + 1",
-                "b = base * 2",
-                "c = base ** 2",
-                "d = base - 5",
-                "total = a + b + c + d\nprint(f'Total: {total}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out1 = nb_runner.get_output(6)
-        assert "Total: 136" in out1  # 11 + 20 + 100 + 5
-
-        # Change base
-        nb_runner.set_cell_source(1, "base = 20")
-        nb_runner.run_all()
-        out2 = nb_runner.get_output(6)
-        assert "Total: 476" in out2  # 21 + 40 + 400 + 15
-
-    def test_conditional_dependency(self, nb_runner):
-        """Dependency that only matters based on a flag."""
-        nb_runner.create_notebook(
-            [
-                "use_advanced = True",
-                "basic_val = 10",
-                "advanced_val = basic_val * 100",
-                textwrap.dedent("""\
-                if use_advanced:
-                    result = advanced_val
-                else:
-                    result = basic_val
-                print(f'Result: {result}')"""),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out1 = nb_runner.get_output(4)
-        assert "Result: 1000" in out1
-
-        # Change flag
-        nb_runner.set_cell_source(1, "use_advanced = False")
-        nb_runner.run_all()
-        out2 = nb_runner.get_output(4)
-        assert "Result: 10" in out2
-
-
-@pytest.mark.integration
-@pytest.mark.timeout(30)
-class TestRealWorldPatterns:
-    """Real-world usage patterns from data science workflows."""
-
-    def test_data_pipeline_with_validation(self, nb_runner, tmp_path):
-        """Pipeline: load → validate → transform → aggregate."""
-        import pandas as pd
-
-        csv = tmp_path / "sales.csv"
-        csv_str = str(csv).replace("\\", "/")
-        pd.DataFrame(
-            {
-                "product": ["A", "B", "A", "B", "C"],
-                "amount": [100, 200, 150, 300, 50],
-                "valid": [True, True, True, True, False],
-            }
-        ).to_csv(csv, index=False)
-
-        nb_runner.create_notebook(
-            [
-                f"import pandas as pd\ndf = pd.read_csv('{csv_str}')",
-                "df_valid = df[df['valid'] == True].copy()",
-                "df_valid['amount_scaled'] = df_valid['amount'] * 1.1",
-                "total = df_valid['amount_scaled'].sum()\nprint(f'Total: {total:.1f}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "Total: 825.0" in out  # (100+200+150+300)*1.1
-
-    def test_config_driven_computation(self, nb_runner):
-        """Configuration dict drives computation in later cells."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                params = {
-                    'learning_rate': 0.01,
-                    'epochs': 100,
-                    'batch_size': 32,
-                }"""),
-                "total_steps = params['epochs'] * (1000 // params['batch_size'])",
-                "print(f'Total steps: {total_steps}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out1 = nb_runner.get_output(3)
-        assert "Total steps: 3100" in out1  # 100 * 31
-
-        # Change epochs
-        nb_runner.set_cell_source(
-            1,
-            textwrap.dedent("""\
-            params = {
-                'learning_rate': 0.01,
-                'epochs': 200,
-                'batch_size': 32,
-            }"""),
-        )
-        nb_runner.run_all()
-        out2 = nb_runner.get_output(3)
-        assert "Total steps: 6200" in out2  # 200 * 31
-
-
-@pytest.mark.integration
-@pytest.mark.timeout(30)
-class TestEdgeCasePatterns:
-    """Edge cases that might trip the caching system."""
-
-    def test_walrus_operator(self, nb_runner):
-        """Walrus operator (:=) in comprehension."""
-        nb_runner.create_notebook(
-            [
-                "data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]",
-                "results = [y for x in data if (y := x**2) > 25]",
-                "print(f'Results: {results}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(3)
-        assert "Results: [36, 49, 64, 81, 100]" in out
-
-    def test_fstring_with_expression(self, nb_runner):
-        """F-string with complex expression should not confuse analysis."""
-        nb_runner.create_notebook(
-            [
-                "x = 42\ny = 3.14",
-                "msg = f'Result: {x * y:.2f} (x={x}, y={y})'",
-                "print(msg)",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(3)
-        assert "Result: 131.88" in out
-
-
-@pytest.mark.integration
-@pytest.mark.timeout(30)
-class TestFileAndModuleInteraction:
-    """Test complex file + module interaction patterns."""
-
-    def test_module_writes_file_then_read(self, nb_runner, tmp_path):
-        """Module function writes a file, then another cell reads it."""
-        mod_path = tmp_path / "writer.py"
-        str(mod_path).replace("\\", "/")
-        mod_path.write_text(
-            textwrap.dedent("""\
-            def write_data(path, data):
-                with open(path, 'w') as f:
-                    f.write(data)
-        """),
-            encoding="utf-8",
-        )
-
-        out_file = tmp_path / "output.txt"
-        out_str = str(out_file).replace("\\", "/")
-        tmp_str = str(tmp_path).replace("\\", "/")
-
-        nb_runner.create_notebook(
-            [
-                f"import sys\nsys.path.insert(0, '{tmp_str}')\nimport writer",
-                f"writer.write_data('{out_str}', 'hello world')",
-                f"content = open('{out_str}').read()\nprint(f'Content: {{content}}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(3)
-        assert "Content: hello world" in out
-
-    def test_csv_then_transform_module(self, nb_runner, tmp_path):
-        """Read CSV, then use a local module to transform it."""
-        import pandas as pd
-
-        csv_path = tmp_path / "data.csv"
-        csv_str = str(csv_path).replace("\\", "/")
-        pd.DataFrame({"x": [1, 2, 3], "y": [4, 5, 6]}).to_csv(csv_path, index=False)
-
-        mod_path = tmp_path / "transformer.py"
-        mod_path.write_text(
-            textwrap.dedent("""\
-            def double_column(df, col):
-                df = df.copy()
-                df[col] = df[col] * 2
-                return df
-        """),
-            encoding="utf-8",
-        )
-        tmp_str = str(tmp_path).replace("\\", "/")
-
-        nb_runner.create_notebook(
-            [
-                f"import sys\nsys.path.insert(0, '{tmp_str}')\nimport pandas as pd\nimport transformer",
-                f"df = pd.read_csv('{csv_str}')",
-                "df2 = transformer.double_column(df, 'x')",
-                "print(df2.to_string(index=False))",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "2" in out  # x values should be 2, 4, 6
-
-        # Now change the transformer
-        mod_path.write_text(
-            textwrap.dedent("""\
-            def double_column(df, col):
-                df = df.copy()
-                df[col] = df[col] * 10
-                return df
-        """),
-            encoding="utf-8",
-        )
-        nb_runner.run_all()
-        out2 = nb_runner.get_output(4)
-        assert "10" in out2  # x values should be 10, 20, 30
-
-
-@pytest.mark.integration
-@pytest.mark.timeout(30)
-class TestReExecutionPatterns:
-    """Test various re-execution patterns."""
-
-    def test_selective_cell_rerun(self, nb_runner):
-        """Run specific cells out of order."""
-        nb_runner.create_notebook(
-            [
-                "a = 1",
-                "b = a + 1",
-                "c = b + 1",
-                "d = c + 1\nprint(f'd: {d}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out1 = nb_runner.get_output(4)
-        assert "d: 4" in out1
-
-        # Re-run only cell 4 — upstream simulation should handle it
-        nb_runner.run_cell(4)
-        out2 = nb_runner.get_output(4)
-        assert "d: 4" in out2
-
-    def test_run_last_cell_only(self, nb_runner):
-        """Run only the last cell — should trigger upstream simulation."""
-        nb_runner.create_notebook(
-            [
-                "x = 100",
-                "y = x + 50",
-                "print(f'y: {y}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        # Only run cell 3 — upstream should auto-execute cells 1 and 2
-        nb_runner.run_cell(3)
-        out = nb_runner.get_output(3)
-        assert "y: 150" in out
-
-
 # Mutation tracking under re-execution & cell edits.
 #
 # Tests that in-place mutations (list.append, dict update, etc.) are correctly
@@ -595,6 +196,68 @@ class TestMutationRerunConsistency:
 
         nb_runner.run_all()
         assert "len = 3" in nb_runner.get_output(3)
+
+
+@pytest.mark.stress
+class TestMultipleMutationsInSequence:
+    """Multiple mutation cells in sequence."""
+
+    def test_two_mutations_edit_first(self, nb_runner):
+        """Two mutation cells, edit the first one. Restart for clean state."""
+        nb_runner.create_notebook(
+            [
+                "data = []",
+                "data.append(1)",
+                "data.append(2)",
+                "print(f'data = {data}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "data = [1, 2]" in nb_runner.get_output(4)
+
+        nb_runner.set_cell_source(2, "data.append(10)")
+        nb_runner.shutdown()
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "data = [10, 2]" in nb_runner.get_output(4)
+
+    def test_two_mutations_edit_second(self, nb_runner):
+        """Two mutation cells, edit the second one. Restart for clean state."""
+        nb_runner.create_notebook(
+            [
+                "data = []",
+                "data.append(1)",
+                "data.append(2)",
+                "print(f'data = {data}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "data = [1, 2]" in nb_runner.get_output(4)
+
+        nb_runner.set_cell_source(3, "data.append(20)")
+        nb_runner.shutdown()
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "data = [1, 20]" in nb_runner.get_output(4)
+
+    def test_accumulator_pattern_rerun(self, nb_runner):
+        """Classic accumulator pattern: init + loop += must not double-count."""
+        nb_runner.create_notebook(
+            [
+                "total = 0",
+                "for x in [1, 2, 3]:\n    total += x",
+                "print(f'total = {total}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "total = 6" in nb_runner.get_output(3)
+
+        # Re-run should give same result, not 12
+        nb_runner.run_all()
+        assert "total = 6" in nb_runner.get_output(3)
 
 
 @pytest.mark.stress
@@ -675,113 +338,6 @@ class TestMutationWithCellEdits:
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "total = 3" in nb_runner.get_output(3)
-
-
-@pytest.mark.stress
-class TestMutationWithRestart:
-    """Mutations across kernel restarts."""
-
-    def test_mutation_restored_after_restart(self, nb_runner):
-        """After restart, mutation result should be correctly restored.
-        Mutations can't be virtually restored — must re-run all cells
-        so the mutation is re-executed from scratch."""
-        nb_runner.create_notebook(
-            [
-                "data = [1, 2, 3]",
-                "data.append(4)",
-                "total = sum(data)\nprint(f'total = {total}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "total = 10" in nb_runner.get_output(3)
-
-        nb_runner.shutdown()
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "total = 10" in nb_runner.get_output(3)
-
-    def test_mutation_edit_after_restart(self, nb_runner):
-        """Restart, edit the mutation, re-run all.
-        After restart, all cells re-execute from scratch."""
-        nb_runner.create_notebook(
-            [
-                "items = ['a', 'b']",
-                "items.append('c')",
-                "result = ','.join(items)\nprint(f'result = {result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result = a,b,c" in nb_runner.get_output(3)
-
-        nb_runner.shutdown()
-        nb_runner.set_cell_source(2, "items.append('z')")
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result = a,b,z" in nb_runner.get_output(3)
-
-
-@pytest.mark.stress
-class TestMultipleMutationsInSequence:
-    """Multiple mutation cells in sequence."""
-
-    def test_two_mutations_edit_first(self, nb_runner):
-        """Two mutation cells, edit the first one. Restart for clean state."""
-        nb_runner.create_notebook(
-            [
-                "data = []",
-                "data.append(1)",
-                "data.append(2)",
-                "print(f'data = {data}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "data = [1, 2]" in nb_runner.get_output(4)
-
-        nb_runner.set_cell_source(2, "data.append(10)")
-        nb_runner.shutdown()
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "data = [10, 2]" in nb_runner.get_output(4)
-
-    def test_two_mutations_edit_second(self, nb_runner):
-        """Two mutation cells, edit the second one. Restart for clean state."""
-        nb_runner.create_notebook(
-            [
-                "data = []",
-                "data.append(1)",
-                "data.append(2)",
-                "print(f'data = {data}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "data = [1, 2]" in nb_runner.get_output(4)
-
-        nb_runner.set_cell_source(3, "data.append(20)")
-        nb_runner.shutdown()
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "data = [1, 20]" in nb_runner.get_output(4)
-
-    def test_accumulator_pattern_rerun(self, nb_runner):
-        """Classic accumulator pattern: init + loop += must not double-count."""
-        nb_runner.create_notebook(
-            [
-                "total = 0",
-                "for x in [1, 2, 3]:\n    total += x",
-                "print(f'total = {total}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "total = 6" in nb_runner.get_output(3)
-
-        # Re-run should give same result, not 12
-        nb_runner.run_all()
-        assert "total = 6" in nb_runner.get_output(3)
 
 
 # Container/collection mutation + cell edit interaction tests.
@@ -922,3 +478,48 @@ class TestNestedCollectionCellEdits:
         )
         nb_runner.run_all()
         assert "total = 13" in nb_runner.get_output(2)
+
+
+@pytest.mark.stress
+class TestMutationWithRestart:
+    """Mutations across kernel restarts."""
+
+    def test_mutation_restored_after_restart(self, nb_runner):
+        """After restart, mutation result should be correctly restored.
+        Mutations can't be virtually restored — must re-run all cells
+        so the mutation is re-executed from scratch."""
+        nb_runner.create_notebook(
+            [
+                "data = [1, 2, 3]",
+                "data.append(4)",
+                "total = sum(data)\nprint(f'total = {total}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "total = 10" in nb_runner.get_output(3)
+
+        nb_runner.shutdown()
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "total = 10" in nb_runner.get_output(3)
+
+    def test_mutation_edit_after_restart(self, nb_runner):
+        """Restart, edit the mutation, re-run all.
+        After restart, all cells re-execute from scratch."""
+        nb_runner.create_notebook(
+            [
+                "items = ['a', 'b']",
+                "items.append('c')",
+                "result = ','.join(items)\nprint(f'result = {result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "result = a,b,c" in nb_runner.get_output(3)
+
+        nb_runner.shutdown()
+        nb_runner.set_cell_source(2, "items.append('z')")
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "result = a,b,z" in nb_runner.get_output(3)
