@@ -23,14 +23,14 @@ the one that owes a higher duty of care.
 
 **Migrated to real sites.** This file used to be the one
 deliberate holdout exercising only the no-site decorator-fallback branch of
-``resolve()`` — ``CallUnit._storable`` was a stub returning ``True`` before
+``resolve()`` — ``CallEntries.storable`` was a stub returning ``True`` before
 Task 6, so a call routed through a REAL ``CallSite`` had no guard at all (see
 ``tests/test_notebook_integration/calls/test_cache_calls_figure_guard.py``'s
 history for the matching, now-removed ``xfail``). Task 6 implemented the
-guard in ``CallUnit._storable`` itself, so this file now registers sites via
+guard in ``CallEntries.storable`` itself, so this file now registers sites via
 ``set_sites`` like its siblings (``test_call_interception_runtime.py``) and
 exercises the production path end to end: ``CallCache.resolve`` ->
-``CallUnit.wrap`` -> ``_storable``.
+``CallUnit.wrap`` -> ``CallEntries.storable``.
 
 **Every test sleeps above ``CallUnit``'s ``_COST_FLOOR_S`` (0.01s) and, where
 there is a second call, asserts on ``call_cache.drain_call_log()``'s
@@ -77,7 +77,7 @@ def test_a_figure_returning_call_does_not_hijack_pyplot(call_cache):
 
     The sleep is load-bearing: the guard is only even consulted once the call
     clears ``CallUnit``'s cost floor (``wrap``'s
-    ``elapsed >= _COST_FLOOR_S and self._storable(...)``); without it this
+    ``elapsed >= _COST_FLOOR_S and self._entries.storable(...)``); without it this
     call is never a store candidate at all and the test would pass whether or
     not the guard exists.
     """

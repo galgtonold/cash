@@ -40,7 +40,7 @@ def test_a_cache_hit_is_also_marked_intercepted(call_unit_harness):
     """The flag must not be an artefact of the miss path only."""
 
     def slow(v):
-        # `_storable` refuses to cache a call whose result IS one of its
+        # `CallEntries.storable` refuses to cache a call whose result IS one of its
         # arguments (identity), so this must return something new rather
         # than `v` itself or the entry would never be stored at all.
         time.sleep(ABOVE_PERSISTENCE_FLOOR_S)  # above the cost-model floor

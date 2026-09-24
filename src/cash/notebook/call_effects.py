@@ -172,7 +172,7 @@ def hash_args(args: tuple, kwargs: dict) -> tuple:
        A same-size in-place edit outside the sampled region is invisible
        here. This is a known, accepted trade -- it errs toward CACHING for
        objects that still hash BY CONTENT, and the identity check in
-       `CallUnit._storable` stays as a second line of defence for the one shape it
+       `CallEntries.storable` stays as a second line of defence for the one shape it
        fully covers (`return arg`).
 
     2. **Identity fallback.** `compute_hash`'s tier 3

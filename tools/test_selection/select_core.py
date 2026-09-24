@@ -70,6 +70,7 @@ FEATURES = {
     "notebook/call_unit": "call_caching",
     "notebook/call_key": "call_caching",
     "notebook/call_effects": "call_caching",
+    "notebook/call_entries": "call_caching",
     "notebook/call_interception": "call_caching",
     "notebook/call_refs": "call_caching",
     "notebook/consumables": "consumables",

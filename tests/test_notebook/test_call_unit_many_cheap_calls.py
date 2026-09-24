@@ -18,6 +18,7 @@ import time
 import pytest
 
 from cash.notebook import call_unit as cu
+from cash.notebook.call_entries import CallEntries
 from cash.notebook.call_interception import CallSite
 
 SITE = CallSite(
@@ -32,7 +33,7 @@ N = cu._GUARD_AFTER_CALLS + cu._PLAIN_SAMPLES + 40
 
 @pytest.fixture
 def slow_lookup(monkeypatch):
-    real = cu.CallUnit._lookup
+    real = CallEntries.lookup
     lookups: list[str] = []
 
     def lookup(self, key):
@@ -40,7 +41,7 @@ def slow_lookup(monkeypatch):
         time.sleep(0.002)
         return real(self, key)
 
-    monkeypatch.setattr(cu.CallUnit, "_lookup", lookup)
+    monkeypatch.setattr(CallEntries, "lookup", lookup)
     return lookups
 
 

@@ -22,14 +22,14 @@ The correctness gates this file pins, now that the fast path is gone:
     kernel), result byte-identical to a no-cash run;
   * #2 / #3 a REAL kernel restart — and here the picture genuinely changed,
     though NARROWER than it first looked. The disk tier itself is not the
-    issue: ``CallUnit._store`` writes through the exact same
+    issue: ``CallEntries.store`` writes through the exact same
     ``backend.set(key, value, metadata)`` the statement path uses, and
     ``TieredBackend`` promotes an entry to disk either when its metadata sets
     ``force_persist`` OR when the entry clears the backend's own generic
     compute-cost floor (~1s) regardless of any annotation. An EXPENSIVE
     intercepted call (e.g. a 1.2s ``slow``) survives a restart today, with or
     without ``@cash:persist`` — confirmed against a real kernel. What is
-    actually lost was narrower: ``CallUnit._store`` never consulted the
+    actually lost was narrower: ``CallEntries.store`` never consulted the
     ``persist`` annotation and always wrote the same sparse, fixed metadata
     (``execution_time``/``timestamp``), so it could never set
     ``force_persist`` — cache *policy* did not propagate down to call units.

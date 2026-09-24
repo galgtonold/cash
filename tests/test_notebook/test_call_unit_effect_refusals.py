@@ -116,7 +116,7 @@ def test_mutation_refusal_is_permanent_across_wrap_calls(call_unit_harness):
     """The refusal is keyed by cache key and must survive re-wrapping the
     same site -- `wrap` is called fresh per statement execution in
     production (`CallCache.resolve` builds a new wrapper on every cell run),
-    so the refusal set has to live on `CallUnit`, not on the closure `wrap`
+    so the refusal set has to live on the unit (its `CallEntries`), not on the closure `wrap`
     returns.
 
     The second call is deliberately left in the ALREADY-CLEAN state (`payload`
@@ -125,8 +125,8 @@ def test_mutation_refusal_is_permanent_across_wrap_calls(call_unit_harness):
     comparison. This is what actually distinguishes "refusal recorded on
     `self`" from "refusal recorded on a closure that gets thrown away":
 
-    - correct (permanent) impl: call 2 short-circuits on `key in
-      self._refused` (learned from call 1) BEFORE ever comparing hashes, so
+    - correct (permanent) impl: call 2 short-circuits on the refusal
+      `CallEntries` holds (learned from call 1) BEFORE ever comparing hashes, so
       it never gets a chance to be fooled by looking clean, and never stores.
     - broken (closure-scoped) impl: call 2 gets a brand-new, empty local
       refusal set, does the full miss cycle, sees NO hash change (idempotent
@@ -135,9 +135,9 @@ def test_mutation_refusal_is_permanent_across_wrap_calls(call_unit_harness):
       cached result instead of re-running `clean`, and `calls` would stop
       growing on the third call.
 
-    Mutation-that-breaks-this-test: scoping `self._refused` (or the guard
+    Mutation-that-breaks-this-test: scoping `CallEntries._refused` (or the guard
     that checks it) to the `_invoke` closure created by one `wrap()` call
-    instead of `self`.
+    instead of the unit's `CallEntries`.
     """
     calls = []
 

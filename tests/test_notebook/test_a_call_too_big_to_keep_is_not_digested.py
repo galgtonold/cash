@@ -14,20 +14,20 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from cash.notebook import call_unit as call_unit_mod
+from cash.notebook import call_entries
 from cash.notebook.call_refs import DIGEST_FIELD, ESTIMATED_FIELD, UNHASHED_PREFIX
 from cash.object_hashing import pickled_size_estimate
 
 
 def _spy(monkeypatch):
     calls = []
-    real = call_unit_mod.digest_and_size
+    real = call_entries.digest_and_size
 
     def spy(value):
         calls.append(1)
         return real(value)
 
-    monkeypatch.setattr(call_unit_mod, "digest_and_size", spy)
+    monkeypatch.setattr(call_entries, "digest_and_size", spy)
     return calls
 
 
@@ -39,7 +39,7 @@ def test_a_result_far_over_the_ceiling_is_not_digested(call_unit_harness, monkey
     calls = _spy(monkeypatch)
     unit = call_unit_harness(lineage={}, user_ns={})
     big = pd.DataFrame({"x": np.zeros(4_000_000), "s": ["a"] * 4_000_000})  # ~40 MB
-    unit._store("call:big", big, 0.1)  # 0.1 s is worth 12.8 MiB at most
+    unit._entries.store("call:big", big, 0.1)  # 0.1 s is worth 12.8 MiB at most
     assert calls == [], "pickled a result the size estimate already refuses"
     meta = _meta(unit, "call:big")
     assert meta.get(ESTIMATED_FIELD) is True
@@ -49,7 +49,7 @@ def test_a_result_far_over_the_ceiling_is_not_digested(call_unit_harness, monkey
 def test_a_result_worth_its_bytes_is_still_digested(call_unit_harness, monkeypatch):
     calls = _spy(monkeypatch)
     unit = call_unit_harness(lineage={}, user_ns={})
-    unit._store("call:small", pd.DataFrame({"x": np.zeros(1000)}), 0.2)
+    unit._entries.store("call:small", pd.DataFrame({"x": np.zeros(1000)}), 0.2)
     assert calls == [1]
     meta = _meta(unit, "call:small")
     assert DIGEST_FIELD in meta and ESTIMATED_FIELD not in meta

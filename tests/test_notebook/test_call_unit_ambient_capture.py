@@ -12,7 +12,7 @@ hit by replaying what the ORIGINAL execution observed:
 * ``replay_output`` writes the entry's recorded stdout/stderr onto the
   live stream, reconstructing ``print(a); f(x); print(b)``'s interleaving.
 * A call's own cache KEY carries no file content (only source + argument
-  lineage), so ``_lookup`` also re-validates ``auto_file_deps`` before
+  lineage), so ``CallEntries.lookup`` also re-validates ``auto_file_deps`` before
   calling anything a hit -- otherwise a call whose underlying file changed
   would be served forever, and the replay above would just make the
   statement re-declare a staleness nobody underneath it ever notices.
@@ -52,7 +52,7 @@ def test_call_hit_recomputes_when_its_own_file_dependency_goes_stale(call_unit_h
     """A call's cache KEY never encodes file content, so a stored entry
     whose recorded file changed must not be served forever.
 
-    One-line mutation that breaks this test: in ``CallUnit._lookup``, delete
+    One-line mutation that breaks this test: in ``CallEntries.lookup``, delete
     the ``if not self._auto_file_deps_fresh(metadata): return False, None,
     0.0, {}`` guard. Applied and observed: the third call returns the STALE
     ``20`` instead of the freshly-computed ``200`` -- verified below, then
@@ -93,7 +93,7 @@ def test_call_hit_recomputes_when_its_own_file_dependency_goes_stale(call_unit_h
 def test_replay_deps_registers_a_local_path_on_the_ambient_tracker():
     """Direct unit test of ``replay_deps`` for the local-file shape.
 
-    Exercises the function itself (not the full ``_lookup`` round-trip, whose
+    Exercises the function itself (not the full ``CallEntries.lookup`` round-trip, whose
     freshness re-check has its own tracking side effect for local paths --
     see the module docstring) so the local-path branch is still verified in
     isolation.
@@ -135,7 +135,7 @@ def test_two_reads_of_the_same_path_in_one_tracker_window_both_stay_correct(call
     correctly -- the freshness re-check's own ``open()`` call re-registers a
     dependency that already exists in the metadata. Here the bug is
     upstream of that: under the old delta-based code the second call's
-    ``auto_file_deps`` is never written in the first place (``_store``'s
+    ``auto_file_deps`` is never written in the first place (``CallEntries.store``'s
     ``if file_deps or remote_deps:`` guard sees an empty set and skips it
     entirely), so ``_auto_file_deps_fresh`` returns ``True`` on the
     ``if not snap`` fast path *before* it ever calls ``file_dep_is_fresh`` /

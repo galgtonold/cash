@@ -19,7 +19,7 @@ from tests._cell_driver import run_cash_cell
 pd = pytest.importorskip("pandas")
 np = pytest.importorskip("numpy")
 
-from cash.notebook import call_refs, call_unit  # noqa: E402
+from cash.notebook import call_entries, call_refs  # noqa: E402
 
 BUILD = (
     "import time\nimport numpy as np\nimport pandas as pd\n"
@@ -46,8 +46,8 @@ def seen(monkeypatch):
     monkeypatch.setattr("cash.notebook.statement.call_routing.with_call_refs", spy_refs)
     real_digest = call_refs.digest_of
     monkeypatch.setattr(call_refs, "digest_of", lambda v: digests.append(1) or real_digest(v))
-    real_ds = call_unit.digest_and_size
-    monkeypatch.setattr(call_unit, "digest_and_size", lambda v: digests.append(1) or real_ds(v))
+    real_ds = call_entries.digest_and_size
+    monkeypatch.setattr(call_entries, "digest_and_size", lambda v: digests.append(1) or real_ds(v))
     return stored, digests
 
 

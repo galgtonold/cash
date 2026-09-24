@@ -39,7 +39,7 @@ but the call does not".
 **Verified one-line mutation** (this is the one that actually distinguishes
 pass/fail at the full-notebook level -- see the report for why
 ``call_effects.replay_deps`` alone does not): in
-``CallUnit._store``, change ``if file_deps or remote_deps:`` to
+``CallEntries.store``, change ``if file_deps or remote_deps:`` to
 ``if False and (file_deps or remote_deps):``, so a call's own
 ``auto_file_deps`` snapshot is never written at all. Applied and observed:
 run 3 prints ``TOTAL 25`` (the stale run-2 value) instead of ``TOTAL 205``

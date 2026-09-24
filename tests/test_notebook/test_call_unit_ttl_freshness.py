@@ -1,4 +1,4 @@
-"""`CallUnit._ttl_fresh` edge semantics.
+"""`CallEntries._ttl_fresh` edge semantics.
 
 The end-to-end contract is pinned in
 `tests/test_notebook_integration/calls/test_call_unit_ttl.py`. These cover the three
@@ -24,7 +24,7 @@ def _unit(ttl):
 
 def test_no_ttl_never_expires_an_entry():
     """`None` is "no TTL", the path every unannotated statement takes."""
-    assert _unit(None)._ttl_fresh({"timestamp": 0.0}) is True
+    assert _unit(None)._entries._ttl_fresh({"timestamp": 0.0}) is True
 
 
 def test_ttl_zero_expires_without_consulting_the_clock():
@@ -35,15 +35,15 @@ def test_ttl_zero_expires_without_consulting_the_clock():
     back the very entry `ttl=0` exists to reject. An entry stamped *now* is
     the case that catches it.
     """
-    assert _unit(0)._ttl_fresh({"timestamp": time.time()}) is False
+    assert _unit(0)._entries._ttl_fresh({"timestamp": time.time()}) is False
 
 
 def test_a_falsy_ttl_is_not_treated_as_absent():
     """The distinction `is not None` protects, stated directly. Reading `if
     ttl:` here would make `ttl=0` mean "no TTL" -- which is precisely the bug
     the statement layer once had."""
-    assert _unit(0)._ttl_fresh({"timestamp": time.time()}) is False
-    assert _unit(None)._ttl_fresh({"timestamp": time.time()}) is True
+    assert _unit(0)._entries._ttl_fresh({"timestamp": time.time()}) is False
+    assert _unit(None)._entries._ttl_fresh({"timestamp": time.time()}) is True
 
 
 @pytest.mark.parametrize(
@@ -56,7 +56,7 @@ def test_a_falsy_ttl_is_not_treated_as_absent():
 )
 def test_expiry_tracks_the_recorded_timestamp(age, ttl, fresh):
     metadata = {"timestamp": time.time() - age}
-    assert _unit(ttl)._ttl_fresh(metadata) is fresh
+    assert _unit(ttl)._entries._ttl_fresh(metadata) is fresh
 
 
 @pytest.mark.parametrize(
@@ -73,7 +73,7 @@ def test_an_entry_without_a_usable_timestamp_expires(metadata):
     who has explicitly asked for freshness. Treating it as fresh would be the
     same silent-staleness failure this ticket exists to remove.
     """
-    assert _unit(30)._ttl_fresh(metadata) is False
+    assert _unit(30)._entries._ttl_fresh(metadata) is False
 
 
 def test_a_unit_built_without_a_ttl_provider_behaves_as_before():
@@ -82,4 +82,4 @@ def test_a_unit_built_without_a_ttl_provider_behaves_as_before():
     cash = Cash(backend=InMemoryBackend(), register_magic=False)
     unit = CallUnit(cash, ctx_provider=lambda: None)
 
-    assert unit._ttl_fresh({"timestamp": 0.0}) is True
+    assert unit._entries._ttl_fresh({"timestamp": 0.0}) is True
