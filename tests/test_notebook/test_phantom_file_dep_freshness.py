@@ -3,7 +3,7 @@
 ``tracking_state.executed_file_deps`` is a strict superset of the producer's
 persisted ``file_dependencies`` snapshot:
 
-* ``FileAccessTracker._track_path`` records every access *attempt* — the
+* ``FileAccessTracker.track_path`` records every access *attempt* — the
   ``open()`` wrapper records the path before it calls through, so a read that
   raises ``FileNotFoundError`` still lands in the set.
 * ``snapshot_file_deps`` silently drops any path it cannot ``stat``, so a

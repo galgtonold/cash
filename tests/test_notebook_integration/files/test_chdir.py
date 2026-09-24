@@ -18,7 +18,7 @@ Verifier repro: chdir cell edited to a directory holding a DIFFERENT data.csv.
 
 Minimal repro for the probe finding `chdir-relative-path-stale-collision`:
 the file-dependency for a relative-path read is frozen to the realpath
-resolved at FIRST execution (file_tracker._track_path), and cwd is not an
+resolved at FIRST execution (file_tracker.track_path), and cwd is not an
 input to the cache decision, so after editing the os.chdir cell to point at
 a directory holding a different file with the same relative name, run_all
 serves the OLD directory's data.

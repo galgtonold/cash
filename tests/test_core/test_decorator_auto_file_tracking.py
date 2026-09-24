@@ -153,8 +153,8 @@ def test_pseudo_fs_reads_are_not_tracked_as_dependencies():
     assert not is_pseudo_fs("/tmp/procession.csv")  # prefix, not a path component
 
     tracker = FileAccessTracker({})
-    tracker._track_path("/proc/meminfo")
-    tracker._track_path("/sys/kernel/mm/transparent_hugepage/enabled")
+    tracker.track_path("/proc/meminfo")
+    tracker.track_path("/sys/kernel/mm/transparent_hugepage/enabled")
     assert tracker.accessed_files == set(), f"pseudo-fs paths leaked into deps: {tracker.accessed_files}"
 
 

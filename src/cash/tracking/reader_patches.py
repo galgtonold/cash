@@ -60,7 +60,7 @@ def _dispatch_track(path: Any) -> None:
     """
     _tracker = active_tracker.get()
     if _tracker is not None:
-        _tracker._track_path(path)
+        _tracker.track_path(path)
 
 
 #: (module id, pattern) -> (namespace size, matched names); `_find_patch_targets`.
@@ -173,7 +173,7 @@ def _track_regular_file(path: Any) -> None:
         return
     try:
         if stat.S_ISREG(os.stat(path).st_mode):
-            tracker._track_path(path)
+            tracker.track_path(path)
     except (OSError, ValueError, TypeError):
         return
 
@@ -404,7 +404,7 @@ class FileDependencyRegistry:
         # returned 101 after an INSERT, and `pd.read_sql_query` over the same
         # connection did too.
         # The connection's path is the dependency; a URI or ":memory:" has no
-        # file behind it and `_track_path` drops what it cannot resolve.
+        # file behind it and `track_path` drops what it cannot resolve.
         self.register("sqlite3", "connect", self._create_path_arg_handler)
         self.register("sqlite3.dbapi2", "connect", self._create_path_arg_handler)
 
@@ -470,7 +470,7 @@ class FileDependencyRegistry:
             if isinstance(target, (str, bytes, os.PathLike)):
                 _tracker = active_tracker.get()
                 if _tracker is not None:
-                    _tracker._track_path(target)
+                    _tracker.track_path(target)
                 else:
                     note_untracked_read(target, sys._getframe(1))
             return original_func(*args, **kwargs)
@@ -496,7 +496,7 @@ class FileDependencyRegistry:
             if not result:
                 _tracker = active_tracker.get()
                 if _tracker is not None and isinstance(path, (str, bytes, os.PathLike)):
-                    _tracker._track_absent(path)
+                    _tracker.track_absent(path)
             return result
 
         return tracked_exists
@@ -538,7 +538,7 @@ class FileDependencyRegistry:
                         except (OSError, ValueError):
                             real = False
                         if real:
-                            _tracker._track_path(filename)
+                            _tracker.track_path(filename)
             return original_func(filename, *args, **kwargs)
 
         return tracked_source_reader

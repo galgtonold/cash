@@ -228,7 +228,7 @@ class TestRemoteUrlChannel:
 
     def test_a_url_lands_on_the_remote_channel_not_the_file_one(self):
         tracker = FileAccessTracker()
-        tracker._track_path("s3://bucket/events.parquet")
+        tracker.track_path("s3://bucket/events.parquet")
 
         assert tracker.get_accessed_remote_urls() == {"s3://bucket/events.parquet"}
         assert tracker.get_accessed_files() == set(), (
@@ -247,7 +247,7 @@ class TestRemoteUrlChannel:
     )
     def test_recognised_schemes(self, url):
         tracker = FileAccessTracker()
-        tracker._track_path(url)
+        tracker.track_path(url)
         assert tracker.get_accessed_remote_urls() == {url}
 
     def test_tracking_a_url_does_not_warn(self):
@@ -259,7 +259,7 @@ class TestRemoteUrlChannel:
         tracker = FileAccessTracker()
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            tracker._track_path("s3://bucket/events.parquet")
+            tracker.track_path("s3://bucket/events.parquet")
 
         hits = [w for w in caught if issubclass(w.category, CashCacheIneffectiveWarning)]
         assert hits == [], f"a tracked read must not warn, got {[str(h.message) for h in hits]}"
@@ -270,8 +270,8 @@ class TestRemoteUrlChannel:
         real = tmp_path / "data.csv"
         real.write_text("a,b\n1,2\n", encoding="utf-8")
         tracker = FileAccessTracker()
-        tracker._track_path(str(real))
-        tracker._track_path(r"C:\Users\someone\data.csv")
+        tracker.track_path(str(real))
+        tracker.track_path(r"C:\Users\someone\data.csv")
 
         assert tracker.get_accessed_remote_urls() == set()
         assert tracker.get_accessed_files(), "local paths must still be tracked"
@@ -283,6 +283,6 @@ class TestRemoteUrlChannel:
         with outer:
             inner = FileAccessTracker(propagate_to_parent=True)
             with inner:
-                inner._track_path("s3://bucket/events.parquet")
+                inner.track_path("s3://bucket/events.parquet")
 
         assert outer.get_accessed_remote_urls() == {"s3://bucket/events.parquet"}

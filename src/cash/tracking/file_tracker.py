@@ -111,7 +111,7 @@ class FileAccessTracker:
         # kind of dependency (``{'absent': True}``) so an entry computed
         # WITHOUT an optional file stops being valid once that file appears --
         # including when the same relative name resolves into a directory that
-        # has one. See ``_track_absent``.
+        # has one. See ``track_absent``.
         self.absent_files: set[str] = set()
         # The stat of each regular file WHEN IT WAS FIRST READ. The entry's
         # fingerprint is taken when it is stored, after the body has finished,
@@ -205,7 +205,11 @@ class FileAccessTracker:
         """Paths this block looked for and did not find."""
         return self.absent_files
 
-    def _track_path(self, path):
+    # The three methods below are what the feeders (`read_events`,
+    # `reader_patches`, `read_credit`) call when they see a read.
+
+    def track_path(self, path):
+        """Record a read of *path*, unless it is not a user dependency."""
         global _tracking_seconds
         started = _perf_counter()
         try:
@@ -343,13 +347,15 @@ class FileAccessTracker:
         finally:
             self.read_hash_seconds += _perf_counter() - t0
 
-    def _note_reading_code(self, code: Any) -> None:
+    def note_reading_code(self, code: Any) -> None:
+        """Record *code* as user code that read a file in this block, here and
+        in every tracker this one propagates to."""
         self.reading_codes.add(code)
         parent = self._propagation_parent()
         if parent is not None:
-            parent._note_reading_code(code)
+            parent.note_reading_code(code)
 
-    def _track_absent(self, path) -> None:
+    def track_absent(self, path) -> None:
         """Record *path* as looked-for-and-missing.
 
         Kept as WRITTEN, not resolved: a relative probe is about "a file with
@@ -358,7 +364,7 @@ class FileAccessTracker:
         freeze the directory the probe happened to run in -- which is the bug
         this exists to close, in mirror image.
 
-        The same filters as ``_track_path``: kernel pseudo-filesystems and
+        The same filters as ``track_path``: kernel pseudo-filesystems and
         cash's own storage are not user dependencies.
         """
         try:

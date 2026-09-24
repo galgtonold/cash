@@ -3,7 +3,7 @@
 Under ``%cash_on`` the file tracker replaces the pandas readers (and once
 replaced ``open``) with cash shims. A cached user function that reads a file therefore resolves
 its callee to ``cash.tracking.reader_patches``, and the analyzer used to walk
-straight into it and report the shim's own ``_tracker._track_path(...)`` as
+straight into it and report the shim's own ``_tracker.track_path(...)`` as
 "likely side effects or scope mutations" -- blaming the user for cash's
 instrumentation.
 
@@ -54,7 +54,7 @@ def test_analyzer_does_not_attribute_cash_internals_to_the_user():
     offenders = [
         i
         for i in report.issues
-        if any(part in str(i) for part in ("cash.notebook", "file_tracker", "reader_patches", "_track_path"))
+        if any(part in str(i) for part in ("cash.notebook", "file_tracker", "reader_patches", "track_path"))
     ]
     assert not offenders, (
         f"the analyzer walked into cash's own file-tracking shim and reported it as the user's impurity: {offenders}"

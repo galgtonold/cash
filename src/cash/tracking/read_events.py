@@ -92,7 +92,7 @@ def _on_open(args: tuple) -> None:
         if tracker is None:
             note_untracked_read(path, caller)
             return
-        tracker._track_path(path)
+        tracker.track_path(path)
         if "a" not in mode:
             # A file that was not there is an input too, and the docs say so --
             # but only the `os.path.exists` spelling recorded it.
@@ -101,7 +101,7 @@ def _on_open(args: tuple) -> None:
             try:
                 os.stat(path)
             except FileNotFoundError:
-                tracker._track_absent(path)
+                tracker.track_absent(path)
             except (OSError, ValueError):
                 pass
     elif any(ch in mode for ch in "wax"):
@@ -136,7 +136,7 @@ def _on_listing(args: tuple) -> None:
         return  # a descriptor
     if _not_a_read(_audited_caller()):
         return
-    tracker._track_path(path)
+    tracker.track_path(path)
 
 
 def _on_glob(args: tuple) -> None:
@@ -146,7 +146,7 @@ def _on_glob(args: tuple) -> None:
         return
     base = _glob_base_dir(args[0])
     if base is not None:
-        tracker._track_path(base)
+        tracker.track_path(base)
 
 
 def _glob_base_dir(pattern: Any) -> str | None:

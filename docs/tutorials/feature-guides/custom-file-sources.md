@@ -36,7 +36,7 @@ modification time must match too. The full rule is in
 
 ## What's automatically tracked
 
-<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @caa8d35e, cash/tracking/read_events.py:_on_open @7e1d5c60, cash/tracking/read_events.py:_on_listing @c2c76d1d -->
+<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @caa8d35e, cash/tracking/read_events.py:_on_open @5461415d, cash/tracking/read_events.py:_on_listing @82829f4a -->
 Cash tracks `open()` in a read mode and what reads through it, the pandas, polars,
 pyarrow and numpy readers, `sqlite3.connect`, directory listings (a new
 matching file recomputes the call) and existence checks that answer False (the

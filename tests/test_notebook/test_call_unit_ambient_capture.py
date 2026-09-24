@@ -230,11 +230,11 @@ def test_call_hit_propagates_remote_dependency_through_resolve(tmp_path, monkeyp
         calls.append(u)
         time.sleep(ABOVE_PERSISTENCE_FLOOR_S)
         # What a real registered remote-reader handler does: tell the
-        # ACTIVE tracker about the read. `_track_path` routes a URL-shaped
+        # ACTIVE tracker about the read. `track_path` routes a URL-shaped
         # string to the remote channel on its own (see file_tracker.py).
         tracker = active_tracker.get()
         if tracker is not None:
-            tracker._track_path(u)
+            tracker.track_path(u)
         return f"DATA-{token['value']}"
 
     call_cache = CallCache(cash.Cash(cache_dir=str(tmp_path / "cc")))

@@ -86,7 +86,7 @@ def credit_read_to_stack(abs_path: str, tracker: "FileAccessTracker") -> None:
         if kind == "wrapper":
             break  # the cached call's own wrapper: the walk ends
         if kind == "user":
-            tracker._note_reading_code(code)
+            tracker.note_reading_code(code)
             _record_read(code, abs_path, stat)
         frame, depth = frame.f_back, depth + 1
 
