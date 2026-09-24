@@ -143,13 +143,13 @@ def test_pseudo_fs_reads_are_not_tracked_as_dependencies():
     every ``check_interval`` writes and psutil reads ``/proc/meminfo`` on
     Linux, while the tracker is active for the user's call.
     """
-    from cash.tracking.file_tracker import FileAccessTracker, _is_pseudo_fs
+    from cash.tracking.file_tracker import FileAccessTracker, is_pseudo_fs
 
-    assert _is_pseudo_fs("/proc/meminfo")
-    assert _is_pseudo_fs("/sys/fs/cgroup/memory.max")
-    assert _is_pseudo_fs("/dev/urandom")
-    assert not _is_pseudo_fs("/home/me/data.csv")
-    assert not _is_pseudo_fs("/tmp/procession.csv")  # prefix, not a path component
+    assert is_pseudo_fs("/proc/meminfo")
+    assert is_pseudo_fs("/sys/fs/cgroup/memory.max")
+    assert is_pseudo_fs("/dev/urandom")
+    assert not is_pseudo_fs("/home/me/data.csv")
+    assert not is_pseudo_fs("/tmp/procession.csv")  # prefix, not a path component
 
     tracker = FileAccessTracker({})
     tracker._track_path("/proc/meminfo")

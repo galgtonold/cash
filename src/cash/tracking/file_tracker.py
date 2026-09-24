@@ -63,7 +63,7 @@ active_tracker: contextvars.ContextVar[Optional["FileAccessTracker"]] = contextv
 )
 
 
-class _Memo:
+class Memo:
     """A dict that stops growing at *limit* entries.
 
     Past the limit a new key is either not remembered, or (``reset=True``,
@@ -101,7 +101,7 @@ class untracked:
     OUTER call's tracker is live, so those reads were recorded as the outer
     entry's file dependencies: bump the project's version and every cached
     function that calls another one recomputed. The storage-path filters
-    (``_is_cash_internal``) cannot help, because a config file is not storage.
+    (``is_cash_internal``) cannot help, because a config file is not storage.
     A class rather than ``contextlib.contextmanager`` so it costs one
     ContextVar swap, not a generator.
     """
@@ -119,7 +119,7 @@ class untracked:
         active_tracker.reset(self._token)
 
 
-# The wrappers installed while a tracker is open (see `_install_patches`),
+# The wrappers installed while a tracker is open (see `install_patches`),
 # and the lock that serialises installing and removing them with the post-
 # import hook patching a module that was imported meanwhile.
 _patches = io_watch.Patches()
@@ -152,7 +152,7 @@ _PSEUDO_FS_PREFIXES: tuple[str, ...] = ("/proc/", "/sys/", "/dev/")
 _PATH_KWARGS = ("filepath_or_buffer", "path_or_buf", "source", "input_file", "path", "file", "fname", "filename", "io")
 
 
-def _regular_file_stat(path: str) -> tuple[int, int, int] | None:
+def regular_file_stat(path: str) -> tuple[int, int, int] | None:
     """``(size, mtime_ns, ctime_ns)`` for a regular file, None otherwise.
 
     ``ctime_ns`` is the inode change time on POSIX, so an edit that restores
@@ -170,18 +170,18 @@ def _regular_file_stat(path: str) -> tuple[int, int, int] | None:
 
 
 #: The folder joblib memory-maps a parallel call's large arguments into.
-_SCRATCH_MEMMAP = "joblib_memmapping_folder_"
+SCRATCH_MEMMAP = "joblib_memmapping_folder_"
 
 #: Caches a runtime keeps for ITSELF: the interpreter's bytecode and numba's
 #: JIT index/data (``.nbi`` / ``.nbc``), which live in a ``__pycache__`` next to
 #: the code or wherever ``NUMBA_CACHE_DIR`` points. Never the user's data, and
 #: rewritten by any other process that runs the same function -- recorded,
 #: scanpy's normalize made every step after it re-run after a restart.
-_RUNTIME_CACHE_SEGMENT = "/__pycache__/"
-_RUNTIME_CACHE_SUFFIXES = (".nbi", ".nbc", ".pyc")
+RUNTIME_CACHE_SEGMENT = "/__pycache__/"
+RUNTIME_CACHE_SUFFIXES = (".nbi", ".nbc", ".pyc")
 
 
-def _is_pseudo_fs(path: str) -> bool:
+def is_pseudo_fs(path: str) -> bool:
     """True for kernel pseudo-filesystem paths, which are machine state rather
     than data and must never become cache dependencies.
 
@@ -301,7 +301,7 @@ def _module_package_dir(module_name: str) -> str | None:
 #: module name -> (metadata module?, read plumbing?, top-level name). A read
 #: walks the whole stack, ~30 frames in a kernel, and a folder read does it for
 #: every file, so each module is classified once.
-_module_kinds = _Memo(8192)
+_module_kinds = Memo(8192)
 
 
 def incidental_read(path: str, own_package: str | None = None) -> str | None:
@@ -400,7 +400,7 @@ def register_cache_dir(path: str) -> None:
         _CASH_CACHE_DIRS.add(resolved.replace("\\", "/").rstrip("/") + "/")
 
 
-def _is_cash_internal(path: str) -> bool:
+def is_cash_internal(path: str) -> bool:
     """True for a read or write of cash's own cache storage.
 
     Being in a registered directory is NOT enough on its own: ``cache_dir``
@@ -438,12 +438,12 @@ def _is_cash_internal(path: str) -> bool:
 #: `credited_reads` answers when a call reaches it again, and the stat says
 #: WHICH version it read: a memo filled before the file changed hands back the
 #: old version's data. Reads outside any cached call count too
-#: (`_note_untracked_read`) -- `main()` logging its settings through the memo
+#: (`note_untracked_read`) -- `main()` logging its settings through the memo
 #: before the first cached call is the ordinary way to fill one. A code past
 #: `_READS_PER_CODE_MAX` files is marked ``None``: it reads per argument, and
 #: every file it ever read is no one call's dependency.
 _READS_PER_CODE_MAX = 16
-_reads_by_code = _Memo(4096)
+_reads_by_code = Memo(4096)
 _CASH_PACKAGE_DIR = os.path.normcase(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -475,7 +475,7 @@ def _is_cash_wrapper(filename: str) -> bool:
     return norm == _DECORATOR_FILES[0] or norm.startswith(_DECORATOR_FILES[1])
 
 
-def _credit_read_to_stack(abs_path: str, tracker: "FileAccessTracker") -> None:
+def credit_read_to_stack(abs_path: str, tracker: "FileAccessTracker") -> None:
     """Credit a read to the user code on the stack, up to the cached call."""
     try:
         frame = sys._getframe(1)
@@ -495,7 +495,7 @@ def _credit_read_to_stack(abs_path: str, tracker: "FileAccessTracker") -> None:
 
 
 #: code filename -> ``wrapper``/``cash``/``user``/``other``; `_frame_kind`.
-_frame_kinds = _Memo(8192)
+_frame_kinds = Memo(8192)
 
 
 def _frame_kind(filename: str) -> str:
@@ -516,13 +516,13 @@ def _frame_kind(filename: str) -> str:
     return kind
 
 
-#: absolute path -> resolved path, for reads outside a tracker; `_note_untracked_read`.
-_untracked_realpaths = _Memo(4096, reset=True)
-#: resolved path -> (monotonic time, stat); `_note_untracked_read`.
-_untracked_stats = _Memo(4096, reset=True)
+#: absolute path -> resolved path, for reads outside a tracker; `note_untracked_read`.
+_untracked_realpaths = Memo(4096, reset=True)
+#: resolved path -> (monotonic time, stat); `note_untracked_read`.
+_untracked_stats = Memo(4096, reset=True)
 
 
-def _note_untracked_read(path: Any, frame: Any) -> None:
+def note_untracked_read(path: Any, frame: Any) -> None:
     """A read made outside every cached call, credited to the user code on the stack.
 
     *frame* is the frame that asked for the read. Only a read that user code
@@ -545,7 +545,7 @@ def _note_untracked_read(path: Any, frame: Any) -> None:
         if not codes:
             return
         raw = os.fsdecode(path) if isinstance(path, bytes) else os.fspath(path)
-        if not isinstance(raw, str) or _is_pseudo_fs(raw) or is_remote_url(raw):
+        if not isinstance(raw, str) or is_pseudo_fs(raw) or is_remote_url(raw):
             return
         # `realpath` is 60us on Windows, most of what this costs; resolved once
         # per absolute path (so a chdir still resolves anew).
@@ -554,7 +554,7 @@ def _note_untracked_read(path: Any, frame: Any) -> None:
         if abs_path is None:
             abs_path = normalize_path(os.path.realpath(absolute))
             _untracked_realpaths.put(absolute, abs_path)
-        if _is_pseudo_fs(abs_path) or _is_cash_internal(abs_path):
+        if is_pseudo_fs(abs_path) or is_cash_internal(abs_path):
             return
         # A stat is 15us, and a loop re-reading one file pays it every time.
         # Reusing one taken in the last second can only be too OLD, and an old
@@ -565,7 +565,7 @@ def _note_untracked_read(path: Any, frame: Any) -> None:
         if seen is not None and now - seen[0] < 1.0:
             stat = seen[1]
         else:
-            stat = _regular_file_stat(abs_path)
+            stat = regular_file_stat(abs_path)
             _untracked_stats.put(abs_path, (now, stat))
         if stat is None:
             return
@@ -656,7 +656,7 @@ def _on_open(args: tuple) -> None:
     if _is_read_mode(mode):
         tracker = active_tracker.get()
         if tracker is None:
-            _note_untracked_read(path, caller)
+            note_untracked_read(path, caller)
             return
         tracker._track_path(path)
         if "a" not in mode:
@@ -678,7 +678,7 @@ def _on_open(args: tuple) -> None:
         # library it does not walk into) that is a silent behaviour change the
         # user should hear about. See cash.effect_observer.
         observer = _active_effect_observer.get()
-        if observer is not None and not _is_cash_internal(path):
+        if observer is not None and not is_cash_internal(path):
             observer.record_write(path)
 
 
@@ -734,7 +734,7 @@ def _glob_base_dir(pattern: Any) -> str | None:
     return "/".join(base) or "."
 
 
-def _subscribe_read_events() -> None:
+def subscribe_read_events() -> None:
     """Route the audit events of Python-level opens and listings to the tracker."""
     io_watch.subscribe("open", _on_open, outside_scopes=True)
     io_watch.subscribe("os.listdir", _on_listing)
@@ -757,10 +757,10 @@ def _dispatch_track(path: Any) -> None:
 
 
 #: (module id, pattern) -> (namespace size, matched names); `_find_patch_targets`.
-_patch_targets = _Memo(1024)
+_patch_targets = Memo(1024)
 #: (owner id, name, kind) -> (original, wrapper); `_install_wrapper`.
-_wrappers = _Memo(1024)
-#: What the last full install was computed from; `_install_patches`.
+_wrappers = Memo(1024)
+#: What the last full install was computed from; `install_patches`.
 _installed_for: Any = None
 
 
@@ -824,7 +824,7 @@ def _install_module_patches(module_name: str, module_obj: Any) -> None:
     Idempotent — skips any target whose current attribute is already a
     dispatcher wrapper.
 
-    Called from `_install_patches`, from :class:`_PatchingLoader.exec_module`
+    Called from `install_patches`, from :class:`_PatchingLoader.exec_module`
     (post-import) and when a handler is registered. The dispatcher wrappers
     route via ``active_tracker`` so they're tracker-agnostic — one install
     serves all trackers.
@@ -1165,7 +1165,7 @@ class FileDependencyRegistry:
                 if _tracker is not None:
                     _tracker._track_path(target)
                 else:
-                    _note_untracked_read(target, sys._getframe(1))
+                    note_untracked_read(target, sys._getframe(1))
             return original_func(*args, **kwargs)
 
         return tracked_func
@@ -1249,7 +1249,7 @@ class PostImportHook(importlib.abc.MetaPathFinder):
     """Intercepts imports of registered modules to patch them after loading.
 
     A single shared hook sits on ``sys.meta_path`` while a tracker is open
-    (see `_install_patches`). Module patching is tracker-agnostic —
+    (see `install_patches`). Module patching is tracker-agnostic —
     :func:`_install_module_patches` routes file reads via ``active_tracker``
     so the same patches serve every tracker.
     """
@@ -1304,7 +1304,7 @@ class _PatchingLoader:
 _shared_import_hook = PostImportHook()
 
 
-def _install_patches() -> None:
+def install_patches() -> None:
     """Wrap the readers no audit event reports; run when the first tracker opens."""
     global _installed_for
     with _install_lock:
@@ -1328,7 +1328,7 @@ def _install_patches() -> None:
             sys.meta_path.insert(0, _shared_import_hook)
 
 
-def _remove_patches() -> None:
+def remove_patches() -> None:
     """Put the originals back; run when the last tracker closes."""
     with _install_lock:
         try:
@@ -1417,14 +1417,14 @@ class FileAccessTracker:
         self._propagate_to_parent = propagate_to_parent
         self._parent_stack: list[Optional["FileAccessTracker"]] = []
         # The user code that read a file in THIS block (see
-        # `_credit_read_to_stack`): its recorded reads are live, not remembered.
+        # `credit_read_to_stack`): its recorded reads are live, not remembered.
         self.reading_codes: set[Any] = set()
         # Files a memo handed this block data from that was read from an
         # EARLIER version of the file (see `Cash._credit_remembered_reads`).
         self.stale_memo_reads: set[str] = set()
 
     def __enter__(self):
-        # The first open tracker installs the wrappers (see `_install_patches`).
+        # The first open tracker installs the wrappers (see `install_patches`).
         io_watch.hold()
         # Capture the enclosing tracker (if any) BEFORE we become active, so a
         # read inside this block also registers with the outer tracker(s).
@@ -1476,7 +1476,7 @@ class FileAccessTracker:
         """
         moved = []
         for path, before in self.read_stats.items():
-            if _regular_file_stat(path) != before:
+            if regular_file_stat(path) != before:
                 moved.append(path)
         return moved
 
@@ -1504,7 +1504,7 @@ class FileAccessTracker:
             # an input.
             return
         raw_path = os.fsdecode(path) if isinstance(path, bytes) else str(path)
-        if _is_pseudo_fs(raw_path):
+        if is_pseudo_fs(raw_path):
             # See _PSEUDO_FS_PREFIXES. Checked BEFORE realpath, which on
             # Windows rewrites /proc/... to C:/proc/... and would slip past.
             logger.debug("[TRACKER] Ignoring pseudo-fs read %r", raw_path)
@@ -1529,23 +1529,23 @@ class FileAccessTracker:
         except (TypeError, ValueError, OSError) as e:
             logger.debug("[TRACKER] Could not track file path %r: %s", path, e)
             return
-        if _is_pseudo_fs(abs_path):
+        if is_pseudo_fs(abs_path):
             # See _PSEUDO_FS_PREFIXES: recording one of these makes the entry
             # permanently unfreshenable. Return before the relative-path arm
             # too — these paths are always absolute.
             logger.debug("[TRACKER] Ignoring pseudo-fs read %r", abs_path)
             return
-        if _SCRATCH_MEMMAP in abs_path:
+        if SCRATCH_MEMMAP in abs_path:
             # joblib's memmaps of a parallel call's arrays: deleted when the
             # call returns, so recorded, every entry that read them was stale
             # for ever -- a ``cross_val_predict(n_jobs=4)`` loop re-ran on
             # every run of the report cell.
             logger.debug("[TRACKER] Ignoring joblib scratch read %r", abs_path)
             return
-        if _RUNTIME_CACHE_SEGMENT in abs_path or abs_path.endswith(_RUNTIME_CACHE_SUFFIXES):
+        if RUNTIME_CACHE_SEGMENT in abs_path or abs_path.endswith(RUNTIME_CACHE_SUFFIXES):
             logger.debug("[TRACKER] Ignoring runtime-cache read %r", abs_path)
             return
-        if _is_cash_internal(abs_path):
+        if is_cash_internal(abs_path):
             # See _CASH_INTERNAL_SEGMENTS. Checked after realpath so a relative
             # or symlinked cache path is caught too.
             logger.debug("[TRACKER] Ignoring cash-internal read %r", abs_path)
@@ -1556,7 +1556,7 @@ class FileAccessTracker:
             return
         self.add_tracked(abs_path, lstat=read_lstat)
         try:
-            _credit_read_to_stack(abs_path, self)
+            credit_read_to_stack(abs_path, self)
         except Exception:  # noqa: BLE001 - attribution is an aid; the read counts regardless
             logger.debug("[TRACKER] Could not credit %r to the stack", abs_path, exc_info=True)
         # a RELATIVE read path also records the UN-resolved relative
@@ -1603,7 +1603,7 @@ class FileAccessTracker:
             # cwd at check time, and a chdir during the call would make its
             # stat look like a change that never happened.
             st = (
-                _regular_file_stat(abs_path)
+                regular_file_stat(abs_path)
                 if lstat is None
                 else (lstat.st_size, lstat.st_mtime_ns, getattr(lstat, "st_ctime_ns", 0))
             )
@@ -1654,13 +1654,13 @@ class FileAccessTracker:
             raw = str(path)
         except (TypeError, ValueError):
             return
-        if not raw or _is_pseudo_fs(raw):
+        if not raw or is_pseudo_fs(raw):
             return
         try:
             normalized = normalize_path(raw)
         except (TypeError, ValueError):
             return
-        if _is_cash_internal(normalized):
+        if is_cash_internal(normalized):
             return
         if os.path.isabs(raw):
             # An absolute probe is about one fixed file, so record it resolved
@@ -1670,7 +1670,7 @@ class FileAccessTracker:
                 normalized = normalize_path(os.path.realpath(raw))
             except (TypeError, ValueError, OSError):
                 pass
-            if _is_pseudo_fs(normalized) or _is_cash_internal(normalized):
+            if is_pseudo_fs(normalized) or is_cash_internal(normalized):
                 return
         # A library probing for an optional file while it is imported
         # (matplotlib looks for a `matplotlibrc` in the working directory) or
@@ -1712,5 +1712,5 @@ def tracking_seconds() -> float:
 # What feeds a tracker: the audit events Python raises for its own opens and
 # listings, and wrappers on the readers that raise none, installed while one
 # is open.
-_subscribe_read_events()
-io_watch.add_patcher(_install_patches, _remove_patches)
+subscribe_read_events()
+io_watch.add_patcher(install_patches, remove_patches)

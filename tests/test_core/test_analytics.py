@@ -210,9 +210,9 @@ def test_the_analytics_db_is_not_a_file_the_users_code_read(tmp_path):
     statement; the connect was recorded as a file that statement read, and
     the statement lost its cost check (seen as a flaky notebook test)."""
     from cash.analytics import AnalyticsManager
-    from cash.tracking.file_tracker import _is_cash_internal
+    from cash.tracking.file_tracker import is_cash_internal
 
     db = tmp_path / "somewhere" / "analytics.db"
     AnalyticsManager(db_path=str(db))
-    assert _is_cash_internal(str(db))
-    assert not _is_cash_internal(str(tmp_path / "somewhere" / "data.csv"))
+    assert is_cash_internal(str(db))
+    assert not is_cash_internal(str(tmp_path / "somewhere" / "data.csv"))
