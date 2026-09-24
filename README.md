@@ -18,61 +18,22 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Status: Beta](https://img.shields.io/badge/status-beta-orange.svg)](#status)
 
-> **Two lines. Zero config. Restart-and-run-all in seconds instead of minutes.**
 
-```python
-import cash
-%cash_on
-```
+cash is a Python cache that re-runs only what changed. It stores the results
+of slow work and hands them back when the code and the inputs that produced
+them have not changed, including the helper functions your code calls and the
+data files it reads.
 
-That's it. The next time you re-run the notebook, every statement that hasn't changed is **restored from cache** instead of recomputed. Outside notebooks, the same engine wraps any function as `@cash.cache`.
+You use it in one of two ways:
 
-**The number that matters:** a 100 MB DataFrame comes back from disk in **70 ms**. Whatever it cost you to compute, that is what every re-run hands back. Cash publishes what a restore costs rather than a speedup multiplier — [here's why](https://cash-lib.readthedocs.io/en/latest/benchmarks/).
+- **In scripts, services and libraries:** decorate a slow function with
+  `@cash.cache`.
+- **In a notebook:** put `import cash` and `%cash_on` alone in the first cell,
+  and every statement below it caches itself.
 
-📺 **Watch the 90-second demo** — Cash caching a real notebook, end to end:
-
-https://github.com/user-attachments/assets/3f376660-aeb5-4794-89cc-532a04f82f32
-
-**Or try it live in your browser** — no install:
-
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/galgtonold/cash/blob/main/examples/try_cash_colab.ipynb) [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/galgtonold/cash/main?labpath=examples/try_cash_binder.ipynb)
+**What a restore costs:** a 100 MB DataFrame comes back from disk in **70 ms** on the machine the [benchmark table](https://cash-lib.readthedocs.io/en/latest/benchmarks/) was measured on. Your hardware and disk change that number, so the benchmarks page shows how to measure your own. cash quotes this rather than a speedup, because the speedup depends on how long your code takes to compute.
 
 **[Read the docs →](https://cash-lib.readthedocs.io/en/latest/)**
-
----
-
-## Two ways to use cash
-
-Pick the path that matches how you write code — both ride the same engine:
-
-- **In a notebook** — add `%cash_on` and every cell caches itself, statement-level, with a badge above each cell's output. For interactive work in Jupyter, Colab, or VS Code.
-- **In a script** — wrap a function with `@cash.cache` and it caches by its arguments and its own source. For modules, pipelines, and batch jobs.
-
----
-
-## Why Cash is different
-
-Most caching tools key on the **arguments** you pass. Cash also keys on **the code that runs** — a function's own source, the helpers it calls, and the files it reads — so editing any of them recomputes instead of handing back a stale answer.
-
-**Both paths get:**
-
-- **Change-awareness that follows callees.** It is not only the decorated function's own source that is keyed — edit a plain, undecorated helper it calls, several levels down, and the next call recomputes.
-- **File-awareness.** `pd.read_csv`, `np.load`, `open`, … are intercepted. Replace `data.csv` and whatever read it recomputes.
-- **Dependency-awareness.** Cash builds a lineage graph, so touching an upstream value re-runs only what transitively depends on it.
-- **Persistence across processes.** The cache lives on disk by default — a restart, a fresh process, or a shared backend across machines.
-- **Native pandas / numpy / polars / PyArrow hashing.** A DataFrame or an array can be an argument or a tracked input, content-hashed rather than keyed by identity.
-
-**In a notebook, additionally:**
-
-- **Statement-level, not cell-level.** Change one line in a 20-line cell → that line and its dependents recompute. The other 19 stay cached.
-- **Mutation-aware.** `df.append(...)` and `+=` are detected, so cells *below* the mutation see it. Re-running a cell *above* one answers as a clean top-to-bottom run would — without it ([why](https://cash-lib.readthedocs.io/en/latest/known-limitations/)).
-- **Zero-config.** `%cash_on` and you're done. No decorators, no config file.
-
-Cash saves time on **re-runs** — restoring an unchanged result instead of recomputing it, not speeding the first execution up. The more a statement costs to compute relative to the size of its result, the more a restore saves; `%cash_stats` reports your actual numbers, and says so plainly when caching cost you time. See the [benchmarks](https://cash-lib.readthedocs.io/en/latest/benchmarks/) for how that plays out on real workloads.
-
-Weighing cash against a tool you already use? The [comparison matrix](https://cash-lib.readthedocs.io/en/latest/why-cash/#cash-vs-the-alternatives-youve-tried) does that properly, tool by tool.
-
----
 
 ## Install
 
@@ -80,53 +41,9 @@ Weighing cash against a tool you already use? The [comparison matrix](https://ca
 pip install cash-lib
 ```
 
-Optional extras: `pip install "cash-lib[all]"` (pandas, polars, redis, s3, …). See [installation](https://cash-lib.readthedocs.io/en/latest/getting-started/installation/).
+Extras for pandas, polars, Redis, S3 and more: see [installation](https://cash-lib.readthedocs.io/en/latest/getting-started/installation/).
 
-## Quick start
-
-### In a notebook
-
-**Cell 1** — turn it on:
-
-```python
-import cash
-%cash_on
-```
-
-**Cell 2** — your normal code:
-
-```python
-import pandas as pd
-df = pd.read_csv("large_dataset.csv")   # tracked: file change → recompute
-summary = df.describe()
-```
-
-Re-run it, and Cash puts a badge above the cell's output saying exactly what
-it did.
-Here is one from a cell of the same shape — a load, then a summary:
-
-<a href="https://cash-lib.readthedocs.io/en/latest/badges/">
-  <img width="480" alt="A Cash badge below a notebook cell: the pd.read_csv row restored from cache, the df.describe row recomputed"
-       src="https://raw.githubusercontent.com/galgtonold/cash/main/docs/_badges/status_mixed.png">
-</a>
-
-Two statements, one cell, two different decisions. The file hadn't changed, so
-the load was **restored**; `describe()` had been edited, so only that line
-**ran** — the two rails and the `CACHED 1` / `EXEC 1` chips say which is which.
-That is what statement-level means in practice: a cell-level cache would have
-had to redo both.
-
-- ✅ Nothing changed → every row reads `CACHED`.
-- 🔄 The CSV changed → the rows that read it flip to `EXECUTED`.
-- ⚡ Only the analysis changed → the load stays `CACHED`, the analysis re-runs.
-
-In the notebook the badge is expandable — click any row for its cache key,
-storage tier and timing. Full anatomy in [Reading the Cash badge](https://cash-lib.readthedocs.io/en/latest/badges/).
-
-### In a script
-
-`@cash.cache` caches any Python function across processes — keyed by its
-arguments *and* by the code that produced the result.
+## Decorator
 
 ```python
 import cash
@@ -140,37 +57,76 @@ def features(path):
     return clean(pd.read_csv(path))["feature_a"].mean()
 
 features("large_dataset.csv")     # runs
-features("large_dataset.csv")     # restored — and again in the next process
+features("large_dataset.csv")     # restored, and again in the next process
 ```
 
-Now edit `clean`: the next call **recomputes**, even though `features`'s own
-source never changed. Same if `large_dataset.csv` changes on disk.
+- The key is the arguments (DataFrames and arrays are hashed by content), the
+  function's source and the source of the helpers it calls. Edit `clean` and
+  the next call recomputes.
+- Files the function reads are tracked: change `large_dataset.csv` and the
+  next call recomputes.
+- Every result is written to disk, so a new process gets it back.
+- Side effects (HTTP calls, file writes) are flagged, because they run on the
+  first call only.
 
-That reach into a plain, undecorated helper — not just the decorated
-function's own source — is what keeps a cached result honest while you
-refactor around it.
+[Decorator quick start](https://cash-lib.readthedocs.io/en/latest/getting-started/quickstart-script/) · [`@cash.cache` guide](https://cash-lib.readthedocs.io/en/latest/decorator/)
 
-Impure functions (LLM calls, HTTP, file writes) are flagged by default, since
-their side effects only run on the first call.
+## Notebook
 
-Full walkthrough in [the decorator guide](https://cash-lib.readthedocs.io/en/latest/decorator/).
+**Cell 1**, on its own:
 
----
+```python
+import cash
+%cash_on
+```
+
+**Cell 2** and below, your code:
+
+```python
+import pandas as pd
+df = pd.read_csv("large_dataset.csv")
+summary = df.describe()
+```
+
+Re-run it, and cash puts a badge above the cell's output saying what it did:
+
+<a href="https://cash-lib.readthedocs.io/en/latest/badges/">
+  <img width="480" alt="A Cash badge below a notebook cell: the pd.read_csv row restored from cache, the df.describe row recomputed"
+       src="https://raw.githubusercontent.com/galgtonold/cash/main/docs/_badges/status_mixed.png">
+</a>
+
+Here the file had not changed, so the load was restored; `describe()` had been
+edited, so only that line ran.
+
+- Each statement is cached on its own: edit one line and only that line and
+  what depends on it re-run.
+- Files a statement reads are tracked, and in-place changes such as
+  `df["x"] = ...` or `items.append(...)` are detected.
+- Expensive results are saved to disk and come back after a kernel restart.
+
+A 90-second demo of cash in a real notebook:
+
+https://github.com/user-attachments/assets/3f376660-aeb5-4794-89cc-532a04f82f32
+
+Or try it in your browser with no install:
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/galgtonold/cash/blob/main/examples/try_cash_colab.ipynb) [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/galgtonold/cash/main?labpath=examples/try_cash_binder.ipynb)
+
+[Notebook quick start](https://cash-lib.readthedocs.io/en/latest/getting-started/quickstart-notebook/) · [Reading the badge](https://cash-lib.readthedocs.io/en/latest/badges/)
 
 ## Learn more
 
-- [Documentation home](https://cash-lib.readthedocs.io/en/latest/) · [Why Cash?](https://cash-lib.readthedocs.io/en/latest/why-cash/) · [Quick start](https://cash-lib.readthedocs.io/en/latest/getting-started/quickstart-notebook/)
-- [Reading the badge](https://cash-lib.readthedocs.io/en/latest/badges/) · [Magic commands](https://cash-lib.readthedocs.io/en/latest/magics/) · [Annotations](https://cash-lib.readthedocs.io/en/latest/annotations/)
-- [The decorator](https://cash-lib.readthedocs.io/en/latest/decorator/) · [Backends](https://cash-lib.readthedocs.io/en/latest/api/backends/) · [Command-line interface](https://cash-lib.readthedocs.io/en/latest/cli/)
-- [Known limitations](https://cash-lib.readthedocs.io/en/latest/known-limitations/) · [Benchmarks](https://cash-lib.readthedocs.io/en/latest/benchmarks/) · [Versioning & compatibility](https://cash-lib.readthedocs.io/en/latest/versioning/)
+- [Why cash?](https://cash-lib.readthedocs.io/en/latest/why-cash/): what each path does, and a [comparison](https://cash-lib.readthedocs.io/en/latest/why-cash/#compared-with-other-tools) with joblib, lru_cache, diskcache and others
+- [FAQ](https://cash-lib.readthedocs.io/en/latest/faq/) · [Command-line interface](https://cash-lib.readthedocs.io/en/latest/cli/) · [Configuration](https://cash-lib.readthedocs.io/en/latest/getting-started/configuration/)
+- [Writing cache-safe cells](https://cash-lib.readthedocs.io/en/latest/known-limitations/) · [Benchmarks](https://cash-lib.readthedocs.io/en/latest/benchmarks/) · [Versioning](https://cash-lib.readthedocs.io/en/latest/versioning/)
 
 ## Status
 
-**Beta.** The public API is stabilizing, but this is a `0.x` release — the cache format may still change between minor versions, so run `cash clear --all` after upgrading (see [versioning & compatibility](https://cash-lib.readthedocs.io/en/latest/versioning/)). The [known limitations](https://cash-lib.readthedocs.io/en/latest/known-limitations/) are documented honestly.
+**Beta.** This is a `0.x` release: a minor release can change the API. cash clears a cache written in an older format by itself. See [versioning](https://cash-lib.readthedocs.io/en/latest/versioning/) and the [known limitations](https://cash-lib.readthedocs.io/en/latest/known-limitations/).
 
-A cache is only worth as much as your trust in it, so [**how cash is tested**](https://cash-lib.readthedocs.io/en/latest/how-it-works/testing/) is written down: <!-- docnum:tests_total -->~10,450<!-- /docnum --> tests across <!-- docnum:platforms -->15<!-- /docnum --> platform combinations, documentation whose code is executed and whose prose is pinned to the source that decides it, and a section on what all of that still fails to catch.
+[How cash is tested](https://cash-lib.readthedocs.io/en/latest/how-it-works/testing/): <!-- docnum:tests_total -->~10,450<!-- /docnum --> tests across <!-- docnum:platforms -->15<!-- /docnum --> platform combinations, documentation whose code is executed and whose prose is pinned to the source, and what that still misses.
 
-Bug reports welcome: the badge has a "Report a bug" button, `%cash_help` ends with the links, or open an [issue](https://github.com/galgtonold/cash/issues).
+Bug reports are welcome: use the badge's "Report a bug" button, the links at the end of `%cash_help`, or open an [issue](https://github.com/galgtonold/cash/issues).
 
 ## Contributing
 

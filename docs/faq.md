@@ -1,142 +1,110 @@
 # FAQ
 
-Short answers to the questions that come up most. For the "is this for my
-workflow?" case, see [Why Cash?](why-cash.md); for the vocabulary, see the
-[Glossary](glossary.md).
+!!! info "Applies to: both paths"
+    Short answers. Questions for one path are grouped under that path.
 
-## Getting started
+## Both paths
 
-??? question "Do I need to change my code?"
-    No. `%cash_on` caches your existing cells as-is — no decorators, no config
-    file. The `@cash.cache` decorator is opt-in for plain scripts. See
-    [Quick start](getting-started/quickstart-notebook.md).
-
-??? question "Notebooks only, or scripts too?"
-    Both. The `@cash.cache` decorator works in plain Python scripts; the
-    notebook integration (`%cash_on`, statement-level caching) is the
-    notebook-specific layer over the same engine. See [API reference](api/index.md).
-
-??? question "How do I turn it on for every notebook automatically?"
-    `cash autoload on` installs a one-time IPython startup hook so every new
-    kernel imports cash and runs `%cash_on`. See [CLI reference](cli.md).
-
-## Correctness
+??? question "Which path should I use?"
+    `@cash.cache` in scripts, services and libraries; `%cash_on` in a notebook.
+    [Why cash?](why-cash.md) lists what each path does.
 
 ??? question "What if cash returns a stale value?"
-    Cash invalidates a cached result whenever the code that produced it changes
-    *or* any of its inputs change. Inputs are tracked by [lineage](glossary.md#lineage)
-    hash, so a change three cells upstream still propagates, and a changed data
-    file is detected by content hash. See
+    A result is recomputed when its code, a helper it calls, an input or a
+    data file it read changes. Cash cannot see a database table or a web page
+    change; give such results a `ttl`. See
     [Knowing when to recompute](how-it-works/invalidation.md).
 
-??? question "What about in-place mutations like `df['x'] = 0`?"
-    Cash uses AST-based [mutation detection](glossary.md#mutation-detection) to
-    flag in-place mutations so cached objects are invalidated correctly. See
-    [the mutation pattern in the data-science tutorial](tutorials/use-cases/data-science.md).
+??? question "Does it work with pandas, numpy, polars, torch or duckdb?"
+    Built-in hashers cover pandas, numpy, polars, PyArrow, modin and dask. For
+    anything else, register one with `cash.register_hasher`. See
+    [Custom hashers](tutorials/feature-guides/custom-hashers.md).
 
-??? question "What about unseeded randomness?"
-    A draw with no fixed seed can't be reproduced, so cash warns and freezes the
-    drawn value by design. Opt in with `@cash:allow-random`, or seed the RNG for
-    normal caching. See [Known limitations](known-limitations.md).
+??? question "How much faster will it make things?"
+    It depends on compute time against reload time, so cash quotes no
+    multiplier. The first run is slightly slower; later runs skip the work.
+    [Benchmarks](benchmarks.md) shows what a restore costs and how to work out
+    your own number.
 
-??? question "Why did `@cash.cache` raise `CashImpureFunctionError`?"
-    The function resolves a dependency from a runtime value cash can't track —
-    `eval`/`exec`, dynamic dispatch via `getattr(obj, name)()`,
-    `getattr(mod, "exec")(...)`, or `importlib.import_module` — so a cached
-    result could go silently stale, and
-    cash refuses to cache it by default. Put `# @cash:assume-safe` on that line
-    to accept the risk for it alone, pass `@cash.cache(assume_safe=True)` to
-    waive the whole function, or refactor to a statically-named call. See
-    [the decorator guide](decorator.md).
+??? question "Where is the cache, and how do I clear it?"
+    In a `.cash/` folder, with a size cap. See
+    [Where your cache lives](how-it-works/storage.md). To clear it, run
+    `cash clear --all` or delete the folder.
 
-## Coverage
-
-??? question "Does it work with pandas / numpy / polars / torch / duckdb?"
-    Native built-in hashers cover pandas, numpy, polars, PyArrow, modin, and
-    dask. For anything else — torch tensors, duckdb relations, custom domain
-    types — register a hasher with `cash.register_hasher`. See
-    [API reference](api/cash.md#cash.Cash).
-
-## Performance
-
-??? question "How much does cash slow down a cold run?"
-    ~5–30 ms per cached statement on a cold run (lineage computation, cache key,
-    write). For most real work the overhead is dwarfed by what's being cached.
-    Run #1 is a net cost — the win is on iteration and restart. See
-    [Cost model](cost-model.md).
-
-??? question "How much faster will it actually make things?"
-    It depends on the ratio of compute cost to result size — the range is wide
-    (a heavy loop body can see ~190×; a naive big-frame ETL ~1.2×, and Run #1 is
-    slower). `%cash_stats` tells you which case you're in and will say so plainly
-    when cash cost you time. See [Cost model](cost-model.md) for the decision
-    model and [Benchmarks](benchmarks.md) for measured numbers you can reproduce.
-
-??? question "Will my cache still be valid after I upgrade cash?"
-    Cache entries are not guaranteed to survive a version change — see
-    [Versioning & compatibility](versioning.md) for what is and isn't promised,
-    and clear the cache (`python -m cash clear`) if in doubt.
-
-## Troubleshooting
-
-??? question "A cell isn't caching — how do I find out why?"
-    Read the [badge](glossary.md#badge): the row reads `NOT CACHED` and names
-    the reason. The usual
-    reasons are (1) the statement is under the ~10 ms floor (too cheap to be
-    worth caching), (2) the result is too large for the [cost
-    model](glossary.md#cost-model) to persist economically, or (3) a side effect
-    or unseeded draw made it unsafe. A long `for`-loop that appends into a list
-    can also stop caching — see
-    [known limitations](known-limitations.md#a-long-for-append-loop-can-stop-caching).
-    Force caching with `# @cash:persist` when you know better than the heuristic.
-    Full walkthrough: [Debugging and monitoring](tutorials/feature-guides/debugging-and-monitoring.md).
-
-??? question "A cell recomputed when I expected a hit."
-    Something in its [cache key](glossary.md#cache-key) changed: the code, an
-    upstream variable's [lineage](glossary.md#lineage), or a tracked
-    [file dependency](glossary.md#file-dependency). Use `%cash_status` for the
-    last cell and `%cash_provenance` to see what a variable depends on. In a
-    notebook, use `.explain()` rather than `cache_info()` on decorated functions
-    — cash may rebuild the wrapper, so its counters can read zero even while
-    caching works. See [Seeing what Cash did](how-it-works/inspecting.md).
-
-??? question "How do I force a fresh run or clear the cache?"
-    Three escape hatches: `@cash:no-cache` on one statement, `%cash_off` to
-    disable auto-caching for the rest of the session (not just one cell -- run
-    `%cash_on` to re-enable), or the `cash clear` CLI command. To wipe
-    everything, delete `.cash/` or run `cash clear --all`. See
-    [Annotations](annotations.md) and [CLI reference](cli.md).
-
-## Production readiness
+??? question "Is my cache still valid after I upgrade cash?"
+    Cash clears a local cache written in an older, incompatible format by
+    itself, and treats any entry it cannot read as a miss. An upgrade can cost
+    you a recompute, never a wrong value. `cash clear --all` only frees space.
+    See [Versioning](versioning.md).
 
 ??? question "Is a 0.x release safe for real work?"
-    It depends which path you mean, and the two are not equally solid. The
-    **`@cash.cache` decorator** is the smaller problem -- it keys on a
-    function's arguments and its own source, with no cross-cell reasoning --
-    and is the conservative choice for something that matters. The
-    **notebook's statement-level tracking** is the hard end of the problem: it
-    reasons about what your code reads, writes and mutates across cells, from
-    the source alone, and that is where surprises live. Keep an eye on the
-    badge.
-
-    Both are backed by thousands of integration tests, many derived from real
-    bug reports, and where cash knows it can be wrong it says so on
-    [Known limitations](known-limitations.md). Treat it like any library you'd
-    pin — this is a `0.x` release, so the API and cache format may change
-    between minor versions (run `cash clear --all` after upgrading). The
-    [CHANGELOG](https://github.com/galgtonold/cash/blob/main/CHANGELOG.md)
-    documents breaking changes.
+    The decorator is the simpler problem. The notebook path reasons about what
+    your code reads and changes across cells, so surprises are more likely
+    there; watch the badge. Known gaps are in
+    [Writing cache-safe cells](known-limitations.md); the tests are described
+    in [How cash is tested](how-it-works/testing.md). Pin the version: during
+    0.x a minor release can change the API.
 
 ??? question "Is loading a cache safe?"
-    A cache is executable: cash unpickles stored objects, so loading a cache is
-    equivalent to running a Python script from whoever produced it. Only load
-    caches you trust — your own local `.cash/` is as safe as the code that wrote
-    it. See the trust model in [Backends](api/backends.md#security).
+    Only if you trust whoever wrote it. Cash unpickles stored results, and
+    unpickling can run code. See the trust model in
+    [Backends](api/backends.md#security).
 
-## Vs. alternatives
+??? question "How is cash different from joblib, lru_cache, diskcache, jupyter-cache or %store?"
+    See the [comparison](why-cash.md#compared-with-other-tools), and
+    [Coming from other caches](migration_guide.md) for before-and-after code.
 
-??? question "How is cash different from joblib, lru_cache, diskcache, jupyter-cache, %store?"
-    The short version: those cache function calls, cells, or key→value pairs;
-    cash caches **statements** and tracks the dependency graph between them, with
-    file tracking, mutation detection, and kernel-restart persistence. See the
-    full capability matrix and per-tool notes in [Why Cash?](why-cash.md#vs-alternatives).
+## Decorator
+
+??? question "Why did `@cash.cache` raise `CashImpureFunctionError`?"
+    The function picks what to run at runtime (`eval`, `exec`,
+    `getattr(obj, name)()`, `importlib.import_module`), so cash cannot tell
+    when a result goes stale. Put `# @cash:assume-safe` on that line, pass
+    `assume_safe=True` for the whole function, or call the function by name.
+
+??? question "Why does a cache hit not print anything?"
+    A hit returns the stored value without running the function body, so its
+    prints and other side effects do not happen again.
+
+??? question "Why do I get `KEY-UNHASHABLE-ARG`?"
+    An argument (a lock, a socket, an open file) cannot be hashed, so the call
+    runs uncached. See [the warning](warnings.md#key-unhashable-arg).
+
+## Notebook
+
+??? question "Do I need to change my notebook?"
+    No. Put `import cash` and `%cash_on` alone in the first cell; the cells
+    below cache as they are.
+
+??? question "Why is nothing in my first cell cached?"
+    Statements in the cell that runs `%cash_on` are never cached: cash starts
+    tracking after it. Keep that cell to `import cash` and `%cash_on`.
+
+??? question "How do I turn it on for every notebook?"
+    Run `cash autoload on` once in a terminal. See
+    [Command-line interface](cli.md).
+
+??? question "A statement isn't cached. Why?"
+    The badge row reads `NOT CACHED` and names the reason: usually under
+    10 ms, a side effect such as a file write, a change to an object from an
+    earlier cell, or `# @cash:no-cache`. See [Reading the badge](badges.md).
+
+??? question "A statement re-ran when I expected a hit."
+    Something in its key changed: its code, an input variable, or a file it
+    read. `%cash_status` shows the last cell and `%cash_provenance x` shows
+    what `x` depends on. See [Reading the badge](badges.md).
+
+??? question "What about unseeded randomness?"
+    An unseeded draw is cached, so a restore replays the same draw. Seed the
+    generator, or put `# @cash:no-cache` on the statement for a fresh draw.
+    `# @cash:allow-random` only hides the warning. See
+    [Writing cache-safe cells](known-limitations.md).
+
+??? question "How do I force a fresh run?"
+    Put `# @cash:no-cache` above one statement, or run `%cash_off` to stop
+    caching for the rest of the session (`%cash_on` turns it back on). See
+    [Annotations](annotations.md).
+
+??? question "`cache_info()` on a decorated function reads zero in my notebook."
+    Re-running the defining cell creates a new wrapper with fresh counters.
+    Use `f.explain(...)` or `%cash_stats` instead.

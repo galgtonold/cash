@@ -1,191 +1,140 @@
-# Migration Guide
+# Coming from other caches
 
-This guide helps you migrate from other Python caching solutions to Cash. It
-focuses on the `@cash.cache` **decorator**, the closest analogue to the tools
-below. In a notebook you usually don't migrate function-by-function at all — you
-add `%cash_on` once and your existing cells cache themselves; see the
-[Quick Start](getting-started/quickstart-script.md).
+!!! info "Applies to: both paths"
+    If you already cache with another tool: the same code before and after.
+    How the tools compare is on [Why cash?](why-cash.md#compared-with-other-tools).
 
-For a capability-by-capability comparison against these tools, see the
-[matrix in Why Cash?](why-cash.md#cash-vs-the-alternatives-youve-tried).
+=== "Decorator"
 
-## From functools.lru_cache
+    **`functools.lru_cache`**
 
-**Before (lru_cache):**
-```python
-from functools import lru_cache
+    ```python
+    from functools import lru_cache
 
-@lru_cache(maxsize=128)
-def expensive_compute(data_hash):
-    # ... expensive computation
-    return result
-```
+    @lru_cache(maxsize=128)
+    def load_prices(ticker):
+        ...
+    ```
 
-**After (Cash decorator):**
-```python
-import cash
+    ```python
+    import cash
 
-@cash.cache
-def expensive_compute(data):
-    # Cash handles hashing automatically
-    return result
-```
+    @cash.cache                  # stored on disk; arguments need not be hashable
+    def load_prices(ticker):
+        ...
+    ```
 
-**Key differences:**
-- `lru_cache` requires hashable arguments; Cash handles DataFrames, numpy arrays, polars, etc. natively
-- `lru_cache` is memory-only; Cash persists to disk automatically via TieredBackend
-- Cash tracks file dependencies (if your function reads files)
-- Cash provides `cache_info()` and `cache_clear()` per function, similar to `lru_cache`
-- Cash supports `register_hasher()` for custom types that can't be pickled
+    `load_prices.cache_info()` and `load_prices.cache_clear()` work as before.
 
-**For notebooks (recommended):**
-```python
-import cash
-%cash_on
-# All cells are cached automatically - no decorator needed
-```
+    **`joblib.Memory`**
 
-## From joblib.Memory
+    ```python
+    from joblib import Memory
 
-**Before (joblib):**
-<!-- test:skip reason="joblib.Memory tries to pickle the stub df argument" -->
-```python
-from joblib import Memory
+    memory = Memory("/tmp/joblib-cache", verbose=0)
 
-memory = Memory("/tmp/joblib-cache", verbose=0)
+    @memory.cache
+    def transform(data):
+        return data.apply(complex_transform)
+    ```
 
-@memory.cache
-def slow_function(data):
-    return data.apply(complex_transform)
+    ```python
+    import cash
 
-result = slow_function(df)
-```
+    @cash.cache                  # cache folder: .cash/ in your project, or CASH_CACHE_DIR
+    def transform(data):
+        return data.apply(complex_transform)
+    ```
 
-**After (Cash):**
-```python
-import cash
+    **`diskcache`**
 
-@cash.cache
-def slow_function(data):
-    return data.apply(complex_transform)
+    ```python
+    from diskcache import Cache
 
-result = slow_function(df)
-```
+    cache = Cache("/tmp/diskcache")
 
-**Or in notebooks:**
-```python
-import cash
-%cash_on
+    @cache.memoize()
+    def transform(data):
+        return data.apply(complex_transform)
+    ```
 
-# Just write your code normally - it's cached automatically
-result = df.apply(complex_transform)
-```
+    ```python
+    import cash
 
-**Key differences:**
+    @cash.cache
+    def transform(data):
+        return data.apply(complex_transform)
+    ```
 
-- **Transitive helper invalidation — the headline difference.** joblib hashes
-  only the decorated function's *own* body. Edit a helper it calls and joblib
-  keeps serving the old result. Cash folds the source of the functions you call —
-  transitively, across your project's own modules — into the cache key, so editing a callee
-  (even a few levels down) invalidates the cache.
-- joblib doesn't track upstream state; Cash invalidates on changed files
-  (automatically), declared `depends_on=`, and module globals the function reads.
-- joblib requires a decorator per function; Cash notebook mode caches every
-  statement automatically, at statement-level granularity.
+    **Hand-written pickle files**
 
-## From diskcache
+    ```python
+    import os
+    import pickle
 
-**Before (diskcache):**
-<!-- test:skip reason="diskcache is not a doc-test dependency" -->
-```python
-from diskcache import Cache
+    if os.path.exists("result.pkl"):
+        with open("result.pkl", "rb") as f:
+            result = pickle.load(f)
+    else:
+        result = expensive_computation()
+        with open("result.pkl", "wb") as f:
+            pickle.dump(result, f)
+    ```
 
-cache = Cache("/tmp/diskcache")
+    ```python
+    import cash
 
-@cache.memoize()
-def transform_frame(data):
-    return data.apply(complex_transform)
-```
+    @cash.cache
+    def expensive_computation():
+        ...
 
-**After (Cash):**
-```python
-import cash
-
-@cash.cache
-def transform_frame(data):
-    return data.apply(complex_transform)
-```
-
-**Key differences:**
-- `diskcache.memoize` keys on the function's **name and arguments** (like
-  `lru_cache`), so editing the function body does *not* invalidate a cached
-  entry. Cash hashes the function source, so a body edit recomputes.
-- diskcache has no notebook awareness, dependency lineage, file tracking, or
-  mutation detection — it's a fast key→value store, not a "know when to
-  recompute" layer. (Cash can use a disk backend for that same storage job.)
-
-## From `%store` (IPython)
-
-`%store result` / `%store -r result` is a manual save/load primitive — no
-automatic invalidation and no signal when an upstream variable or file changes.
-Replace it with `%cash_on`: cash restores your variables on re-run *and*
-recomputes them when their code or inputs change.
-
-```python
-import cash
-%cash_on
-# no %store / %store -r needed — cells restore and invalidate automatically
-```
-
-## From jupyter-cache
-
-`jupyter-cache` (the engine behind Jupyter Book / MyST-NB) caches a notebook's
-executed outputs so a **build** can skip re-running an unchanged notebook — it
-matches at whole-notebook granularity and is designed for CI/book builds, not
-the interactive edit-and-re-run loop. There's nothing to "migrate": keep
-`jupyter-cache` for reproducible book builds, and add `%cash_on` for the
-interactive statement-level caching cash provides while you work.
-
-## From Manual Pickle Caching
-
-**Before (manual):**
-```python
-import pickle
-import os
-
-cache_file = "result.pkl"
-if os.path.exists(cache_file):
-    with open(cache_file, "rb") as f:
-        result = pickle.load(f)
-else:
     result = expensive_computation()
-    with open(cache_file, "wb") as f:
-        pickle.dump(result, f)
-```
+    ```
 
-**After (Cash notebook mode):**
-```python
-import cash
-%cash_on
+=== "Notebook"
 
-# That's it - just run your code
-result = expensive_computation()
-```
+    **`%store`**
 
-**Key differences:**
-- No manual cache file management
-- Automatic invalidation when code or inputs change
-- No stale cache bugs (Cash tracks exact inputs and code)
+    ```python { .nb-cell }
+    %store -r df
+    if "df" not in dir():
+        df = pd.read_csv("large_file.csv")
+        %store df
+    ```
 
-## Feature comparison
+    ```python { .nb-cell }
+    # first cell, on its own
+    import cash
+    %cash_on
+    ```
 
-The full capability matrix — cash versus `lru_cache`, `joblib.Memory`,
-`diskcache`, `jupyter-cache`, `%store`, and manual pickling — lives on one page
-so it stays in sync: see
-[Cash vs. the alternatives](why-cash.md#cash-vs-the-alternatives-youve-tried).
+    ```python { .nb-cell }
+    # any cell below it
+    df = pd.read_csv("large_file.csv")
+    ```
 
-## Related
+    **Hand-written pickle files**
 
-- [Decorator (`@cash.cache`)](decorator.md) — the full decorator reference.
-- [FAQ](faq.md) and [Glossary](glossary.md) — quick answers and vocabulary.
-- [Why Cash?](why-cash.md) — when cash is (and isn't) the right fit.
+    ```python { .nb-cell }
+    import os
+    import pickle
+
+    if os.path.exists("result.pkl"):
+        with open("result.pkl", "rb") as f:
+            result = pickle.load(f)
+    else:
+        result = expensive_computation()
+        with open("result.pkl", "wb") as f:
+            pickle.dump(result, f)
+    ```
+
+    ```python { .nb-cell }
+    # below the import cash / %cash_on cell
+    result = expensive_computation()
+    ```
+
+    **`jupyter-cache`**
+
+    Nothing to replace: `jupyter-cache` skips re-executing unchanged notebooks
+    in a book build, and cash caches statements while you work. Use both if
+    you need both.

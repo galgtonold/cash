@@ -1,159 +1,157 @@
 # Glossary
 
-Cash uses a handful of specific terms throughout the docs and in the per-cell
-badge. This page defines them in one place; each entry links to the page that
-covers it in depth.
+!!! info "Applies to: both paths"
+    Each term is tagged with the path it belongs to: decorator, notebook, or
+    both.
 
 <div class="cash-glossary" markdown="1">
 
 ## Annotation
 
-A `# @cash:...` comment that overrides cash's default decision for one
-statement or cell — e.g. `@cash:no-cache`, `@cash:persist`, `@cash:cache-fit`,
-`@cash:allow-random`. Annotations are how you tell cash you know better than the
-heuristic. See [Annotations](annotations.md).
+*Notebook.* A `# @cash:...` comment above a statement that overrides cash's
+decision for it, such as `# @cash:no-cache` or `# @cash:persist`. See
+[Annotations](annotations.md).
+
+## `assume_safe`
+
+*Decorator.* `@cash.cache(assume_safe=True)` tells cash you have checked the
+function's side effects and it should cache it anyway. `# @cash:assume-safe`
+on one line does the same for that line only. See the
+[`@cash.cache` guide](decorator.md).
 
 ## Badge
 
-The compact summary cash renders above each executed cell, reporting what it did
-for every statement — **CACHED**, **EXECUTED**, **NOT CACHED** or **SKIPPED** —
-plus the storage tier, timing, and any warnings (randomness, mutation, side
-effects). The badge is the primary way to *see* caching happening. (The
-`CacheStatus` enum still spells the first two `RESTORED` and `COMPUTED`; only
-the display vocabulary was unified.) See
-[Reading the Cash badge](badges.md).
+*Notebook.* The summary cash shows above each cell's output: one row per
+statement, reading **CACHED**, **EXECUTED**, **NOT CACHED** or **SKIPPED**,
+with timings and warnings. The JSON from `%cash_status` uses the enum names
+`COMPUTED` and `RESTORED` for the first two. See
+[Reading the badge](badges.md).
 
 ## Cache key
 
-The hash that decides whether a statement **hits** or **misses**. It is computed
-from the statement's code, the [lineages](#lineage) of the variables it reads,
-and its [file dependencies](#file-dependency). Same key → restore the cached
-result; different key → recompute. See
-[Cache keys, lineage & hashing](how-it-works/cache-keys-and-lineage.md).
+*Both.* The hash that decides a hit or a miss. For a decorated function it
+covers the arguments, the function's source and the source of the helpers it
+calls. For a notebook statement it covers the code, the [lineage](#lineage) of
+the variables it reads and its [file dependencies](#file-dependency). See
+[Cache keys and lineage](how-it-works/cache-keys-and-lineage.md).
+
+## Call-level caching
+
+*Notebook.* Caching of a slow call inside a statement, keyed on the values
+it receives, so a statement that cannot be cached (an `.append()` in a loop)
+still skips the slow part. The badge shows it as a `sub-call` line.
+`# @cash:no-cache-calls` turns it off. See
+[Annotations](annotations.md).
 
 ## Cost model
 
-The fitted model cash uses to estimate how long restoring a result would take
-versus recomputing it. It drives [promotion](#promotion) and the decision to
-[skip](#skip-uncacheable) caching a result that would be slower to reload than
-to recompute. See [Cost model](cost-model.md).
+*Notebook.* How cash decides whether a statement's result is worth storing
+in RAM and on disk. It does not apply to decorated functions. See
+[Cost model](cost-model.md).
+
+## `depends_on` / `file_depends_on`
+
+*Decorator.* Parameters that add dependencies cash cannot find itself.
+`file_depends_on=` names files, checked by content like the files a function
+reads. `depends_on=` takes other functions or data sources. See the
+[`@cash.cache` guide](decorator.md).
+
+## `explain()`
+
+*Decorator.* `f.explain(*args)` says whether that call would hit, and if
+not, why. See the [`@cash.cache` guide](decorator.md).
 
 ## File dependency
 
-A data file a statement read (via `pd.read_csv`, `np.load`, `open`, …) that cash
-intercepted and folded into the [cache key](#cache-key). When the file changes,
-dependent statements recompute automatically. See
-[Knowing when to recompute](how-it-works/invalidation.md).
+*Both.* A file a function or statement read through a tracked call
+(`pd.read_csv`, `np.load`, `open`, ...). Change the file and the result
+recomputes. See [Knowing when to recompute](how-it-works/invalidation.md).
 
-## Freshness
+## Hit / miss
 
-Whether a cached statement's tracked inputs — especially [file
-dependencies](#file-dependency) — are unchanged since the entry was written.
-A stale input makes the entry unusable and forces a recompute. See
-[Knowing when to recompute](how-it-works/invalidation.md).
+*Both.* A **hit** means the [cache key](#cache-key) matched a stored entry, so
+the result was restored without running the code. A **miss** means it ran.
 
-## Hit / Miss
+## `KEY-*` warnings
 
-A **hit** means the [cache key](#cache-key) matched an existing entry and the
-result was [restored](#restore) without executing. A **miss** means it was
-recomputed (new code, changed input, or first run). Session totals are shown by
-`%cash_stats`. See [Seeing what Cash did](how-it-works/inspecting.md).
+*Decorator.* Warnings about what goes into a decorated call's key. For
+example, `KEY-UNHASHABLE-ARG` means an argument cannot be hashed, so the call
+runs uncached, and `KEY-NETWORK-READ` means the function reads from the
+network, so it should have a `ttl`. See [Warnings](warnings.md).
 
 ## Lineage
 
-A hash attached to a produced variable that identifies *how it was derived*. It
-equals the producing statement's [cache key](#cache-key), and is propagated to
-every downstream statement that reads the variable — so a change anywhere flows
-through the dependency graph:
+*Notebook.* A hash attached to each variable that records how it was made:
+the statement's code, the lineage of its inputs and the files it read. It
+flows to every statement that reads the variable, so a change upstream
+reaches everything below it. See
+[Cache keys and lineage](how-it-works/cache-keys-and-lineage.md).
 
-```
-lineage(result) = hash(code + sorted(input_lineages) + file_deps)
-```
+## Live reader
 
-Lineage (propagated downstream) is distinct from the cache key (which decides
-one statement's hit/miss) even though they share a value. See
-[Cache keys, lineage & hashing](how-it-works/cache-keys-and-lineage.md).
+*Notebook.* A way for cash to read your cells as they are in the editor, not
+as last saved: Colab, JupyterLab with cash's extension, and VS Code with hot
+exit. Without one, cash reads the saved `.ipynb`. See
+[Writing cache-safe cells](known-limitations.md#editing-without-saving).
 
 ## Mutation detection
 
-AST-based detection of in-place changes — `df['x'] = 0`, `lst.append(...)`,
-`+=` — so that mutating a cached object correctly invalidates it and its
-readers, rather than serving a stale value. See
-[Knowing when to recompute](how-it-works/invalidation.md).
+*Notebook.* Detection of in-place changes such as `df['x'] = 0`,
+`lst.append(...)` or `+=`, so that statements below see the changed object.
+See [Knowing when to recompute](how-it-works/invalidation.md).
 
 ## Promotion
 
-The [cost model](#cost-model)'s decision to move a result from the RAM tier (L1)
-to the disk tier (L2) so it survives a kernel restart. A result is promoted when
-recomputing it would cost more than restoring it from disk, above a ~100 ms
-compute floor. Force it with `@cash:persist`. See
-[Smart persistence](tutorials/feature-guides/smart-persistence.md).
+*Notebook.* Writing a statement's result from RAM to disk so it survives a
+kernel restart. It happens when the statement took more than 0.1 s and
+reloading is cheaper than recomputing. `# @cash:persist` forces it. Decorated
+results are always written to disk. See [Cost model](cost-model.md).
 
 ## Provenance
 
-The recorded computational history of a variable — which statements and inputs
-produced it. Surfaced by `%cash_provenance`. See
-[Seeing what Cash did](how-it-works/inspecting.md).
+*Notebook.* The statements and inputs that produced a variable, shown by
+`%cash_provenance`. See [Seeing what cash did](how-it-works/inspecting.md).
 
-## Purity
+## Purity and side effects
 
-Whether a function is free of side effects and therefore safe to cache. Cash
-warns when it caches an impure function (LLM calls, HTTP, file writes) because
-the side effect only runs on the first call. Declare intent with `@pure` /
-`@stateful`. See [Purity decorators](tutorials/feature-guides/purity-decorators.md)
-and [Knowing when not to cache](how-it-works/safety.md).
-
-## Restore
-
-Rebuilding a variable's value from the cache instead of executing the statement
-that produces it — what happens on a [hit](#hit-miss). See
-[The notebook path](how-it-works/notebook-path.md).
-
-## Side-effect detection
-
-Static flagging of statements that write files, hit the network, or touch a
-database. These are not safe to silently cache, so cash warns or declines. See
+*Both.* Code is pure when it only computes a result: no file writes, network
+or database calls. A notebook statement with a side effect is not cached; a
+decorated function gets a warning, and its side effects run on the first call
+only. `@cash.pure` and `@cash.stateful` state your intent. See
 [Knowing when not to cache](how-it-works/safety.md).
 
-## Skip / Uncacheable
+## Skip / not cached
 
-A statement cash decides *not* to cache — because it is too cheap to be worth
-caching (under the ~10 ms floor), too large to store economically (the [cost
-model](#cost-model) declines), or has side effects. The [badge](#badge) reports
-it as **NOT CACHED** and names the reason. That is a different row state from
-**SKIPPED**, which means the statement had nothing to do — a redundant `import`
-whose names are already bound, or an upstream statement the simulation found
-already satisfied. (A branch that didn't run is neither: only the taken branch
-is rendered at all.) See
-[Knowing when not to cache](how-it-works/safety.md).
+*Notebook.* **NOT CACHED** means the statement ran but its result was not
+stored: it was under 10 ms, had a side effect, or carried
+`# @cash:no-cache`. **SKIPPED** means there was nothing to do, such as an
+`import` whose names are already bound. See [Reading the badge](badges.md).
 
 ## Statement-level caching
 
-Caching each individual statement (line) in a cell independently, rather than
-the whole cell. Edit one line in a 20-line cell and only that line and its
-dependents recompute. This is cash's defining characteristic. See
-[Overview](how-it-works/overview.md).
+*Notebook.* Caching each statement in a cell on its own, so editing one line
+re-runs only that line and what depends on it. See
+[The notebook path](how-it-works/notebook-path.md).
 
-## Tier / TieredBackend
+## TTL
 
-The default backend, layering a fast **RAM** tier (L1, `InMemoryBackend`) over a
-persistent **disk** tier (L2, `FileBackend`). Results live in RAM and are
-[promoted](#promotion) to disk when worth persisting. Other backends — SQLite,
-Redis, S3 — are available for custom stacks. See
-[Choosing a backend](tutorials/feature-guides/choosing-a-backend.md).
+*Both.* A time to live: after `ttl` seconds an entry expires and the next call
+recomputes. `@cash.cache(ttl=3600)`, `%cash_on ttl=3600`, or
+`# @cash:ttl=3600` on one statement. See the
+[`@cash.cache` guide](decorator.md) and [Annotations](annotations.md).
 
 ## Unseeded randomness
 
-A random draw (`np.random.rand()`, `random.random()`, …) with no fixed seed.
-Because the value can't be reproduced, caching it would freeze one draw forever;
-cash warns and, by design, freezes the drawn value. Opt in explicitly with
-`@cash:allow-random`. See [Known limitations](known-limitations.md).
+*Both.* A random draw with no fixed seed. Cash caches it like any other
+result, so a hit replays the same draw, and it warns. Seed the generator, or
+skip caching for a fresh draw. `allow_random=True` (decorator) and
+`# @cash:allow-random` (notebook) only hide the warning.
+See [Writing cache-safe cells](known-limitations.md).
 
 ## Upstream simulation
 
-Cash's dry-run analysis of the notebook that determines, before executing, which
-statements can be restored and which must recompute — including recomputing
-skipped intermediate cells to satisfy a downstream read. See
-[The notebook path](how-it-works/notebook-path.md).
+*Notebook.* Cash's dry run over the cells above the one you run. It works out
+what to restore and what to re-run so the cell sees what a top-to-bottom run
+would give it. See [The notebook path](how-it-works/notebook-path.md).
 
 </div>
