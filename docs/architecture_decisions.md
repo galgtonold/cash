@@ -443,6 +443,9 @@ Public surface: `CashMagics` only. Everything else (`CashAdminMagicsMixin`, `Cel
 
 - The package holds more than four files: `badges.py` (`BadgePresenter`),
   `_args.py` and `_help.py` joined it.
+- `admin.py` is `inspection.py` and its mixin `InspectionMagicsMixin`: once
+  the admin magic was removed, it held only `%cash_stats` and
+  `%cash_provenance`.
 - `CashSession` carries the session's statistics, provenance and compute
   baselines; there is no audit log.
 

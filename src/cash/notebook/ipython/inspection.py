@@ -20,7 +20,7 @@ from ._args import parse_mode, strip_inline_comment
 if TYPE_CHECKING:
     from .magics import CashMagics
 
-__all__ = ["CashAdminMagicsMixin"]
+__all__ = ["InspectionMagicsMixin"]
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +51,7 @@ def _fmt_signed_time(seconds: float) -> str:
     return _fmt_time(seconds)
 
 
-class CashAdminMagicsMixin:
+class InspectionMagicsMixin:
     """Mixin providing the session-inspection magics.
 
     All methods expect ``self`` to be a fully-initialised
@@ -86,7 +86,7 @@ class CashAdminMagicsMixin:
             # Rebuilt from the same definition a fresh session uses, so a new
             # counter can never be added to the stats and silently survive a
             # reset (it already happened once).
-            # Local: import cycle ipython.admin -> ipython.magics -> ipython.admin.
+            # Local: import cycle ipython.inspection -> ipython.magics -> ipython.inspection.
             from .magics import new_session_stats
 
             self._session.stats.update(new_session_stats())

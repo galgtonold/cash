@@ -318,7 +318,7 @@ def test_config_defaults_in_docs_match_source() -> None:
 _MAGICS_PAGE = DOCS_ROOT / "magics.md"
 _MAGIC_SOURCES = (
     "notebook/ipython/magics.py",
-    "notebook/ipython/admin.py",
+    "notebook/ipython/inspection.py",
 )
 
 

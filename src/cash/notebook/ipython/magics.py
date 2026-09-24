@@ -52,7 +52,6 @@ from ..upstream import UpstreamChecker
 from ._args import parse_mode, strip_inline_comment
 from ._help import help_text
 from ._types import CellMetrics
-from .admin import CashAdminMagicsMixin
 from .badges import BadgePresenter
 from .cell_executor import (
     CellExecutor,
@@ -61,6 +60,7 @@ from .cell_executor import (
     PipelineSyntaxError,
     discarded_writes_notification,
 )
+from .inspection import InspectionMagicsMixin
 
 __all__ = ["CashMagics"]
 
@@ -164,7 +164,7 @@ def _is_silent(args: tuple, kwargs: dict) -> bool:
 
 
 @magics_class
-class CashMagics(CashAdminMagicsMixin, Magics):
+class CashMagics(InspectionMagicsMixin, Magics):
     def __init__(self, shell: ShellProtocol, cash_instance: Cash) -> None:
         """Initialise CashMagics in three phases (ordering matters):
 
