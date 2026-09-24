@@ -9,7 +9,7 @@ from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from typing import Any
 
-import cash
+from cash._active import default_cash
 from cash.backends.persistence_policy import PersistencePolicy
 from cash.control_markers import has_marker
 from cash.exceptions import (
@@ -226,13 +226,13 @@ class StatementProcessor:
     def get_cash_instance(self) -> Any | None:
         """Return the Cash instance for decorator call tracking.
 
-        Tries ``self.cash_instance`` first, then looks for the global
-        ``cash._global_cash`` singleton so that ``@cash.cache`` calls are
-        captured even when the user imports ``from cash import cache``.
+        Tries ``self.cash_instance`` first, then the default instance, so
+        that ``@cash.cache`` calls are captured even when the user imports
+        ``from cash import cache``.
         """
         if self.cash_instance is not None:
             return self.cash_instance
-        return getattr(cash, "_global_cash", None)
+        return default_cash()
 
     def _attribute_input_change(self, metrics: dict, inputs, outputs) -> None:
         """Name the input whose change forced this statement to recompute.

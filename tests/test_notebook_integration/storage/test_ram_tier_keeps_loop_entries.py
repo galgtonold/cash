@@ -55,7 +55,7 @@ if hasattr(C, "_test_orig"):
     C.process_statement = C._test_orig
     del C._test_orig
 """
-_RAM = "__import__('cash')._global_cash.backend.backends[0]"
+_RAM = "__import__('cash')._active.default_cash().backend.backends[0]"
 _SMALL_CAP = f"(setattr({_RAM}, '_max_size_bytes', {CAP}), setattr({_RAM}, 'max_memory_percent', 1.0))"
 _COUNTS = "__import__('cash.notebook.statement.processor', fromlist=['_']).StatementProcessor._test_n"
 _RESET = f"{_COUNTS}.clear()"

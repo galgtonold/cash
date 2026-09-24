@@ -17,6 +17,7 @@ exactly the parts a mock would define into existence.
 
 from __future__ import annotations
 
+import subprocess
 import sys
 import threading
 import types
@@ -357,6 +358,22 @@ class TestRevalidationWindow:
         assert origin.requests == ["HEAD"], (
             "the window must reach a separately-constructed source, or it cannot reach an auto-tracked read at all"
         )
+
+    def test_a_toml_window_applies_before_any_instance_exists(self, origin, tmp_path):
+        """Outside a call and before a default ``Cash`` exists (a fresh
+        process), the window comes from the same env and TOML merge as every
+        other setting."""
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.cash]\nremote_revalidate_max_age_seconds = 300\n", encoding="utf-8"
+        )
+        code = (
+            "from cash import RemoteFileDataSource\n"
+            f"RemoteFileDataSource({origin.url!r}).state_token()\n"
+            f"RemoteFileDataSource({origin.url!r}).state_token()\n"
+        )
+        done = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True, timeout=120)
+        assert done.returncode == 0, done.stderr
+        assert origin.requests == ["HEAD"], "the pyproject.toml window was ignored"
 
     def test_a_per_source_window_overrides_the_default(self, origin):
         RemoteFileDataSource(origin.url, max_age=300).state_token()

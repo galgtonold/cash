@@ -20,6 +20,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
 
 from . import _log
+from ._active import ACTIVE_CONFIG
 from .backends import CacheBackend, CacheMetadata
 from .backends._base import entry_expired
 from .backends._writes import in_multiprocessing_child
@@ -77,9 +78,6 @@ from .exceptions import (
 from .graph import DependencyGraph
 from .object_hashing import builtin_hash_family
 from .reconfigure import apply_overrides
-from .tracking.file_dep_snapshot import (
-    ACTIVE_CONFIG,
-)
 from .tracking.file_tracker import install_read_watch
 from .tracking.reader_patches import file_registry
 

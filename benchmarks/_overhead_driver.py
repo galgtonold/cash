@@ -93,7 +93,7 @@ def run_notebook(
         # from warm-restart in exactly one variable — whether the RAM tier
         # survives — rather than also inheriting "this cell already ran"
         # short-circuits, which would flatter the numbers.
-        cash._global_cash = session
+        cash._active.set_default_cash(session)
 
     statement_sink: list[StatementMetric] = []
     if cash_enabled:

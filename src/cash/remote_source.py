@@ -37,7 +37,6 @@ from __future__ import annotations
 import contextvars
 import itertools
 import logging
-import os
 import time
 
 # ``urllib.request`` drags in http.client, email and ssl - a real cost on every
@@ -47,12 +46,12 @@ import time
 import urllib.parse
 from typing import Any
 
+from ._active import active_config
 from ._clock import perf_counter as _perf_counter
 from ._memo import REMOTE_URLS, LruMemo
 from .data_source import DataSource
 from .diagnostics import warn_diagnostic
 from .exceptions import CashCacheIneffectiveWarning, DependencyNotFoundError
-from .tracking.file_dep_snapshot import ACTIVE_CONFIG
 
 __all__ = ["RemoteFileDataSource"]
 
@@ -428,32 +427,15 @@ class RemoteFileDataSource(DataSource):
     def _effective_max_age(self) -> float:
         """This source's window, falling back to the cash-level default.
 
-        The default is read off the settings of the ``Cash`` instance whose
-        call is checking this source (``ACTIVE_CONFIG``), so a source used by a
-        ``Cash(...)`` of your own follows that instance, not the global one.
-        Outside a cached call it is the global singleton's already-resolved
-        config: ``get_config()`` would re-merge env and TOML from disk on every
-        call, which is not something to do per freshness check, while the
-        resolved config is what ``cash.configure(...)`` mutates.
-
-        Before any singleton exists there is nothing resolved to read, so the
-        env var is consulted directly - cheap, and it covers the CI case. A
-        TOML-only setting is not seen in that window, which errs toward
-        revalidating: the safe direction.
+        The default comes from the settings that govern the running code
+        (``active_config``): those of the ``Cash`` instance whose call is
+        checking this source, so a source used by a ``Cash(...)`` of your own
+        follows that instance, not the default one.
         """
         if self.max_age:
             return self.max_age
         try:
-            config = ACTIVE_CONFIG.get()
-            if config is None:
-                # Local: import cycle cash -> remote_source -> cash.
-                import cash
-
-                config = getattr(cash._global_cash, "config", None)
-            if config is not None:
-                return float(config.remote_revalidate_max_age_seconds)
-
-            return float(os.environ.get("CASH_REMOTE_REVALIDATE_MAX_AGE_SECONDS", 0.0))
+            return float(active_config().remote_revalidate_max_age_seconds)
         except Exception:  # noqa: BLE001 - a config problem must not break a read
             return 0.0
 

@@ -246,7 +246,7 @@ class TestDiskPromotionAfterChdir:
                 # Cell 4: Check if FileBackend has absolute path
                 (
                     "import cash\n"
-                    "b = cash._global_cash.backend\n"
+                    "b = cash._active.default_cash().backend\n"
                     "fb = b.backends[1]\n"
                     "print(f'FileBackend path absolute: {os.path.isabs(fb.cache_dir)}')\n"
                     "print(f'FileBackend path: {fb.cache_dir}')\n"
@@ -273,7 +273,7 @@ class TestDiskPromotionAfterChdir:
                 # Cell 3: Check that the .cash directory has files at the correct location
                 (
                     "import cash, os, glob\n"
-                    "fb = cash._global_cash.backend.backends[1]\n"
+                    "fb = cash._active.default_cash().backend.backends[1]\n"
                     "files = glob.glob(os.path.join(fb.cache_dir, '*'))\n"
                     "print(f'Cache dir: {fb.cache_dir}')\n"
                     "print(f'Cache files: {len(files)}')\n"

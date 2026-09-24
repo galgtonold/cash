@@ -12,7 +12,7 @@ through common readers (`open`, `pd.read_csv("s3://...")`). Declare a source
 only for what it cannot see; for a local file, `file_depends_on="path"` is
 shorter.
 
-<!-- claim: cash/data_source.py:FileDataSource @69335436 broad="the content-token contract is a property of the whole class", cash/remote_source.py:RemoteFileDataSource @2db689bf broad="the scheme list and validator contract are properties of the whole class" -->
+<!-- claim: cash/data_source.py:FileDataSource @69335436 broad="the content-token contract is a property of the whole class", cash/remote_source.py:RemoteFileDataSource @754fe5e0 broad="the scheme list and validator contract are properties of the whole class" -->
 ::: cash.FileDataSource
     options:
       members: false

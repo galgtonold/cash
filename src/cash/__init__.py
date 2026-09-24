@@ -20,6 +20,7 @@ import contextlib
 from collections.abc import Iterator
 from typing import Any
 
+from . import _active
 from .backends import FileBackend, InMemoryBackend, TieredBackend
 from .backends.sqlite_backend import SQLiteBackend
 from .config import CashConfig, create_default_config, get_config
@@ -80,9 +81,6 @@ def opaque(cls: type) -> type:
 
 __version__ = "0.11.0"
 
-# Lazy-initialized global instance (created on first access)
-_global_cash = None
-
 
 def _get_global_cash():
     """Return the global ``Cash`` singleton, creating it on first call.
@@ -91,12 +89,14 @@ def _get_global_cash():
     convenience API (``cash.cache``, ``cash.show_stats``,
     ``cash.register_hasher``) without requiring users to instantiate
     ``Cash`` themselves.  For custom configuration, create your own
-    ``Cash(...)`` instance instead.
+    ``Cash(...)`` instance instead. It is kept in ``cash._active``, where
+    the modules below ``core`` read it.
     """
-    global _global_cash
-    if _global_cash is None:
-        _global_cash = Cash()
-    return _global_cash
+    instance = _active.default_cash()
+    if instance is None:
+        instance = Cash()
+        _active.set_default_cash(instance)
+    return instance
 
 
 def reset_session() -> None:
@@ -108,8 +108,7 @@ def reset_session() -> None:
     new instance. The cache on disk is kept; ``cash clear --all`` deletes
     it.
     """
-    global _global_cash
-    _global_cash = None
+    _active.set_default_cash(None)
     # If IPython is active, re-register magics on a fresh instance so
     # existing ``%cash_*`` references resolve to the new singleton.
     try:

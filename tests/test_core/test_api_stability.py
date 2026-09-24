@@ -70,7 +70,7 @@ def test_a_star_import_leaves_help_alone_and_builds_nothing():
         "from cash import *\n"
         "import cash\n"
         "assert help is builtins.help, help\n"
-        "assert cash._global_cash is None\n"
+        "assert cash._active.default_cash() is None\n"
         "assert {'cache', 'show_stats', 'register_hasher', 'help'} <= set(dir(cash))\n"
         "assert callable(cash.help) and callable(cash.cache)\n"
     )

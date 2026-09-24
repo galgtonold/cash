@@ -38,7 +38,6 @@ recorded, and that had settled before it was hashed, is not read again
 
 from __future__ import annotations
 
-import contextvars
 import hashlib
 import io
 import logging
@@ -49,9 +48,9 @@ import time
 from collections.abc import Iterable, Mapping
 from typing import Any, NamedTuple
 
+from cash._active import active_config
 from cash._memo import FILE_DIGESTS, LruMemo
 from cash._paths import normalize_path, resolve_file_dep_path
-from cash.config import get_config
 from cash.tracking.tracker_context import untracked
 
 logger = logging.getLogger(__name__)
@@ -104,13 +103,6 @@ _ABSENT_MARKER = "absent"
 _HASH_FULL_MAX_BYTES_DEFAULT = 256 * 1024 * 1024  # 256 MiB
 
 
-#: The config of the `Cash` instance whose call is running, set by its
-#: wrapper. The threshold used to come from the process-wide singleton, or a
-#: fresh `get_config()` when there was none, so `Cash(file_hash_full_max_bytes=
-#: ...)` on an instance of your own was silently ignored.
-ACTIVE_CONFIG: contextvars.ContextVar[Any] = contextvars.ContextVar("cash_active_config", default=None)
-
-
 def full_hash_max_bytes() -> int:
     """Largest file hashed IN FULL rather than sampled, for a caller that did
     not pass its own ``full_hash_max``.
@@ -126,19 +118,7 @@ def full_hash_max_bytes() -> int:
     effect; falls back to the default when the config layer is unavailable.
     """
     try:
-        # The LIVE config first: ``cash.configure(...)`` updates the singleton's
-        # config in place, while ``get_config()`` re-merges env and TOML from
-        # disk and would not see it. Falls through to the merged one for a
-        # process that has not built a Cash yet.
-        config = ACTIVE_CONFIG.get()
-        if config is None:
-            # Local: import cycle cash -> core -> tracking.file_dep_snapshot -> cash.
-            import cash
-
-            config = getattr(getattr(cash, "_global_cash", None), "config", None)
-        if config is None:
-            config = get_config()
-        value = int(config.file_hash_full_max_bytes)
+        value = int(active_config().file_hash_full_max_bytes)
     except Exception:  # noqa: BLE001 - teardown, or a config that cannot load
         logger.debug("[SNAPSHOT] no config for the full-hash threshold; using the default", exc_info=True)
         return _HASH_FULL_MAX_BYTES_DEFAULT

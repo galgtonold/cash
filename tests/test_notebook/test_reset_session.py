@@ -12,13 +12,14 @@ Use cases:
 from __future__ import annotations
 
 import cash
+from cash._active import default_cash, set_default_cash
 
 
 class TestResetSession:
     def test_drops_global_singleton(self):
         """After ``reset_session()`` the singleton is replaced, not reused.
 
-        Asserting ``_global_cash is None`` here does NOT work, and used to make
+        Asserting ``default_cash() is None`` here does NOT work, and used to make
         this test depend on which other tests shared its xdist worker: when an
         IPython shell exists in the process, ``reset_session`` nulls the
         singleton and then immediately rebuilds one to rebind the ``%cash_*``
@@ -32,15 +33,15 @@ class TestResetSession:
         """
         # Touch ``cash.cache`` to force-create the singleton if needed.
         _ = cash.cache
-        before = cash._global_cash
+        before = default_cash()
         assert before is not None
 
         cash.reset_session()
-        assert cash._global_cash is not before
+        assert default_cash() is not before
 
         # Next access yields a NEW singleton, never the old one.
         _ = cash.cache
-        after = cash._global_cash
+        after = default_cash()
         assert after is not None
         assert after is not before
 
@@ -61,11 +62,11 @@ class TestResetSession:
 
         Only "no exceptions" is asserted, because that is all that is true in
         both worlds: under a live IPython shell ``reset_session`` rebinds the
-        magics onto a fresh singleton, so ``_global_cash`` is not None
+        magics onto a fresh singleton, so ``default_cash()`` is not None
         afterwards. See ``test_drops_global_singleton`` for why that used to
         depend on which tests shared the worker.
         """
-        cash._global_cash = None
+        set_default_cash(None)
         cash.reset_session()  # the assertion is that this does not raise
         assert cash.cache is not None
 

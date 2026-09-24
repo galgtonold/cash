@@ -19,11 +19,6 @@ import cash
 
 SRC = Path(cash.__file__).resolve().parent
 
-# `cash._global_cash` is the default Cash, created on first use. A few modules
-# peek at it without creating it; it lives on the package namespace, where any
-# public name becomes user-facing API, so it keeps its underscore.
-ALLOWED = {("cash", "_global_cash")}
-
 
 def _is_private(name: str) -> bool:
     return name.startswith("_") and not name.startswith("__")
@@ -61,7 +56,7 @@ def _private_uses(path: Path) -> list[str]:
                 target = f"{source}.{alias.name}"
                 if _is_module(target):
                     module_aliases[alias.asname or alias.name] = target
-                elif _is_private(alias.name) and (source, alias.name) not in ALLOWED:
+                elif _is_private(alias.name):
                     found.append(f"{name}:{node.lineno} imports {alias.name} from {source}")
         elif isinstance(node, ast.Import):
             for alias in node.names:
@@ -78,7 +73,7 @@ def _private_uses(path: Path) -> list[str]:
             and _is_private(node.attr)
         ):
             owner = module_aliases[node.value.id]
-            if owner != name and not _is_module(f"{owner}.{node.attr}") and (owner, node.attr) not in ALLOWED:
+            if owner != name and not _is_module(f"{owner}.{node.attr}"):
                 found.append(f"{name}:{node.lineno} reads {owner}.{node.attr}")
     return found
 

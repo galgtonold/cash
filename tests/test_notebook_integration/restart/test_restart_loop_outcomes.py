@@ -62,7 +62,7 @@ def _record_expr(loop_src: str) -> str:
 
     code = _ast.unparse(_ast.parse(loop_src).body[1])  # body[0] is the accumulator seed
     return (
-        "__import__('cash')._global_cash.backend.get_metadata("
+        "__import__('cash')._active.default_cash().backend.get_metadata("
         f"__import__('cash.notebook.cache_key', fromlist=['_']).control_outcome_key({code!r}))"
     )
 
@@ -150,7 +150,7 @@ def _split_expr(loop_src: str) -> str:
     code = ast.unparse(ast.parse(loop_src).body[1])
     split = "__import__('cash.notebook.loop_split', fromlist=['_'])"
     return (
-        f"{split}.store_for_backend(__import__('cash')._global_cash.backend)"
+        f"{split}.store_for_backend(__import__('cash')._active.default_cash().backend)"
         f".get({split}.loop_source_hash(__import__('ast').parse({code!r}).body[0]))"
     )
 

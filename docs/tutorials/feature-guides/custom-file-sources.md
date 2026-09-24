@@ -100,7 +100,7 @@ path that does not exist, so the entry never notices the object changing. Use
 
 ## Remote objects: tracked by the store's own validator
 
-<!-- claim: cash/remote_source.py:RemoteFileDataSource @2db689bf broad="the scheme list and validator contract are properties of the whole class" -->
+<!-- claim: cash/remote_source.py:RemoteFileDataSource @754fe5e0 broad="the scheme list and validator contract are properties of the whole class" -->
 Object stores keep a validator for every object, such as an ETag, a version id
 or a GCS generation, and it changes when the bytes change. A read of `s3://`,
 `gs://`, `az://` or `https://` through a tracked reader records that validator.
