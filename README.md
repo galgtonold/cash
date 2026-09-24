@@ -124,7 +124,7 @@ Or try it in your browser with no install:
 
 **Beta.** This is a `0.x` release: a minor release can change the API. cash clears a cache written in an older format by itself. See [versioning](https://cash-lib.readthedocs.io/en/latest/versioning/) and the [known limitations](https://cash-lib.readthedocs.io/en/latest/known-limitations/).
 
-[How cash is tested](https://cash-lib.readthedocs.io/en/latest/how-it-works/testing/): <!-- docnum:tests_total -->~10,750<!-- /docnum --> tests across <!-- docnum:platforms -->15<!-- /docnum --> platform combinations, documentation whose code is executed and whose prose is pinned to the source, and what that still misses.
+[How cash is tested](https://cash-lib.readthedocs.io/en/latest/how-it-works/testing/): <!-- docnum:tests_total -->~10,800<!-- /docnum --> tests across <!-- docnum:platforms -->15<!-- /docnum --> platform combinations, documentation whose code is executed and whose prose is pinned to the source, and what that still misses.
 
 Bug reports are welcome: use the badge's "Report a bug" button, the links at the end of `%cash_help`, or open an [issue](https://github.com/galgtonold/cash/issues).
 
