@@ -620,7 +620,7 @@ def _content_source(call: ast.Call, local: frozenset[str]) -> str:
     ``f(A, B)`` and ``f(B, A)`` share a key."""
     if _call_has_unpacking(call):
         # What arrives is only known at run time, and then every value is
-        # hashed with its keyword (`CallUnit._build_unpacked_key`): the spelling
+        # hashed with its keyword (`CallKeys._build_unpacked_key`): the spelling
         # of the arguments says nothing more.
         try:
             return f"{ast.unparse(call.func)}(*<received>)"

@@ -14,10 +14,10 @@ from cash.notebook.call_interception import wrap_eligible_calls
 from cash.notebook.call_key import (
     _CONTENT_KEY_MAX_BYTES,
     _NAME_CONTENT_MAX_BYTES,
+    CallKeys,
     _keys_by_content,
     call_cache_key,
 )
-from cash.notebook.call_unit import CallUnit
 
 np = pytest.importorskip("numpy")
 
@@ -71,7 +71,7 @@ def _by_name_key(cutoff_lineage, cutoff_value, params=None):
         arg_digests=["group"],
         loop_vars={},
         by_content=True,
-        name_digests=CallUnit._name_digests(site, args, {}),
+        name_digests=CallKeys._name_digests(site, args, {}),
     )
 
 
@@ -91,8 +91,8 @@ def test_an_argument_passed_by_name_is_keyed_on_its_value():
 def test_a_big_argument_passed_by_name_keeps_its_lineage():
     site = _site("x = f(big)")
     big = np.zeros(_NAME_CONTENT_MAX_BYTES // 8 + 1)
-    assert CallUnit._name_digests(site, (big,), {}) == {}
-    assert CallUnit._name_digests(site, (big[:10],), {}).keys() == {"big"}
+    assert CallKeys._name_digests(site, (big,), {}) == {}
+    assert CallKeys._name_digests(site, (big[:10],), {}).keys() == {"big"}
 
 
 def test_the_statement_leaves_the_key():

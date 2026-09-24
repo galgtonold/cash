@@ -41,14 +41,7 @@ from cash.backends.value_policy import worth_its_bytes
 from cash.notebook._trace import trace_event
 from cash.notebook.cache_key import CacheKeyContext
 from cash.notebook.call_interception import CallSite, names_read
-from cash.notebook.call_key import (
-    _NAME_CONTENT_MAX_BYTES,
-    _keys_by_content,
-    _loop_vars_the_call_can_read,
-    _nbytes,
-    call_cache_key,
-    callee_mutated_globals,
-)
+from cash.notebook.call_key import CallKeys, callee_mutated_globals, global_digests
 from cash.notebook.call_refs import (
     DIGEST_FIELD,
     ESTIMATED_FIELD,
@@ -59,7 +52,6 @@ from cash.notebook.call_refs import (
 from cash.notebook.consumables import is_consumable_unrestorable
 from cash.object_hashing import (
     compute_hash,
-    compute_hash_full,
     estimate_object_size,
     is_identity_fallback_hash,
     pickled_size_estimate,
@@ -344,7 +336,8 @@ class CallUnit:
         persist_provider: Callable[[], bool] | None = None,
     ):
         self._cash = cash_instance
-        self._ctx_provider = ctx_provider
+        #: Builds each call's key and remembers what each site was keyed on.
+        self._keys = CallKeys(ctx_provider, loop_vars_provider, loop_var_digests_provider)
         # The TTL in force for the statement this call sits in.
         # Read at INVOKE time, like `loop_vars_provider`, because one
         # `CallCache` serves every statement and each brings its own
@@ -359,20 +352,6 @@ class CallUnit:
         # leaves the decision to the cost model, which is what this class did
         # when it ignored `persist` entirely.
         self._persist_provider = persist_provider or (lambda: False)
-        # See `call_cache_key`'s `loop_vars` section. `None` (rather than
-        # requiring every caller to pass one) keeps every existing direct
-        # construction of `CallUnit` -- tests included -- working exactly as
-        # before: "no loop context available" degrading to `{}`, the same
-        # answer this class gave when `loop_vars={}` was hardcoded in
-        # `_build_key`.
-        self._loop_vars_provider = loop_vars_provider or (lambda: {})
-        # See `call_cache_key`'s `loop_var_digests` section and
-        # `_loop_var_digest`'s docstring. `None` here is always CORRECT
-        # (every entry falls through to a fresh `compute_hash_full`), only
-        # slower -- so, same as `_loop_vars_provider` above, every existing
-        # direct `CallUnit` construction that predates this parameter keeps
-        # working unchanged.
-        self._loop_var_digests_provider = loop_var_digests_provider or (lambda: {})
         self.call_log: list[dict] = []
         #: Per call site, how its calls went in the statement run under way
         #: (see :meth:`_entry_for`); emptied by :meth:`begin_statement`.
@@ -385,15 +364,6 @@ class CallUnit:
         #: Monotonic; a statement reads the difference across its run (see
         #: ``StatementProcessor._finish``).
         self.overhead_s = 0.0
-        # Per call SITE: what its key was built from last time, and what moved
-        # since -- the badge's answer to "why did this re-run?".
-        self._site_parts: dict[tuple, tuple[str, dict]] = {}
-        self._site_reason: dict[tuple, str | None] = {}
-        # Sites already keyed in THIS statement run. A site called once per
-        # loop item keys differently per item BY DESIGN -- that is the loop
-        # variable doing its job, not something to explain. Only the first
-        # call of each run is compared, against the first call of the last.
-        self._keyed_this_run: set = set()
         self.hits_saved_s = 0.0
         self._last_hit = False
         self._last_key_s: float | None = None
@@ -433,7 +403,7 @@ class CallUnit:
     def begin_statement(self) -> None:
         """A new statement run: every site starts over (see :meth:`_entry_for`)."""
         self._site_runs.clear()
-        self._keyed_this_run.clear()
+        self._keys.begin_statement()
         self.last_returned = None
 
     def outermost_result(self) -> tuple[str, int, str] | None:
@@ -566,11 +536,11 @@ class CallUnit:
             # empty, so an ordinary call pays one memo lookup.
             key_started = _perf_counter()
             mutated_globals = callee_mutated_globals(fn)
-            key = self._build_key(
+            key = self._keys.key(
                 site,
                 args,
                 kwargs,
-                self._global_digests(fn, mutated_globals) if mutated_globals else None,
+                global_digests(fn, mutated_globals) if mutated_globals else None,
                 # A callee that writes globals keys on their state: the old way.
                 fn=None if mutated_globals else fn,
             )
@@ -877,39 +847,6 @@ class CallUnit:
         return tuple(out)
 
     @staticmethod
-    def _global_digests(fn, names: tuple[str, ...]) -> dict[str, str]:
-        """PRE-call content hashes of the globals *fn* writes, for the key.
-
-        ``compute_hash_full``, never the sampling ``compute_hash``, for the
-        same reason :func:`_loop_var_digest` documents at length: this IS the
-        discriminator. ``compute_hash`` reduces a collection over 200 elements
-        to its first and last five, so two different accumulator states that
-        agree at both ends would key IDENTICALLY -- and an accumulator is
-        precisely the shape that grows in the middle. That is first-run
-        wrongness, not a missed optimisation.
-
-        The cost this admits is real and bounded by how rare the case is: a
-        callee that writes a global at all is uncommon, and the hash is over
-        the accumulator, not over the arguments. ``_hash_args``' sampling trade
-        is fine where it lives (a coarse per-call mutation smoke test on a
-        possibly-huge live argument, allowed to be wrong toward "assume
-        unmutated"); it is not fine here.
-
-        A name that cannot be hashed at all is omitted, which makes the key
-        LESS discriminating -- so :meth:`_capture_globals` independently
-        refuses to store any entry whose capture is not sound, and the pair of
-        them fails closed.
-        """
-        globals_dict = getattr(fn, "__globals__", None) or {}
-        digests: dict[str, str] = {}
-        for name in names:
-            try:
-                digests[name] = compute_hash_full(globals_dict[name])
-            except Exception:  # noqa: BLE001 - a missing digest only widens the key
-                logger.debug("call unit: could not digest global %r", name)
-        return digests
-
-    @staticmethod
     def _capture_globals(fn, names: tuple[str, ...]) -> dict[str, Any] | None:
         """Post-call values of the globals *fn* writes, or ``None`` to refuse.
 
@@ -999,167 +936,6 @@ class CallUnit:
                     globals_dict[name] = _copy.deepcopy(recorded[name])
                 except Exception:  # noqa: BLE001 - a restore must never crash
                     logger.debug("call unit: could not restore global %r", name)
-
-    def _build_key(
-        self, site: CallSite, args: tuple, kwargs: dict, global_digests: Mapping[str, str] | None = None, fn=None
-    ) -> str | None:
-        """The call's key. With *fn*, keyed on what it receives when
-        :func:`_keys_by_content` allows it."""
-        if site.has_unpacking and fn is not None:
-            return self._build_unpacked_key(site, args, kwargs, fn)
-        if site.has_unpacking:
-            # `*args`/`**kwargs` unpacking means the call's live arity is not
-            # statically known. `site.computed_arg_positions` is a STATIC
-            # count (every position, fail-closed -- see
-            # `_computed_arg_positions`), which need not match the RUNTIME
-            # flattened `(*args, *kwargs.values())` length: `compute(*pair())`
-            # has one static position but the pair unpacks to two live
-            # arguments, and indexing only position 0 would hash the first
-            # element and silently ignore the rest (reproduced as a second, DIFFERENT pair() result being served the
-            # first call's cached value). Refuse the whole site rather than
-            # mint a key that looks discriminated but isn't; an uncached call
-            # is merely slow.
-            return None
-        try:
-            loop_vars = self._current_loop_vars()
-            by_content = fn is not None and _keys_by_content(fn, site, args, kwargs, loop_vars)
-            if getattr(site, "in_loop_unit", False) and not by_content:
-                return None
-            arg_digests = self._arg_digests(site, args, kwargs, full=by_content)
-            name_digests = self._name_digests(site, args, kwargs) if by_content else None
-            if by_content and loop_vars:
-                loop_vars = _loop_vars_the_call_can_read(fn, site, loop_vars, name_digests)
-            ctx = self._ctx_provider()
-            key = call_cache_key(
-                site,
-                ctx=ctx,
-                arg_digests=arg_digests,
-                loop_vars=loop_vars,
-                loop_var_digests=self._current_loop_var_digests(),
-                global_digests=global_digests,
-                by_content=by_content,
-                name_digests=name_digests,
-            )
-            self._note_key_parts(site, key, ctx, arg_digests, global_digests)
-            return key
-        except Exception:  # noqa: BLE001 - never let keying break the call
-            logger.debug("call unit: key build failed for %s", site.source)
-            return None
-
-    def _build_unpacked_key(self, site: CallSite, args: tuple, kwargs: dict, fn) -> str | None:
-        """The key of a call with ``*``/``**`` unpacking, keyed on what it received.
-
-        ``fit_series(g, **TUNED.get(dept, {}))`` in a comprehension ran uncached:
-        positions written in the source say nothing about the values
-        that arrive, so the site was refused (``compute(*pair())``
-        had keyed the first of two values). What did arrive is in hand here:
-        every positional value, and every keyword with its name, hashed in
-        full. Only when the call may be keyed on content at all
-        (:func:`_keys_by_content`); otherwise refused as before.
-        """
-        try:
-            count = len(args) + len(kwargs)
-            received = dataclasses.replace(
-                site,
-                computed_arg_positions=tuple(range(count)),
-                local_arg_positions=tuple(range(count)),
-                name_arg_positions=(),
-                has_unpacking=False,
-            )
-            loop_vars = self._current_loop_vars()
-            if not _keys_by_content(fn, received, args, kwargs, loop_vars):
-                return None
-            digests = [compute_hash_full(value) for value in args]
-            digests.extend(f"{name}:{compute_hash_full(kwargs[name])}" for name in sorted(kwargs))
-            if loop_vars:
-                loop_vars = _loop_vars_the_call_can_read(fn, received, loop_vars, None)
-            return call_cache_key(
-                received,
-                ctx=self._ctx_provider(),
-                arg_digests=digests,
-                loop_vars=loop_vars,
-                loop_var_digests=self._current_loop_var_digests(),
-                by_content=True,
-            )
-        except Exception:  # noqa: BLE001 - never let keying break the call
-            logger.debug("call unit: key build failed for %s", site.source)
-            return None
-
-    def _current_loop_vars(self) -> dict[str, object]:
-        """The live enclosing loop's non-dunder iteration vars, or ``{}``.
-
-        Wired to ``CallRouting.current_loop_vars_for_call_key`` (see that class's
-        ``_loop_vars`` stack, pushed/popped by
-        ``ForLoopHandler._process_one_iteration`` around each iteration's body)
-        via ``CallCache``'s ``loop_vars_provider``. Guarded independently of
-        ``_build_key``'s own try/except: a provider failure should degrade to
-        "no loop discriminator" ``{}`` -- same as running outside a loop --
-        not to refusing the key (and therefore the call's caching) entirely.
-        """
-        try:
-            loop_vars = self._loop_vars_provider()
-        except Exception:  # noqa: BLE001 - degrade, don't refuse the whole key
-            logger.debug("call unit: loop_vars_provider failed for this call")
-            return {}
-        return loop_vars if isinstance(loop_vars, dict) else {}
-
-    def _current_loop_var_digests(self) -> Mapping[str, str]:
-        """The live enclosing loop's precomputed loop-var digests, or ``{}``.
-
-        Wired to ``CallRouting.current_loop_var_digests_for_call_key`` (see that
-        class's ``_loop_var_digests`` stack -- pushed/popped in
-        lockstep with ``_loop_vars``, by the same
-        ``loop_vars_scope`` call) via ``CallCache``'s
-        ``loop_var_digests_provider``. Guarded independently of
-        ``_build_key``'s own try/except, same reasoning as
-        ``_current_loop_vars``: a provider failure degrades to "no
-        precomputed digest available" ``{}``, which ``_loop_var_digest``
-        treats as "fall through to a fresh `compute_hash_full`" -- slower,
-        never wrong -- not to refusing the key entirely.
-        """
-        try:
-            digests = self._loop_var_digests_provider()
-        except Exception:  # noqa: BLE001 - degrade, don't refuse the whole key
-            logger.debug("call unit: loop_var_digests_provider failed for this call")
-            return {}
-        return digests if isinstance(digests, Mapping) else {}
-
-    @staticmethod
-    def _name_digests(site: CallSite, args: tuple, kwargs: dict) -> dict[str, str]:
-        """Full hashes of the small arguments passed as a bare name (see
-        :func:`call_cache_key`'s *name_digests*). Past
-        ``_NAME_CONTENT_MAX_BYTES`` a value keeps its lineage instead."""
-        combined = (*args, *kwargs.values())
-        digests = {}
-        for name, pos in getattr(site, "name_arg_positions", ()):
-            if pos < len(combined) and _nbytes(combined[pos]) <= _NAME_CONTENT_MAX_BYTES:
-                digests[name] = compute_hash_full(combined[pos])
-        return digests
-
-    def _arg_digests(self, site: CallSite, args: tuple, kwargs: dict, full: bool = False) -> list[str]:
-        """Content hashes of the live arguments at ``site.computed_arg_positions``.
-
-        Positions are in ``(*args, *kwargs.values())`` order, matching how
-        :func:`_computed_arg_positions` numbered them at rewrite time. A
-        position beyond the live call's arity (the wrapped function called with
-        a different shape than the site predicted) is simply not appended --
-        the resulting length mismatch is caught by ``call_cache_key`` itself,
-        which refuses rather than mint a key with a discriminator missing.
-
-        *full* hashes every one of them in full: under content keying the
-        value is all the key knows of where the argument came from.
-        """
-        combined = (*args, *kwargs.values())
-        local = set(getattr(site, "local_arg_positions", ()))
-        digests = []
-        for pos in site.computed_arg_positions:
-            if pos >= len(combined):
-                continue
-            # A comprehension's own variable discriminates its elements, as a
-            # loop variable does its iterations: full hash, never sampled.
-            hash_fn = compute_hash_full if full or pos in local else compute_hash
-            digests.append(hash_fn(combined[pos]))
-        return digests
 
     #: A hit is judged a loss only past this, so timer noise on a cheap call
     #: never refuses it.
@@ -1473,58 +1249,6 @@ class CallUnit:
         trace_event("call_digest_skipped", bytes_estimated=estimate, seconds=round(elapsed, 3))
         return estimate
 
-    def _note_key_parts(self, site: CallSite, key, ctx, arg_digests, global_digests) -> None:
-        """Remember what this call site was keyed on, and what moved since the
-        last time it was keyed (read back by :meth:`_why_missed`).
-
-        In-memory and per site, like the statement guard's own components. A
-        first run in a fresh kernel has nothing to compare against and says
-        nothing -- the same deliberate silence a statement keeps, since "first
-        time" is self-evident to someone running a cell for the first time.
-        """
-        if key is None:
-            return
-        try:
-            site_id = self._site_id(site)
-            if site_id in self._keyed_this_run:
-                return
-            self._keyed_this_run.add(site_id)
-            lineages = getattr(ctx, "variable_lineage", None) or {}
-            parts = {name: lineages.get(name) for name in site.free_names}
-            for i, digest in enumerate(arg_digests or ()):
-                parts[f"argument {i + 1}"] = digest
-            for name, digest in (global_digests or {}).items():
-                parts[name] = digest
-            seen = self._site_parts.get(site_id)
-            self._site_parts[site_id] = (key, parts)
-            if not seen or seen[0] == key:
-                self._site_reason.pop(site_id, None)
-                return
-            moved = sorted(name for name in set(parts) | set(seen[1]) if parts.get(name) != seen[1].get(name))
-            # The key moved with no named part of it moving: something else did
-            # (a file the callee reads, the callee's own source). Naming
-            # nothing beats naming the wrong thing.
-            named = ", ".join(moved[:3]) + (", ..." if len(moved) > 3 else "")
-            self._site_reason[site_id] = f"changed: {named}" if moved else None
-        except Exception:  # noqa: BLE001 - attribution never breaks a call
-            logger.debug("call unit: could not note key parts for %s", site.source)
-
-    @staticmethod
-    def _site_id(site: CallSite) -> tuple[str, int, str]:
-        return (site.source, site.occurrence_index, getattr(site, "stmt_identity", ""))
-
-    def _why_missed(self, site: CallSite) -> str | None:
-        """Which named part of this call's key moved since it was last keyed.
-
-        A sweep re-ran and the badge said only "0/6 hit", so the user had to
-        guess why -- and guessed wrong, then reported the re-run as a
-        suspected bug.
-        """
-        try:
-            return self._site_reason.get(self._site_id(site))
-        except Exception:  # noqa: BLE001
-            return None
-
     def _func_name(self, fn) -> str:
         """The name this call's events display under in the badge and stats.
 
@@ -1569,7 +1293,7 @@ class CallUnit:
                 "stored": bool(stored),
                 # Why this call was not served: which part of its key moved since
                 # the site was last keyed. Only on a miss, and only when known.
-                "miss_reason": None if cache_hit else self._why_missed(site),
+                "miss_reason": None if cache_hit else self._keys.why_missed(site),
             }
         )
 

@@ -2,7 +2,7 @@
 
 The wiring under test: ``ForLoopHandler._process_one_iteration`` pushes the
 current iteration's loop vars onto ``StatementProcessor``'s stack
-(``loop_vars_scope``), and ``CallUnit._build_key`` reads them back through
+(``loop_vars_scope``), and ``CallKeys.key`` reads them back through
 ``CallCache``'s ``loop_vars_provider`` at the moment an intercepted call is
 actually invoked. Every other test of this feature either drives
 ``call_cache_key`` directly (proves the discrimination logic, not that the

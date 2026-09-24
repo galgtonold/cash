@@ -14,7 +14,7 @@ import pytest
 
 from cash.notebook.cache_key import CacheKeyContext
 from cash.notebook.call_interception import CallSite
-from cash.notebook.call_key import call_cache_key, callee_mutated_globals
+from cash.notebook.call_key import call_cache_key, callee_mutated_globals, global_digests
 from cash.notebook.call_unit import (
     _UNWRAP_FAILED,
     CallUnit,
@@ -355,9 +355,9 @@ def test_digests_use_the_full_hash_not_the_sampled_one():
     b = list(range(300))
     b[150] = -1
     fn, ns = _make("def f():\n    pass\n", "f", {"ACC": a})
-    first = CallUnit._global_digests(fn, ("ACC",))
+    first = global_digests(fn, ("ACC",))
     ns["ACC"] = b
-    second = CallUnit._global_digests(fn, ("ACC",))
+    second = global_digests(fn, ("ACC",))
     assert first != second, "the pre-state digest is sampled; two accumulators differing only in the middle share a key"
 
 

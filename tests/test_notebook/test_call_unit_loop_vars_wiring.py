@@ -1,4 +1,4 @@
-"""The `loop_vars` route from `for_handler.py` to `CallUnit._build_key`.
+"""The `loop_vars` route from `for_handler.py` to `CallKeys.key`.
 
 `call_cache_key`'s `loop_vars` parameter is fully covered at the unit level
 (`test_call_unit_key.py`) -- given a dict, it discriminates correctly. What
@@ -6,7 +6,7 @@ was NOT covered until this file: whether the production pipeline ever
 actually PRODUCES that dict and gets it to the call at invocation time. The
 route is a stack-shaped attribute on the processor's `CallRouting`
 (`_loop_vars`), pushed/popped by `ForLoopHandler._process_one_iteration`
-around each iteration's body statements and read by `CallUnit._build_key`
+around each iteration's body statements and read by `CallKeys.key`
 through the `loop_vars_provider` callable threaded via `CallCache`.
 
 A test that constructs `CallUnit`/`CallCache` directly and hands `loop_vars`
@@ -79,7 +79,7 @@ def test_hidden_state_call_gets_a_distinct_value_per_iteration(cash_magics, mock
     `{1: 1, 2: 1, 3: 1}` instead of the correct `{1: 1, 2: 2, 3: 3}`, wrong on
     the very first run, no pre-existing cache required.
 
-    Mutation that must make this fail: `call_unit.py`'s `_build_key` reverted
+    Mutation that must make this fail: `call_key.py`'s `CallKeys.key` reverted
     to `loop_vars={}` (the TODO'd-out state this task replaced). Verified by
     hand: with that reversion this assertion fails with
     `{1: 1, 2: 1, 3: 1} != {1: 1, 2: 2, 3: 3}`.
