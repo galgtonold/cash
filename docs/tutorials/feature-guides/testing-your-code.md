@@ -1,26 +1,12 @@
 # Testing code that uses cash
 
-A test suite is the one place where a cache hit can make a result *look*
-right without it being right. This page is how to keep `@cash.cache` from
-vouching for code it did not run.
+!!! info "Applies to: decorator"
+    Anyone writing a test suite for code that uses `@cash.cache`.
 
-## The trap: a determinism test that the cache passes for you
+In a test suite, a cache hit can make a wrong result look right. This page shows
+how to keep the cache from vouching for code it did not run.
 
-<!-- test:skip reason="illustrative: simulate and params belong to the reader's project" -->
-```python
-def test_simulation_is_reproducible():
-    assert simulate(params, seed=1) == simulate(params, seed=1)
-```
-
-Under caching, the second call is a hit, so the assertion compares one result
-with itself. It passes even if `simulate` ignores its seed and draws fresh
-random numbers every time — and it passes on a fresh cache too, because the
-first call writes the entry the second call reads. Any test that calls a
-cached function twice to check that it agrees with itself is testing the
-cache.
-
-Here is the whole trap, runnable — a function that ignores its seed, and the
-two checks side by side:
+## The trap: the cache passes your determinism test
 
 ```python
 import random
@@ -30,50 +16,42 @@ import cash
 def simulate(n, seed=0):
     return random.random()          # the bug: seed is never used
 
-# Through the cache: the second call is a hit, so this compares a value with itself.
+# Through the cache, the second call is a hit: a value compared with itself.
 assert simulate(3, seed=1) == simulate(3, seed=1)
 
 # The undecorated function tells the truth.
 assert simulate.__wrapped__(3, seed=1) != simulate.__wrapped__(3, seed=1)
 ```
 
-Two fixes, and CI wants both:
+Any test that calls a cached function twice to check that it agrees with itself
+is testing the cache. It passes on an empty cache too, because the first call
+writes what the second reads. Two fixes, and CI wants both:
 
-- in a test that is *about* the function's own behaviour, call the undecorated
-  function, `simulate.__wrapped__(...)`;
-- run the whole suite once with caching off, which catches the tests nobody
+- In a test **about the function's behaviour**, call the undecorated function,
+  `f.__wrapped__(...)`.
+- Run the whole suite once with caching off. That catches the tests nobody
   thought to write that way.
 
-## Turning caching off: `CASH_DISABLE=1`
+## Turning caching off
 
 <!-- claim: cash/config.py:CashConfig.disable == False, cash/core.py:Cash._wrap_with_stats @b467e7e4 -->
 ```bash
 CASH_DISABLE=1 pytest
 ```
 
-Every `@cash.cache` function then calls straight through: no key, no lookup,
-no store, no analysis, and nothing is read from or written to the cache
-directory. `f.explain(...)` reports `disabled`, and with `CASH_SUMMARY=1` the
-exit summary says caching was off and how many calls ran uncached. In a
-notebook, `%cash_on` declines to switch caching on and says why — so a CI job
-that executes notebooks with the variable set runs them uncached too.
-
-The same switch is `Cash(disable=True)`, `cash.configure(disable=True)` (read
-on every call, so it takes effect immediately), or `disable = true` under
-`[tool.cash]`.
-
-A CI job that runs the suite this way costs one extra run, and it is the only
-thing that shows the suite passes on the code's merits.
+Every cached function then calls straight through: no key, no lookup, no store,
+and nothing read from or written to the cache folder. `f.explain(...)` reports
+`disabled`. The same switch is `Cash(disable=True)`,
+`cash.configure(disable=True)` (it takes effect on the next call), or
+`disable = true` under `[tool.cash]`.
 
 ## Isolating the suite's cache
 
-`pytest` is installed code, so it caches where your project is — in the same
-`.cash` your application uses (see
-[what paths are relative to](../../getting-started/configuration.md#what-paths-are-relative-to)).
-A test run then reads entries that a previous run, or the application, wrote.
-To give each session a cache of its own:
+A test run caches in your project's `.cash` folder by default, the same one the
+application uses, so it reads entries that earlier runs wrote. To give each
+session a cache of its own:
 
-<!-- test:skip reason="a conftest.py fixture; exercised by running pytest twice in a scratch project" -->
+<!-- test:skip reason="a conftest.py fixture, not a standalone script" -->
 ```python
 # conftest.py
 import cash
@@ -84,23 +62,15 @@ def _cash_isolated(tmp_path_factory):
     cash.configure(cache_dir=str(tmp_path_factory.mktemp("cash")))
 ```
 
-Or from the outside, with no code at all:
+Or, with no code: `CASH_CACHE_DIR="$(mktemp -d)" pytest`. With
+`cash.configure(backend="memory")` nothing is written anywhere, and each test
+process (every xdist worker is one) starts empty.
 
-```bash
-CASH_CACHE_DIR="$(mktemp -d)" pytest
-```
-
-`cash.configure(backend="memory")` keeps the cache in RAM only: nothing is
-written anywhere, and each test process — every xdist worker is one — starts
-empty.
-
-A session-wide cache directory keeps a test run from reading the application's
-entries, and it also gives up everything the cache saves you between local
-runs. To keep that, and switch the cache off only for the tests that must not
-see it, use a fixture:
+To keep the cache for most tests and switch it off only for those that must
+not see it, use a fixture:
 
 <!-- claim: cash/__init__.py:disabled @c23cd1a2 -->
-<!-- test:skip reason="a conftest.py fixture; run under CASH_DISABLE=1 by tests/test_core/test_disabled_context.py" -->
+<!-- test:skip reason="a conftest.py fixture, not a standalone script" -->
 ```python
 # conftest.py
 import cash
@@ -108,7 +78,7 @@ import pytest
 
 @pytest.fixture
 def no_cache():
-    with cash.disabled():             # every @cash.cache call runs its body
+    with cash.disabled():             # every cached call runs its body
         yield
 
 # test_model.py
@@ -116,19 +86,18 @@ def test_training_really_trains(no_cache):
     ...
 ```
 
-`cash.disabled()` puts back whatever was in force before the block, so a run
-started with `CASH_DISABLE=1` stays uncached after the fixture's first use.
-Ending the fixture with `cash.configure(disable=False)` instead — which this
-page used to show — switches caching back **on** for the rest of that run.
+`cash.disabled()` restores whatever was in force before the block, so a run
+started with `CASH_DISABLE=1` stays uncached. Don't end the fixture with
+`cash.configure(disable=False)`: that switches caching **on** for the rest of
+the run.
 
 ## Mocking and monkeypatching
 
-Patching a helper that a cached function calls works the way the test expects:
-the helper is looked up through the name the cached function's module uses, so
-the patched call gets its own entry and the real one comes back when the patch
-is undone.
+Patching a helper that a cached function calls works as the test expects. The
+patched call gets its own entry, and the real one comes back when the patch is
+undone:
 
-<!-- test:skip reason="needs importable modules; exercised by tests/test_core/test_patched_helper_binding.py" -->
+<!-- test:skip reason="needs importable modules primes and sievelib" -->
 ```python
 # primes.py
 from sievelib import sieve as _sieve
@@ -139,7 +108,7 @@ def count(n):
 
 # test_primes.py
 def test_count_uses_the_sieve(monkeypatch):
-    monkeypatch.setattr(primes, "_sieve", lambda n: [2, 3])   # patch where it is USED
+    monkeypatch.setattr(primes, "_sieve", lambda n: [2, 3])   # patch where it is used
     assert primes.count(10) == 2
 
 def test_real_count():
@@ -148,47 +117,33 @@ def test_real_count():
 
 Patch the name where it is **used** (`primes._sieve`), as with any mocking.
 Patching `sievelib.sieve` after `primes` imported it changes nothing `count`
-runs, and so nothing about its key. That holds at any depth: a helper's own
-helpers are looked up in the helper's module.
+runs.
 
 <!-- claim: cash/purity_analyzer.py:is_mock @173f99ff -->
-A `unittest.mock` object (`mock.patch(..., return_value=...)`, `MagicMock`,
-`pytest-mock`'s `mocker`) has no code for cash to key, and its answer is
-whatever the test configured, so a call that reaches one **runs uncached**,
-and nothing it returns is stored. That is usually what a test with a mock
-wants. It holds for a mock the function reaches by name: a helper of yours, a
-library function patched where it lives (`mock.patch("requests.get")`), or a
-whole module swapped out (`mock.patch("mylib.requests", MagicMock())`). An
-`autospec=True` patch counts too; its `side_effect` is the test's code, not
-yours, and is not read — before, a fake that used `__import__` made the test
-raise `CashImpureFunctionError`.
+**A call that reaches a `unittest.mock` object runs uncached**, and nothing it
+returns is stored. That covers `mock.patch(...)`, `MagicMock`, `pytest-mock`'s
+`mocker` and `autospec=True` patches, whether the mock replaces your helper, a
+library function (`mock.patch("requests.get")`) or a whole module.
+
+<!-- claim: cash/effect_observer.py:_hook_mock_calls @fbaaf89b -->
+A mock deeper down, such as `mock.patch("requests.Session.request")`, is not
+part of the key, so cash can't tell the call from a real one before it runs.
+It can afterwards: a call during which any mock was called is **not stored**,
+so a fake answer never reaches a later real run. The other direction is not
+covered: if a real run already stored the entry, the mocked call is a hit and
+gets the real answer. A test that must see its own mock needs the `no_cache`
+fixture.
+
+Libraries that intercept HTTP without replacing the function you call
+(`responses`, `requests-mock`, `vcrpy`, `httpretty`) are invisible to cash. A
+recorded response can be stored under the real key, so run those tests with the
+`no_cache` fixture.
 
 <!-- claim: cash/_clock.py:perf_counter @9808b623, cash/_plain_data.py:fake_clock @bcb59121 -->
-**A clock test double** such as freezegun is not a mock in this sense: the
-call is cached as usual. Cash times its own work with a clock `freeze_time`
-does not reach, so a body that takes three seconds is still measured as three
-seconds and stored under a frozen clock. A `date` or `datetime` made under freezegun
-is keyed as the date it equals, so a frozen run and a real one share entries.
-What the frozen clock does reach is TTLs, which follow `time.time()`: an
-entry's age is measured on the clock the test is pretending to.
-
-<!-- claim: cash/effect_observer.py:_hook_mock_calls @fbaaf89b, cash/decorator/store.py:StoreMixin._store_refusal @76b546c6 -->
-A mock deeper down — `mock.patch("requests.Session.request")`,
-`HTTPAdapter.send`, or a `MagicMock` swapped into a module-level session
-after the function first ran — is not part of the key, so cash cannot tell
-the call apart from a real one before it runs. It can tell afterwards: a call
-during which any `unittest.mock` object was called is **not stored**, so a
-fake never reaches a later real run. What that cannot prevent is the other
-direction: if a real run already stored an entry, the mocked call is a hit
-and gets the real answer. A test that must see its own mock needs the
-fixture above.
-
-What cash cannot see is a library that intercepts calls deeper down without
-replacing the function you call: `responses`, `requests-mock`, `vcrpy`,
-`httpretty`. Under those, `requests.get` is still the real
-function, so a cached call that goes through it is cached as usual, and the
-recorded response can be stored under the real key. Run those tests uncached
-(see the fixture above).
+**freezegun** and other clock doubles are not mocks in this sense: the call is
+cached as usual. Cash measures run time with a clock `freeze_time` does not
+reach, and a frozen `date` is keyed as the date it equals. TTLs do follow the
+frozen clock, since they use `time.time()`.
 
 ## Which to use
 
@@ -198,3 +153,5 @@ recorded response can be stored under the real key. Run those tests uncached
 | Local runs that never see another run's entries | a session `cache_dir` from `tmp_path_factory` |
 | A test about the function itself | `f.__wrapped__(...)` |
 | A test about the caching | a fresh `Cash(cache_dir=tmp_path)` per test |
+
+For caching inside CI pipelines, see [Deploying](deploying.md#ci).

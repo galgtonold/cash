@@ -1,17 +1,13 @@
-# ETL and Data Engineering Pipelines
+# Data engineering
 
-ETL pipelines re-process the same data over and over during development, debugging, and incremental backfills. Cash turns each pipeline step into a cached function, so re-running after fixing a bug downstream skips everything upstream that didn't change.
+!!! info "Applies to: decorator"
+    Anyone building ETL pipelines and backfills from Python functions.
 
-## Why this matters in data engineering
+A pipeline re-processes the same data again and again while you develop, debug
+and backfill it. Make each step a cached function, and a re-run after a fix
+skips every step whose code and inputs didn't change.
 
-- **Iteration speed.** Debugging a tail-end transform shouldn't require re-reading 100GB of source data. With each step cached, the failing step is the only one that re-runs while you fix it.
-- **Idempotency.** A pipeline that's already run against a given input shouldn't re-run when invoked a second time on the same input. Cash gives you that for free — same args, same source files, cache hit.
-- **Partial backfill.** Fix the bug, re-run the pipeline, only affected steps recompute. No bespoke "skip steps 1-3" logic in your orchestrator.
-- **Reproducibility.** Cached intermediate states preserve the exact inputs and outputs of past runs, which is useful when an analyst asks "what did this report look like last Tuesday?"
-
-## The pattern: pipeline-as-functions
-
-Each step is a `@cash.cache`'d function. The result is a dependency graph the cache figures out for you:
+## The pattern: one cached function per step
 
 ```python
 import cash
@@ -24,92 +20,81 @@ def extract(source_path):
 @cash.cache
 def normalize(df):
     df = df.copy()
-    df['amount'] = df['amount'].fillna(0)
+    df["amount"] = df["amount"].fillna(0)
     return df
 
 @cash.cache
 def aggregate(df):
-    return df.groupby('region').agg(total=('amount', 'sum'))
+    return df.groupby("region").agg(total=("amount", "sum"))
 
 def run(source):
-    raw = extract(source)
-    clean = normalize(raw)
-    agg = aggregate(clean)
-    agg.to_parquet('output.parquet')
+    agg = aggregate(normalize(extract(source)))
+    agg.to_parquet("output.parquet")      # the write stays outside the cache
 
 if __name__ == "__main__":
     run("s3://bucket/raw.parquet")
 ```
 
-Change the `aggregate` function and re-run: `extract` and `normalize` are cache hits; only `aggregate` re-executes. Change the source file and re-run: `extract` misses (its recorded content fingerprint no longer matches), and everything downstream cascades.
+Edit `aggregate` and re-run: `extract` and `normalize` are hits, and only
+`aggregate` runs. Change the source data and `extract` misses; its new result
+is a new argument for `normalize`, so everything downstream recomputes.
 
-The first run on a fresh cache reads the parquet, normalises, aggregates, and writes. Every subsequent run with the same source path returns the aggregated frame in milliseconds — the whole pipeline collapses to three cache lookups and one parquet write.
+## Source data
 
-## File-based source data
+<!-- claim: cash/tracking/file_tracker.py:FileDependencyRegistry._initialize_defaults @b63601b2 -->
+Files read inside a step are tracked by content, with nothing to declare:
+pandas and polars readers, pyarrow's `csv`, `parquet`, `feather` and `json`
+readers, `open()`. An `s3://` or `gs://` read is tracked by the object's ETag or
+version. A `touch` that leaves the bytes alone does not invalidate. Readers
+cash can't see (`h5py`, `pyarrow.parquet.ParquetFile`) need
+`file_depends_on=`; see [File dependencies](../feature-guides/custom-file-sources.md).
 
-Pandas readers (`read_parquet`, `read_csv`, `read_json`) are intercepted automatically and the source file's **content fingerprint** is recorded. Change the file's bytes and `extract` misses on the next call; a bare `touch` that leaves the content identical does **not** invalidate it. For non-pandas readers — Arrow, HDF5, custom binary formats — declare the dependency explicitly with `file_depends_on=` or `dynamic_depends_on=`. See [Custom File Sources](../feature-guides/custom-file-sources.md).
+Databases and APIs have no file to check. Three ways to handle them:
 
-## Database and API sources
+- **Snapshot to a file.** A scheduled task writes the query result to disk, and
+  a cached step reads it. The read is tracked, so a new snapshot invalidates
+  everything downstream:
 
-Cash doesn't auto-track SQL connections or HTTP endpoints — there's no file on disk to fingerprint. Two practical patterns:
+    ```python
+    @cash.cache
+    def load_snapshot():
+        return pd.read_parquet("snapshot.parquet")
+    ```
 
-**Snapshot to file first.** Land the query result on disk, then key your transforms off the snapshot:
+- **Track a version.** If you can read a freshness signal (a table's
+  `last_modified`, a schema version), wrap it in a `DataSource` and return it
+  from a `dynamic_depends_on=` resolver. The resolver must return a
+  `DataSource`: a raw string or number makes the call run uncached, with a
+  [`KEY-DYNAMIC-DEP-FAILED`](../../warnings.md#key-dynamic-dep-failed) warning.
+  See [Dynamic dependencies](../feature-guides/dynamic-dependencies.md).
+- **Give it a lifetime.** A step that queries or fetches directly warns
+  [`KEY-NETWORK-READ`](../../warnings.md#key-network-read), because cash can't
+  see when the data changes. A `ttl=` answers that and silences the warning:
 
-```python
-import cash
-import pandas as pd
+    ```python
+    @cash.cache(ttl=3600)   # refresh hourly
+    def fetch_exchange_rates():
+        return requests.get("https://api.exchangerate.host/latest").json()
+    ```
 
-@cash.cache(file_depends_on="snapshot.parquet")
-def load_snapshot():
-    return pd.read_parquet("snapshot.parquet")
-```
+## Backfills
 
-A cron or Airflow task refreshes `snapshot.parquet`; everything downstream invalidates automatically when it changes.
-
-**Use a `DataSource` to track a version.** When you can name the freshness signal (a table's `last_modified` row, an API version, a config hash), wrap it in a `DataSource` subclass and pass a resolver to `dynamic_depends_on=`. The resolver must return a `DataSource` instance — passing a raw string or version number is silently ignored. See [Dynamic Dependencies](../feature-guides/dynamic-dependencies.md) for the correct subclass shape and a worked example.
-
-## Choosing a backend for pipelines
-
-- **Single machine, dev or batch.** The default tiered backend (in-memory L1, disk L2) handles everything up to ~100GB of cached state.
-- **Shared dev/staging server.** `SQLiteBackend` for L2 — concurrent reads, single-file deployment, no daemon.
-- **Distributed workers (Spark, Dask, Ray).** `RedisBackend` so all workers see the same cache and the same hits.
-- **Cloud and cross-region.** `S3Backend` as L2 — workers in any region hit the same bucket and the same cached parquet files.
-
-See [Choosing a Backend](../feature-guides/choosing-a-backend.md) for the decision tree and configuration snippets.
-
-## Idempotency and backfills
-
-The same pipeline invoked twice with the same arguments is a cache hit on every step. That's the idempotency property — useful for orchestrators that may retry tasks, useful for humans who want to re-run the script without thinking about it.
-
-For backfills, encode the period as an argument:
+Make the period an argument:
 
 ```python
 @cash.cache
-def extract(source_path, date):
+def extract_day(source_path, date):
     return pd.read_parquet(f"{source_path}/dt={date}")
-
-@cash.cache
-def normalize(df):
-    ...
 ```
 
-Now `extract(src, "2026-01-15")` and `extract(src, "2026-01-16")` are independent cache entries. Backfilling January re-runs only the dates that haven't been cached; resuming after a partial run picks up where it left off.
+Each date is its own entry. A backfill computes only the dates not yet cached,
+and a run that stopped halfway resumes where it left off. Fix a bug in a later
+step and re-run the whole month: every `extract_day` is a hit, and only the
+fixed step and those after it run again.
 
-Partial re-execution after a code change works the same way: edit `normalize`, and `extract` is still a hit for every date — only `normalize` and downstream steps recompute.
+## Seeing which steps ran
 
-This is the workflow Cash optimises for: you've spent two hours running a 30-day backfill, the aggregation step has a bug, you fix it, you re-run the whole script. Extraction is a hit on all 30 days. Normalisation is a hit on all 30 days. Only the aggregation re-runs. The 2-hour pipeline finishes in seconds.
-
-## Schema changes
-
-When the *code* changes, Cash sees the new function source and invalidates downstream automatically. The trickier case is when the schema changes but the code that consumes it doesn't — a new column appears in the source table, but `normalize` still does `df['amount'].fillna(0)` and doesn't notice. Two options:
-
-- **Re-snapshot and rely on the file's content.** If your snapshot file is rewritten whenever the upstream schema moves, its changed content cascades through every cached step. (A rewrite that produces byte-identical output correctly changes nothing.)
-- **Bump a version dependency.** Wrap "schema version" in a `DataSource` subclass and pass it via `dynamic_depends_on=` (see the feature guide). Increment the version on schema changes; every cached step re-runs.
-
-## Monitoring
-
-In a pipeline run, you want to know which steps hit and which missed. Every
-`@cash.cache` function carries its own counters:
+Each cached function counts its own hits and misses:
 
 ```python
 import cash
@@ -118,50 +103,47 @@ import cash
 def load_day(date):
     return {"date": date, "rows": 1000}
 
-load_day("2026-01-15")          # first call — computes
-load_day("2026-01-16")          # different date, computes again
+load_day("2026-01-15")          # first call: computes
+load_day("2026-01-16")          # a different date: computes
 load_day("2026-01-15")          # cache hit
 
 print(load_day.cache_info())
-# {'hits': 1, 'misses': 2, 'hit_rate': 0.333…, 'total_time_saved': …, 'warnings': []}
+# {'hits': 1, 'misses': 2, 'hit_rate': 0.333..., ...}
 ```
 
-`hit_rate` is the number to watch across a backfill: on a re-run of dates you
-have already processed it should be close to 1.0, and each step of a pipeline
-reports its own, so you can see exactly where the re-run stopped being free.
+On a re-run of processed dates, `hit_rate` should be close to 1.0; the step
+where it drops is where the re-run stopped being free. Log `cache_info()` at the
+end of each run: a sudden drop is often the first sign that something upstream
+changed. `f.explain(...)` says why a call would miss, and `CASH_SUMMARY=1`
+prints a table for the whole run; see
+[Seeing what cash did](../../decorator.md#seeing-what-cash-did).
 
-In a notebook, `%cash_stats` prints a summary across every tracked function. On the CLI, `cash inspect` reads the cache directory and lists entries with sizes and timestamps. See [Debugging and Monitoring](../feature-guides/debugging-and-monitoring.md) for the full surface — `f.explain()` is especially useful in CI when you want to know *why* a step missed.
+## Running it in production
 
-In production, log `cache_info()` at the end of each pipeline run. A sudden drop in hit rate is usually the first signal that something changed upstream — a schema migration, a new file landing, a clock skew — well before any downstream metric notices.
-
-## Production deployment
-
-Cash slots into orchestrators without ceremony — each Airflow task, Prefect flow, or Dagster op just calls Cash-decorated functions. Two things to set up:
-
-- **Shared cache directory.** If workers are distributed, point Cash at shared storage (NFS for on-prem, S3 for cloud). Otherwise each worker has its own cache and you lose cross-worker hits.
-- **TTL on freshness-sensitive steps.** For data that goes stale on a known cadence (daily exchange rates, hourly inventory snapshots), set `ttl=` so the cache expires automatically and the next call re-fetches.
-
-```python
-@cash.cache(ttl=3600)  # refresh every hour
-def fetch_exchange_rates():
-    return requests.get("https://api.exchangerate.host/latest").json()
-```
-
-See [Production Transition](../feature-guides/production-transition.md) for the notebook-to-script handover and the production-readiness checklist.
+Each Airflow task, Prefect flow or Dagster op just calls the cached functions.
+For workers on several machines, point them at a shared backend (Redis or S3),
+or each keeps its own cache. See [Deploying](../feature-guides/deploying.md) and
+[Choosing a backend](../feature-guides/choosing-a-backend.md).
 
 ## Caveats
 
-- **Don't cache the write step.** `to_parquet`, `to_csv`, `write_table` — these are side effects with no useful return value. Cache the *computation* that produces the frame; leave the write outside the cached function.
 <!-- claim: cash/analysis/file_effects.py:SideEffectVisitor @07c1a65b broad="the write-detection claim is about the visitor as a whole" -->
-- **Large intermediate states bloat disk.** A 50GB intermediate cached after every step adds up fast. For cheap or transient transforms (a `df.rename(columns=...)` that runs in milliseconds), skip caching with `# @cash:no-cache` and let it recompute. See [Controlling Cache Behavior](../feature-guides/controlling-cache-behavior.md).
-- **Mutable state.** Cash assumes pure transforms. If a function mutates its input (`df.fillna(0, inplace=True)`), the cached result may not match what callers see on a miss. Defensive `df.copy()` at the top of each step is cheap insurance.
-- **Don't cache the client object.** Database connections, S3 clients, Spark sessions — initialize them at module scope, not inside a cached function. The client isn't a function of its arguments and serializing it usually doesn't even work.
-- **Watch out for non-deterministic transforms.** Anything that calls `datetime.now()`, `uuid.uuid4()`, or unseeded random sampling inside a cached step will bake the first observed value into the cache. Either lift the non-determinism out (pass `now` as an argument) or skip caching that step. See [Controlling Cache Behavior](../feature-guides/controlling-cache-behavior.md).
+- **Keep writes out of cached steps.** `to_parquet` and `to_csv` are effects: a
+  hit would skip them. Cash warns if a cached step writes. Cache the step that
+  builds the frame and write it outside, as `run` does above.
+- **Leave cheap steps undecorated.** Every cached result is written to disk. A
+  rename that takes milliseconds isn't worth a 5 GB entry.
+- **Don't change arguments in place.** A step that runs
+  `df.fillna(0, inplace=True)` on its input is not stored, so it runs every
+  time. Copy first, as `normalize` does; see
+  [Results cash refuses to store](../../decorator.md#results-cash-refuses-to-store).
+- **Create clients at module level.** Database connections, S3 clients and Spark
+  sessions are not results. Build them once, outside cached functions.
+- **Pass the clock in.** A step that reads `datetime.now()` stores the first
+  value it saw, with a warning. Pass `now` as an argument instead.
 
 ## Related
 
-- [Custom File Sources](../feature-guides/custom-file-sources.md) — declare non-pandas file readers as cache dependencies.
-- [Dynamic Dependencies](../feature-guides/dynamic-dependencies.md) — track per-call dependencies via a `DataSource` resolver.
-- [Choosing a Backend](../feature-guides/choosing-a-backend.md) — picking storage for single-machine vs distributed pipelines.
-- [Production Transition](../feature-guides/production-transition.md) — moving from notebook to scheduled job.
-- [Debugging and Monitoring](../feature-guides/debugging-and-monitoring.md) — `cache_info()`, `f.explain()`, and CLI inspection.
+- [File dependencies](../feature-guides/custom-file-sources.md)
+- [Dynamic dependencies](../feature-guides/dynamic-dependencies.md)
+- [Deploying](../feature-guides/deploying.md)

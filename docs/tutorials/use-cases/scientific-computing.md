@@ -1,15 +1,14 @@
-# Scientific Computing
+# Scientific computing
 
-Scientific computing means simulations that take hours, parameter sweeps with hundreds of variations, and the need to reproduce results months later. Cash caches each simulation run, so re-running an analysis notebook doesn't trigger a fresh hour-long simulation.
+!!! info "Applies to: decorator"
+    Researchers running simulations and parameter sweeps from Python scripts or
+    modules.
 
-## Why this matters in scientific computing
+Simulations take hours, sweeps have hundreds of variations, and a reviewer may
+ask for Figure 3 again in six months. Cache each simulation run, and re-running
+the analysis never repeats a simulation you already have.
 
-- **Compute cost.** Hour-long simulations don't tolerate accidental re-runs. The point of caching is that "I closed the notebook and re-opened it" never costs you an afternoon.
-- **Parameter sweeps.** Each `(param_a, param_b, seed)` tuple is cached independently. Re-running the sweep skips combinations you've already computed and only fills in the gaps.
-- **Reproducibility.** Six months later, when a reviewer asks how you produced Figure 3, the cached result is *exactly* what you used. Same args, same key, same bytes.
-- **Iteration on analysis.** You usually iterate on the plot, the statistical test, or the summary table — not the underlying simulation. Cash makes the simulation a one-time cost and lets the analysis layer churn.
-
-## Quick start
+## A cached simulation
 
 ```python
 import cash
@@ -20,17 +19,23 @@ def simulate(n_steps: int, dt: float, alpha: float, seed: int):
     rng = np.random.default_rng(seed)
     state = np.zeros((n_steps, 3))
     for i in range(1, n_steps):
-        state[i] = state[i-1] + alpha * dt * rng.standard_normal(3)
+        state[i] = state[i - 1] + alpha * dt * rng.standard_normal(3)
     return state
 
 trajectory = simulate(n_steps=10_000, dt=0.01, alpha=0.5, seed=42)
 ```
 
-First call runs the simulation. Every subsequent call with the same four arguments returns the cached `state` array. Change `alpha` or `seed` and you get a new key and a fresh run.
+<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @dfaf7643 -->
+The first call runs the simulation and writes the result to disk; every later
+call with the same four arguments, in this run or the next, loads it. Change
+`alpha` or `seed` and it runs again. Large results are stored like small ones:
+a decorated result is always written to disk unless it exceeds the disk tier's
+size cap; see
+[Where results are stored](../../decorator.md#where-results-are-stored).
 
 ## Parameter sweeps
 
-A sweep is just a loop over arguments. Each combination is an independent cache entry:
+A sweep is a loop over arguments, and each combination is its own entry:
 
 ```python
 results = {}
@@ -39,111 +44,39 @@ for alpha in [0.1, 0.5, 1.0, 2.0]:
         results[(alpha, seed)] = simulate(1_000, 0.01, alpha, seed)
 ```
 
-Deliberately small so you can paste and run it. A real sweep is the same three
-lines with bigger numbers — and that is the point: adding seeds or alphas later
-only computes the combinations you haven't run yet.
+The first run computes 12 simulations. Running the loop again computes none.
+Add `alpha=4.0` and only its 3 runs are new. The same holds for Monte Carlo
+seeds and one-at-a-time sensitivity runs.
 
-First run: 12 simulations (4 alphas × 3 seeds) execute and get cached. Re-running the same loop: 12 cache hits, no computation. Add `alpha=4.0` to the list: 3 new runs, the existing 12 still hit. This is the workflow that justifies the cache directory's existence.
-
-For an embarrassingly parallel sweep you can dispatch the same loop across worker processes — see [across processes](../feature-guides/thread-safety.md#across-processes-pool-processpoolexecutor-joblib) for what the workers share and what each keeps to itself.
+To spread a sweep over worker processes (`multiprocessing`, joblib), see
+[Threads and processes](../feature-guides/thread-safety.md#across-processes-pool-processpoolexecutor-joblib).
+Workers share results through the disk. Two workers can still compute the same
+combination at the same moment, unless the backend is Redis with
+`use_locking=True`.
 
 <!-- claim: cash/tracking/randomness/detect.py:RNG_CARRIER_CONSTRUCTORS @620106b9 -->
-## Determinism: always seed the RNG
+## Seed through an argument
 
-The hard rule for cacheable simulations: **the seed is an argument, not a global**.
+The seed must be an **argument**, and the generator local:
 
 ```python
-# Good — seed is an argument, result is reproducible
 @cash.cache
-def simulate(n_steps: int, dt: float, alpha: float, seed: int):
-    rng = np.random.default_rng(seed)
-    return rng.standard_normal(n_steps)
-
-# Bad — the value is reproducible, but np.random.seed() reseeds the whole
-# process's RNG, and a cache hit skips that
-@cash.cache
-def simulate_bad(n_steps: int):
-    np.random.seed(42)        # don't do this inside a cached function
-    return np.random.randn(n_steps)
+def sample(n: int, seed: int):
+    rng = np.random.default_rng(seed)     # good: seeded from an argument
+    return rng.standard_normal(n)
 ```
 
-`simulate_bad` returns the same array hit or miss. What differs is everything
-after it: on a miss the global RNG has just been reseeded, on a hit it has not,
-so the next `np.random` draw anywhere in the program depends on whether the
-cache was warm. Cash flags the reseed as a side effect
-([IMPURE-SIDE-EFFECTS](../../warnings.md#impure-side-effects)). A local
-generator built from a seed argument has no such reach.
+An unseeded draw inside a cached function stores the first value and returns
+it on every later call, with a warning
+([`RANDOM-UNSEEDED`](../../warnings.md#random-unseeded)). Calling the global
+`np.random.seed(42)` inside it is worse: a hit skips the reseed, so every draw
+after it in your program depends on whether the cache was warm. See
+[`allow_random=`](../../decorator.md#allow_random).
 
-Cash scans your notebook for unseeded RNG calls and warns when it finds them — the warning is the cache telling you that what's saved won't match what a fresh re-run would produce. See [Controlling Cache Behavior](../feature-guides/controlling-cache-behavior.md) for the `# @cash:allow-random` escape hatch and the full list of detected RNG calls.
+## One function per stage
 
-If you need an unseeded run for a one-off exploration, do it outside the cached function. Inside the cache, always pass the seed.
-
-### A shared `Generator` keeps its place across cache hits
-
-In a notebook you often keep one `rng` alive across cells and draw from it as you go. That is a *consumable*: restoring a cached statement without advancing `rng` would make the next draw silently repeat numbers the cached statement already consumed.
-
-Cash handles this. A user-held `np.random.Generator`, `np.random.RandomState`, or `random.Random` has its state captured with the statement and replayed on a cache hit, so draws taken after a restored statement match a full re-run:
-
-```python { .nb-cell }
-rng = np.random.default_rng(0)
-sample_a = rng.standard_normal(1000)   # restored from cache...
-sample_b = rng.standard_normal(1000)   # ...and this still matches a fresh run
-```
-
-This does not weaken the rule above — a seed passed as an argument is still the right shape for a `@cash.cache`d simulation. It means an interactive notebook that threads one generator through several cells stays reproducible rather than quietly diverging on the second run.
-
-## Large arrays and persistence
-
-<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.pays_to_restore @e011b70e, cash/backends/persistence_policy.py:COMPUTE_FLOOR_S == 0.1 -->
-Simulation outputs are usually arrays — and often big ones. Cash's
-smart-persistence layer decides automatically when an in-memory entry is worth
-writing to disk, and a simulation is the shape it says yes to.
-
-Worth being precise about *why*, because the intuition "big things get
-persisted" is backwards: size pushes **against** persistence, since a bigger
-value costs more to restore. What earns the write is **compute time** — the
-value has to have taken longer than 0.1 s, and recomputing it has to cost more
-than restoring it. A simulation clears that easily on the compute side, so its
-output persists despite being large; a large array that was cheap to produce
-stays in RAM.
-
-When you *want* to force persistence — for example, a long-running simulation whose output absolutely must survive a kernel restart — annotate the cell:
-
-```python { .nb-cell }
-# @cash:persist
-trajectory = simulate(n_steps=100_000, dt=0.001, alpha=0.5, seed=42)
-```
-
-See [Smart Persistence](../feature-guides/smart-persistence.md) for the heuristics Cash uses and the difference between L1 (in-memory) and L2 (on-disk) tiers.
-
-## Custom numerical types
-
-Cash hashes `numpy` arrays, plain numbers, lists, tuples, and built-ins by default. For specialised numerical objects — `mpmath` arbitrary-precision numbers, JAX arrays, PyTorch tensors on GPU, sparse matrices — register a custom hasher so the cache key reflects the array's contents instead of its Python `id`.
-
+<!-- test:skip reason="illustrative: the stage bodies are elided" -->
 ```python
-import cash
-
-def hash_my_array(arr):
-    return arr.tobytes()  # or arr.numpy().tobytes(), etc.
-
-cash.register_hasher(MyArrayType, hash_my_array)
-```
-
-See [Custom Hashers](../feature-guides/custom-hashers.md) for the full hook surface and worked examples for the common scientific types.
-
-## File-based input data
-
-Initial conditions, mesh files, observation data — anything you read with `pandas.read_*` is auto-tracked by its **content fingerprint**, so editing `initial_conditions.csv` invalidates every cached call downstream of it (and re-saving it unchanged does not).
-
-For non-pandas formats (HDF5 via `h5py`, NetCDF, Zarr, custom binary), declare the dependency explicitly with `file_depends_on=` so Cash sees the file. See [Custom File Sources](../feature-guides/custom-file-sources.md).
-
-## Pipeline pattern: simulate → analyse → reduce → plot
-
-The high-leverage layout for a research notebook is one cached function per stage:
-
-<!-- test:skip reason="illustrative stage sketch — the bodies are `...`, so running it proves only that a def parses" -->
-```python
-# test:inject: import cash
 @cash.cache
 def simulate(params): ...
 
@@ -153,45 +86,53 @@ def analyse(trajectory): ...
 @cash.cache
 def reduce(analyses): ...
 
-# @cash:no-cache
-def plot(summary): ...    # plotting is cheap, side-effect-y, skip the cache
+def plot(summary): ...    # cheap, and a figure is an effect: leave it undecorated
 ```
 
-Edit the plot: nothing else re-runs. Edit `reduce`: `simulate` and `analyse` are cache hits, only `reduce` and `plot` execute. Edit the simulation: everything cascades, which is the correct behaviour because the underlying physics changed.
+Edit `reduce`: `simulate` and `analyse` are hits, and only `reduce` and `plot`
+run. Edit the simulation and everything after it recomputes, as it should.
 
-Plotting itself rarely benefits from caching — the figure is a side effect, not a return value, and rendering is fast compared to simulation. Mark the cell with `# @cash:no-cache` to make the intent explicit.
+## Inputs and types
+
+- **Data files** read through numpy, pandas or `open()` are tracked by content:
+  editing `initial_conditions.csv` invalidates the calls that read it. HDF5
+  through `h5py`, NetCDF and other C-level readers are not seen; name those files
+  with `file_depends_on=`. See
+  [File dependencies](../feature-guides/custom-file-sources.md).
+- **numpy arrays** are hashed by their full content. Types cash can't pickle
+  (GPU tensors, some C extension types) need a hasher:
+
+    ```python
+    import hashlib
+
+    def hash_my_array(arr):
+        return hashlib.sha256(arr.tobytes()).hexdigest()
+
+    cash.register_hasher(MyArrayType, hash_my_array)
+    ```
+
+    See [Custom hashers](../feature-guides/custom-hashers.md).
+
+- **Huge arguments** are hashed on every call. Mark the producing cached
+  function `frozen=True`, or pass a path or the parameters that produced the
+  array and load it inside; see
+  [`frozen=` and large arguments](../../decorator.md#frozen-and-large-arguments).
 
 ## Reproducibility over months
 
-The cache directory *is* your reproducibility artefact. Two practical habits:
-
-- **Back up the cache directory.** It contains the inputs and outputs of every run you've made. Treat it like any other research output — include it in backups, or commit a small one to the repo.
-- **Pin dependencies.** Cash's keys reflect *your* source code; they don't reflect a library upgrade that changed numpy's RNG implementation. Pin `numpy`, `scipy`, and any solver libraries in a lockfile, and you've closed the most common reproducibility gap.
-
-If you genuinely need library versions to fold into the cache key — e.g. you're running across a numpy major-version bump and want both eras cached separately — wrap "library version" in a `DataSource` subclass and pass a resolver via `dynamic_depends_on=`. Note that `dynamic_depends_on` requires a `DataSource` instance, not a raw string. See [Dynamic Dependencies](../feature-guides/dynamic-dependencies.md) for the subclass shape.
-
-## Common patterns
-
-- **Iterative solvers with checkpoints.** Cache each checkpoint as a function of `(initial_state, n_steps, params)`. A solver that crashes at step 10,000 can resume from the last cached checkpoint instead of from step 0.
-- **Monte Carlo with multiple seeds.** Wrap the per-seed run in `@cash.cache`, loop over seeds. Adding more seeds is incremental — the existing ones stay cached.
-- **Sensitivity analysis.** Identical to a parameter sweep — vary one input at a time, each combination cached independently, the analysis layer iterates freely.
-- **Embarrassingly parallel sweeps.** Dispatch the cached function across processes with `multiprocessing` or `joblib`. If you want a *guarantee* that two workers don't both compute the same `(alpha, seed)` combination, you need `Cash(use_locking=True)` against `RedisBackend`. Every backend single-flights concurrent callers *within* one process, but a `multiprocessing`/`joblib` sweep puts the workers in **separate processes**, and Redis is the only shipped backend whose lock spans them. See [Thread Safety](../feature-guides/thread-safety.md) for the backend table and the redundancy semantics.
-
-  <!-- claim: cash/backends/_writes.py:in_multiprocessing_child @9bd4615e, cash/backends/_writes.py:PendingWrites._run_inline @4c600cb9 -->
-  Inside a worker process — a `multiprocessing.Pool`, a `ProcessPoolExecutor`, joblib's workers — cash writes each result *before* the task returns, instead of in the background as it does in your main process. That is what keeps `with Pool() as pool:` safe: its exit *terminates* the workers, and a background write still in flight at that moment used to be lost, so each worker's last task recomputed on every later run. The cost is that a worker's task includes its cache write.
-
-## Caveats
-
-- **Don't pass 1 GB arrays as cache-key arguments.** The key hashes every argument. If your "input" is a huge precomputed array, pass a fingerprint instead — a hash, a file path, or the parameter tuple that *produced* the array — and resolve the array inside the cached function.
-- **GPU non-determinism.** CUDA kernels are non-deterministic by default; the same input can produce slightly different outputs across runs. Set `torch.use_deterministic_algorithms(True)` (and the corresponding env vars) before you cache GPU computations, or accept that cache hits may diverge from fresh re-runs at the level of floating-point noise.
-- **Floating-point reproducibility across hardware.** Results depend on your BLAS, your CPU, and your compiler flags. A cache built on one machine and read on another may not bit-match if the architectures differ. For most analyses this is below the noise floor; for high-precision work, document the hardware alongside the cache.
-- **Don't cache the file write.** `np.save`, `h5py.File(...).create_dataset(...)`, `xarray.to_netcdf` — these are side effects. Cache the computation that produces the array; leave the write outside the cached function.
+- **Pin your libraries.** Keys cover your code, not numpy's or your solver's. A
+  library upgrade that changes results does not invalidate anything.
+- **Keep the cache folder** with the project's other outputs if you rely on it
+  to reproduce a figure.
+- **GPU and hardware.** CUDA kernels are non-deterministic unless you ask
+  otherwise (`torch.use_deterministic_algorithms(True)`), and BLAS results can
+  differ between machines at the level of rounding. A cache read on another
+  machine returns the stored bits, not what that machine would compute.
+- **Writes stay outside.** `np.save` and `to_netcdf` inside a cached function
+  are skipped on a hit. Cache the computation and write outside it.
 
 ## Related
 
-- [Custom Hashers](../feature-guides/custom-hashers.md) — for `mpmath`, JAX, PyTorch, sparse matrices, and other specialised numerical types.
-- [Smart Persistence](../feature-guides/smart-persistence.md) — when Cash decides to push a large array from memory to disk.
-- [Thread Safety](../feature-guides/thread-safety.md) — `use_locking=True` semantics for parallel sweeps; every backend locks in-process, Redis is the one that locks across processes.
-- [Controlling Cache Behavior](../feature-guides/controlling-cache-behavior.md) — RNG-detection warnings, `@cash:no-cache`, `@cash:persist`, and TTL.
-- [Custom File Sources](../feature-guides/custom-file-sources.md) — declaring HDF5, NetCDF, and other non-pandas readers as dependencies.
-- [Dynamic Dependencies](../feature-guides/dynamic-dependencies.md) — folding a library or schema version into the cache key.
+- [Caching over a grid](../feature-guides/caching-over-a-grid.md): reusing work when you refine a grid.
+- [Threads and processes](../feature-guides/thread-safety.md)
+- [Deploying](../feature-guides/deploying.md): running sweeps on a cluster or in CI.

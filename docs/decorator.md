@@ -1,46 +1,16 @@
-# `@cash.cache` — decorator guide
+# The `@cash.cache` guide
 
-!!! info "This is the script path"
-    Everything here works in a plain `.py` file - no Jupyter, no magics.
-    **You do not need `%cash_on`**, which is the notebook path and is
-    covered in [Notebook caching](notebook_caching_api.md). The two
-    compose, but neither requires the other.
+!!! info "Applies to: decorator"
+    Scripts, services and libraries that use `@cash.cache`.
 
-This page is the cohesive walkthrough of `@cash.cache`: when to use it,
-**what invalidates a cached result by default**, what every parameter adds
-on top, the wrapper methods you can call on a decorated function, and the
-gotchas that bite people in practice.
+Put `@cash.cache` on a slow function and cash stores its result. The next call
+with the same arguments, in this run or a later one, returns the stored result
+instead of running the body. This page covers where results go, how to see what
+cash did, what makes an entry go stale, the parameters, and the limits.
 
-For the auto-generated, exhaustive signature reference see the
-[API reference](api/cash.md). For the notebook-side
-equivalent (`%cash_on`) see [Notebook caching](notebook_caching_api.md).
-
----
-
-## When to use the decorator
-
-Reach for `@cash.cache` when you have a slow Python function whose
-result depends on its arguments and (optionally) some external state
-(files, configuration, other functions). The classic candidates:
-
-- Network calls (`requests.get`, LLM completions, database queries)
-- Expensive ETL (`pd.read_csv` of a 5 GB file followed by joins)
-- CPU-bound transforms (feature extraction, simulations)
-- Anything where "I've computed this exact thing already" is true at runtime
-
-Don't use it for:
-
-- Functions whose return value depends on hidden runtime state you
-  can't capture in arguments or `depends_on=` (the cache will go
-  stale silently)
-- Functions called sub-microsecond in a hot loop (cache key
-  computation alone will dominate the runtime)
-
-For methods on stateful objects (database handles, model wrappers,
-etc.) see the dedicated [caching class methods](tutorials/feature-guides/caching-class-methods.md)
-recipe.
-
----
+Good candidates are file loads, ETL steps, model fits, simulations and paid
+API calls. A function that takes microseconds gains nothing: building the key
+costs more than the body.
 
 ## The minimum
 
@@ -51,807 +21,230 @@ import cash
 def slow_square(n):
     return sum(i * i for i in range(n))
 
-slow_square(10_000_000)   # ~1 second
-slow_square(10_000_000)   # microseconds — restored from cache
+slow_square(1_000_000)   # first call: runs the body and stores the result
+slow_square(1_000_000)   # cache hit: returns the stored result
 ```
 
-That's it. The default `Cash()` singleton writes a tiered RAM + disk
-cache under `./.cash/`. The next call with the same `n` (this run or
-next month) returns the stored value.
+That is all the setup there is. A few rules hold for every cached function:
 
-<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @dfaf7643, cash/backends/persistence_policy.py:COMPUTE_FLOOR_S == 0.1 -->
-!!! note "A decorated result is written to disk however cheap it was"
-    Decorating a function is the decision to cache it, so its result is not
-    judged by the 0.1 s compute floor or the cost model that decide what a
-    notebook statement leaves on disk. What still applies is each disk tier's
-    size cap: a value too big for every one of them stays in RAM, and
-    [`CACHE-VALUE-TOO-BIG`](warnings.md#cache-value-too-big) says so. See
-    [cost model and smart persistence](cost-model.md).
+<!-- claim: cash/decorator/store.py:StoreMixin._store_refusal @76b546c6, cash/backends/serialization.py:get_serializer @76cf2c1b -->
+- **Exceptions are never cached.** If the body raises, nothing is stored and the
+  exception reaches you as usual. The next call runs the body again.
+- **A hit does not replay output.** Anything the body printed or logged appears
+  only on the call that ran it.
+- **A hit returns a copy.** The value is rebuilt from the stored bytes, so
+  writing into a result you got from a hit never changes what the next caller
+  gets.
 
-If you want a custom configuration (different backend, custom
-directory, debug logging), instantiate `Cash(...)` explicitly:
+To configure your own instance instead of the shared default, create a `Cash`
+and use its `cache` method:
 
 ```python
 from cash import Cash
 
-c = Cash(cache_dir="./my_app_cache", debug=True)
+app = Cash(cache_dir="./my_app_cache")
 
-@c.cache
-def slow_square(n):
-    return sum(i * i for i in range(n))
+@app.cache
+def slow_cube(n):
+    return sum(i * i * i for i in range(n))
 
-slow_square(1000)      # first call on this instance — computes
-slow_square(1000)      # cache hit, from ./my_app_cache
+slow_cube(1000)   # first call: runs the body
+slow_cube(1000)   # cache hit, from ./my_app_cache
 ```
 
-### Where the cache lives
+`Cash(...)` takes `cache_dir`, `backend` or `backends`, `use_locking`, `debug`,
+`verbose`, `register_magic`, `config_path`, and any configuration field as a
+keyword (`summary=True`, `max_cache_size="5GB"`, `disable=True`). See the
+[`Cash` reference](api/cash.md) and [Configuration](getting-started/configuration.md).
+
+## Where results are stored
+
+<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @dfaf7643, cash/backends/tiered_backend.py:TieredBackend.set @8f018587 -->
+**Every result is written to disk.** However cheap the call was, a decorated
+result goes to the RAM tier and to the disk tier, so the next process finds it.
+The one exception is a value too big for every disk tier's size cap: it stays in
+RAM for this process, and
+[`CACHE-VALUE-TOO-BIG`](warnings.md#cache-value-too-big) says so.
 
 <!-- claim: cash/_location.py:project_anchor @46e903a7, cash/config.py:_anchor_cache_dir @ae7a94f7 -->
-`.cash` sits next to **your project**, not next to whoever launched the job.
-Cash finds the running script, walks up to the first directory holding a
-`pyproject.toml`, `setup.py`, `setup.cfg` or `.git`, and puts the cache there —
-so `python /srv/etl/run.py` uses the same cache whether it was started by you,
-by cron from `/`, or by a CI step in a checkout directory. A script with no
-project above it caches beside itself; an interactive session or a notebook,
-which has no script at all, caches in the current directory. Installed
-code — `pytest`, a `python -m` module in site-packages, a `[project.scripts]`
-tool you installed — anchors to the project you run it from; run from outside
-any project, an installed tool caches per user, per tool, in the platform's
-cache location (`%LOCALAPPDATA%\cash\<tool>`, `~/Library/Caches/cash/<tool>`,
-`$XDG_CACHE_HOME/cash/<tool>`). See
-[what paths are relative to](getting-started/configuration.md#what-paths-are-relative-to).
+**The folder is `.cash` at your project root.** Cash starts at the running
+script and walks up to the first directory that holds a `setup.py`, a
+`setup.cfg`, a `.git`, or a `pyproject.toml` that declares a project (a
+`[project]`, `[build-system]`, `[tool.poetry]` or `[tool.cash]` table). So
+`python /srv/etl/run.py` uses the same cache whether you, cron or a CI step
+started it, from any directory. A script with no project above it caches next
+to itself. An installed tool run from outside any project caches per user, in
+the platform's cache folder. [Where your cache lives](how-it-works/storage.md)
+has the full rule.
 
-That matters most for exactly the case that cannot see it. A scheduled job runs
-from whatever directory the scheduler picked, and a cwd-relative cache meant a
-second cache built from scratch every time, with no symptom beyond "it is
-always slow" and a disk filling with duplicates.
+To choose the folder yourself, highest priority first:
 
-Four ways to say it explicitly, highest priority first:
-
-| How | Relative to | Use it for |
+| How | Relative to | Good for |
 |---|---|---|
-| `Cash(cache_dir="…")` | your current directory | one app that owns its cache |
-| `CASH_CACHE_DIR=…` | your current directory | a scheduled job, a container, CI |
-| `[tool.cash] cache_dir` in `pyproject.toml` | that file's directory | a shared, committed project setting |
-| *(nothing)* | the project anchor above | everything else |
+| `Cash(cache_dir="…")` | the current directory | an app that owns its cache |
+| `CASH_CACHE_DIR=…` | the current directory | cron, containers, CI |
+| `cache_dir` under `[tool.cash]` in `pyproject.toml` | that file's folder | a setting shared through the repo |
 
-`CASH_CACHE_DIR` is the one to reach for in a cron entry or a `Dockerfile`: it
-needs no change to the code that is already running, and an absolute value
-removes every question about where the cache ends up.
+`CASH_CACHE_DIR=/var/cache/myapp python run.py` needs no code change, and an
+absolute path leaves no doubt about where entries go.
 
-```bash
-CASH_CACHE_DIR=/var/cache/cash python /srv/etl/run.py
-```
+<!-- claim: cash/config.py:CashConfig.max_cache_size == None -->
+**The disk cap is automatic.** By default the disk tier may use a quarter of
+the room on its volume, and the RAM tier a fifth of memory. `cash info` prints
+both numbers (`Max size: auto -- disk 8.0 GiB, RAM 3.1 GiB`). When the disk
+tier is full, cash evicts the entries worth least per byte first: cheap to
+recompute, large, and rarely read. Set `max_cache_size` (or
+`CASH_MAX_CACHE_SIZE`) to a number of bytes or a size such as `"20GB"` to pin
+the disk cap.
 
-**Your test suite uses the same cache.** `pytest` anchors to the project too,
-so tests read entries the application wrote, and the application reads what the
-tests stored — a fake answer from a test included. Give the suite a cache of
-its own (`CASH_CACHE_DIR="$(mktemp -d)" pytest`, or the one-fixture version in
-[isolating the suite's cache](tutorials/feature-guides/testing-your-code.md#isolating-the-suites-cache)),
-and run it once with `CASH_DISABLE=1` to see that it passes on the code's merits.
+<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_clear @b5ac9b37, cash/__main__.py:cmd_clear @a2a0458b -->
+**Clearing.** Pick the narrowest tool that does the job:
 
----
+| To remove | Run |
+|---|---|
+| One function's entries, from the code | `slow_square.cache_clear()` |
+| One function's entries, from a shell | `cash clear --function slow_square` |
+| One entry | `cash clear --entry ID` (ids from `cash inspect --function NAME`) |
+| Entries whose `ttl` has run out | `cash clear --expired`, or `cash.cleanup()` in code |
+| Everything | `cash clear --all` |
 
-## Seeing what it did
+A clear reaches processes that are still running: within about a second they
+stop serving what was cleared. Plain `cash clear` with no option prints help
+and exits with an error.
 
-A notebook shows a badge on every statement. A script shows nothing by
-default, which makes it easy to assume caching is working when it isn't — so
-there are several ways to look.
+Your test suite runs from the same project, so it reads and writes this same
+cache. Give it its own; see [Testing your code](tutorials/feature-guides/testing-your-code.md#isolating-the-suites-cache).
+
+## Seeing what cash did
+<a id="seeing-what-it-did"></a>
+
+A script shows nothing by default. Use these to check that caching works.
 
 <!-- claim: cash/core.py:Cash.run_summary @8346c3db, cash/core.py:Cash._summary_reasons @30c139d9, cash/core.py:Cash._print_run_summary @f2a46f9f -->
-**What recomputed just now, and why?** Set `CASH_SUMMARY=1` and a
-per-function table prints to **stderr** when the process exits — stderr, so it
-never lands in a report, a pipe or a JSON response your program writes to
-stdout; into your log instead, when your program configures logging. No code
-change, which is the point:
+**A summary at exit.** `CASH_SUMMARY=1` prints one table to stderr when the
+process ends: hits and misses per function, the time saved, and why calls
+missed. Here, after `prices.csv` was edited and the global `THRESHOLD` changed:
 
 ```bash
 CASH_SUMMARY=1 python model.py
 ```
 
-```
-cash: 4 of 6 calls restored, 41.2s saved
-  cache: /srv/etl/.cash
-  model.ray_component   3 hits,   1 miss     41.2s saved
+```text
+cash: 4 of 7 calls restored, 0.3s saved
+  cache: /srv/proj/.cash
+  model.load_prices  1 hit,    1 miss      0.3s saved
       missed: 1 file changed
-  model.build_grid      1 hit,    1 miss      0.3s saved
-      missed: 1 no entry yet
-      kept in RAM only (1x): under the 0.1s persistence floor; a new process recomputes it
-  model.score           0 hits,   2 misses    -
+  model.build_grid   3 hits,   0 misses    0.0s saved
+  model.score        0 hits,   2 misses    -
       missed: 2 code or state changed
       code or state changed (2x): global THRESHOLD changed
 ```
 
-Under each row: why its calls missed, and anything that was computed but not
-kept — a `cache_if` that said no, a store the backend refused, or a value too
-large for any disk tier ([why](cost-model.md)), so the *next* run will miss it
-too. The run that causes that is the one that can tell you.
+When a run you expected to be warm was not, check the `cache:` line first: it
+is the folder this run actually used. The summary also lists results that were
+computed but not stored. It prints on any normal exit or uncaught exception,
+not when the process is killed. `summary=True` in code or config does the same.
 
-The `cache:` line is the directory this run actually used. Check it first when
-a run that should have been warm was not: a job started from a different
-directory, a path with a typo in it, a container volume that is not the one you
-meant — each of those looks exactly like "caching is broken" until you see
-where the entries were going.
+<!-- claim: cash/decorator/explain.py:describe_state_change @7b3bcda1, cash/decorator/explain.py:ExplainMixin._absent_entry_reason @69e58ae2 -->
+**One line per call.** `CASH_DEBUG=1` logs every call to stderr, with cash's
+other debug records. `CASH_VERBOSE=1` gives only the call lines:
 
-The summary prints on a normal exit, on `sys.exit()` with any code, and after
-an uncaught exception or Ctrl-C. It cannot print when the process is killed
-outright — `SIGKILL`, a default `SIGTERM`, `os._exit()`.
-
-`cash.configure(summary=True)`, `Cash(summary=True)` and a `summary = true`
-TOML key do the same thing; `f.cache_info()` gives one function's numbers
-directly, its `miss_reasons` included.
-
-**Every call as it happens.** `CASH_DEBUG=1` (or `Cash(debug=True)`) logs one
-line per call to stderr — a hit, or a miss and why:
-
-```
-cash.calls: MISS model.build_grid  [3f9a1c2b7e04]  no entry yet: the first call with these arguments in this process, and no earlier run stored one  (ran 0.05s; kept in RAM only -- under the 0.1s persistence floor -- so another process will recompute it)
-cash.calls: HIT  model.build_grid  [3f9a1c2b7e04]  (saved 0.05s)
-cash.calls: MISS model.build_grid  [8c21d05e9a13]  new arguments: called with arguments not seen on the last call  (ran 0.05s)
-cash.calls: MISS model.ray_component  [b7e4410c2d88]  code or state changed: the function's code, a helper it calls, or a value it reads changed since an earlier run stored it -- helper model._smooth moved to dsp._smooth  (ran 9.8s)
-cash.calls: RAISE model.load_prices  ValueError: no rows for 2026-09-10; nothing stored  (ran 1.20s)
+```text
+cash.calls: MISS model.build_grid  [4cc0d96b86b7]  no entry yet: the first call with these arguments in this process, and no earlier run stored one  (ran 0.05s)
+cash.calls: HIT  model.build_grid  [4cc0d96b86b7]  (saved 0.05s)
+cash.calls: MISS model.build_grid  [3bb6d830f0b9]  new arguments: called with arguments not seen on the last call  (ran 0.05s)
+cash.calls: MISS model.score  [53bb9553d5ad]  code or state changed: the function's code, a helper it calls, or a value it reads changed since an earlier run stored it -- global THRESHOLD changed  (ran 0.20s)
+cash.calls: RAISE model.load_prices  ValueError: no rows for 2026-09-10; nothing stored  (ran 0.21s)
 ```
 
 The id in brackets is the one `cash inspect --function` lists and
-`cash clear --entry` takes. `Cash(verbose=True)`, `cash.configure(verbose=True)`,
-`CASH_VERBOSE=1` or `verbose = true` give these lines without the other debug
-records.
+`cash clear --entry` takes. After `--`, a miss names what changed: `its own
+source changed`, `helper model._rank changed`, `environment variable TENANT
+changed`, and so on. This works across runs too, including `ttl expired` and
+evicted entries.
 
-<!-- claim: cash/decorator/explain.py:ExplainMixin._absent_entry_reason @69e58ae2, cash/decorator/stored_keys.py:StoredKeyRecord.note_ram_only @39a4e46a -->
-A reason is not limited to what this process saw: each function's recently
-stored keys are recorded beside the cache (in `.keys/`), so the first call of a
-new run can still say that the code changed, that the arguments are new, that
-an earlier run's entry expired under its `ttl`, or that it was evicted or
-cleared. Results a run kept in RAM only are recorded there too, by the time it exits,
-so the next run says `not stored last time: an earlier run computed it but kept
-it in RAM only (under the 0.1s persistence floor)` instead of calling the same
-arguments new. After a code edit, every call says `code or state changed`, not
-just the first — including after a changed parameter default, which moves the
-arguments as well because they are keyed with defaults applied.
+<!-- claim: cash/_log.py:_StandDownWhenTheAppLogs.filter @1f08254a -->
+If your program configures `logging`, these lines go to your handlers in your
+format instead of stderr. Cash's warnings are Python warnings, not log records;
+`logging.captureWarnings(True)` routes them to your handlers too.
 
-<!-- claim: cash/decorator/explain.py:describe_state_change @7b3bcda1, cash/decorator/explain.py:ExplainMixin._flat_ledger @cd04a090 -->
-After `--` it says *what* changed: `its own source changed`, `global
-THRESHOLD changed`, `helper model._rank changed`, `cached function
-model.load changed`, `environment variable TENANT changed`, `it now uses
-global DATA_DIR`, or `helper model._smooth
-moved to dsp._smooth` for a helper whose code arrived unchanged under another
-module. When none of those moved, it names the part of the key that did: `a
-variable it captures`, `a parameter default`, `the instance it is bound to`, `a
-function or class passed as an argument`. The summary counts them on their own
-line. A moved helper is still a miss: the key holds where the code lives as well
-as what it says.
+**One function, from code.** `f.explain(*args)` tells you whether the next call
+with those arguments would hit, and why, without running anything.
+`f.cache_info()` returns the counters for this process. Both are described
+under [Methods on a cached function](#methods-on-a-cached-function).
 
-The time in brackets is the body's own, the number the persistence floor is
-judged on. A hit that rests on a file larger than `file_hash_full_max_bytes`
-says so — `-- trusts the timestamps of big.npy (sampled: ...)` — because only
-three regions of such a file are hashed and the rest is trusted to its
-timestamps ([why](known-limitations.md)).
+**What is on disk.** `cash inspect` lists functions, entry counts, sizes and
+last use; `cash inspect --function NAME` lists one function's entries. See the
+[CLI reference](cli.md).
 
-<!-- claim: cash/_log.py:_StandDownWhenTheAppLogs.filter @1f08254a, cash/core.py:Cash._print_run_summary @f2a46f9f -->
-With `CASH_DEBUG` they come with cash's other debug records. If your program configures `logging`
-itself, those records go to your handlers in your format instead, and no
-stderr handler is added. That holds when it configures logging *after*
-`import cash`, the usual order in a command-line tool: from the first record
-your handlers take, cash's own stops printing, so nothing appears twice. The
-exit summary goes to your handlers, in your format, whenever one of them takes
-INFO records — whatever level the root or `cash` logger is set to, since
-`CASH_SUMMARY` asked for it — and to stderr when none does.
-`Cash(verbose=True)` gives the per-call lines alone.
+## What invalidates an entry
 
-Two things your logging setup does not reach. A **worker process** started by
-`multiprocessing`, `ProcessPoolExecutor` or joblib on the `spawn` start method
-(always, on Windows and macOS) runs none of your `main()`, so its lines go to
-its own stderr: configure logging in the pool's `initializer=` to collect them.
-And cash's **warnings** — `CACHE-THRASH`, `CACHE-NET-LOSS` and the rest — are
-Python warnings, not log records; `logging.captureWarnings(True)` sends them to
-your handlers as well.
+With a bare `@cash.cache`, a call recomputes when any input below changed. The
+left column is tracked for you. The right column is not, and says what to do.
 
-**What is on disk, and what is it costing me?**
-
-```bash
-cash inspect
-```
-
-```
-Cache directory: /srv/etl/.cash
-  Total size: 1.6 GiB    Entries: 412    Functions: 6
-
-  FUNCTION                                  ENTRIES        SIZE   LAST USED
-  model.ray_component                           180     1.2 GiB   2 min ago
-  model.build_grid                               97   310.0 MiB   2 min ago
-
-  cash inspect --function NAME   to list one function's entries
-  cash clear   --function NAME   to drop them
-```
-
-**Drop one function's entries** when you're out of disk but still want the
-rest:
-
-```bash
-cash clear --function build_grid
-```
-
-See the [CLI reference](cli.md) for the full set.
-
----
-
-## What invalidates your cache
-
-Worth understanding before any parameter. With a bare `@cash.cache` and nothing
-configured, a cached result is discarded and recomputed when **any** of these
-change:
-
-<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe, cash/decorator/registry.py:RegistryMixin._analyze_dependencies @35b8b434 -->
-| What changed | How it's detected |
+<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe, cash/decorator/registry.py:RegistryMixin._analyze_dependencies @35b8b434, cash/decorator/globals_fold.py:GlobalsFoldMixin._fold_read_globals @6c43e132, cash/decorator/code_args.py:CodeArgsMixin._fold_code_args @1945cfc2 -->
+| Tracked: a change recomputes | Not tracked: what to do |
 |---|---|
-| The **arguments** | Hashed by *content* — so DataFrames and arrays work, and two equal-but-distinct objects share one entry |
-| The **function's own source** | Edit the body and old entries stop matching |
-| The source of a **helper it calls** | Followed **transitively**, across your own modules and your own installed package — other people's libraries are where it stops |
-| A helper's **parameter defaults** | Folded by value: `def shrink(v, alpha=ALPHA)` invalidates when `ALPHA` changes, though the helper's source reads the same — including a closure's defaults set by a factory |
-| A **file it reads** | `pd.read_csv`, `open()`, `np.load`, `joblib.load`, polars and pyarrow readers are intercepted — [the full list](tutorials/feature-guides/custom-file-sources.md#whats-automatically-tracked) |
-| A **module global it reads** | A config constant, a threshold, a dispatch dict — including one read by a **helper**, or by another cached function it calls, rather than by itself |
-| A **class its code reaches** | Followed transitively, so editing a class that a folded class constructs invalidates too |
-| A **class passed as an argument** | Keyed by its declaration, not its name — so an output specification handed to a call (`extract(doc, InvoiceFields)`) invalidates when a field or a field description changes. Works for plain classes, `@dataclass`, and pydantic `BaseModel` |
-
-None of that needs an annotation. That is the point: the usual reasons a cached
-result goes stale are tracked for you, and the [parameters](#parameters) exist
-for the cases this model *can't* see.
-
-> `functools.lru_cache` sees only the arguments — and refuses unhashable ones.
-> `joblib.Memory` adds the decorated function's own body but **not** the helpers
-> it calls, so editing a helper quietly serves a stale result. Cash follows the
-> call graph.
-
-### What else is in the key — the ones that cost a recompute
-
-<!-- claim: cash/decorator/closure_fold.py:ClosureFoldMixin._fold_defaults @b9735923, cash/decorator/arg_hashing.py:ArgHashingMixin._hash_arg_payload @7bc7e4ca, cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe -->
-None of these gives a wrong answer. Each one costs a recompute you might not
-expect, measured across fresh processes:
-
-| You do this | What happens | Why |
-|---|---|---|
-| Move an unchanged helper into another module | Every function that calls it recomputes, once | A helper is keyed by where it lives as well as by its code |
-| Call with `0.5` in one run and `np.float64(0.5)` in the next | Two entries, one per type | An argument is keyed by its type as well as its value, and the two pickle differently though they compare equal |
-| Change a constant used as a parameter default (`def f(x, k=K)`) | Calls that pass `k` explicitly recompute too | The defaults are part of the function, whatever a particular call passes |
-| Read a relative path (`open("data.csv")`) from two working directories | Every switch recomputes, and replaces the other directory's entry | The key holds the string `"data.csv"`, the same from both; the file behind it is not, so the entry is found stale and rewritten. Pass an absolute path, or one resolved from the project |
-| Switch a data file back and forth between two versions | Every switch recomputes | A file is checked when its entry is read, not keyed: one entry per call, rewritten when the file changes |
-| Switch code back and forth between two versions | Switching back hits | Code is in the key, so each version keeps its own entry |
-| Add or edit a method on a settings class whose instance the functions receive, or read as a global | Every function that uses an instance of it recomputes, once | A pre-built instance of your own class is keyed by its class's code as well as its values, so any method counts, used or not |
-| Pass `"C:\Data\x.csv"` in one call and `"c:\data\x.csv"` in the next, on Windows | Two entries | Arguments are keyed by value, and those are two different strings; the file behind them is tracked once. Build paths one way (`Path(p).resolve()`) |
-| Run a package from a checkout, then from `pip install .` | The same keys, so the installed copy hits | Code is keyed by module and text, not by where it is — unless a module global holds a location (`DATA = Path(__file__).parent / "data"`), which is then a different value in each. Resolve such paths inside the function |
-
-<!-- claim: cash/backends/serialization.py:get_serializer @76cf2c1b -->
-**A hit returns a copy.** A miss hands you the object the function returned; a
-hit hands you one rebuilt from the stored bytes. The difference shows when a
-function returns a view of an argument, `return a[:3]` on an array: after a
-miss, writing into the result writes into `a`; after a hit it does not. Return
-`a[:3].copy()` if a caller writes into what it gets back.
-
-### It follows the functions you call
-
-Editing a plain helper called from a cached function invalidates that
-function's cache — even a few levels down:
-
-<!-- test:skip reason="illustrative — schematic call graph" -->
-```python
-def clean(x):     ...                      # edit this...
-def features(x):  return clean(x) + ...
-
-@cash.cache
-def pipeline(x):  return features(x)       # ...and pipeline's cache invalidates
-```
-
-<!-- claim: cash/decorator/code_identity.py:CodeIdentityMixin._hash_callable_source @57867b7d, cash/decorator/registry.py:RegistryMixin._ensure_closure_analyzed @ecd28b28 -->
-The analyzer captures helper source hashes and folds them into the cache key, so
-both cross-process edits and in-process redefinitions (notebook cell rerun, REPL)
-are picked up automatically. Overhead is ~3μs *per helper*, paid once for each helper in the
-transitive call graph on every call.
-
-<!-- claim: cash/decorator/registry.py:RegistryMixin._refresh_helper_bindings @b357a2d1 -->
-Each helper is looked up through the name its *caller* uses — `_sieve` in
-`from sievelib import sieve as _sieve` — at every level of the call graph. So
-rebinding that name at runtime (`monkeypatch.setattr(app, "_sieve", fake)`,
-`mock.patch.object(...)`, a plugin swapping an implementation) changes the key
-as well, and putting the original back returns to the original entry. A binding
-to a `unittest.mock` object has no code to key, so a call that reaches one runs
-uncached, and a call during which any mock was called, however deep, is not
-stored. See [mocking in tests](tutorials/feature-guides/testing-your-code.md#mocking-and-monkeypatching).
-
-<!-- claim: cash/purity_analyzer.py:callable_layers @d507a38c -->
-**A decorated helper is every function it runs.** Behind `@timed def clean(x)`
-there are two: the decorator's wrapper and `clean` itself, and both are followed —
-edit either body and the entry invalidates, whether or not the decorator uses
-`functools.wraps`. The same goes for stacked decorators, a class-based decorator's
-`__call__`, the values a decorator was configured with (`@scale(10)`, or
-`@scale(K)` when `K` changes), what the wrapped function reads and calls, and the
-user function held inside a library wrapper — `functools.lru_cache`,
-`np.vectorize` (its `otypes=` included), `toolz.curry`, `wrapt`, the
-`decorator` package, a `singledispatch` implementation. The library's own
-wrapper code is treated like any other installed code: fixed for a given
-environment. `@cash.cache` stacked on top of another decorator is followed the
-same way.
-
-**The boundary is your code, not your module.** A helper imported from another
-file in your project is followed like any other — edit it and the entry
-invalidates, verified end to end. What the analyzer stops at is *other people's*
-installed code: anything under `site-packages` / `dist-packages` or the standard
-library is treated as fixed for a given environment, because folding numpy's
-internals into your key would churn it on every call. **Your own package is
-followed wherever it is installed** — the top-level package that defines the
-cached function counts as your code even after `pip install .`, so a changed
-`settings.FACTOR` and a reinstall invalidates exactly as it does in an editable
-checkout. If you do need a third-party function's identity in the key, name it
-with [`depends_on=`](#depends_on-explicit-dependency-graph).
-
-<!-- claim: cash/decorator/globals_fold.py:GlobalsFoldMixin._local_binding_parts @8a3a536d, cash/purity_analyzer.py:resolve_local_import @e2289266 -->
-An import written **inside** the function (`from .models import auc`, the usual
-way out of an import cycle) is followed the same way as one at the top of the
-file -- a function it imports, a constant (`from .settings import ROUNDING`),
-or a module whose attributes the body reads (`settings.ROUNDING`). So is a
-module held in a closure: `from . import settings` inside a decorator factory,
-read by the wrapper. If the first call reaches cash before the body has made that import, cash
-imports a module of *yours* itself to read it; a library you deliberately import
-inside a function to defer its cost is never imported early.
-
-<!-- claim: cash/analysis/code_analyzer.py:CodeAnalyzer.find_called_functions @628ebd74, cash/analysis/code_analyzer.py:CodeAnalyzer._referenced_function @54c5c19c -->
-**Another cached function counts whether you call it or hand it on.** Calling
-`inner(n)` makes `inner` part of the caller's key, and so does passing it as a
-value — `map(inner, xs)`, `pool.map(inner, xs)`, `joblib.delayed(inner)`,
-`for fn in [inner]`, a `fn=inner` default, a `partial(inner)` — so editing
-`inner` or anything it calls recomputes the caller too. This is the usual way
-to spread a cached step across a pool, and only the call form
-used to count.
-
-### File reads are tracked automatically
-
-<!-- claim: cash/tracking/file_tracker.py:_install_module_patches @03e888c6, cash/tracking/file_tracker.py:FileDependencyRegistry @5cbd8a51 broad="the claim is that a family of reader calls is intercepted, which is the registry's whole job" -->
-You usually don't need to declare files at all: cash intercepts file reads
-*inside* a cached function — `pd.read_csv`, `np.load`, `open()`, `joblib.load`,
-… — and folds each file's fingerprint into the entry, so changing the file on
-disk recomputes with no annotation:
-
-<!-- test:skip reason="illustrative — references a missing data.csv" -->
-```python
-@cash.cache
-def load():
-    return pd.read_csv("data.csv")   # change data.csv → recomputes, automatically
-```
-
-Auto-tracking fingerprints file **content**; to name a file cash can't see you
-read, use [`file_depends_on=`](#file_depends_on-name-a-file-explicitly).
-
-A file that was **not** there counts as well. `if os.path.exists("cfg.toml")`
-coming back False is an input — it chose the defaults branch — so the entry it
-produced stops being valid once that file appears, including when the same
-relative name resolves into a directory that has one.
-
-<!-- claim: cash/tracking/file_tracker.py:_patch_thread_pool_submit @d32ffb58 -->
-Reads in a **thread pool** the function starts count too:
-`ThreadPoolExecutor(4).map(np.load, shards)` records every shard, the same as a
-serial loop would — it used to record none of them. A thread you start
-yourself with `threading.Thread(target=...)` begins with nothing cash can see,
-so a file read only there is not tracked; read it in the function, hand the work
-to a `ThreadPoolExecutor`, or name the file with `file_depends_on=`.
-
-<!-- claim: cash/tracking/file_tracker.py:_patch_process_pool_submit @f036a70f, cash/tracking/file_tracker.py:_ReadsInWorker.__call__ @288a0a53 -->
-A **`ProcessPoolExecutor`** the function starts reads in other processes, and
-cash brings those reads back: each task runs in its worker under a tracker of
-its own and returns what it read with its result, so `ex.map(read_region,
-paths)` inside a cached orchestrator records every file its workers opened, and
-a data fix in one of them recomputes the orchestrator. It costs each worker one
-import of cash's file tracker. `multiprocessing.Pool` and joblib's workers are
-not wrapped: files read only there are not seen, so name them with
-`file_depends_on=`.
-
-<!-- claim: cash/decorator/file_deps.py:FileDepsMixin._credit_remembered_reads @c6e8b40e, cash/tracking/file_tracker.py:_credit_read_to_stack @a47279d7 -->
-A read your code **memoises** counts for every call that uses it. With
-`parse = functools.lru_cache()(parse_csv)` — or a module-level dict of parsed
-files — only the first cached function to call `parse(path)` actually opens
-the file; the next one gets the stored rows and reads nothing. cash remembers
-which of your functions read which file, and when a later call reaches one of
-them without it reading, adds what it read then — just `path`, when the memo is
-keyed by a path this call was given. The second consumer used to record
-no file at all and kept its result after the file changed.
-
-<!-- claim: cash/tracking/file_tracker.py:_note_untracked_read @eea44a1f, cash/tracking/file_tracker.py:install_read_watch @78c9aa62 -->
-That holds wherever the memo was filled: in a cached call, or before any ran —
-`main()` printing its settings through the memo at start-up — because cash
-watches your `open()` reads from the moment a function is decorated. (A memo
-filled before any cached call through a reader that opens its file in C, such
-as `pl.read_csv` or `pyarrow`, is not seen: those readers are only wrapped while
-a cached call runs.) And cash remembers
-which *version* of the file the memo read. In a long-running process whose
-memo still holds an older version after the file changed, a cached call that
-uses it returns what the memo gives, as the program would without cash, but its
-result is **not stored**: it answers for the old file, not the one on disk. The
-next process, whose memo starts empty, computes it from the file as it is.
-
-One limit: a helper that has read more than 16 different files is taken to read
-per argument and is not attributed — name those files with `file_depends_on=`.
-
-### Module globals a function reads
-
-A cached function that reads a module-level global — a config constant, a
-dispatch dict of callables — invalidates when that global changes:
-
-```python
-TAX_RATE = 0.2
-
-@cash.cache
-def net(amount):
-    return amount * (1 - TAX_RATE)
-
-net(100)          # 80.0
-TAX_RATE = 0.5
-net(100)          # 50.0 — recomputed, not the stale 80.0
-```
-
-<!-- claim: cash/decorator/globals_fold.py:GlobalsFoldMixin._fold_read_globals @6c43e132, cash/decorator/globals_fold.py:GlobalsFoldMixin._fold_dependency_read_globals @abf3ee0c -->
-Only globals that are **read** participate — and that includes globals read
-on someone else's behalf: by a **helper**, so a helper returning a module-level
-`CONFIG` invalidates its caller when that config changes, and by another
-**cached function** further down the call chain, however many modules away.
-That last one is the shape a library has — a `config.py` holding a constant, an
-`io.py` reading it, a `build.py` calling that — and it is followed
-transitively, so a constant four modules down still invalidates the top. Globals that are *written* (`global x; x = ...`) or mutated in
-place are excluded — those are side-effect accumulators, and folding them
-in would invalidate the function on its own output. That exclusion applies
-to a helper's own accumulator too. A read global whose value can't be hashed
-warns once rather than failing the call.
-
-Dunder-named constants count too: bumping a module's `__version__` invalidates
-whatever read it. The import machinery's own dunders — `__file__`, `__name__`,
-`__doc__` and friends — are the exception, and deliberately: they differ
-between two checkouts of the same project and between `python job.py` and
-`python -m job`, so folding them would make a cache un-shareable.
-
-**Reading includes passing it to something.** `sum(G)`, `len(G)`,
-`helper(G)` and `model.predict(G)` all count, so changing `G` invalidates
-in each case — as does reading it through a non-writing method of its own,
-`G.get(k)` or `G.keys()`. If cash then observes that *calling your function* is what
-changed `G` — a helper that appends to it, say — it stops tracking that one
-name and warns, because a value the call itself moves would key every entry
-on the previous call's output. The rest of the function keeps caching
-normally.
-
-The same rule applies to variables a closure captures, not just module
-globals.
-
-<!-- claim: cash/decorator/globals_fold.py:GlobalsFoldMixin._carried_global_hash @2ae561ae -->
-**A callable built from data counts as that data.** A global that is a
-library callable carrying values — `SMOOTH = partial(ndimage.gaussian_filter,
-sigma=SIGMA)`, `POLY = np.poly1d(COEFFS)`, `CAL = interp1d(X, Y)`,
-`LOOKUP = RATES.get`, `PREDICT = model.predict`, `KEY =
-operator.itemgetter("total", "region")` — is keyed by what it was built
-with, so editing `SIGMA`, the table or the sort key recomputes, whether you
-import the name or read it as `cfg.SMOOTH`. A callable wrapping *your* code
-is followed as a helper instead, and what a library wrapper around it holds is
-keyed as well: the `k` of `np.vectorize(partial(scale, k=K))`. A bound write or log method (`record = RESULTS.append`,
-`log = logger.info`) is left out: what its object holds is the call's output.
-Some library callables change when called — a bound `rng.normal` advances its
-generator, `np.vectorize` fills a cache — and cash stops keying those after
-the first call that changes them, which costs one extra miss in that process.
-
-Globals read inside a nested scope count too. A generator expression or
-`lambda` always compiles to its own code object, and detection recurses into
-it. List/set/dict comprehensions did too before Python 3.12; PEP 709 now
-inlines them into the enclosing scope, where their global reads are picked up
-directly — either way the global is tracked:
-
-```python
-THRESHOLD = 10
-
-@cash.cache
-def count_big(values):
-    return sum(v > THRESHOLD for v in values)   # THRESHOLD is tracked
-
-count_big([5, 20])   # 1
-THRESHOLD = 1
-count_big([5, 20])   # 2 — recomputed
-```
-
-#### Pre-built objects: the class's method source is tracked too
-
-A read global that is an **instance of one of your classes** — a transformer,
-client, or config object built once at import and used as data — folds its
-class's *source*, not just its `__dict__`. Editing a method on that class
-invalidates, even though the object's pickled state is unchanged:
-
-<!-- test:skip reason="illustrative: two-file pipeline sketch; fit()/edit-and-rerun not executable inline" -->
-```python
-# preprocessor.py
-class Scaler:
-    def apply(self, x):
-        return x / 100          # ...edit this to  x / 50
-
-SCALER = Scaler()
-
-# pipeline.py
-@cash.cache
-def run(rows):
-    steps = [("scale", SCALER)]         # SCALER used as data
-    return fit(steps, rows)             # fit() calls SCALER.apply internally
-```
-
-Editing `Scaler.apply` re-keys `run` and it recomputes. cash also follows, a few
-levels deep, into user-class instances the object *holds* (a pipeline holding a
-transformer holding another). Third-party classes (a fitted sklearn estimator,
-a numpy array) are **not** walked — their source is fixed for your environment,
-and stopping there keeps the key from churning.
-
-Two boundaries worth knowing:
-
-- **This is the *data* path, and the exclusion is a WRITING method call.**
-  Calling a method that writes (`obj.append(...)`, `obj.update(...)`,
-  `obj.sort()` — the mutating verbs) excludes the receiver from value-folding:
-  it is an accumulator, and folding a value the call itself moves would key
-  every entry on the previous call's output. Every other method call is a read:
-  `ALIASES.get(v)`, `TABLE.keys()`, `text.upper()` fold the receiver's value
-  like any other global, and a method cash's table does not know about is folded
-  and then dropped if calling your function is observed to move the value.
-  A directly *called* method's own edit is caught separately, by the
-  helper-source channel.
-- **Source is read once per process, and checked against what is running.**
-  cash reads a helper's or class's source the first time a call needs it, and
-  keeps that digest for the rest of the run. A file edited *under* a running
-  process — new files land and the restart comes later, which is what every
-  deploy does — would make that first read describe the new text while the
-  old code is the one executing. So a file modified after the process started
-  is compiled and compared with the loaded code first; if they differ, cash
-  keys that helper by the code actually running and says so
-  ([`KEY-SOURCE-CHANGED`](warnings.md#key-source-changed)). Results stay
-  correct for the running process, and the restarted one computes afresh.
-  Editing a class *between two calls* of the same process, after its first
-  use, is still out of scope. Re-run the process and the edit is seen. The argument channel below relaxes
-  this, but only for a *re-definition*: it hashes bytecode off the object it was
-  handed and memoizes per object, so a re-run notebook cell — a **new** class
-  object — is seen immediately, while an in-place edit of the same live class
-  (`Schema.render = ...`) still is not.
-
-### Code you pass as an argument
-
-`args_hash` pickles the arguments, and pickle serializes a class or a function
-**by reference** — its module and qualified name, never its body. So a call that
-takes your code as data used to hit forever:
-
-<!-- test:skip reason="illustrative: the two Schema definitions are the same name edited between runs, which one script cannot express" -->
-```python
-class Schema:
-    def render(self): ...        # ...edit this
-
-@cash.cache
-def build(schema):
-    return schema().render()
-
-build(Schema)                    # edit Schema, call again -> used to return the old answer
-```
-
-<!-- claim: cash/decorator/code_args.py:CodeArgsMixin._fold_code_args @1945cfc2, cash/decorator/code_args.py:CodeArgsMixin._iter_code_carriers @37807f5e -->
-Your code reached through the arguments now folds into `state_hash`, so editing
-it invalidates. cash finds it in a class, a function, an instance (through its
-class), any of those nested in a list/tuple/set/dict, and an instance whose
-class is a subclass of `dict`/`list`/`tuple`/`set`/`str`/`int`/`float`/`bytes`,
-a namedtuple, an `Enum` member, a `__slots__` instance, or a callable object.
-Base classes count: editing a base invalidates a call that was passed the
-subclass. So do the objects an instance of your class holds: pass `A(1, B())`
-where `A.f` calls `self.b.f()`, and editing `B.f` — or a function it calls —
-invalidates too.
-
-**What that code reads counts too.** A callback that reads a module constant —
-`def double_well(x): return x**4 - x**2 + TILT * x`, passed to a cached
-integrator — folds the constant's value as well as its own bytecode, whether it
-arrives as a function, a bound method, or a callable instance. Changing `TILT`
-invalidates the call. It used not to: the code was keyed and the data it read
-was not, so a physics-breaking edit produced a green, cached test run.
-
-So do the functions that code calls — by name, through a module
-(`helpers.fun1()`), or by a name written out as a string
-(`getattr(helpers, "fun1")()`, `globals()["fun1"]()`). A function it picks by a
-value only known at runtime (`getattr(helpers, name)()`) cannot be followed; cash
-warns once, naming the method and the line
-([`KEY-DYNAMIC-DEPENDENCY`](warnings.md#key-dynamic-dependency)).
-
-This channel walks the **cached function's own bound arguments** — what the
-caller handed it, *plus any parameter default the caller left out* — and nothing
-else. Defaults count because the same logical call must key the same way however
-it is written: `build()` and `build(Schema)` share one entry, and editing
-`Schema` invalidates both. A module-level object the *body* reaches for is the
-separate read-globals channel [above](#module-globals-a-function-reads), which
-folds that object's value and its class's source on its own terms.
-
-The digest is **bytecode**, not source — a class defined in a notebook cell has
-no retrievable source at all, because `inspect.getsource` resolves a class
-through `sys.modules[cls.__module__].__file__` and a kernel's `__main__` has
-none. Two consequences follow from that choice: reformatting or a comment-only
-edit does *not* invalidate (bytecode carries neither, and cash masks the
-docstrings it does carry, class and method alike — except a pydantic model's
-class docstring, which is its schema's `description`), and a Python-version
-upgrade re-keys every entry that passes code, once.
-
-Where cash is handed code of yours it cannot hash — a compiled wrapper such as
-`numpy.frompyfunc(my_fn, 1, 1)` — it says so once rather than silently keying on
-the name. A `functools.partial` is keyed by the function it wraps and by its
-arguments, like the function itself. Library code is deliberately **not**
-folded, and rightly gets no warning — with one edge where cash cannot tell:
-see [known limitations](known-limitations.md#code-passed-as-an-argument).
-
-#### `@cash.opaque` / `cash.opaque(T)` — opt a type out
-
-<!-- claim: cash/decorator/arg_hashing.py:ArgHashingMixin._is_opaque @338bc5d6, cash/__init__.py:opaque @679c15ff -->
-For a marker class you pass but do not depend on, or one whose code churns for
-reasons that never change the result:
-
-```python
-@cash.opaque                       # a class you own
-class RenderTarget:
-    ...
-
-VendorWidget = type("VendorWidget", (), {})   # stands in for a library's class
-cash.opaque(VendorWidget)                     # one you can't decorate — same call,
-                                              # made from outside
-```
-
-`@cash.opaque` returns the class itself, not a wrapper, so `isinstance` and
-identity comparisons are unaffected; the class is recorded in a registry,
-not modified. Opacity is not inherited: a subclass
-of an opaque class is *not* opaque, because it may carry freshly written methods
-of its own. Mark the subclass too if you want the same treatment.
-
-A `functools.partial` cannot be marked: it is the function it wraps plus
-arguments, and both are keyed. `cash.opaque(functools.partial)` used to be
-the way to silence KEY-OPAQUE-CALLABLE for one, and it exempted every partial in
-the process — including ones over code you were still editing.
-
-### How a call decides hit vs miss
-
-```mermaid
-flowchart TD
-    A["Call f(args)"] --> B{Cache key computable?}
-    B -->|No - unhashable arg| W1[Warning, recompute, don't store]
-    B -->|Yes| C{Entry in backend?}
-    C -->|No| D[Compute, store]
-    C -->|Yes| E{TTL expired?}
-    E -->|Yes| D
-    E -->|No| F{File deps fresh?}
-    F -->|No| D
-    F -->|Yes| G[Return cached value]
-```
-
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._compute_cache_key @a3272962, cash/decorator/code_args.py:CodeArgsMixin._fold_code_args @1945cfc2 -->
-The cache key is `f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"`.
-
-- `state_hash` folds in the function's own source hash + every
-  `depends_on` source + transitive helper hashes (so editing a helper
-  invalidates) + the content of any **module global the function *or one of
-  its helpers* reads** (see above) + the code of any class or function of
-  yours reached through the **arguments**
-  ([below](#code-you-pass-as-an-argument)) — so passing a
-  schema class or a callback and then editing it invalidates instead of
-  returning the old answer.
-
-  Reachability is **transitive**: code reached *through* code that is already
-  folded is folded too. If a cached function builds an `A`, and `A`'s
-  `field(default_factory=lambda: B())` constructs a `B`, then editing `B`
-  invalidates — even though `B` appears nowhere in the function or in `A`'s
-  own body. Names the code *loads* are followed, and so are the classes and
-  functions your **type annotations** name: pydantic runs the validators of a
-  field typed `b: B`, and anything built on `typing.get_type_hints` (cattrs,
-  dacite, a builder of your own) constructs `B` from the hint, so editing `B`
-  invalidates. A hint that really is inert costs a recompute when its class is
-  edited, never a stale answer. A class your function names without calling
-  it (`A.model_validate(d)`, `build(A, d)`) is followed the same way.
-
-  The limit worth knowing: reachability is **static**. Cash follows names
-  your code refers to, so code selected at *runtime* — a class pulled out of
-  a dict, an implementation assigned during execution — is still invisible.
-  Declare those with `depends_on=[...]`.
-  Every source hash in `state_hash` is taken over a **normalized** form of
-  the code, not its raw text: comments, docstrings, blank lines, trailing
-  whitespace and the exact indentation width are dropped first. Adding a
-  comment, rewording a docstring or running a formatter therefore keeps your
-  cache, while any change to what the code actually does invalidates it. One
-  exception stays load-bearing on purpose — `# @cash:` annotations
-  (`no-cache`, `ttl`, `persist`, …), because they are directives rather than
-  prose. The flip side of dropping docstrings: a function whose result
-  depends on reading `__doc__` at run time is not re-run when the text
-  changes.
-- `dynamic_hash` folds in `dynamic_depends_on` resolver outputs (when
-  set).
-- `args_hash` is a SHA-256 over the pickled args (with custom hashers
-  via `cash.register_hasher` taking precedence for non-picklable types).
-  The arguments are put in one canonical form first: dicts in sorted-key
-  order and sets in sorted order, so two values that are equal but for
-  their order share a key — `f({"a": 1, "b": 2})` and
-  `f({"b": 2, "a": 1})` hit the same entry, in every process. Every
-  container is tagged with its type, so `f([1, 2])` and `f((1, 2))`, or two
-  namedtuple types holding equal values, never share one.
-
-When something that affects the result *isn't* among those signals — a
-database table, a remote URL, a file you never `open()` — declare it with the
-parameters below. And when a miss (or a suspicious hit) mystifies you,
-[`func.explain()`](#funcexplainargs-kwargs) shows which signal decided.
-
----
+| The **arguments**, by content and type. Equal values share an entry | **Library code** (`site-packages`, the standard library). Pin versions |
+| The function's **own code**. Comments, docstrings and formatting are ignored | What a **server or database** returns. Set `ttl=` ([`KEY-NETWORK-READ`](warnings.md#key-network-read)) |
+| The code of every **helper it calls**, transitively, in your project or your own installed package | The **clock** or a random UUID. Pass the value as an argument ([`KEY-AMBIENT-READ`](warnings.md#key-ambient-read)) |
+| **Module globals** read by the function or its helpers, parameter defaults, and captured variables | **Code picked at run time** (`getattr(mod, name)()`, a dict built in the body). Name it with `depends_on=` |
+| Another **cached function** it calls or passes on (`pool.map(inner, xs)`) | A file read by a reader cash does not know. Use `file_depends_on=` |
+| **Your class or function passed as an argument**, and what that code reads | The decorator's own parameters (`ttl`, `cache_if`, `strict`, ...). Changing them keeps entries |
+| A **file** read by a [tracked reader](tutorials/feature-guides/custom-file-sources.md#whats-automatically-tracked), by content, or declared with `file_depends_on=`. Also a file it looked for and did not find, once it appears | |
+| An **environment variable** read by literal name (`os.getenv("TENANT")`) and the working directory | |
+| Sources named in `depends_on=` or `dynamic_depends_on=`, and an elapsed `ttl` | |
+
+<a id="file-reads-are-tracked-automatically"></a>
+File reads need no annotation. `pd.read_csv`, `open()`, `np.load` and the other
+tracked readers record each file with the entry, and every lookup checks that
+its content still matches. A touch that leaves the bytes alone still hits.
+
+To see why a particular call missed, use `explain()`. For how the key is built,
+see [The decorator path](how-it-works/decorator-path.md).
 
 ## Parameters
 
-For the cases the automatic model above can't see — plus
-expiry, opt-outs, and the purity gates. All keyword-only and optional.
-
 <!-- claim: cash/core.py:Cash.cache @75e545d3 -->
-| Param | What it does |
+All parameters are keyword-only and optional:
+
+| Parameter | What it does |
 |---|---|
-| `depends_on=` | List of `Callable` or `DataSource` that contributes to the cache key |
-| `dynamic_depends_on=` | Callable(s) that receive the function's args and return `DataSource`(s) — for deps that depend on the call |
-| `file_depends_on=` | File path(s) tracked by content, as if the function read them |
-| `ttl=` | Time-to-live in seconds; `None` (default) = never expires |
-| `cache_if=` | Predicate `(result) -> bool`; falsy result → don't cache (still returns to caller) |
-| `chunk_max_items=` / `chunk_max_bytes=` | For iterator returns, chunk thresholds (1M items / 1 GB default) |
-| `strict=` | Raise `CashImpureFunctionError` at first call if purity analyzer finds issues |
-| `assume_safe=` | Silence the purity warning; you've audited and know caching is safe |
-| `allow_random=` | Silence the unseeded-randomness warning; you know the result is frozen |
-| `frozen=` | Promise the result is not modified after it is returned, so a cached function receiving it keys it without hashing it ([below](#passing-large-objects-between-cached-functions)) |
+| `ttl=` | Seconds an entry stays valid. `None` (default): no expiry |
+| `cache_if=` | Predicate `(result) -> bool`. A falsy answer returns the result without storing it |
+| `depends_on=` | List of callables or `DataSource` objects to add to the key |
+| `file_depends_on=` | A path or list of paths, tracked by content as if the body read them |
+| `dynamic_depends_on=` | A callable (or list) that gets the call's arguments and returns `DataSource` objects |
+| `frozen=` | Promise that nothing modifies the result after it is returned, so a cached function receiving it skips hashing it |
+| `strict=` | Raise `CashImpureFunctionError` on any purity finding. For CI |
+| `assume_safe=` | Silence purity findings and cache anyway |
+| `allow_random=` | Silence the unseeded-randomness warning |
+| `chunk_max_items=`, `chunk_max_bytes=` | Chunk size for iterator results (default 1,000,000 items, 1 GB) |
 
-Mutually exclusive: `strict` and `assume_safe` — pass both and the
-decorator raises `ValueError` immediately.
+`strict=True` with `assume_safe=True` raises `ValueError`. Changing a parameter
+keeps the entries already stored; adding, removing or changing a declared
+dependency recomputes. Locking is not a decorator parameter: it is
+`Cash(use_locking=True)`, see [Threads and processes](tutorials/feature-guides/thread-safety.md).
 
-Locking is not a decorator parameter: `use_locking=True` is set on the `Cash`
-instance and applies to every function registered through it. Reach for it when
-concurrent callers can ask for the same uncached result — a web worker pool, a
-task queue, an `asyncio.gather` over one paid API — and see
-[Thread safety](tutorials/feature-guides/thread-safety.md) for what it
-guarantees and what it costs.
-
-**Changing any of these keeps your cache.** The decorator's arguments are
-configuration, not code, so editing one does not change the function's
-identity and does not invalidate entries already stored. Adding
-`assume_safe=True` in response to a purity warning costs you nothing; so
-does adjusting a `ttl` or a chunk size. What *does* invalidate is a change
-to the function's body, to a helper it calls, or to a dependency you
-declared — `depends_on`, `dynamic_depends_on` and `file_depends_on` reach
-the cache key through the dependency graph, so adding, removing or
-re-pointing one still recomputes, as does an edit to a tracked file.
-
-Decorators that are not cash's own are left alone. If `@inject(db=prod)`
-sits above `@cash.cache`, changing it invalidates — cash cannot know it did
-not change the result.
-
-### `ttl=` — expiration
+### `ttl=`
 
 ```python
 @cash.cache(ttl=300)   # five minutes
-def stock_price(symbol):
-    return requests.get(f"https://api.example.com/{symbol}").json()
+def rates():
+    return requests.get("https://api.example.com/rates").json()
 ```
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._entry_expired @c72fd40d, cash/core.py:Cash.cleanup @20df501f -->
-After the TTL elapses, the next call recomputes and replaces the entry.
-Entries whose calls never come back stay on disk until you reclaim them —
-call `cash.cleanup()`, or run `python -m cash clear` from the CLI.
+<!-- claim: cash/decorator/runtime.py:RuntimeMixin._entry_ttl @b7544486, cash/core.py:Cash.cleanup @20df501f -->
+After the ttl, the next call recomputes and replaces the entry. An entry keeps
+the ttl it was written with, and the decorator's current ttl applies too: the
+shorter one wins. So lengthening `ttl=60` to `ttl=3600` does not rescue entries
+written under 60 seconds. To give every function a lifetime from
+configuration, set `default_ttl` on the disk tier; see
+[Deploying](tutorials/feature-guides/deploying.md#a-default-lifetime-for-every-entry).
+An expired entry stays on disk until it is called again or you run
+`cash clear --expired`.
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._entry_ttl @b7544486, cash/decorator/explain.py:ExplainMixin._absent_entry_reason @69e58ae2 -->
-An entry remembers the `ttl` it was written with, and the decorator's
-current `ttl` applies too, so the **shorter** of the two wins. Lengthening
-`ttl=60` to `ttl=3600` does not rescue entries already written under 60 s:
-they expire at 60 s and are rewritten under the new value.
-`explain()` and the miss reason say `ttl expired` in either case, including
-for an entry a previous run wrote.
-
-Without `ttl=`, an entry lives until it is evicted or cleared, unless the tier
-it is written to has a `default_ttl`. That is the way to give every function a
-lifetime from configuration; see
-[running as a service](tutorials/feature-guides/production-transition.md#running-as-a-service-or-a-worker-pool).
-The tier's default works the same way as the decorator's `ttl=`: the shorter
-of the one an entry was written with and the one configured now wins, so
-lowering `default_ttl` from a day to an hour shortens entries already on disk
-too. A decorator's own `ttl=` takes precedence over the tier default, in both
-directions. `cash info` shows each tier's `default_ttl`, and `cash inspect
---function NAME` when each entry expires.
-
-### `file_depends_on=` — name a file explicitly
-
-Reach for this when a file the result depends on isn't read through a tracked
-call — a path handed to a C extension, or a sidecar the function never `open()`s:
+### `file_depends_on=` and `depends_on=`
 
 ```python
 @cash.cache(file_depends_on="config.yaml")
@@ -860,85 +253,33 @@ def parse_config():
 ```
 
 <!-- claim: cash/decorator/file_deps.py:FileDepsMixin._track_declared_files @e10259dc -->
-Pass a list for multiple files. A declared file is recorded exactly as if the
-function had read it: its **content** fingerprint is stored with the entry and
-checked on every lookup, the same check automatic tracking uses. A `touch` that
-leaves the bytes alone still hits, and an edit that keeps the mtime still
-recomputes. For richer dependencies (database tables, API endpoints, remote
-URLs), write a `DataSource` subclass and pass it via `depends_on=`.
+Use `file_depends_on=` for a file the body reads in a way cash cannot see (a C
+library, a subprocess). It is checked by content, like a tracked read. A URL is
+treated as a missing local file, so for `s3://` or `https://` data pass
+`depends_on=[RemoteFileDataSource(url)]` instead
+([Remote objects](tutorials/feature-guides/custom-file-sources.md#remote-objects-tracked-by-the-stores-own-validator)).
 
-### `depends_on=` — explicit dependency graph
-
-```python
-@cash.cache
-def load_users():
-    return db.query("SELECT * FROM users")
-
-@cash.cache(depends_on=[load_users])
-def user_summary():
-    users = load_users()
-    return {"total": len(users), "active": sum(1 for u in users if u.active)}
-```
-
-When `load_users`'s source changes (you edit the function), the source
-hash flows up through the dependency graph and invalidates
-`user_summary` too. Without `depends_on=` we can usually still detect
-this via static analysis, but listing it explicitly makes the link
-explicit and lets us follow it across modules.
-
-`depends_on=` also accepts **plain, non-decorated** functions — the dep's
-source is snapshotted at registration and folded into the cache key, so
-editing it invalidates the dependent:
+`depends_on=` names things cash cannot follow on its own: a function picked at
+run time, a library function whose version you want in the key, or a
+`DataSource` for a database table or API version. A plain function in the list
+is keyed by its source:
 
 ```python
-def score(user):           # not decorated
+def score(user):             # not decorated
     return user.visits * 2
 
 @cash.cache(depends_on=[score])
 def leaderboard():
-    return sorted(load_users(), key=score)
+    return sorted(db.query("SELECT * FROM users"), key=score)
 ```
 
-Edit `score` → `leaderboard` recomputes. (Previously this edge was inert:
-a non-decorated callable contributed nothing to the key, so the declared
-dependency was silently ignored.) If a dep's source can't be read at all,
-you get a warning rather than a silently dead edge.
+`dynamic_depends_on=` builds the dependency from the call's arguments, for
+example one file per tenant. If the resolver raises or returns something that is
+not a `DataSource`, the call runs uncached with
+[`KEY-DYNAMIC-DEP-FAILED`](warnings.md#key-dynamic-dep-failed). See
+[Dynamic dependencies](tutorials/feature-guides/dynamic-dependencies.md).
 
-### `dynamic_depends_on=` — deps that depend on args
-
-When the data source depends on the call's arguments:
-
-```python
-from cash import FileDataSource
-
-@cash.cache(dynamic_depends_on=lambda user_id: FileDataSource(f"/data/users/{user_id}.json"))
-def load_user(user_id):
-    return json.load(open(f"/data/users/{user_id}.json"))
-```
-
-<!-- claim: cash/decorator/registry.py:RegistryMixin._resolve_dynamic_dependencies @1d703750 -->
-The resolver runs with the same `args/kwargs` as the function on every call.
-
-!!! warning "A resolver that fails makes the call run uncached"
-    Whatever the resolver raises — a `KeyError` from a lookup as much as an
-    `OSError` — or a return value that is not a `DataSource` (or a list of
-    them, or `None`), the call runs **uncached** and a one-shot
-    `CashCacheIneffectiveWarning` (`KEY-DYNAMIC-DEP-FAILED`) says why. It is
-    never keyed without the dependency, which would keep serving the entry
-    after the data changed.
-
-    <!-- test:skip reason="illustrative: PATHS is undefined" -->
-    ```python
-    @cash.cache(dynamic_depends_on=lambda uid: FileDataSource(PATHS[uid]))
-    def load(uid): ...
-
-    load("unknown")   # KeyError in the resolver: warns, runs load() uncached
-    ```
-
-    A resolver is dependency *bookkeeping*, so keep it total: return `None` for
-    an input that has no dependency rather than raising.
-
-### `cache_if=` — skip caching by result
+### `cache_if=`
 
 ```python
 @cash.cache(cache_if=lambda r: r is not None)
@@ -946,718 +287,255 @@ def lookup(key):
     return cache_backend.get_or_none(key)
 ```
 
-The predicate runs after the function returns. Falsy → don't cache (the
-caller still gets the result). Useful for "don't cache misses",
-"don't cache empty results", etc.
-
-If the predicate itself raises, a one-shot `CashCacheIneffectiveWarning`
-fires and the result isn't cached. Don't use the predicate to assert
-business invariants — its job is purely "should this be cached".
-
-**Iterator returns + `cache_if`:** the predicate is honored when the
-result fits in a single chunk. For multi-chunk results, the predicate
-is bypassed (warning fires) — see the iterator section below.
-
 <!-- claim: cash/decorator/store.py:StoreMixin._store_refusal @76b546c6 -->
-**It decides what is written, not what is served.** `cache_if` is not part of
-the key, so adding it to a function that already has entries changes nothing
-about those entries: a `None` stored before you added
-`cache_if=lambda r: r is not None` is still returned on the next call. After
-adding or tightening a predicate, drop what was stored under the old rule with
-`cash clear --function NAME` (or `f.cache_clear()` in-process).
+The predicate runs after the body returns. It decides what is **written**, not
+what is served: a `None` stored before you added the predicate is still
+returned. Clear the function after adding or tightening one. If the predicate
+raises, the result is returned and not stored, with a warning. For an iterator
+result larger than one chunk the predicate cannot run
+([`CACHE-IF-BYPASSED`](warnings.md#cache-if-bypassed)).
 
-### `strict=` and `assume_safe=` — purity gates
+### `allow_random=`
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._surface_purity @9fe07f2d, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
-By default, `@cash.cache` runs a static analyzer on the function body
-(and module-bounded helpers) on first call. What it does depends on what it finds:
+<!-- claim: cash/decorator/rng.py:RngMixin._warn_unseeded_randomness @2d41d2f7 -->
+When the body draws from an unseeded random generator, cash warns
+([`RANDOM-UNSEEDED`](warnings.md#random-unseeded)): the first draw is stored and
+every later call gets the same "random" value. The fix is a generator seeded
+from an argument, `rng = np.random.default_rng(seed)`. Pass
+`allow_random=True` only when a frozen draw is what you want. It silences the
+warning and still caches. Don't call the global `np.random.seed()` inside a
+cached function: a hit skips the reseed, so later draws differ between a hit and
+a miss.
 
-- **Impure calls, scope mutations, discarded-return calls** (`requests.post`,
-  `df.to_csv(...)`, `model.fit(...)`, …) → a `CashImpurityWarning` fires and the
-  function is **still cached**.
-- **Network and database reads** (`requests.get`, `requests.head`,
-  `urlopen(url)` without data, `cur.execute("SELECT ...")`, `pd.read_sql`) → a
-  `CashImpurityWarning` coded
-  [`KEY-NETWORK-READ`](warnings.md#key-network-read), and the function is
-  **still cached**. A read writes nothing; what the server returns is an input
-  the key cannot see, so the first answer is served until the key changes.
-  Setting `ttl=` bounds how old that answer may get and silences the warning.
-  A SQLite file the body opens itself is tracked as a file read instead.
-- **Environment reads** — `os.getenv("NAME")`, `os.environ["NAME"]`,
-  `os.environ.get("NAME")` with the name written out, and `os.getcwd()` → no
-  warning: the current value is folded into the key on every call (a digest,
-  never the value), in the body, its helpers and the cached functions it
-  depends on. A new value is a new entry.
-- **Ambient reads** — the clock or a fresh UUID (`datetime.now()`,
-  `date.today()`, `uuid.uuid4()`), or an environment read whose name is only
-  known at run time (`os.getenv(name)`) → a `CashImpurityWarning` coded
-  [`KEY-AMBIENT-READ`](warnings.md#key-ambient-read), and the function is
-  **still cached**. Not a side effect: the value is a hidden *input*, so the
-  first call's reading is frozen into every later result, in this process and
-  in every process after it. Pass it in as an argument and it reaches the key.
-- **Untrackable dependencies** — a call resolved from a *runtime value*, so cash
-  can't tell when it changes: `eval`/`exec`/`compile`, dynamic dispatch via
-  `getattr(obj, name)()`, `getattr(mod, "exec")(...)`, or
-  `importlib.import_module` — **raise `CashImpureFunctionError` by default**,
-  because a cached result could go silently stale. Pass `assume_safe=True` to
-  cache anyway, or refactor to a statically-named call.
-- **Runtime lookups out of a table cash can't see** — one built inside the
-  body (`t = {...}; t[key]()`), one on a parameter (`router.table[key]()`), or
-  `globals()[name]()` → a warning, and the function is **still cached**.
-  Editing the callable such a table holds does not invalidate; name it with
-  `depends_on=[...]` and it will. A **module-level** table (`HANDLERS[key]()`)
-  needs none of this — <!-- claim: cash/decorator/globals_fold.py:GlobalsFoldMixin._data_callable_identity_of @000f2d06 -->cash hashes it as a global already, and each function
-  in it counts as what calling it runs: its source, the helpers it calls, and
-  for a `@cash.cache` function its whole dependency state, so an edit to a
-  step's helper, or to a cached step's own body, recomputes the function that
-  looks the step up.
+### `frozen=` and large arguments
+<a id="passing-large-objects-between-cached-functions"></a>
 
-The analyzer stops at library boundaries, so an effect *inside* a dependency is
-reachable only by the method's name (`session.post`, `cur.execute`). Because a
-name cannot reach everything — `session.get` collides with `dict.get` — cash
-also **watches the first call** and warns if it wrote a file, opened a
-connection, or spawned a process that the analyzer never saw, naming the line
-of yours that led to it. A hit repeats none of those. See
-[observed effects](tutorials/feature-guides/purity-decorators.md#observed-effects-what-the-first-call-actually-did).
+<!-- claim: cash/decorator/frozen.py:FrozenMixin._audit_frozen @12932111, cash/decorator/frozen.py:FrozenMixin._warn_frozen_has_no_effect @f605e5d3 -->
+An argument is keyed by its content at the time of the call, so a big array or
+frame is hashed on every call it is passed to. When a result comes from another
+cached function and nothing changes it afterwards, say so on the producer:
 
 ```python
+@cash.cache(frozen=True)
+def train(data):
+    return fit_model(data)          # nothing downstream modifies the model
+
 @cash.cache
-def save_user(uid, record):
-    return requests.post(f"https://api/{uid}", json=record).json()
-# First call: CashImpurityWarning fires (requests.post is impure) — still cached.
+def score(model, batch):            # keys `model` by the call that made it
+    return model.predict(batch)
 ```
 
-Three modes:
+The consumer then keys the model by the call that produced it, in microseconds.
+A frozen numpy array comes back read-only, and
+[`KEY-FROZEN-MUTATED`](warnings.md#key-frozen-mutated) names the producer if a
+frozen result was changed after all. [`CACHE-NET-LOSS`](warnings.md#cache-net-loss)
+warns when hashing an argument costs more than the cache saves. For big inputs,
+key the cached functions by **file path** and parse inside them.
 
-- **default** (warn) — impure calls warn and cache; **untrackable dependencies raise**.
-- **`strict=True`** — raise `CashImpureFunctionError` on *any* purity issue. Good for
-  CI: fail the build if anyone introduces caching of side-effecting code.
-- **`assume_safe=True`** — silence every purity warning **and** the
-  untrackable-dependency raise, caching regardless. Use after you've audited and
-  know caching is correct (e.g., a memoized API call whose side effect is
-  idempotent / harmless on hit).
+## Side effects
+<a id="strict-and-assume_safe-purity-gates"></a>
 
-To waive **one statement** rather than the whole function, annotate it:
+A hit returns the stored value without running the body. Anything else the body
+did (a file written, a request sent, a line printed) does not happen again. On
+the first call, cash reads the function and its helpers and reports what a hit
+would skip or get wrong:
+
+<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._surface_purity @9fe07f2d, cash/purity_analyzer.py:DECORATOR_POLICY @44b8bc03, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+| The body... | Cash |
+|---|---|
+| Writes, posts, prints to stdout, or changes state outside the function | Warns ([`IMPURE-SIDE-EFFECTS`](warnings.md#impure-side-effects)) and caches |
+| Reads the network or a database (`requests.get`, `pd.read_sql`) | Warns ([`KEY-NETWORK-READ`](warnings.md#key-network-read)) and caches. `ttl=` answers it and silences the warning |
+| Reads the clock, a random UUID, or an environment variable by computed name | Warns ([`KEY-AMBIENT-READ`](warnings.md#key-ambient-read)) and caches the first value |
+| Reads an environment variable by literal name, or the working directory | Puts the value in the key. No warning |
+| Uses `eval`/`exec`, `importlib`, or `getattr(obj, name)()` with a computed name | Raises `CashImpureFunctionError`, because edits to that code can't be tracked |
+
+Logging calls are not side effects for this purpose.
+
+<!-- claim: cash/effect_observer.py:EffectObserver @cbf80638 broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecksMixin._report_observed_effects @47196b48 -->
+Cash also **watches the first call**. Library code is not read, so a
+`session.post` or an SDK request is invisible to the analysis above. While a
+miss runs, cash records file writes, outbound connections and subprocesses, and
+warns once about any it had not already reported
+([`IMPURE-OBSERVED-EFFECTS`](warnings.md#impure-observed-effects)). A call to an
+LLM or HTTP SDK shows up this way. Two observations stop the result from being
+stored, because a hit could not reproduce them: the call changed an argument
+in place, or it called a `unittest.mock` object.
+
+**Accepting an effect.** Once you have checked that skipping the effect on a hit
+is fine, put a comment on the line the warning names:
 
 ```python
 @cash.cache
 def fetch_user(uid):
-    return requests.get(f"https://api/{uid}").json()   # @cash:assume-safe
+    return requests.get(f"https://api.example.com/users/{uid}").json()   # @cash:assume-safe
 ```
 
-Prefer this over `assume_safe=True`. The flag silences the function
-permanently, including calls added long after the audit; an annotation only
-covers the statement it sits on, so new code is reported. It works under
-`strict=True` too, and on the `def` line it waives the function-scoped
-findings (a read of a mutated global, which has no line to attach to).
+<!-- claim: cash/purity_analyzer.py:audited_lines @da3b0e65 -->
+The comment covers that statement only (put it on the opening line of a call
+that spans lines, or on the line above), so code added later is still checked.
+On the `def` line it covers findings about the whole body. In a helper it
+covers every caller of that helper. `assume_safe=True` silences the whole
+function instead, including code added after your review, so prefer the
+comment.
 
-See [Purity tutorial](tutorials/feature-guides/purity-decorators.md) for the full story including
-`@pure` and `@stateful`, which also mark third-party callables when called
-on them.
+**In CI**, `strict=True` turns every finding into `CashImpureFunctionError`, so
+caching a side-effecting function fails the build. It honours
+`# @cash:assume-safe` comments, and a network read passes once the function has
+a `ttl=`.
 
-### `allow_random=` — unseeded randomness
+To tell cash about a helper it cannot judge, mark it with `@cash.pure` or
+`@cash.stateful`; see [Purity markers](tutorials/feature-guides/purity-decorators.md).
 
-<!-- claim: cash/decorator/rng.py:RngMixin._warn_unseeded_randomness @2d41d2f7 -->
-At decoration time, `@cash.cache` scans the function's source for draws
-from an unseeded RNG and emits a one-shot `CashRandomnessWarning`:
-
-```python
-@cash.cache
-def sample():
-    return np.random.randn()      # no seed anywhere
-# CashRandomnessWarning: [RANDOM-UNSEEDED] @cash.cache on __main__.sample:
-#   Unseeded randomness detected: numpy.random.randn() at line 3. ...
-#   Fix: seed the RNG to make the value reproducible, leave the function
-#   undecorated for a genuinely fresh draw, or pass
-#   @cash.cache(allow_random=True) to keep it frozen on purpose.
-#   https://cash-lib.readthedocs.io/en/stable/warnings/#random-unseeded
-```
-
-The warning matters because the first call's value is cached and
-replayed forever — later calls never consult the RNG again, so the
-"random" number is frozen, and it won't survive a cleared cache either.
-
-This is the same detector the notebook path uses, so both paths agree on
-what counts as unseeded. Two ways to make it silent:
-
-- **Seed the RNG** — with a local generator whose seed is an argument,
-  `rng = np.random.default_rng(seed)`. A seeded draw is reproducible, so
-  no warning fires. This is the real fix. Calling the global
-  `np.random.seed(0)` or `random.seed(0)` inside the function also makes
-  the value reproducible, but it reseeds the whole process's RNG as a
-  side effect that a cache hit skips — the next `np.random` draw after
-  the call then differs between a hit and a miss, and cash flags it
-  ([IMPURE-SIDE-EFFECTS](warnings.md#impure-side-effects)).
-- **`allow_random=True`** — acknowledge the freeze and move on.
-
-```python
-@cash.cache(allow_random=True)
-def jitter():
-    return np.random.randn()
-```
-
-The notebook's [`# @cash:allow-random`](annotations.md#cashallow-random)
-comment is also honoured inside a decorated function's body.
-
-!!! note
-    `allow_random` suppresses a *warning*. It does **not** stop the
-    caching — the value is still frozen. Use
-    [`cache_if=`](#cache_if-skip-caching-by-result) or drop the
-    decorator if you want a fresh draw every call.
-
-Detection is source-based and runs **once per function at decoration
-time**, so cached calls pay nothing for it. The one exception is a seed
-that is a *parameter* — `def simulate(n, seed=None): rng =
-np.random.default_rng(seed)`. Whether that draw is seeded depends on
-what the caller passed, so each call checks that one argument, and a
-call where it is `None` gets the same warning. The same goes for a seed
-read from a parameter or a module global — `default_rng(settings.seed)`,
-`default_rng(opts["seed"])`, `default_rng(CONFIG.seed)` — read without
-running any of your code (a property is skipped). Two consequences: a function
-with no retrievable source (defined via `exec`, or in a bare REPL) is
-not scanned, and randomness *inside* a compiled library call — an
-unseeded `estimator.fit()`, for example — is invisible to it. Pass an
-explicit `random_state=` to such estimators.
-
-### `chunk_max_items=` / `chunk_max_bytes=` — iterator chunking
-
-When the decorated function returns an iterator (generator,
-`map`/`filter` result, custom iterator), the result is materialized
-and stored in chunks. Defaults are 1M items / 1 GB per chunk.
-
-<!-- test:skip reason="opens huge.log which doesn't exist in test env" -->
-```python
-@cash.cache(chunk_max_items=10_000)
-def read_lines(path):
-    with open(path) as f:
-        for line in f:
-            yield line.strip()
-
-for line in read_lines("huge.log"):
-    process(line)
-# Second run: chunks are read lazily from disk; RAM bounded by chunk size.
-```
-
-<!-- claim: cash/decorator/iterators.py:ChunkedCachedIterator @8437fd80 broad="the claim is about the replay iterator's whole supported protocol" -->
-The cached iterator supports `iter()`, `__next__`, `close()`. Generator
-methods `.send()` and `.throw()` are not supported — call them and you
-get an `AttributeError` reminding you the iterator is a replay.
-
-A chunk can go while you are still reading it — another process clears the
-cache, or the RAM tier evicts it. The rest of the run is then recomputed from
-the function, continuing where the replay stopped; where cash cannot recompute
-(an async hit), the loss raises. What it never does is stop early: that would
-hand you a silent prefix, and a sum over half a stream is wrong rather than
-slow.
-
----
-
-## Async support
-
-`async def` functions are first-class. The wrapper is `async def` too:
-
-<!-- test:skip reason="async httpx.AsyncClient requires real HTTP client / network" -->
-```python
-@cash.cache(ttl=60)
-async def fetch_user(user_id):
-    async with httpx.AsyncClient() as client:
-        return (await client.get(f"/users/{user_id}")).json()
-
-users = await asyncio.gather(*(fetch_user(i) for i in range(100)))
-```
-
-Concurrent `asyncio.gather` is safe: with `use_locking=True` on the `Cash`
-instance, each unique key computes once and duplicate awaits coalesce — the
-leader computes and stores, the followers wait and read the stored result. See
-the [API reference](api/cash.md).
-
-Async generators (`async def gen(): yield ...`) are **not** cached
-yet — they emit a `CashCacheIneffectiveWarning` and are returned
-unwrapped.
-
----
-
-## Wrapper methods
-
-Every decorated function gets four extra attributes:
-
-### `func.cache_info()`
-
-```python
-@cash.cache
-def f(x): return x * 2
-
-f(1); f(1); f(2)
-f.cache_info()
-# {'hits': 1, 'misses': 2, 'hit_rate': 0.333..., 'total_time_saved': 0.0,
-#  'warnings': []}
-```
+## Methods on a cached function
 
 <!-- claim: cash/core.py:Cash._wrap_with_stats.cache_info @905b7b2b -->
-Keys:
+**`f.cache_info()`** returns this process's counters:
 
-- **`hits`**, **`misses`**, **`hit_rate`** — counters since the wrapper
-  was created.
-- **`total_time_saved`** — sum of execution times avoided on hits.
-- **`miss_reasons`** — the misses counted by why: `no entry yet`,
-  `new arguments`, `code or state changed`, `file changed`, `ttl expired`,
-  `not stored last time`, and the rest.
-- **`warnings`** — rolling log (last 20) of recent `CashWarning`
-  emissions for this function. Lets you discover silent misbehavior
-  after the fact even when `warnings.simplefilter` swallowed the
-  stderr emission.
+```python
+@cash.cache
+def double(x):
+    return x * 2
 
-!!! warning "In a notebook, `cache_info()` reads 0 / 0 — use `explain()` instead"
-    The counters live on the **wrapper object**, and they count only since
-    that wrapper was created. In a notebook, cash may rebuild the cell that
-    defines your function, which re-runs the decorator and produces a fresh
-    wrapper with fresh counters. So `cache_info()` can report
-    `{'hits': 0, 'misses': 0}` **forever**, even while caching is working
-    perfectly and saving you minutes.
+double(1); double(1); double(2)
+double.cache_info()
+# {'hits': 1, 'misses': 2, 'hit_rate': 0.333..., 'total_time_saved': 1e-05,
+#  'miss_reasons': {'no entry yet': 1, 'new arguments': 1}, 'warnings': []}
+```
 
-    It is not telling you caching is broken — it is telling you *this
-    wrapper* has not served a call yet. To check whether caching is actually
-    working in a notebook, use either:
-
-    ```python
-    f.explain(1)      # -> [HIT] ... execution_time_saved: 23.54
-    ```
-
-    ```python
-    %cash_stats       # session-wide hits, misses and net time saved
-    ```
-
-    Both read through to the real cache rather than a per-wrapper counter.
-    `cache_info()` is reliable in scripts and long-lived processes, where
-    the wrapper is created once.
-
-### `func.cache_clear()`
-
-<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_clear @b5ac9b37 -->
-Wipe backend entries whose key starts with this function's name. Also
-resets stats, drops the warnings log, and forgets the `_warn_once`
-dedup marks (so the next misbehavior re-warns instead of being silent).
-
-### `func.explain(*args, **kwargs)`
+`warnings` holds the last 20 cash warnings for the function, even when a
+warnings filter hid them. The counters belong to the wrapper, so they start at
+zero in each process.
 
 <!-- claim: cash/decorator/explain.py:ExplainMixin._explain_call @bd141dbf -->
-Pure introspection — returns a `CacheExplanation` describing whether
-the next call with these args would hit or miss the cache, and why:
+**`f.explain(*args, **kwargs)`** says whether that call would hit, and why. It
+does not run the function, change the counters or write anything:
 
 ```python
-f.explain(5)
-# [MISS] __main__.f — no_entry
-#   cache_dir: /home/me/project/.cash
-#   cache_key: __main__.f:9a3c...:...
-#   entry_id: 4be1c09d7a21
-#   hint: No matching cache entry. First call with these arguments, or...
-#   why: no entry yet: the first call with these arguments in this process, ...
-
-f(5)  # compute
-f.explain(5)
-# [HIT] __main__.f — hit
-#   cache_dir: /home/me/project/.cash
-#   cache_key: __main__.f:9a3c...:...
-#   entry_id: 4be1c09d7a21
-#   cached_at: 1779637032.79
-#   cache_age_seconds: 0.05
-#   execution_time_saved: 0.0008
-
-f.explain(6)
-# [MISS] __main__.f — no_entry
-#   ...
+double.explain(5)
+# [MISS] model.double - no_entry
+#   cache_dir: /srv/proj/.cash
+#   cache_key: model.double:8ff9a351...::abc50414...
+#   entry_id: 58872c3e0a1e
 #   why: new arguments: called with arguments not seen on the last call
+double(5)
+double.explain(5)
+# [HIT] model.double - hit
+#   cache_dir: /srv/proj/.cash
+#   ...
+#   execution_time_saved: 3.5e-06
 ```
 
-`reason` is one of `hit`, `key_uncomputable` (unhashable arg),
-`no_entry`, `ttl_expired`, `file_changed`, or `disabled` (caching switched off
-with [`CASH_DISABLE`](tutorials/feature-guides/testing-your-code.md)). On `no_entry`, `details['why']`
-says what this process knows: which part of the key moved since the last
-call (`new arguments`, `code or state changed`, `dynamic dependency changed`),
-that the last result was never stored and why (`cache_if`, a file that
-changed mid-call), or that it was stored and has since been evicted. On a
-`hit` or `file_changed`, `details['file_deps']` lists every file the entry
-was computed from, with the fingerprint it is checked against. `entry_id` is
-the id `cash inspect --function NAME` lists and `cash clear --entry` takes,
-and `cache_dir` the directory the answer was read from.
-See [`CacheExplanation`](api/cash.md#cash.CacheExplanation) for all of it.
+`reason` is one of `hit`, `no_entry`, `ttl_expired`, `file_changed`,
+`key_uncomputable` or `disabled`. For `file_changed`, `details["changed_files"]`
+names each changed file. See
+[`CacheExplanation`](api/cash.md#cash.CacheExplanation).
 
-Does NOT call your function, mutate stats, or write to the backend.
-Safe to call from sync code even on async-wrapped functions.
+**`f.cache_clear()`** deletes the function's entries from every tier, including
+iterator chunks, and resets its counters and warning log.
 
-### `func.__wrapped__`
+**`f.__wrapped__`** is the undecorated function. Call it to bypass the cache,
+for example in a test.
 
-The original undecorated function. Useful for testing — call it to
-bypass caching entirely.
+## Known limitations
 
----
+### Arguments cash cannot hash
 
-## Passing large objects between cached functions
-
-<!-- claim: cash/decorator/arg_hashing.py:ArgHashingMixin._frame_signature @28a3f549, cash/decorator/arg_hashing.py:ArgHashingMixin._frame_memo_store @99f98c8a -->
-An argument is keyed by what it holds **at the time of the call**, so a result
-you mutate in place and pass on is keyed by its new contents:
+<!-- claim: cash/decorator/arg_hashing.py:ArgHashingMixin._hash_arg_payload @7bc7e4ca -->
+An argument that cannot be pickled (a lock, an open file, a live connection, a
+closure) cannot be keyed. The call runs uncached and warns
+[`KEY-UNHASHABLE-ARG`](warnings.md#key-unhashable-arg); any other failure while
+building the key does the same. Pass a plain value that identifies the object
+instead, or register a hasher that returns a **stable** identifying value, such
+as a database URL:
 
 ```python
-import pandas as pd
+import hashlib
+import cash
 
-@cash.cache
-def load_frame():
-    return pd.DataFrame({"a": [1, 2, 3]})
+class Store:
+    def __init__(self, url):
+        self.url = url
 
-@cash.cache
-def column_total(df):
-    return int(df["a"].sum())
-
-df = load_frame()
-column_total(df)       # 6
-df.loc[0, "a"] = 100   # in place
-column_total(df)       # 105 — recomputes, keyed by what df holds now
+cash.register_hasher(Store, lambda s: hashlib.sha256(s.url.encode()).hexdigest())
 ```
 
-That costs a hash of the argument, and for a large one the hash is the cost that
-shows — measured, about 150 ms for a 100 MB numeric frame (more with string
-columns), 50 ms for a 100 MB numpy array. What cash does about it:
-
-- **pandas 3 frames and series are hashed once.** Under copy-on-write, a frame
-  can only be changed in place by giving it new data blocks, so cash remembers a
-  frame's hash together with the identity of its blocks and axes and reuses it
-  while they are the same — microseconds per call, exact rather than sampled.
-  The cost: after cash has seen a frame, the first in-place write to each of its
-  blocks copies that block, once. (pandas 2 with copy-on-write switched on is
-  treated the same way; without it, every call hashes.)
-- **In a notebook**, `%cash_on` tracks every assignment and mutation, and cash
-  uses that instead of hashing a tracked object again.
-- <!-- claim: cash/decorator/arg_hashing.py:plain_key_part @10345e4f, cash/_plain_data.py:is_plain @7f7e9e70, cash/_plain_data.py:dict_rows @c1110385, cash/_plain_data.py:pickle_unshared @841b27ff -->
-  **Lists and tuples of plain values** — the rows a parser returns, including
-  `date`, `datetime`, `timedelta` and `Decimal` columns — and **lists of dicts**
-  that share their keys (`csv.DictReader` rows, JSON records) are recognised
-  as such in C, a level at a time, and hashed in one pass instead of being
-  walked element by element. Each such argument is keyed on its own, by its
-  content alone, so a small options dict passed beside it does not slow it
-  down. A warm hit on two million rows went from 8.4 s to 0.37 s; that is
-  still ten times the 0.04 s it takes to sum them, so a cheap function over a
-  big list is better left uncached.
-- **Everything else** — numpy arrays, models, your own objects — is hashed on
-  every call it is passed to. [`CACHE-NET-LOSS`](warnings.md#cache-net-loss)
-  tells you when that is costing more than it saves, and says so when the cost
-  is loading the stored result rather than the key.
-
-When the object comes from another cached function and nothing modifies it
-afterwards — a trained model, a lookup table, a feature matrix — say so on the
-function that makes it:
-
-<!-- claim: cash/decorator/frozen.py:FrozenMixin._audit_frozen @12932111, cash/decorator/frozen.py:FrozenMixin._frozen_array_hash @e1115b1b -->
-```python
-@cash.cache(frozen=True)
-def train(data):
-    return fit_model(data)          # not modified by anything downstream
-
-@cash.cache
-def score(model, batch):            # keys `model` by train()'s identity:
-    return model.predict(batch)     # no hash per call, same key in every process
-```
-
-<!-- claim: cash/decorator/frozen.py:FrozenMixin._remember_frozen_container @9cf2a45a, cash/decorator/frozen.py:FrozenMixin._warn_frozen_has_no_effect @f605e5d3 -->
-A cached function receiving a frozen result keys it by the call that produced
-it: microseconds, the same in every process, and it works for an object that
-cannot be pickled. That covers a numpy array, a pandas / polars / modin frame, a
-pyarrow table, any object that takes an attribute — and a plain **list, tuple
-or dict**, such as the rows a parser returns: two million tuples handed to two
-cached consumers cost seconds per call to hash, and nothing with `frozen=True`.
-For a result it cannot mark (a `set`, an object with `__slots__`),
-[`KEY-FROZEN-NO-EFFECT`](warnings.md#key-frozen-no-effect) says so rather than
-leaving `frozen=True` silently inert. A numpy array result comes back
-**read-only**, so a write raises instead of going stale. A frozen result is
-also the one kind cash hands back as the SAME object when it cannot copy it --
-that is what "works for an object that cannot be pickled" means. Without
-`frozen=`, a result cash cannot copy is not cached at all (`STORE-FAILED` says
-so): storing it would hand every caller one object, and a caller mutating a hit
-would change what later calls get. Other objects are
-**audited**: what the object is shaped like — a length, a frame's shape and
-dtypes, the lengths of a few elements — is compared on **every** use, which
-costs nothing to read and moves for the changes a caller makes
-(`model["w"].append(...)`); cash also re-hashes it in full
-at an occasional use (every use under `CASH_DEBUG=1`), which catches a change
-those cannot see, such as a value overwritten in place. If it has changed —
-say `model.fit(...)` was called on it downstream —
-[`KEY-FROZEN-MUTATED`](warnings.md#key-frozen-mutated) names the producer and
-the object is keyed by its contents from then on. A result with a `ttl=` is
-never treated as frozen: its value changes while its key does not.
-
-Without `frozen=`, give cash a cheaper identity for a type yourself:
-`cash.register_hasher(T, fn, override=True)` (return something that changes
-whenever the data does, such as a version).
-
-An object that can't be pickled and has no hasher can't be keyed unless it is
-frozen, so a call receiving one runs uncached
-([`KEY-UNHASHABLE-ARG`](warnings.md#key-unhashable-arg)).
-
-### When a cached function changes what it was given
-
-<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._argument_identities @14a2dea3, cash/_plain_data.py:identity_changed @a853a1cf -->
-A call that sorts, appends to or rewrites an argument in place makes a change
-the caller sees — and a hit would not make it. Cash checks for that after each
-miss, and a call it catches is not stored: it runs every time, as it would
-uncached. How far the check reaches depends on the argument:
-
-- a list or tuple of plain values — parsed rows, of any size — is compared by
-  the identities of what it holds, which is cheap: `rows.sort()`, an append, a
-  `del`, `rows[i] = ...` and `for r in rows: r[3] = ...` are all caught, also
-  on a `frozen=True` producer's result (which is then no longer trusted as
-  frozen);
-- anything else is re-hashed, and only when that takes under about 50 ms: a big
-  array or frame changed in place is **not** caught, and the static finding
-  ("changes the argument '…' in place") is all you get.
-
-The fix is the same either way: return a modified copy
-(`rows = sorted(rows)`, `df = df.assign(...)`) and let the caller keep its
-object. See [argument mutation](warnings.md#impure-observed-effects).
-
-### Millions of rows: cache what you compute from them
-
-Passing a big parsed input *into* cached functions makes each of them pay to
-key it. The design that pays is the other way round: key the results by the
-**file path**, and parse only when some result misses:
-
-<!-- test:skip reason="illustrative: parse() and the aggregates belong to the reader's project" -->
-```python
-import functools
-
-@functools.lru_cache(maxsize=4)          # one parse per process, shared by the misses
-def _orders(path):
-    return parse_orders(path)
-
-@cash.cache
-def revenue_by_country(orders_path):
-    return aggregate_revenue(_orders(orders_path))
-
-@cash.cache
-def top_customers(orders_path, n=10):
-    return rank_customers(_orders(orders_path), n)
-```
-
-The file read inside `_orders` is a dependency of every function that uses the
-rows, including those that found them already parsed (see
-[file reads](#file-reads-are-tracked-automatically)), so an edit to the file
-recomputes them all. Measured on a 214 MB log: with the rows
-passed into cached consumers, a warm run was 1.3–3.6× *slower* than no cache;
-keyed by path, it was 18× faster.
-
-### Cheap results are written too
-
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @8f018587 -->
-A decorated result goes to disk whatever it cost to produce. A millisecond
-aggregate over rows another call already parsed is written like anything else,
-because a new process would have to parse that file again to recompute it, and
-you said to cache the function.
-
-This used to need a workaround -- a second `Cash` instance on a plain
-`FileBackend` -- because a compute floor and then the cost model decided which
-decorated results were worth keeping, and both refused anything quick. Neither
-applies now. What still applies is the per-tier
-[size caps](how-it-works/storage.md): a value too large for any disk tier stays
-in memory for the session and warns that it did.
-
----
-
-## Common gotchas
-
-### Unhashable arguments
-
-<!-- test:expect-warning reason="threading.Lock is genuinely unpicklable; the ineffective-cache warning is the point of this gotcha" -->
-```python
-import threading
-
-@cash.cache
-def f(lock):
-    return id(lock)
-
-f(threading.Lock())
-# CashCacheIneffectiveWarning: [KEY-UNHASHABLE-ARG] @cash.cache on __main__.f:
-#   an argument of type lock could not be hashed, so this call and every call
-#   like it does not cache.
-#   Fix: register a hasher with cash.register_hasher(lock, ...), or pass the
-#   argument by a hashable value.
-#   https://cash-lib.readthedocs.io/en/stable/warnings/#key-unhashable-arg
-```
-
-`threading.Lock`, sockets, open file handles, etc. can't be pickled,
-which means we can't build a cache key. The warning explains which
-type is the culprit. Either:
-
-1. Don't pass the object; pass something hashable that identifies it.
-2. `cash.register_hasher(LockType, lambda lock: id(lock))` if you're
-   sure same-identity caching is what you want.
-
-### Instance methods — `self` participates in the key
-
-`self` is an argument like any other, and it is hashed by its **state**, not
-its identity. Two instances with equal attributes share an entry; change an
-attribute and the key changes with it:
-
-<!-- test:skip reason="illustrative — references missing a.csv" -->
-```python
-class Loader:
-    def __init__(self, path):
-        self.path = path
-
-    @cash.cache
-    def load(self):
-        return pd.read_csv(self.path)
-
-Loader("a.csv").load()
-Loader("a.csv").load()   # HIT — equal state, same key
-Loader("b.csv").load()   # MISS — different path, different key
-```
-
-The gotcha is an attribute that cannot be hashed — a lock, a live database
-connection, an open file. Then `self` cannot be hashed either, and the method
-does not cache at all ([KEY-UNHASHABLE-ARG](warnings.md#key-unhashable-arg)).
-Tell cash which attributes identify the instance with
-[`register_hasher`](tutorials/feature-guides/caching-class-methods.md):
-
-<!-- test:skip reason="Loader class defined in skipped previous fence" -->
-```python
-cash.register_hasher(Loader, lambda l: hashlib.sha256(l.path.encode()).hexdigest())
-```
-
-Now two instances with the same `path` share an entry, whatever else they hold.
-
-### C-extension callables and builtins
-
-Caching a callable with no readable Python source — a C-extension
-function, a builtin, a NumPy ufunc, a dispatcher, or a
-`functools.partial` wrapping one — works rather than crashing. The
-source-hashing and AST-analysis steps have no source to read for these,
-so they degrade to a stable identity-based fallback instead of raising:
-
-```python
-import functools, numpy as np
-
-cached_sqrt = cash.cache(np.sqrt)              # ufunc — fine
-cached_max = cash.cache(functools.partial(max, 0))   # partial over a builtin — fine
-```
-
-Because there is no source to hash, cash cannot notice a change *inside*
-a C extension (upgrading the library, say). That's the same blind spot
-any source-based invalidation has; pin the dependency if it matters.
-
-### Caching code with side effects
-
-The purity analyzer warns by default if your function calls
-`requests.post`, mutates globals, writes files, etc. The cached
-behavior is: the side effect runs on the **first** call only. Every
-hit replays the return value without the side effect.
-
-If that's what you want (an idempotent write that is harmless to skip),
-`# @cash:assume-safe` on the line silences the warning for that statement,
-and `assume_safe=True` for the whole function. If it isn't, refactor:
-separate the pure compute from the side effect, and only cache the pure part.
-A network **read** is not in this group; see the next section.
-
-### A cached GET goes stale
-
-<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._surface_purity @9fe07f2d, cash/purity_analyzer.py:DECORATOR_POLICY @44b8bc03 -->
-`requests.get(url)` writes nothing, so it is not reported with the side
-effects. What the server returns is an **input**, and it is not in the key:
-the first answer is stored and served on every later call, in every later
-process, until something changes the key. That is what
-[`KEY-NETWORK-READ`](warnings.md#key-network-read) says on the first call.
-Give a cached network read a freshness plan before it ships:
-
-<!-- test:skip reason="illustrative: needs a live endpoint" -->
-```python
-@cash.cache(ttl=3600)                    # an hour old at most
-def rates():
-    return requests.get("https://api.example.com/rates").json()
-
-@cash.cache
-def rates_on(day):                       # or: what makes it new is an argument
-    return requests.get(f"https://api.example.com/rates/{day}").json()
-```
-
-A `ttl=` — the function's own, or a shorter one inherited from a cached
-function it calls — answers the question and silences the warning; so does
-`# @cash:assume-safe` on the line, for an answer that never changes. An
-argument does not silence it, because cash cannot tell which argument makes
-the answer new.
-
-`ttl=` suits data that drifts; an argument that changes (a date, a version, an
-ETag you fetched cheaply) suits data that is published in versions. A file read
-by URL through a tracked reader — `pd.read_parquet("s3://...")`,
-`pd.read_csv("https://...")` — is the exception: cash asks the store for the
-object's ETag or version on every hit
-([remote objects](tutorials/feature-guides/custom-file-sources.md#remote-objects-tracked-by-the-stores-own-validator)).
-A `requests.get` is not a file read, and is never checked.
-
-### A function returning a matplotlib `Figure` is never cached
-
-<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._refuses_identity_coupled @a3290610 -->
-`@cash.cache` refuses to store a result that is — or contains — a matplotlib
-`Figure` or `Axes`, and warns once saying so.
-
-This is not a limitation cash is apologising for; storing one would be *wrong*.
-pyplot keeps a process-wide registry of the "current figure", and
-`plt.savefig()` / `plt.title()` act on whatever that registry says, not on your
-variable. Cash's RAM tier deep-copies every value it stores, and reconstructing
-a `Figure` re-registers the **copy** as current. From then on you draw on your
-figure while `plt.savefig()` writes the cache's private snapshot — a blank
-image, on the first call, with no error.
-
-The trade is one-sided: a figure costs milliseconds to build, so there is no
-version of this that pays for the risk. Cache the *data* and draw from it:
-
-<!-- test:skip reason="illustrative — needs a df and a pyplot import the page doesn't set up" -->
-```python
-@cash.cache
-def summarise(df):          # expensive, cacheable
-    return df.groupby("region")["sales"].sum()
-
-fig, ax = plt.subplots()    # cheap, never cached
-summarise(df).plot(ax=ax)
-```
-
-The statement cache and call-unit caching refuse these objects for the same
-reason, so the rule is the same wherever you write it.
-
-### `@cash.cache` on a generator
-
-Generators are materialized into a list (or chunks) on first call so
-the cache replay can give back fresh iterators. Don't decorate a
-function returning an infinite generator (it will hang trying to
-exhaust). For very large finite iterators, tune `chunk_max_items=` /
-`chunk_max_bytes=`.
-
-### `cache_clear()` clears more than you'd expect on iterators
-
-<!-- claim: cash/core.py:Cash._delete_backend_entries @8ecb341e -->
-For chunked iterator caches, `cache_clear()` removes the manifest entry
-but the individual chunk entries (keyed
-`f"{cache_key}:chunk_{i}"`) are also caught by the
-`startswith(func_name)` sweep. No orphans.
-
----
-
-## Where to go next
-
-- [API reference — Cash class](api/cash.md) — exhaustive signatures
-- [Purity tutorial](tutorials/feature-guides/purity-decorators.md) — `@pure`, `@stateful`
-- [Caching class methods](tutorials/feature-guides/caching-class-methods.md) — recipe for
-  stateful receivers via `register_hasher`
-- [Choosing a backend](tutorials/feature-guides/choosing-a-backend.md) —
-  picking RAM / disk / Redis / S3 tiers for your workload
-- [Custom hashers](tutorials/feature-guides/custom-hashers.md) —
-  `register_hasher` for non-picklable / domain-specific argument types
-- [Dynamic dependencies](tutorials/feature-guides/dynamic-dependencies.md) —
-  deeper walkthrough of `dynamic_depends_on=` patterns
-- [Async caching](tutorials/feature-guides/async-caching.md) —
-  `async def` functions, concurrency, and gotchas with locking
-- [Thread safety](tutorials/feature-guides/thread-safety.md) —
-  `use_locking`, concurrent decorator hits, and shared backends
-- [Production transition](tutorials/feature-guides/production-transition.md) —
-  moving notebook caches to long-lived services
-- [Configuration](getting-started/configuration.md) — picking a
-  backend, tier stacks, TOML / env / programmatic resolution
-- [Notebook caching](notebook_caching_api.md) — the `%cash_on`
-  alternative for statement-level caching in Jupyter
+Never hash by `id()`: ids repeat across processes, so a later run could get
+another object's entry. See [Custom hashers](tutorials/feature-guides/custom-hashers.md).
+
+### Methods and `self`
+
+`self` is an argument like any other, hashed by its state: two instances with
+equal attributes share entries. An unpicklable attribute makes every call
+uncached. See [Class methods](tutorials/feature-guides/caching-class-methods.md).
+
+### Code you pass as an argument
+
+A class or function of yours passed as an argument is keyed by its code and by
+what that code reads, so editing it recomputes. Three cases are not covered:
+
+- **Library classes and functions** are keyed by name, not code. Pin versions.
+- **A closure or `lambda`** can't be pickled, so the call runs uncached. Pass a
+  module-level function and give it the captured value as an argument.
+- **An implementation picked at run time** (`HANDLERS[name]()` on a dict built
+  inside the body, a plugin registry) is not reached. Name the candidates:
+  `@cash.cache(depends_on=[FastPath, ExactPath])`.
+
+A marker class you pass but whose code never affects the result can be excluded
+with `@cash.opaque`; see [Purity markers](tutorials/feature-guides/purity-decorators.md#cashopaque-leave-a-class-out-of-the-key).
+
+### Reads cash cannot see
+
+Cash does not record a file opened by a C extension, `os.open`, a subprocess,
+a `threading.Thread` you start, or a `multiprocessing.Pool` worker. Reads in a
+`ThreadPoolExecutor` or `ProcessPoolExecutor` the function starts are recorded.
+A polars `LazyFrame` argument from `scan_csv` is keyed by its path, not the
+file's content; collect it first. Name any file cash misses with
+`file_depends_on=`.
+
+### Relative paths and working directories
+
+`open("data.csv")` from two working directories reads two different files under
+one key. Each switch recomputes and replaces the other directory's entry. Build
+paths from the project root or pass absolute paths.
+
+### Results cash refuses to store
+
+- A matplotlib `Figure` or `Axes` is never cached
+  ([`CACHE-IDENTITY-COUPLED`](warnings.md#cache-identity-coupled)): a restored
+  copy would become pyplot's "current figure" and `plt.savefig()` would save a
+  blank image. Cache the data and draw from it.
+- A result that can't be pickled is not stored
+  ([`STORE-FAILED`](warnings.md#store-failed)), unless the function is
+  `frozen=True`.
+- A call that changed its argument in place is not stored, so it runs every
+  time. Return a modified copy instead (`rows = sorted(rows)`).
+
+### Generators and async functions
+
+A generator result is stored in chunks as you consume it, and nothing is stored
+if you stop early; an infinite generator never finishes, so it never caches. See
+[Iterators](tutorials/feature-guides/iterator-caching.md). `async def` functions
+cache like sync ones; async generators are returned undecorated with a warning.
+See [Async functions](tutorials/feature-guides/async-caching.md).
+
+### Edits inside a running process
+
+Cash reads a helper's source once per process, so an edit between two calls
+of one long-running process is seen only by the next process. If a source file
+changes on disk after the process started (a deploy), cash keys by the code
+that is running and warns [`KEY-SOURCE-CHANGED`](warnings.md#key-source-changed).
+
+### Using a decorated function in a notebook
+
+Decorated functions work in a notebook, but re-running the cell that defines
+one creates a new wrapper with new counters, so `cache_info()` may read zero.
+Use `explain()` there. The notebook's own caching is covered in the
+[Notebook guide](notebook_caching_api.md).
+
+## Next
+
+- [Deploying](tutorials/feature-guides/deploying.md): services, workers, CI, shared caches, libraries.
+- [Testing your code](tutorials/feature-guides/testing-your-code.md): keep the cache from passing tests for you.
+- [File dependencies](tutorials/feature-guides/custom-file-sources.md) and [Dynamic dependencies](tutorials/feature-guides/dynamic-dependencies.md).
+- [Choosing a backend](tutorials/feature-guides/choosing-a-backend.md) and [Configuration](getting-started/configuration.md).
+- [The decorator path](how-it-works/decorator-path.md): how the key is built.

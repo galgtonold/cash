@@ -1,120 +1,73 @@
-# Caching class methods
+# Class methods
 
-`@cash.cache` on a bound method puts `self` into the cache key like
-any other argument. Two failure modes follow:
+!!! info "Applies to: decorator"
+    Code that puts `@cash.cache` on methods.
 
-1. **`self` is unpicklable.** Instances holding file handles, database
-   connections, threads, or locks fail the pickle path silently — cash
-   can't build a key and your method recomputes on every call. Cash
-   emits a `CashCacheIneffectiveWarning` on the first such call, naming
-   the type that could not be pickled.
-2. **`self` is picklable but holds incidental state.** Lazy attributes,
-   a `__cache__` dict, or a heavy `self.df` change the pickle bytes
-   even when the *logical* identity is unchanged. Two equivalent
-   instances miss each other; pickling 200 MB of `self.df` costs you
-   on every call.
+`@cash.cache` works on methods. `self` is part of the key like any other
+argument, hashed by its state, so two instances with equal attributes share
+entries. That default goes wrong in two ways:
 
-The fix is the same in both cases: tell cash how to summarise your
-type into a cache key.
+- **`self` can't be pickled.** An instance holding a connection, a thread or a
+  lock gives cash nothing to hash. Every call runs uncached, with a warning
+  ([`KEY-UNHASHABLE-ARG`](../../warnings.md#key-unhashable-arg)).
+- **`self` carries state that doesn't matter.** A lazy attribute, a memo dict or
+  a large `self.df` changes the key, or makes it slow to build, while the
+  instance means the same thing.
+
+The fix for both is to tell cash what identifies an instance.
+
+## Register a hasher for the class
 
 <!-- claim: cash/core.py:Cash.register_hasher @2ae870d0, cash/decorator/arg_hashing.py:ArgHashingMixin._hash_arg_payload @7bc7e4ca -->
-## Register a type-level hasher
-
 ```python
-import cash
 import hashlib
+from cash import Cash
 
-c = cash.Cash()
+app = Cash()
 
 class Loader:
-    def __init__(self, dataset_id, db_conn):
+    def __init__(self, dataset_id, db):
         self.dataset_id = dataset_id
-        self._db = db_conn  # unpicklable; not part of identity
+        self.db = db                    # a connection: not part of the identity
 
-    @c.cache
+    @app.cache
     def load(self, version):
-        return self._db.query(self.dataset_id, version)
+        return self.db.query(self.dataset_id, version)
 
-c.register_hasher(
+app.register_hasher(
     Loader,
-    lambda self: hashlib.sha256(self.dataset_id.encode()).hexdigest(),
+    lambda loader: hashlib.sha256(loader.dataset_id.encode()).hexdigest(),
 )
 ```
 
-Order matters: register the hasher after `Loader` is defined but before
-you call any `@c.cache` method on an instance.
+Register it before the first call. The hasher then applies wherever a `Loader`
+is an argument of a cached function, as `self` or not. The method's other
+arguments are hashed as usual.
 
-`register_hasher` is set once per type. Every `@c.cache` method that
-takes a `Loader` instance — whether as `self` or as a regular
-argument — automatically uses the hasher.
+The hasher must name **everything** that changes the result. Here two loaders
+with the same `dataset_id` but different databases share entries. That is
+right only if both databases hold the same data. See
+[Custom hashers](custom-hashers.md#what-makes-a-good-hasher).
 
-## Singleton-service shortcut
-
-For a stateless service object — a wrapper around an external
-resource with no logical identity of its own — use a constant hasher:
+For a service object with no identity of its own, a constant hasher drops
+`self` from the key:
 
 ```python
-c.register_hasher(MyService, lambda _: "singleton")
+app.register_hasher(MyService, lambda _: "singleton")
 ```
 
-This effectively drops `self` from the cache key. Use with care: two
-different `MyService()` instances now share cache entries, which is
-only correct when the instances are truly interchangeable.
+Every instance then shares entries, which is correct only when instances are
+interchangeable.
 
-## What `__hash__` won't do
-
-<!-- claim: cash/decorator/arg_hashing.py:ArgHashingMixin._hash_arg_payload @7bc7e4ca -->
-Defining `__hash__` on your class doesn't help cash. Cash uses a
-256-bit composite cache key (SHA-256). Python's built-in `hash()` is
-a 64-bit value designed for hash-table bucketing, not for collision
-resistance at cache-key scale. Mixing the two would risk silent
-wrong-result bugs when collisions occur. `register_hasher` returns
-a SHA-256 hex digest by convention and is the supported path for
-custom key derivation.
-
-## Composing with other args
-
-The hasher is applied to *any* arg of the registered type — `self`
-included. Other args go through the standard path (built-in pickle
-or another `register_hasher` entry). So a method on a `Loader`
-taking a pandas `DataFrame` benefits from both your `Loader` hasher
-and cash's built-in pandas hasher with no extra work.
+`__hash__` doesn't help: Python's `hash()` is 64 bits and meant for dict
+buckets, too weak for a cache key. Use `register_hasher`.
 
 ## Methods that return iterators
 
-A bound method that yields values or returns a `map`/`filter`/generator
-expression is cached using Cash's chunked-iterator storage — same
-mechanics as for any plain function, with `self` simply contributing
-to the cache key through the registered hasher (or pickle fallback).
-
-```python
-class Loader:
-    @c.cache
-    def stream_rows(self, table):
-        for row in self._db.query(f"SELECT * FROM {table}"):
-            yield row
-```
-
-Two class-method-specific notes:
-
-- **`register_hasher(Loader, ...)` applies to the iterator-method path
-  exactly as it does to a scalar-returning method.** The hasher's
-  output digests `self`; chunk keys are then derived from the same
-  cache key as any other call.
-- **The hasher must be cheap on every call.** Cash exhausts the
-  underlying generator on the first call to populate chunks, but the
-  *hasher* runs on every subsequent hit as part of cache-key
-  resolution. If your hasher reads expensive fields off `self`,
-  iterator hits inherit that cost. See [Custom Hashers](custom-hashers.md)
-  for the cost model.
-
-For the storage mechanics — chunk size knobs, `cache_if` bypass on
-multi-chunk results, replay semantics, eviction behavior — see
-[Iterator Caching](iterator-caching.md).
+A method that yields is cached like any iterator; `self` goes into the key
+through the same hasher. See [Iterators](iterator-caching.md).
 
 ## Related
 
-- [Custom Hashers](custom-hashers.md) — register hashers for any type, not just bound methods.
-- [Purity Decorators](purity-decorators.md) — control what Cash treats as deterministic.
-- [Iterator Caching](iterator-caching.md) — the chunked storage system that handles generator returns.
-- [Decorator (`@cash.cache`)](../../decorator.md) — the underlying decorator API.
+- [Custom hashers](custom-hashers.md)
+- [The `@cash.cache` guide](../../decorator.md#methods-and-self)
