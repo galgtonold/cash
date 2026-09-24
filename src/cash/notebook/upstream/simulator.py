@@ -172,7 +172,7 @@ class NotebookSimulator:
         keys the module's readers on its source.
         """
         ft = self.virtual_lineage.function_tracker
-        user_ns = getattr(self.shell, "user_ns", None)
+        user_ns = self.shell.user_ns
         if ft is None or not user_ns:
             return
 
@@ -229,7 +229,7 @@ class NotebookSimulator:
         if not self._adopt_untracked_pending:
             return
         self._adopt_untracked_pending = False
-        user_ns = getattr(self.shell, "user_ns", None)
+        user_ns = self.shell.user_ns
         if not user_ns:
             return
         runtime = self.tracking_state.variable_lineage
@@ -628,7 +628,7 @@ class NotebookSimulator:
         candidates = required_inputs & consumed
         if not candidates:
             return flagged
-        bases = getattr(self.tracking_state, "consumable_bases", {})
+        bases = self.tracking_state.consumable_bases
         for var_name in candidates:
             if var_name in BUILTIN_NAMES and var_name not in self.tracking_state.variable_lineage:
                 continue
@@ -717,7 +717,7 @@ class NotebookSimulator:
             return
         if self.compute_hash_fn is None:
             return
-        session_hashes = getattr(self.tracking_state, "current_session_hashes", {})
+        session_hashes = self.tracking_state.current_session_hashes
         base_content = session_hashes.get(var_name)
         if base_content is None:
             return
@@ -802,8 +802,7 @@ class NotebookSimulator:
 
     def _persisted_reads(self, code: str) -> set[str] | None:
         """Files *code* read when it last ran, from the backend, or ``None``."""
-        cash = getattr(self.virtual_lineage, "cash_instance", None)
-        backend = getattr(cash, "backend", None) if cash is not None else None
+        backend = self.virtual_lineage.backend()
         if backend is None:
             return None
 
@@ -914,9 +913,9 @@ class NotebookSimulator:
 
         paths: set[str] = set()
         fully_known = True
-        user_ns = getattr(self.shell, "user_ns", None)
+        user_ns = self.shell.user_ns
 
-        efd = getattr(self.tracking_state, "executed_file_deps", None) or {}
+        efd = self.tracking_state.executed_file_deps
         for v in required_inputs or ():
             dep = efd.get(v)
             if not dep:

@@ -315,6 +315,13 @@ class VirtualLineage:
         self._last_hit_bumped: set[str] = set()
         #: Names the forward probe bound to ``_FORWARD_PROBE_PLACEHOLDER``.
         self._probe_placeholders: set[str] = set()
+        #: ``{name: source}`` of every top-level def in the notebook's cells,
+        #: set by each pass 1 (see ``_resolve_sim_function_source``).
+        self._sim_func_sources: dict[str, str] = {}
+        #: ``TrackingState.module_generation`` the last pass 1 saw.
+        self._simulated_module_generation = 0
+        #: ``_import_bindings`` answers by statement; cleared with the caches.
+        self._import_bindings_memo: dict[str, dict[str, dict]] = {}
 
     @staticmethod
     def _build_function_sources(notebook_cells: list[str]) -> dict[str, str]:
@@ -348,11 +355,9 @@ class VirtualLineage:
         resolves it, so an imported helper that mutates its argument is seen by
         both engines.
         """
-        srcs = getattr(self, "_sim_func_sources", None)
-        if srcs is not None:
-            s = srcs.get(name)
-            if s is not None:
-                return s
+        source = self._sim_func_sources.get(name)
+        if source is not None:
+            return source
         return live_function_source(name, self.shell.user_ns)
 
     def _mutation_receivers(
@@ -391,7 +396,7 @@ class VirtualLineage:
     def reset_caches(self) -> None:
         """Forget every cell snapshot of the previous simulation."""
         self.cache.reset()
-        self.__dict__.pop("_import_bindings_memo", None)
+        self._import_bindings_memo.clear()
 
     def _get_metadata_only(self, cache_key: str) -> dict | None:
         """Get only metadata for a cache key without deserializing the full value.
@@ -403,10 +408,14 @@ class VirtualLineage:
         deserialization of large cached objects (e.g. DataFrames) when
         only metadata is needed.
         """
-        backend = self.cash_instance.backend if self.cash_instance else None
+        backend = self.backend()
         if backend is None:
             return None
         return backend.get_metadata(cache_key)
+
+    def backend(self):
+        """The cache backend the simulation probes, or None without a Cash."""
+        return self.cash_instance.backend if self.cash_instance else None
 
     def record_replayed_file_deps(self, rerecorded: set[str]) -> None:
         """Add the files behind the *rerecorded* variables to the snapshots of
@@ -596,11 +605,11 @@ class VirtualLineage:
         # upstream CODE modification, which would withdraw trust from every
         # loop in the notebook.
         state = self.tracking_state
-        generation = getattr(state, "module_generation", 0)
+        generation = state.module_generation
         reloaded: set[str] = set()
-        if generation != getattr(self, "_simulated_module_generation", 0):
+        if generation != self._simulated_module_generation:
             self._simulated_module_generation = generation
-            reloaded = set(getattr(state, "reloaded_names", set()))
+            reloaded = set(state.reloaded_names)
             state.reloaded_names = set()
             reader = _first_cell_reading(notebook_cells, current_cell_idx, reloaded)
             if reader is not None and reader < first_changed_cell:
@@ -1732,7 +1741,7 @@ class VirtualLineage:
         See ``mutation_verdict_key``. Kept in ``mutation_verdicts`` once read,
         where the runtime overwrites it when the statement runs again.
         """
-        backend = getattr(self.cash_instance, "backend", None) if self.cash_instance else None
+        backend = self.backend()
         if backend is None:
             return None
 
@@ -1759,7 +1768,7 @@ class VirtualLineage:
         checked by the caller, exactly as for the session's own record. Any
         doubt returns None, and the loop is replayed.
         """
-        backend = getattr(self.cash_instance, "backend", None) if self.cash_instance else None
+        backend = self.backend()
         if backend is None:
             return None
 
@@ -2284,11 +2293,11 @@ class VirtualLineage:
     def _import_bindings(self, stmt_code: str) -> dict[str, dict]:
         """What *stmt_code* (a ``from`` import) bound when it last ran -- see
         ``import_bindings_key`` -- or ``{}``. Memoized; cleared with the caches."""
-        memo = self.__dict__.setdefault("_import_bindings_memo", {})
+        memo = self._import_bindings_memo
         if stmt_code in memo:
             return memo[stmt_code]
         found: dict[str, dict] = {}
-        backend = getattr(self.cash_instance, "backend", None) if self.cash_instance else None
+        backend = self.backend()
         if backend is not None:
             try:
                 record = backend.get_metadata(import_bindings_key(stmt_code))

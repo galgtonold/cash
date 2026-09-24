@@ -143,7 +143,7 @@ class MismatchClassifier:
         # `results = {}` and not the loop that fills it: UpstreamStateError,
         # 'logreg', on a run order with no edit. A VALUE computed by
         # calling one is still walked through it: `best = score(1)` read `rows`.
-        user_ns = getattr(self.shell, "user_ns", {}) or {}
+        user_ns = self.shell.user_ns
         if isinstance(user_ns.get(var_name), (types.FunctionType, type)):
             return False
         seen: set[str] = set()

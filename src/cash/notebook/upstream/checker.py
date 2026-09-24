@@ -279,7 +279,6 @@ class UpstreamChecker:
             if cell_id:
                 logger.debug("[UPSTREAM_DEBUG]   cell_id: %s", cell_id)
 
-        self.current_cell_id = cell_id
         # A name the previous cell's forward probe held and no restore filled.
         self.simulator.virtual_lineage.drop_probe_placeholders()
 
@@ -310,6 +309,7 @@ class UpstreamChecker:
             notebook_path=notebook_path,
             progress_callback=progress_callback,
             control_structure_callback=control_structure_callback,
+            cell_id=cell_id,
         )
 
         return UpstreamResult(all_metrics, total_restore_time, total_execution_time)
@@ -475,6 +475,7 @@ class UpstreamChecker:
         required_inputs: set[str],
         current_cell_outputs: set[str] | None,
         notebook_path: str | None,
+        cell_id: str | None = None,
     ) -> tuple[list[str] | None, int | None]:
         """Load the notebook and resolve the current cell index.
 
@@ -499,7 +500,6 @@ class UpstreamChecker:
         logger.debug("[UPSTREAM_DEBUG] Found %d notebook cells", len(notebook_cells))
 
         cells_with_ids = get_notebook_cells_with_ids(notebook_path)
-        cell_id = getattr(self, "current_cell_id", None)
 
         current_cell_idx = self._resolve_current_cell_idx(
             cell_code, notebook_cells, cell_id, cells_with_ids, required_inputs, current_cell_outputs
@@ -598,7 +598,7 @@ class UpstreamChecker:
             self.shell.user_ns.pop(var, None)
             state.lineage.discard(var)
             for attr in dict_attrs:
-                getattr(state, attr, {}).pop(var, None)
+                getattr(state, attr).pop(var, None)
             logger.debug("[UPSTREAM] evicted orphaned variable '%s'", var)
 
     @staticmethod
@@ -858,6 +858,7 @@ class UpstreamChecker:
         notebook_path: str | None = None,
         progress_callback: Callable[..., None] | None = None,
         control_structure_callback: Callable[..., Any] | None = None,
+        cell_id: str | None = None,
     ) -> UpstreamResult:
         """Bring the state the cell reads up to date with the notebook above it.
 
@@ -866,7 +867,11 @@ class UpstreamChecker:
         """
         try:
             notebook_cells, current_cell_idx = self._load_notebook_and_find_cell(
-                cell_code, required_inputs, set(effects.outputs) if effects is not None else None, notebook_path
+                cell_code,
+                required_inputs,
+                set(effects.outputs) if effects is not None else None,
+                notebook_path,
+                cell_id=cell_id,
             )
             if notebook_cells is None or current_cell_idx is None:
                 return UpstreamResult([], 0.0, 0.0)
@@ -1406,9 +1411,7 @@ class UpstreamChecker:
         scheduled ``import numpy as np`` and failed. Moving it earlier keeps it
         ahead of its other consumers, which all come later in the plan.
         """
-        live = getattr(self.shell, "user_ns", None)
-        if not isinstance(live, dict):
-            live = {}
+        live = self.shell.user_ns
         # name -> indices binding it, built once and only if a name goes missing.
         definers: dict[str, list[int]] | None = None
 

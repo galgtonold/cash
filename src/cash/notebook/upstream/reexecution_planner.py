@@ -243,8 +243,14 @@ class ReexecutionPlanner:
     ) -> None:
         self.virtual_lineage = virtual_lineage
         self.classifier = classifier
+        self.tracking_state = virtual_lineage.tracking_state
         #: ``(trace index, paths)`` of the writers the last plan left out of date.
         self.stale_exports: list[tuple[int, list[str]]] = []
+        #: ``(read paths, their count, index)`` -- see ``_read_path_index``.
+        self._read_index: tuple[set[str], int, tuple[set[str], list[str], list[str]]] | None = None
+        #: ``(trace, its length, defs)`` -- see ``_trace_defs``. Holds the
+        #: trace itself, so an identity match cannot be a reused id.
+        self._trace_defs_memo: tuple[list, int, dict] | None = None
 
     @staticmethod
     def _drop_scheduled_from_restored(simulation_trace, stmts_to_run_indices, restored):
@@ -423,9 +429,7 @@ class ReexecutionPlanner:
         """Mark the writers this repair left out of date (see
         :meth:`find_stale_file_writer_indices`) as such, in place of the
         "already current" skipped row they would otherwise get."""
-        stale = {
-            i: paths for i, paths in getattr(self, "stale_exports", None) or () if i not in set(stmts_to_run_indices)
-        }
+        stale = {i: paths for i, paths in self.stale_exports if i not in set(stmts_to_run_indices)}
         if not stale:
             return restored_statements_info
         kept = [
@@ -857,7 +861,7 @@ class ReexecutionPlanner:
         re-deriving an object while re-executing only PART of what fills it —
         precisely what this pass exists to prevent.
         """
-        user_ns = getattr(getattr(self.virtual_lineage, "shell", None), "user_ns", None)
+        user_ns = self._user_ns()
         if user_ns is None:
             return stmts_to_run_indices, restored_statements_info
 
@@ -982,7 +986,7 @@ class ReexecutionPlanner:
         missing variable and is fixed by running the cell, whereas a duplicated
         append is silent and permanent.
         """
-        user_ns = getattr(getattr(self.virtual_lineage, "shell", None), "user_ns", None) or {}
+        user_ns = self._user_ns()
         recorded = self.virtual_lineage.tracking_state.variable_lineage
 
         extra: set[int] = set()
@@ -1076,7 +1080,7 @@ class ReexecutionPlanner:
         this is a no-op, so ``fig.savefig`` and the tests are
         untouched. A missed re-save is acceptable; a blank PNG on disk is not.
         """
-        user_ns = getattr(getattr(self.virtual_lineage, "shell", None), "user_ns", None)
+        user_ns = self._user_ns()
         scheduled = set(stmts_to_run_indices)
         refused: set[int] = set()
 
@@ -1164,7 +1168,7 @@ class ReexecutionPlanner:
         carrier is live, the carrier-history pass owns the case and this is a
         no-op.
         """
-        user_ns = getattr(getattr(self.virtual_lineage, "shell", None), "user_ns", None)
+        user_ns = self._user_ns()
         scheduled = set(stmts_to_run_indices)
         refused: set[int] = set()
 
@@ -1248,8 +1252,8 @@ class ReexecutionPlanner:
         "shutil.",
     )
 
-    def _user_ns(self):
-        return getattr(getattr(self.virtual_lineage, "shell", None), "user_ns", None)
+    def _user_ns(self) -> dict:
+        return self.virtual_lineage.shell.user_ns
 
     @staticmethod
     def _called_names(code: str) -> set[str]:
@@ -1265,12 +1269,11 @@ class ReexecutionPlanner:
         After a kernel restart a helper is not defined yet, so its body can
         only be read from the notebook -- the ``def`` statement in the trace,
         whose inputs are the globals the body reads."""
-        memo_key = (id(simulation_trace), len(simulation_trace or ()))
-        memo = self.__dict__.get("_trace_defs_memo")
-        if memo is not None and memo[0] == memo_key:
-            return memo[1]
+        memo = self._trace_defs_memo
+        if memo is not None and memo[0] is simulation_trace and memo[1] == len(simulation_trace or ()):
+            return memo[2]
         defs: dict = {}
-        self.__dict__["_trace_defs_memo"] = (memo_key, defs)
+        self._trace_defs_memo = (simulation_trace, len(simulation_trace or ()), defs)
         for entry in simulation_trace or ():
             code = entry.stmt_code.lstrip()
             if not code.startswith(("def ", "async def ", "@")):
@@ -1382,8 +1385,7 @@ class ReexecutionPlanner:
         # consumer — e.g. an edited payload that exists just to be dumped).
         changed_inputs = scheduled_outputs | set(broken_vars or ())
 
-        tracking = getattr(self.classifier, "tracking_state", None)
-        runtime_lineage = getattr(tracking, "variable_lineage", None) or {}
+        runtime_lineage = self.tracking_state.variable_lineage
         # Live kernel namespace, to tell "provably unchanged" apart from
         # "absent". A writer input that is gone from user_ns (kernel restart,
         # ``del``, or an isolated re-run whose producer never ran this session)
@@ -1392,7 +1394,7 @@ class ReexecutionPlanner:
         # the input's producer. That left ``df.to_csv(path)`` scheduled WITHOUT
         # its producer, so it ran against a missing ``df`` and raised NameError
         # post-restart, poisoning the whole notebook.
-        user_ns = getattr(getattr(self.virtual_lineage, "shell", None), "user_ns", None)
+        user_ns = self._user_ns()
 
         def _input_changed(name: str) -> bool:
             if name in changed_inputs:
@@ -1469,8 +1471,7 @@ class ReexecutionPlanner:
         # against the PRE-write file state. Re-execution happens in trace
         # order, after the writer, so its freshness is decided against the
         # freshly written file.
-        tracking = getattr(self.classifier, "tracking_state", None)
-        executed_file_deps = getattr(tracking, "executed_file_deps", None) or {}
+        executed_file_deps = self.tracking_state.executed_file_deps
         # Only what depends on a file a scheduled writer WRITES. "Any file
         # dependency" promoted nearly everything after the writer, because
         # recorded dependencies include inherited ones: saving a cleaned copy of
@@ -1603,11 +1604,8 @@ class ReexecutionPlanner:
         file on disk is now out of date, and the badge must not call it
         current.
         """
-        tracking = getattr(self.classifier, "tracking_state", None)
-        executed_writes = getattr(tracking, "executed_write_stmt_codes", None)
-        if executed_writes is None:
-            return []
-        runtime_lineage = getattr(tracking, "variable_lineage", None) or {}
+        executed_writes = self.tracking_state.executed_write_stmt_codes
+        runtime_lineage = self.tracking_state.variable_lineage
 
         def _input_lineage_drifted(name: str) -> bool:
             # The writer's payload changed even though nothing in the variable
@@ -1784,13 +1782,12 @@ class ReexecutionPlanner:
         literal path (``OUT = Path('report')``) resolves from *simulation_trace*;
         a folder removed by ``shutil.rmtree(OUT)`` leaves no record to fall back on.
         """
-        user_ns = getattr(getattr(self.virtual_lineage, "shell", None), "user_ns", None)
+        user_ns = self._user_ns()
         namespace = {**_literal_path_bindings(simulation_trace), **(user_ns or {})}
         written = statement_written_paths(stmt_code, namespace=namespace)
         if written:
             return written
-        cash = getattr(self.virtual_lineage, "cash_instance", None)
-        backend = getattr(cash, "backend", None) if cash is not None else None
+        backend = self.virtual_lineage.backend()
         if backend is None:
             return None
         try:
@@ -1834,7 +1831,7 @@ class ReexecutionPlanner:
         with the same set in one check, so it is kept across passes too; one
         notebook's 10,000 documents were indexed twice per cell, 1.8 s, and each resolved
         twice."""
-        cached = getattr(self, "_read_index", None)
+        cached = self._read_index
         if cached is not None and cached[0] is relevant_read_paths and cached[1] == len(relevant_read_paths):
             return cached[2]
         read_forms: set[str] = set()
@@ -1964,8 +1961,7 @@ class ReexecutionPlanner:
             trace_event("writer_not_fresh", stmt=stmt_code[:80], reason=reason, **detail)
             return reason
 
-        cash = getattr(self.virtual_lineage, "cash_instance", None)
-        backend = getattr(cash, "backend", None) if cash is not None else None
+        backend = self.virtual_lineage.backend()
         if backend is None:
             return "no backend"
         try:
