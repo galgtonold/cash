@@ -10,7 +10,7 @@ The case it doesn't cover is when the path (or the data source identity, more ge
 
 - A loader called as `load(dataset_name)` that should track `f"data/{dataset_name}.parquet"`.
 - A reader that mounts a different config file per tenant.
-- A function that watches an mtime on a file whose name was computed from a hash of the input.
+- A function that watches a file whose name was computed from a hash of the input.
 
 You could expand each case into one `@cash.cache` per dataset, but that doesn't scale. `dynamic_depends_on=` lets you express "compute the dependency from the arguments, then track it" in one decorator.
 
@@ -29,11 +29,11 @@ def load(name: str):
     import pandas as pd
     return pd.read_parquet(f"data/{name}.parquet")
 
-load("features")          # First call: cache miss — compute + record mtime
+load("features")          # First call: cache miss — compute + record the file's digest
 load("features")          # cache hit
 load("labels")            # cache miss — different args and different tracked file
-# test:inject: import os, time as _t; _ts = _t.time() + 1; os.utime("data/features.parquet", (_ts, _ts))
-load("features")          # cache miss — dynamic dep mtime moved
+# test:inject: import pandas as _pd; _pd.DataFrame({"col1": ["new"]}).to_parquet("data/features.parquet")
+load("features")          # cache miss — the file's content changed
 ```
 
 The resolver receives **the same positional and keyword arguments as the decorated function** and must return a `DataSource` instance (or a list of them, or a single one wrapped in a list). On every cache lookup Cash calls the resolver, hashes the returned source(s), and folds the digest into the cache key.
@@ -45,7 +45,7 @@ The resolver lives in `Cash._resolve_dynamic_dependencies`. The path is:
 
 1. The resolver is called as `resolver(*args, **kwargs)` — same signature as the decorated function.
 2. The return value is normalised to a list: `dss = ds_result if isinstance(ds_result, list) else [ds_result]`.
-3. Each `None` entry is skipped, and each `DataSource` contributes `str(ds.state_token())`. Anything else makes the call unkeyable (below). `state_token()` is the one method a `DataSource` has to say what state it is in; `FileDataSource`'s returns the file's mtime.
+3. Each `None` entry is skipped, and each `DataSource` contributes `str(ds.state_token())`. Anything else makes the call unkeyable (below). `state_token()` is the one method a `DataSource` has to say what state it is in; `FileDataSource`'s returns the file's content digest.
 4. The collected strings are sorted and SHA-256'd to produce a `dynamic_state_hash` that is mixed into the cache key alongside the args hash and the static dependency hash.
 
 Two consequences of step 3 worth pinning down:
@@ -93,7 +93,7 @@ The resolver must return one of:
 
 Any other value makes the call run uncached, with a warning.
 
-To track something other than an mtime, write a `DataSource` subclass. The key
+To track something other than a local file, write a `DataSource` subclass. The key
 method is `state_token()`, which must return a **value that
 changes when the data changes** — a version, a config digest, a tenant id. Cash
 folds that value into the cache key, so the entry invalidates when it moves.
@@ -154,7 +154,7 @@ def resolver(x):
     return FileDataSource(f"data/{state['v']}.parquet")
 ```
 
-Mutating `state['v']` between calls changes which file the resolver returns, but the *function source* doesn't change and the cache won't notice unless the new file's mtime differs from the old one's. If you need a version-keyed cache, encode the version into the function arguments, not into a closure.
+Mutating `state['v']` between calls changes which file the resolver returns, but the *function source* doesn't change and the cache won't notice unless the new file's content differs from the old one's. If you need a version-keyed cache, encode the version into the function arguments, not into a closure.
 
 ## Error handling
 
@@ -176,13 +176,13 @@ A transiently failing resolver (e.g. a temporary `OSError`) therefore does not b
 
 Two things to watch:
 
-- **Resolver cost.** It runs on every call, so the overhead lands on cache hits too. `FileDataSource(path)` costs one `os.path.getmtime` when its token is read — one stat per source, usually sub-millisecond. Custom subclasses that do anything heavier should cache internally.
+- **Resolver cost.** It runs on every call, so the overhead lands on cache hits too. `FileDataSource(path)` costs one `stat` when its token is read: the content digest is memoized on the file's stat, so the file is read again only after it changed. Custom subclasses that do anything heavier should cache internally.
 - **`DataSource` reuse.** Returning a fresh `FileDataSource(path)` from the resolver every call means a new stat every call. That's fine for filesystem reads but if your custom `DataSource` is expensive to construct, consider memoising the resolver itself (a plain `functools.lru_cache` over `(path,)` is enough).
 
 ## Caveats
 
 - **Resolver errors fail closed.** A resolver that raises or returns something other than a `DataSource` makes each such call run uncached, with a warning, rather than keying it without the dependency.
-- **`FileDataSource` reads the mtime when the key is built.** Its token is the file's *current* mtime at the moment the resolver runs — exactly what you want for dynamic tracking. (`file_depends_on=` works differently: it checks the file's content, the way an automatically tracked read is checked. See [Custom File Sources](custom-file-sources.md).)
+- **`FileDataSource` reads the file's state when the key is built.** Its token is the digest of the file's *current* content at the moment the resolver runs — the same fingerprint `file_depends_on=` and an automatically tracked read are checked by (see [Custom File Sources](custom-file-sources.md)), so a `touch` alone does not invalidate.
 - **Closures over mutable state are a footgun.** See the example above — if a closure changes which `DataSource` you return without changing the function arguments, the cache may not notice. Encode anything that varies across calls into the arguments.
 
 ## API reference
@@ -191,8 +191,8 @@ Two things to watch:
 |---|---|---|
 | `dynamic_depends_on=callable` | `@cash.cache` kwarg | Calls *callable* with the function's args; expects a `DataSource` or list of them. Folded into the cache key as a sorted SHA-256 of each source's `state_token()`. |
 | `dynamic_depends_on=[callable1, callable2, ...]` | `@cash.cache` kwarg | Each resolver is called independently; results are pooled and hashed together. Equivalent to one resolver that concatenates the lists. |
-| `cash.DataSource` | Public ABC | Subclass to track anything other than file mtime. Implement `get_id` and `state_token`. |
-| `cash.FileDataSource(path)` | Public class | mtime-based source for a single file. The canonical thing to return from a resolver. |
+| `cash.DataSource` | Public ABC | Subclass to track anything other than a local file. Implement `get_id` and `state_token`. |
+| `cash.FileDataSource(path)` | Public class | Content-digest source for a single file. The canonical thing to return from a resolver. |
 | `CashCacheIneffectiveWarning` | Warning | Fires once per function when a resolver raises or returns something that is not a `DataSource`; the call runs uncached. |
 | `f.explain(*args).reason == 'key_uncomputable'` | Diagnostic | What `explain()` reports when the resolver raises or returns something that is not a `DataSource`. |
 

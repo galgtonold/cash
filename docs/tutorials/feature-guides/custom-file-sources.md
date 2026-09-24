@@ -142,9 +142,8 @@ Remote URLs are the exception to the "not tracked" list: `pd.read_parquet("s3://
 For the local-file gaps, use the `file_depends_on=` escape hatch below.
 
 !!! warning "`file_depends_on=` does not work for a remote URL"
-    It builds a `FileDataSource`, whose token is the file's mtime — and
-    `os.path.getmtime("s3://…")` fails, so the token is a constant `0.0` and the
-    entry **never invalidates**. Remote objects are tracked automatically
+    It records the path as a local file, and `s3://…` is never one: every
+    lookup sees the same absent file, so the entry **never invalidates**. Remote objects are tracked automatically
     (below); to declare one explicitly, use
     `depends_on=[RemoteFileDataSource(url)]`, not `file_depends_on=`.
 
@@ -376,7 +375,7 @@ NFS, SMB, and similar network mounts often have coarse mtime resolution (1-secon
 
 Three things on network mounts do still deserve care:
 
-- **`FileDataSource` remains mtime-based**, so the coarse-resolution problem applies to it in full. On a network mount, prefer auto-tracking or `file_depends_on=` for critical files, or write a `DataSource` subclass whose `state_token()` returns a content hash.
+- **`FileDataSource` reads content too**, so it is immune in the same way.
 - **Directory dependencies are mtime-based too.** A directory has no content to hash, so the [directory tracking](#directory-enumeration-tracks-the-directory) added for `glob` / `listdir` / `scandir` falls back to the mtime path. It relies on the filesystem bumping a directory's mtime when an entry is added or removed — true on local filesystems, not guaranteed on every network mount. If a new file appearing in a globbed directory must invalidate on such a mount, list the files explicitly via `file_depends_on=`.
 - **Content hashing costs a network read.** On a slow mount the hash is I/O over the wire whenever the size matches. The size check short-circuits the common "file was replaced wholesale" case first, and files over 256 MiB only pull 768 KiB of samples, but a large directory of same-size files re-hashed on every lookup is worth measuring.
 
@@ -394,7 +393,7 @@ The tracker records full absolute paths and stats them on every lookup. There's 
 |---|---|---|
 | `file_depends_on=path` | `@cash.cache` kwarg | Records *path* on every miss as if the function read it, so its content is checked on each lookup. Accepts `str` or `list[str]`. |
 | `c.register_file_handler(module, func, factory)` | `Cash` method | Register a wrapper factory for an additional reader. Catches every subsequent call to `module.func` from cached code. Glob wildcard supported in *func*. |
-| `cash.FileDataSource(path)` | Public class | mtime-based change detection for a single file. Use in `depends_on=[...]` for advanced cases or subclass for content-hashing. |
+| `cash.FileDataSource(path)` | Public class | Content-based change detection for a single file, the same check as `file_depends_on=`. Use in `depends_on=[...]` or return it from a `dynamic_depends_on=` resolver. |
 | `f.explain(*args).reason == 'file_changed'` | Diagnostic | Explanation reason emitted when one or more recorded files changed. `details['changed_files']` maps each path to `'content changed'`, `'size changed'`, or `'file missing'`. |
 | `FileAccessTracker` | Internal | Context manager that records a block's reads, installing the reader wrappers while it is open. Auto-installed around the body by `Cash._body_scope`; not intended for direct use. |
 | `FileDependencyRegistry` | Internal | The class of the process's one registry of handler factories (`file_registry()`). Accessed through `register_file_handler`; direct use is unsupported. |

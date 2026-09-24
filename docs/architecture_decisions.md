@@ -94,11 +94,10 @@ paid about 0.14 s per iteration. The window is documented in known-limitations.
 
 **Declared files follow the same rule:** `file_depends_on=` records its paths
 on the call's file tracker as if the body had read them, so they are
-snapshotted and checked by content like any tracked read. Only the
+snapshotted and checked by content like any tracked read. The
 `FileDataSource` class, a `DataSource` for `depends_on=` and
-`dynamic_depends_on=`, still folds the file's mtime into the cache key
-(`state_token()`, `src/cash/data_source.py`); users can subclass `DataSource`
-to return a digest instead.
+`dynamic_depends_on=`, folds the same content digest into the cache key
+(`state_token()`, `src/cash/data_source.py`).
 
 ---
 

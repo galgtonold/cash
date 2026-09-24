@@ -8,6 +8,7 @@ from typing import Any
 
 from .diagnostics import warn_diagnostic
 from .exceptions import CashCacheIneffectiveWarning
+from .tracking.file_dep_snapshot import file_content_hash
 
 __all__ = ["DataSource", "FileDataSource"]
 
@@ -61,7 +62,15 @@ def state_token_of(source: DataSource) -> str:
 
 
 class FileDataSource(DataSource):
-    """Tracks a file by its modification time (``0.0`` while it is missing)."""
+    """Tracks a local file by its content.
+
+    The token is the file's content digest, the fingerprint a file the function
+    reads itself is checked by (:func:`cash.tracking.file_dep_snapshot.file_content_hash`):
+    a ``touch`` that leaves the bytes alone keeps the entry, and an edit that
+    leaves the mtime where it was does not. Files above ``full_hash_max_bytes``
+    are hashed by sampling, and the digest is memoized on the file's stat, so
+    an unchanged file costs one ``stat``.
+    """
 
     def __init__(self, filepath: str):
         self.filepath = os.path.abspath(filepath)
@@ -69,8 +78,12 @@ class FileDataSource(DataSource):
     def get_id(self) -> str:
         return f"file:{self.filepath}"
 
-    def state_token(self) -> float:
+    def state_token(self) -> str:
+        digest = file_content_hash(self.filepath)
+        if digest is not None:
+            return digest
+        # A file that exists but cannot be read still moves with its mtime.
         try:
-            return os.path.getmtime(self.filepath)
+            return f"unreadable:{os.path.getmtime(self.filepath)}"
         except OSError:
-            return 0.0
+            return "absent"

@@ -1,17 +1,17 @@
 # Data sources
 
-<!-- claim: cash/data_source.py:FileDataSource @a09d1326 broad="the mtime contract is a property of the whole class", cash/remote_source.py:RemoteFileDataSource @2db689bf broad="the scheme list and validator contract are properties of the whole class" -->
+<!-- claim: cash/data_source.py:FileDataSource @69335436 broad="the content-digest contract is a property of the whole class", cash/remote_source.py:RemoteFileDataSource @2db689bf broad="the scheme list and validator contract are properties of the whole class" -->
 Objects that contribute to a cache key by reporting a **token representing
 their current state** (an mtime, a version, a content digest) — the cached
 entry invalidates when that token changes. Two are bundled:
-`FileDataSource` tracks a local file's mtime, and `RemoteFileDataSource` tracks
+`FileDataSource` tracks a local file's content, and `RemoteFileDataSource` tracks
 a remote object by the validator its store maintains. Custom subclasses extend
 the same pattern to databases, API endpoints, etc.
 
 ## Imports
 
 ```python
-from cash import FileDataSource         # the bundled file-mtime source
+from cash import FileDataSource         # the bundled local-file source
 from cash import RemoteFileDataSource   # s3://, gs://, az://, http(s)://
 from cash.data_source import DataSource  # ABC for writing your own
 ```
@@ -39,8 +39,10 @@ load_data()             # computes, recording the file's current state
 load_data()             # hits — the file hasn't changed
 ```
 
-When `input.csv` changes on disk, cached results are automatically
-invalidated. For the simpler one-off case, prefer
+When the content of `input.csv` changes, cached results are automatically
+invalidated; a `touch` that leaves the bytes alone does not. The token is the
+same content digest a file the function reads itself is checked by, so large
+files are hashed by sampling. For the simpler one-off case, prefer
 `@c.cache(file_depends_on="data/input.csv")` — same behavior, less
 typing.
 
