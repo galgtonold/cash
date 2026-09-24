@@ -1613,7 +1613,7 @@ class PurityAnalyzer:
     # through different code paths).
 
     def __init__(self) -> None:
-        # memo key -> (report, the closure it belongs to, or None)
+        # memo key -> (report, the function it was built from); see `analyze`
         self._cache: LruMemo[str, tuple[PurityReport, weakref.ref | None]] = LruMemo(PURITY_REPORTS)
         self._cache_lock = threading.Lock()
 
@@ -1626,6 +1626,8 @@ class PurityAnalyzer:
         function itself.
         """
         owner: weakref.ref | None = None
+        target = getattr(func, "__func__", func)  # a bound method is made anew per access
+        closure = bool(getattr(func, "__closure__", None))
         source_hash = _try_source_hash(func)
         if source_hash is not None:
             # Keyed by the namespace the names resolve in as well as the text:
@@ -1634,17 +1636,25 @@ class PurityAnalyzer:
             # second module the first one's helpers -- editing its own `step`
             # then changed nothing its key could see.
             source_hash = f"{source_hash}:{id(getattr(func, '__globals__', None))}"
-            # A closure's names also resolve in its cells: two closures with
-            # the same text in one module (one factory called twice, or two
-            # factories) can capture different helpers, and sharing a report
-            # keyed the second by the first one's helpers. A report of a
-            # closure belongs to that function object alone.
-            if getattr(func, "__closure__", None):
-                try:
-                    owner = weakref.ref(func)
-                except TypeError:
-                    source_hash = None
-                else:
+            # An id outlives nothing: a module dropped from `sys.modules` frees
+            # its namespace, and a new module with the same text can be given
+            # the same address. Its function was then handed the dead one's
+            # report, bindings and all -- and a binding into a module that has
+            # gone proves nothing (`bindings_changed`), so a helper patched
+            # with a mock was never seen and the call was served from the
+            # cache. So an entry holds the function it was built from, and
+            # serves only while that function is alive in the same namespace.
+            try:
+                owner = weakref.ref(target)
+            except TypeError:
+                source_hash = None
+            else:
+                # A closure's names also resolve in its cells: two closures
+                # with the same text in one module (one factory called twice,
+                # or two factories) can capture different helpers, and sharing
+                # a report keyed the second by the first one's helpers. A
+                # report of a closure belongs to that function object alone.
+                if closure:
                     source_hash = f"{source_hash}:{id(func)}"
         if source_hash is not None:
             with self._cache_lock:
@@ -1652,8 +1662,12 @@ class PurityAnalyzer:
             cached = None
             if entry is not None:
                 cached, cached_owner = entry
-                # The id of a closure that died can be reused by a new one.
-                if cached_owner is not None and cached_owner() is not func:
+                built_from = cached_owner() if cached_owner is not None else None
+                if built_from is None:
+                    cached = None
+                elif closure and built_from is not target:
+                    cached = None
+                elif getattr(built_from, "__globals__", None) is not getattr(func, "__globals__", None):
                     cached = None
             # The source is the same, but a name it calls through may hold a
             # different object now (a patched helper, or a real one restored):

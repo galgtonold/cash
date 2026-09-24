@@ -241,6 +241,32 @@ def test_cache_by_source_hash(analyzer):
     assert r1 is r2
 
 
+def _same_text_function():
+    def f(x):
+        return x * 2
+
+    return f
+
+
+def test_a_report_serves_another_function_of_the_same_text_and_namespace(analyzer):
+    first = _same_text_function()
+    assert analyzer.analyze(_same_text_function()) is analyzer.analyze(first)
+
+
+def test_a_report_dies_with_the_function_it_was_built_from(analyzer):
+    """The memo is keyed by the namespace's id, and a dead namespace's id can
+    be handed to a new module with the same text: an entry whose function
+    has gone must not be served, or the new module gets the old one's
+    helpers and bindings."""
+    import gc
+
+    first = _same_text_function()
+    report = analyzer.analyze(first)
+    del first
+    gc.collect()
+    assert analyzer.analyze(_same_text_function()) is not report
+
+
 def test_recursion_terminates(analyzer):
     """A self-referencing function doesn't loop the analyzer."""
 
