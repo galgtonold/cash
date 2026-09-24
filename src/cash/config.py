@@ -39,7 +39,7 @@ from ._location import (
 )
 from .diagnostics import warn_diagnostic
 from .exceptions import CashCacheIneffectiveWarning
-from .tracking.file_tracker import untracked
+from .tracking.tracker_context import untracked
 
 logger = logging.getLogger(__name__)
 

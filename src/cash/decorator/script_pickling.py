@@ -12,7 +12,7 @@ import sys
 from collections.abc import Callable
 
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
-from ..tracking.file_tracker import untracked
+from ..tracking.tracker_context import untracked
 
 logger = logging.getLogger(__name__)
 

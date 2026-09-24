@@ -47,7 +47,7 @@ import types
 
 from .analysis.annotations import ANNOTATION_PATTERN
 from .exceptions import SOURCE_RETRIEVAL_ERRORS
-from .tracking.file_tracker import untracked
+from .tracking.tracker_context import untracked
 from .value_types import IMMUTABLE_PRIMS
 
 __all__ = [

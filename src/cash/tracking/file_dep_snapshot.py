@@ -51,6 +51,7 @@ from typing import Any, NamedTuple
 
 from cash._paths import normalize_path, resolve_file_dep_path
 from cash.config import get_config
+from cash.tracking.tracker_context import untracked
 
 logger = logging.getLogger(__name__)
 
@@ -366,9 +367,6 @@ def file_content_hash(
         # Untracked: cash's own read of a file must not be tracked as a read
         # by the cached call it is checking on behalf of (which then hashed
         # the file a second time to fingerprint that "read").
-        # Local: import cycle tracking.file_dep_snapshot -> tracking.file_tracker -> tracking.file_dep_snapshot.
-        from cash.tracking.file_tracker import untracked
-
         with untracked(), io.FileIO(path, "rb") as f:
             if size <= full_hash_max:
                 # ``FileIO.read(n)`` allocates n bytes before it reads, so a
@@ -627,9 +625,6 @@ def stats_from_listings(paths: Iterable[str]) -> dict[str, os.stat_result]:
     """
     if os.name != "nt":
         return {}
-    # Local: import cycle tracking.file_dep_snapshot -> tracking.file_tracker -> tracking.file_dep_snapshot.
-    from cash.tracking.file_tracker import untracked
-
     by_dir: dict[str, dict[str, str]] = {}
     for path in paths:
         directory, name = os.path.split(path)

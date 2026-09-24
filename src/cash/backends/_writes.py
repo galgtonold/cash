@@ -20,7 +20,7 @@ from typing import Any
 
 from cash.diagnostics import warn_diagnostic
 from cash.exceptions import CashCacheStoreFailedWarning
-from cash.tracking.file_tracker import untracked
+from cash.tracking.tracker_context import untracked
 
 from ..config import get_config
 

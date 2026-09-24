@@ -30,8 +30,11 @@ from typing import Any, Optional
 
 from cash._clock import perf_counter as _perf_counter
 from cash._paths import is_remote_url, normalize_path
+from cash.effect_observer import active_observer as _active_effect_observer
 from cash.install_paths import installed_roots, interpreter_roots, is_user_path, norm_dir, normcase_path, site_roots
 from cash.tracking import io_watch
+from cash.tracking._memo import Memo
+from cash.tracking.tracker_context import active_tracker
 
 # A remote URL handed to a reader (``pd.read_parquet("s3://bucket/key")``)
 # reaches us as the raw first argument. ``os.path.realpath`` would mangle it into
@@ -47,77 +50,6 @@ __all__ = ["FileDependencyRegistry", "PostImportHook", "FileAccessTracker", "Fil
 FileDependencies = dict[str, float]
 
 logger = logging.getLogger(__name__)
-
-# The effect observer for the current task/thread. Imported at module scope
-# rather than inside the wrapper: `tracked_open` sits on the process-global
-# `open`, so an import executed there would run during arbitrary user code --
-# including at interpreter shutdown, while sys.modules is being torn down.
-# `cash.effect_observer` imports nothing from cash, so this cannot cycle.
-from cash.effect_observer import active_observer as _active_effect_observer
-
-# Active tracker for the current asyncio task / thread.
-# Read by the patched I/O dispatchers to decide whether to record the
-# access. Isolated per task/thread by contextvars semantics.
-active_tracker: contextvars.ContextVar[Optional["FileAccessTracker"]] = contextvars.ContextVar(
-    "active_tracker", default=None
-)
-
-
-class Memo:
-    """A dict that stops growing at *limit* entries.
-
-    Past the limit a new key is either not remembered, or (``reset=True``,
-    for a memo whose old entries go stale anyway) the memo starts over.
-    """
-
-    __slots__ = ("_data", "_limit", "_reset")
-
-    def __init__(self, limit: int, *, reset: bool = False) -> None:
-        self._data: dict[Any, Any] = {}
-        self._limit = limit
-        self._reset = reset
-
-    def get(self, key: Any, default: Any = None) -> Any:
-        return self._data.get(key, default)
-
-    def __contains__(self, key: Any) -> bool:
-        return key in self._data
-
-    def put(self, key: Any, value: Any) -> bool:
-        """Remember *value* under *key*; False if the memo is full and keeps it out."""
-        if key not in self._data and len(self._data) >= self._limit:
-            if not self._reset:
-                return False
-            self._data.clear()
-        self._data[key] = value
-        return True
-
-
-class untracked:
-    """Run cash's OWN I/O without it becoming anyone's dependency.
-
-    A nested cached call does its bookkeeping -- resolving configuration,
-    reading ``pyproject.toml``, walking up for project markers -- while the
-    OUTER call's tracker is live, so those reads were recorded as the outer
-    entry's file dependencies: bump the project's version and every cached
-    function that calls another one recomputed. The storage-path filters
-    (``is_cash_internal``) cannot help, because a config file is not storage.
-    A class rather than ``contextlib.contextmanager`` so it costs one
-    ContextVar swap, not a generator.
-    """
-
-    __slots__ = ("_token", "_observer_token")
-
-    def __enter__(self) -> None:
-        self._token = active_tracker.set(None)
-        # Nor anyone's observed side effect: cash writing its own bookkeeping
-        # file inside a nested call is not the OUTER function writing a file.
-        self._observer_token = _active_effect_observer.set(None)
-
-    def __exit__(self, *exc: Any) -> None:
-        _active_effect_observer.reset(self._observer_token)
-        active_tracker.reset(self._token)
-
 
 # The wrappers installed while a tracker is open (see `install_patches`),
 # and the lock that serialises installing and removing them with the post-

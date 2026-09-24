@@ -22,7 +22,7 @@ from typing import Any
 from .._paths import replace_with_retry
 from ..backends._writes import PendingWrites
 from ..backends.cache_dir import recreate_cache_dir
-from ..tracking.file_tracker import untracked
+from ..tracking.tracker_context import untracked
 
 logger = logging.getLogger(__name__)
 

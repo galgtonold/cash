@@ -76,8 +76,9 @@ from cash.tracking.file_dep_snapshot import (
     snapshot_dependencies,
     snapshot_is_fresh,
 )
-from cash.tracking.file_tracker import FileAccessTracker, active_tracker
+from cash.tracking.file_tracker import FileAccessTracker
 from cash.tracking.randomness import capture_rng_state, rng_modules_changed
+from cash.tracking.tracker_context import active_tracker
 
 from ..cost_model import estimated_restore_time
 from ._tee import TeeWriter

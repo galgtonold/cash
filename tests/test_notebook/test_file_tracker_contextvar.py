@@ -103,7 +103,7 @@ def test_nested_with_blocks(tmp_path):
 def test_reentry_same_instance_via_stack(tmp_path):
     """The same FileAccessTracker instance can be re-entered (nested with).
     The token stack restores the previous ContextVar state on the inner exit."""
-    from cash.tracking.file_tracker import active_tracker
+    from cash.tracking.tracker_context import active_tracker
 
     p_a = tmp_path / "a.txt"
     p_a.write_text("a", encoding="utf-8")
