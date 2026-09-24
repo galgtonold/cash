@@ -8,6 +8,7 @@
 
     **`functools.lru_cache`**
 
+    <!-- test:skip reason="illustrative: before/after code; the other tools and data are not set up" -->
     ```python
     from functools import lru_cache
 
@@ -16,6 +17,7 @@
         ...
     ```
 
+    <!-- test:skip reason="illustrative: before/after code; the other tools and data are not set up" -->
     ```python
     import cash
 
@@ -28,6 +30,7 @@
 
     **`joblib.Memory`**
 
+    <!-- test:skip reason="illustrative: before/after code; the other tools and data are not set up" -->
     ```python
     from joblib import Memory
 
@@ -38,6 +41,7 @@
         return data.apply(complex_transform)
     ```
 
+    <!-- test:skip reason="illustrative: before/after code; the other tools and data are not set up" -->
     ```python
     import cash
 
@@ -48,6 +52,7 @@
 
     **`diskcache`**
 
+    <!-- test:skip reason="illustrative: before/after code; the other tools and data are not set up" -->
     ```python
     from diskcache import Cache
 
@@ -58,6 +63,7 @@
         return data.apply(complex_transform)
     ```
 
+    <!-- test:skip reason="illustrative: before/after code; the other tools and data are not set up" -->
     ```python
     import cash
 
@@ -68,6 +74,7 @@
 
     **Hand-written pickle files**
 
+    <!-- test:skip reason="illustrative: before/after code; the other tools and data are not set up" -->
     ```python
     import os
     import pickle
@@ -81,6 +88,7 @@
             pickle.dump(result, f)
     ```
 
+    <!-- test:skip reason="illustrative: before/after code; the other tools and data are not set up" -->
     ```python
     import cash
 
@@ -95,6 +103,7 @@
 
     **`%store`**
 
+    <!-- test:skip reason="illustrative: before/after code; the other tools and data are not set up" -->
     ```python { .nb-cell }
     %store -r df
     if "df" not in dir():
@@ -102,12 +111,14 @@
         %store df
     ```
 
+    <!-- test:skip reason="illustrative: before/after code; the other tools and data are not set up" -->
     ```python { .nb-cell }
     # first cell, on its own
     import cash
     %cash_on
     ```
 
+    <!-- test:skip reason="illustrative: before/after code; the other tools and data are not set up" -->
     ```python { .nb-cell }
     # any cell below it
     df = pd.read_csv("large_file.csv")
@@ -115,6 +126,7 @@
 
     **Hand-written pickle files**
 
+    <!-- test:skip reason="illustrative: before/after code; the other tools and data are not set up" -->
     ```python { .nb-cell }
     import os
     import pickle
@@ -128,6 +140,7 @@
             pickle.dump(result, f)
     ```
 
+    <!-- test:skip reason="illustrative: before/after code; the other tools and data are not set up" -->
     ```python { .nb-cell }
     # below the import cash / %cash_on cell
     result = expensive_computation()

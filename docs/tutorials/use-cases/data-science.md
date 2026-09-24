@@ -36,6 +36,7 @@ run again, and the badge names the file:
 
 ### Cell 3: clean
 
+<!-- test:expect-badge rerun=EXECUTED -->
 ```python { .nb-cell }
 customers = customers.dropna(subset=["email", "signup_date"])
 customers = customers.assign(signup_date=pd.to_datetime(customers["signup_date"]))

@@ -78,25 +78,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 #: move the entry. ``test_harness.py`` fails on an entry that matches no fence,
 #: so the list only shrinks: when a page is fixed, delete its entries.
 PENDING_FENCES: dict[str, dict[str, str]] = {
-    "CHANGELOG.md": {
-        'if getattr(w.message, "code", None)': "fragment: w is a caught warning the entry does not create",
-    },
-    "docs/decorator.md": {
-        "%cash_stats": "a notebook magic on a decorator page: it sends the whole page through IPython",
-    },
     "docs/for-coding-agents.md": {
         "@cash.cache(assume_safe=True)": "fragment: needs `import cash` and a scikit-learn import",
-    },
-    "docs/tutorials/feature-guides/async-caching.md": {
-        "@cash.cache\nasync def make_iter": "top-level await: the page's later asyncio.run() then runs inside a loop",
-    },
-    "docs/tutorials/feature-guides/controlling-cache-behavior.md": {
-        "# @cash:persist\n# @cash:ttl=86400": "fragment: train_lightgbm, X and y are not defined",
-    },
-    "docs/why-cash.md": {
-        "import pickle, os": "illustrative: pd is not imported and large_file.csv does not exist",
-        "# IPython %store has no granularity": "illustrative: large_file.csv does not exist",
-        "%cash_on\n\ndf = pd.read_csv": "illustrative: large_file.csv does not exist",
     },
 }
 

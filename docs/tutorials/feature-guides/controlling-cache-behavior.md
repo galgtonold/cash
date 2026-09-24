@@ -47,6 +47,7 @@ chat = ChatClient()
 A price, a feed or anything else that changes on its own should not be served
 forever. Give the statement a lifetime in seconds:
 
+<!-- test:expect-badge rerun=EXECUTED -->
 ```python { .nb-cell }
 # @cash:ttl=60
 price = fetch_price("AAPL")    # served from the cache for a minute, then fetched again
@@ -60,6 +61,7 @@ statement; a `# @cash:ttl=N` on a statement overrides it.
 Use `no-cache` when the answer must be new on every run and cash cannot tell,
 for example a read from a live source:
 
+<!-- test:expect-badge rerun=EXECUTED -->
 ```python { .nb-cell }
 # @cash:no-cache
 live = fetch_price("AAPL")     # runs every time, nothing stored
@@ -90,6 +92,7 @@ Cash runs every POST, PUT or upload every time, because a cache hit would skip
 sending it. Some APIs use POST for plain queries, such as a search endpoint or an
 LLM completion. Tell cash that skipping the request is harmless:
 
+<!-- test:expect-badge rerun=EXECUTED -->
 ```python { .nb-cell }
 class SearchSession:
     def post(self, url, json=None):
@@ -99,6 +102,7 @@ class SearchSession:
 session = SearchSession()
 ```
 
+<!-- test:expect-badge rerun=EXECUTED -->
 ```python { .nb-cell }
 # @cash:assume-safe
 # @cash:ttl=3600
@@ -115,6 +119,7 @@ cannot be cached, such as `results.append(compute(x))`. If the function has an
 effect cash cannot see, turn this off for the statement, or for a whole loop by
 putting the comment on its header:
 
+<!-- test:expect-badge rerun=EXECUTED -->
 ```python { .nb-cell }
 results = []
 # @cash:no-cache-calls
@@ -137,6 +142,7 @@ def announce(text):
     return chat.chat_postMessage(channel="#runs", text=text)
 ```
 
+<!-- test:expect-badge rerun=EXECUTED -->
 ```python { .nb-cell }
 receipt = announce("model trained")    # badge: NOT CACHED - Calls @stateful function
 ```

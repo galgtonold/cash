@@ -25,7 +25,7 @@ terminal.
 
 ## 2. Write your code in the cells below
 
-<!-- test:skip reason="illustrative: large_dataset.csv is not shipped with the docs" -->
+<!-- test:expect-badge first=EXECUTED -->
 ```python { .nb-cell }
 import pandas as pd
 

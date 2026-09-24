@@ -447,6 +447,7 @@ them, and still could not tell what they meant.
   — `pytest.warns(match=...)`, a log filter, a regex — that match will break.
   Branch on the code instead, which is stable where prose is not:
 
+  <!-- test:skip reason="illustrative fragment: w is a caught warning the entry does not create" -->
   ```python
   if getattr(w.message, "code", None) == "CACHE-THRASH":
       ...
