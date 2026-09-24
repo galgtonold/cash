@@ -1369,8 +1369,8 @@ class Cash:
               the **absolute or resolvable** path you want recorded.
               Relative paths are resolved against ``os.getcwd()`` at
               tracking time.
-            * Tracking is on the file's ``(mtime, size)``; downstream
-              cache-key computation is automatic.
+            * Tracking is on the file's content, as for any tracked
+              read; downstream cache-key computation is automatic.
         """
 
         file_registry().register(module_name, func_name, handler_factory)

@@ -46,9 +46,9 @@ def carrier_name(carrier: Any) -> str:
 
 
 def is_user_code_carrier(carrier: Any) -> bool:
-    """``_is_user_code_object`` for the ADVISORY rather than for hashing.
+    """``is_user_code_object`` for the ADVISORY rather than for hashing.
 
-    ``_is_user_code_object`` answers "could not confirm reachability ->
+    ``is_user_code_object`` answers "could not confirm reachability ->
     treat as user code". That is the safe direction when deciding whether
     to HASH something and the wrong one when deciding whether to WARN about
     it: an object with no ``__qualname__`` of its own -- a
@@ -181,7 +181,7 @@ class CodeArgs:
     def iter_code_carriers(self, value: Any, _depth: int = 0, _seen: set | None = None):
         """Yield objects in *value* that carry user code.
 
-        Depth-bounded at 8, matching ``_stabilize_for_global_hash``. ``_seen``
+        Depth-bounded at 8, matching ``stabilize_for_global_hash``. ``_seen``
         guards self-referential containers, and doubles as a once-per-argument
         dedup for the classes yielded on behalf of instances: a list of 50k
         objects of one class must evaluate the user-code gate once, not 50k
@@ -195,7 +195,7 @@ class CodeArgs:
         # argument. Returning before ``_seen`` is touched keeps a list of a
         # million numbers allocation-free; otherwise the id-set below would grow
         # to the container's length on every cached call. Mirrors
-        # ``_iter_contained``'s first line. See `CODELESS_PRIMS` for why this
+        # ``iter_contained``'s first line. See `CODELESS_PRIMS` for why this
         # is an exact-type test against a tuple rather than an isinstance.
         if type(value) in CODELESS_PRIMS:
             return
@@ -235,7 +235,7 @@ class CodeArgs:
             # yielding the instance would fold NOTHING, while the identical
             # object WITHOUT ``__call__`` takes the instance branch below and
             # folds its class: adding ``__call__`` to a class must not remove
-            # that class's code from the key. ``_is_opaque`` returns the same verdict for a class as
+            # that class's code from the key. ``is_opaque`` returns the same verdict for a class as
             # for one of its instances, so routing the class here rather than
             # the instance leaves opacity unchanged.
             call = getattr(type(value), "__call__", None)
@@ -338,7 +338,7 @@ class CodeArgs:
 
         Split out because three branches need it, and because the dedup is the
         difference between one user-code gate evaluation per ARGUMENT and one
-        per ELEMENT -- ``_is_user_code_object`` is a ``sys.modules`` lookup plus
+        per ELEMENT -- ``is_user_code_object`` is a ``sys.modules`` lookup plus
         a ``__qualname__`` walk, and a list of 50k instances of one class was
         paying it 50k times (measured: 50000 calls -> 1).
 
@@ -374,7 +374,7 @@ class CodeArgs:
                     continue
                 # Dedup ACROSS arguments too, not just within one walk:
                 # `f(a, b, c)` with three instances of one class reaches
-                # `_is_opaque` + `CodeIdentity.code_surface_hash` once instead of three
+                # `is_opaque` + `CodeIdentity.code_surface_hash` once instead of three
                 # times. Safe by identity because every carrier is
                 # reachable from `args`/`kwargs` for this whole loop, so no
                 # id can be recycled underneath us.

@@ -277,7 +277,7 @@ def is_opaque(obj: Any) -> bool:
     """True when *obj* -- a class, or an instance of one -- must not have
     its code hashed into a cache key.
 
-    The type itself must be in ``_OPAQUE_TYPES`` (``cash.opaque``); a
+    The type itself must be in ``OPAQUE_TYPES`` (``cash.opaque``); a
     subclass of an opaque class is not covered. It may carry its own
     freshly-written methods the user actively edits, and inheriting the
     mark would silently exempt that code from ever invalidating the cache.

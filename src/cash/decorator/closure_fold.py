@@ -81,7 +81,7 @@ def unsafe_uses_of(
     correctly, which is what made it so hard to believe.
 
     ``waived`` skips uses on a ``# @cash:assume-safe`` line: the effect
-    there was audited as one a hit may lose (see `_waived_use_filter`).
+    there was audited as one a hit may lose (see `waived_use_filter`).
     """
     unsafe: set[str] = set()
     write_methods: frozenset[str] = frozenset()
@@ -200,9 +200,8 @@ def iter_code_scopes(code: types.CodeType) -> Iterator[types.CodeType]:
     A generator expression, comprehension, or ``lambda`` compiles to its
     OWN code object hung off the enclosing ``co_consts``, so anything it
     references is invisible in the outer ``co_names`` / instruction stream.
-    Walking the const tree is the same trick the
-    bytecode hash uses (``tracking/function_tracker.py``
-    ``_update_code_object_hash``) for exactly this reason.
+    Walking the const tree is what `walk_nested_code` does, for exactly
+    this reason.
 
     Comprehensions nest, so this recurses. Note that CPython 3.12+ inlines
     list/set/dict comprehensions into the enclosing scope (PEP 709) — those
@@ -372,7 +371,7 @@ class HelperIdentity:
         folded (``ClosureFold.fold_defaults``); now every followed helper's are, by value,
         through the same payload hasher and the same callable fallback.
 
-        Not inside ``_hash_callable_source``'s memo: that is keyed per CODE
+        Not inside ``hash_callable_source``'s memo: that is keyed per CODE
         object, and two closures from one factory share a code object while
         holding different defaults.
         """
@@ -428,7 +427,7 @@ class HelperIdentity:
         return identity
 
     def fingerprint_default(self, v: Any) -> Any:
-        """`_fingerprint_default`, plus what a FUNCTION default carries.
+        """`HelperIdentity.fingerprint_default`, plus what a FUNCTION default carries.
 
         A factory-built callable as a default (`def run(xs, fn=make(3))`)
         shares its source with every other one the factory makes; the value it
@@ -534,7 +533,7 @@ class ClosureFold:
             # `ramp` both returning 0.025001250062501867, one body execution.
             #
             # A call cannot mutate a function, so the reason `unsafe` exists
-            # does not apply. Same predicate as `_fingerprint_default`, and the
+            # does not apply. Same predicate as `HelperIdentity.fingerprint_default`, and the
             # same deliberate limit: functions, methods and builtins only. An
             # arbitrary callable INSTANCE takes the paths below rather than being
             # keyed on its class and silently sharing entries across instances

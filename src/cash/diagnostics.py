@@ -319,7 +319,7 @@ def warn_diagnostic_message(
 ) -> None:
     """Emit an already-rendered *message* carrying *code*.
 
-    ``Cash._warn_once`` renders with :func:`format_diagnostic` itself, because
+    ``Notices.warn_once`` renders with :func:`format_diagnostic` itself, because
     it files the same text into ``cache_info()['warnings']`` before emitting and
     the log and the terminal must not drift apart. This keeps the ``.code``
     attribute and the registry check for that path.

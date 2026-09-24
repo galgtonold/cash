@@ -57,7 +57,7 @@ logger = logging.getLogger(__name__)
 # running. Editing a .py file WITHOUT reloading leaves the old code object
 # live, and the old digest is then the correct answer.
 #
-# Load-bearing, not a micro-optimisation. `_hash_callable_source` is the live
+# Load-bearing, not a micro-optimisation. `hash_callable_source` is the live
 # per-call identity of every transitive helper, and it calls
 # `inspect.getsource`, which re-reads and RE-TOKENISES the source block on
 # every call. Measured on a 2-helper function: 8700 tokenizer calls per 300
@@ -136,7 +136,7 @@ def func_key(func: Callable) -> str:
     (e.g. a notebook's ``dep()`` vs a library module's ``dep()``).
 
     ``__main__`` is resolved to the name the module would have when
-    imported — see `_main_module_name`.
+    imported — see `resolve_main_module`.
 
     A ``functools.partial`` is named after the function it wraps plus a
     digest of what it binds. Any other callable without ``__qualname__``
@@ -338,7 +338,7 @@ def is_user_class(cls: Any, own_pkg: str | None = None) -> bool:
     class's attributes should not churn the key.
 
     *own_pkg*: the cached function's top-level package, which counts as
-    user code wherever it is installed -- see ``_is_user_module``.
+    user code wherever it is installed -- see ``is_user_module``.
     """
 
     if in_own_package(getattr(cls, "__module__", None), own_pkg):
@@ -383,10 +383,10 @@ FILELESS_NON_USER = frozenset(sys.builtin_module_names) | {
 
 
 def is_user_code_module(mod: Any) -> bool:
-    """Like :meth:`_is_user_module`, but a module with no ``__file__``
+    """Like :meth:`is_user_module`, but a module with no ``__file__``
     counts as user code rather than being disqualified.
 
-    ``_is_user_module`` returns False for a fileless module ("nothing to
+    ``is_user_module`` returns False for a fileless module ("nothing to
     edit"). That is right for its callers and wrong here: a class defined
     in a notebook cell lives in a ``__main__`` with no ``__file__``, and it
     is precisely the thing the user edits between runs.
@@ -413,7 +413,7 @@ def is_user_code_object(obj: Any) -> bool:
     lives. Confirm *obj* is actually reachable through the module it
     claims before trusting that module's verdict; otherwise this is the
     exec()/notebook case the predicate exists to catch, so it counts as
-    user code (mirroring ``_is_user_code_module``'s fileless-module
+    user code (mirroring ``is_user_code_module``'s fileless-module
     handling).
     """
     mod_name = getattr(obj, "__module__", None)
@@ -433,7 +433,7 @@ def qualname_resolves_in(mod: Any, obj: Any) -> bool:
     module implementing PEP 562 ``__getattr__`` (a real pattern for
     deprecation shims: raise a custom error for an old name instead of
     just returning it) can make this walk raise something else entirely,
-    and ``_is_user_code_object`` must never raise.
+    and ``is_user_code_object`` must never raise.
     """
     qualname = getattr(obj, "__qualname__", None) or getattr(obj, "__name__", None)
     if not qualname:
@@ -772,7 +772,7 @@ class CodeIdentity:
         has no retrievable source at all: ``inspect.getsource`` resolves a class
         through ``sys.modules[cls.__module__].__file__``, and a notebook
         ``__main__`` has none. A function escapes this via ``co_filename``,
-        which is why ``_hash_callable_source`` works for helpers and not here.
+        which is why ``hash_callable_source`` works for helpers and not here.
 
         Comments and formatting are absent from bytecode, so they do not
         invalidate -- strictly better than source hashing. Docstrings live in
@@ -1427,7 +1427,7 @@ class CodeIdentity:
 
         Source-first, surface-as-fallback. Both of this method's callers
         (``CodeIdentity.instance_class_source_parts``, directly and via
-        ``GlobalsFold.fold_read_globals``) gate on ``_is_user_class`` -> ``_is_user_module``,
+        ``GlobalsFold.fold_read_globals``) gate on ``is_user_class`` -> ``is_user_module``,
         which requires ``__file__`` -- so every class actually reachable here
         already has retrievable source, and ``inspect.getsource`` succeeds. The
         class-aware surface (``CodeIdentity.code_surface_hash``) only engages on

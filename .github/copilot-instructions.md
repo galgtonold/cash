@@ -35,6 +35,13 @@ Read these instead of relying on this file for details:
 ## Architecture
 
 - **`src/cash/core.py`**: the `Cash` class and `@cash.cache`.
+- **`src/cash/decorator/`**: the objects `Cash.__init__` builds and wires together.
+  Each one takes what it uses as constructor arguments; there are no mixins and no
+  shared `self`. `FunctionRegistry` holds the cached functions and their analysis.
+  `KeyBuilder` and `CallRunner` (`runtime.py`) build the key and run a call.
+  `ResultStore` stores results, and `Explainer` answers `f.explain()`. The key
+  folds live in `closure_fold.py`, `globals_fold.py`, `code_args.py`,
+  `code_identity.py` and `arg_hashing.py`.
 - **`src/cash/backends/`**: storage backends. `factory.py` maps a `TierConfig.type`
   (`memory` / `file` / `sqlite` / `redis` / `s3` / `tiered`) to a class. The default is
   `TieredBackend([InMemoryBackend, FileBackend])`.

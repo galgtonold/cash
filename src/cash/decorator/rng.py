@@ -333,7 +333,7 @@ class RngWatch:
 
         Runs at DECORATION time, once per function. The analysis is a pure
         function of the source, so there is no reason to pay for it per call,
-        and ``cache()`` already reads the source anyway (``_register_func`` ->
+        and ``cache()`` already reads the source anyway (``FunctionRegistry.register`` ->
         ``callable_identity``), which warms ``linecache`` for us.
 
         A fresh detector is used per function rather than one shared across the
@@ -501,7 +501,7 @@ class RngWatch:
         recipe: a report would have called the model "completely stable across
         random seeds".
 
-        Same verdict rule as ``_unseeded_estimator_fits``: unseeded iff
+        Same verdict rule as ``unseeded_estimator_fits``: unseeded iff
         ``get_params()`` HAS ``random_state`` and it is ``None``. A seed of any
         kind, or no such parameter at all (``LinearRegression``), is silent.
         Any failure is silent too -- an advisory must never break a call.
