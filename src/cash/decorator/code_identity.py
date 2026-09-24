@@ -1427,7 +1427,7 @@ class CodeIdentity:
 
         Source-first, surface-as-fallback. Both of this method's callers
         (``CodeIdentity.instance_class_source_parts``, directly and via
-        ``_fold_read_globals``) gate on ``_is_user_class`` -> ``_is_user_module``,
+        ``GlobalsFold.fold_read_globals``) gate on ``_is_user_class`` -> ``_is_user_module``,
         which requires ``__file__`` -- so every class actually reachable here
         already has retrievable source, and ``inspect.getsource`` succeeds. The
         class-aware surface (``CodeIdentity.code_surface_hash``) only engages on

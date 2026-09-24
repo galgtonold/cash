@@ -188,6 +188,26 @@ def helper_mutates_global(fn: Any, name: str) -> bool:
     return name in unsafe_uses_of(tree, frozenset({name}), bare_args=False, mutating_methods_only=True)
 
 
+class LearnedMutations:
+    """Names a call was OBSERVED to mutate, per ``(code object, scope)``.
+
+    Learned once, on the miss that saw it; from then on the closure and
+    globals folds stop folding those names, which would otherwise move the
+    key on every call.
+    """
+
+    def __init__(self) -> None:
+        self._by_code: dict[tuple[Any, str], set[str]] = {}
+
+    def of(self, code: Any, scope: str) -> frozenset[str] | set[str]:
+        """The names learned for *code* in *scope* ("closure" or "global")."""
+        return self._by_code.get((code, scope), frozenset())
+
+    def learn(self, code: Any, scope: str, name: str) -> None:
+        """Record that a call of *code* mutated *name* in *scope*."""
+        self._by_code.setdefault((code, scope), set()).add(name)
+
+
 class PurityChecksMixin:
     """Purity findings, observed effects and argument mutation, per cached function."""
 
@@ -322,7 +342,7 @@ class PurityChecksMixin:
                     mapping, key = owner
                     if key not in mapping:
                         continue
-                    after = self._carried_global_hash(mapping[key], getattr(func, "__module__", None))
+                    after = self._globals.carried_global_hash(mapping[key], getattr(func, "__module__", None))
                 else:
                     # The mapping the BEFORE hash came from -- a helper's
                     # module, when this entry was folded on a helper's behalf.
@@ -330,7 +350,7 @@ class PurityChecksMixin:
                     if not isinstance(g, dict) or name not in g:
                         continue
                     after = self._args.hash_payload(
-                        (stabilize_for_global_hash(g[name], self._data_callable_identity),), {}
+                        (stabilize_for_global_hash(g[name], self._globals.data_callable_identity),), {}
                     )
             except Exception:  # noqa: BLE001 - unhashable NOW; treat as unchanged
                 continue
@@ -339,10 +359,10 @@ class PurityChecksMixin:
             if scope == "carrier":
                 # The library's own state (a generator advanced, a cache
                 # filled), not a mutation the user wrote: stop folding it.
-                self._mutating_globals.setdefault((code, "global"), set()).add(name)
+                self._mutations.learn(code, "global", name)
                 logger.debug("[CORE] %s: stopped keying what %s carries; calling it changes it", func_name, name)
                 continue
-            self._mutating_globals.setdefault((code, scope), set()).add(name)
+            self._mutations.learn(code, scope, name)
             if scope == "closure":
                 where = f"variable it captures '{name}'"
             else:
@@ -643,14 +663,14 @@ class PurityChecksMixin:
             # common settings pattern there is.
             return True
         try:
-            if name not in self._read_global_data_names(reader):
+            if name not in self._globals.read_global_data_names(reader):
                 return False
         except Exception:  # noqa: BLE001 - user source; a heuristic must not break a call
             return False
         value = module_ns[name]
         if isinstance(value, types.ModuleType):
             # `conf.RATE` reads of a module of the user's are folded by value
-            # (`_module_attr_parts`); "mutated elsewhere" is `conf.RATE = ...`.
+            # (`GlobalsFold.module_attr_parts`); "mutated elsewhere" is `conf.RATE = ...`.
             return is_user_module(value, own_package(reader))
         if isinstance(value, type):
             return False

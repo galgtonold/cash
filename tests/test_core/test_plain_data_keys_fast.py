@@ -117,10 +117,10 @@ def test_a_warm_hit_on_many_rows_does_not_walk_them(tmp_path, monkeypatch):
         monkeypatch.setattr(
             object_hashing, name, lambda *a, _r=real, _n=name, **k: calls.__setitem__(_n, calls[_n] + 1) or _r(*a, **k)
         )
-    real_iter = c._iter_code_carriers
+    real_iter = c._code_args.iter_code_carriers
     monkeypatch.setattr(
-        c,
-        "_iter_code_carriers",
+        c._code_args,
+        "iter_code_carriers",
         lambda *a, **k: calls.__setitem__("carriers", calls["carriers"] + 1) or real_iter(*a, **k),
     )
     t0 = time.perf_counter()

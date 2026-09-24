@@ -33,7 +33,7 @@ class KeyBuildFailed(Exception):
 
 
 class UnhashableDefault(Exception):
-    """A parameter default could not be hashed; `_fold_defaults` has warned."""
+    """A parameter default could not be hashed; `ClosureFold.fold_defaults` has warned."""
 
 
 class UnhashableArgs(Exception):
@@ -113,12 +113,12 @@ CALL_ENTRY: "contextvars.ContextVar[list | None]" = contextvars.ContextVar("_cas
 
 #: The capture watch of the key being built: {name: (pre-call hash, scope,
 #: owner_globals, owner)} for every provisional capture folded into it. Both
-#: `_fold_closure` and `_fold_read_globals` add to it; `_resolve_cache_key`
+#: `ClosureFold.fold_closure` and `GlobalsFold.fold_read_globals` add to it; `_resolve_cache_key`
 #: sets a fresh one per key and hands it back with the key, so two threads, or
 #: a cached call nested in another's key build, never share one.
 #:
 #: `owner_globals` is the mapping the pre-call hash was taken FROM, and it is
-#: not always the decorated function's own. `_fold_read_globals` also runs on
+#: not always the decorated function's own. `GlobalsFold.fold_read_globals` also runs on
 #: behalf of module-bounded HELPERS, so a global read by a helper in another
 #: module lands here under a bare name that does not exist in
 #: `func.__globals__` at all. Re-reading it there found None, hashed that, and

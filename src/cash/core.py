@@ -40,8 +40,8 @@ from .decorator.call_state import (
     enter_cached_call,
     exit_cached_call,
 )
-from .decorator.closure_fold import ClosureFoldMixin
-from .decorator.code_args import CodeArgsMixin
+from .decorator.closure_fold import CaptureAnalysis, ClosureFold, HelperIdentity
+from .decorator.code_args import CodeArgs
 from .decorator.code_identity import (
     CodeIdentity,
     func_key,
@@ -55,12 +55,8 @@ from .decorator.explain import (
 )
 from .decorator.file_deps import FileDepsMixin
 from .decorator.frozen import FrozenResults
-from .decorator.globals_fold import (
-    GlobalsFoldMixin,
-)
-from .decorator.purity_checks import (
-    PurityChecksMixin,
-)
+from .decorator.globals_fold import GlobalsFold
+from .decorator.purity_checks import LearnedMutations, PurityChecksMixin
 from .decorator.registry import FunctionRegistry, warn_inert_dependency
 from .decorator.reporting import CallLog, Notices
 from .decorator.rng import RngMixin
@@ -199,9 +195,6 @@ def _in_kernel() -> bool:
 
 
 class Cash(
-    CodeArgsMixin,
-    ClosureFoldMixin,
-    GlobalsFoldMixin,
     RngMixin,
     FileDepsMixin,
     PurityChecksMixin,
@@ -333,35 +326,6 @@ class Cash(
             # not keep the instance alive; registered before the exit work,
             # so it runs after it.
             atexit.register(_summary_at_exit, weakref.ref(self))
-        self._deref_writes: dict = {}  # code object -> frozenset of reassigned freevars
-        # code object -> global names its decorator expressions read
-        self._decorator_names_cache: dict = {}
-        # code object -> frozenset of free vars with capture-unsafe uses
-        self._capture_use_cache: dict = {}
-        # code object -> tuple of global names it reads (global folding)
-        self._global_read_cache: dict = {}
-        # code object -> names folded only provisionally. See
-        # `_read_global_data_names`. A missing entry means "unknown", which
-        # `_fold_read_globals` treats as "watch everything".
-        self._provisional_global_cache: dict = {}
-        # (code object, scope) -> names a call was OBSERVED to mutate. Learned
-        # once, then those names stop being folded (see `_learn_mutating_captures`).
-        self._mutating_globals: dict = {}
-        # code object -> closure free vars folded only provisionally.
-        self._provisional_capture_cache: dict = {}
-        # (module_global, attribute) read pairs per code object; see
-        # _read_module_attr_pairs.
-        self._module_attr_cache: dict = {}
-        self._local_binding_cache: dict[Any, tuple | None] = {}
-        self._carrier_verdicts: dict[int, tuple[Any, bool]] = {}
-        # ``(class, is user code)`` per class id, for `_iter_attribute_carriers`:
-        # a list of 50k instances must not pay the verdict per element. The
-        # class is kept so a recycled id is never trusted. Bounded there.
-        self._attribute_walk_verdicts: dict[tuple[str, int], tuple[type, bool]] = {}
-        # Code carriers already reported (`_warn_unhashable_code_once`,
-        # `_warn_untrackable_in_carrier_once`): once per carrier and function.
-        self._warned_unhashable_code: set[tuple] = set()
-        self._warned_untrackable_carrier: set[tuple] = set()
         # The keys earlier runs stored, recorded beside the cache.
         self._stored_keys = StoredKeyRecord(self._backend_slot.local_dir)
         self._notices = Notices(self._registry.cached, self.functions, self._stored_keys, self._backend_slot)
@@ -372,17 +336,9 @@ class Cash(
         self._frozen = FrozenResults(self.config, self._notices)
         self._args = ArgHasher(self._registry.cached, self._frozen, self._notices)
         self._code = CodeIdentity(self._args)
-        # function object -> digest of its parameter defaults, for defaults that
-        # are immutable and therefore cannot drift between calls.
-        # Weak so the memo dies with the function instead of pinning it (and so
-        # a later function object can never inherit a dead one's entry by
-        # id-reuse). Mutable defaults are deliberately absent: they must be
-        # re-hashed per call to stay correct.
-        self._defaults_pins: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
-        # id(helper) -> (helper, __defaults__, __kwdefaults__, identity); see
-        # `_hash_helper_identity`. Holding the helper keeps its id from being
-        # recycled while the entry lives.
-        self._helper_defaults_memo: dict[int, tuple[Any, Any, Any, str]] = {}
+        self._captures = CaptureAnalysis()
+        self._helpers = HelperIdentity(self._args, self._captures)
+        self._mutations = LearnedMutations()
         # In-process async single-flight registry: cache_key ->
         # concurrent.futures.Future. When use_locking is set, concurrent awaits
         # of the same key coalesce - one coroutine computes, the rest wait and
@@ -418,14 +374,17 @@ class Cash(
             source_hashes=self.source_hashes,
             purity_reports=self._registry.purity_reports,
             graph=self.graph,
-            helper_resolver=SysModulesHelperResolver(self._hash_helper_identity),
+            helper_resolver=SysModulesHelperResolver(self._helpers.identity),
             declared_dep_snapshots=self._registry.declared_dep_snapshots,
             declared_dep_resolver=self._registry.resolve_declared_dep_hash,
         )
-
-        # The same live re-resolution, for functions found inside data globals
-        # (`_data_callable_identity`).
-        self._data_helper_resolver = SysModulesHelperResolver(self._hash_helper_identity)
+        self._globals = GlobalsFold(
+            self._args, self._code, self._helpers, self._registry, self._state_hasher, self._mutations, self._notices
+        )
+        self._closures = ClosureFold(
+            self._args, self._captures, self._helpers, self._globals, self._mutations, self._notices
+        )
+        self._code_args = CodeArgs(self._code, self._globals, self._frozen)
 
         atexit.register(self._exit_work.run)
 

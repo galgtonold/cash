@@ -304,7 +304,7 @@ for the cases this model *can't* see.
 
 ### What else is in the key — the ones that cost a recompute
 
-<!-- claim: cash/decorator/closure_fold.py:ClosureFoldMixin._fold_defaults @b9735923, cash/decorator/arg_hashing.py:ArgHasher.hash_payload @7bc7e4ca, cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe -->
+<!-- claim: cash/decorator/closure_fold.py:ClosureFold.fold_defaults @b9735923, cash/decorator/arg_hashing.py:ArgHasher.hash_payload @7bc7e4ca, cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe -->
 None of these gives a wrong answer. Each one costs a recompute you might not
 expect, measured across fresh processes:
 
@@ -383,7 +383,7 @@ cached function counts as your code even after `pip install .`, so a changed
 checkout. If you do need a third-party function's identity in the key, name it
 with [`depends_on=`](#depends_on-explicit-dependency-graph).
 
-<!-- claim: cash/decorator/globals_fold.py:GlobalsFoldMixin._local_binding_parts @8a3a536d, cash/purity_analyzer.py:resolve_local_import @e2289266 -->
+<!-- claim: cash/decorator/globals_fold.py:GlobalsFold._local_binding_parts @8a3a536d, cash/purity_analyzer.py:resolve_local_import @e2289266 -->
 An import written **inside** the function (`from .models import auc`, the usual
 way out of an import cycle) is followed the same way as one at the top of the
 file -- a function it imports, a constant (`from .settings import ROUNDING`),
@@ -486,7 +486,7 @@ TAX_RATE = 0.5
 net(100)          # 50.0 — recomputed, not the stale 80.0
 ```
 
-<!-- claim: cash/decorator/globals_fold.py:GlobalsFoldMixin._fold_read_globals @6c43e132, cash/decorator/globals_fold.py:GlobalsFoldMixin._fold_dependency_read_globals @abf3ee0c -->
+<!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @6c43e132, cash/decorator/globals_fold.py:GlobalsFold.fold_dependency_read_globals @abf3ee0c -->
 Only globals that are **read** participate — and that includes globals read
 on someone else's behalf: by a **helper**, so a helper returning a module-level
 `CONFIG` invalidates its caller when that config changes, and by another
@@ -517,7 +517,7 @@ normally.
 The same rule applies to variables a closure captures, not just module
 globals.
 
-<!-- claim: cash/decorator/globals_fold.py:GlobalsFoldMixin._carried_global_hash @2ae561ae -->
+<!-- claim: cash/decorator/globals_fold.py:GlobalsFold.carried_global_hash @2ae561ae -->
 **A callable built from data counts as that data.** A global that is a
 library callable carrying values — `SMOOTH = partial(ndimage.gaussian_filter,
 sigma=SIGMA)`, `POLY = np.poly1d(COEFFS)`, `CAL = interp1d(X, Y)`,
@@ -626,7 +626,7 @@ def build(schema):
 build(Schema)                    # edit Schema, call again -> used to return the old answer
 ```
 
-<!-- claim: cash/decorator/code_args.py:CodeArgsMixin._fold_code_args @1945cfc2, cash/decorator/code_args.py:CodeArgsMixin._iter_code_carriers @37807f5e -->
+<!-- claim: cash/decorator/code_args.py:CodeArgs.fold_code_args @1945cfc2, cash/decorator/code_args.py:CodeArgs.iter_code_carriers @37807f5e -->
 Your code reached through the arguments now folds into `state_hash`, so editing
 it invalidates. cash finds it in a class, a function, an instance (through its
 class), any of those nested in a list/tuple/set/dict, and an instance whose
@@ -717,7 +717,7 @@ flowchart TD
     F -->|Yes| G[Return cached value]
 ```
 
-<!-- claim: cash/decorator/runtime.py:compute_cache_key @a3272962, cash/decorator/code_args.py:CodeArgsMixin._fold_code_args @1945cfc2 -->
+<!-- claim: cash/decorator/runtime.py:compute_cache_key @a3272962, cash/decorator/code_args.py:CodeArgs.fold_code_args @1945cfc2 -->
 The cache key is `f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"`.
 
 - `state_hash` folds in the function's own source hash + every
@@ -1006,7 +1006,7 @@ By default, `@cash.cache` runs a static analyzer on the function body
   `globals()[name]()` → a warning, and the function is **still cached**.
   Editing the callable such a table holds does not invalidate; name it with
   `depends_on=[...]` and it will. A **module-level** table (`HANDLERS[key]()`)
-  needs none of this — <!-- claim: cash/decorator/globals_fold.py:GlobalsFoldMixin._data_callable_identity_of @000f2d06 -->cash hashes it as a global already, and each function
+  needs none of this — <!-- claim: cash/decorator/globals_fold.py:GlobalsFold.data_callable_identity @000f2d06 -->cash hashes it as a global already, and each function
   in it counts as what calling it runs: its source, the helpers it calls, and
   for a `@cash.cache` function its whole dependency state, so an edit to a
   step's helper, or to a cached step's own body, recomputes the function that

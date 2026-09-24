@@ -6,7 +6,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import types
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .. import _plain_data
 from ..dependency_state import EXPLAINING as _EXPLAINING
@@ -17,6 +17,11 @@ from ..source_norm import class_functions
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, PLAIN_SEQS
 from .arg_hashing import is_opaque, plain_census
 from .code_identity import is_user_code_object
+
+if TYPE_CHECKING:
+    from .code_identity import CodeIdentity
+    from .frozen import FrozenResults
+    from .globals_fold import GlobalsFold
 
 logger = logging.getLogger(__name__)
 
@@ -65,8 +70,22 @@ def is_user_code_carrier(carrier: Any) -> bool:
     return is_user_code_object(type(carrier))
 
 
-class CodeArgsMixin:
-    """The code an argument carries, folded into the state segment."""
+class CodeArgs:
+    """The user code an argument carries -- a class, a function, an instance
+    of the user's own class -- folded into the state segment."""
+
+    def __init__(self, code: CodeIdentity, globals_fold: GlobalsFold, frozen: FrozenResults) -> None:
+        self._code = code
+        self._globals = globals_fold
+        self._frozen = frozen
+        # ``(class, is user code)`` per class id, for `_iter_attribute_carriers`:
+        # a list of 50k instances must not pay the verdict per element. The
+        # class is kept so a recycled id is never trusted. Bounded there.
+        self._attribute_walk_verdicts: dict[tuple[str, int], tuple[type, bool]] = {}
+        # Code carriers already reported (`_warn_unhashable_code_once`,
+        # `_warn_untrackable_in_carrier_once`): once per carrier and function.
+        self._warned_unhashable_code: set[tuple] = set()
+        self._warned_untrackable_carrier: set[tuple] = set()
 
     def _warn_untrackable_in_carrier_once(self, carrier: Any, func_name: str = "?", param: str | None = None) -> None:
         """Say once that code reached through an argument resolves a dependency
@@ -159,7 +178,7 @@ class CodeArgsMixin:
             fix,
         )
 
-    def _iter_code_carriers(self, value: Any, _depth: int = 0, _seen: set | None = None):
+    def iter_code_carriers(self, value: Any, _depth: int = 0, _seen: set | None = None):
         """Yield objects in *value* that carry user code.
 
         Depth-bounded at 8, matching ``_stabilize_for_global_hash``. ``_seen``
@@ -249,9 +268,9 @@ class CodeArgsMixin:
                     yield cls
             for k, v in value.items():
                 if type(k) not in CODELESS_PRIMS:
-                    yield from self._iter_code_carriers(k, _depth + 1, _seen)
+                    yield from self.iter_code_carriers(k, _depth + 1, _seen)
                 if type(v) not in CODELESS_PRIMS:
-                    yield from self._iter_code_carriers(v, _depth + 1, _seen)
+                    yield from self.iter_code_carriers(v, _depth + 1, _seen)
         elif isinstance(value, (list, tuple, set, frozenset)):
             if id(value) in _seen:
                 return
@@ -262,7 +281,7 @@ class CodeArgsMixin:
                     yield cls
             for v in value:
                 if type(v) not in CODELESS_PRIMS:
-                    yield from self._iter_code_carriers(v, _depth + 1, _seen)
+                    yield from self.iter_code_carriers(v, _depth + 1, _seen)
         else:
             # An instance contributes its class's code. Deliberately NOT gated
             # on ``hasattr(value, "__dict__")``: a class using ``__slots__``
@@ -312,7 +331,7 @@ class CodeArgsMixin:
             return
         _seen.add(id(value))
         for v in held:
-            yield from self._iter_code_carriers(v, _depth + 1, _seen)
+            yield from self.iter_code_carriers(v, _depth + 1, _seen)
 
     def _instance_class_carrier(self, value: Any, _seen: set) -> type | None:
         """``type(value)`` if it is user code and not already seen this walk.
@@ -333,7 +352,7 @@ class CodeArgsMixin:
         _seen.add(id(cls))
         return cls if is_user_code_object(cls) else None
 
-    def _fold_code_args(self, args: tuple, kwargs: dict, state_hash: str, func_name: str = "?") -> str:
+    def fold_code_args(self, args: tuple, kwargs: dict, state_hash: str, func_name: str = "?") -> str:
         """Fold user code reached through the arguments into the key.
 
         ``args_hash`` is a digest of the PICKLED arguments, and pickle
@@ -350,7 +369,7 @@ class CodeArgsMixin:
         # A clock test double's date is the date, not code (`fake_clock`).
         fake_dates = _plain_data.fake_clock()[0]
         for param, value in (*((None, a) for a in args), *kwargs.items()):
-            for carrier in self._iter_code_carriers(value):
+            for carrier in self.iter_code_carriers(value):
                 if fake_dates and (type(carrier) in fake_dates or carrier in fake_dates):
                     continue
                 # Dedup ACROSS arguments too, not just within one walk:
@@ -393,7 +412,7 @@ class CodeArgsMixin:
         """Key parts for the module data a code carrier's functions read.
 
         The same channel the cached function's own globals go through
-        (`_read_global_data_names` + `_safe_global_hash`, plus the
+        (`GlobalsFold.read_global_data_names` + `GlobalsFold.safe_global_hash`, plus the
         ``module.ATTR`` fold), applied to code that arrived as an ARGUMENT: a
         function, a bound method's function, or a class's own methods -- which
         is how a callable instance's ``__call__`` is reached.
@@ -410,7 +429,7 @@ class CodeArgsMixin:
             if not isinstance(g, dict):
                 continue
             owner = getattr(fn, "__qualname__", "?")
-            for name in self._read_global_data_names(fn):
+            for name in self._globals.read_global_data_names(fn):
                 if name not in g:
                     continue
                 value = g[name]
@@ -418,9 +437,9 @@ class CodeArgsMixin:
                     continue
                 if callable(value) and not isinstance(value, (dict, list, tuple, set)):
                     continue
-                h = self._safe_global_hash(value, func_name, f"{owner}.{name}")
+                h = self._globals.safe_global_hash(value, func_name, f"{owner}.{name}")
                 if h is not None:
                     parts.append(f"argglobal:{owner}.{name}:{h}")
-            for label, h in self._module_attr_parts(fn, func_name, g):
+            for label, h in self._globals.module_attr_parts(fn, func_name, g):
                 parts.append(f"argglobal:{owner}:{label}:{h}")
         return parts

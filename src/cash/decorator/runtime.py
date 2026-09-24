@@ -92,7 +92,7 @@ class RuntimeMixin:
         try:
             built = self._build_key(func, func_name, dynamic_depends_on, args, kwargs)
         except UnhashableDefault:
-            # `_fold_defaults` has warned: an unhashable default means cash
+            # `ClosureFold.fold_defaults` has warned: an unhashable default means cash
             # cannot tell whether it changed, so caching at all risks a stale
             # result.
             return Unkeyable(_UNHASHABLE), watch
@@ -163,34 +163,34 @@ class RuntimeMixin:
             )
             state_hash = self._fold_declared_files(func_name, state_hash)
             chain.append(state_hash)
-            state_hash = self._fold_closure(func, func_name, state_hash)
+            state_hash = self._closures.fold_closure(func, func_name, state_hash)
             chain.append(state_hash)
-            folded_defaults = self._fold_defaults(func, func_name, state_hash)
+            folded_defaults = self._closures.fold_defaults(func, func_name, state_hash)
             if folded_defaults is None:
                 raise UnhashableDefault
             state_hash = folded_defaults
             chain.append(state_hash)
-            state_hash = self._fold_bound_self(func, func_name, state_hash)
+            state_hash = self._closures.fold_bound_self(func, func_name, state_hash)
             chain.append(state_hash)
-            state_hash = self._fold_read_globals(func, func_name, state_hash)
-            state_hash = self._fold_helper_read_globals(func, func_name, state_hash)
-            state_hash = self._fold_dependency_read_globals(func, func_name, state_hash)
+            state_hash = self._globals.fold_read_globals(func, func_name, state_hash)
+            state_hash = self._globals.fold_helper_read_globals(func, func_name, state_hash)
+            state_hash = self._globals.fold_dependency_read_globals(func, func_name, state_hash)
             chain.append(state_hash)
             state_hash = self._fold_rng_epoch(func_name, state_hash)
             chain.append(state_hash)
-            state_hash = self._fold_environment(func_name, state_hash)
+            state_hash = self._globals.fold_environment(func_name, state_hash)
             chain.append(state_hash)
             state_hash = self._code.fold_method_class_deps(func, args, state_hash)
             chain.append(state_hash)
             # ONE canonicalisation, fed to both the code channel and the value
-            # channel. `_fold_code_args` on the RAW arguments saw a class
+            # channel. `CodeArgs.fold_code_args` on the RAW arguments saw a class
             # passed explicitly but not the identical class arriving as a
             # parameter DEFAULT, so `build()` and `build(Schema)` -- the same
             # logical call -- produced two cache keys and two executions.
             normalized_args = self._args.normalize_call_args(func_name, args, kwargs)
             if self._registry.cached[func_name].seed_params:
                 self._warn_if_seed_is_none(func, func_name, args, kwargs)
-            state_hash = self._fold_code_args(*normalized_args, state_hash, func_name=func_name)
+            state_hash = self._code_args.fold_code_args(*normalized_args, state_hash, func_name=func_name)
             chain.append(state_hash)
             dynamic_state_hash = resolve_dynamic_dependencies(func_name, dynamic_depends_on, args, kwargs)
             args_hash = self._args.serialize_args(func_name, args, kwargs, normalized=normalized_args)

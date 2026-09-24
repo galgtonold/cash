@@ -962,7 +962,7 @@ call that asks the world what time it is or for a fresh UUID:
 an environment read whose variable name is only known at run time,
 `os.getenv(name)`. The named line ran, and the result was cached as normal.
 
-<!-- claim: cash/effects.py:environment_input @bed3e42a, cash/decorator/globals_fold.py:GlobalsFoldMixin._fold_environment @86f8ed6b -->
+<!-- claim: cash/effects.py:environment_input @bed3e42a, cash/decorator/globals_fold.py:GlobalsFold.fold_environment @86f8ed6b -->
 An environment read with the name written out — `os.getenv("TENANT")`,
 `os.environ["TENANT"]`, `os.environ.get("TENANT", "x")` — and `os.getcwd()`
 are not reported: the variable's current value (a digest of it, never the
@@ -1155,7 +1155,7 @@ seriously only when the opaque target is code you compile yourself.
 
 ## KEY-DYNAMIC-DEPENDENCY {#key-dynamic-dependency}
 
-<!-- claim: cash/decorator/code_args.py:CodeArgsMixin._warn_untrackable_in_carrier_once @477865a2 -->
+<!-- claim: cash/decorator/code_args.py:CodeArgs._warn_untrackable_in_carrier_once @477865a2 -->
 **What happened.** An object you passed to a cached function carries code — a
 method of its class, or the function itself — and that code picks what it calls
 from a value at runtime: `getattr(module, name)()` with `name` in a variable,
@@ -1254,7 +1254,7 @@ nothing worth saving.
 
 ## KEY-INSTANCE-STATE {#key-instance-state}
 
-<!-- claim: cash/decorator/closure_fold.py:ClosureFoldMixin._fold_bound_self @00b9d2f5 -->
+<!-- claim: cash/decorator/closure_fold.py:ClosureFold.fold_bound_self @00b9d2f5 -->
 **What happened.** You cached an already-bound method — `c.cache(obj.method)`.
 Cash folds the instance into the key so that two objects in different states do
 not share results, but this instance could not be hashed, so it fell back to
@@ -1482,7 +1482,7 @@ declined to cache the call. The message names the type. The same holds for a
 default of a helper the function calls, since a helper's defaults are folded
 into the key too; the message then names the helper.
 
-<!-- claim: cash/decorator/closure_fold.py:ClosureFoldMixin._defaults_unhashable @4a02abf1, cash/decorator/closure_fold.py:ClosureFoldMixin._hash_helper_identity @5cbe6721 -->
+<!-- claim: cash/decorator/closure_fold.py:ClosureFold._defaults_unhashable @4a02abf1, cash/decorator/closure_fold.py:HelperIdentity.identity @5cbe6721 -->
 **Why it matters.** Cash folds defaults into the key so that `build()` and
 `build(Schema)` are recognised as the same call, and so that changing a default
 invalidates. It cannot tell whether an unhashable default has changed, and it
@@ -1503,7 +1503,7 @@ whole function's caching, not just the calls that rely on the default.
 
 ## KEY-UNHASHABLE-GLOBAL {#key-unhashable-global}
 
-<!-- claim: cash/decorator/globals_fold.py:GlobalsFoldMixin._fold_read_globals @6c43e132 -->
+<!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @6c43e132 -->
 **What happened.** The function reads a module-level variable — its own
 module's, or a helper's, in which case the message shows a dotted name — and
 Cash could not fingerprint that variable's value. Cash normally folds the

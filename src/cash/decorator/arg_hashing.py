@@ -706,7 +706,7 @@ class ArgHasher:
 
         *normalized* lets a caller that has ALREADY canonicalised pass the
         result in rather than have it recomputed. That is not an optimisation:
-        the code channel (`_fold_code_args`) and this value channel must key
+        the code channel (`CodeArgs.fold_code_args`) and this value channel must key
         off the SAME bound arguments, or `f()` and `f(<the default>)` -- the
         same logical call -- disagree in one channel and split into two cache
         entries. One canonicalisation, shared, is the only way that invariant

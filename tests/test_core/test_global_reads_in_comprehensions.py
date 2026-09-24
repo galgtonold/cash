@@ -182,7 +182,7 @@ class TestNoOverInvalidation:
         c = Cash()
         f = c.cache(mod.f)
 
-        assert c._read_global_data_names(mod.f) == ()
+        assert c._globals.read_global_data_names(mod.f) == ()
         f((1, 2, 3))
         key_before = f.explain((1, 2, 3)).cache_key
         assert f.explain((1, 2, 3)).reason == "hit"
@@ -199,7 +199,7 @@ class TestReadGlobalNamesDetection:
             "THRESHOLD = 10\nOTHER = 3\ndef f(v):\n    return sum(x > THRESHOLD for x in v) + OTHER\n",
         )
         c = Cash()
-        assert c._read_global_data_names(mod.f) == ("OTHER", "THRESHOLD")
+        assert c._globals.read_global_data_names(mod.f) == ("OTHER", "THRESHOLD")
 
     def test_detection_is_memoized_per_code_object(self, make_module):
         mod = make_module(
@@ -207,6 +207,6 @@ class TestReadGlobalNamesDetection:
             "THRESHOLD = 10\ndef f(v):\n    return sum(x > THRESHOLD for x in v)\n",
         )
         c = Cash()
-        first = c._read_global_data_names(mod.f)
-        assert mod.f.__code__ in c._global_read_cache
-        assert c._read_global_data_names(mod.f) is first
+        first = c._globals.read_global_data_names(mod.f)
+        assert mod.f.__code__ in c._globals._global_read_cache
+        assert c._globals.read_global_data_names(mod.f) is first

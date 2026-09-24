@@ -383,9 +383,9 @@ def test_the_third_party_gate_is_measurable_not_merely_stable(c):
     import json.encoder
 
     base = "0" * 64
-    assert c._fold_code_args((json.encoder.JSONEncoder,), {}, base) == base
+    assert c._code_args.fold_code_args((json.encoder.JSONEncoder,), {}, base) == base
     nb = _nb_module()
-    assert c._fold_code_args((_define(nb, _V1),), {}, base) != base
+    assert c._code_args.fold_code_args((_define(nb, _V1),), {}, base) != base
 
 
 def test_a_comment_only_edit_does_not_invalidate(c):
@@ -662,9 +662,9 @@ def test_a_self_referential_container_argument_terminates(c):
     v1 = _define(nb, _V1)
     payload = [v1]
     payload.append(payload)
-    assert [x.__qualname__ for x in c._iter_code_carriers(payload)] == ["S"]
+    assert [x.__qualname__ for x in c._code_args.iter_code_carriers(payload)] == ["S"]
     base = "0" * 64
-    assert c._fold_code_args((payload,), {}, base) != base
+    assert c._code_args.fold_code_args((payload,), {}, base) != base
     assert len(calls) == 0  # nothing above should have called the function
 
 

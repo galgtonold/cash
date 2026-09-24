@@ -10,8 +10,9 @@ import inspect
 import pickle
 import textwrap
 import types
+import weakref
 from collections.abc import Callable, Iterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..effect_observer import line_waived
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
@@ -20,6 +21,12 @@ from ..value_types import IMMUTABLE_VALUE_TYPES
 from .arg_hashing import CODE_VALUE_TYPES, is_opaque
 from .call_state import CAPTURE_WATCH, KeyBuildFailed
 from .code_identity import code_fingerprint, hash_callable_source, is_user_code_object
+
+if TYPE_CHECKING:
+    from .arg_hashing import ArgHasher
+    from .globals_fold import GlobalsFold
+    from .purity_checks import LearnedMutations
+    from .reporting import Notices
 
 
 def is_immutable_capture(v: Any, _depth: int = 0) -> bool:
@@ -208,10 +215,22 @@ def iter_code_scopes(code: types.CodeType) -> Iterator[types.CodeType]:
             yield from iter_code_scopes(const)
 
 
-class ClosureFoldMixin:
-    """Closure, default and bound-instance folds of the state segment."""
+class CaptureAnalysis:
+    """Which of a closure's captured variables the function body may change,
+    read from its code and source once per code object (closures from one
+    factory share it)."""
 
-    def _closure_written_freevars(self, code: Any) -> frozenset:
+    def __init__(self) -> None:
+        # code object -> frozenset of reassigned freevars
+        self._deref_writes: dict = {}
+        # code object -> frozenset of free vars with capture-unsafe uses
+        self._use_cache: dict = {}
+        # code object -> closure free vars folded only provisionally: passed to
+        # a call, so folded and then confirmed by observation. Kept in
+        # lockstep with the cache above.
+        self._provisional: dict = {}
+
+    def written_freevars(self, code: Any) -> frozenset:
         """Free-variable names the function reassigns (``STORE_DEREF`` /
         ``DELETE_DEREF``) - i.e. ``nonlocal`` counters that drift between calls.
         Cached per code object (closures share a code object per factory)."""
@@ -227,7 +246,7 @@ class ClosureFoldMixin:
             cache[code] = written
         return written
 
-    def _capture_unsafe_uses(self, func: Callable) -> frozenset:
+    def unsafe_uses(self, func: Callable) -> frozenset:
         """Free-variable names whose captured object *may be mutated* by the
         function body.
 
@@ -244,7 +263,7 @@ class ClosureFoldMixin:
         code = getattr(func, "__code__", None)
         if code is None:
             return frozenset()
-        cached = self._capture_use_cache.get(code)
+        cached = self._use_cache.get(code)
         if cached is not None:
             return cached
         freevars = set(code.co_freevars or ())
@@ -268,16 +287,187 @@ class ClosureFoldMixin:
             )
             suspected = unsafe_uses_of(tree, freevars) - result
             provisional = unsafe_uses_of(tree, suspected, waived=waived_use_filter(func))
-            # Only on waived lines: as for globals (`_read_global_data_names`).
+            # Only on waived lines: as for globals (`GlobalsFold.read_global_data_names`).
             result = result | (suspected - provisional)
-        if len(self._capture_use_cache) < 4096:
-            self._capture_use_cache[code] = result
+        if len(self._use_cache) < 4096:
+            self._use_cache[code] = result
             # Kept in lockstep with the cache above so the two can never
             # disagree about a code object.
-            self._provisional_capture_cache[code] = provisional
+            self._provisional[code] = provisional
         return result
 
-    def _fold_closure(self, func: Callable, func_name: str, state_hash: str, _depth: int = 0) -> str:
+    def provisional(self, code: Any) -> frozenset | None:
+        """The free vars of *code* folded only provisionally, or None if unknown."""
+        return self._provisional.get(code)
+
+
+class HelperIdentity:
+    """A helper's identity for the key: its code, its parameter defaults and
+    the immutable values its closure captured."""
+
+    def __init__(self, args: ArgHasher, captures: CaptureAnalysis) -> None:
+        self._args = args
+        self._captures = captures
+        # id(helper) -> (helper, __defaults__, __kwdefaults__, identity); see
+        # `identity`. Holding the helper keeps its id from being recycled while
+        # the entry lives.
+        self._defaults_memo: dict[int, tuple[Any, Any, Any, str]] = {}
+
+    def _capture_part(self, fn: Callable) -> str:
+        """Digest of the IMMUTABLE values a helper's closure captured, or "".
+
+        A decorator's arguments live there: ``@scale(10)`` builds a wrapper
+        whose closure holds ``k=10``, so ``@scale(100)`` -- or ``@scale(K)``
+        after ``K`` changed -- ran different code under an identical source and
+        was served stale. Immutable values only, and never a variable the
+        function reassigns (``nonlocal calls; calls += 1``): decorators often
+        keep caches, counters and registries in their closures, and folding
+        state that drifts on every call would make every call miss. Captured
+        FUNCTIONS are followed as helpers in their own right, not here.
+        """
+        closure = getattr(fn, "__closure__", None)
+        code = getattr(fn, "__code__", None)
+        if not closure or code is None:
+            return ""
+        written = self._captures.written_freevars(code)
+        unsafe: frozenset | None = None
+        captures = []
+        for name, cell in zip(code.co_freevars, closure):
+            if name in written:
+                continue
+            try:
+                value = cell.cell_contents
+            except ValueError:
+                continue
+            if callable(value) or isinstance(value, types.ModuleType):
+                continue
+            if not (is_immutable_capture(value) or isinstance(value, IMMUTABLE_VALUE_TYPES)):
+                # A container the helper only READS is data like any other:
+                # `lambda: when` with `when` a list, a dict -- or a datetime
+                # before the type list above had it -- gave every value ONE
+                # entry, so the standard frozen-clock fixture served July's
+                # answer to a March test. What the body mutates
+                # (a decorator's cache dict, a counter list) stays out, as
+                # before: folding it would make every call miss.
+                if unsafe is None:
+                    unsafe = self._captures.unsafe_uses(fn)
+                if name in unsafe or not isinstance(value, (list, dict, set, tuple, frozenset)):
+                    continue
+            captures.append((name, value))
+        if not captures:
+            return ""
+        try:
+            return self._args.hash_payload(tuple(captures), {})
+        except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
+            return ""
+
+    def identity(self, fn: Callable) -> str:
+        """A helper's identity for the key: its code, AND its parameter defaults.
+
+        A default is evaluated once, at ``def`` time, and lives on the function
+        object -- so ``def shrink(v, alpha=ALPHA)`` reads the same after
+        ``ALPHA`` changes, the source digest does not move, and global folding
+        never sees the name (it is not read in the body): a service whose ridge
+        penalty was a helper's default served 8 wrong answers in 8. The cached function's own defaults were already
+        folded (``ClosureFold.fold_defaults``); now every followed helper's are, by value,
+        through the same payload hasher and the same callable fallback.
+
+        Not inside ``_hash_callable_source``'s memo: that is keyed per CODE
+        object, and two closures from one factory share a code object while
+        holding different defaults.
+        """
+        source = hash_callable_source(fn)
+        if isinstance(fn, type):
+            # A class's own source says nothing about what it inherits, and
+            # this channel is what the key folds: ``Worker(Base)`` calling an
+            # inherited ``run`` kept serving the old answer after ``Base.run``
+            # was rewritten -- 20 where an uncached run gives 500, in one file.
+            # An OPAQUE base still contributes nothing, as for a class passed as an argument.
+            bases = [
+                hash_callable_source(base)
+                for base in fn.__mro__[1:]
+                if base is not object and not is_opaque(base) and is_user_code_object(base)
+            ]
+            if bases:
+                source = f"{source}:bases:{','.join(bases)}"
+        captured = self._capture_part(fn)
+        if captured:
+            source = f"{source}:captures:{captured}"
+        defaults = getattr(fn, "__defaults__", None)
+        kwdefaults = getattr(fn, "__kwdefaults__", None)
+        memo_key = id(fn)
+        cached = self._defaults_memo.get(memo_key)
+        if cached is not None and cached[0] is fn and cached[1] is defaults and cached[2] is kwdefaults:
+            return cached[3]
+        pos, kwd = defaults_of(fn)
+        try:
+            digest = self._args.hash_payload(pos, kwd)
+        except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
+            try:
+                digest = self._args.hash_payload(
+                    tuple(fingerprint_default(v) for v in pos),
+                    {k: fingerprint_default(v) for k, v in kwd.items()},
+                )
+            except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
+                bad_type = self._args.first_unhashable_arg_type(pos, kwd)
+                name = getattr(fn, "__qualname__", repr(fn))
+                raise KeyBuildFailed(
+                    "KEY-UNHASHABLE-DEFAULT",
+                    f"@cash.cache: a parameter default of type {bad_type} on the helper "
+                    f"{name} could not be hashed ({type(e).__name__}), so the call ran "
+                    f"uncached rather than risk serving a result computed under a "
+                    f"default that changed.",
+                    f"get the value out of {name}'s signature -- build it in the body or "
+                    f"pass it at the call site -- or register a hasher with "
+                    f"cash.register_hasher({bad_type}, ...).",
+                ) from e
+        identity = f"{source}:defaults:{digest}"
+        if len(self._defaults_memo) >= 4096:
+            self._defaults_memo.clear()
+        self._defaults_memo[memo_key] = (fn, defaults, kwdefaults, identity)
+        return identity
+
+    def fingerprint_default(self, v: Any) -> Any:
+        """`_fingerprint_default`, plus what a FUNCTION default carries.
+
+        A factory-built callable as a default (`def run(xs, fn=make(3))`)
+        shares its source with every other one the factory makes; the value it
+        was built with lives in its closure, and was not keyed -- `make(3)` ->
+        `make(1)` served the old result. `HelperIdentity.identity`
+        adds its immutable captures and its own defaults.
+        """
+        if inspect.isfunction(v):
+            return f"__cash_callable__:{self.identity(v)}"
+        return fingerprint_default(v)
+
+
+class ClosureFold:
+    """The closure, default and bound-instance folds of the state segment."""
+
+    def __init__(
+        self,
+        args: ArgHasher,
+        captures: CaptureAnalysis,
+        helpers: HelperIdentity,
+        globals_fold: GlobalsFold,
+        mutations: LearnedMutations,
+        notices: Notices,
+    ) -> None:
+        self._args = args
+        self._captures = captures
+        self._helpers = helpers
+        self._globals = globals_fold
+        self._mutations = mutations
+        self._notices = notices
+        # function object -> digest of its parameter defaults, for defaults that
+        # are immutable and therefore cannot drift between calls.
+        # Weak so the memo dies with the function instead of pinning it (and so
+        # a later function object can never inherit a dead one's entry by
+        # id-reuse). Mutable defaults are deliberately absent: they must be
+        # re-hashed per call to stay correct.
+        self._defaults_pins: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+    def fold_closure(self, func: Callable, func_name: str, state_hash: str, _depth: int = 0) -> str:
         """Mix a fingerprint of *func*'s captured free variables into the
         state hash.
 
@@ -301,13 +491,13 @@ class ClosureFoldMixin:
         freevars = getattr(code, "co_freevars", ()) or ()
         # Free vars the function REASSIGNS (nonlocal counters) drift across calls
         # even when their value type is immutable - exclude them.
-        written = self._closure_written_freevars(code)
-        unsafe = self._capture_unsafe_uses(func)
+        written = self._captures.written_freevars(code)
+        unsafe = self._captures.unsafe_uses(func)
         # Captures excluded ONLY because they were passed to a call. Folded, then
         # confirmed at runtime -- same treatment as module globals. A
         # missing entry means "unknown": watch it rather than fold it blind.
-        provisional = self._provisional_capture_cache.get(code)
-        learned_mutating = self._mutating_globals.get((code, "closure"), frozenset())
+        provisional = self._captures.provisional(code)
+        learned_mutating = self._mutations.of(code, "closure")
         captures = []
         for name, cell in zip(freevars, closure):
             if name in written or name in learned_mutating:
@@ -319,13 +509,13 @@ class ClosureFoldMixin:
             if getattr(v, "_cash_cached", False):
                 # A captured CACHED function is what it computes: its
                 # dependency state, as a registry holding one counts it
-                # (`_data_callable_identity_of`). Not cash's wrapper around
+                # (`GlobalsFold.data_callable_identity`). Not cash's wrapper around
                 # it, whose closure holds this Cash instance and the
                 # function's spec: those were content-hashed into the key on
                 # every call, backend and all, while the write thread changed
                 # the backend's dicts -- "dictionary changed size during
                 # iteration", and the call ran uncached.
-                captures.append((name, self._data_callable_identity_of(v)))
+                captures.append((name, self._globals.data_callable_identity(v)))
                 continue
             # A captured FUNCTION is its code, so fold its source. Reaching
             # this before the `unsafe` check is the point: a capture the body
@@ -366,7 +556,7 @@ class ClosureFoldMixin:
                 # rules. Bounded, because a wrong answer is worth a few frames
                 # and a cycle is not.
                 if _depth < 4:
-                    fingerprint = self._fold_closure(
+                    fingerprint = self.fold_closure(
                         v,
                         f"{func_name}.{name}",
                         str(fingerprint),
@@ -395,121 +585,7 @@ class ClosureFoldMixin:
             return state_hash
         return hashlib.sha256(f"{state_hash}:closure:{clo}".encode()).hexdigest()
 
-    def _helper_capture_part(self, fn: Callable) -> str:
-        """Digest of the IMMUTABLE values a helper's closure captured, or "".
-
-        A decorator's arguments live there: ``@scale(10)`` builds a wrapper
-        whose closure holds ``k=10``, so ``@scale(100)`` -- or ``@scale(K)``
-        after ``K`` changed -- ran different code under an identical source and
-        was served stale. Immutable values only, and never a variable the
-        function reassigns (``nonlocal calls; calls += 1``): decorators often
-        keep caches, counters and registries in their closures, and folding
-        state that drifts on every call would make every call miss. Captured
-        FUNCTIONS are followed as helpers in their own right, not here.
-        """
-        closure = getattr(fn, "__closure__", None)
-        code = getattr(fn, "__code__", None)
-        if not closure or code is None:
-            return ""
-        written = self._closure_written_freevars(code)
-        unsafe: frozenset | None = None
-        captures = []
-        for name, cell in zip(code.co_freevars, closure):
-            if name in written:
-                continue
-            try:
-                value = cell.cell_contents
-            except ValueError:
-                continue
-            if callable(value) or isinstance(value, types.ModuleType):
-                continue
-            if not (is_immutable_capture(value) or isinstance(value, IMMUTABLE_VALUE_TYPES)):
-                # A container the helper only READS is data like any other:
-                # `lambda: when` with `when` a list, a dict -- or a datetime
-                # before the type list above had it -- gave every value ONE
-                # entry, so the standard frozen-clock fixture served July's
-                # answer to a March test. What the body mutates
-                # (a decorator's cache dict, a counter list) stays out, as
-                # before: folding it would make every call miss.
-                if unsafe is None:
-                    unsafe = self._capture_unsafe_uses(fn)
-                if name in unsafe or not isinstance(value, (list, dict, set, tuple, frozenset)):
-                    continue
-            captures.append((name, value))
-        if not captures:
-            return ""
-        try:
-            return self._args.hash_payload(tuple(captures), {})
-        except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
-            return ""
-
-    def _hash_helper_identity(self, fn: Callable) -> str:
-        """A helper's identity for the key: its code, AND its parameter defaults.
-
-        A default is evaluated once, at ``def`` time, and lives on the function
-        object -- so ``def shrink(v, alpha=ALPHA)`` reads the same after
-        ``ALPHA`` changes, the source digest does not move, and global folding
-        never sees the name (it is not read in the body): a service whose ridge
-        penalty was a helper's default served 8 wrong answers in 8. The cached function's own defaults were already
-        folded (``_fold_defaults``); now every followed helper's are, by value,
-        through the same payload hasher and the same callable fallback.
-
-        Not inside ``_hash_callable_source``'s memo: that is keyed per CODE
-        object, and two closures from one factory share a code object while
-        holding different defaults.
-        """
-        source = hash_callable_source(fn)
-        if isinstance(fn, type):
-            # A class's own source says nothing about what it inherits, and
-            # this channel is what the key folds: ``Worker(Base)`` calling an
-            # inherited ``run`` kept serving the old answer after ``Base.run``
-            # was rewritten -- 20 where an uncached run gives 500, in one file.
-            # An OPAQUE base still contributes nothing, as for a class passed as an argument.
-            bases = [
-                hash_callable_source(base)
-                for base in fn.__mro__[1:]
-                if base is not object and not is_opaque(base) and is_user_code_object(base)
-            ]
-            if bases:
-                source = f"{source}:bases:{','.join(bases)}"
-        captured = self._helper_capture_part(fn)
-        if captured:
-            source = f"{source}:captures:{captured}"
-        defaults = getattr(fn, "__defaults__", None)
-        kwdefaults = getattr(fn, "__kwdefaults__", None)
-        memo_key = id(fn)
-        cached = self._helper_defaults_memo.get(memo_key)
-        if cached is not None and cached[0] is fn and cached[1] is defaults and cached[2] is kwdefaults:
-            return cached[3]
-        pos, kwd = defaults_of(fn)
-        try:
-            digest = self._args.hash_payload(pos, kwd)
-        except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
-            try:
-                digest = self._args.hash_payload(
-                    tuple(fingerprint_default(v) for v in pos),
-                    {k: fingerprint_default(v) for k, v in kwd.items()},
-                )
-            except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
-                bad_type = self._args.first_unhashable_arg_type(pos, kwd)
-                name = getattr(fn, "__qualname__", repr(fn))
-                raise KeyBuildFailed(
-                    "KEY-UNHASHABLE-DEFAULT",
-                    f"@cash.cache: a parameter default of type {bad_type} on the helper "
-                    f"{name} could not be hashed ({type(e).__name__}), so the call ran "
-                    f"uncached rather than risk serving a result computed under a "
-                    f"default that changed.",
-                    f"get the value out of {name}'s signature -- build it in the body or "
-                    f"pass it at the call site -- or register a hasher with "
-                    f"cash.register_hasher({bad_type}, ...).",
-                ) from e
-        identity = f"{source}:defaults:{digest}"
-        if len(self._helper_defaults_memo) >= 4096:
-            self._helper_defaults_memo.clear()
-        self._helper_defaults_memo[memo_key] = (fn, defaults, kwdefaults, identity)
-        return identity
-
-    def _fold_defaults(
+    def fold_defaults(
         self,
         func: Callable,
         func_name: str,
@@ -567,25 +643,12 @@ class ClosureFoldMixin:
             # cacheable, which a bare refuse-to-cache would not.
             try:
                 digest = self._args.hash_payload(
-                    tuple(self._fingerprint_callable_default(v) for v in pos),
-                    {k: self._fingerprint_callable_default(v) for k, v in kwd.items()},
+                    tuple(self._helpers.fingerprint_default(v) for v in pos),
+                    {k: self._helpers.fingerprint_default(v) for k, v in kwd.items()},
                 )
             except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
                 return self._defaults_unhashable(func_name, pos, kwd, e)
         return self._finish_defaults_fold(func, state_hash, digest, pos, kwd, pinnable)
-
-    def _fingerprint_callable_default(self, v: Any) -> Any:
-        """`_fingerprint_default`, plus what a FUNCTION default carries.
-
-        A factory-built callable as a default (`def run(xs, fn=make(3))`)
-        shares its source with every other one the factory makes; the value it
-        was built with lives in its closure, and was not keyed -- `make(3)` ->
-        `make(1)` served the old result. `_hash_helper_identity`
-        adds its immutable captures and its own defaults.
-        """
-        if inspect.isfunction(v):
-            return f"__cash_callable__:{self._hash_helper_identity(v)}"
-        return fingerprint_default(v)
 
     def _defaults_unhashable(
         self,
@@ -651,7 +714,7 @@ class ClosureFoldMixin:
                 pass  # not weak-referenceable; recompute per call
         return hashlib.sha256(f"{state_hash}:defaults:{digest}".encode("utf-8")).hexdigest()
 
-    def _fold_bound_self(
+    def fold_bound_self(
         self,
         func: Callable,
         func_name: str,
