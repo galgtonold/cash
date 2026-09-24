@@ -53,7 +53,7 @@ def test_a_callee_that_mutates_its_argument_is_never_cached(call_unit_harness):
     run cleans it -- the two runs disagree about `df`, not just about the
     return value. The arg-IDENTITY check (Task 6) only catches `return arg`.
 
-    Mutation-that-breaks-this-test: dropping the `_hash_args(...) !=
+    Mutation-that-breaks-this-test: dropping the `hash_args(...) !=
     arg_hashes_before` comparison in `CallUnit.wrap` (i.e. never refusing on
     argument mutation) makes the second call a hit, so `calls == [1]` and
     `payload["dirty"] is True`.
@@ -170,7 +170,7 @@ def test_a_callee_that_mutates_an_unpicklable_argument_is_never_cached(call_unit
     _is_never_cached` above) -- it is blind to EVERY mutation, always, for the
     whole unpicklable-object class, and would silently violate "fail closed".
 
-    Mutation-that-breaks-this-test: in `CallUnit._hash_args`, replace
+    Mutation-that-breaks-this-test: in `call_effects.hash_args`, replace
     `out.append(object() if is_identity_fallback_hash(value, h) else h)`
     (i.e. drop the `is_identity_fallback_hash` check and always append `h`).
     The before/after hash tuples then compare equal (id-based hash of the
@@ -240,7 +240,7 @@ def test_a_refused_call_is_never_stored_through_the_production_dispatch_path(tmp
 
 
 def test_an_unhashable_argument_reads_as_changed_not_unchanged(monkeypatch):
-    """`_hash_args`'s `except` branch must fail CLOSED, on every Python.
+    """`hash_args`'s `except` branch must fail CLOSED, on every Python.
 
     It used to append `None` there, reasoning that "'cannot prove unmutated' is
     exactly what a `None` here already means to the caller". It did not:
@@ -261,17 +261,16 @@ def test_an_unhashable_argument_reads_as_changed_not_unchanged(monkeypatch):
     quirk to reach it, and therefore keeps protecting the property on 3.14 and
     on whatever 3.15 does.
     """
-    from cash.notebook import call_unit as cu
+    from cash.notebook import call_effects
 
     def boom(_obj):
         raise AttributeError("Can't pickle local object")
 
-    monkeypatch.setattr(cu, "compute_hash", boom)
+    monkeypatch.setattr(call_effects, "compute_hash", boom)
 
-    unit = cu.CallUnit.__new__(cu.CallUnit)
     subject = object()
-    before = cu.CallUnit._hash_args(unit, (subject,), {})
-    after = cu.CallUnit._hash_args(unit, (subject,), {})
+    before = call_effects.hash_args((subject,), {})
+    after = call_effects.hash_args((subject,), {})
 
     assert len(before) == 1, "the argument must still produce a slot"
     assert before != after, (

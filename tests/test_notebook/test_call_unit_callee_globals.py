@@ -13,13 +13,9 @@ import types
 import pytest
 
 from cash.notebook.cache_key import CacheKeyContext
+from cash.notebook.call_effects import UNWRAP_FAILED, capture_globals, restore_globals, unwrap_callee_globals
 from cash.notebook.call_interception import CallSite
 from cash.notebook.call_key import call_cache_key, callee_mutated_globals, global_digests
-from cash.notebook.call_unit import (
-    _UNWRAP_FAILED,
-    CallUnit,
-    _unwrap_callee_globals,
-)
 
 
 def _make(source, name, extra_globals=None):
@@ -105,7 +101,7 @@ class TestIdentification:
         assert callee_mutated_globals(increments_a_global_subscript) == ("COUNTER",)
 
     def test_an_argument_mutation_is_not_a_global(self):
-        # Owned by `_hash_args` / `function_arg_mutations`. Claiming it here
+        # Owned by `hash_args` / `function_arg_mutations`. Claiming it here
         # would double-count it and capture the caller's object as if it were
         # module state.
         assert callee_mutated_globals(mutates_its_argument) == ()
@@ -254,17 +250,17 @@ class TestKeying:
 class TestCaptureAndRestore:
     def test_capture_returns_the_post_call_values(self):
         fn, ns = _make("def f():\n    pass\n", "f", {"CALLS": [1, 2]})
-        assert CallUnit._capture_globals(fn, ("CALLS",)) == {"CALLS": [1, 2]}
+        assert capture_globals(fn, ("CALLS",)) == {"CALLS": [1, 2]}
 
     def test_capture_of_nothing_is_an_empty_dict_not_a_refusal(self):
         # `None` means refuse; `{}` means "nothing to capture, store normally".
         # Conflating them would stop every ordinary call being cached.
-        assert CallUnit._capture_globals(is_pure, ()) == {}
+        assert capture_globals(is_pure, ()) == {}
 
     def test_capture_refuses_a_name_that_vanished(self):
         fn, ns = _make("def f():\n    pass\n", "f", {"CALLS": []})
         del ns["CALLS"]
-        assert CallUnit._capture_globals(fn, ("CALLS",)) is None
+        assert capture_globals(fn, ("CALLS",)) is None
 
     def test_capture_refuses_an_unpicklable_value(self):
         """``compute_hash`` falls back to ``sha256(id(obj))`` for anything that
@@ -275,20 +271,18 @@ class TestCaptureAndRestore:
         import threading
 
         fn, _ = _make("def f():\n    pass\n", "f", {"LOCK": threading.Lock()})
-        assert CallUnit._capture_globals(fn, ("LOCK",)) is None
+        assert capture_globals(fn, ("LOCK",)) is None
 
     def test_restore_writes_the_recorded_value_back(self):
         fn, ns = _make("def f():\n    pass\n", "f", {"CALLS": []})
-        unit = CallUnit.__new__(CallUnit)
-        unit._restore_globals(fn, ("CALLS",), {"CALLS": [1, 2, 3]})
+        restore_globals(fn, ("CALLS",), {"CALLS": [1, 2, 3]})
         assert ns["CALLS"] == [1, 2, 3]
 
     def test_restore_ignores_a_name_the_current_callee_no_longer_writes(self):
         """The entry can outlive an edit to the callee. Honouring a stale name
         would resurrect a variable the current source never mentions."""
         fn, ns = _make("def f():\n    pass\n", "f", {"CALLS": []})
-        unit = CallUnit.__new__(CallUnit)
-        unit._restore_globals(fn, (), {"GONE": [9]})
+        restore_globals(fn, (), {"GONE": [9]})
         assert "GONE" not in ns
 
     def test_capture_snapshots_rather_than_referencing(self):
@@ -310,7 +304,7 @@ class TestCaptureAndRestore:
         later.
         """
         fn, ns = _make("def f():\n    pass\n", "f", {"CALLS": [1]})
-        captured = CallUnit._capture_globals(fn, ("CALLS",))
+        captured = capture_globals(fn, ("CALLS",))
         ns["CALLS"].append(2)
         assert captured == {"CALLS": [1]}, (
             "the capture aliases the live object, so a later mutation rewrites an entry that was already stored"
@@ -322,8 +316,7 @@ class TestCaptureAndRestore:
         rewrite the entry it was just served from."""
         fn, ns = _make("def f():\n    pass\n", "f", {"CALLS": []})
         entry = {"CALLS": [1]}
-        unit = CallUnit.__new__(CallUnit)
-        unit._restore_globals(fn, ("CALLS",), entry)
+        restore_globals(fn, ("CALLS",), entry)
         ns["CALLS"].append(2)
         assert entry["CALLS"] == [1], "mutating the restored variable reached back into the cache entry"
 
@@ -333,12 +326,11 @@ class TestCaptureAndRestore:
                 raise RuntimeError("nope")
 
         fn, _ = _make("def f():\n    pass\n", "f", {"ODD": NoCopy()})
-        assert CallUnit._capture_globals(fn, ("ODD",)) is None
+        assert capture_globals(fn, ("ODD",)) is None
 
     def test_restore_without_a_recorded_entry_is_a_no_op(self):
         fn, ns = _make("def f():\n    pass\n", "f", {"CALLS": [7]})
-        unit = CallUnit.__new__(CallUnit)
-        unit._restore_globals(fn, ("CALLS",), None)
+        restore_globals(fn, ("CALLS",), None)
         assert ns["CALLS"] == [7]
 
 
@@ -364,8 +356,7 @@ def test_digests_use_the_full_hash_not_the_sampled_one():
 @pytest.mark.parametrize("bad", [None, 42, "text"])
 def test_restore_tolerates_a_malformed_entry(bad):
     fn, ns = _make("def f():\n    pass\n", "f", {"CALLS": [7]})
-    unit = CallUnit.__new__(CallUnit)
-    unit._restore_globals(fn, ("CALLS",), bad)
+    restore_globals(fn, ("CALLS",), bad)
     assert ns["CALLS"] == [7]
 
 
@@ -381,10 +372,10 @@ class TestPayloadLivesOnTheValueNotInMetadata:
     """
 
     def test_an_ordinary_entry_is_unwrapped_untouched(self):
-        assert _unwrap_callee_globals(42, {}) == (42, None)
+        assert unwrap_callee_globals(42, {}) == (42, None)
 
     def test_a_wrapped_entry_splits_into_result_and_globals(self):
-        result, globs = _unwrap_callee_globals((42, {"CALLS": [1]}), {"has_callee_globals": True})
+        result, globs = unwrap_callee_globals((42, {"CALLS": [1]}), {"has_callee_globals": True})
         assert result == 42
         assert globs == {"CALLS": [1]}
 
@@ -393,18 +384,18 @@ class TestPayloadLivesOnTheValueNotInMetadata:
         legitimately returning ``(x, {...})`` is indistinguishable from a
         wrapped entry by type alone."""
         value = (42, {"CALLS": [1]})
-        assert _unwrap_callee_globals(value, {}) == (value, None)
+        assert unwrap_callee_globals(value, {}) == (value, None)
 
     def test_a_flagged_entry_with_the_wrong_shape_is_refused(self):
         """Corrupt or hand-edited. Handing the tuple back as the result would
         be a silently wrong value; a miss merely costs a recompute."""
-        assert _unwrap_callee_globals(42, {"has_callee_globals": True})[0] is _UNWRAP_FAILED
-        assert _unwrap_callee_globals((1, 2, 3), {"has_callee_globals": True})[0] is _UNWRAP_FAILED
-        assert _unwrap_callee_globals((1, "no"), {"has_callee_globals": True})[0] is _UNWRAP_FAILED
+        assert unwrap_callee_globals(42, {"has_callee_globals": True})[0] is UNWRAP_FAILED
+        assert unwrap_callee_globals((1, 2, 3), {"has_callee_globals": True})[0] is UNWRAP_FAILED
+        assert unwrap_callee_globals((1, "no"), {"has_callee_globals": True})[0] is UNWRAP_FAILED
 
     def test_none_is_a_legitimate_cached_value_not_a_failure(self):
-        """``_UNWRAP_FAILED`` is a unique sentinel precisely so a stored
+        """``UNWRAP_FAILED`` is a unique sentinel precisely so a stored
         ``None`` stays distinguishable from a broken entry."""
-        assert _unwrap_callee_globals(None, {}) == (None, None)
-        result, globs = _unwrap_callee_globals((None, {"C": [1]}), {"has_callee_globals": True})
+        assert unwrap_callee_globals(None, {}) == (None, None)
+        result, globs = unwrap_callee_globals((None, {"C": [1]}), {"has_callee_globals": True})
         assert result is None and globs == {"C": [1]}

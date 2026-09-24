@@ -1322,7 +1322,7 @@ class TestCalleeGlobalMutations:
 
     def test_param_mutation_is_not_a_global(self):
         # A mutated ARGUMENT is the other channel, owned by
-        # ``function_arg_mutations`` / the call unit's ``_hash_args``. Claiming
+        # ``function_arg_mutations`` / the call unit's ``hash_args``. Claiming
         # it here would double-count it.
         assert self._f("x = arg(d)") == frozenset()
 

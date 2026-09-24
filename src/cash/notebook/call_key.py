@@ -441,13 +441,13 @@ def global_digests(fn, names: tuple[str, ...]) -> dict[str, str]:
 
     The cost this admits is real and bounded by how rare the case is: a
     callee that writes a global at all is uncommon, and the hash is over
-    the accumulator, not over the arguments. ``_hash_args``' sampling trade
+    the accumulator, not over the arguments. ``hash_args``' sampling trade
     is fine where it lives (a coarse per-call mutation smoke test on a
     possibly-huge live argument, allowed to be wrong toward "assume
     unmutated"); it is not fine here.
 
     A name that cannot be hashed at all is omitted, which makes the key
-    LESS discriminating -- so ``CallUnit._capture_globals`` independently
+    LESS discriminating -- so ``call_effects.capture_globals`` independently
     refuses to store any entry whose capture is not sound, and the pair of
     them fails closed.
     """

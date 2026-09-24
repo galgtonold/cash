@@ -38,7 +38,7 @@ but the call does not".
 
 **Verified one-line mutation** (this is the one that actually distinguishes
 pass/fail at the full-notebook level -- see the report for why
-``CallUnit._replay_deps`` alone does not): in
+``call_effects.replay_deps`` alone does not): in
 ``CallUnit._store``, change ``if file_deps or remote_deps:`` to
 ``if False and (file_deps or remote_deps):``, so a call's own
 ``auto_file_deps`` snapshot is never written at all. Applied and observed:
@@ -48,7 +48,7 @@ performs a real, tracked read (``file_dep_is_fresh`` -> ``file_content_hash``
 -> ``open()``, through the same monkey-patched ``open`` the ambient tracker
 observes), so at this end-to-end level the freshness re-check's own side
 effect already re-registers the dependency whenever one was recorded at
-store time -- ``CallUnit._replay_deps`` in isolation is verified directly,
+store time -- ``call_effects.replay_deps`` in isolation is verified directly,
 and for the un-masked remote channel, in
 ``tests/test_notebook/test_call_unit_ambient_capture.py``.
 """

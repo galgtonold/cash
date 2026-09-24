@@ -5,11 +5,11 @@ capture. A genuine miss records the call's effects there for free; a hit
 does not, because the callee never runs. ``CallUnit`` closes that gap on a
 hit by replaying what the ORIGINAL execution observed:
 
-* ``_replay_deps`` re-declares the entry's recorded file/remote reads onto
+* ``replay_deps`` re-declares the entry's recorded file/remote reads onto
   the ambient tracker (``active_tracker``), mirroring ``core.py``'s
   ``_propagate_file_deps_to_active_tracker`` -- the ``@cash.cache``
   decorator's own defence against exactly this failure mode.
-* ``_replay_output`` writes the entry's recorded stdout/stderr onto the
+* ``replay_output`` writes the entry's recorded stdout/stderr onto the
   live stream, reconstructing ``print(a); f(x); print(b)``'s interleaving.
 * A call's own cache KEY carries no file content (only source + argument
   lineage), so ``_lookup`` also re-validates ``auto_file_deps`` before
@@ -22,10 +22,10 @@ a LOCAL file (``file_dep_is_fresh`` -> ``file_content_hash`` -> ``open()``)
 itself performs a real, tracked read through the SAME monkey-patched
 ``open`` the ambient tracker observes -- so for local paths, the freshness
 re-check's own side effect already re-registers the dependency, independent
-of ``_replay_deps``. That is harmless (it mirrors the decorator's own
+of ``replay_deps``. That is harmless (it mirrors the decorator's own
 ``_auto_file_deps_fresh`` -> ``_propagate_file_deps_to_active_tracker``
 ordering, which has the identical property), but it means a LOCAL-only
-scenario cannot isolate ``_replay_deps``'s specific contribution. The
+scenario cannot isolate ``replay_deps``'s specific contribution. The
 REMOTE channel has no such side effect (``remote_dep_is_fresh`` only asks
 the store's validator, no local I/O), so that is where this file's
 propagation-specific test lives -- and per the task brief, remote deps are
@@ -37,6 +37,7 @@ from __future__ import annotations
 import time
 
 import cash
+from cash.notebook.call_effects import replay_deps
 from cash.notebook.call_interception import CallCache, CallSite
 from cash.tracking.file_tracker import FileAccessTracker
 from cash.tracking.tracker_context import active_tracker
@@ -89,10 +90,10 @@ def test_call_hit_recomputes_when_its_own_file_dependency_goes_stale(call_unit_h
     assert calls == [2, 2], "a call whose file dependency went stale was still served the old value"
 
 
-def test_replay_deps_registers_a_local_path_on_the_ambient_tracker(call_unit_harness):
-    """Direct unit test of ``_replay_deps`` for the local-file shape.
+def test_replay_deps_registers_a_local_path_on_the_ambient_tracker():
+    """Direct unit test of ``replay_deps`` for the local-file shape.
 
-    Exercises the method itself (not the full ``_lookup`` round-trip, whose
+    Exercises the function itself (not the full ``_lookup`` round-trip, whose
     freshness re-check has its own tracking side effect for local paths --
     see the module docstring) so the local-path branch is still verified in
     isolation.
@@ -101,14 +102,13 @@ def test_replay_deps_registers_a_local_path_on_the_ambient_tracker(call_unit_har
     loop body with ``pass``. Applied and observed: ``tracker`` ends up empty
     instead of containing the path -- verified below, then reverted.
     """
-    unit = call_unit_harness(lineage={}, user_ns={})
     metadata = {
         "auto_file_deps": {
             "C:/data/input.csv": {"mtime": 1.0, "size": 5, "hash": "deadbeef"},
         },
     }
     with FileAccessTracker() as tracker:
-        unit._replay_deps(metadata)
+        replay_deps(metadata)
         assert "C:/data/input.csv" in tracker.get_accessed_files()
 
 
@@ -208,7 +208,7 @@ def test_call_hit_propagates_remote_dependency_through_resolve(tmp_path, monkeyp
     store's own validator reports the object changed.
 
     One-line mutation that breaks the propagation half: in
-    ``CallUnit._replay_deps``, change ``for path, recorded in snap.items():``
+    ``call_effects.replay_deps``, change ``for path, recorded in snap.items():``
     to iterate an empty ``()`` instead. Applied and observed: the second
     call's ambient tracker never sees the URL (assertion on ``tracker2``
     fails) -- verified below, then reverted.
@@ -280,7 +280,7 @@ def test_call_hit_propagates_remote_dependency_through_resolve(tmp_path, monkeyp
 
 def test_call_hit_replays_stdout_reconstructing_interleaving(call_unit_harness, capsys):
     """One-line mutation: in ``wrap``'s hit branch, delete the
-    ``self._replay_output(metadata)`` call. Applied and observed: the
+    ``replay_output(metadata)`` call. Applied and observed: the
     second capture is missing the callee's own line (``"inside=5"``) --
     verified below, then reverted.
     """

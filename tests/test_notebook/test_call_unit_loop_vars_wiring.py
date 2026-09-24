@@ -49,7 +49,7 @@ from tests._cell_driver import run_cash_cell
 # argument-side discriminator" shape `loop_vars` exists to cover. The hidden
 # state lives in `counter`, a dict mutated from INSIDE `fetch_next`'s body --
 # invisible to the call site's own free names (`fetch_next`, `conn`) and to
-# `_hash_args`'s before/after check (which only watches the live arguments,
+# `hash_args`'s before/after check (which only watches the live arguments,
 # and `conn` itself is never mutated).
 _DEFS_CELL = """
 import time
