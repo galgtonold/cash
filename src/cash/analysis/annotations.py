@@ -18,6 +18,8 @@ __all__ = [
     "parse_annotations_in_range",
     "get_statement_annotations",
     "extract_annotations_for_statements",
+    "ASSUME_SAFE_RE",
+    "audited_lines",
 ]
 
 
@@ -339,3 +341,43 @@ def extract_annotations_for_statements(full_source: str) -> dict[int, CacheAnnot
                 annotations[start_line] = ann
 
     return annotations
+
+
+#: ``# @cash:assume-safe`` -- a waiver scoped to ONE statement.
+#
+# ``assume_safe=True`` on the decorator silences the whole function, for good.
+# Audit a call today, add an unrelated ``session.post(...)`` next month, and
+# nothing says a word: the waiver outlived the audit it was granted for.
+# Measured -- a POST added after the fact was detected by the analyzer and
+# suppressed by the flag.
+#
+# A waiver written NEXT TO the statement cannot do that. New code arrives
+# unannotated, so it is reported. The scope of the exemption is visible in the
+# diff that grants it, which is the property blanket suppression cannot have.
+ASSUME_SAFE_RE = re.compile(r"#\s*@cash:\s*assume-safe\b")
+
+
+def audited_lines(src: str) -> tuple[frozenset[int], bool]:
+    """Line numbers waived by ``# @cash:assume-safe``, and the function flag.
+
+    1-based against *src*, the same frame ``PurityIssue.line`` uses -- both
+    come from the dedented function source.
+
+    An annotation on its own line waives the statement BELOW it as well as
+    itself, because that is how people write ``# noqa`` once the line is long.
+    On the ``def`` line it waives the function-scoped findings instead: a read
+    of a mutated global is a property of the whole body and carries no line, so
+    there is no statement to attach it to.
+    """
+    lines = src.splitlines()
+    marked: set[int] = set()
+    for index, line in enumerate(lines, start=1):
+        if not ASSUME_SAFE_RE.search(line):
+            continue
+        marked.add(index)
+        if line.strip().startswith("#"):
+            marked.add(index + 1)
+    function_scope = any(
+        lines[i - 1].lstrip().startswith(("def ", "async def ")) for i in marked if 1 <= i <= len(lines)
+    )
+    return frozenset(marked), function_scope

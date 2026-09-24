@@ -63,6 +63,7 @@ import os
 import sys
 from typing import Any
 
+from .analysis.annotations import ASSUME_SAFE_RE
 from .effects import EffectKind
 from .install_paths import is_user_path
 from .tracking import io_watch
@@ -110,9 +111,6 @@ def _is_library_file(filename: str) -> bool:
 
 def line_waived(filename: str, lineno: int) -> bool:
     """Does ``# @cash:assume-safe`` cover *lineno* -- on it, or alone above it?"""
-    # Local: import cycle effect_observer -> purity_analyzer -> ... -> effect_observer.
-    from .purity_analyzer import ASSUME_SAFE_RE
-
     if ASSUME_SAFE_RE.search(linecache.getline(filename, lineno)):
         return True
     above = linecache.getline(filename, lineno - 1)

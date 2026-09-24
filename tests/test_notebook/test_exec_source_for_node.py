@@ -40,7 +40,7 @@ are pinned here so none regresses silently:
   putting an UNDIRECTED function on the recovery path and re-opening the
   exact cross-path hash instability above for a user who wrote no
   annotation at all. Fixed by gating on
-  ``purity_analyzer.audited_lines(body)`` instead -- the same function the
+  ``annotations.audited_lines(body)`` instead -- the same function the
   analyzer itself calls to decide whether a line is waived, so the gate and
   the analyzer agree about what counts as "directed" BY CONSTRUCTION rather
   than by a second, independently-fallible guess. See

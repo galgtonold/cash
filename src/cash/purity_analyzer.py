@@ -42,7 +42,6 @@ import importlib
 import importlib.util
 import inspect
 import logging
-import re
 import sqlite3
 import sys
 import textwrap
@@ -57,6 +56,7 @@ from typing import Any
 from ._annotation_refs import annotation_referents
 from ._memo import CODE_OBJECTS, PURITY_REPORTS, LruMemo
 from ._paths import MAIN_MODULE_NAMES, resolve_main_module
+from .analysis.annotations import audited_lines
 from .analysis.ast_util import called_names, resolve_callee
 from .analysis.file_effects import get_base_name, get_call_module, get_call_name
 from .analysis.mutations import PANDAS_INPLACE_METHODS
@@ -2185,46 +2185,6 @@ def get_analyzer() -> PurityAnalyzer:
         if _global_analyzer is None:
             _global_analyzer = PurityAnalyzer()
         return _global_analyzer
-
-
-#: ``# @cash:assume-safe`` -- a waiver scoped to ONE statement.
-#
-# ``assume_safe=True`` on the decorator silences the whole function, for good.
-# Audit a call today, add an unrelated ``session.post(...)`` next month, and
-# nothing says a word: the waiver outlived the audit it was granted for.
-# Measured -- a POST added after the fact was detected by the analyzer and
-# suppressed by the flag.
-#
-# A waiver written NEXT TO the statement cannot do that. New code arrives
-# unannotated, so it is reported. The scope of the exemption is visible in the
-# diff that grants it, which is the property blanket suppression cannot have.
-ASSUME_SAFE_RE = re.compile(r"#\s*@cash:\s*assume-safe\b")
-
-
-def audited_lines(src: str) -> tuple[frozenset[int], bool]:
-    """Line numbers waived by ``# @cash:assume-safe``, and the function flag.
-
-    1-based against *src*, the same frame ``PurityIssue.line`` uses -- both
-    come from the dedented function source.
-
-    An annotation on its own line waives the statement BELOW it as well as
-    itself, because that is how people write ``# noqa`` once the line is long.
-    On the ``def`` line it waives the function-scoped findings instead: a read
-    of a mutated global is a property of the whole body and carries no line, so
-    there is no statement to attach it to.
-    """
-    lines = src.splitlines()
-    marked: set[int] = set()
-    for index, line in enumerate(lines, start=1):
-        if not ASSUME_SAFE_RE.search(line):
-            continue
-        marked.add(index)
-        if line.strip().startswith("#"):
-            marked.add(index + 1)
-    function_scope = any(
-        lines[i - 1].lstrip().startswith(("def ", "async def ")) for i in marked if 1 <= i <= len(lines)
-    )
-    return frozenset(marked), function_scope
 
 
 def _drop_audited(issues: list[PurityIssue], start: int, src: str) -> None:

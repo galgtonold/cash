@@ -49,7 +49,7 @@ from collections.abc import Awaitable, Callable, Generator, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from ...analysis.annotations import get_statement_annotations
+from ...analysis.annotations import audited_lines, get_statement_annotations
 from ...analysis.code_analyzer import CodeAnalyzer, splitlines_like_the_parser, statement_code
 from ...backends._writes import discarded_writes
 from ...diagnostics import warn_diagnostic
@@ -59,7 +59,6 @@ from ...exceptions import (
     ForwardReferenceError,
     UpstreamStateError,
 )
-from ...purity_analyzer import audited_lines
 from ...remote_source import measured_validation as _measured_validation
 from ...tracking.file_dep_snapshot import begin_file_state_epoch, end_file_state_epoch
 from ...tracking.randomness import get_drawing_rng_modules, rng_lineage_fingerprint
@@ -381,7 +380,7 @@ def _exec_source_for_node(
     decorators and a trailing comment on its last line included.
 
     Only when the body carries a real waiver, as decided by
-    ``purity_analyzer.audited_lines`` (the analyzer's own test, so the two
+    ``annotations.audited_lines`` (the analyzer's own test, so the two
     cannot disagree). Every other ``def``/``class`` must compile from the
     unparsed text on every path: the upstream re-execution path always
     compiles that form, and two texts for one function give it two identity

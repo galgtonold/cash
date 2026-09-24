@@ -366,7 +366,7 @@ def fetch_user(uid):
     return requests.get(f"https://api.example.com/users/{uid}").json()   # @cash:assume-safe
 ```
 
-<!-- claim: cash/purity_analyzer.py:audited_lines @da3b0e65 -->
+<!-- claim: cash/analysis/annotations.py:audited_lines @da3b0e65 -->
 The comment covers that statement only (put it on the opening line of a call
 that spans lines, or on the line above), so code added later is still checked.
 On the `def` line it covers findings about the whole body. In a helper it
