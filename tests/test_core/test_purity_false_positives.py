@@ -20,7 +20,7 @@ import warnings
 import pytest
 
 from cash import Cash
-from cash.purity_analyzer import PurityAnalyzer
+from cash.analysis.purity_analyzer import PurityAnalyzer
 
 np = pytest.importorskip("numpy")
 

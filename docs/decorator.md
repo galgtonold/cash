@@ -336,7 +336,7 @@ did (a file written, a request sent, a line printed) does not happen again. On
 the first call, cash reads the function and its helpers and reports what a hit
 would skip or get wrong:
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @21132aa4, cash/purity_analyzer.py:DECORATOR_POLICY @44b8bc03, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @21132aa4, cash/analysis/purity_analyzer.py:DECORATOR_POLICY @44b8bc03, cash/analysis/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 | The body... | Cash |
 |---|---|
 | Writes, posts, prints to stdout, or changes state outside the function | Warns ([`IMPURE-SIDE-EFFECTS`](warnings.md#impure-side-effects)) and caches |

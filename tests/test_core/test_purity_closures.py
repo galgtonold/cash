@@ -16,7 +16,7 @@ import warnings
 import pytest
 
 from cash import Cash, CashImpurityWarning
-from cash.purity_analyzer import (
+from cash.analysis.purity_analyzer import (
     ISSUE_IMPURE_CALL,
     PurityAnalyzer,
 )

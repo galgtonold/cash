@@ -100,7 +100,7 @@ ENVIRONMENT_SPELLINGS = {
 
 @pytest.mark.parametrize("spelling", sorted(ENVIRONMENT_SPELLINGS))
 def test_an_aliased_environment_read_is_keyed(tmp_path, monkeypatch, spelling):
-    from cash.purity_analyzer import PurityAnalyzer
+    from cash.analysis.purity_analyzer import PurityAnalyzer
 
     body, entry = ENVIRONMENT_SPELLINGS[spelling]
     mod = _load(tmp_path, monkeypatch, body)

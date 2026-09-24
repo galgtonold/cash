@@ -28,8 +28,8 @@ import os
 import warnings
 
 from cash import Cash
+from cash.analysis.purity_analyzer import ISSUE_MUTABLE_GLOBAL, PurityAnalyzer
 from cash.exceptions import CashImpureFunctionError, CashImpurityWarning
-from cash.purity_analyzer import ISSUE_MUTABLE_GLOBAL, PurityAnalyzer
 
 from . import audited_helper
 

@@ -12,10 +12,10 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from ..analysis.code_analyzer import CodeAnalyzer
+from ..analysis.purity_analyzer import PurityReport, bindings_changed, get_analyzer, resolve_binding
 from ..data_source import DataSource, state_token_of
 from ..exceptions import CashCacheIneffectiveWarning
 from ..graph import DependencyGraph
-from ..purity_analyzer import PurityReport, bindings_changed, get_analyzer, resolve_binding
 from ..source_norm import bytecode_identity, callable_identity, compiled_identity
 from .cached_function import CachedFunction, PurityMode
 from .call_state import KeyBuildFailed

@@ -11,7 +11,7 @@ import warnings
 import pytest
 
 from cash import CashImpurityWarning
-from cash.purity_analyzer import (
+from cash.analysis.purity_analyzer import (
     ISSUE_MUTABLE_GLOBAL,
     _module_modified_globals,
     get_analyzer,

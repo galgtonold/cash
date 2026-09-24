@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from cash.purity import pure, stateful
-from cash.purity_analyzer import (
+from cash.analysis.purity_analyzer import (
     ISSUE_DISCARDED_CALL,
     ISSUE_DYNAMIC_PATTERN,
     ISSUE_IMPURE_CALL,
@@ -13,6 +12,7 @@ from cash.purity_analyzer import (
     ISSUE_UNTRACKABLE_DEP,
     PurityAnalyzer,
 )
+from cash.purity import pure, stateful
 
 
 @pytest.fixture

@@ -32,9 +32,9 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from .data_source import state_token_of
 
 if TYPE_CHECKING:
+    from .analysis.purity_analyzer import PurityReport
     from .data_source import DataSource
     from .graph import DependencyGraph
-    from .purity_analyzer import PurityReport
 
 __all__ = [
     "DependencyStateHasher",

@@ -24,7 +24,7 @@ from cash.analysis.annotations import CacheAnnotation, get_statement_annotations
 from cash.analysis.cacheability import analyze_statement
 from cash.analysis.cacheability_decision import decide_cacheability
 from cash.analysis.code_analyzer import CodeAnalyzer
-from cash.purity_analyzer import PurityAnalyzer
+from cash.analysis.purity_analyzer import PurityAnalyzer
 
 _HEADER = """\
 import csv, datetime, getpass, gzip, json, os, pickle, re, shutil, subprocess, sys, time, uuid

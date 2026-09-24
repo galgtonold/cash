@@ -119,7 +119,7 @@ Patch the name where it is **used** (`primes._sieve`), as with any mocking.
 Patching `sievelib.sieve` after `primes` imported it changes nothing `count`
 runs.
 
-<!-- claim: cash/purity_analyzer.py:is_mock @173f99ff -->
+<!-- claim: cash/analysis/purity_analyzer.py:is_mock @173f99ff -->
 **A call that reaches a `unittest.mock` object runs uncached**, and nothing it
 returns is stored. That covers `mock.patch(...)`, `MagicMock`, `pytest-mock`'s
 `mocker` and `autospec=True` patches, whether the mock replaces your helper, a

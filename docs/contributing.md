@@ -44,7 +44,8 @@ src/cash/
 │   └── *.py            #   the statement cache key, lineage store, call units,
 │                       #   provenance, live cell sources, ...
 ├── analysis/           # static analysis: statement inputs and outputs,
-│                       #   # @cash: annotations, mutations, cacheability
+│                       #   # @cash: annotations, mutations, cacheability,
+│                       #   the purity analysis of a decorated function
 ├── tracking/           # what a computation reads at run time: files,
 │                       #   function source, modules, randomness
 ├── backends/           # storage: memory, file, tiered, SQLite, Redis, S3;
@@ -55,8 +56,6 @@ src/cash/
 ├── effects.py          # which calls write files, send requests, read the clock or environment
 ├── effect_observer.py  # side effects a cached function performs on its first call
 ├── purity.py           # @pure, @stateful and the known-pure registry
-├── purity_analyzer.py  # static purity analysis of a decorated function
-├── purity_flow.py      #   and the data-flow questions it asks
 ├── dependency_state.py # the state hash: own source, dependencies, helpers
 ├── object_hashing.py   # content hashes and sizes of values
 ├── source_norm.py      # normalises source before hashing (comments, blank lines)

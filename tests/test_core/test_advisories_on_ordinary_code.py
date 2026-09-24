@@ -25,7 +25,7 @@ from collections import defaultdict
 
 import pytest
 
-from cash.purity_analyzer import PurityAnalyzer
+from cash.analysis.purity_analyzer import PurityAnalyzer
 
 pytestmark = pytest.mark.core
 

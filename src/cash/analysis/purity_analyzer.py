@@ -53,14 +53,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from ._annotation_refs import annotation_referents
-from ._memo import CODE_OBJECTS, PURITY_REPORTS, LruMemo
-from ._paths import MAIN_MODULE_NAMES, resolve_main_module
-from .analysis.annotations import audited_lines
-from .analysis.ast_util import called_names, resolve_callee
-from .analysis.file_effects import get_base_name, get_call_module, get_call_name
-from .analysis.mutations import PANDAS_INPLACE_METHODS
-from .effects import (
+from .._annotation_refs import annotation_referents
+from .._memo import CODE_OBJECTS, PURITY_REPORTS, LruMemo
+from .._paths import MAIN_MODULE_NAMES, resolve_main_module
+from ..effects import (
     CLOCK_WHEN_ARG_CALLS,
     ENVIRON_NAMES,
     METHOD_VERBS,
@@ -72,12 +68,24 @@ from .effects import (
     dotted_name,
     environment_input,
 )
-from .exceptions import SOURCE_RETRIEVAL_ERRORS
-from .purity import (
+from ..exceptions import SOURCE_RETRIEVAL_ERRORS
+from ..purity import (
     KNOWN_PURE_BUILTINS,
     is_pure,
     is_stateful,
 )
+from ..source_norm import (
+    callable_identity,
+    compiled_identity,
+    normalize_source_for_hash,
+    own_source,
+)
+from ..tracking.function_tracker import is_local_module
+from ..value_types import BUILTIN_NAMES
+from .annotations import audited_lines
+from .ast_util import called_names, resolve_callee
+from .file_effects import get_base_name, get_call_module, get_call_name
+from .mutations import PANDAS_INPLACE_METHODS
 from .purity_flow import (
     LogOnlyFlow,
     fresh_name_nodes,
@@ -85,14 +93,6 @@ from .purity_flow import (
     is_log_line,
     receiver_is_fresh,
 )
-from .source_norm import (
-    callable_identity,
-    compiled_identity,
-    normalize_source_for_hash,
-    own_source,
-)
-from .tracking.function_tracker import is_local_module
-from .value_types import BUILTIN_NAMES
 
 logger = logging.getLogger(__name__)
 

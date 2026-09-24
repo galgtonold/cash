@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from cash.purity_analyzer import ISSUE_SCOPE_MUTATION, PurityAnalyzer
+from cash.analysis.purity_analyzer import ISSUE_SCOPE_MUTATION, PurityAnalyzer
 
 SRC = Path(__file__).resolve().parents[2] / "src" / "cash"
 
@@ -102,5 +102,5 @@ def test_someone_elses_object_is_still_reported(fn):
 
 
 def test_the_fresh_allocation_tables_live_in_one_place():
-    text = (SRC / "purity_analyzer.py").read_text(encoding="utf-8")
+    text = (SRC / "analysis" / "purity_analyzer.py").read_text(encoding="utf-8")
     assert not re.search(r"^_FRESH_\w+\s*[:=]", text, re.MULTILINE)

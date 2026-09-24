@@ -15,10 +15,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from .._memo import CODE_OBJECTS, LruMemo
-from ..dependency_state import SysModulesHelperResolver, ledger_note
-from ..effects import environment_component
-from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashImpurityWarning
-from ..purity_analyzer import (
+from ..analysis.purity_analyzer import (
     REPORTED_METHODS,
     PurityReport,
     callable_layers,
@@ -29,6 +26,9 @@ from ..purity_analyzer import (
     resolve_binding,
     resolve_local_import,
 )
+from ..dependency_state import SysModulesHelperResolver, ledger_note
+from ..effects import environment_component
+from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashImpurityWarning
 from ..source_norm import own_source
 from .call_state import CAPTURE_WATCH
 from .closure_fold import iter_code_scopes, unsafe_uses_of, waived_use_filter

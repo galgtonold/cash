@@ -11,9 +11,9 @@ from typing import TYPE_CHECKING, Any
 from .. import _plain_data
 from .._active import EXPLAINING as _EXPLAINING
 from .._memo import CODE_OBJECTS, LruMemo
+from ..analysis.purity_analyzer import ISSUE_UNTRACKABLE_DEP, get_analyzer
 from ..diagnostics import log_diagnostic, warn_diagnostic
 from ..exceptions import CashImpurityWarning
-from ..purity_analyzer import ISSUE_UNTRACKABLE_DEP, get_analyzer
 from ..source_norm import class_functions
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, PLAIN_SEQS
 from .arg_hashing import is_opaque, plain_census

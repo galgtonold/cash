@@ -12,9 +12,9 @@ from __future__ import annotations
 
 import hashlib
 
+from cash.analysis.purity_analyzer import PurityReport
 from cash.dependency_state import DependencyStateHasher, SysModulesHelperResolver
 from cash.graph import DependencyGraph
-from cash.purity_analyzer import PurityReport
 
 from . import _purity_helper_module as hm
 

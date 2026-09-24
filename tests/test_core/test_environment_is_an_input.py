@@ -18,10 +18,10 @@ import warnings
 import pytest
 
 from cash import Cash
+from cash.analysis.purity_analyzer import ISSUE_AMBIENT_READ, PurityAnalyzer
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.cache_status import CacheStatus
 from cash.notebook.lineage_formula import statement_environment_reads
-from cash.purity_analyzer import ISSUE_AMBIENT_READ, PurityAnalyzer
 from tests._cell_driver import run_cash_cell
 
 _VAR = "CASH_TEST_TENANT"

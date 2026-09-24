@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import warnings
 
-from cash.purity_analyzer import _is_user_code, get_analyzer
+from cash.analysis.purity_analyzer import _is_user_code, get_analyzer
 from cash.tracking.reader_patches import FileDependencyRegistry
 
 # A REAL cash shim, built the way the file tracker builds it. Its code lives in

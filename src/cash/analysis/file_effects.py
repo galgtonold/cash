@@ -38,7 +38,7 @@ __all__ = [
 
 #: What a notebook statement does about each kind of effect in it. What a kind
 #: IS lives in :mod:`cash.effects`, shared with the decorator, whose own table
-#: is ``cash.purity_analyzer.DECORATOR_POLICY``. The two differ where the paths
+#: is ``cash.analysis.purity_analyzer.DECORATOR_POLICY``. The two differ where the paths
 #: differ on purpose -- a notebook replays a statement's printed output, so a
 #: print caches here, while a decorator hit drops it -- and a test keeps both
 #: covering every kind, so a new kind cannot slip past either.

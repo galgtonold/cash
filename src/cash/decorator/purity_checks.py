@@ -17,14 +17,7 @@ from .. import _plain_data
 from .._clock import perf_counter as _perf_counter
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
 from ..analysis.cacheability_decision import identity_coupled_reason
-from ..effect_observer import EffectObserver, observed_label
-from ..exceptions import (
-    SOURCE_RETRIEVAL_ERRORS,
-    CashCacheIneffectiveWarning,
-    CashImpureFunctionError,
-    CashImpurityWarning,
-)
-from ..purity_analyzer import (
+from ..analysis.purity_analyzer import (
     ISSUE_AMBIENT_READ,
     ISSUE_IMPURE_CALL,
     ISSUE_MUTABLE_GLOBAL,
@@ -33,6 +26,13 @@ from ..purity_analyzer import (
     PurityIssue,
     PurityReport,
     resolve_binding,
+)
+from ..effect_observer import EffectObserver, observed_label
+from ..exceptions import (
+    SOURCE_RETRIEVAL_ERRORS,
+    CashCacheIneffectiveWarning,
+    CashImpureFunctionError,
+    CashImpurityWarning,
 )
 from ..value_types import IMMUTABLE_VALUE_TYPES, writable_types
 from .closure_fold import is_immutable_capture, iter_code_scopes, unsafe_uses_of

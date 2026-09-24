@@ -12,8 +12,8 @@ import ast
 import pytest
 
 from cash.analysis.file_effects import NOTEBOOK_POLICY
+from cash.analysis.purity_analyzer import DECORATOR_POLICY
 from cash.effects import Action, EffectKind, classify_call
-from cash.purity_analyzer import DECORATOR_POLICY
 
 
 def _call(src: str) -> ast.Call:
