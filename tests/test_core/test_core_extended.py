@@ -7,7 +7,7 @@ from cash.backends import InMemoryBackend
 from cash.backends.tiered_backend import TieredBackend
 from cash.config import CashConfig
 from cash.core import Cash
-from cash.data_source import FileDataSource
+from cash.file_source import FileDataSource
 
 
 class TestCashInit:

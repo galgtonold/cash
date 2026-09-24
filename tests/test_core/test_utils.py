@@ -171,7 +171,7 @@ class TestFileDataSource:
 
     def test_create_data_source(self, tmp_path):
         """FileDataSource tracks a file by its content digest."""
-        from cash.data_source import FileDataSource
+        from cash.file_source import FileDataSource
         from cash.tracking.file_dep_snapshot import file_content_hash
 
         f = tmp_path / "data.txt"
@@ -182,7 +182,7 @@ class TestFileDataSource:
 
     def test_touch_keeps_the_token(self, tmp_path):
         """A new mtime over the same bytes is not a change."""
-        from cash.data_source import FileDataSource
+        from cash.file_source import FileDataSource
 
         f = tmp_path / "data.txt"
         f.write_text("hello", encoding="utf-8")
@@ -193,7 +193,7 @@ class TestFileDataSource:
 
     def test_edit_under_the_same_mtime_moves_the_token(self, tmp_path):
         """An edit that leaves the mtime where it was is still a change."""
-        from cash.data_source import FileDataSource
+        from cash.file_source import FileDataSource
 
         f = tmp_path / "data.txt"
         f.write_text("hello", encoding="utf-8")
@@ -206,7 +206,7 @@ class TestFileDataSource:
 
     def test_detect_change(self, tmp_path):
         """The token moves when the file is modified."""
-        from cash.data_source import FileDataSource
+        from cash.file_source import FileDataSource
 
         f = tmp_path / "data.txt"
         f.write_text("hello", encoding="utf-8")
@@ -219,7 +219,7 @@ class TestFileDataSource:
 
     def test_nonexistent_file(self, tmp_path):
         """A missing file has its own token."""
-        from cash.data_source import FileDataSource
+        from cash.file_source import FileDataSource
 
         ds = FileDataSource(str(tmp_path / "missing.txt"))
         assert ds.get_id().startswith("file:")

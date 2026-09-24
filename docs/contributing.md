@@ -62,7 +62,8 @@ src/cash/
 ├── source_norm.py      # normalises source before hashing (comments, blank lines)
 ├── cost_model.py       # predicted serialise and restore time per type and backend
 ├── effectiveness.py    # notices when caching costs more than it saves
-├── data_source.py      # FileDataSource and the DataSource protocol
+├── data_source.py      # the DataSource protocol
+├── file_source.py      # FileDataSource for a local file
 ├── remote_source.py    # RemoteFileDataSource for s3, gs, az and http
 ├── diagnostics.py      # the stable code of every warning
 ├── exceptions.py       # public exceptions and warnings

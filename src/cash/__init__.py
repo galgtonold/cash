@@ -25,7 +25,7 @@ from .backends import FileBackend, InMemoryBackend, TieredBackend
 from .backends.sqlite_backend import SQLiteBackend
 from .config import CashConfig, create_default_config, get_config
 from .core import CacheExplanation, Cash
-from .data_source import DataSource, FileDataSource
+from .data_source import DataSource
 from .exceptions import (
     AmbiguousCellError,
     CacheBackendError,
@@ -42,6 +42,7 @@ from .exceptions import (
     ForwardReferenceError,
     UpstreamStateError,
 )
+from .file_source import FileDataSource
 from .purity import is_pure, is_stateful, pure, stateful
 from .remote_source import RemoteFileDataSource
 from .tracking.randomness import CashRandomnessWarning
