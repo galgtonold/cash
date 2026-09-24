@@ -29,7 +29,7 @@ reconstruct and these cases do not arise. Entries that also affect Run All say s
 
 This is the one home for randomness in notebooks; other pages link here.
 
-<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @dbaae9db, cash/tracking/randomness/state.py:restore_rng_state @3e10fc77, cash/tracking/randomness/state.py:capture_rng_state @421bfe05 -->
+<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @c622f3f9, cash/tracking/randomness/state.py:restore_rng_state @2e1cc6af, cash/tracking/randomness/state.py:capture_rng_state @421bfe05 -->
 **Symptom:** re-running a cell returns the same random numbers.
 
 An unseeded draw is cached like any other value, so a re-run shows the stored
@@ -44,7 +44,7 @@ cache. An estimator fitted with `random_state=None` counts as an unseeded draw.
 
 | You want | Do this |
 |---|---|
-| A new draw every run | `# @cash:no-cache` on the statement, on the line above it or at the end of its line. It turns off the rewind as well as caching. |
+| A new draw every run | `# @cash:no-cache` on the statement, on the line above it or at the end of its line. The draw then continues the stream from where it stood before cash rewound it, so it changes every run, also below a frozen draw. |
 | The same result every run | Seed it: `np.random.seed(0)`, `np.random.default_rng(0)`, `random_state=0`. |
 | No warning | `# @cash:allow-random`. It changes the warning only, never what is cached or rewound. |
 

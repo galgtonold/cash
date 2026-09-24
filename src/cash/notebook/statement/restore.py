@@ -126,7 +126,7 @@ class StatementRestorer:
                 rng_state = payload.get("rng_state")
                 if rng_state and rng_replay_is_current(payload, seed_epochs):
                     logger.debug("[CACHE DEBUG] Restoring RNG state")
-                    restore_rng_state(rng_state)
+                    restore_rng_state(rng_state, tracking_state.rng_live_states)
                 # Absent on older entries — restore_object_rng_states
                 # treats None/{} as a no-op, so old cache entries load unchanged.
                 object_rng_states = payload.get("rng_object_states")

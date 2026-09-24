@@ -821,6 +821,8 @@ class StatementProcessor:
         execution = runner.execution
         marks = self._calls.cash_time_marks()
         start_time = time.time()
+        if run.annotation is not None and run.annotation.no_cache:
+            self._randomness.resume_live_stream(code)
         # Snapshot the global RNG streams around execution so a before/after
         # diff catches a draw that static analysis and object-introspection
         # both miss -- one hidden inside a called function.

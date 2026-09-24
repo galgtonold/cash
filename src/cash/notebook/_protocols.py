@@ -108,6 +108,13 @@ class TrackingState:
     # W: CellExecutor. R: UpstreamChecker.
     rng_pre_states: dict[str, Any] = field(default_factory=dict)
 
+    # RNG module -> where its global stream stood before cash moved it back to
+    # a recorded position (a rewind or a cache hit's replay). A ``no-cache``
+    # statement drawing from an unseeded stream resumes from here, so it draws
+    # a new value each run instead of the rewound one; the entry is used up.
+    # W: RngRewind, StatementRestorer. R/W: StatementRandomness.
+    rng_live_states: dict[str, Any] = field(default_factory=dict)
+
     # sha256(cell source) -> RNG modules the cell changed at runtime, including
     # draws inside called functions that static analysis cannot see.
     # W: CellExecutor. R: UpstreamChecker.

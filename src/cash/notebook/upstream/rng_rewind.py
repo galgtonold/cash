@@ -382,7 +382,7 @@ class RngRewind:
                     self.tracking_state.variable_lineage,
                     drawing,
                 ):
-                    restore_rng_state(own_state)
+                    restore_rng_state(own_state, self.tracking_state.rng_live_states)
                     return
                 # Seed changed since it was recorded: the saved position belongs
                 # to the old seed. Fall through rather than apply it.
@@ -398,7 +398,7 @@ class RngRewind:
                 digest = hashlib.sha256(src.encode("utf-8")).hexdigest()
                 state = post_states.get(digest)
                 if state is not None:
-                    restore_rng_state(state)
+                    restore_rng_state(state, self.tracking_state.rng_live_states)
                 return  # nearest predecessor only, whether or not it was recorded
         except (AttributeError, IndexError, TypeError):  # pragma: no cover - defensive
             return

@@ -76,16 +76,25 @@ def capture_rng_state() -> dict:
     return state
 
 
-def restore_rng_state(state: dict) -> None:
+def restore_rng_state(state: dict, displaced: dict | None = None) -> None:
     """
     Restore RNG state from a previously captured state dict.
 
     Args:
         state: Dict mapping module name to its RNG state.
+        displaced: When given, receives the state each restored module is
+            moved away from, unless it already holds one for that module, so
+            it keeps the earliest position a run of restores moved away from.
     """
 
     if not state:
         return
+
+    if displaced is not None and any(module not in displaced for module in state):
+        current = capture_rng_state()
+        for module in state:
+            if module in current:
+                displaced.setdefault(module, current[module])
 
     # Standard library random
     if "random" in state and "random" in sys.modules:

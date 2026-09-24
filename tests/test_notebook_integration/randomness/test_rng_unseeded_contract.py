@@ -102,6 +102,46 @@ def test_a_trailing_no_cache_redraws_every_run(nb_runner):
 
 
 @pytest.mark.timeout(180)
+def test_no_cache_redraws_below_a_frozen_draw(nb_runner):
+    """The frozen draw above rewinds the stream to where it started, so a
+    no-cache draw below it must not start from that same position each run."""
+    nb_runner.create_notebook(
+        [
+            C_ON,
+            SETUP,
+            "a = random.random()\nprint('a=', a)",
+            "# @cash:no-cache\nr = random.random()\nprint('r=', r)",
+        ]
+    )
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    first_a = nb_runner.get_output(3).split("a=")[-1].strip().splitlines()[0]
+    first_r = _drawn(nb_runner, 4)
+    nb_runner.run_all()
+    assert nb_runner.get_output(3).split("a=")[-1].strip().splitlines()[0] == first_a, "the draw above stays frozen"
+    assert _drawn(nb_runner, 4) != first_r, "the no-cache draw below a frozen draw must redraw each run"
+
+
+@pytest.mark.timeout(180)
+def test_no_cache_redraws_after_a_replayed_statement(nb_runner):
+    """A cache hit puts the stream back where the cached statement left it;
+    the no-cache draw after it must still redraw.
+
+    Printed by a no-cache cell of its own: with every statement persisted, a
+    plain ``print(r)`` is itself a cache hit and replays the first run's output.
+    """
+    nb_runner.create_notebook(
+        [C_ON, SETUP, "x = 1\n# @cash:no-cache\nr = random.random()", "# @cash:no-cache\nprint('r=', r)"]
+    )
+    nb_runner.start_kernel()
+    nb_runner.enable_persist()
+    nb_runner.run_all()
+    first = _drawn(nb_runner, 4)
+    nb_runner.run_all()
+    assert _drawn(nb_runner, 4) != first
+
+
+@pytest.mark.timeout(180)
 def test_allow_random_stays_frozen_and_silent(nb_runner):
     """allow-random suppresses the warning; it does not change the value."""
     first, second = _two_run_alls(

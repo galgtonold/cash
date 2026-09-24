@@ -22,6 +22,7 @@ from cash.tracking.randomness import (
     hidden_lineage_writes,
     hidden_write_lineage,
     publish_seed_epochs,
+    restore_rng_state,
     rng_modules_changed,
     rng_virtual_var,
     warn_stale_estimator_fit,
@@ -72,6 +73,32 @@ class StatementRandomness:
         self._cell_changed: set[str] = set()
         self._cell_pre: dict | None = None
         self._cell_post: dict | None = None
+
+    def resume_live_stream(self, code: str) -> None:
+        """Move the unseeded streams a ``no-cache`` statement draws from back
+        to where they stood before cash's rewinds and replays moved them.
+
+        A rewind or a cache hit puts a stream back to a recorded position so a
+        frozen draw repeats. A ``no-cache`` draw run after it would start from
+        that same position on every run and repeat too. Resuming the stream
+        the kernel was on before cash moved it gives it the next value of that
+        stream instead, a new one each run. A seeded stream is left where it
+        is: there the recorded position is the one a clean run reaches.
+        """
+        live = self.tracking_state.rng_live_states
+        if not live:
+            return
+        try:
+            modules = get_drawing_rng_modules(strip_markers(code))
+        except (SyntaxError, ValueError, AttributeError, RecursionError):
+            return
+        digest = hashlib.sha256(code.encode("utf-8")).hexdigest()
+        modules |= self.tracking_state.observed_rng_statement_draws.get(digest, set())
+        modules -= set(self.seed_epochs)
+        if "torch" in modules:
+            modules.add("torch.cuda")
+        resumed = {module: live.pop(module) for module in modules if module in live}
+        restore_rng_state(resumed)
 
     def begin_statement(self) -> dict:
         """Clear the last statement's observation and snapshot the RNG streams.
