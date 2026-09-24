@@ -23,6 +23,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from ..value_types import BUILTIN_NAMES
 from .aliases import aliased_sources
 from .annotations import extract_annotations_for_statements
 from .ast_util import called_names
@@ -90,6 +91,11 @@ def live_function_source(name: str, namespace: Mapping[str, Any]) -> str | None:
             return inspect.getsource(fn)
         except (OSError, TypeError):
             pass
+    if name not in namespace and name in BUILTIN_NAMES:
+        # ``len`` or ``print`` unbound in the namespace is the builtin, which
+        # has no source. Scanning every value's globals for it took about 1 ms
+        # per call with 3,000 functions in the namespace.
+        return None
     seen: set[int] = set()
     for value in namespace.values():
         module_globals = getattr(value, "__globals__", None)
@@ -575,14 +581,25 @@ def _object_protocol_effects(
 
 @dataclass(frozen=True)
 class StatementEffects:
-    """What one statement reads and writes, as both engines must see it."""
+    """What one statement reads and writes, as both engines must see it.
+
+    A callee's writes to globals show up twice, for two questions.
+    ``outputs`` answers "what does this statement produce": every call counts,
+    including one in a loop or branch body, so each written global gets a
+    producer and a lineage that advances. ``callee_globals`` answers "which
+    writes does this statement own, to replay or skip": a loop or branch is one
+    unit to the simulation and the accumulator machinery, so its body's writes
+    belong to it and not to one body statement. Both engines read both fields
+    the same way, which keeps their keys equal.
+    """
 
     #: Names the statement reads.
     inputs: frozenset[str]
-    #: Names it binds, plus the globals a callee mutates in place.
+    #: Names it binds, plus the globals any callee it calls mutates in place.
     outputs: frozenset[str]
-    #: Notebook globals a callee mutates in place. Empty for a statement in a
-    #: control-structure body: the loop or branch owns its body's writes.
+    #: Notebook globals a callee mutates in place, counting only calls outside
+    #: control-structure bodies. Empty for a statement in a control-structure
+    #: body: the loop or branch owns its body's writes.
     callee_globals: frozenset[str]
     #: Variables handed to a bare call of a user function that mutates the
     #: matching parameter in place (``def add(d): d.append(x)`` + ``add(data)``).
@@ -595,6 +612,22 @@ def is_module_name(name: str, namespace: Mapping[str, Any], virtual_modules: Ite
     if isinstance(namespace.get(name), types.ModuleType):
         return True
     return name not in namespace and name in virtual_modules
+
+
+def _resolve_once(resolve_source: SourceResolver) -> SourceResolver:
+    """*resolve_source*, answering each name from its first answer.
+
+    A resolver that raises is asked again next time, so each caller still
+    sees the exception and handles it its own way.
+    """
+    answers: dict[str, str | None] = {}
+
+    def resolve(name: str) -> str | None:
+        if name not in answers:
+            answers[name] = resolve_source(name)
+        return answers[name]
+
+    return resolve
 
 
 def statement_effects(
@@ -611,9 +644,14 @@ def statement_effects(
 
     *tree* is ``ast.parse(code)``, or None when that fails (a magic, a
     top-level ``await``): the inputs and outputs are then read from a
-    magic-tolerant parse, and no callee is looked into. *virtual_modules* are
-    names the simulation bound to modules that the kernel does not hold yet.
+    magic-tolerant parse, and ``callee_globals`` and ``arg_mutations`` are
+    empty. *virtual_modules* are names the simulation bound to modules that
+    the kernel does not hold yet.
+
+    Each called name is resolved once, however many of the questions above
+    ask about it.
     """
+    resolve_source = _resolve_once(resolve_source)
     inputs, outputs = CodeAnalyzer.analyze_code_block(code, tree=tree, resolve_source=resolve_source, user_ns=namespace)
     callee_globals: frozenset[str] = frozenset()
     if not control_body:
