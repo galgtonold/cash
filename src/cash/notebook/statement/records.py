@@ -34,7 +34,6 @@ from cash.tracking.file_dep_snapshot import snapshot_file_deps
 
 if TYPE_CHECKING:
     from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
-    from cash.notebook.statement.restore import StatementRestorer
     from cash.tracking.function_tracker import FunctionTracker
 
 logger = logging.getLogger(__name__)
@@ -52,14 +51,12 @@ class StatementRecords:
         shell: ShellProtocol,
         tracking_state: TrackingState,
         cash_instance: CashInstanceProtocol | None,
-        restorer: StatementRestorer,
         function_tracker: FunctionTracker | None,
     ) -> None:
         self.shell = shell
         self.tracking_state = tracking_state
         self.cash_instance = cash_instance
         self.function_tracker = function_tracker
-        self._restorer = restorer
         # This cell's statements so far, each with the lineages it read, for a
         # chart writer's provenance (``carrier_history``).
         self._cell_stmt_log: list[tuple[str, dict[str, str]]] = []
@@ -174,8 +171,7 @@ class StatementRecords:
             return
 
         try:
-            self._restorer.persist_metadata_only(
-                backend,
+            backend.set_metadata_only(
                 import_bindings_key(code),
                 {
                     "import_bindings": True,
@@ -205,8 +201,7 @@ class StatementRecords:
             return
 
         try:
-            self._restorer.persist_metadata_only(
-                backend,
+            backend.set_metadata_only(
                 mutation_verdict_key(source_hash),
                 {"mutation_verdict": True, "receivers": verdict, "ttl": None},
             )
@@ -230,8 +225,7 @@ class StatementRecords:
         if backend is None:
             return
         try:
-            self._restorer.persist_metadata_only(
-                backend,
+            backend.set_metadata_only(
                 read_provenance_key(code),
                 {"read_provenance": True, "paths": paths, "code": code, "ttl": None},
             )
@@ -308,8 +302,7 @@ class StatementRecords:
                 record["carrier_histories"] = histories
             backend = self.cash_instance.backend if self.cash_instance else None
             if backend is not None:
-                self._restorer.persist_metadata_only(
-                    backend,
+                backend.set_metadata_only(
                     write_provenance_key(code),
                     record,
                 )

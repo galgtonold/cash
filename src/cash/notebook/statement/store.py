@@ -38,7 +38,6 @@ if TYPE_CHECKING:
     from cash.notebook.statement.call_routing import CallRouting
     from cash.notebook.statement.lineage import StatementLineageBuilder
     from cash.notebook.statement.rebuild_cost import RebuildCostLedger
-    from cash.notebook.statement.restore import StatementRestorer
     from cash.notebook.statement.run import StatementExecution, StatementRun
 
 logger = logging.getLogger(__name__)
@@ -81,9 +80,9 @@ class StatementStore:
     """Decides whether a statement's result is worth storing, and stores it.
 
     Collaborators are injected: the lineage builder writes the entry's
-    lineages, the restorer writes metadata-only records, the amplification
-    guard and the rebuild-cost ledger can refuse or force a write, and the
-    call router swaps served call results for references.
+    lineages, the amplification guard and the rebuild-cost ledger can refuse
+    or force a write, and the call router swaps served call results for
+    references.
     """
 
     def __init__(
@@ -92,24 +91,18 @@ class StatementStore:
         tracking_state: TrackingState,
         cash_instance: CashInstanceProtocol,
         *,
-        restorer: StatementRestorer,
         lineage_builder: StatementLineageBuilder,
         amplification: AmplificationGuard,
         rebuild_cost: RebuildCostLedger,
         calls: CallRouting,
-        seed_epochs: Mapping[str, Any],
     ) -> None:
         self.shell = shell
         self.tracking_state = tracking_state
         self.cash_instance = cash_instance
-        self._restorer = restorer
         self._lineage_builder = lineage_builder
         self._amplification = amplification
         self._rebuild_cost = rebuild_cost
         self._calls = calls
-        #: The seeding regime each RNG was last seeded under, stored with the
-        #: RNG state (``StatementRandomness.seed_epochs``, shared, not copied).
-        self._seed_epochs = seed_epochs
         #: Names a later top-level statement of the running cell writes
         #: (:meth:`set_written_later_in_cell`).
         self.written_later_in_cell: frozenset[str] = frozenset()
@@ -161,7 +154,15 @@ class StatementStore:
         execution: StatementExecution,
         captured_vars: dict[str, Any],
         miss_guarded: bool = False,
+        *,
+        seed_epochs: Mapping[str, str],
     ) -> StatementCacheMetadata | None:
+        """Store *run*'s result, or the metadata alone when a gate refuses the
+        value; None when the statement gets no entry at all.
+
+        *seed_epochs* is the seeding regime each RNG was last seeded under
+        (``StatementRandomness.seed_epochs``), stored with the RNG state.
+        """
         if getattr(execution.result, "skipped", False):
             return None
 
@@ -196,6 +197,7 @@ class StatementStore:
             file_dependencies=all_file_deps,
             miss_guarded=miss_guarded,
             inherited_snapshots=inherited_snapshots,
+            seed_epochs=seed_epochs,
         )
 
     def _producer_file_snapshots(self, var_name: str) -> dict[str, dict]:
@@ -348,6 +350,7 @@ class StatementStore:
         file_dependencies: set[str],
         miss_guarded: bool = False,
         inherited_snapshots: dict[str, dict] | None = None,
+        seed_epochs: Mapping[str, str],
     ) -> StatementCacheMetadata | None:
         """Store execution results and metadata in the cache. Returns
         metadata, or ``None`` when the statement was so cheap to compute
@@ -493,7 +496,7 @@ class StatementStore:
             try:
                 backend = self.cash_instance.backend if self.cash_instance else None
                 if backend is not None:
-                    self._restorer.persist_metadata_only(backend, cache_key, skip_metadata.to_dict())
+                    backend.set_metadata_only(cache_key, skip_metadata.to_dict())
             except (OSError, TypeError, ValueError, AttributeError):
                 logger.debug("[PROCESSOR] Best-effort metadata persistence failed")
             return skip_metadata
@@ -530,7 +533,7 @@ class StatementStore:
             # The seeding regime this state was captured under, so a later
             # restore can tell whether replaying it would clobber a re-seed
             # rather than continue the stream.
-            "rng_epochs": dict(self._seed_epochs),
+            "rng_epochs": dict(seed_epochs),
         }
 
         # the module-global RNG post-state above misses generators the
@@ -580,7 +583,7 @@ class StatementStore:
         try:
             backend = self.cash_instance.backend
             if backend is not None and not persisted:
-                self._restorer.persist_metadata_only(backend, cache_key, wire)
+                backend.set_metadata_only(cache_key, wire)
         except (OSError, TypeError, ValueError, AttributeError):
             logger.debug("[PROCESSOR] Best-effort metadata persistence failed")
 

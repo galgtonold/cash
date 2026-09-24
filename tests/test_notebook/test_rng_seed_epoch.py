@@ -19,9 +19,7 @@ is a function of the cache, not of the current seed.
 
 from __future__ import annotations
 
-import pytest
-
-from cash.notebook.statement.restore import StatementRestorer
+from cash.notebook.statement.restore import rng_replay_is_current
 from cash.tracking.randomness import (
     get_drawing_rng_modules,
     get_seeding_rng_modules,
@@ -54,52 +52,43 @@ class TestModuleDetection:
 class TestRngReplayGate:
     """The second half: a stale RNG state must not clobber a fresh seed."""
 
-    def _restorer(self, epochs):
-        return StatementRestorer(
-            shell=object(),
-            rng_seed_epochs=epochs,
-        )
-
     def test_matching_epoch_still_replays(self):
         """Within one seeding regime, replay is what keeps the stream coherent."""
-        r = self._restorer({"numpy.random": "stmt:aaa"})
-        assert r._rng_replay_is_current({"rng_epochs": {"numpy.random": "stmt:aaa"}}) is True
+        payload = {"rng_epochs": {"numpy.random": "stmt:aaa"}}
+        assert rng_replay_is_current(payload, {"numpy.random": "stmt:aaa"}) is True
 
     def test_changed_epoch_suppresses_replay(self):
         """The regression: after a re-seed, replay would discard the new seed."""
-        r = self._restorer({"numpy.random": "stmt:bbb"})
-        assert r._rng_replay_is_current({"rng_epochs": {"numpy.random": "stmt:aaa"}}) is False
+        payload = {"rng_epochs": {"numpy.random": "stmt:aaa"}}
+        assert rng_replay_is_current(payload, {"numpy.random": "stmt:bbb"}) is False
 
     def test_unknown_module_does_not_suppress(self):
         """No epoch for a module means nothing is known to have changed."""
-        r = self._restorer({})
-        assert r._rng_replay_is_current({"rng_epochs": {"numpy.random": "stmt:aaa"}}) is True
+        assert rng_replay_is_current({"rng_epochs": {"numpy.random": "stmt:aaa"}}, {}) is True
 
     def test_any_changed_module_suppresses(self):
-        r = self._restorer({"numpy.random": "stmt:aaa", "random": "stmt:CHANGED"})
         payload = {"rng_epochs": {"numpy.random": "stmt:aaa", "random": "stmt:zzz"}}
-        assert r._rng_replay_is_current(payload) is False
+        assert rng_replay_is_current(payload, {"numpy.random": "stmt:aaa", "random": "stmt:CHANGED"}) is False
 
 
-def test_default_ledger_is_isolated():
-    """Two restorers built without a ledger must not share one dict."""
-    a = StatementRestorer(shell=object())
-    b = StatementRestorer(shell=object())
-    a._rng_seed_epochs["numpy.random"] = "stmt:aaa"
-    assert b._rng_seed_epochs == {}
+def test_a_hit_is_judged_by_the_seed_in_force_when_it_is_served(statement_processor):
+    """A seed processed AFTER an entry was cached stops that entry's RNG state
+    from replaying: the hit is judged by the seed ledger as it is when the hit
+    is served. Judged by an older copy, the hit rewinds the stream to where the
+    old seed left it, and the next draw repeats the old seed's numbers."""
+    import random
 
+    from cash.notebook.cache_status import CacheStatus
 
-@pytest.mark.parametrize("seeded_first", [True, False])
-def test_epoch_ledger_is_shared_with_the_processor(seeded_first):
-    """The restorer must observe seeds executed AFTER it was constructed.
+    processor = statement_processor
+    processor.cash_instance.config.min_execution_time_to_cache_seconds = 0.0
+    processor.process_statement("import random")
+    processor.process_statement("random.seed(0)")
+    assert processor.process_statement("y = 1 + 1")["status"] == CacheStatus.COMPUTED
 
-    The ledger is passed by reference precisely so a seed statement processed
-    later is visible at restore time; copying it would silently reinstate the
-    bug for every statement cached before the re-seed.
-    """
-    ledger: dict[str, str] = {}
-    r = StatementRestorer(shell=object(), rng_seed_epochs=ledger)
-    if seeded_first:
-        ledger["numpy.random"] = "stmt:aaa"
-    ledger["numpy.random"] = "stmt:bbb"
-    assert r._rng_replay_is_current({"rng_epochs": {"numpy.random": "stmt:aaa"}}) is False
+    processor.process_statement("random.seed(1)")
+    assert processor.process_statement("y = 1 + 1")["status"] == CacheStatus.RESTORED
+
+    drawn = random.random()
+    random.seed(1)
+    assert drawn == random.random()

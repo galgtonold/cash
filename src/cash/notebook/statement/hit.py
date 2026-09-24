@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import pickle
 import time
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from cash.exceptions import CacheBackendError, CacheSerializationError
@@ -44,6 +45,7 @@ class CacheHitServer:
         run: StatementRun,
         cached_data: Any,
         metadata: StatementCacheMetadata | None,
+        seed_epochs: Mapping[str, str],
     ) -> ProcessResult | None:
         """Restore from cache and populate *metrics* for a cache-hit path.
 
@@ -55,6 +57,9 @@ class CacheHitServer:
         every alias observes the fit. It is recomputed each call from
         the live namespace (never read from ``mutation_verdicts``, which is empty
         right after a kernel restart).
+
+        *seed_epochs* is the seeding regime in force now
+        (``StatementRandomness.seed_epochs``).
         """
         cache_key, inputs, metrics, process_start = run.cache_key, run.inputs, run.metrics, run.process_start
         try:
@@ -76,7 +81,13 @@ class CacheHitServer:
                         [(k, v[:16] + "...") for k, v in (metadata.output_lineages or {}).items()],
                     )
             self._restorer.restore_from_cache(
-                self.tracking_state, cached_data, metadata, run.silent, process_start, run.est_fit
+                self.tracking_state,
+                cached_data,
+                metadata,
+                run.silent,
+                process_start,
+                run.est_fit,
+                seed_epochs=seed_epochs,
             )
 
             metrics["status"] = CacheStatus.RESTORED

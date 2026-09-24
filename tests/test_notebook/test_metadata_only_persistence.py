@@ -195,18 +195,16 @@ class TestTieredBackendMetadataOnlyWithFileTier:
 
 
 class TestStatementProcessorMetadataPersistence:
-    """Test StatementRestorer.persist_metadata_only and metadata persistence on skip."""
+    """``set_metadata_only``, which the statement store calls for a refused value."""
 
-    def test_persist_metadata_only_calls_backend(self, tmp_path):
-        """persist_metadata_only should call set_metadata_only on the backend."""
+    def test_set_metadata_only_lands_on_disk(self, tmp_path):
+        """Through the tiered backend, the metadata reaches the file tier."""
         from cash.backends import FileBackend, InMemoryBackend, TieredBackend
-        from cash.notebook.statement.restore import StatementRestorer
 
         file_backend = FileBackend(cache_dir=str(tmp_path))
         cascade = TieredBackend([InMemoryBackend(), file_backend])
 
-        StatementRestorer.persist_metadata_only(
-            cascade,
+        cascade.set_metadata_only(
             "test_key",
             {
                 "execution_time": 3.5,
@@ -220,11 +218,10 @@ class TestStatementProcessorMetadataPersistence:
         assert retrieved["execution_time"] == 3.5
         assert retrieved["metadata_only"] is True
 
-    def test_persist_metadata_only_noop_for_unsupported_backend(self):
-        """persist_metadata_only is a no-op for a backend that keeps the base
-        class's ``set_metadata_only``: nothing is written, nothing raises."""
+    def test_set_metadata_only_noop_for_unsupported_backend(self):
+        """A backend that keeps the base class's ``set_metadata_only``
+        writes nothing and raises nothing."""
         from cash.backends import CacheBackend
-        from cash.notebook.statement.restore import StatementRestorer
 
         class DummyBackend(CacheBackend):
             def get(self, key):
@@ -243,7 +240,7 @@ class TestStatementProcessorMetadataPersistence:
                 return []
 
         # Should not raise
-        StatementRestorer.persist_metadata_only(DummyBackend(), "key", {"execution_time": 1.0})
+        DummyBackend().set_metadata_only("key", {"execution_time": 1.0})
 
 
 class TestTieredBackendMetadataOnly:
@@ -418,10 +415,9 @@ class TestTieredBackendMetadataOnly:
 
     def test_set_stores_metadata_even_without_promotion(self, tmp_path):
         """When TieredBackend.set() doesn't promote to disk (cheap stmt),
-        _persist_metadata_only should still persist the metadata."""
+        set_metadata_only should still persist the metadata."""
         from cash.backends import FileBackend, InMemoryBackend
         from cash.backends.tiered_backend import TieredBackend
-        from cash.notebook.statement.restore import StatementRestorer
 
         l1 = InMemoryBackend()
         l2 = FileBackend(cache_dir=str(tmp_path))
@@ -429,7 +425,7 @@ class TestTieredBackendMetadataOnly:
         # Use a promotion policy that rejects everything
         tiered = TieredBackend([l1, l2], promotion_policy=lambda t, s: False)
 
-        # Simulate what statement_processor does: set() then persist_metadata_only()
+        # What the statement store does: set(), then set_metadata_only()
         metadata = {"execution_time": 0.05, "outputs": ["x"], "size": 100}
         tiered.set("key1", {"variables": {"x": 42}}, metadata)
 
@@ -438,7 +434,7 @@ class TestTieredBackendMetadataOnly:
         assert full_val is None, "Promotion should have been rejected"
 
         # Now persist metadata only
-        StatementRestorer.persist_metadata_only(tiered, "key1", metadata)
+        tiered.set_metadata_only("key1", metadata)
 
         # Metadata should be on disk
         retrieved = tiered.get_metadata("key1")

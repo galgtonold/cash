@@ -193,14 +193,8 @@ class StatementProcessor:
         # variable-granular Restorer in restore.py (owned by CashMagics) —
         # see that module's docstring for the unit-of-work distinction.
         # Stateless w.r.t. tracking state — receives it per call.
-        self._stmt_restorer = StatementRestorer(
-            shell=shell,
-            compute_hash=compute_hash_fn,
-            rng_seed_epochs=self._randomness.seed_epochs,
-        )
-        self._records = StatementRecords(
-            shell, self.tracking_state, cash_instance, self._stmt_restorer, self.function_tracker
-        )
+        self._stmt_restorer = StatementRestorer(shell=shell, compute_hash=compute_hash_fn)
+        self._records = StatementRecords(shell, self.tracking_state, cash_instance, self.function_tracker)
 
         # Used to prevent the "redundant import" optimization from skipping
         # import statements for modules that need re-execution after source changes.
@@ -222,12 +216,10 @@ class StatementProcessor:
             shell,
             self.tracking_state,
             cash_instance,
-            restorer=self._stmt_restorer,
             lineage_builder=self.lineage_builder,
             amplification=self._amplification,
             rebuild_cost=self._rebuild_cost,
             calls=self._calls,
-            seed_epochs=self._randomness.seed_epochs,
         )
 
     def get_cash_instance(self) -> Any | None:
@@ -729,7 +721,7 @@ class StatementProcessor:
             self._log_cache_lookup(code, run.cache_key, inputs, cached_data, analysis_time, hash_time, cache_check_time)
 
         if cached_data and not import_needs_reexecution(tree, self.shell.user_ns):
-            hit_result = self._hits.serve(run, cached_data, metadata)
+            hit_result = self._hits.serve(run, cached_data, metadata, self._randomness.seed_epochs)
             if hit_result is not None:
                 self.analytics_manager.record_event(
                     status="HIT",
@@ -1190,7 +1182,9 @@ class StatementProcessor:
         run.outputs, run.skip_cache = outputs, skip_cache
         saved_metadata = None
         if not skip_cache:
-            saved_metadata = self._store.save(run, execution, captured_vars, miss_guarded=miss_guarded)
+            saved_metadata = self._store.save(
+                run, execution, captured_vars, miss_guarded=miss_guarded, seed_epochs=self._randomness.seed_epochs
+            )
         else:
             logger.debug("%s Skipping cache save due to @cash:no-cache", _LOG_ANNOTATION)
 

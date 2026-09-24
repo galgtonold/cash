@@ -4,9 +4,7 @@ Owns the operation "hydrate a statement's outputs from a cached
 payload" — write the variables into ``user_ns``, reconstitute lineage
 + source tracking, replay captured stdout / stderr / rich outputs.
 
-Single public entry: :meth:`StatementRestorer.restore_from_cache`,
-plus :meth:`StatementRestorer.persist_metadata_only` for the
-small-but-cacheable case where only metadata gets persisted.
+Single public entry: :meth:`StatementRestorer.restore_from_cache`.
 
 **Distinct from the variable-granular Restorer:**
 
@@ -32,7 +30,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from ...tracking.randomness import restore_object_rng_states, restore_rng_state
@@ -46,12 +44,42 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def rng_replay_is_current(payload: Mapping[str, Any], seed_epochs: Mapping[str, str]) -> bool:
+    """Whether a cached statement's RNG state may still be replayed, under the
+    seeding regime *seed_epochs* (``StatementRandomness.seed_epochs``).
+
+    Replaying a cached statement's post-execution RNG state keeps the random
+    stream coherent when a restore stands in for an execution: the next draw
+    then continues from where a real run would have left it.
+
+    That is only true WITHIN one seeding regime. Re-seed the RNG and the
+    replay becomes actively destructive -- it rewinds the generator to the
+    state the COLD run left behind, silently discarding the seed the user
+    just set. The following draw then recomputes (its key changed) and still
+    produces the old seed's numbers, because it draws from the old seed's
+    state. Keying the draw is necessary but not sufficient; this is the
+    other half.
+
+    So an entry may replay its RNG state only while the epochs it was
+    written under still hold.
+    """
+    for module, epoch in payload["rng_epochs"].items():
+        if seed_epochs.get(module, epoch) != epoch:
+            logger.debug(
+                "[CACHE DEBUG] Skipping RNG replay for %s: re-seeded since caching",
+                module,
+            )
+            return False
+    return True
+
+
 class StatementRestorer:
     """Hydrate a statement's outputs from a cached payload.
 
     Stateless apart from the shell reference and the optional content
     hasher; all :class:`TrackingState` access happens through the
-    ``tracking_state`` method parameter, and what a restored value records
+    ``tracking_state`` method parameter, the seeding regime comes with each
+    call, and what a restored value records
     there is :func:`~cash.notebook.restored_var.apply_restored_var`'s.
     Mutates ``user_ns`` and ``tracking_state`` directly; replays captured
     display output via IPython.
@@ -61,54 +89,9 @@ class StatementRestorer:
         self,
         shell: "ShellProtocol",
         compute_hash: Callable[[Any], str] | None = None,
-        rng_seed_epochs: dict[str, str] | None = None,
     ) -> None:
         self.shell = shell
         self.compute_hash = compute_hash
-        # SHARED with the processor's ledger (same dict object), so a seed
-        # statement executed after construction is visible here.
-        self._rng_seed_epochs = rng_seed_epochs if rng_seed_epochs is not None else {}
-
-    def _rng_replay_is_current(self, payload: dict[str, Any]) -> bool:
-        """Whether this entry's RNG state may still be replayed.
-
-        Replaying a cached statement's post-execution RNG state keeps the random
-        stream coherent when a restore stands in for an execution: the next draw
-        then continues from where a real run would have left it.
-
-        That is only true WITHIN one seeding regime. Re-seed the RNG and the
-        replay becomes actively destructive -- it rewinds the generator to the
-        state the COLD run left behind, silently discarding the seed the user
-        just set. The following draw then recomputes (its key changed) and still
-        produces the old seed's numbers, because it draws from the old seed's
-        state. Keying the draw was necessary but not sufficient; this is the
-        other half.
-
-        So an entry may replay its RNG state only while the epochs it was
-        written under still hold.
-        """
-        for module, epoch in payload["rng_epochs"].items():
-            if self._rng_seed_epochs.get(module, epoch) != epoch:
-                logger.debug(
-                    "[CACHE DEBUG] Skipping RNG replay for %s: re-seeded since caching",
-                    module,
-                )
-                return False
-        return True
-
-    @staticmethod
-    def persist_metadata_only(
-        backend: Any,
-        cache_key: str,
-        metadata: dict[str, Any],
-    ) -> None:
-        """Persist only metadata (no data payload) to disk for badge display after restart.
-
-        Only a tier that keeps metadata alone (e.g. FileBackend) writes it.
-        Ensures timing info survives kernel restarts even when the actual data
-        was too large / too cheap to cache.
-        """
-        backend.set_metadata_only(cache_key, metadata)
 
     def restore_from_cache(
         self,
@@ -118,6 +101,8 @@ class StatementRestorer:
         silent: bool,
         process_start: float,
         inplace_restore: "set[str] | frozenset[str] | None" = None,
+        *,
+        seed_epochs: Mapping[str, str],
     ) -> None:
         """Restore a cached statement's outputs into ``user_ns`` and replay display.
 
@@ -125,6 +110,9 @@ class StatementRestorer:
         state must be transferred onto the EXISTING object rather than rebinding
         the name, so every alias sees the fit. Empty/None for every other
         statement, which keeps the plain-rebind behaviour.
+
+        *seed_epochs* is the seeding regime in force now; the entry's RNG state
+        is replayed only while it still holds (:func:`rng_replay_is_current`).
         """
         t_restore = time.time()
 
@@ -136,7 +124,7 @@ class StatementRestorer:
                 stderr = payload.get("stderr", "")
                 rich_outputs = payload.get("rich_outputs", [])
                 rng_state = payload.get("rng_state")
-                if rng_state and self._rng_replay_is_current(payload):
+                if rng_state and rng_replay_is_current(payload, seed_epochs):
                     logger.debug("[CACHE DEBUG] Restoring RNG state")
                     restore_rng_state(rng_state)
                 # Absent on older entries — restore_object_rng_states
