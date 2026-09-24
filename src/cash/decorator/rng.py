@@ -403,8 +403,8 @@ class RngMixin:
             f"call - the RNG is never consulted again, so the value is frozen "
             f"and not reproducible across a cleared cache."
         )
-        # ``_warn_once`` keys on (category, func_name, "") -> one warning per
-        # decorated function for the life of this Cash instance, and it also
+        # ``_warn_once`` gives one warning per decorated function for the life
+        # of this Cash instance, and it also
         # files the message into ``f.cache_info()['warnings']`` so it stays
         # discoverable if the user missed the stderr emission.
         self._warn_once(
@@ -416,13 +416,6 @@ class RngMixin:
             fix="seed the RNG to make the value reproducible, leave the "
             "function undecorated for a genuinely fresh draw, or pass "
             "@cash.cache(allow_random=True) to keep it frozen on purpose.",
-            # 4, not 3: the chain from ``warnings.warn`` is
-            # ``warn_diagnostic_message -> _warn_once ->
-            # _warn_unseeded_randomness -> cache -> user``, so 3 blamed
-            # ``cache`` itself and printed a line inside core.py. Measured
-            # against a decoration on a known line; a reader whose warning
-            # points into Cash cannot act on it, which is the whole point of
-            # this diagnostic. Single caller, so the depth is fixed.,
         )
 
     def _warn_if_seed_is_none(self, func: Callable, func_name: str, args: tuple, kwargs: dict) -> None:

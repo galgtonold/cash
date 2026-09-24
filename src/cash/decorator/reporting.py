@@ -170,8 +170,6 @@ class ReportingMixin:
         self,
         func_name: str,
         error: BaseException,
-        *,
-        stacklevel: int | None = None,
     ) -> None:
         """Surface a raised ``cache_if`` predicate as a user-visible warning.
 
@@ -190,15 +188,12 @@ class ReportingMixin:
             code="CACHE-IF-RAISED",
             fix="make the predicate total -- it must handle every shape the "
             "result can take -- or drop cache_if= to restore caching.",
-            stacklevel=stacklevel,
         )
 
     def _warn_metadata_invalid(
         self,
         func_name: str,
         error: BaseException,
-        *,
-        stacklevel: int | None = None,
     ) -> None:
         """Surface a malformed cache-metadata read as a user-visible warning.
 
@@ -217,15 +212,12 @@ class ReportingMixin:
             code="STORE-METADATA-INVALID",
             fix="nothing, for a one-off; if it keeps appearing, run "
             "f.cache_clear() so the unreadable records are replaced.",
-            stacklevel=stacklevel,
         )
 
     def _warn_lock_failed(
         self,
         func_name: str,
         error: BaseException,
-        *,
-        stacklevel: int | None = None,
     ) -> None:
         """Surface a backend-locking failure as a user-visible warning.
 
@@ -246,7 +238,6 @@ class ReportingMixin:
             fix="investigate the backend the exception names -- a full disk, a "
             "stale lock file, or a cache_dir on a filesystem where locking "
             "does not work.",
-            stacklevel=stacklevel,
         )
 
     def _warn_once(
@@ -258,7 +249,6 @@ class ReportingMixin:
         *,
         code: str,
         fix: str,
-        stacklevel: int | None = None,
         once_per_version: bool = False,
     ) -> None:
         """Emit a coded diagnostic at most once per
@@ -284,16 +274,10 @@ class ReportingMixin:
         attach to a specific arg type (e.g. store-failed). The seen-set
         key still distinguishes by func_name.
 
-        **Do not pass ``stacklevel``.** The blamed frame is resolved at emit
-        time by walking out to the nearest frame outside ``cash/`` -- see
-        :func:`~cash.diagnostics._stacklevel_of_first_user_frame`. This used to
-        be a per-caller constant, documented here as 5 by default with 6 and 3
-        for the deeper and shallower chains, and four separate diagnostics
-        shipped pointing at a line inside ``core.py`` anyway. A constant cannot
-        be right for a helper reached at two different depths, and an over-deep
-        one reports ``<sys>:0`` rather than clamping, so the failure was silent
-        in both directions. The parameter survives only as an override for a
-        site that needs one; none does.
+        The warning blames the nearest frame outside ``cash/``, found at emit
+        time (see :func:`~cash.diagnostics._stacklevel_of_first_user_frame`):
+        one helper is reached at different call depths, so no fixed
+        ``stacklevel`` could name the user's line.
         """
         if _EXPLAINING.get():
             return
@@ -325,9 +309,7 @@ class ReportingMixin:
         if once_per_version and not self._first_showing(func_name, rendered):
             entry["shown_by_an_earlier_run"] = True
             return
-        warn_diagnostic_message(
-            category, code, rendered, stacklevel=stacklevel, fallback=self._definition_site(func_name)
-        )
+        warn_diagnostic_message(category, code, rendered, fallback=self._definition_site(func_name))
 
     def _first_showing(self, func_name: str, rendered: str) -> bool:
         """Has no earlier run on this cache shown *rendered*? Records that one

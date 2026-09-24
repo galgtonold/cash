@@ -723,7 +723,7 @@ class ExplainMixin:
         self._remember_outcome(cache_key, {"not_stored": refusal})
 
     @staticmethod
-    def _not_persisted_reason(stored_meta: dict[str, Any], execution_time: float) -> str | None:
+    def _not_persisted_reason(stored_meta: dict[str, Any]) -> str | None:
         """Why a stored value reached only RAM, or ``None`` if it went further.
 
         Only a tiered backend says where a value landed; anything else reports

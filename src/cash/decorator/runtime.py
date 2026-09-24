@@ -530,7 +530,6 @@ class RuntimeMixin:
                 call.cache_key,
                 func_name,
                 res,
-                call.metadata,
                 call.ttl,
                 call.state_hash,
                 call.args_hash,

@@ -83,7 +83,7 @@ def make_opaque_issue(func_name: str, opaque_list: str) -> Any:
     )
 
 
-def format_issues_summary(func_name: str, issues: list[Any]) -> str:
+def format_issues_summary(issues: list[Any]) -> str:
     """Pretty-print a list of `PurityIssue` records, grouped
     by their ``where`` field. Used by both the warning body and the
     strict-mode exception body so users get the same diagnostic.
@@ -699,7 +699,7 @@ class PurityChecksMixin:
         if mode == "silent":
             return
 
-        summary = format_issues_summary(func_name, issues)
+        summary = format_issues_summary(issues)
 
         # Untrackable-dependency patterns (eval/exec/compile, getattr(obj,name)()
         # dynamic dispatch, importlib.import_module) RAISE by default, even in
@@ -710,7 +710,7 @@ class PurityChecksMixin:
         # handled above) to cache anyway.
         untrackable = [i for i in issues if getattr(i, "kind", None) == ISSUE_UNTRACKABLE_DEP]
         if untrackable and mode != "strict":
-            untrackable_summary = format_issues_summary(func_name, untrackable)
+            untrackable_summary = format_issues_summary(untrackable)
             raise CashImpureFunctionError(
                 f"@cash.cache on {func_name}: a dependency is resolved from a "
                 f"runtime value, so cash cannot tell when it changes and a cached "
@@ -744,7 +744,7 @@ class PurityChecksMixin:
                 f"UUID). That value is not part of the cache key, so the first "
                 f"call's answer is what every later call gets back -- in this "
                 f"process and in every process "
-                f"after it.\n{format_issues_summary(func_name, ambient)}",
+                f"after it.\n{format_issues_summary(ambient)}",
                 code="KEY-AMBIENT-READ",
                 fix="pass the value in as an argument -- `f(now=datetime.now())` "
                 "-- so it reaches the cache key and a new value means a new "
@@ -768,7 +768,7 @@ class PurityChecksMixin:
                 f"server or a database returned, and that answer is not part "
                 f"of the cache key. The first call's answer is what every later call gets "
                 f"back -- in this process and in every process after it -- "
-                f"until something changes the key.\n{format_issues_summary(func_name, remote)}",
+                f"until something changes the key.\n{format_issues_summary(remote)}",
                 code="KEY-NETWORK-READ",
                 fix="bound how old a served answer may be with ttl= -- "
                 "`@cash.cache(ttl=3600)` -- or pass what makes the answer new "
@@ -779,7 +779,7 @@ class PurityChecksMixin:
             )
         if not issues:
             return
-        summary = format_issues_summary(func_name, issues)
+        summary = format_issues_summary(issues)
 
         self._purity_static_flagged.add(func_name)
 

@@ -262,7 +262,6 @@ class StoreMixin:
         cache_key: str,
         func_name: str,
         result: Any,
-        metadata: dict[str, Any] | None,
         ttl: int | None,
         state_hash: str,
         args_hash: str,
@@ -343,7 +342,7 @@ class StoreMixin:
             store_errors = meta_dict.get("store_errors")
             if store_errors and not [t for t in (meta_dict.get("storage") or []) if t != "RAM"]:
                 raise CacheBackendError("; ".join(str(e) for e in store_errors))
-            not_persisted = self._not_persisted_reason(meta_dict, execution_time)
+            not_persisted = self._not_persisted_reason(meta_dict)
             self._remember_outcome(
                 cache_key,
                 {
@@ -371,7 +370,7 @@ class StoreMixin:
                 fix=STORE_FAILED_FIX,
             )
 
-    def _warn_cache_if_bypassed(self, spec: CachedFunction, stacklevel: int | None = None) -> None:
+    def _warn_cache_if_bypassed(self, spec: CachedFunction) -> None:
         """One-shot: the result outgrew a single chunk, so cache_if cannot run.
 
         Applying it would mean materializing every chunk back into memory,
@@ -397,7 +396,6 @@ class StoreMixin:
             "result reaches, or return a list instead of an iterator, so "
             "the whole result arrives in one piece for the predicate to "
             "see.",
-            stacklevel=stacklevel,
         )
 
     def _stream_and_store(

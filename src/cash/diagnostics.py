@@ -315,7 +315,6 @@ def warn_diagnostic_message(
     code: str,
     message: str,
     *,
-    stacklevel: int | None = None,
     fallback: tuple[str, int] | None = None,
 ) -> None:
     """Emit an already-rendered *message* carrying *code*.
@@ -325,12 +324,12 @@ def warn_diagnostic_message(
     the log and the terminal must not drift apart. This keeps the ``.code``
     attribute and the registry check for that path.
 
-    Blames the nearest frame outside Cash unless *stacklevel* overrides it, the
-    same as :func:`warn_diagnostic` -- or, with no frame of the user's on this
-    thread's stack (a pool worker), the ``(filename, lineno)`` in *fallback*.
+    Blames the nearest frame outside Cash, the same as :func:`warn_diagnostic`
+    -- or, with no frame of the user's on this thread's stack (a pool worker),
+    the ``(filename, lineno)`` in *fallback*.
     """
     if code not in DIAGNOSTIC_CODES:
         raise KeyError(f"unknown diagnostic code: {code!r}")
     instance = category(message)
     instance.code = code
-    _warn_at(instance, _user_frame_level() if stacklevel is None else stacklevel + 1, fallback)
+    _warn_at(instance, _user_frame_level(), fallback)
