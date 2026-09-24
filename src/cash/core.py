@@ -1359,8 +1359,8 @@ class Cash(
         Cash already tracks common readers (``open``, ``pd.read_csv``,
         ``np.load``, ...). For another one, give a factory that wraps the
         reader and reports each path it opens; cash installs the wrapper on
-        the module,, so library code that calls it is tracked
-        too. Tracked files are checked like any other read.
+        the module, so library code that calls it is tracked too. Tracked
+        files are checked by content, like any other read.
 
         Args:
             module_name: The module that holds the reader, such as
