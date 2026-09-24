@@ -38,7 +38,8 @@ import time
 
 import cash
 from cash.notebook.call_effects import replay_deps
-from cash.notebook.call_interception import CallCache, CallSite
+from cash.notebook.call_interception import CallSite
+from cash.notebook.call_unit import CallCache
 from cash.tracking.file_tracker import FileAccessTracker
 from cash.tracking.tracker_context import active_tracker
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S

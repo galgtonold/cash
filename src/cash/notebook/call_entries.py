@@ -166,7 +166,7 @@ class CallEntries:
         by design it never imports matplotlib and has no I/O -- so this
         except is a belt no realistic value should ever reach; returning
         ``True`` here mirrors the already-shipped fallback in
-        ``call_interception._is_storable`` (same delegation, same except
+        ``call_unit._is_storable`` (same delegation, same except
         clause) so a call's storability does not silently depend on which of
         the two dispatch paths happened to route it.
         """

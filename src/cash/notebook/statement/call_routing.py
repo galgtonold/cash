@@ -1,7 +1,7 @@
 """Routing a statement's calls through the call cache.
 
 Each eligible call in a statement is rewritten to resolve its callee through
-:class:`~cash.notebook.call_interception.CallCache`, so an expensive call is
+:class:`~cash.notebook.call_unit.CallCache`, so an expensive call is
 cached on its own even where the statement around it cannot be. This module
 owns that rewrite and what the call units read while the statement runs:
 its TTL, its persist request, and the variables of the loops around it.
@@ -18,9 +18,9 @@ from typing import TYPE_CHECKING, Any
 from cash.analysis.code_analyzer import CodeAnalyzer
 from cash.control_markers import strip_markers
 from cash.notebook.cache_key import CacheKeyContext
-from cash.notebook.call_interception import HELPER_NAME, CallCache, wrap_eligible_calls
+from cash.notebook.call_interception import HELPER_NAME, wrap_eligible_calls
 from cash.notebook.call_refs import with_call_refs
-from cash.notebook.call_unit import call_cost_floor_s, call_site_is_cacheable
+from cash.notebook.call_unit import CallCache, call_cost_floor_s, call_site_is_cacheable
 from cash.tracking.file_tracker import tracking_seconds
 
 if TYPE_CHECKING:

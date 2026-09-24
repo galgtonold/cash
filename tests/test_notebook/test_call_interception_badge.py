@@ -24,7 +24,8 @@ import pytest
 import cash
 from cash.notebook.badge_renderer.renderers.text import render_text
 from cash.notebook.badge_renderer.view_builder import build_interactive_badge
-from cash.notebook.call_interception import CallCache, CallSite
+from cash.notebook.call_interception import CallSite
+from cash.notebook.call_unit import CallCache
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 # ---------------------------------------------------------------- CallCache

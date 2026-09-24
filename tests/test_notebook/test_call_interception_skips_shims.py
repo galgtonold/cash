@@ -28,7 +28,8 @@ import builtins
 import pytest
 
 import cash
-from cash.notebook.call_interception import CallCache, CallSite
+from cash.notebook.call_interception import CallSite
+from cash.notebook.call_unit import CallCache
 from cash.tracking.file_tracker import FileAccessTracker
 
 

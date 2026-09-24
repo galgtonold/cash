@@ -1,8 +1,9 @@
 """Runtime half of sub-statement caching: running one intercepted call.
 
 ``call_interception.py`` owns the AST half — which call nodes are structurally
-eligible, and the rewrite. This module owns the runtime gate
-(:func:`call_site_is_cacheable`) and :class:`CallUnit`, which runs each call
+eligible, and the rewrite. This module owns
+:class:`CallCache`, which resolves a callee to its cached counterpart, the
+runtime gate (:func:`call_site_is_cacheable`) and :class:`CallUnit`, which runs each call
 through three collaborators: its key (:class:`~cash.notebook.call_key.CallKeys`,
 which reads variable lineage), its entry (:class:`~cash.notebook.call_entries.CallEntries`,
 the backend round-trip and the refusals before a write), and its effects
@@ -29,6 +30,7 @@ import logging
 import pathlib as _pathlib
 import sys
 import time as _time
+import types
 import warnings
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -36,7 +38,7 @@ from typing import Any
 from cash._clock import perf_counter as _perf_counter
 from cash.analysis.annotations import CacheAnnotation
 from cash.analysis.cacheability import analyze_statement
-from cash.analysis.cacheability_decision import decide_cacheability
+from cash.analysis.cacheability_decision import decide_cacheability, identity_coupled_reason
 from cash.notebook._trace import trace_event
 from cash.notebook.cache_key import CacheKeyContext
 from cash.notebook.call_effects import (
@@ -50,18 +52,19 @@ from cash.notebook.call_effects import (
     unwrap_callee_globals,
 )
 from cash.notebook.call_entries import CallEntries
-from cash.notebook.call_interception import CallSite, names_read
+from cash.notebook.call_interception import CallSite, interceptable, names_read
 from cash.notebook.call_key import CallKeys, callee_mutated_globals, global_digests
 from cash.notebook.call_refs import (
     DIGEST_FIELD,
     SIZE_FIELD,
 )
+from cash.notebook.consumables import is_consumable_unrestorable
 from cash.tracking.file_tracker import FileAccessTracker
 from cash.tracking.randomness import capture_rng_state, rng_modules_changed
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["call_site_is_cacheable", "CallUnit"]
+__all__ = ["call_site_is_cacheable", "CallCache", "CallUnit"]
 
 
 def call_site_is_cacheable(
@@ -721,3 +724,225 @@ class CallUnit:
     def drain(self) -> list[dict]:
         events, self.call_log = self.call_log, []
         return events
+
+
+def _is_storable(result) -> bool:
+    """``cache_if`` predicate: may this call's result be written to the cache?
+
+    Refuses objects that are identity-coupled to a library global — today, a
+    matplotlib Figure/Axes. The RAM tier deep-copies on store and
+    ``Figure.__setstate__`` re-registers the COPY as pyplot's *current figure*,
+    so a later bare ``plt.savefig()`` writes the cache's snapshot instead of the
+    figure the user drew on, on the FIRST run and silently.
+
+    ``statement/processor.py`` already refuses exactly this shape. Routing calls
+    through the decorator skipped that guard, because the decorator never sees a
+    statement — adversarial probing produced two different PNGs from one figure
+    and ``plt.gcf() is fig`` returning False. Applied as ``cache_if`` rather than
+    a post-check so the refusal lands *before* the write, which is what stops
+    the deep copy from being made at all.
+
+    Nor a consumable the store cannot copy (an open file, a generator): the RAM
+    tier keeps it by reference, so a hit would hand back the object a reader
+    already drained. Everything else the decorator would cache is still cached.
+    """
+    try:
+        return identity_coupled_reason("<intercepted call>", result) is None and not is_consumable_unrestorable(result)
+    except Exception:  # noqa: BLE001 - never let the predicate break the call
+        return True
+
+
+class CallCache:
+    """Resolves a callee to the thing that should actually be called.
+
+    The AST decides *structural* eligibility; this is the object-level gate,
+    which needs the live callable in hand. Three outcomes:
+
+    - a plain Python function -> its ``@cash.cache`` counterpart,
+    - a function already decorated -> itself. It is already on this path;
+      wrapping again would mint a second key for the same work and split its
+      hits across two entries.
+    - anything else -> itself. Builtins (``len``, ``print``) and types
+      (``str``, ``range``) are too cheap to be worth a key and would make a
+      hot loop pay for one per iteration.
+
+    Bound methods are passed through in this first cut. They are callables like
+    any other and nothing here prevents caching them later, but keying a method
+    means keying its receiver too, which is a separate decision.
+
+    **This must never be why user code breaks.** Anything unrecognised, and any
+    failure to build a wrapper, hands the original callable back.
+    """
+
+    def __init__(
+        self,
+        cash_instance,
+        ctx_provider: Callable[[], CacheKeyContext] | None = None,
+        loop_vars_provider: Callable[[], dict[str, Any]] | None = None,
+        loop_var_digests_provider: Callable[[], dict[str, str]] | None = None,
+        ttl_provider: Callable[[], int | None] | None = None,
+        persist_provider: Callable[[], bool] | None = None,
+    ):
+        self._cash = cash_instance
+        # Keyed by (id(fn), site) -- NOT (id(fn), site_index). `set_sites` is
+        # called once per STATEMENT, so `site_index` (an index into that
+        # statement's own site list) is reused across every statement that
+        # rewrites at least one call: index 0 means something different on
+        # every statement. Keying on the index let editing a cell reuse the
+        # PREVIOUS statement's wrapper -- same fn, index 0 -- serving its
+        # source/free_names/computed_arg_positions after the callee's own
+        # argument expression had changed (reproduced as
+        # `out.append(compute(a + 100))` silently returning `out.append(compute(a))`'s
+        # cached value). `CallSite` is a frozen, hashable dataclass of
+        # `(source, free_names, occurrence_index, computed_arg_positions,
+        # has_unpacking, stmt_identity)`, so keying on the site itself
+        # self-invalidates on any of those changing -- while an UNCHANGED cell
+        # re-executing still gets a wrapper hit, because `wrap_eligible_calls`
+        # builds a NEW CallSite object each time but an EQUAL one (frozen
+        # dataclasses hash and compare by value), so the wrapper-reuse
+        # optimisation (`test_wrapper_is_reused_for_the_same_function`) is
+        # preserved rather than lost to a blanket `_wrappers.clear()` in
+        # `set_sites`. A function's id can also be reused after garbage
+        # collection, so the original is pinned alongside the wrapper in the
+        # value tuple to keep it alive and detect a recycled id.
+        #
+        # `stmt_identity` joining this tuple is deliberate, not
+        # incidental: two statements that previously built an EQUAL CallSite
+        # (same call text, same free names, same occurrence index) now build
+        # DIFFERENT ones, so each statement gets its own wrapper instead of
+        # silently sharing one minted for the other. That re-scoping is
+        # exactly what fixes the underlying key collision -- a shared wrapper
+        # closes over one `site`, and a wrapper reused across statements would
+        # still build the collapsed key `stmt_identity` exists to prevent.
+        self._wrappers: dict[tuple[int, CallSite | None], tuple[types.FunctionType, object]] = {}
+        # NOTE: there is deliberately no name-reconciliation here any more.
+        # This class used to rebuild ``module.qualname`` via
+        # ``Cash.get_func_key`` so the badge could tell an intercepted call
+        # from a hand-decorated one, with a comment warning that the two "must
+        # agree exactly or the badge silently stops marking intercepted calls".
+        # Call-unit events set ``intercepted=True`` at the source, so the two
+        # can no longer drift.
+        #: The current cell's rewrite-time site table, set by the processor
+        #: right before execution via :meth:`set_sites`.
+        self._sites: list[CallSite] = []
+        self._call_unit = CallUnit(
+            cash_instance,
+            ctx_provider or self._default_ctx,
+            loop_vars_provider or self._default_loop_vars,
+            loop_var_digests_provider or self._default_loop_var_digests,
+            # No fallback: absent a live processor there is no annotation in
+            # force, and `None` is precisely "no TTL".
+            ttl_provider,
+            # Same reasoning for `persist`: no processor means no annotation,
+            # and `None` degrades to "don't force it".
+            persist_provider,
+        )
+
+    def _default_ctx(self) -> CacheKeyContext:
+        """Fallback used only when no live processor state was wired in.
+
+        The production call site (``statement/processor.py``) always supplies a
+        real ``ctx_provider`` bound to the executing cell's ``user_ns`` and
+        ``variable_lineage``. This empty context is exercised only by
+        ``resolve()`` calls that never registered a site (see below) -- direct,
+        non-production use of ``CallCache`` -- where it is harmless: lineage
+        resolution degrades to id-based hashing rather than a dict lookup, and
+        nothing is served incorrectly.
+        """
+        return CacheKeyContext(variable_lineage={}, user_ns={})
+
+    @staticmethod
+    def _default_loop_vars() -> dict[str, Any]:
+        """Fallback used only when no live processor state was wired in.
+
+        Same reasoning as :meth:`_default_ctx`: the production call site
+        always supplies a real ``loop_vars_provider`` bound to the executing
+        statement processor's loop-var stack. ``{}`` here is what
+        ``call_cache_key`` already treats as "outside a loop" -- correct,
+        merely undiscriminated.
+        """
+        return {}
+
+    @staticmethod
+    def _default_loop_var_digests() -> dict[str, str]:
+        """Fallback used only when no live processor state was wired in.
+
+        Same reasoning as :meth:`_default_loop_vars`. ``{}`` here is what
+        ``call_cache_key``'s ``_loop_var_digest`` already treats as "no
+        precomputed digest" -- it falls through to a fresh
+        ``compute_hash_full`` of the value, correct, merely undiscounted.
+        """
+        return {}
+
+    def begin_cell(self) -> None:
+        self._call_unit.begin_cell()
+
+    @property
+    def call_unit(self) -> CallUnit:
+        """The unit that keys, stores and serves this cache's calls."""
+        return self._call_unit
+
+    def held_results(self) -> dict:
+        return self._call_unit.held_results
+
+    def outermost_result(self):
+        return self._call_unit.outermost_result()
+
+    def set_sites(self, sites: list[CallSite], plain_value_source: str | None = None) -> None:
+        self._sites = sites
+        # One call per statement run: each site's guard starts over.
+        self._call_unit.begin_statement()
+        self._call_unit.plain_value_source = plain_value_source
+
+    def drain_call_log(self) -> list[dict]:
+        """Events :class:`~cash.notebook.call_unit.CallUnit` recorded since the
+        last drain, in the same shape ``Cash.drain_decorator_calls`` returns.
+
+        An intercepted call routed through :meth:`resolve`'s real-site branch
+        no longer calls ``self._cash.cache`` at all, so nothing about it lands
+        in the ``Cash`` instance's own decorator-call log any more -- the
+        processor must pull this in and merge it with
+        ``drain_decorator_calls()`` or the badge, the ``@cache`` row and
+        ``%cash_stats`` silently stop seeing intercepted calls.
+        """
+        return self._call_unit.drain()
+
+    def resolve(self, fn, site_index: int = 0):
+        """Return *fn* or a cached counterpart. Never raises."""
+        if not interceptable(fn):
+            return fn
+
+        try:
+            site = self._sites[site_index]
+        except (IndexError, TypeError):
+            site = None
+
+        # Keyed on the SITE, not the index -- see the long comment on
+        # `_wrappers` in `__init__` for why the index alone is unsafe.
+        cache_key = (id(fn), site)
+        entry = self._wrappers.get(cache_key)
+        if entry is not None and entry[0] is fn:
+            return entry[1]
+
+        try:
+            if site is not None:
+                # The real path: key and store through the
+                # statement backend via the call's own CallSite.
+                wrapper = self._call_unit.wrap(fn, site)
+            else:
+                # No site registered for this index -- CallCache is being used
+                # outside the ``CallRouting.code_and_tree_for_execution`` rewrite pipeline
+                # (e.g. called directly, as a unit test may do).
+                # In production ``set_sites`` is always called with a non-empty
+                # list before ``__cash_call__`` is ever bound into ``user_ns``
+                # (``CallRouting.code_and_tree_for_execution`` returns early when
+                # ``wrap_eligible_calls`` finds nothing), so this branch is not
+                # reachable from real notebook execution. Keep the previously-
+                # shipped decorator-based wrapping here rather than passing the
+                # callee through unwrapped: an unrecognised shape must degrade
+                # to a slower-but-correct cache, not to silently losing caching.
+                wrapper = self._cash.cache(fn, cache_if=_is_storable)
+        except Exception:  # noqa: BLE001 - a caching wrapper is never worth an error
+            return fn
+        self._wrappers[cache_key] = (fn, wrapper)
+        return wrapper

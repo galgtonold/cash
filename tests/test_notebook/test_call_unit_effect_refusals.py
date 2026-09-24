@@ -12,7 +12,8 @@ right above the assertion it protects.
 
 import time
 
-from cash.notebook.call_interception import CallCache, CallSite
+from cash.notebook.call_interception import CallSite
+from cash.notebook.call_unit import CallCache
 
 
 def _site(source="f(d)", names=("f", "d"), computed_arg_positions=()):

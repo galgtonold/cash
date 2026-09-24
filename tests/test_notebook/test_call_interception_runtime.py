@@ -28,7 +28,8 @@ import time
 import pytest
 
 import cash
-from cash.notebook.call_interception import CallCache, CallSite
+from cash.notebook.call_interception import CallSite
+from cash.notebook.call_unit import CallCache
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 
@@ -123,7 +124,7 @@ def test_wrapper_is_reused_for_the_same_function(call_cache):
     source introspection, and split the cache across wrappers. The SAME site
     object is registered before each ``resolve()`` call, matching how a loop
     body actually re-executes: a fresh, but EQUAL, ``CallSite`` each
-    iteration (see the ``_wrappers`` keying note in ``call_interception.py``).
+    iteration (see the ``_wrappers`` keying note in ``call_unit.py``).
     """
 
     def compute(x):

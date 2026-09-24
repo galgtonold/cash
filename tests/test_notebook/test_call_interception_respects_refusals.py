@@ -29,7 +29,8 @@ import time
 import pytest
 
 import cash
-from cash.notebook.call_interception import CallCache, CallSite
+from cash.notebook.call_interception import CallSite
+from cash.notebook.call_unit import CallCache
 
 
 @pytest.fixture
