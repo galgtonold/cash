@@ -87,10 +87,8 @@ from .source_norm import (
 from .tracking.file_dep_snapshot import (
     ACTIVE_CONFIG,
 )
-from .tracking.file_tracker import (
-    file_registry,
-    install_read_watch,
-)
+from .tracking.file_tracker import install_read_watch
+from .tracking.reader_patches import file_registry
 
 if TYPE_CHECKING:
     from .analytics import AnalyticsManager

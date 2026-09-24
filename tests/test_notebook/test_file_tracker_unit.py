@@ -9,10 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from cash.tracking.file_tracker import (
-    FileAccessTracker,
-    file_registry,
-)
+from cash.tracking.file_tracker import FileAccessTracker
+from cash.tracking.reader_patches import file_registry
 
 # ---------------------------------------------------------------------------
 # FileDependencyRegistry

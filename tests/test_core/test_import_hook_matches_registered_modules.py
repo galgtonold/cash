@@ -11,8 +11,8 @@ import sys
 
 import pytest
 
-from cash.tracking import file_tracker
-from cash.tracking.file_tracker import FileDependencyRegistry, PostImportHook, _PatchingLoader
+from cash.tracking import reader_patches
+from cash.tracking.reader_patches import FileDependencyRegistry, PostImportHook, _PatchingLoader
 
 
 @pytest.fixture
@@ -24,7 +24,7 @@ def package(tmp_path, monkeypatch):
     monkeypatch.syspath_prepend(str(tmp_path))
     registry = FileDependencyRegistry()
     registry.register("hookpkg", "read_*", FileDependencyRegistry._create_path_arg_handler)
-    monkeypatch.setattr(file_tracker, "_registry", registry)
+    monkeypatch.setattr(reader_patches, "_registry", registry)
     yield
     for name in ("hookpkg", "hookpkg.helpers"):
         sys.modules.pop(name, None)

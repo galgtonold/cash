@@ -64,7 +64,8 @@ def test_patches_exist_only_while_a_scope_is_open():
         import cash
         from cash.effect_observer import EffectObserver
         from cash.tracking import io_watch
-        from cash.tracking.file_tracker import FileAccessTracker, _shared_import_hook
+        from cash.tracking.file_tracker import FileAccessTracker
+        from cash.tracking.reader_patches import _shared_import_hook
 
         with FileAccessTracker():
             with EffectObserver():

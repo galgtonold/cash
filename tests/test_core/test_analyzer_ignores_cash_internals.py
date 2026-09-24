@@ -2,7 +2,7 @@
 
 Under ``%cash_on`` the file tracker replaces the pandas readers (and once
 replaced ``open``) with cash shims. A cached user function that reads a file therefore resolves
-its callee to ``cash.tracking.file_tracker``, and the analyzer used to walk
+its callee to ``cash.tracking.reader_patches``, and the analyzer used to walk
 straight into it and report the shim's own ``_tracker._track_path(...)`` as
 "likely side effects or scope mutations" -- blaming the user for cash's
 instrumentation.
@@ -25,10 +25,10 @@ from __future__ import annotations
 import warnings
 
 from cash.purity_analyzer import _is_user_code, get_analyzer
-from cash.tracking.file_tracker import FileDependencyRegistry
+from cash.tracking.reader_patches import FileDependencyRegistry
 
 # A REAL cash shim, built the way the file tracker builds it. Its code lives in
-# cash.tracking.file_tracker, so it is the exact callee a user's reader name
+# cash.tracking.reader_patches, so it is the exact callee a user's reader name
 # resolves to while tracking is installed.
 _SHIM = FileDependencyRegistry._create_path_arg_handler(open, lambda *a, **k: None)
 
@@ -52,7 +52,9 @@ def test_is_user_code_still_recurses_when_cash_analyses_itself():
 def test_analyzer_does_not_attribute_cash_internals_to_the_user():
     report = get_analyzer().analyze(_user_function_that_reads_a_file)
     offenders = [
-        i for i in report.issues if "cash.notebook" in str(i) or "file_tracker" in str(i) or "_track_path" in str(i)
+        i
+        for i in report.issues
+        if any(part in str(i) for part in ("cash.notebook", "file_tracker", "reader_patches", "_track_path"))
     ]
     assert not offenders, (
         f"the analyzer walked into cash's own file-tracking shim and reported it as the user's impurity: {offenders}"

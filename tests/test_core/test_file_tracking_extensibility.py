@@ -5,8 +5,9 @@ import unittest
 from unittest.mock import MagicMock
 
 from cash.core import Cash
-from cash.tracking import file_tracker
-from cash.tracking.file_tracker import FileAccessTracker, FileDependencyRegistry, file_registry
+from cash.tracking import reader_patches
+from cash.tracking.file_tracker import FileAccessTracker
+from cash.tracking.reader_patches import FileDependencyRegistry, file_registry
 
 
 class TestFileTrackingExtensibility(unittest.TestCase):
@@ -15,8 +16,8 @@ class TestFileTrackingExtensibility(unittest.TestCase):
         self.mock_shell.user_ns = {}
 
         # A fresh registry for each test, so handlers do not leak between them
-        self._saved_registry = file_tracker._registry
-        file_tracker._registry = FileDependencyRegistry()
+        self._saved_registry = reader_patches._registry
+        reader_patches._registry = FileDependencyRegistry()
 
         # Test helpers
         with tempfile.NamedTemporaryFile(encoding="utf-8", delete=False, mode="w+") as tf:
@@ -28,7 +29,7 @@ class TestFileTrackingExtensibility(unittest.TestCase):
             self.temp_path = os.path.realpath(tf.name).replace(os.sep, "/")
 
     def tearDown(self):
-        file_tracker._registry = self._saved_registry
+        reader_patches._registry = self._saved_registry
         if os.path.exists(self.temp_path):
             os.remove(self.temp_path)
 
