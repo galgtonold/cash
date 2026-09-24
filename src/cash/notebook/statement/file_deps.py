@@ -8,9 +8,8 @@ Two layers:
 * :class:`StatementFileDeps` — stateful manager that mutates the
   ``executed_file_deps`` dict.  Propagates
   direct file accesses + inherits file deps from input variables.
-* Module-level pure helpers ``compute_file_hash_component`` and
-  ``read_module_source_hash`` — used both here and by the
-  upcoming ``StatementLineageBuilder`` (step B1).
+* Module-level pure helper ``compute_file_hash_component`` — used both
+  here and by ``StatementLineageBuilder``.
 
 **Anti-god-class rule (load-bearing):** this module owns
 **statement-level** file deps (which files contributed to producing
@@ -29,7 +28,6 @@ from typing import TYPE_CHECKING, Any
 
 from ..._paths import normalize_path
 from ...remote_source import RemoteFileDataSource
-from ...source_norm import module_identity
 from ...tracking.file_dep_snapshot import realpath_of_read_this_run
 from ...value_types import IMMUTABLE_PRIMS
 from ..server_discovery import get_notebook_path
@@ -119,29 +117,6 @@ def compute_file_hash_component(
         logger.debug("[FILE_HASH] Final hash component: %s...", component[:50])
         return component
     return ""
-
-
-def read_module_source_hash(mod_file: str, dep_files: set[str] | None = None) -> str | None:
-    """Combined identity hash of a module file and its dependency files.
-
-    See `cash.source_norm.module_identity` for what "identity" covers and why
-    it is not the file's bytes.
-    """
-    own = module_identity(mod_file)
-    if own is None:
-        logger.debug("[MODULE_HASH] Could not read module file: %s", mod_file)
-        return None
-    if not dep_files:
-        return own
-    hasher = hashlib.sha256()
-    hasher.update(own.encode("utf-8"))
-    for dep_path in sorted(dep_files):
-        dep = module_identity(dep_path)
-        if dep is None:
-            logger.debug("[MODULE_HASH] Could not read dependency file: %s", dep_path)
-            continue
-        hasher.update(dep.encode("utf-8"))
-    return hasher.hexdigest()
 
 
 # ---------------------------------------------------------------------------

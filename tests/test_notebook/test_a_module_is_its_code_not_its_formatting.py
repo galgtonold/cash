@@ -24,7 +24,7 @@ import os
 import pytest
 
 from cash import source_norm
-from cash.notebook.statement.file_deps import read_module_source_hash
+from cash.notebook.lineage_formula import read_module_source_hash
 from cash.source_norm import _module_text_identity
 
 BASE = "def load(n):\n    return list(range(n))\n\ndef report(rows):\n    return len(rows)\n"
