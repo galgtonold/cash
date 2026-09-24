@@ -1150,7 +1150,7 @@ class Cash:
         # Internal import - must always succeed when IPython is present.
         # Kept outside the ImportError guard above so a broken import path
         # surfaces loudly instead of masquerading as "IPython not available".
-        # Local: import cycle core -> notebook.ipython -> notebook.ipython.magics -> core.
+        # Local: the plugin entry; core never imports the notebook package otherwise.
         from .notebook.ipython.magics import CashMagics
 
         magics = CashMagics(ip, self)
