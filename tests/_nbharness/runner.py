@@ -1,8 +1,10 @@
 """NotebookTestRunner: runs a real notebook file on a real kernel, cell by cell."""
 
 import hashlib
+import inspect
 import os
 import shutil
+import warnings
 from pathlib import Path
 from typing import List, Optional, Union
 
@@ -891,6 +893,15 @@ except Exception:
             # after they have already had a warm one.
             self._force_fresh_kernel = True
             return
+        if self._run_async is None:
+            # Never started, or already shut down: a test that calls
+            # shutdown() itself is shut down again by the fixture's teardown.
+            # Every kernel this runner boots is driven through its own
+            # _run_async, so without one there is no kernel left to save
+            # coverage from or to kill. Going on built the coverage-save
+            # coroutine and failed to call a None _run_async with it.
+            self._kernel_started = False
+            return
         if self.client:
             # COVERAGE EXPERIMENT (env-gated, no-op in normal runs):
             # ipykernel exits via os._exit(), which skips the atexit hook that
@@ -909,10 +920,18 @@ except Exception:
                         output_hook=lambda msg: None,
                     )
 
+                save = _save_cov()
                 try:
-                    self._run_async(_save_cov())
-                except Exception:
-                    pass
+                    self._run_async(save)
+                except Exception as exc:
+                    if inspect.getcoroutinestate(save) == inspect.CORO_CREATED:
+                        save.close()  # never scheduled: close it, or Python warns it was never awaited
+                    warnings.warn(
+                        f"cash test harness: could not save the kernel's coverage data before "
+                        f"killing it ({exc!r}); the lines it ran are missing from the coverage data.",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
             # Tear the kernel down without the async shutdown coroutine, which
             # can deadlock on the background loop (see _force_kill_kernel).
             # stop_channels() is sync + bounded; the PID kill is loop-independent.
