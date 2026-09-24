@@ -294,8 +294,9 @@ def called_function_dependencies(
         for ref in code_obj.co_names:
             if ref in seen or ref in ("get_ipython", "__builtins__"):
                 continue
-            # Modules carry their own key component; builtins are constant.
-            if not is_module(ref) and not hasattr(builtins, ref):
+            # Builtins are constant. Modules carry their own key component,
+            # which is decided below: an attribute name is kept whatever it names.
+            if not hasattr(builtins, ref):
                 referenced.add(ref)
             if ref in attrs:
                 attribute_only.add(ref)
@@ -309,6 +310,10 @@ def called_function_dependencies(
     # ``forecast:ABSENT`` before its first run and ``forecast:<lineage>``
     # after, so the simulation never found the entry and re-ran it.
     attribute_only -= {ref for name in seen for ref in _global_names(code_of(name))}
+    # So is a module that shares an attribute's name: ``np.random`` keyed
+    # ``random:ABSENT`` until ``import random`` bound the module, and then
+    # dropped the component, so the call missed once.
+    referenced = {ref for ref in referenced if ref in attribute_only or not is_module(ref)}
     if used_virtual:
 
         def lineage(ref: str) -> str:
@@ -380,6 +385,9 @@ _ATTRIBUTE_OPS = frozenset(
 )
 
 
+#: Opcodes whose argument indexes ``co_names``.
+_NAME_OPS = frozenset(dis.hasname)
+
 #: code object -> its global names. A code object never changes, and a call
 #: made per element of a comprehension disassembled its callee every time:
 #: 1,470 walks for 355 calls, a quarter of what caching them cost.
@@ -387,7 +395,12 @@ _GLOBAL_NAMES_MEMO: LruMemo[Any, frozenset[str]] = LruMemo(4096)
 
 
 def _global_names(code_obj: Any) -> frozenset[str]:
-    """``co_names`` entries *code_obj* uses as something other than an attribute."""
+    """``co_names`` entries *code_obj* uses as something other than an attribute.
+
+    Only instructions whose argument IS a ``co_names`` entry count. A string
+    constant or a local that merely equals one (``hasattr(o, "u")`` beside
+    ``o.u``) is not a global read.
+    """
     if code_obj is None:
         return frozenset()
     try:
@@ -400,7 +413,7 @@ def _global_names(code_obj: Any) -> frozenset[str]:
         found = frozenset(
             ins.argval
             for ins in dis.get_instructions(code_obj)
-            if ins.opname not in _ATTRIBUTE_OPS and isinstance(ins.argval, str) and ins.argval in code_obj.co_names
+            if ins.opcode in _NAME_OPS and ins.opname not in _ATTRIBUTE_OPS and isinstance(ins.argval, str)
         )
     except (TypeError, ValueError):
         return frozenset(code_obj.co_names)  # unknown: treat every name as a global
