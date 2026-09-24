@@ -369,8 +369,8 @@ class StatementProcessor:
 
     def persist_metadata_only(self, key: str, metadata: dict[str, Any]) -> None:
         """Write *metadata* under *key* with no value, for a later kernel to
-        read (see :meth:`StatementRestorer.persist_metadata_only`)."""
-        self._stmt_restorer.persist_metadata_only(self.cash_instance.backend, key, metadata)
+        read. Only a tier that keeps metadata alone (a file tier) stores it."""
+        self.cash_instance.backend.set_metadata_only(key, metadata)
 
     def user_written_paths(self, paths) -> frozenset[str]:
         """*paths* without cash's own storage (its cache directories)."""
