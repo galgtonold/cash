@@ -50,7 +50,7 @@ A file opened for writing is not a dependency: the entry would then depend on
 its own output. Cash reports the write as a side effect instead
 ([Side effects](../../decorator.md#side-effects)).
 
-<!-- claim: cash/tracking/read_classification.py:incidental_read @9366e41c -->
+<!-- claim: cash/tracking/read_classification.py:incidental_read @75e075c3 -->
 Some reads are left out on purpose because they are not your data: files of the
 Python installation, package metadata, reads a library makes while it is
 imported, and an installed package reading its own files (fonts, templates,

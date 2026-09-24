@@ -181,7 +181,7 @@ last use; `cash inspect --function NAME` lists one function's entries. See the
 With a bare `@cash.cache`, a call recomputes when any input below changed. The
 left column is tracked for you. The right column is not, and says what to do.
 
-<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe, cash/decorator/runtime.py:CallRunner._analyze_dependencies @b5ed0470, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @b96cfac7, cash/decorator/code_args.py:CodeArgs.fold_code_args @3190707c -->
+<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe, cash/decorator/runtime.py:CallRunner._analyze_dependencies @b5ed0470, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @3068be4c, cash/decorator/code_args.py:CodeArgs.fold_code_args @3190707c -->
 | Tracked: a change recomputes | Not tracked: what to do |
 |---|---|
 | The **arguments**, by content and type. Equal values share an entry | **Library code** (`site-packages`, the standard library). Pin versions |
@@ -307,7 +307,7 @@ a miss.
 
 ### `frozen=` and large arguments
 
-<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @07fb0ad3, cash/decorator/frozen.py:FrozenResults.warn_has_no_effect @46f8683e -->
+<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @0786c6c6, cash/decorator/frozen.py:FrozenResults.warn_has_no_effect @46f8683e -->
 An argument is keyed by its content at the time of the call, so a big array or
 frame is hashed on every call it is passed to. When a result comes from another
 cached function and nothing changes it afterwards, say so on the producer:

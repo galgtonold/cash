@@ -53,7 +53,7 @@ that can change the result without changing an argument:
 | Environment reads | A digest of each `os.getenv("NAME")`, `os.environ["NAME"]` or `os.getcwd()` value the function, its helpers or the cached functions it calls read with the name written out. A new value is a new entry. |
 | The random seed | For a function seen drawing from the global `random` or `numpy.random` stream: which seed is in force. Re-seeding recomputes. |
 
-<!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @b96cfac7 -->
+<!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @3068be4c -->
 Two limits. A global that cannot be hashed (a lock, a live connection) is left
 out with a [`KEY-UNHASHABLE-GLOBAL`](../warnings.md#key-unhashable-global)
 warning. And reachability is static: code picked at run time, from a dict or

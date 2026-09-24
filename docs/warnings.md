@@ -597,7 +597,7 @@ run time (`os.getenv(name)`).
 
 <!-- claim: cash/effects.py:environment_input @bed3e42a, cash/decorator/globals_fold.py:GlobalsFold.fold_environment @f7aa5f7b -->
 <!-- claim: cash/purity_flow.py:is_log_helper @6bf250bd, cash/purity_analyzer.py:_log_helper_names @c43afd2c -->
-<!-- claim: cash/purity_analyzer.py:_clock_helper_read @e08307ae -->
+<!-- claim: cash/purity_analyzer.py:_clock_helper_read @c1abcb81 -->
 An environment read with the name written out (`os.getenv("TENANT")`) and
 `os.getcwd()` are not reported: their values are folded into the key. A
 reading that only goes into a log line is not reported either.
@@ -739,7 +739,7 @@ Put `# @cash:assume-safe` on the line.
 
 *Decorator.*
 
-<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @07fb0ad3 -->
+<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @0786c6c6 -->
 **What happened.** A function marked `@cash.cache(frozen=True)` promised its
 result is not modified, and a later check found one of its results modified.
 
@@ -850,7 +850,7 @@ like `re.compile(p).match`: it cannot change under you.
 **What happened.** A file holding a cached function or a helper was edited
 after this process imported it. The process still runs the old code.
 
-<!-- claim: cash/decorator/code_identity.py:CodeIdentity.pin_own_source @f3521507 -->
+<!-- claim: cash/decorator/code_identity.py:CodeIdentity.pin_own_source @ede4d2d0 -->
 **Why it matters.** Cash keys that code by what is actually running, so
 results in this process are correct, and they are not reused after a restart
 on the new code.
@@ -888,7 +888,7 @@ and give the captured values as arguments
 
 *Decorator.*
 
-<!-- claim: cash/decorator/closure_fold.py:ClosureFold._defaults_unhashable @26da6217, cash/decorator/closure_fold.py:HelperIdentity.identity @6e68b672 -->
+<!-- claim: cash/decorator/closure_fold.py:ClosureFold._defaults_unhashable @26da6217, cash/decorator/closure_fold.py:HelperIdentity.identity @b8565683 -->
 **What happened.** A parameter default of the function, or of a helper it
 calls, could not be hashed, so the call was not cached. The message names the
 type.
@@ -906,7 +906,7 @@ is the classic case.
 
 *Decorator.*
 
-<!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @b96cfac7 -->
+<!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @3068be4c -->
 **What happened.** The function (or a helper) reads a module global that
 could not be hashed, so it was left out of the key.
 
