@@ -1,9 +1,12 @@
-"""Runtime half of sub-statement caching: keying, gating and storing a call.
+"""Runtime half of sub-statement caching: running one intercepted call.
 
 ``call_interception.py`` owns the AST half — which call nodes are structurally
-eligible, and the rewrite. This module owns everything that needs a live
-object: the key (which reads variable lineage), the runtime gate, the
-post-execution refusals, and the backend round-trip.
+eligible, and the rewrite. This module owns the runtime gate
+(:func:`call_site_is_cacheable`) and :class:`CallUnit`, which runs each call
+through three collaborators: its key (:class:`~cash.notebook.call_key.CallKeys`,
+which reads variable lineage), its entry (:class:`~cash.notebook.call_entries.CallEntries`,
+the backend round-trip and the refusals before a write), and its effects
+(:mod:`cash.notebook.call_effects`, recorded on a miss and replayed on a hit).
 
 **Why this is not the decorator.** ``@cash.cache`` keys a call by pickling
 every argument. That is the right contract for a function called from
@@ -264,6 +267,20 @@ def _warnings_at_the_caller():
                     pass
 
 
+@dataclasses.dataclass(frozen=True)
+class _Call:
+    """One keyed call on its way through :meth:`CallUnit.wrap`."""
+
+    fn: Callable[..., Any]
+    site: CallSite
+    func_name: str
+    key: str
+    #: The globals the callee writes (``callee_mutated_globals``).
+    mutated_globals: tuple[str, ...]
+    args: tuple
+    kwargs: dict
+
+
 class CallUnit:
     """Caches one intercepted call against the statement backend.
 
@@ -462,7 +479,7 @@ class CallUnit:
             # than once per `wrap`, because the underlying source analysis is
             # memoised (`callee_mutated_globals`) while the "is it bound, is it
             # a module" filter genuinely depends on the live namespace. Empty
-            # for nearly every callee, and every branch below short-circuits on
+            # for nearly every callee, and every step below short-circuits on
             # empty, so an ordinary call pays one memo lookup.
             key_started = _perf_counter()
             mutated_globals = callee_mutated_globals(fn)
@@ -471,7 +488,8 @@ class CallUnit:
                 args,
                 kwargs,
                 global_digests(fn, mutated_globals) if mutated_globals else None,
-                # A callee that writes globals keys on their state: the old way.
+                # A callee that writes globals keys on their state, not on
+                # what it receives.
                 fn=None if mutated_globals else fn,
             )
             if key is None:
@@ -493,139 +511,165 @@ class CallUnit:
                 # it plain -- never look it up, never store over it.
                 return fn(*args, **kwargs)
 
+            call = _Call(fn, site, func_name, key, mutated_globals, args, kwargs)
             hit_started = _perf_counter()
             hit, value, recorded_cost, metadata = self._entries.lookup(key)
             self._last_key_s = _perf_counter() - key_started
             if hit:
-                value, captured_globals = unwrap_callee_globals(value, metadata)
-                if value is UNWRAP_FAILED:
-                    # The entry says it carries captured globals and does not.
-                    # Treat it as absent rather than hand back a tuple where a
-                    # value belongs -- a miss costs a recompute, this would be
-                    # a silently wrong value.
-                    return fn(*args, **kwargs)
-                # Replay the ORIGINAL execution's observations into the
-                # statement's ambient capture (FileAccessTracker, live
-                # stdout/stderr). The call itself does not run on a hit, so
-                # without this replay the tracker records no read and the
-                # live stream sees no print -- the enclosing statement's own
-                # entry would then be rewritten (on ITS next miss) from a
-                # degraded observation that is missing both. Mirrors
-                # ``core.py``'s ``_propagate_file_deps_to_active_tracker``,
-                # the ``@cash.cache`` decorator's defence against the same
-                # failure mode.
-                replay_deps(metadata)
-                replay_output(metadata)
-                restore_globals(fn, mutated_globals, captured_globals)
-                if not captured_globals:
-                    self._hold(key, value, metadata.get(DIGEST_FIELD), metadata.get(SIZE_FIELD))
-                self._record(func_name, site, key, cache_hit=True, elapsed=0.0, time_saved=recorded_cost)
-                self._last_compute = recorded_cost or 0.0
-                self._last_hit = True
-                self._entries.drop_if_hit_costs_more(key, _perf_counter() - hit_started, recorded_cost)
-                return value
-
-            # The call runs inside the STATEMENT's ambient capture
-            # (FileAccessTracker, RNG capture, output capture), which wraps
-            # the whole statement's exec. On a genuine miss that capture
-            # records this call's effects as its own, for free, and
-            # everything is correct. The broken case is a later run where the
-            # STATEMENT misses and re-executes but the CALL hits: the call's
-            # effects do not re-happen, so the statement's own capture is
-            # rewritten from a degraded observation. Both checks below fail
-            # CLOSED -- refuse the site outright rather than serve a value
-            # whose side effects will not re-happen.
-            #
-            # File deps and stdout/stderr are recorded around the call so a
-            # LATER hit can replay them (above). RNG is deliberately not
-            # recorded here -- a call that consumed it is already refused.
-            #
-            # A NESTED tracker, not a before/after diff against the ambient
-            # (statement-wide) one -- ``core.py:1870`` is what this task was
-            # told to copy, and it wraps the DECORATED CALL in its own fresh
-            # ``FileAccessTracker(propagate_to_parent=True)``, not a diff
-            # against the caller's tracker. That distinction is load-bearing:
-            # ``active_tracker.get()`` is shared for the whole statement (or,
-            # inside a loop, the whole loop-as-one-unit execution), so a diff
-            # against it goes silently wrong the moment the SAME path is read
-            # twice in one tracker window -- ``hdr = read(p); total =
-            # expensive(k)``, or two loop iterations both reading the same
-            # file. The second read's "after" set already contains the path
-            # from the first, so ``after - before`` is EMPTY: the entry
-            # stores no dependency at all, and ``CallEntries._auto_file_deps_fresh`` is
-            # vacuously true forever. A fresh, per-call tracker has no such
-            # baseline to collide with -- its own set IS this call's reads,
-            # full stop -- and ``propagate_to_parent=True`` still surfaces
-            # every read to the enclosing statement's tracker immediately, so
-            # the miss-path "recorded for free" behaviour is unchanged.
-            rng_before = capture_rng_state()
-            arg_hashes_before = hash_args(args, kwargs)
-            started = _perf_counter()
-            call_tracker = FileAccessTracker(
-                getattr(fn, "__globals__", None),
-                propagate_to_parent=True,
-            )
-            with call_tracker:
-                result, stdout_text, stderr_text = call_capturing_output(fn, args, kwargs)
-            elapsed = _perf_counter() - started
-            stored = False
-
-            if rng_modules_changed(rng_before, capture_rng_state()):
-                # RNG is a consumed linear resource -- what matters is stream
-                # POSITION, not membership. A hit leaves the global stream
-                # where it was, so every downstream draw would diverge from
-                # the uncached oracle. Replaying it properly needs a
-                # sub-statement position anchor that does not exist yet;
-                # v1 refuses instead of guessing.
-                self._entries.refuse(key)
-            elif hash_args(args, kwargs) != arg_hashes_before:
-                # The callee mutated a live argument in place and returned
-                # something else (`df.dropna(inplace=True); return len(df)`).
-                # The identity check only catches `return arg` -- this
-                # catches "mutated but returned a *different* object", which
-                # a hit would silently skip.
-                self._entries.refuse(key)
-            elif (
-                elapsed >= self._cost_floor_s()
-                and self._entries.storable(result, args, kwargs)
-                and self._entries.restore_pays(result, elapsed)
-            ):
-                # The callee's writes to its own globals, captured as
-                # an END STATE. Snapshotting the final value needs no ordering
-                # and no idempotence, which is why this is tractable where
-                # replaying the individual mutations is not.
-                #
-                # `None` means "cannot capture this soundly" -- an unpicklable
-                # value, or one whose hash falls back to identity so a later
-                # pre-state comparison could not tell it had changed. Refuse
-                # the SITE rather than store an entry whose restore would be
-                # wrong, matching the RNG and argument-mutation refusals above:
-                # an uncached call is merely slow.
-                captured = capture_globals(fn, mutated_globals)
-                if captured is None:
-                    self._entries.refuse(key)
-                else:
-                    held = self._entries.store(
-                        key,
-                        result,
-                        elapsed,
-                        file_deps=frozenset(call_tracker.get_accessed_files()),
-                        remote_deps=frozenset(call_tracker.get_accessed_remote_urls()),
-                        stdout=stdout_text,
-                        stderr=stderr_text,
-                        callee_globals=captured,
-                        function=func_name,
-                        plain_value=site.source == self.plain_value_source,
-                        code_module=getattr(fn, "__module__", None),
-                    )
-                    if held:
-                        self._hold(key, result, *held)
-                    stored = True
-            self._record(func_name, site, key, cache_hit=False, elapsed=elapsed, stored=stored)
-            self._last_compute = elapsed
-            return result
+                return self._serve_hit(call, value, recorded_cost, metadata, hit_started)
+            return self._run_miss(call)
 
         return self._entry_for(fn, site, _invoke)
+
+    def _serve_hit(self, call: _Call, value, recorded_cost: float, metadata: Mapping[str, Any], hit_started: float):
+        """Hand back a found entry's value, with the call's effects put back."""
+        __tracebackhide__ = True  # noqa: F841 - see _entry_for
+        value, captured_globals = unwrap_callee_globals(value, metadata)
+        if value is UNWRAP_FAILED:
+            # The entry says it carries captured globals and does not.
+            # Treat it as absent rather than hand back a tuple where a
+            # value belongs -- a miss costs a recompute, this would be
+            # a silently wrong value.
+            return call.fn(*call.args, **call.kwargs)
+        # Replay the ORIGINAL execution's observations into the
+        # statement's ambient capture (FileAccessTracker, live
+        # stdout/stderr). The call itself does not run on a hit, so
+        # without this replay the tracker records no read and the
+        # live stream sees no print -- the enclosing statement's own
+        # entry would then be rewritten (on ITS next miss) from a
+        # degraded observation that is missing both. Mirrors
+        # ``core.py``'s ``_propagate_file_deps_to_active_tracker``,
+        # the ``@cash.cache`` decorator's defence against the same
+        # failure mode.
+        replay_deps(metadata)
+        replay_output(metadata)
+        restore_globals(call.fn, call.mutated_globals, captured_globals)
+        if not captured_globals:
+            self._hold(call.key, value, metadata.get(DIGEST_FIELD), metadata.get(SIZE_FIELD))
+        self._record(call.func_name, call.site, call.key, cache_hit=True, elapsed=0.0, time_saved=recorded_cost)
+        self._last_compute = recorded_cost or 0.0
+        self._last_hit = True
+        self._entries.drop_if_hit_costs_more(call.key, _perf_counter() - hit_started, recorded_cost)
+        return value
+
+    def _run_miss(self, call: _Call):
+        """Run the call, watching what it does, and keep its result when a
+        later hit could stand in for it."""
+        __tracebackhide__ = True  # noqa: F841 - see _entry_for
+        # The call runs inside the STATEMENT's ambient capture
+        # (FileAccessTracker, RNG capture, output capture), which wraps
+        # the whole statement's exec. On a genuine miss that capture
+        # records this call's effects as its own, for free, and
+        # everything is correct. The broken case is a later run where the
+        # STATEMENT misses and re-executes but the CALL hits: the call's
+        # effects do not re-happen, so the statement's own capture is
+        # rewritten from a degraded observation. The checks in
+        # :meth:`_did_what_a_hit_cannot` fail CLOSED -- refuse the site
+        # outright rather than serve a value whose side effects will not
+        # re-happen.
+        #
+        # File deps and stdout/stderr are recorded around the call so a
+        # LATER hit can replay them (:meth:`_serve_hit`). RNG is not
+        # recorded -- a call that consumed it is refused.
+        #
+        # A NESTED tracker, not a before/after diff against the ambient
+        # (statement-wide) one, as the decorator wraps its call in a fresh
+        # ``FileAccessTracker(propagate_to_parent=True)``. That distinction
+        # is load-bearing: ``active_tracker.get()`` is shared for the whole
+        # statement (or, inside a loop, the whole loop-as-one-unit
+        # execution), so a diff against it goes silently wrong the moment the
+        # SAME path is read twice in one tracker window -- ``hdr = read(p);
+        # total = expensive(k)``, or two loop iterations both reading the
+        # same file. The second read's "after" set already contains the path
+        # from the first, so ``after - before`` is EMPTY: the entry stores no
+        # dependency at all, and ``CallEntries._auto_file_deps_fresh`` is
+        # vacuously true forever. A fresh, per-call tracker has no such
+        # baseline to collide with -- its own set IS this call's reads, full
+        # stop -- and ``propagate_to_parent=True`` still surfaces every read
+        # to the enclosing statement's tracker immediately, so the miss-path
+        # "recorded for free" behaviour holds.
+        rng_before = capture_rng_state()
+        arg_hashes_before = hash_args(call.args, call.kwargs)
+        started = _perf_counter()
+        call_tracker = FileAccessTracker(
+            getattr(call.fn, "__globals__", None),
+            propagate_to_parent=True,
+        )
+        with call_tracker:
+            result, stdout_text, stderr_text = call_capturing_output(call.fn, call.args, call.kwargs)
+        elapsed = _perf_counter() - started
+        stored = False
+        if self._did_what_a_hit_cannot(call, rng_before, arg_hashes_before):
+            self._entries.refuse(call.key)
+        elif self._worth_storing(call, result, elapsed):
+            stored = self._store_result(call, result, elapsed, call_tracker, stdout_text, stderr_text)
+        self._record(call.func_name, call.site, call.key, cache_hit=False, elapsed=elapsed, stored=stored)
+        self._last_compute = elapsed
+        return result
+
+    @staticmethod
+    def _did_what_a_hit_cannot(call: _Call, rng_before, arg_hashes_before: tuple) -> bool:
+        """Whether the call just run had an effect a hit would silently skip."""
+        if rng_modules_changed(rng_before, capture_rng_state()):
+            # RNG is a consumed linear resource -- what matters is stream
+            # POSITION, not membership. A hit leaves the global stream
+            # where it was, so every downstream draw would diverge from
+            # the uncached oracle. Replaying it properly needs a
+            # sub-statement position anchor that does not exist, so the
+            # site is refused instead.
+            return True
+        # The callee mutated a live argument in place and returned
+        # something else (`df.dropna(inplace=True); return len(df)`).
+        # The identity check only catches `return arg` -- this
+        # catches "mutated but returned a *different* object", which
+        # a hit would silently skip.
+        return hash_args(call.args, call.kwargs) != arg_hashes_before
+
+    def _worth_storing(self, call: _Call, result, elapsed: float) -> bool:
+        """Past the cost floor, safe to hand back as a copy, and cheaper to
+        restore than to compute again."""
+        return (
+            elapsed >= self._cost_floor_s()
+            and self._entries.storable(result, call.args, call.kwargs)
+            and self._entries.restore_pays(result, elapsed)
+        )
+
+    def _store_result(
+        self, call: _Call, result, elapsed: float, call_tracker: FileAccessTracker, stdout_text: str, stderr_text: str
+    ) -> bool:
+        """Write the result with what the call read, printed and wrote to its
+        globals; ``False`` when those globals cannot be captured."""
+        # The callee's writes to its own globals, captured as
+        # an END STATE. Snapshotting the final value needs no ordering
+        # and no idempotence, which is why this is tractable where
+        # replaying the individual mutations is not.
+        #
+        # `None` means "cannot capture this soundly" -- an unpicklable
+        # value, or one whose hash falls back to identity so a later
+        # pre-state comparison could not tell it had changed. Refuse
+        # the SITE rather than store an entry whose restore would be
+        # wrong, matching the RNG and argument-mutation refusals:
+        # an uncached call is merely slow.
+        captured = capture_globals(call.fn, call.mutated_globals)
+        if captured is None:
+            self._entries.refuse(call.key)
+            return False
+        held = self._entries.store(
+            call.key,
+            result,
+            elapsed,
+            file_deps=frozenset(call_tracker.get_accessed_files()),
+            remote_deps=frozenset(call_tracker.get_accessed_remote_urls()),
+            stdout=stdout_text,
+            stderr=stderr_text,
+            callee_globals=captured,
+            function=call.func_name,
+            plain_value=call.site.source == self.plain_value_source,
+            code_module=getattr(call.fn, "__module__", None),
+        )
+        if held:
+            self._hold(call.key, result, *held)
+        return True
 
     def _func_name(self, fn) -> str:
         """The name this call's events display under in the badge and stats.

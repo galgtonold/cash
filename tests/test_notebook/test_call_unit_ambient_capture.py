@@ -279,7 +279,7 @@ def test_call_hit_propagates_remote_dependency_through_resolve(tmp_path, monkeyp
 
 
 def test_call_hit_replays_stdout_reconstructing_interleaving(call_unit_harness, capsys):
-    """One-line mutation: in ``wrap``'s hit branch, delete the
+    """One-line mutation: in ``CallUnit._serve_hit``, delete the
     ``replay_output(metadata)`` call. Applied and observed: the
     second capture is missing the callee's own line (``"inside=5"``) --
     verified below, then reverted.

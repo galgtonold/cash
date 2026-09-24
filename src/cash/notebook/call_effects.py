@@ -188,8 +188,8 @@ def hash_args(args: tuple, kwargs: dict) -> tuple:
        value flagged via `is_identity_fallback_hash` is therefore replaced
        with a fresh, single-use sentinel (`object()`) instead of the hash
        string. Two distinct `object()` instances are never `==`, so the
-       before/after tuple comparison in `wrap` always reads as "changed"
-       for that argument -- i.e. "cannot prove this argument is clean" is
+       before/after comparison (`CallUnit._did_what_a_hit_cannot`) always
+       reads as "changed" for that argument -- i.e. "cannot prove this argument is clean" is
        treated the same as "proved it changed", which is the fail-closed
        direction the task requires.
     """

@@ -76,7 +76,7 @@ def test_a_figure_returning_call_does_not_hijack_pyplot(call_cache):
     """After the call, pyplot's current figure must still be the returned one.
 
     The sleep is load-bearing: the guard is only even consulted once the call
-    clears ``CallUnit``'s cost floor (``wrap``'s
+    clears ``CallUnit``'s cost floor (``CallUnit._worth_storing``:
     ``elapsed >= _COST_FLOOR_S and self._entries.storable(...)``); without it this
     call is never a store candidate at all and the test would pass whether or
     not the guard exists.
