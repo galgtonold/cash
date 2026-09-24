@@ -504,14 +504,47 @@ class StatementProcessor:
         ``None`` when it must run, with *run* filled in for :meth:`_executing`
         and :meth:`_finish`.
         """
+        self._begin(run)
+        effects, analysis_time, hash_time = self._analyze(run)
+
+        done = self._check_redundant_import(run)
+        if done is not None:
+            return done
+
+        # Computed once: used by the cacheability decision and (on the
+        # cache-miss path) by _post_execute for in-place-mutation tracking.
+        run.analysis = analyze_statement(run.code, run.tree, self.shell.user_ns)
+        self._route_mutations(run, effects)
+        self._decide_cacheability(run)
+        # An UNSEEDED estimator fit routed to caching above is frozen on re-run
+        # with no warning -- cash's AST detector cannot see the randomness inside
+        # sklearn's compiled .fit(). Warn now (compute time); the same set drives
+        # the restore-time warning on a cache hit below. Only once the statement
+        # is known to be cached: one that re-executes fits afresh every run.
+        fits_cached = run.est_fit if not run.skip_cache else set()
+        unseeded_fits = self._randomness.warn_unseeded_estimator_fit(run.code, fits_cached, run.allow_random)
+        self._randomness.stamp_random_effect(run.metrics, run.code, run.unseeded_calls, unseeded_fits)
+
+        metadata, cached_data = self._lookup(run, analysis_time, hash_time)
+        if cached_data and not import_needs_reexecution(run.tree, self.shell.user_ns):
+            hit_result = self._serve_hit(run, cached_data, metadata, unseeded_fits)
+            if hit_result is not None:
+                return hit_result
+
+        self._route_calls(run)
+        return None
+
+    def _begin(self, run: StatementRun) -> None:
+        """Read *run*'s annotation, warn about its randomness, start its
+        metrics and parse it."""
         code = run.code
-        run.effective_ttl, run.force_persist, run.skip_cache, run.allow_random, cache_fit = self._parse_annotation(
+        run.effective_ttl, run.force_persist, run.skip_cache, run.allow_random, run.cache_fit = self._parse_annotation(
             run.annotation, run.ttl
         )
         self._calls.begin_statement(run.effective_ttl, run.force_persist)
         run.unseeded_calls = self._randomness.warn_unseeded(code, run.allow_random, skip_cache=run.skip_cache)
         self._randomness.warn_entropy_reseed(code)
-        run.metrics = metrics = {
+        run.metrics = {
             "status": CacheStatus.UNKNOWN,
             "execution_time": 0.0,
             "total_time": 0.0,
@@ -524,7 +557,7 @@ class StatementProcessor:
             "display_code": run.display_code,
             "uncacheable_reasons": [],
         }
-        self._randomness.stamp_random_effect(metrics, code, run.unseeded_calls)
+        self._randomness.stamp_random_effect(run.metrics, code, run.unseeded_calls)
         logger.debug("%s Processing statement: %s...", _LOG_DEBUG, code[:50])
 
         run.process_start = time.time()
@@ -533,12 +566,16 @@ class StatementProcessor:
             run.tree = ast.parse(code.strip())
         except SyntaxError:
             run.tree = None
-        tree = run.tree
 
+    def _analyze(self, run: StatementRun) -> tuple[StatementEffects, float, float]:
+        """Key *run* and settle its inputs and outputs.
+
+        Returns ``(effects, analysis_time, hash_time)``.
+        """
         effects, run.source_hash, run.cache_key, analysis_time, hash_time = self._analyze_and_hash(
-            code, occurrence_index=run.occurrence_index, tree=tree
+            run.code, occurrence_index=run.occurrence_index, tree=run.tree
         )
-        inputs, outputs = set(effects.inputs), set(effects.outputs)
+        outputs = set(effects.outputs)
         callee_globals = set(effects.callee_globals)
         # Caller-forced outputs (accumulator-loop fast path): capture
         # and restore these on top of the AST-discovered outputs, and mark them
@@ -551,14 +588,13 @@ class StatementProcessor:
             outputs = outputs | run.force_outputs
         # A callee's writes to globals join ``outputs`` so their lineage is
         # bumped (a downstream consumer of the accumulator must re-key), and the
-        # statement is skip-cached below so the write actually happens.
+        # statement is skip-cached (`_route_mutations`) so the write actually
+        # happens.
         #
-        # NOT captured and restored. An earlier version of this did exactly
-        # that -- store the global's post-statement value, restore it on a hit
-        # -- and it is unsound the moment a global has more than ONE writer,
-        # because an absolute end state does not compose with a prefix that was
-        # itself skipped. Measured, two calls to the same appending helper in
-        # one cell, cold run::
+        # NOT captured and restored: that is unsound the moment a global has
+        # more than ONE writer, because an absolute end state does not compose
+        # with a prefix that was itself skipped. Two calls to the same
+        # appending helper in one cell, cold run::
         #
         #     expected  ['ok:3.3', 'cleanup', 'err:zero_div', 'cleanup']
         #     observed  ['err:zero_div', 'cleanup']
@@ -567,23 +603,19 @@ class StatementProcessor:
         # above CAN restore an accumulator, but only under
         # ``cacheable_accumulator_loop``'s conditions -- fresh empty seed, a
         # single accumulator call -- which are precisely the guarantees that
-        # make one writer's snapshot sufficient. Copying that mechanism without
-        # its preconditions is what broke.
+        # make one writer's snapshot sufficient.
         if callee_globals:
             outputs = outputs | callee_globals
-        run.inputs, run.outputs = inputs, outputs
+        run.inputs, run.outputs = set(effects.inputs), outputs
         # Exposed so the badge can show a short prefix in the row-detail "Key"
         # field: two runs of the same statement in the same slot or not.
-        metrics["cache_key"] = run.cache_key
+        run.metrics["cache_key"] = run.cache_key
+        return effects, analysis_time, hash_time
 
-        done = self._check_redundant_import(run)
-        if done is not None:
-            return done
-
-        # Computed once: used by the cacheability decision and (on the
-        # cache-miss path) by _post_execute for in-place-mutation tracking.
-        run.analysis = analyze_statement(code, tree, self.shell.user_ns)
-
+    def _route_mutations(self, run: StatementRun, effects: StatementEffects) -> None:
+        """Add the receivers *run* mutates to its outputs, and skip-cache it
+        where the mutation must really happen on every run."""
+        code, tree, metrics = run.code, run.tree, run.metrics
         # A standalone bare-Expr method call (``lst.append(x)``, ``bus.on(fn)``)
         # has no Store target, so AST analysis never surfaces the receiver as an
         # output and its lineage stays frozen -> a cached downstream consumer
@@ -610,9 +642,9 @@ class StatementProcessor:
             mut_pre_route, run.mut_observe, run.mut_assumed, run.mut_record = self._mutations.classify(
                 tree,
                 run.source_hash,
-                outputs,
+                run.outputs,
             )
-            run.est_fit = self._mutations.estimator_fit_receivers(tree, outputs) if cache_fit else set()
+            run.est_fit = self._mutations.estimator_fit_receivers(tree, run.outputs) if run.cache_fit else set()
             draw_only = set()
             fit_only = set()
         est_fit = run.est_fit
@@ -621,14 +653,13 @@ class StatementProcessor:
         # skip-caching: the statement re-executes and is never serialised, which is
         # net-NEUTRAL -- a fit that keeps missing cannot cost more than it saves.
         #
-        # It does NOT make aliases safe. An earlier design claimed skipping the fit
-        # made ``backup = clf`` correct "by construction"; that was later disproved.
-        # ``backup = clf`` is an ORDINARY ASSIGNMENT that cash caches on its own, and
-        # restoring it rebinds ``backup`` to a pre-fit deserialised copy -- the fit
-        # statement has no bearing on it either way. Do not restore that reasoning.
+        # It does NOT make aliases safe. ``backup = clf`` is an ORDINARY
+        # ASSIGNMENT that cash caches on its own, and restoring it rebinds
+        # ``backup`` to a pre-fit deserialised copy -- the fit statement has no
+        # bearing on it either way.
         #
         # Caching a bare fit instead is the OPT-IN path, kept because it
-        # is a large win when it lands but demoted from the default because its
+        # is a large win when it lands but not the default because its
         # correctness surface exceeds what per-statement restore can guarantee:
         #   * a cache HIT may REBIND the receiver, leaving an alias pointing at the
         #     pre-fit object. Not fixable per-statement -- on a warm run-all the
@@ -649,11 +680,11 @@ class StatementProcessor:
         # genuine skip receiver still skips (the skip wins for that receiver).
         # ``est_fit`` also threads to the cache-hit path so its restore is IN
         # PLACE. Without the directive ``est_fit`` is empty and every
-        # site below degrades to the pre-existing skip-cache behaviour.
-        fam = effects.arg_mutations - outputs
+        # site below degrades to the skip-cache behaviour.
+        fam = effects.arg_mutations - run.outputs
         skip_pre_route = mut_pre_route - est_fit
         if mut_pre_route or est_fit or fam:
-            run.outputs = outputs = outputs | mut_pre_route | est_fit | fam
+            run.outputs = run.outputs | mut_pre_route | est_fit | fam
         if skip_pre_route:
             run.skip_cache = True
             metrics["uncacheable_reasons"].append(
@@ -667,6 +698,7 @@ class StatementProcessor:
         # The expensive work is NOT lost. Call interception still serves the
         # call inside this statement, keyed on the mutated global's own
         # pre-call state, so what re-executes is the glue around it.
+        callee_globals = set(effects.callee_globals)
         if callee_globals:
             run.skip_cache = True
             metrics["uncacheable_reasons"].append(
@@ -687,57 +719,75 @@ class StatementProcessor:
             metrics["uncacheable_reasons"].append(
                 f"Fits: {', '.join(sorted(fit_only))} (estimator fitted in place; statement re-executes)"
             )
-        if not run.skip_cache:
-            cacheable, reasons = decide_cacheability(
-                code=code,
-                tree=tree,
-                inputs=inputs,
-                outputs=outputs,
-                annotation=run.annotation,
-                analysis=run.analysis,
-                user_ns=self.shell.user_ns,
-                variable_lineage=self.tracking_state.variable_lineage,
-                is_stateful_call=self._check_callable_stateful,
-                scan_forbidden=CodeAnalyzer.scan_for_forbidden_functions,
-            )
-            if not cacheable:
-                metrics["uncacheable_reasons"].extend(reasons)
-                run.skip_cache = True
-        # An UNSEEDED estimator fit routed to caching above is frozen on re-run
-        # with no warning -- cash's AST detector cannot see the randomness inside
-        # sklearn's compiled .fit(). Warn now (compute time); the same set drives
-        # the restore-time warning on a cache hit below. Only once the statement
-        # is known to be cached: one that re-executes fits afresh every run.
-        fits_cached = est_fit if not run.skip_cache else set()
-        unseeded_fits = self._randomness.warn_unseeded_estimator_fit(code, fits_cached, run.allow_random)
-        self._randomness.stamp_random_effect(metrics, code, run.unseeded_calls, unseeded_fits)
-        run.effective_ttl = self._ttl_floor_from_called_functions(inputs, run.effective_ttl)
-        metadata, cached_data, cache_check_time = self._do_cache_lookup(
-            run.skip_cache, run.cache_key, run.effective_ttl, inputs
+
+    def _decide_cacheability(self, run: StatementRun) -> None:
+        """Skip-cache *run* when the static cacheability decision refuses it."""
+        if run.skip_cache:
+            return
+        cacheable, reasons = decide_cacheability(
+            code=run.code,
+            tree=run.tree,
+            inputs=run.inputs,
+            outputs=run.outputs,
+            annotation=run.annotation,
+            analysis=run.analysis,
+            user_ns=self.shell.user_ns,
+            variable_lineage=self.tracking_state.variable_lineage,
+            is_stateful_call=self._check_callable_stateful,
+            scan_forbidden=CodeAnalyzer.scan_for_forbidden_functions,
         )
-        self._observe_miss_guard(run.skip_cache, code, run.source_hash, run.cache_key, cached_data, inputs)
+        if not cacheable:
+            run.metrics["uncacheable_reasons"].extend(reasons)
+            run.skip_cache = True
+
+    def _lookup(
+        self, run: StatementRun, analysis_time: float, hash_time: float
+    ) -> tuple[StatementCacheMetadata | None, Any | None]:
+        """Look *run* up in the cache: ``(metadata, cached_data)``, both None
+        on a miss or a skipped lookup."""
+        run.effective_ttl = self._ttl_floor_from_called_functions(run.inputs, run.effective_ttl)
+        metadata, cached_data, cache_check_time = self._do_cache_lookup(
+            run.skip_cache, run.cache_key, run.effective_ttl, run.inputs
+        )
+        self._observe_miss_guard(run.skip_cache, run.code, run.source_hash, run.cache_key, cached_data, run.inputs)
 
         if logger.isEnabledFor(logging.DEBUG):
-            self._log_cache_lookup(code, run.cache_key, inputs, cached_data, analysis_time, hash_time, cache_check_time)
+            self._log_cache_lookup(
+                run.code, run.cache_key, run.inputs, cached_data, analysis_time, hash_time, cache_check_time
+            )
+        return metadata, cached_data
 
-        if cached_data and not import_needs_reexecution(tree, self.shell.user_ns):
-            hit_result = self._hits.serve(run, cached_data, metadata, self._randomness.seed_epochs)
-            if hit_result is not None:
-                self.analytics_manager.record_event(
-                    status="HIT",
-                    execution_time=hit_result["total_time"],
-                    saved_time=hit_result["saved_time"],
-                    code_hash=run.cache_key,
-                )
-                # The restore SUCCEEDED, so the value handed back is a replay.
-                self._randomness.warn_stale(code, run.unseeded_calls, run.allow_random)
-                self._randomness.warn_stale_estimator_fit(code, unseeded_fits, run.allow_random)
-                self._randomness.flag_inline_unseeded_fit(
-                    hit_result, code, tree, outputs, run.allow_random, is_hit=True
-                )
-                return hit_result
+    def _serve_hit(
+        self,
+        run: StatementRun,
+        cached_data: Any,
+        metadata: StatementCacheMetadata | None,
+        unseeded_fits: Any,
+    ) -> ProcessResult | None:
+        """Restore *run* from its entry; the finished result, or None when the
+        restore failed and the statement must run after all."""
+        hit_result = self._hits.serve(run, cached_data, metadata, self._randomness.seed_epochs)
+        if hit_result is None:
+            return None
+        self.analytics_manager.record_event(
+            status="HIT",
+            execution_time=hit_result["total_time"],
+            saved_time=hit_result["saved_time"],
+            code_hash=run.cache_key,
+        )
+        # The restore SUCCEEDED, so the value handed back is a replay.
+        self._randomness.warn_stale(run.code, run.unseeded_calls, run.allow_random)
+        self._randomness.warn_stale_estimator_fit(run.code, unseeded_fits, run.allow_random)
+        self._randomness.flag_inline_unseeded_fit(
+            hit_result, run.code, run.tree, run.outputs, run.allow_random, is_hit=True
+        )
+        return hit_result
 
-        run.exec_code, run.exec_tree = self._calls.code_and_tree_for_execution(code, tree, run.annotation)
+    def _route_calls(self, run: StatementRun) -> None:
+        """Settle what executes: *run*'s code with eligible calls routed
+        through the call cache."""
+        code = run.code
+        run.exec_code, run.exec_tree = self._calls.code_and_tree_for_execution(code, run.tree, run.annotation)
         # `code_and_tree_for_execution` returns a NEW string, never `code`
         # itself, only when it routed an eligible call through the call cache.
         # Compiling the pre-rewrite original text after that would run a version
@@ -745,7 +795,6 @@ class StatementProcessor:
         # original text is used only when the rewrite made no change.
         if run.exec_code is not code:
             run.exec_source = None
-        return None
 
     @contextmanager
     def _executing(self, run: StatementRun) -> Generator[CodeRunner, None, None]:
@@ -993,120 +1042,159 @@ class StatementProcessor:
         Updates ``run.outputs`` and ``run.skip_cache`` with what execution
         revealed (an observed mutation, an uncacheable value).
         """
-        code, tree, inputs, outputs = run.code, run.tree, run.inputs, run.outputs
-        source_hash, cache_key, metrics = run.source_hash, run.cache_key, run.metrics
-        skip_cache, est_fit = run.skip_cache, run.est_fit
-        accessed_files, accessed_remote = execution.accessed_files, execution.accessed_remote
-        # Broad-precise mutation observation: for a standalone method call whose
-        # method is not statically known, compare each candidate receiver's
-        # content after execution against its pre-statement hash. Must run BEFORE
-        # capture_and_track so a newly-detected mutation is in ``outputs`` (its
-        # lineage gets bumped) and skip-caches the statement. The verdict is
-        # recorded for the upstream simulation, which cannot observe execution.
-        if run.mut_record:
-            newly_mutated = self._mutations.observed_mutations(run.mut_observe, source_hash)
-            if newly_mutated:
-                # ``est_fit`` is non-empty only under ``# @cash:cache-fit``
-                # . Those receivers still enter ``outputs`` (source-based
-                # lineage bump + fitted value capture) and are still recorded in
-                # ``mutation_verdicts`` below (so the upstream simulation bumps
-                # downstream lineage on a data edit), but they are NOT
-                # skip-cached -- they cache + restore in place. Every
-                # other observed mutation -- including a bare fit WITHOUT the
-                # directive -- still skip-caches its receiver.
-                outputs = outputs | newly_mutated
-                # The caller's ``outputs`` is its own set: without this the
-                # badge row said "Produced -" for ``sc.pp.normalize_total(adata)``
-                # on its first run.
-                produced = metrics.setdefault("evaluated_vars", [])
-                produced.extend(n for n in sorted(newly_mutated) if n not in produced)
-                skip_observed = newly_mutated - est_fit
-                if skip_observed:
-                    skip_cache = True
-                    metrics.setdefault("uncacheable_reasons", []).append(
-                        f"In-place mutation on: {', '.join(sorted(skip_observed))} "
-                        "(observed; receiver lineage bumped; statement re-executes)"
-                        + self._mutations.cache_fit_hint(skip_observed)
-                    )
-            self.tracking_state.mutation_verdicts[source_hash] = set(run.mut_assumed) | newly_mutated
-            self._records.persist_mutation_verdict(source_hash, self.tracking_state.mutation_verdicts[source_hash])
+        self._observe_mutations(run)
 
         # Auto-track newly imported local modules so _capture_variables includes
         # the module source hash in the lineage on first execution.
         try:
-            self.function_tracker.auto_track_local_imports(code)
+            self.function_tracker.auto_track_local_imports(run.code)
         except (ImportError, AttributeError, OSError):
             logger.debug("%s Failed to auto-track local imports", _LOG_PROCESSOR)
-        self._records.persist_import_bindings(code, tree)
+        self._records.persist_import_bindings(run.code, run.tree)
 
         captured_vars = self.lineage_builder.capture_and_track_variables(
             self.tracking_state,
-            outputs,
-            inputs,
-            code,
-            source_hash,
-            cache_key=cache_key,
-            accessed_files=accessed_files,
-            tree=tree,
-            accessed_remote=accessed_remote,
+            run.outputs,
+            run.inputs,
+            run.code,
+            run.source_hash,
+            cache_key=run.cache_key,
+            accessed_files=execution.accessed_files,
+            tree=run.tree,
+            accessed_remote=execution.accessed_remote,
+        )
+        if not run.skip_cache:
+            self._refuse_unrestorable_outputs(run, captured_vars)
+        self._record_file_effects(run, execution)
+
+        # Detect in-place mutations (detection-only; do not modify lineage).
+        # Reuses the StatementAnalysis from process_statement to avoid a
+        # second pass of AST visitors over the same tree.
+        pure_mutations = run.analysis.all_mutated_vars - run.outputs
+        if pure_mutations:
+            self.tracking_state.vars_with_mutation_lineage.update(pure_mutations)
+            logger.debug("%s Detected in-place mutations on: %s", _LOG_MUTATION, pure_mutations)
+
+        miss_guarded = self._miss_guarded(run, execution, captured_vars)
+        self._skip_a_newly_seen_draw(run)
+
+        saved_metadata = None
+        if not run.skip_cache:
+            saved_metadata = self._store.save(
+                run, execution, captured_vars, miss_guarded=miss_guarded, seed_epochs=self._randomness.seed_epochs
+            )
+        else:
+            logger.debug("%s Skipping cache save due to @cash:no-cache", _LOG_ANNOTATION)
+        self._report_saved(run, saved_metadata)
+        storage = (saved_metadata.storage if saved_metadata else None) or ()
+        self._rebuild_cost.note(
+            run.cache_key, run.inputs, run.outputs, execution.cost, on_disk=any(s != "RAM" for s in storage)
         )
 
-        # A statement producing a live-alias object (numpy view, pandas
-        # groupby/rolling ref-holder) must NOT be cached: pickling and restoring
-        # such an object decouples it from its live base, so a later base
-        # mutation would be lost after restore. Force re-derivation from the live
-        # base instead. ``.copy()`` produces no alias and stays
-        # cacheable (over-invalidation guard).
-        if not skip_cache:
-            for out in outputs:
-                val = captured_vars.get(out)
-                if val is not None and is_uncacheable_alias(val, self.shell.user_ns):
-                    skip_cache = True
-                    metrics.setdefault("uncacheable_reasons", []).append(
-                        f"Live-alias object '{out}' (view/ref-holder); re-derived from live base, not cached."
-                    )
-                    break
+        run.metrics["total_time"] = time.time() - run.process_start
+        self.analytics_manager.record_event(
+            status="MISS",
+            execution_time=run.metrics["total_time"],
+            saved_time=0.0,
+            code_hash=run.cache_key,
+        )
 
-        # A statement producing an object that is identity-coupled to a library
-        # global (a matplotlib Figure/Axes vs pyplot's ``Gcf`` current-figure
-        # registry) must NOT be cached. The RAM tier deep-copies on store, and a
-        # Figure's ``__setstate__`` re-registers the COPY as pyplot's current
-        # figure -- so the user draws on their figure while ``plt.savefig()``
-        # writes the cache's snapshot: a blank PNG on the FIRST run, silently.
-        # This must run here (post-execution) rather than in decide_cacheability:
-        # the object does not exist yet when that runs. Refusing BEFORE
-        # StatementStore.save is what prevents the deep-copy from ever happening
-        # .
-        if not skip_cache:
-            for out in outputs:
-                val = captured_vars.get(out)
-                if val is None:
-                    continue
-                reason = identity_coupled_reason(out, val)
+    def _observe_mutations(self, run: StatementRun) -> None:
+        """Add the receivers execution was seen mutating to *run*'s outputs.
+
+        Broad-precise mutation observation: for a standalone method call whose
+        method is not statically known, compare each candidate receiver's
+        content after execution against its pre-statement hash. Runs BEFORE
+        capture_and_track so a newly-detected mutation is in the outputs (its
+        lineage gets bumped) and skip-caches the statement. The verdict is
+        recorded for the upstream simulation, which cannot observe execution.
+        """
+        if not run.mut_record:
+            return
+        metrics, source_hash = run.metrics, run.source_hash
+        newly_mutated = self._mutations.observed_mutations(run.mut_observe, source_hash)
+        if newly_mutated:
+            # ``run.est_fit`` is non-empty only under ``# @cash:cache-fit``.
+            # Those receivers still enter the outputs (source-based lineage
+            # bump + fitted value capture) and are still recorded in
+            # ``mutation_verdicts`` below (so the upstream simulation bumps
+            # downstream lineage on a data edit), but they are NOT
+            # skip-cached -- they cache + restore in place. Every
+            # other observed mutation -- including a bare fit WITHOUT the
+            # directive -- still skip-caches its receiver.
+            run.outputs = run.outputs | newly_mutated
+            # The metrics hold their own copy of the outputs: without this the
+            # badge row said "Produced -" for ``sc.pp.normalize_total(adata)``
+            # on its first run.
+            produced = metrics.setdefault("evaluated_vars", [])
+            produced.extend(n for n in sorted(newly_mutated) if n not in produced)
+            skip_observed = newly_mutated - run.est_fit
+            if skip_observed:
+                run.skip_cache = True
+                metrics.setdefault("uncacheable_reasons", []).append(
+                    f"In-place mutation on: {', '.join(sorted(skip_observed))} "
+                    "(observed; receiver lineage bumped; statement re-executes)"
+                    + self._mutations.cache_fit_hint(skip_observed)
+                )
+        self.tracking_state.mutation_verdicts[source_hash] = set(run.mut_assumed) | newly_mutated
+        self._records.persist_mutation_verdict(source_hash, self.tracking_state.mutation_verdicts[source_hash])
+
+    def _alias_refusal(self, name: str, value: Any) -> str | None:
+        """A live-alias object (numpy view, pandas groupby/rolling ref-holder)
+        is not cached: pickling and restoring it decouples it from its live
+        base, so a later base mutation would be lost after restore. It is
+        re-derived from the live base instead. ``.copy()`` produces no alias
+        and stays cacheable."""
+        if is_uncacheable_alias(value, self.shell.user_ns):
+            return f"Live-alias object '{name}' (view/ref-holder); re-derived from live base, not cached."
+        return None
+
+    @staticmethod
+    def _consumable_refusal(name: str, value: Any) -> str | None:
+        """Nor a CONSUMABLE the cache cannot copy -- an open file handle, a
+        generator. The RAM tier keeps such a value by reference, so a "hit"
+        hands back the very object a reader already drained: on a second Run
+        All `fh = open(p)` was served, and the cell reading `fh` printed []
+        where Run All in plain Jupyter reads the file again
+        (test_a_consumed_iterator_is_rebuilt_for_its_reader)."""
+        if is_consumable_unrestorable(value):
+            return (
+                f"'{name}' is consumed as it is read (an open file or a "
+                f"generator) and cannot be restored: it is re-created "
+                f"every run"
+            )
+        return None
+
+    def _refuse_unrestorable_outputs(self, run: StatementRun, captured_vars: dict[str, Any]) -> None:
+        """Skip-cache *run* when one of its output values cannot be stored and
+        restored faithfully, giving the first refusal found as the reason.
+
+        Checked here, after execution, because the values do not exist when
+        the cacheability decision runs; and before ``StatementStore.save``,
+        because refusing then is what keeps the RAM tier from deep-copying
+        them. ``identity_coupled_reason`` refuses an object identity-coupled to
+        a library global: the RAM tier's deep copy of a matplotlib Figure
+        re-registers the COPY as pyplot's current figure, so ``plt.savefig()``
+        writes the cache's snapshot, a blank PNG on the first run.
+        """
+        refusals: tuple[Callable[[str, Any], str | None], ...] = (
+            self._alias_refusal,
+            identity_coupled_reason,
+            self._consumable_refusal,
+        )
+        for refusal in refusals:
+            for out in run.outputs:
+                value = captured_vars.get(out)
+                reason = refusal(out, value) if value is not None else None
                 if reason is not None:
-                    skip_cache = True
-                    metrics.setdefault("uncacheable_reasons", []).append(reason)
-                    break
+                    run.skip_cache = True
+                    run.metrics.setdefault("uncacheable_reasons", []).append(reason)
+                    return
 
-        # Nor one producing a CONSUMABLE the cache cannot copy -- an open file
-        # handle, a generator. The RAM tier keeps such a value by reference, so
-        # a "hit" hands back the very object a reader already drained: on a
-        # second Run All `fh = open(p)` was served, and the cell reading `fh`
-        # printed [] where Run All in plain Jupyter reads the file again. It
-        # stayed hidden while that reader was itself restored from the cache
-        # (test_a_consumed_iterator_is_rebuilt_for_its_reader).
-        if not skip_cache:
-            for out in outputs:
-                val = captured_vars.get(out)
-                if val is not None and is_consumable_unrestorable(val):
-                    skip_cache = True
-                    metrics.setdefault("uncacheable_reasons", []).append(
-                        f"'{out}' is consumed as it is read (an open file or a "
-                        f"generator) and cannot be restored: it is re-created "
-                        f"every run"
-                    )
-                    break
-
+    def _record_file_effects(self, run: StatementRun, execution: StatementExecution) -> None:
+        """Record the files *run* wrote and read, for the upstream simulation
+        and for a reader after a restart."""
+        code = run.code
         # Record executed file-WRITING statements by code text:
         # writes have no variable edge, so the upstream simulation needs this
         # to tell an edited/new writer from one that already ran.
@@ -1124,94 +1212,76 @@ class StatementProcessor:
                 forget_file_state_this_run()
                 # Persist write provenance so a post-restart isolated reader can
                 # tell an already-on-disk writer effect (skip it) from a stale
-                # one (re-fire it) — ``executed_write_stmt_codes`` is empty after
-                # a restart, which used to force every writer to re-fire and
-                # re-run its non-idempotent side effect. Not for a
-                # loop body statement: the simulation sees the loop, which
-                # records its own (ControlStructureProcessor).
+                # one (re-fire it): ``executed_write_stmt_codes`` is empty after
+                # a restart. Not for a loop body statement: the simulation sees
+                # the loop, which records its own (ControlStructureProcessor).
                 if not is_control_body(code):
-                    self._records.persist_write_provenance(code, inputs, tree, written)
+                    self._records.persist_write_provenance(code, run.inputs, run.tree, written)
         except AttributeError:
             pass
-        if accessed_files:
-            self._records.persist_read_provenance(code, accessed_files)
+        if execution.accessed_files:
+            self._records.persist_read_provenance(code, execution.accessed_files)
 
-        # Detect in-place mutations (detection-only; do not modify lineage).
-        # Reuses the StatementAnalysis from process_statement to avoid a
-        # second pass of AST visitors over the same tree.
-        pure_mutations = run.analysis.all_mutated_vars - outputs
-        if pure_mutations:
-            self.tracking_state.vars_with_mutation_lineage.update(pure_mutations)
-            logger.debug("%s Detected in-place mutations on: %s", _LOG_MUTATION, pure_mutations)
+    def _miss_guarded(self, run: StatementRun, execution: StatementExecution, captured_vars: dict[str, Any]) -> bool:
+        """Whether the perpetual-miss guard keeps *run*'s value from being written.
 
-        # Perpetual-miss guard: this statement's key has churned for
-        # ``GUARD_AFTER_CONSECUTIVE_CHURN_MISSES`` runs with zero hits, so
-        # serialising it again buys nothing. Routed through the SAME
-        # metadata-only path as the size-aware skip rather than through
-        # ``skip_cache``: output lineages must still persist for the upstream
-        # simulation, and only the value payload is the wasted cost.
-        # ``force_persist`` (``# @cash:persist`` / ``%cash_persist``) wins — a
-        # user who explicitly asks for persistence gets it; the guard is a
-        # default, not a veto.
-        miss_guarded = (
-            not skip_cache
+        This statement's key has churned for ``GUARD_AFTER_CONSECUTIVE_CHURN_MISSES``
+        runs with zero hits, so serialising it again buys nothing. Routed
+        through the SAME metadata-only path as the size-aware skip rather than
+        through ``skip_cache``: output lineages must still persist for the
+        upstream simulation, and only the value payload is the wasted cost.
+        ``force_persist`` (``# @cash:persist`` / ``%cash_persist``) wins -- a
+        user who explicitly asks for persistence gets it; the guard is a
+        default, not a veto.
+        """
+        return (
+            not run.skip_cache
             and not run.force_persist
-            and not self._miss_guard.should_serialise(source_hash)
-            and not self._store.write_is_cheap(outputs, captured_vars, execution.cost)
+            and not self._miss_guard.should_serialise(run.source_hash)
+            and not self._store.write_is_cheap(run.outputs, captured_vars, execution.cost)
         )
 
-        # A statement whose hidden draw we only just discovered has a key built
-        # without its RNG variable. Writing it creates an entry that a later
-        # run rebuilds and matches forever: after a kernel restart the ledger is
-        # empty, the same epoch-free key comes back, and the value computed
-        # under the OLD seed is restored -- silently, with a green badge. That
-        # was the whole bug, and persisting the ledger cannot fix it
-        # because the key is consulted before any metadata is read.
-        #
-        # So skip the write exactly once. The value is correct for this run and
-        # is used normally; the next run builds the RNG-aware key, misses, and
-        # stores under it. Self-healing, one extra recompute per statement.
-        if self._randomness.draw_newly_seen and not skip_cache:
-            skip_cache = True
+    def _skip_a_newly_seen_draw(self, run: StatementRun) -> None:
+        """Skip-cache *run* once when its execution revealed a hidden RNG draw.
+
+        Its key was built without its RNG variable. Writing it creates an
+        entry that a later run rebuilds and matches forever: after a kernel
+        restart the ledger is empty, the same epoch-free key comes back, and
+        the value computed under the OLD seed is restored -- silently, with a
+        green badge. Persisting the ledger cannot fix that, because the key is
+        consulted before any metadata is read.
+
+        So the write is skipped exactly once. The value is correct for this
+        run and is used normally; the next run builds the RNG-aware key,
+        misses, and stores under it. Self-healing, one extra recompute per
+        statement.
+        """
+        if self._randomness.draw_newly_seen and not run.skip_cache:
+            run.skip_cache = True
             logger.debug(
                 "%s Not storing %s: hidden RNG draw discovered after its key was built; next run keys it correctly",
                 _LOG_ANNOTATION,
-                source_hash[:12],
+                run.source_hash[:12],
             )
 
-        run.outputs, run.skip_cache = outputs, skip_cache
-        saved_metadata = None
-        if not skip_cache:
-            saved_metadata = self._store.save(
-                run, execution, captured_vars, miss_guarded=miss_guarded, seed_epochs=self._randomness.seed_epochs
-            )
-        else:
-            logger.debug("%s Skipping cache save due to @cash:no-cache", _LOG_ANNOTATION)
-
-        if saved_metadata and saved_metadata.storage is not None:
+    def _report_saved(self, run: StatementRun, saved_metadata: StatementCacheMetadata | None) -> None:
+        """Copy what the store decided into *run*'s metrics for the badge."""
+        if not saved_metadata:
+            return
+        metrics = run.metrics
+        if saved_metadata.storage is not None:
             metrics["storage"] = saved_metadata.storage
-        if saved_metadata and saved_metadata.skipped_reason is not None:
+        if saved_metadata.skipped_reason is not None:
             metrics["skipped_reason"] = saved_metadata.skipped_reason
             if saved_metadata.skipped_reason == GUARD_SKIP_REASON:
                 # What kept changing the key.
-                cause = self._miss_guard.cause(source_hash)
+                cause = self._miss_guard.cause(run.source_hash)
                 if cause:
                     metrics["guard_cause"] = cause
-        if saved_metadata:
-            for k in COST_MODEL_KEYS:
-                value = getattr(saved_metadata, k)
-                if value is not None:
-                    metrics[k] = value
-        storage = (saved_metadata.storage if saved_metadata else None) or ()
-        self._rebuild_cost.note(cache_key, inputs, outputs, execution.cost, on_disk=any(s != "RAM" for s in storage))
-
-        metrics["total_time"] = time.time() - run.process_start
-        self.analytics_manager.record_event(
-            status="MISS",
-            execution_time=metrics["total_time"],
-            saved_time=0.0,
-            code_hash=cache_key,
-        )
+        for k in COST_MODEL_KEYS:
+            value = getattr(saved_metadata, k)
+            if value is not None:
+                metrics[k] = value
 
     def resolve_live_function_source(self, name: str) -> str | None:
         """The source of the function *name* is bound to in the user namespace now."""

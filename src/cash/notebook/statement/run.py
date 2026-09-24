@@ -60,6 +60,8 @@ class StatementRun:
     force_persist: bool = False
     skip_cache: bool = False
     allow_random: bool = False
+    #: ``# @cash:cache-fit``: cache a bare estimator fit rather than re-run it.
+    cache_fit: bool = False
     unseeded_calls: list = field(default_factory=list)
     inputs: set[str] = field(default_factory=set)
     outputs: set[str] = field(default_factory=set)
