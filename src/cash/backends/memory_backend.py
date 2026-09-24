@@ -36,9 +36,11 @@ _PREMADE_ITEMS_MAX = 64
 
 
 class InMemoryBackend(CacheBackend):
-    """
-    In-memory cache backend using a dictionary.
-    Supports smart eviction based on memory pressure.
+    """Entries held in this process's memory, gone when the process ends.
+
+    A hit returns a copy, so changing it does not change the entry. Entries
+    are evicted when the byte cap or the entry cap is reached, or when the
+    machine runs short of memory.
     """
 
     source_label: str = "RAM"
@@ -53,25 +55,15 @@ class InMemoryBackend(CacheBackend):
     ) -> None:
         """
         Args:
-            max_memory_percent: Memory usage percentage (0.0 to 1.0) at which to trigger eviction.
-            check_interval: Number of 'set' operations between memory checks.
-            max_entries: Maximum number of cache entries. When exceeded, LRU eviction is triggered.
-                         None means unlimited entries (eviction only via memory pressure).
-            max_size_bytes: Soft byte cap for the RAM tier. When the tracked
-                         total exceeds it, least-recently-used entries are evicted down to
-                         ~90% of the cap. ``None`` (this CONSTRUCTOR's default) means
-                         unbounded — eviction driven only by ``max_entries`` and psutil
-                         memory pressure.
-
-                         **``None`` is not what a user gets.** Every backend the
-                         factory builds passes a resolved cap
-                         (``adaptive_caps.resolve_ram_cap``: a fifth of the memory
-                         this process may use, clamped to [512 MiB, 4 GiB]), so the
-                         RAM tier is bounded by default and independently of the
-                         disk tier. Read alone, the old wording here supported
-                         exactly the wrong conclusion, and a ticket was filed on
-                         it: "the in-memory tier is unbounded by default".
-                         ``cash info`` prints the resolved number.
+            max_memory_percent: Share of the machine's memory in use (0.0 to
+                1.0) above which entries are evicted.
+            check_interval: Writes between two memory checks.
+            max_entries: Most entries held. ``None``: no limit.
+            max_size_bytes: Byte cap. Past it, the entries worth least per
+                byte are evicted down to about 90% of the cap. ``None``: no
+                cap. A RAM tier built from configuration always has one (a
+                fifth of the memory this process may use, between 512 MiB and
+                4 GiB); ``cash info`` shows it.
         """
         self._store: dict[str, tuple[MetadataDict, Any]] = {}  # Stores (metadata, value)
         self.max_memory_percent = max_memory_percent

@@ -116,13 +116,11 @@ def _untracked() -> Any:
 
 
 class FileBackend(CacheBackend):
-    """File-based cache backend.
+    """One file per entry in a directory; survives restarts.
 
-    .. warning:: Uses `pickle` for serialization.  Cache files are
-       assumed to originate from the local machine.  Loading a cache
-       deserializes pickled objects, which runs arbitrary code, so never
-       point this at a cache directory from an untrusted source.  See the
-       Security section of the Backends documentation.
+    Several processes can share the directory. Entries are pickled, and
+    loading one runs code, so never point it at a directory from an
+    untrusted source (see Security on the Backends page).
     """
 
     source_label: str = "DISK"
@@ -140,15 +138,13 @@ class FileBackend(CacheBackend):
         Args:
             cache_dir: Directory for cache files.
             compress: Whether to gzip-compress data files.
-            max_size_bytes: Maximum total cache size in bytes. A write that takes the
-                cache over it evicts the least valuable entries per byte.
-            flush_interval: Seconds between metadata flush cycles.
-            default_ttl: Default time-to-live in seconds for cache entries. None = no expiration.
-            adaptive_cap: Whether ``max_size_bytes`` came from the machine-scaling
-                policy rather than from the caller. Set by the backend factory when
-                ``max_cache_size`` is unset; leave it False when constructing a
-                backend directly, so an explicit cap (or an explicit ``None``,
-                meaning unlimited) is never second-guessed.
+            max_size_bytes: Byte cap. A write that goes over it evicts the
+                entries worth least per byte. ``None``: no cap.
+            flush_interval: Seconds between writes of access statistics.
+            default_ttl: Seconds an entry stays valid when the caller gives
+                no ``ttl``. ``None``: no expiry.
+            adaptive_cap: Leave ``False``. Set by cash when the cap was
+                sized to the machine, so it may be resized.
         """
         # Absolute, so a later os.chdir() cannot move the cache.
         self.cache_dir = os.path.abspath(cache_dir)

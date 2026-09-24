@@ -1,194 +1,42 @@
 # Command-line interface
 
-Cash ships a `cash` CLI for the tasks that don't fit cleanly inside a notebook
-cell — installing the global IPython autoload hook, inspecting on-disk cache
-directories, clearing caches, and reporting which configuration is in effect.
-Behaviour is derived directly from `src/cash/__main__.py`; this page is the
-canonical reference.
+!!! info "Applies to: both paths"
+    The `cash` command: see your configuration, inspect a cache and clear it. `cash autoload` is for notebook users only.
 
-`cash` and `python -m cash` are equivalent entry points (the script is declared
-as `cash = "cash.__main__:main"` in `pyproject.toml`). Running `cash` with no
-subcommand prints help and exits 0.
+`cash` and `python -m cash` are the same command. With no subcommand it prints
+help and exits 0.
 
 <!-- claim: cash/__main__.py:main @fc218b1b broad="the quick-reference table is a claim about the whole subcommand set" -->
-## Quick reference
-
-| Subcommand | Purpose | Destructive? |
+| Command | What it does | Deletes? |
 |---|---|---|
-| [`cash version`](#cash-version) | Print the installed cash version. | No |
-| [`cash info [--config PATH]`](#cash-info) | Show the effective merged configuration. | No |
-| [`cash inspect [path] [--function NAME] [--tool NAME]`](#cash-inspect-path) | Summarise a cache directory or notebook; drill into one function. | No |
-| [`cash clear [path] [--all] [--function NAME] [--entry ID] [--expired] [--tool NAME]`](#cash-clear-path-all) | Delete a cache directory, one function's entries, a single entry, or the expired entries. | **Yes** — no confirmation prompt |
-| [`cash autoload on`](#cash-autoload-on) | Install the IPython startup hook. | No (refuses to clobber by default) |
-| [`cash autoload off`](#cash-autoload-off) | Remove the startup hook. | Yes (deletes one file) |
+| [`cash version`](#cash-version) | Print the installed version. | No |
+| [`cash info`](#cash-info) | Show the configuration in effect and where each setting came from. | No |
+| [`cash inspect`](#cash-inspect-path) | Summarise a cache: what each function stores, and what it is worth. | No |
+| [`cash clear`](#cash-clear-path-all) | Delete a cache, one function's entries, one entry, or the expired entries. | **Yes**, without asking |
+| [`cash autoload`](#cash-autoload) | Load cash in every new IPython kernel (notebook only). | Only its own hook file |
 
-There are no global flags beyond `-h/--help`. `--version` is not a flag — it is
-its own subcommand (`cash version`).
+Every subcommand takes `-h` / `--help`. There is no `--version` flag; use
+`cash version`.
 
----
-
-## Installing the autoload hook
-
-This is the command most users reach for. It writes a single Python file into
-your IPython startup directory so that every new kernel either has `cash`
-pre-imported (`--mode available`) or has caching automatically enabled
-(`--mode active`, the default).
-
-The target path is:
-
-```
-<IPython dir>/profile_<profile>/startup/00-cash.py
-```
-
-`<IPython dir>` is resolved via `IPython.paths.get_ipython_dir()` when IPython
-is importable, and falls back to `~/.ipython` otherwise. `<profile>` defaults
-to `default`, giving `~/.ipython/profile_default/startup/00-cash.py` on most
-machines.
-
-### `cash autoload on`
-
-Install the startup hook so cash is loaded automatically in every new
-IPython/Jupyter kernel.
-
-**Usage:** `cash autoload on [--mode {available,active}] [--profile NAME] [--force]`
-
-**Arguments:**
-
-- `--mode {available,active}` — *Optional, default `active`.*
-    - `active` writes the **active** hook: `import cash` plus
-      `get_ipython().run_line_magic("cash_on", "")`. Caching is on the moment
-      the kernel boots; run `%cash_off` per session to opt out.
-    - `available` writes the **available** hook: just `import cash`. You still
-      run `%cash_on` (or use `@cash.cache`) per notebook, but the import is
-      already done.
-- `--profile NAME` — *Optional, default `default`.* IPython profile to install
-  into. Use this if you keep parallel profiles (e.g. one for work, one for
-  data-science experiments).
-- `--force` — *Optional.* Overwrite any existing file at the target path, even
-  if cash didn't write it. Without `--force`, cash refuses to clobber a
-  non-cash file.
-
-**Examples:**
-
-```bash
-cash autoload on                       # active mode (default): cash + %cash_on
-cash autoload on --mode available      # lighter: just `import cash`
-cash autoload on --profile work        # install into ~/.ipython/profile_work
-cash autoload on --force               # replace whatever's at 00-cash.py
-```
-
-**Behaviour notes:**
-
-- **Idempotent.** Re-running `cash autoload on` when the file already contains
-  the exact body for the requested mode prints
-  `Autoload already on (mode=<mode>): <path>` and exits 0 — no rewrite.
-- **Safe by default.** If a different file already exists at the target path,
-  cash refuses and exits 1 with the message
-  `Refusing to overwrite existing file: <path>`. Pass `--force` to replace it,
-  or run `cash autoload off` first if it was a cash hook from an earlier
-  install.
-- The written file starts with a `# cash-ipython-hook (managed by ...)`
-  marker comment. `cash autoload off` uses this marker to decide whether the
-  file is safe to delete.
-
-### `cash autoload off`
-
-Remove the startup hook written by `cash autoload on`.
-
-**Usage:** `cash autoload off [--profile NAME] [--force]`
-
-**Arguments:**
-
-- `--profile NAME` — *Optional, default `default`.* IPython profile to clean
-  up. Must match whatever you passed to `cash autoload on`.
-- `--force` — *Optional.* Delete the target file **even if it lacks the
-  `cash-ipython-hook` marker.** Without `--force`, cash refuses to remove a
-  file it doesn't recognise as its own.
-
-**Examples:**
-
-```bash
-cash autoload off                      # remove from the default profile
-cash autoload off --profile work       # remove from a custom profile
-cash autoload off --force              # delete whatever sits at 00-cash.py
-```
-
-**Behaviour notes:**
-
-- If no file exists at the target path, cash prints
-  `Autoload not installed at: <path>` and exits 0 — it's a no-op, not an
-  error.
-- The marker check is a substring search for `cash-ipython-hook` inside the
-  file. Older cash hooks (or files you wrote by hand) without the marker will
-  trip the safety check; use `--force` to override.
-
----
-
-## Inspecting your environment
-
-### `cash version`
-
-Print the installed cash version.
+## `cash version`
 
 **Usage:** `cash version`
-
-**Examples:**
 
 ```bash
 cash version
 # cash <!-- docnum:version -->0.11.0<!-- /docnum -->
 ```
 
-**Behaviour notes:**
-
-- Imports `cash.__version__`. If the import fails (e.g. the package is broken
-  or partially installed), prints `cash unknown` and exits 0.
-- This is a subcommand, not a global flag. `cash --version` does not work.
-
-### `cash info`
-
-Print the effective merged configuration.
+## `cash info`
 
 **Usage:** `cash info [--config PATH]`
 
-- `--config PATH` — *Optional.* Resolve the configuration as a program calling
-  `Cash(config_path=PATH)` would: the TOML file a packaged tool ships, layered
-  above the user and project files. The way to check what an installed tool's
-  file sets without running the tool.
+Prints the configuration in effect, the cache directory and its size, and
+where each setting came from.
 
-**Output fields:**
-
-- `Backend` — the configured backend type (e.g. `file`, `memory`, `tiered`).
-- `Cache dir` — the on-disk cache directory the file backend will use. When
-  something other than the default set it, `Settings` says what.
-- `Holds` — how many entries that directory holds and their size on disk
-  (`nothing yet` before anything was written there).
-- `Disabled` — present only when `disable` is on, with where it was set:
-  every cached function is running uncached.
-- `Max size` — the caps the two persistent tiers actually resolve to, not the
-  configured value: `auto -- disk 16.4 GiB, RAM 4.0 GiB` when unset (the
-  default), or the size in the unit you wrote it in plus the exact bytes
-  (`2 GB (2,000,000,000 bytes) on disk, RAM <M>`) when `max_cache_size` is
-  set. The RAM figure appears nowhere else, and a growing RSS is usually that
-  cap doing its job rather than a leak.
-- `Persist` — what decides disk persistence: the cost model
-  (`0.1s compute floor, N% savings required`).
-- `Tiers` — present when the active config declares an explicit tier
-  list; lists each tier's type in order, with the options it sets —
-  `memory, file (default_ttl=3600s)`.
-- `Config files` — every config file looked for and what happened: `read`,
-  `not found`, `no [tool.cash] section`, or `could not be read` (a warning
-  says why).
-- `Settings` — every setting some layer set, its effective value, and the
-  layer that won: a file path, `CASH_<NAME>`, or `Cash(...)`.
-- `Source` — which layers contributed to the resolved config (e.g.
-  `project:./pyproject.toml,env`, or `defaults` when nothing was set).
-- `Tool caches` — present when installed console scripts have cached
-  anything per user: one line per tool with its entry count, size and
-  directory. An installed tool run from outside any project caches there,
-  where the plain commands cannot see it; `--tool NAME` reaches it.
-
-**Examples:**
+- `--config PATH`: resolve the configuration as `Cash(config_path=PATH)`
+  would. Use it to check the config file a packaged tool ships, without running
+  the tool.
 
 ```bash
 cash info
@@ -208,89 +56,39 @@ cash info
 #   Source:     project:/home/me/project/pyproject.toml,env
 ```
 
-**Behaviour notes:**
-
-- A setting that appears in more than one layer is listed once, with the
-  layer that won (see the precedence in
-  [Configuration](getting-started/configuration.md)). A key
-  that is not a setting, or a value cash could not use, is left out of the
-  list and reported as a warning.
+- `Max size` shows the caps the disk and RAM tiers actually use, including
+  the automatic ones.
+- `Config files` lists every file looked for: `read`, `not found`,
+  `no [tool.cash] section`, or `could not be read`.
+- `Settings` lists each setting some layer set, with the layer that won
+  ([precedence](getting-started/configuration.md)). A key that is not a
+  setting, or a value cash cannot use, is reported as a warning instead.
+- `Disabled` appears when `disable` is on. `Tiers` appears when you declare a
+  tier stack. `Tool caches` appears when installed command-line tools have
+  per-user caches; `--tool NAME` reaches one.
 
 <!-- claim: cash/__main__.py:cmd_inspect @0975006f, cash/__main__.py:_inspect_cache_dir @79ce6b6f, cash/__main__.py:_inspect_notebook @22209429 -->
-### `cash inspect [path] [--function NAME]` { #cash-inspect-path }
+## `cash inspect` { #cash-inspect-path }
 
-Summarise a cache directory, or report on a notebook and its sibling `.cash`
-directory.
+**Usage:** `cash inspect [--function NAME] [--tool NAME] [path]`
 
-**Usage:** `cash inspect [path] [--function NAME]`
+Summarises a cache directory, one function per row, largest first.
 
-**Arguments:**
-
-- `path` — *Optional.* One of:
-    - **A `.ipynb` file.** Reads the notebook with `nbformat`, counts code
-      and markdown cells, detects whether `%cash_on` is used, and
-      then inspects the sibling `.cash` directory next to the notebook (if
-      any).
-    - **A directory.** Treated as a cache directory; cash walks it
-      recursively.
-    - **Omitted.** Defaults to **the cache the library is using** — the same
-      directory `cash info` reports, resolved through the same merge
-      (defaults, user config, project config, `CASH_CACHE_DIR`), so it follows
-      the [project anchor](getting-started/configuration.md#what-paths-are-relative-to)
-      rather than your current directory. The path is printed above the table.
-      If it does not exist, cash names it and exits 1.
-
-**Examples:**
+- `path`: a cache directory, or a `.ipynb` file (reports its cells, whether it
+  uses `%cash_on`, and the `.cash` directory beside it). Without a path,
+  inspects the cache the library is using, the one `cash info` reports.
+- `--function NAME`: list one function's entries instead. A unique trailing
+  part of the name is enough (`work` finds `model.work`); `notebook` selects
+  the notebook statements. An ambiguous name lists the candidates.
+- `--tool NAME`: inspect the per-user cache of the installed command-line tool
+  `NAME` (listed by `cash info`). Cannot be combined with a path.
 
 ```bash
-cash inspect                           # inspect the cache in use
+cash inspect                           # the cache in use
 cash inspect ./.cash                   # a specific directory
 cash inspect ./notebooks/analysis.ipynb
-cash inspect /tmp/some-cache-dir
+cash inspect --function model.heavy_field
 ```
-
-- `--function NAME` — *Optional.* List one function's individual entries
-  instead of the per-function overview: the id `cash clear --entry` takes
-  (and the per-call debug line prints), what the entry saves, its size,
-  `USES` (reads from disk — hits a running process serves from RAM are not
-  counted), when it was last used and, for an entry written with a `ttl`,
-  when it `EXPIRES`. An unambiguous trailing segment is
-  enough: `--function work` finds `model.work`. `notebook` (or
-  `statements`) selects the `(notebook statements)` group without its
-  brackets. An ambiguous name prints the candidates and exits 1; an unknown
-  one prints the functions that *are* cached.
-- `--tool NAME` — *Optional.* Inspect the per-user cache of the installed
-  console script `NAME` instead of the cache in use. `cash info` lists the
-  names. Cannot be combined with a path.
-
-  Each row says what the entry is **worth**, not just how big it is:
-
-  ```
-  ENTRY             SAVES       SIZE   USES   LAST USED   PRODUCES
-  aaaaaaaaaaaa      12.5s    4.0 KiB     3x   2 min ago   df, model
-  bbbbbbbbbbbb       0.4s    1.0 KiB     1x   2 min ago   scores
-  ```
-
-  `SAVES` is the recorded execution time of the function's own body (cash's
-  key work is paid on a hit too, so it is not counted) — what you lose by deleting it —
-  which together with `SIZE` and `USES` is the whole trade. `PRODUCES` names
-  the variables a notebook statement produced, and is omitted when no entry
-  in the group has any. An entry computed from files gets a `reads:` line
-  under it naming them — the first three, then a count:
-
-  ```
-  ENTRY             SAVES       SIZE   USES   LAST USED
-  94babd0e07b7       0.2s      898 B     0x   2s ago
-        reads: /srv/etl/data/prices.csv
-  ```
-
-  The `ENTRY` id is the one `f.explain(...).entry_id` reports, so an
-  explanation leads straight to the entry to drop.
-
-**Output for a cache directory:**
-
-A per-function table, sorted by size — because the question that sends people
-here is "what is filling my disk, and what can I afford to drop?":
 
 ```
 Cache directory: .cash
@@ -301,169 +99,119 @@ Cache directory: .cash
   model.small_helper                  1       620 B   2 min ago
 ```
 
-The grouping needs no extra bookkeeping: a decorator cache key is
-`{module.qualname}:{state}:{dynamic}:{args}`, so the owning function is the
-first segment of every key on disk. Notebook statements are keyed `stmt:<sha>`
-and have no function to name, so they group under `(notebook statements)`.
+A script's functions are named after the file that defines them (`model.`),
+whether you ran it or imported it. Notebook statements group under
+`(notebook statements)`.
 
-The module part is the **defining file's name**, not `__main__`: a function in
-`model.py` groups under `model.` whether you ran the script or imported it, so
-the two agree. `__main__.` is what you see for code with no defining file — a
-REPL, `python -c`, or a notebook kernel.
+With `--function`, each row shows what the entry is worth:
 
-**Output for a notebook:**
+```
+ENTRY             SAVES       SIZE   USES   LAST USED   PRODUCES
+aaaaaaaaaaaa      12.5s    4.0 KiB     3x   2 min ago   df, model
+      reads: /srv/etl/data/prices.csv
+```
 
-- Code-cell and markdown-cell counts.
-- `Uses cash: Yes/No` based on a textual scan for `%cash_on`.
-- The cache summary above if a sibling `.cash/` exists; otherwise
-  `Cache: not found (no .cash directory)`.
+- `ENTRY` is the id `cash clear --entry` takes, and the same id
+  `f.explain(...).entry_id` reports.
+- `SAVES` is how long the body took to compute: what deleting the entry costs.
+- `USES` counts reads from disk; hits a running process serves from RAM are
+  not counted.
+- `PRODUCES` names the variables a notebook statement produced. `EXPIRES`
+  shows when an entry with a `ttl` runs out. `reads:` lists the files an entry
+  depends on.
 
-**Behaviour notes:**
-
-- `nbformat` is an optional dependency. If it isn't installed when you point
-  `cash inspect` at a `.ipynb`, cash prints
-  `nbformat not installed. Install with: pip install nbformat` and continues
-  cleanly (exit 0).
-- Each entry is a single `.entry` file whose metadata sits in a
-  length-prefixed header, so the report reads the header and never touches the
-  payload. A corrupted or unreadable entry is skipped (logged at debug level)
-  rather than aborting the report — one bad file must not cost you the totals
-  for everything else. When nothing is readable the table is replaced by
-  `(no readable entries)`.
-
----
-
-## Clearing caches
+Unreadable entries are skipped. Inspecting a notebook needs `nbformat`; without
+it, cash says how to install it and exits 0.
 
 <!-- claim: cash/__main__.py:cmd_clear @a2a0458b -->
-### `cash clear [path] [--all] [--function NAME]` { #cash-clear-path-all }
+## `cash clear` { #cash-clear-path-all }
 
-Delete a cache directory, or just one function's entries.
+**Usage:** `cash clear [--all] [--function NAME] [--entry ID] [--expired] [--tool NAME] [--force] [path]`
 
-!!! warning "Destructive without confirmation"
-    `cash clear` calls `shutil.rmtree()` immediately on the resolved
-    directory. There is **no confirmation prompt** — running the command
-    deletes the cache as soon as you press enter. Be sure of the target
-    before you run it, especially in CI.
+Deletes cache data immediately. There is no confirmation prompt.
 
-    What it will **not** delete is something that isn't a cache. Every
-    directory it removes — named explicitly, resolved by `--all` or
-    `--tool`, or found next to a notebook — must hold a `CACHE_VERSION` stamp
-    or `.entry` files, **and nothing cash did not write**, or it is refused
-    (exit 1), naming the files it found. Looking like a cache was not enough
-    on its own: cash writes its stamp into whatever directory it is pointed
-    at, so a project with `cache_dir = "../shared_data"` lost that folder's
-    `precious.csv` to `cash clear --all`. `--force` overrides both checks —
-    for a cache that lost its stamp, or a directory you mean to empty
-    whatever is in it. The current directory, and any
-    directory containing it, is refused always, `--force` or not: an
-    explicit path used to go straight to `rmtree`, and `cash clear .` in a
-    project deleted the project's files.
-
-**Usage:** `cash clear [path] [--all] [--function NAME]`
-
-**Arguments:**
-
-- `path` — *Optional.* One of:
-    - **A directory.** Removed in full via `shutil.rmtree` — if it looks like
-      a cache (see the warning above); otherwise refused unless `--force`.
-    - **A `.ipynb` file.** Cash removes the sibling `.cash/` directory next
-      to the notebook (if any). If there's no sibling cache, prints
-      `No cache found for <path>` and exits 0.
-    - **Anything else.** Prints `Not found: <path>` and exits 1.
-- `--all` — *Optional.* Clear **the cache the library is using** — the same
-  directory `cash info` reports, not `./.cash` unless that is where it
-  resolves. Combining it with a `path` is **refused** (exit 2): "all of the
-  cache" and "this one directory" are two different requests, and it used to
-  accept both and silently clear the one you did not name. If the resolved
-  directory doesn't exist, cash names it and exits 0. If it exists but holds
-  no `CACHE_VERSION` and no `.entry` files, cash refuses to remove it and
-  exits 1 — a mistyped `CASH_CACHE_DIR` cost nothing while the CLI ignored the
-  variable, and costs a recursive delete now that it doesn't.
-- `--function NAME` — *Optional.* Delete only that function's entries and
-  leave the rest of the cache intact — the alternative to keeping a cache you
-  cannot afford or deleting work you still want. Resolves names exactly as
-  `cash inspect --function` does, including `notebook`. Takes precedence over
-  `--all`. It clears that function and nothing that calls it: a cached
-  function that calls another is keyed on the inner one's *code*, not on its
-  result, so clearing the inner one leaves the outer one's entries serving.
-  To recompute a caller, clear the caller (or both).
-- `--force` — *Optional.* Clear a directory even though it holds no
-  `CACHE_VERSION` and no `.entry` files. Never clears the current directory
-  or one that contains it.
-- `--entry ID` — *Optional.* Delete a single entry, using an id from
-  `cash inspect --function NAME`. Any unambiguous prefix works, like a short
-  commit hash; an ambiguous one lists the matches and deletes nothing. Takes
-  precedence over `--function`.
-- `--expired` — *Optional.* Delete only the entries whose ttl has run out,
-  and print how much disk that freed. An expired entry is never served, but it
-  stays on disk until something overwrites it, so lowering a tier's
-  `default_ttl` frees nothing by itself; this does. Expiry follows the rule
-  reads apply: an entry stored under a tier default expires by the tier's
-  *current* `default_ttl` when that is lower, while a `ttl=` given on the
-  decorator is kept as written. `cash inspect` shows the same expiry. Cannot
-  be combined with `--function` or `--entry` (exit 2).
-- `--tool NAME` — *Optional.* Act on the per-user cache of the installed
-  console script `NAME` instead of the cache in use. On its own it clears
-  that tool's whole cache; with `--function` or `--entry`, only those
+- `path`: a cache directory to delete in full, or a `.ipynb` file whose `.cash`
+  directory is deleted.
+- `--all`: delete the cache the library is using, the one `cash info`
+  reports. Cannot be combined with a path.
+- `--function NAME`: delete one function's entries and keep the rest. Names
+  resolve as in `cash inspect --function`, including `notebook`. It does not
+  clear callers: a cached function that calls another is keyed on the inner
+  function's code, not its result, so clear the caller too if you want it
+  recomputed.
+- `--entry ID`: delete one entry, by an id or any unique prefix of it from
+  `cash inspect --function`. Takes precedence over `--function`.
+- `--expired`: delete only entries whose `ttl` has run out, and report the disk
+  freed. Expired entries are never served but stay on disk until removed.
+  Cannot be combined with `--function` or `--entry`.
+- `--tool NAME`: act on the per-user cache of the installed tool `NAME`. Alone
+  it clears that whole cache; with `--function` or `--entry`, only those
   entries. Cannot be combined with a path.
-
-**Examples:**
+- `--force`: clear a directory that does not look like a cash cache.
 
 ```bash
 cash clear --expired                   # free what will never be served again
 cash clear --entry a1b2c3              # drop one entry
 cash clear --function ray.build_grid   # drop one function, keep the rest
 cash clear --function notebook         # drop the notebook statements only
-cash clear --all                       # nuke the cache in use
-cash clear ./.cash                     # same thing, explicit
-cash clear ./notebooks/analysis.ipynb  # nuke the sibling .cash next to the notebook
-cash clear /tmp/some-cache-dir         # nuke any directory
+cash clear --all                       # delete the cache in use
+cash clear ./notebooks/analysis.ipynb  # delete the .cash beside the notebook
 ```
 
-**Behaviour notes:**
-
-- If none of `path`, `--all`, `--function`, `--entry` or `--expired` is supplied, cash prints the
-  `cash clear` help and exits 2 without touching anything.
-- `--all` together with a `path` also exits 2, naming both commands you might
-  have meant.
-- The no-op "nothing to clear" message paths (no resolved cache, no sibling
-  cache) exit 0; they're treated as success, not failure.
 <!-- claim: cash/backends/cache_dir.py:CacheDirStamp.check @c89cf812, cash/backends/cache_dir.py:CacheDirStamp._entries_are_current @853438c9 -->
-<!-- claim: cash/backends/clear_watch.py:ClearWatcher.cleared @04551b75, cash/backends/file_backend.py:FileBackend.bump_generation @9c482978 -->
-- **Clearing the cache of a process that is still running** reaches its memory
-  too. A running process checks, at most once a second, whether its cache
-  directory was cleared (`--all`, `--function`, `--entry`), and if so drops
-  what it holds in RAM, so within about a second it stops serving pre-clear
-  results. That includes a process that started with no cache at all and
-  created the directory itself, which earlier versions took for "the directory
-  is still new" and kept serving from memory. Whatever it
-  writes after the clear goes into a freshly re-created directory, which it
-  stamps with the format version, so the next process keeps those entries
-  rather than discarding them.
-- **A call that is computing while you clear its function** is not stopped: it
-  finishes, and stores what it computed into the cleared cache, because the
-  result is still right for the code and inputs it ran with. If you are
-  clearing *because* that code or its data changed, stop the job first — or
-  change the code or the file, which makes the entry miss anyway.
-- A cache directory cash creates contains a `.gitignore` of `*`, so `git add .`
-  in the project leaves it out — including when a clear removed it under a
-  running process and that process re-creates it. A directory that already
-  existed is left alone.
-- `Nothing cleared: no cache at …` means the directory `cash info` reports for
-  where you are standing has no cache. A script outside any project (no
-  `pyproject.toml`, `setup.py`, `setup.cfg` or `.git` above it) caches beside
-  itself, and a `cache_dir` that was changed leaves the old directory behind;
-  pass either directory to `cash clear` explicitly.
+**Safety rules.**
 
----
+- Cash deletes a directory only if it holds cash's `CACHE_VERSION` stamp or
+  `.entry` files, and nothing cash did not write. Otherwise it refuses and
+  names what it found. `--force` overrides this.
+- It never deletes the current directory or one that contains it, even with
+  `--force`.
+
+<!-- claim: cash/backends/clear_watch.py:ClearWatcher.cleared @04551b75, cash/backends/file_backend.py:FileBackend.bump_generation @9c482978 -->
+**Clearing under a running process.** A running process notices within about a
+second that its cache was cleared and drops what it holds in RAM. A call that
+is computing while you clear its function still finishes and stores its
+result; stop the job first if you are clearing because the code or data
+changed.
+
+`Nothing cleared: no cache at …` means the directory `cash info` reports has
+no cache. A script outside any project caches beside itself, and changing
+`cache_dir` leaves the old directory behind; pass either directory
+explicitly.
+
+## `cash autoload` { #cash-autoload }
+
+*Notebook only.*
+
+**Usage:** `cash autoload [--mode {available,active}] [--profile PROFILE] [--force] {on,off}`
+
+Installs or removes an IPython startup file,
+`<IPython dir>/profile_<profile>/startup/00-cash.py`, so every new kernel loads
+cash.
+
+- `on`: install the hook. `--mode active` (the default) imports cash and runs
+  `%cash_on`, so caching is on in every kernel; `%cash_off` opts one session
+  out. `--mode available` only imports cash; you still run `%cash_on`.
+- `off`: remove the hook. If none is installed, it says so and exits 0.
+- `--profile PROFILE`: the IPython profile, `default` unless you name another.
+- `--force`: with `on`, overwrite a different file at that path; with `off`,
+  remove a file that lacks cash's marker comment.
+
+```bash
+cash autoload on                       # import cash and run %cash_on in every kernel
+cash autoload on --mode available      # only import cash
+cash autoload off
+```
+
+Running `on` again with the same mode does nothing. To switch modes, run
+`cash autoload off` first, or pass `--force`: `on` refuses to overwrite an
+existing hook with a different body.
 
 <!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @f8794ec8 -->
 ## Exit codes
 
 | Code | When |
 |---|---|
-| `0` | The command succeeded, including no-op outcomes ("nothing to clear", "autoload not installed at ..."). |
-| `1` | User-error refusals: `cash inspect` when the resolved cache directory does not exist and no path was given; `cash clear <missing-path>`; `cash clear` asked to remove a directory that is not a cash cache (without `--force`), or the current directory or one containing it; `cash autoload on` refusing to overwrite without `--force`; `cash autoload off` refusing to delete a non-cash file without `--force`. |
-| `2` | `cash clear` with none of `path`, `--all`, `--function` or `--expired`, with `--all` *and* a path, or with `--expired` and `--function` or `--entry` — argparse's own "bad invocation" code. Nothing is touched. |
-| traceback | Uncaught exceptions bubble up as Python tracebacks — `main()` does not wrap dispatch in `try/except`. If you see one, treat it as a bug and please file an issue. |
+| `0` | Success, including "nothing to clear" and "autoload not installed". |
+| `1` | A refusal or a missing target: `cash inspect` with no cache or an unknown or ambiguous `--function`; `cash clear` with a missing path, an unknown `--function` or `--entry`, a directory that is not a cash cache (without `--force`), or the current directory; `cash autoload` refusing to overwrite or remove a file (without `--force`). |
+| `2` | A bad `cash clear` invocation: none of `path`, `--all`, `--function`, `--entry`, `--expired` or `--tool`; `--all` or `--tool` together with a path; `--expired` with `--function` or `--entry`. Nothing is touched. |

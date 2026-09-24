@@ -221,28 +221,28 @@ class Cash(
     ReportingMixin,
     RegistryMixin,
 ):
-    """Smart caching framework for Python functions and Jupyter notebooks.
+    """A cache with its own configuration and backend.
 
-    Provides decorator-based caching with automatic dependency tracking,
-    file dependency monitoring, and pluggable storage backends.
-
-    By default (no ``backend`` or ``cache_dir`` specified), uses a
-    TieredBackend with L1 in-memory + L2 file-based storage in a local
-    ``.cash`` directory.  Pass ``backend=`` to override.
+    ``cash.cache`` uses a default instance; create your own when you need
+    different settings. Without ``backend`` or ``backends``, the backend is
+    built from the configuration on first use: by default a RAM tier in
+    front of a disk tier in ``.cash``.
 
     Args:
-        backend: A specific cache backend instance to use.
-        cache_dir: Path to cache directory (creates TieredBackend automatically).
-        backends: List of backends for cascading cache (L1/L2/L3).
-        compress: Enable gzip compression for file-based caching.
-        register_magic: Register IPython magic commands (default True).
-        debug: Enable debug logging output.
-        use_locking: Enable double-checked locking for thread-safe caching.
-        config_path: Path to custom config TOML file.
-        verbose: Log one line per cached call -- hit or miss, and why -- to
-            stderr. ``debug`` does too, and adds cash's DEBUG output.
-        **config_overrides: Any `CashConfig` field by name, e.g.
-            ``Cash(max_cache_size=2 * 1024**3)``; wins over every config file
+        backend: A backend instance to use as is.
+        cache_dir: Directory for the disk tier (the ``cache_dir`` setting).
+        backends: Backends to stack as tiers, fastest first; two or more are
+            combined into a `TieredBackend`.
+        compress: gzip entries on disk (the ``compress`` setting).
+        register_magic: Register the notebook magics. ``None`` (default)
+            registers them only when an IPython session is running.
+        debug: Log every cache decision (the ``debug`` setting).
+        use_locking: Take a per-key lock so concurrent calls with the same
+            arguments compute once.
+        config_path: A TOML file read above the project and user config.
+        verbose: Log one line per cached call (the ``verbose`` setting).
+        **config_overrides: Any other setting by name, for example
+            ``Cash(max_cache_size="2GB")``. These win over every config file
             and environment variable.
 
     Example:
@@ -546,11 +546,9 @@ class Cash(
 
     @property
     def backend(self) -> CacheBackend:
-        """Lazily build the cache backend from ``self.config`` on first access.
+        """The cache backend, built from the configuration on first use.
 
-        This avoids filesystem I/O, thread creation, and directory
-        scanning at ``Cash()`` construction time. The heavy lifting
-        happens only when the cache is actually used.
+        Assign a backend instance to replace it.
         """
         if self._backend is not None:
             return self._backend
@@ -639,110 +637,39 @@ class Cash(
         allow_random: bool = False,
         frozen: bool = False,
     ) -> Callable[P, T] | Callable[[Callable[P, T]], Callable[P, T]]:
-        """Decorator to cache a function's return value.
+        """Cache a function's results, keyed on its arguments, code and inputs.
 
-        Can be used with or without arguments::
-
-            @c.cache
-            def f(x): ...
-
-            @c.cache(ttl=3600)
-            def g(x): ...
-
-            @c.cache(file_depends_on="data.csv")
-            def load_data():
-                return pd.read_csv("data.csv")
+        Use it bare (``@c.cache``) or with options (``@c.cache(ttl=3600)``).
+        The decorated function also gets ``explain``, ``cache_info`` and
+        ``cache_clear``. The decorator guide explains each option.
 
         Args:
-            func: The function to cache (set automatically when used without parens).
-            depends_on: Static dependencies (functions or DataSources) to include
-                in the cache key.
-            dynamic_depends_on: Callable(s) that receive the same args as the
-                decorated function and return DataSource(s) for cache key.
-            file_depends_on: File path(s) to track as dependencies, as if the
-                function had read them: their content is recorded with the
-                entry and checked on every lookup, the way an automatically
-                tracked read is, so an edit recomputes and a ``touch`` does not.
-            ttl: Time-to-live in seconds. ``None`` means never expires.
-            cache_if: Optional predicate ``callable(result) -> bool``. When
-                provided, called with the function's return value after
-                computation. If it returns a falsy value, the result is
-                NOT stored in the cache (but is still returned to the
-                caller). Useful for skipping the caching of negative
-                results, e.g. ``cache_if=lambda r: r is not None``.
-                The predicate is only invoked when the function returns
-                normally; an exception from the function is re-raised
-                without consulting the predicate. If the predicate itself
-                raises, a one-shot `CashCacheIneffectiveWarning`
-                fires and the result is treated as not-cacheable (the
-                user's call still returns the result).
-                If the cache key cannot be built at all (unhashable
-                argument with no registered hasher, key-generation
-                error), the predicate is not consulted - nothing is
-                cached on that fallback path either.
-            chunk_max_items: When the decorated function returns an
-                iterator, close the current chunk after this many
-                items. Default ``1_000_000``. A chunk closes when
-                either ``chunk_max_items`` or ``chunk_max_bytes`` is
-                reached (whichever comes first). For iterators below
-                both thresholds, the entire result lands in a single
-                chunk and storage is indistinguishable from a list.
-            chunk_max_bytes: When the decorated function returns an
-                iterator, close the current chunk after this many
-                bytes (estimated via ``estimate_object_size``).
-                Default ``1_000_000_000`` (1 GB). See
-                ``chunk_max_items`` for the joint behavior.
-            strict: When ``True``, raise `CashImpureFunctionError`
-                on first call if the analyzer finds any purity issues
-                (known-impure calls, scope mutations, explicit
-                dynamism, or discarded calls to non-known-pure
-                callees). Also promotes the analyzer's optimistic
-                opaque-leaf treatment: opaque callees become issues.
-                Use in CI to fail builds that introduce caching of
-                side-effecting code. Mutually exclusive with
-                ``assume_safe``.
-            assume_safe: When ``True``, suppress the
-                `CashImpurityWarning` even when the analyzer
-                finds issues. Use when you've audited the function
-                and know caching is correct (the side effect is
-                idempotent, the dynamism is bounded, etc.). The
-                analyzer still runs because it captures helper
-                source hashes for cache invalidation. Mutually
-                exclusive with ``strict``.
-            allow_random: When ``True``, suppress the one-shot
-                `CashRandomnessWarning` raised at decoration time
-                if the function's source draws from an unseeded RNG
-                (``np.random.randn()``, ``random.random()``,
-                ``np.random.default_rng()`` with no seed, ...).
-                The decorator-path counterpart of the notebook's
-                ``# @cash:allow-random``; that comment is also
-                honoured when it appears in the decorated
-                function's own source. Suppresses only the
-                *warning* - it does not change whether the result
-                is cached, and the first call's value is still
-                frozen and replayed. Seeding the RNG silences the
-                warning on its own, because a seeded draw is
-                reproducible.
-            frozen: When ``True``, declare that the result is not
-                modified after it is returned. A cached function
-                receiving it as an argument then keys it by this
-                call's identity instead of hashing its contents: no
-                hash per call, the same key in every process, and it
-                works for objects that cannot be pickled. A numpy
-                result is returned read-only. Other objects are
-                audited -- re-hashed at an occasional use, every use
-                under ``CASH_DEBUG`` -- and a change warns
-                KEY-FROZEN-MUTATED and falls back to content hashing
-                for that object.
+            func: The function; set for you when used without parentheses.
+            depends_on: Functions or `DataSource` objects whose changes
+                invalidate the entry.
+            dynamic_depends_on: Callable(s) that receive the call's arguments
+                and return the `DataSource` (or a list, or ``None``) that
+                call depends on.
+            file_depends_on: Path(s) treated as read by the function: their
+                content is checked on every lookup.
+            ttl: Seconds an entry stays valid. ``None``: no expiry.
+            cache_if: ``predicate(result) -> bool``. A result it rejects is
+                returned but not stored.
+            chunk_max_items: For an iterator result, items per stored chunk.
+            chunk_max_bytes: For an iterator result, bytes per stored chunk.
+            strict: Raise `CashImpureFunctionError` on the first call for any
+                purity finding.
+            assume_safe: Waive every purity finding for this function.
+            allow_random: Silence the unseeded-randomness warning. The first
+                draw is still what is stored.
+            frozen: Promise the result is never modified, so cached functions
+                that receive it key it by this call instead of hashing it.
 
         Returns:
-            The decorated function with caching behavior.
+            The wrapped function, or a decorator when called with options.
 
-        See Also:
-            [Caching class methods](../tutorials/feature-guides/caching-class-methods.md)
-            for the recipe for caching methods on stateful objects
-            (databases, file handles, connections) via
-            [`register_hasher`][cash.Cash.register_hasher].
+        Raises:
+            ValueError: ``strict`` and ``assume_safe`` are both set.
         """
         if strict and assume_safe:
             raise ValueError(
@@ -1002,28 +929,13 @@ class Cash(
                 return result
 
         def cache_info() -> dict[str, Any]:
-            """Return cache statistics + recent warnings for this function.
+            """Return this function's hit and miss counts and recent warnings.
 
             Returns:
-                Dict with keys:
-
-                * ``hits`` (int) - cache hits since this wrapper was created.
-                * ``misses`` (int) - cache misses (including key-uncomputable
-                  and store-failed paths).
-                * ``hit_rate`` (float) - ``hits / (hits + misses)``, or 0.0.
-                * ``total_time_saved`` (float) - sum of execution times that
-                  were avoided by serving from cache.
-                * ``miss_reasons`` (dict[str, int]) - the misses by why:
-                  ``"no entry yet"``, ``"new arguments"``, ``"code or state
-                  changed"``, ``"file changed"``, ``"ttl expired"``,
-                  ``"not stored last time"`` and so on.
-                * ``warnings`` (list[dict]) - rolling log of recent warning
-                  emissions for this function. Each entry has ``category``,
-                  ``message``, ``timestamp``. Capped at the last
-                  ``WARNINGS_MAX`` (20) so it can't grow
-                  unboundedly. Useful for spotting silent misbehavior
-                  (cache_if predicate raised, lock failure, etc.) when
-                  ``warnings.simplefilter`` swallowed the stderr emission.
+                A dict with ``hits``, ``misses``, ``hit_rate``,
+                ``total_time_saved`` (seconds), ``miss_reasons`` (count per
+                reason) and ``warnings`` (the last 20, each with
+                ``category``, ``code``, ``message`` and ``timestamp``).
             """
             total = _stats["hits"] + _stats["misses"]
             hit_rate = _stats["hits"] / total if total > 0 else 0.0
@@ -1039,13 +951,8 @@ class Cash(
             }
 
         def cache_clear() -> None:
-            """Clear all cached results for this function.
-
-            Removes all cache entries whose key starts with the function name.
-            Resets hit/miss statistics, drops the per-function warnings log,
-            and forgets ``_warn_once`` dedup marks for this function so the
-            next misbehavior re-warns instead of being silently swallowed.
-            """
+            """Delete this function's cache entries and reset its statistics
+            and warning log, so its warnings are shown again."""
             _stats["hits"] = 0
             _stats["misses"] = 0
             _stats["total_time_saved"] = 0.0
@@ -1060,13 +967,8 @@ class Cash(
                 self._warning_keys_seen = {k for k in self._warning_keys_seen if k[1] != func_name}
 
         def explain(*args: Any, **kwargs: Any) -> CacheExplanation:
-            """Return why the next call with these args would hit or miss.
-
-            See `CacheExplanation` for the return shape. Inspection
-            only - does not call the underlying function, mutate stats,
-            or write to the backend. Safe to call from sync code even
-            on async-wrapped functions.
-            """
+            """Return a `CacheExplanation` of whether a call with these
+            arguments would hit, and why. Runs nothing and changes nothing."""
             token = ACTIVE_CONFIG.set(self.config)
             try:
                 explanation = self._explain_call(cf, args, kwargs)
@@ -1121,56 +1023,28 @@ class Cash(
         *,
         override: bool = False,
     ) -> None:
-        """Register a custom hasher for a specific type.
+        """Tell cash how to hash arguments of a type it cannot hash itself.
 
-        When ``_serialize_args`` encounters an argument of ``type_``, it will
-        call ``hasher_fn(value)`` to produce a hash string instead of relying
-        on ``pickle.dumps``.
+        Whatever ``hasher_fn`` returns becomes that value's identity in the
+        cache key, so return something that changes whenever the value does:
+        a version, a content id, a connection string. The hasher's own code
+        is part of the key too.
 
         Args:
-            type_: The Python type to register a hasher for.
-            hasher_fn: A callable that takes a value of ``type_`` and returns
-                a deterministic hash string.
-            override: Take precedence over cash's own content hashers.
-                Needed only for the types cash fingerprints itself -- numpy
-                arrays, pandas / polars / PyArrow / modin frames, dask
-                collections -- where those run first. A plain registration
-                for one of those types is REJECTED with ``ValueError``: it
-                could not have done anything, and saying so at setup beats
-                leaving the user to discover that nothing got faster.
+            type_: The type to hash.
+            hasher_fn: Takes a value of ``type_`` and returns a stable string.
+            override: Use your hasher instead of cash's own, for the types
+                cash hashes itself (numpy arrays, pandas, polars, PyArrow and
+                modin frames, dask collections). Two values it hashes alike
+                share one entry.
 
-                Off by default because the built-ins read every byte, and a
-                hasher that does not can return a *wrong* cached result
-                rather than a slow one. Passing it says you accept that: what
-                you return is the entire identity of the value, and two
-                values sharing it share an entry. That is the right trade
-                when you hold a version, a content id, or an immutable
-                fingerprint the array itself does not carry -- and the wrong
-                one for ``lambda a: a[0, 0]``.
-
-                Overriding hashers are consulted before everything else,
-                including a notebook value's lineage hash.
+        Raises:
+            ValueError: ``type_`` is one cash hashes itself and ``override``
+                is not set.
 
         Example:
 
-            import pandas as pd
-            from cash import Cash
-
-            c = Cash()
-            c.register_hasher(
-                pd.DataFrame,
-                lambda df: hashlib.sha256(
-                    pd.util.hash_pandas_object(df).values.tobytes()
-                ).hexdigest()
-            )
-
-            Note: when ``hasher_fn`` is a callable object (an instance
-            with ``__call__``), the source hash is derived from the
-            class's ``__call__.__code__`` - so two instances of the
-            same callable class share a source hash, even if they hold
-            different per-instance state. If your hasher's behavior
-            depends on instance state, prefer a function or lambda
-            that closes over the state explicitly.
+            c.register_hasher(DatabaseSession, lambda s: s.database_url)
         """
         # Rejected BEFORE anything is mutated, so a refused call leaves an
         # earlier good registration for this type exactly as it was.
@@ -1227,14 +1101,14 @@ class Cash(
         self._frame_memo.clear()
 
     def cleanup(self, max_age: int | None = None) -> int:
-        """Remove expired items from the cache.
+        """Remove expired entries from this instance's backend.
 
         Args:
-            max_age: If provided, remove items older than *max_age* seconds,
-                regardless of their stored TTL.
+            max_age: Also remove entries older than this many seconds,
+                whatever their TTL.
 
         Returns:
-            Number of entries removed.
+            The number of entries removed.
         """
         now = time.time()
 
@@ -1254,7 +1128,7 @@ class Cash(
         return self.backend.cleanup_expired(is_expired)
 
     def explorer(self) -> CacheExplorer:
-        """Return a `CacheExplorer` instance for interactive cache browsing."""
+        """Return a `CacheExplorer` for browsing this instance's entries."""
         # Local: the explorer imports pandas, which `import cash` must not load.
         from .ui.explorer import CacheExplorer
 
@@ -1404,10 +1278,12 @@ class Cash(
             pass
 
     def show_stats(self) -> None:
-        """Display the interactive analytics dashboard.
+        """Show what caching has done in this process.
 
-        Requires IPython/Jupyter and ipywidgets. In script environments,
-        prints the same per-function table ``summary=True`` prints at exit.
+        With ipywidgets installed (in Jupyter), shows the notebook dashboard,
+        which covers notebook statements only. Otherwise prints the
+        per-function table of decorated calls that ``summary`` prints at
+        exit.
         """
 
         # Local: the dashboard imports matplotlib, which `import cash` must not load.
@@ -1449,100 +1325,46 @@ class Cash(
         ip.register_magics(magics)
 
     def clear_all(self) -> None:
-        """Clear cached results for every function registered with this instance.
+        """Call ``cache_clear()`` on every function this instance caches.
 
-        Equivalent to calling ``f.cache_clear()`` on every ``@cash.cache``-decorated
-        function. Resets hit/miss statistics and removes all backend entries.
+        Entries of functions not decorated in this process are kept.
         """
         for cf in list(self._cached.values()):
             if cf.wrapper is not None:
                 cf.wrapper.cache_clear()
 
     def register_file_handler(self, module_name: str, func_name: str, handler_factory: Callable[..., Any]) -> None:
-        """Register a custom file-dependency handler.
+        """Track the files a reader function cash does not know opens.
 
-        Cash already intercepts the popular reader functions
-        (``pd.read_csv``, ``np.load``, ``open``, ``json.load``,
-        etc.) so any cached function that uses them gets automatic
-        file-dep tracking. Use this method when your code reads
-        files via a custom or vendored reader that Cash doesn't
-        know about yet.
-
-        The handler is a closure-style factory: Cash gives it the
-        original function and a ``track_callback(path)``; it returns
-        a replacement function that calls ``track_callback`` for
-        each file path it touches and then forwards to the original.
-        The wrapper is installed on the target module so all callers
-        - yours and any library code - get tracking transparently.
+        Cash already tracks common readers (``open``, ``pd.read_csv``,
+        ``np.load``, ...). For another one, give a factory that wraps the
+        reader and reports each path it opens; cash installs the wrapper on
+        the module,, so library code that calls it is tracked
+        too. Tracked files are checked like any other read.
 
         Args:
-            module_name: The module that owns the reader function
-                (e.g. ``"my_lib"``, ``"my_lib.io"``). Use a dotted
-                path for nested modules.
-            func_name: The reader function's name in that module
-                (e.g. ``"read_data"``). Supports glob wildcards like
-                ``"read_*"`` to track several readers at once.
-            handler_factory: Factory that produces the wrapper. Must
-                accept two arguments -
-                ``(original_function, track_callback)`` - and return
-                a callable with the same signature as the original.
-                See *Example* below for the exact shape.
+            module_name: The module that holds the reader, such as
+                ``"my_lib.io"``.
+            func_name: The reader's name. Glob patterns such as ``"read_*"``
+                match several.
+            handler_factory: ``factory(original, track) -> wrapper``. The
+                wrapper calls ``track(path)`` for each file, then the
+                original.
 
         Example:
 
-            ```python
-            import cash
-
-            c = cash.Cash()
-
-            # my_lib.read_data(path) reads a custom binary format.
-            # Make any cached function calling it invalidate when
-            # the file on disk changes.
-            def custom_reader_handler(original_func, track_callback):
+            def handler(original, track):
                 def wrapper(path, *args, **kwargs):
-                    track_callback(path)              # record the dep
-                    return original_func(path, *args, **kwargs)
+                    track(path)
+                    return original(path, *args, **kwargs)
                 return wrapper
 
-            c.register_file_handler("my_lib", "read_data", custom_reader_handler)
-
-            @c.cache
-            def load_features():
-                import my_lib
-                return my_lib.read_data("/data/features.bin")
-                # ^ when /data/features.bin changes, cache invalidates
-            ```
-
-            For multiple reader names in one go:
-
-            ```python
-            c.register_file_handler("my_lib", "read_*", custom_reader_handler)
-            # Catches read_data, read_metadata, read_index, ...
-            ```
-
-        Notes:
-            * The wrapper replaces the attribute on the live module
-              object - so existing imports
-              (``from my_lib import read_data``) still see the
-              original unwrapped version. Track callers that go
-              through the module namespace
-              (``my_lib.read_data(...)``).
-            * Inside the wrapper, call ``track_callback(path)`` with
-              the **absolute or resolvable** path you want recorded.
-              Relative paths are resolved against ``os.getcwd()`` at
-              tracking time.
-            * Tracking is on the file's ``(mtime, size)``; downstream
-              cache-key computation is automatic.
+            c.register_file_handler("my_lib", "read_data", handler)
         """
 
         file_registry().register(module_name, func_name, handler_factory)
 
     def shutdown(self) -> None:
-        """Finish up: warn the run's CACHE-NET-LOSS verdicts, flush the
-        stored-key record and wait for the backend's writes.
-
-        Runs at exit on its own. Never builds a backend: at interpreter
-        teardown building one would start threads that can no longer
-        register, and an unbuilt backend has nothing to drain.
-        """
+        """Finish pending work: report net-loss verdicts and wait for the
+        backend's background writes. Runs at exit on its own."""
         self._exit_work.run()

@@ -1,61 +1,46 @@
 # Data sources
 
-<!-- claim: cash/data_source.py:FileDataSource @a09d1326 broad="the mtime contract is a property of the whole class", cash/remote_source.py:RemoteFileDataSource @2db689bf broad="the scheme list and validator contract are properties of the whole class" -->
-Objects that contribute to a cache key by reporting a **token representing
-their current state** (an mtime, a version, a content digest) — the cached
-entry invalidates when that token changes. Two are bundled:
-`FileDataSource` tracks a local file's mtime, and `RemoteFileDataSource` tracks
-a remote object by the validator its store maintains. Custom subclasses extend
-the same pattern to databases, API endpoints, etc.
-
-## Imports
+For the decorator: objects passed in `depends_on=` whose state becomes part
+of the cache key. The entry is recomputed when that state changes.
 
 ```python
-from cash import FileDataSource         # the bundled file-mtime source
-from cash import RemoteFileDataSource   # s3://, gs://, az://, http(s)://
-from cash.data_source import DataSource  # ABC for writing your own
+from cash import DataSource, FileDataSource, RemoteFileDataSource
 ```
 
+Cash already tracks the files and remote objects a cached function reads
+through common readers (`open`, `pd.read_csv("s3://...")`). Declare a source
+only for what it cannot see; for a local file, `file_depends_on="path"` is
+shorter.
+
+<!-- claim: cash/data_source.py:FileDataSource @a09d1326 broad="the mtime contract is a property of the whole class", cash/remote_source.py:RemoteFileDataSource @2db689bf broad="the scheme list and validator contract are properties of the whole class" -->
 ::: cash.FileDataSource
     options:
-      members:
-        - __init__
-        - get_id
-        - state_token
-
-### Example
+      members: false
 
 ```python
 from cash import Cash, FileDataSource
 
 c = Cash()
-source = FileDataSource("data/input.csv")
 
-@c.cache(depends_on=[source])
+@c.cache(depends_on=[FileDataSource("data/input.csv")])
 def load_data():
     return pd.read_csv("data/input.csv")
 
-load_data()             # computes, recording the file's current state
-load_data()             # hits — the file hasn't changed
+load_data()  # computes
+load_data()  # hit, until the file's modification time changes
 ```
-
-When `input.csv` changes on disk, cached results are automatically
-invalidated. For the simpler one-off case, prefer
-`@c.cache(file_depends_on="data/input.csv")` — same behavior, less
-typing.
-
----
 
 ::: cash.RemoteFileDataSource
     options:
-      members:
-        - __init__
-        - get_id
-        - state_token
+      members: false
 
-### Example
+`http(s)://` needs no extra package. Other schemes go through fsspec and the
+filesystem package for the scheme (`s3fs` for `s3://`, `gcsfs` for `gs://`);
+a missing one raises `DependencyNotFoundError`. The
+[remote objects guide](../tutorials/feature-guides/custom-file-sources.md#remote-objects-tracked-by-the-stores-own-validator)
+covers `immutable=` and `max_age=`.
 
-<!-- test:skip reason="illustrative — requires a reachable bucket" -->
+<!-- test:skip reason="needs a reachable bucket" -->
 ```python
 from cash import Cash, RemoteFileDataSource
 
@@ -66,43 +51,23 @@ def load_events():
     return read_via_boto3("bucket", "events.parquet")
 ```
 
-Reads cash can already see — `pd.read_parquet("s3://bucket/key")` and friends —
-are tracked this way **automatically**; declare a source explicitly only for the
-ones it can't see. See
-[Remote objects](../tutorials/feature-guides/custom-file-sources.md#remote-objects-tracked-by-the-stores-own-validator)
-for the full story, including `immutable=` and the failure behaviour.
-
-!!! note "`http(s)://` needs no extra install"
-    It resolves through the standard library. Other schemes go through fsspec
-    and its filesystem for that scheme (`pip install "cash-lib[s3]"` plus
-    `s3fs` for `s3://`, `gcsfs` for `gs://`); a missing one raises
-    `DependencyNotFoundError` rather than silently recomputing forever.
-
----
-
 ## Custom data sources
 
-To track something other than a file as a cache dependency, subclass
-`DataSource`. The contract is two abstract methods:
+Subclass `DataSource` and implement its two methods.
 
-::: cash.data_source.DataSource
+::: cash.DataSource
     options:
       members:
         - get_id
         - state_token
 
-!!! warning "`state_token()` must return a state *token*, not a `bool`"
-    The value `state_token()` returns is folded into the cache key — so it must
-    **change when the data changes** (a version, a digest, a max-id). A plain
-    `bool` only has two states and can't track changes: cash warns with
-    `CashCacheIneffectiveWarning` and the cache never invalidates. This is the
-    same contract as
-    [`dynamic_depends_on=`](../tutorials/feature-guides/dynamic-dependencies.md).
-
-### Example: tracking a database table
+`state_token()` must return a value that changes when the data does: a
+version, a digest, a maximum id. A `bool` cannot, so the entry would never be
+recomputed; cash warns
+[`KEY-BOOL-STATE-TOKEN`](../warnings.md#key-bool-state-token) if it sees one.
 
 ```python
-from cash.data_source import DataSource
+from cash import DataSource
 
 class DBTableSource(DataSource):
     def __init__(self, connection, table_name):
@@ -113,34 +78,23 @@ class DBTableSource(DataSource):
         return f"db_table:{self.table}"
 
     def state_token(self):
-        # The state TOKEN folded into the cache key — a value that moves when
-        # the table changes, not a bool. (max_id, row_count) shifts whenever
-        # rows are added or removed.
+        # Changes whenever rows are added or removed.
         row = self.conn.execute(
             f"SELECT MAX(id), COUNT(*) FROM {self.table}"
         ).fetchone()
         return (row[0], row[1])
 ```
 
-Pass via `depends_on=`, then **call it** — a `DataSource` only proves itself when
-the token is actually read:
-
-<!-- test:expect-warning reason="reading the module-global `conn` is unhashable, so cash advises it can't invalidate on it — expected here, the DataSource is what tracks change" -->
+<!-- test:expect-warning reason="the body reads the module-global conn, which cash cannot hash; the DataSource is what tracks the table" -->
 ```python
 @c.cache(depends_on=[DBTableSource(conn, "users")])
 def user_summary():
     return conn.execute("SELECT COUNT(*) FROM users").fetchone()
 
-user_summary()          # computes, and records the current token
-user_summary()          # hits — the table hasn't moved
+user_summary()  # computes and records the token
+user_summary()  # hit, until the table's token changes
 ```
 
-Cash may warn here that `user_summary` reads a module global (`conn`) it can't
-hash, so *changes to that global* won't invalidate the entry. That's expected
-for a database example and not a problem: the connection isn't the data, and the
-`DataSource` is what notices when the table moves.
-
-Insert a row and the next call recomputes, because `(max_id, count)` changed.
-(If `state_token()` returned a `bool` instead, this is the moment cash would warn
-that the entry can never invalidate — which is why the example exercises it
-rather than only defining it.)
+Cash may warn that `user_summary` reads a global (`conn`) it cannot hash.
+That is expected here: the connection is not the data, and the source
+tracks the table.

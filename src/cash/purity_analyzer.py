@@ -224,7 +224,8 @@ class PurityIssue:
 
     Attributes:
         kind: One of ``impure_call``, ``dynamic_pattern``,
-            ``discarded_call``, ``scope_mutation``.
+            ``untrackable_dep``, ``discarded_call``, ``scope_mutation``,
+            ``mutable_global``, ``ambient_read``, ``network_read``.
         description: Human-readable summary (e.g. ``"requests.post()"``,
             ``"global X"``, ``"discards return of helper(...)``).
         where: Qualified name + line of the function containing the
@@ -294,9 +295,7 @@ class PurityReport:
             Opaque for PURITY only. One that still has a ``__code__``
             also gets an entry in ``helper_source_hashes`` and
             ``helper_resolution_paths``, digested from its compiled form,
-            so editing it invalidates its callers. It used to be dropped
-            from both, which made every edit to such a helper invisible
-            to the cache key -- a silently stale result, not a recompute.
+            so editing it invalidates its callers.
     """
 
     issues: tuple[PurityIssue, ...] = ()

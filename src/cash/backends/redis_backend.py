@@ -28,9 +28,26 @@ __all__ = ["RedisBackend", "HAS_REDIS"]
 
 
 class RedisBackend(CacheBackend):
-    """
-    Redis-based cache backend.
-    Requires 'redis' package: pip install redis
+    """Entries in a Redis server, shared by every machine that reaches it.
+
+    Needs the ``redis`` package (``pip install redis``). Entries are pickled:
+    anyone who can write to the server can run code in your process. As a
+    tier, it does not take values over 10 MiB.
+
+    Args:
+        host: Server host name.
+        port: Server port.
+        db: Redis database number.
+        password: Server password, if any.
+        prefix: Prepended to every key cash writes.
+        socket_keepalive: Keep idle connections open.
+        health_check_interval: Seconds between connection health checks.
+        retry_on_timeout: Retry a command that timed out.
+        max_retries: Retries per command, with exponential backoff.
+        **kwargs (Any): Passed to ``redis.Redis``, for example ``ssl=True``.
+
+    Raises:
+        DependencyNotFoundError: ``redis`` is not installed.
     """
 
     source_label: str = "REDIS"

@@ -1,50 +1,36 @@
 # Backends
 
-The concrete backend classes users instantiate. The recommended way to
-pick one is via [configuration](../getting-started/configuration.md);
-direct instantiation is useful for tests and advanced setups.
+For both paths: the storage classes. Choosing a backend through
+[configuration](../getting-started/configuration.md#backend) is usually
+enough; build one yourself for tests or an unusual stack, and pass it as
+`Cash(backend=...)` or `Cash(backends=[...])`.
 
-To write your own backend or contribute fixes, see
-[Backend internals](backend_internals.md).
+```python
+from cash import InMemoryBackend, FileBackend, SQLiteBackend, TieredBackend
+from cash.backends import RedisBackend, S3Backend  # pip install 'cash-lib[redis]' / 'cash-lib[s3]'
+```
+
+To write a backend of your own, see [Internals](backend_internals.md).
 
 ## Security
 
 <!-- claim: cash/backends/serialization.py:PickleSerializer @eb457c2f broad="the pickle-executes-code warning is about the serializer as a whole", cash/backends/serialization.py:get_serializer @76cf2c1b -->
-!!! danger "Cached values are pickled — loading a cache runs code"
-    Every persistent backend (`FileBackend`, `SQLiteBackend`,
-    `RedisBackend`, `S3Backend`) serializes values with **`pickle`**
-    (a DataFrame may go through Parquet instead). Deserialization executes arbitrary code embedded
-    in the payload, so **reading from a cache is only as safe as the party
-    that wrote it.**
+!!! danger "Loading a cache runs code"
+    `FileBackend`, `SQLiteBackend`, `RedisBackend` and `S3Backend` store
+    values with `pickle` (a DataFrame may use Parquet instead). Loading a
+    pickle runs code embedded in it, so a cache is only as safe as whoever
+    wrote to it. Cash does not sandbox this, and no setting makes an
+    untrusted cache safe.
 
-    | Scenario | Safe? |
+    | Cache | Safe to load? |
     |---|---|
-    | Your own local `.cash/` directory | ✅ As safe as your own code |
-    | A cache exported by a trusted teammate on infra you control | ✅ Treat like running their `.py` |
-    | A Redis/S3 store other tenants can write to | ⚠️ Only if every writer is trusted |
-    | A `.cash/` directory downloaded from the internet / a stranger | ❌ Do not load — this is remote code execution |
+    | Your own `.cash` directory | Yes, as safe as your own code. |
+    | A cache from a trusted teammate, on machines you control | Yes, like running their code. |
+    | A Redis server or S3 bucket others can write to | Only if every writer is trusted. |
+    | A cache downloaded from a stranger | No: that is running their code. |
 
-    Cash does **not** sandbox deserialization. If you need to move results
-    across a trust boundary, re-export the underlying data (Parquet, CSV,
-    `np.save`, …) rather than shipping the pickle cache. There is no flag
-    that makes loading an untrusted cache safe.
-
-## Imports
-
-```python
-# Top-level (preferred for the common backends):
-from cash import (
-    InMemoryBackend,
-    FileBackend,
-    SQLiteBackend,
-    TieredBackend,  # the default; Cash() and Cash(backends=[...]) build one
-)
-
-# Remote backends — extras-gated:
-#   pip install 'cash-lib[redis]'
-#   pip install 'cash-lib[s3]'
-from cash.backends import RedisBackend, S3Backend
-```
+    To share results across a trust boundary, export the data (Parquet,
+    CSV, `np.save`) instead of the cache.
 
 ::: cash.InMemoryBackend
     options:
@@ -58,31 +44,17 @@ from cash.backends import RedisBackend, S3Backend
 
 ::: cash.SQLiteBackend
     options:
-      members:
-        - __init__
+      members: false
 
 ::: cash.TieredBackend
     options:
       members:
         - __init__
 
----
-
-The two remote backends below are imported from `cash.backends`. Their
-configuration surfaces tend to evolve faster than the core. Install the
-relevant extra:
-
-```bash
-pip install 'cash-lib[redis]'
-pip install 'cash-lib[s3]'
-```
-
 ::: cash.backends.redis_backend.RedisBackend
     options:
-      members:
-        - __init__
+      members: false
 
 ::: cash.backends.s3_backend.S3Backend
     options:
-      members:
-        - __init__
+      members: false

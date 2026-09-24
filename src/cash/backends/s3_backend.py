@@ -32,9 +32,23 @@ __all__ = ["S3Backend", "HAS_BOTO3"]
 
 
 class S3Backend(CacheBackend):
-    """
-    S3-based cache backend.
-    Requires 'boto3' package: pip install boto3
+    """Entries as objects in an S3 bucket (or an S3-compatible store).
+
+    Needs the ``boto3`` package (``pip install boto3``); credentials come
+    from the usual AWS sources. Entries are pickled: anyone who can write to
+    the bucket can run code in your process. Uploads run in the background.
+
+    Args:
+        bucket: Bucket name.
+        prefix: Prepended to every object key cash writes.
+        max_pool_connections: Most open HTTP connections.
+        retries: Most attempts per request, in botocore's standard retry
+            mode.
+        **kwargs (Any): Passed to ``boto3.client("s3", ...)``, for example
+            ``region_name`` or ``endpoint_url``.
+
+    Raises:
+        DependencyNotFoundError: ``boto3`` is not installed.
     """
 
     source_label: str = "S3"

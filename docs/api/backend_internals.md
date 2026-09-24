@@ -1,63 +1,92 @@
-# Backend internals
+# Internals
 
-<!-- claim: cash/backends/_base.py:CacheBackend @84de6e31 broad="the page documents the ABC as a whole contract" -->
-This page is for users **writing their own backend** or contributing
-fixes to the bundled ones. End-users picking a backend should go to
-[Backends](backends.md) instead.
-
-## Imports
+For both paths, and only if you write your own backend: the base class, the
+metadata it receives, and the serializers. They are importable from
+`cash.backends` but are not part of the public API that
+[Versioning](../versioning.md) promises to keep, and may change in any
+release. To pick a bundled backend, see [Backends](backends.md).
 
 ```python
-from cash.backends import CacheBackend, CacheMetadata
-from cash.backends._writes import PendingWrites
-from cash.backends.serialization import (
-    Serializer,
-    PickleSerializer,
-    ParquetSerializer,
-    get_serializer,
+from cash.backends import (
+    CacheBackend, CacheMetadata, EntryMetadata, MetadataDict,
+    Serializer, PickleSerializer, ParquetSerializer, get_serializer,
 )
 ```
 
-## Writing a backend in three steps
+## Writing a backend
 
-1. Subclass `CacheBackend` (below) and implement the five abstract
-   methods (`get`, `set`, `delete`, `clear`, `list_entries`).
-2. Stamp standard metadata via `_init_metadata()` at the start of
-   `set()` — keeps your backend's entries compatible with the
-   `list_entries` consumers (UI, cleanup, badge).
-3. Honour the error contract: return `(None, None)` from `get()` on
-   miss, raise `CacheBackendError` from anywhere else for
-   infrastructure failures.
+<!-- claim: cash/backends/_base.py:CacheBackend @84de6e31 broad="the page documents the ABC as a whole contract" -->
+Subclass `CacheBackend` and implement `get`, `set`, `delete`, `clear` and
+`list_entries`. Every other method has a default. The contract:
 
-If your `get()` records an access (a use count, a last-used time), also
-override `peek_metadata(key)` to return the metadata without recording one:
-`explain()` uses it, and is documented to change nothing. The default falls
-back to `get_metadata()`, whose own default is a full `get()`.
+- `get(key)` returns `(metadata, value)`, or `(None, None)` for a missing
+  or unreadable entry.
+- `set()` stores the value with its metadata, adding `key`, `created_at`,
+  `last_access` and `access_count` when they are missing.
+- Storage failures raise `CacheBackendError`. A failed `set()` cleans up
+  what it partly wrote before raising.
+- Treat metadata as an opaque dict: store every key you are given and read
+  keys with `metadata.get(...)`. A missing `ttl` means "use my default".
 
-If your backend can count its entries without reading them, override
-`entry_count()`. `%cash_on` prints that number every time it runs, and the
-default counts `list_entries()`, which reads every entry's metadata — on a
-file cache of a few thousand entries that took 22.7 s on Windows.
+```python
+import time
 
-Every other method Cash calls on a backend has a default in `CacheBackend`,
-so a backend overrides only what it can do better. Set the class attribute
-`source_label` to the short name entries give as their source (`RAM`,
-`DISK`), and `cost_kind` to what the cost model should predict restores from
-it as (`"ram"`, `"disk"`, `"redis"` or `"s3"`; `"disk"` by default). Override `local_dir` when your entries live in a local
-directory: Cash keeps its per-function bookkeeping beside them, and does not
-count its own writes there as files a notebook statement wrote. If your
-backend takes a `default_ttl`, store it as `self._default_ttl`. Cash reads
-all of these through the base class, never by probing for an attribute.
+from cash import Cash
+from cash.backends import CacheBackend
 
-If your backend touches the network or disk, also pull in
-`PendingWrites` (below) so `set()` can return fast and the real I/O
-happens off the calling thread.
+class DictBackend(CacheBackend):
+    source_label = "DICT"
+    cost_kind = "ram"
 
-If your stored format isn't bytes-friendly (e.g. you want Parquet on
-disk for DataFrames), see the `Serializer` hierarchy and the
-`get_serializer()` dispatch below.
+    def __init__(self):
+        self.store = {}
 
----
+    def get(self, key):
+        return self.store.get(key, (None, None))
+
+    def set(self, key, value, metadata=None, serializer=None):
+        meta = dict(metadata or {}, key=key)
+        now = time.time()
+        meta.setdefault("created_at", now)
+        meta.setdefault("last_access", now)
+        meta.setdefault("access_count", 0)
+        self.store[key] = (meta, value)
+
+    def delete(self, key):
+        self.store.pop(key, None)
+
+    def clear(self):
+        self.store.clear()
+
+    def list_entries(self):
+        return [meta for meta, _ in self.store.values()]
+
+c = Cash(backend=DictBackend())
+
+@c.cache
+def square(x):
+    return x * x
+
+square(3)
+square(3)
+assert square.cache_info()["hits"] == 1
+```
+
+Override a default when your backend can do better:
+
+| Override | When |
+|---|---|
+| `peek_metadata(key)` | `get()` records an access (a use count, a last-used time). `explain()` reads through this and must change nothing. |
+| `entry_count()` | You can count entries without reading them. The default reads every entry's metadata, and `%cash_on` calls it each time it runs. |
+| `local_dir` (property) | Entries live in a local directory; cash keeps its per-function records beside them. |
+| `default_ttl` (property) | Your backend takes a default TTL. Return it here; cash reads it only through this property. |
+| `shutdown()` | You write in the background; wait for the writes here. |
+
+Class attributes: `source_label` names the tier where an entry says where it
+came from (`RAM`, `DISK`); `cost_kind` is how the cost model predicts restore
+times from it (`"ram"`, `"disk"`, `"redis"` or `"s3"`; default `"disk"`);
+`max_size_bytes` is the largest value a `TieredBackend` copies into it
+(`None`: any size).
 
 ::: cash.backends.CacheBackend
     options:
@@ -68,139 +97,44 @@ disk for DataFrames), see the `Serializer` hierarchy and the
         - clear
         - list_entries
         - entry_count
-        - cleanup_expired
+        - peek_metadata
         - get_metadata
+        - cleanup_expired
         - tier_labels
         - lock
         - shutdown
 
----
+## Metadata
 
-### The metadata channel is an opaque dict
-
-A backend's `metadata` parameter and each `list_entries` row are a plain
-`MetadataDict = dict[str, Any]`. **Inside a backend, treat it as opaque:**
-round-trip whatever you're given, use `metadata.get(key)` / presence
-checks (`'x' not in metadata`) rather than direct subscript, and never
-assume a field exists — not every producer populates every field.
-
-The typed `CacheMetadata` dataclass (and the notebook layer's
-`StatementCacheMetadata`) is the *cash-layer edge* view, **not** something
-backends ever receive. Producers build one and call `.to_dict()` just
-before `set()`; consumers call `from_dict()` on what `get()` returns. The
-channel is polymorphic — both dataclass shapes plus backend-private keys
-flow through the same dict. See [Where your cache lives](../how-it-works/storage.md)
-for the full rationale.
-
-Two wire-contract rules follow from this and matter to backend authors:
-
-- **`to_dict()` omits `None` fields.** An *unset* field is *absent* from
-  the dict, not present-with-`None`. This is load-bearing for `default_ttl`
-  (below): read ttl as `metadata.get('ttl', self._default_ttl)` and treat a
-  **missing** `ttl` key as "apply my default." A decorator cache created
-  without an explicit `ttl` omits the key entirely, so your `default_ttl`
-  takes effect.
-- **`from_dict()` is lenient.** Backend-private keys you inject (e.g.
-  `FileBackend`'s `compressed`) and stale keys from older versions are
-  ignored at the cash edge, so you can stamp whatever bookkeeping you need.
+A backend receives and returns metadata as a plain `MetadataDict`
+(`dict[str, Any]`). `CacheMetadata` is the typed view cash builds before a
+write and reads after a read. Its `to_dict()` leaves out unset fields, so an
+entry written without a `ttl` has no `ttl` key. `EntryMetadata` lists every
+key the bundled backends read or write.
 
 ::: cash.backends.CacheMetadata
-
-### Standard fields
-
-| Field | Type | When populated |
-|---|---|---|
-| `key` | `str` | Always (stamped by `_init_metadata`) |
-| `created_at` | `float` | Always (unix ts) |
-| `last_access` | `float` | Updated by backends that track LRU |
-| `access_count` | `int` | Updated by backends that track frequency |
-| `size` | `int` | Backends that track size (`FileBackend`, `SQLite`, RAM with `max_size_bytes`) |
-| `storage` | `list[str]` | Tier labels for the entry (e.g. `["RAM", "DISK"]`) |
-| `ttl` | `int` | Set by `Cash.cache(ttl=...)`; **absent** when unset, which is how backend `default_ttl` applies |
-| `execution_time` | `float` | Set by the decorator; used by `TieredBackend`'s persistence policy |
-| `outputs` | `list[str]` | Set by the notebook statement processor |
-| `lineage_hash` | `str` | Set by the notebook statement processor |
-| `source` | `str` | Per-backend identifier (e.g. `'RAM'`, `'disk'`) |
-
-Cash itself adds a few decorator-specific fields too — `serializer_cls`,
-`args_hash`, `state_hash`, `func_name`, `auto_file_deps`,
-`iterator_storage`, `n_chunks`. These are internal: a custom backend
-should round-trip whatever metadata it's given without inspecting it.
-
-`cash.backends.EntryMetadata` lists every key the bundled backends read or
-write, with what each means -- among them the persistence inputs
-(`force_persist`, `cost_model_family`, `referenced`, ...) a `TieredBackend`
-decides by. A test keeps the bundled backends from reading any key that list
-does not document.
-
----
-
-Per-backend background-write scheduler. Used by the bundled
-`FileBackend`, `SQLiteBackend`, `RedisBackend`, and `S3Backend` so a
-slow `set()` doesn't block the user's calling thread.
-
-::: cash.backends._writes.PendingWrites
     options:
-      members:
-        - submit
-        - wait
-        - drain
-        - wait_all
-        - pending_count
-        - shutdown
+      members: false
 
-### Usage pattern
+## Serializers
 
-The recommended pattern in a custom backend:
+A backend either uses the `serializer` that `set()` is given, as the bundled
+ones do, or always uses one of its own. `get_serializer(value)` picks Parquet
+for a pandas DataFrame when pyarrow or fastparquet is installed, and pickle
+otherwise. Loading a pickle runs code; see [Security](backends.md#security).
 
-```python
-from cash.backends import CacheBackend
-from cash.backends._writes import PendingWrites
-
-class MyBackend(CacheBackend):
-    def __init__(self):
-        self._writes = PendingWrites()
-
-    def set(self, key, value, metadata=None, serializer=None):
-        # Serialise on the calling thread — must NOT happen in the
-        # worker, or post-set() mutation can corrupt the cached copy.
-        payload = serializer.serialize(value) if serializer else pickle.dumps(value)
-
-        # Dispatch the actual write to the background.
-        self._writes.submit(key, self._write_payload, key, payload, metadata)
-
-    def get(self, key):
-        # Wait for any pending write for THIS key before reading,
-        # so we observe the latest value.
-        self._writes.wait(key)
-        ...
-
-    def delete(self, key):
-        self._writes.drain(key)  # discard any pending write for key
-        ...
-
-    def shutdown(self):
-        self._writes.shutdown(wait=True)
-```
-
----
-
-Cash ships three serialisers and a dispatch function. Custom backends
-can either accept a `serializer` parameter (the bundled approach — the
-caller picks) or hard-wire one (e.g. a Parquet-only backend).
-
-::: cash.backends.serialization.Serializer
+::: cash.backends.Serializer
     options:
       members:
         - serialize
         - deserialize
 
-::: cash.backends.serialization.PickleSerializer
+::: cash.backends.PickleSerializer
     options:
       members: false
 
-::: cash.backends.serialization.ParquetSerializer
+::: cash.backends.ParquetSerializer
     options:
       members: false
 
-::: cash.backends.serialization.get_serializer
+::: cash.backends.get_serializer
