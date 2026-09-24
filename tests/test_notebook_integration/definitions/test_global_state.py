@@ -1,10 +1,38 @@
-"""Globals, nonlocals, scopes and shadowing across cells."""
+"""Globals, counters, registries, singletons, scopes and shadowing across cells."""
 
 import textwrap
 
 import pytest
 
 pytestmark = [pytest.mark.stress]
+
+
+# Global state & side-effect interaction tests.
+#
+# Tests that exercise global variables, print statements, accumulation
+# patterns, and other side-effecting code with cell edits.
+@pytest.mark.core
+@pytest.mark.timeout(30)
+class TestGlobalStateEdits:
+    """Global state manipulation + cell edits."""
+
+    def test_global_dict_update(self, nb_runner):
+        """Update a global dict across cells, edit one update."""
+        nb_runner.create_notebook(
+            [
+                "config = {}",
+                "config['a'] = 1",
+                "config['b'] = 2",
+                "total = config['a'] + config['b']\nprint(f'total = {total}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "total = 3" in nb_runner.get_output(4)
+
+        nb_runner.set_cell_source(2, "config['a'] = 100")
+        nb_runner.run_all()
+        assert "total = 102" in nb_runner.get_output(4)
 
 
 # Global variable and side-effect interaction tests.
@@ -49,6 +77,47 @@ class TestGlobalCounterEdits:
         nb_runner.set_cell_source(1, "total = 100  # starting value changed")
         nb_runner.run_all()
         assert "total = 200" in nb_runner.get_output(2)
+
+
+@pytest.mark.core
+@pytest.mark.timeout(30)
+class TestCounterPatterns:
+    """Counter / running total patterns + edits."""
+
+    def test_running_total(self, nb_runner):
+        """Running total across cells, edit one addition."""
+        nb_runner.create_notebook(
+            [
+                "total = 0",
+                "total = total + 10  # first add",
+                "total = total + 20  # second add",
+                "total = total + 30  # third add",
+                "print(f'total = {total}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "total = 60" in nb_runner.get_output(5)
+
+        nb_runner.set_cell_source(3, "total = total + 200  # second add (boosted)")
+        nb_runner.run_all()
+        assert "total = 240" in nb_runner.get_output(5)
+
+    def test_flag_based_flow(self, nb_runner):
+        """Flag variable controls flow, edit the flag."""
+        nb_runner.create_notebook(
+            [
+                "debug = True",
+                "label = str(debug)\nprint(f'label = {label}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "label = True" in nb_runner.get_output(2)
+
+        nb_runner.set_cell_source(1, "debug = False")
+        nb_runner.run_all()
+        assert "label = False" in nb_runner.get_output(2)
 
 
 @pytest.mark.mutations
@@ -99,191 +168,107 @@ class TestAccumulatorEdits:
         assert "'A': 10" in out
 
 
-@pytest.mark.mutations
+# Global registry and config patterns interaction tests.
+# Tests editing shared state objects that downstream cells depend on.
+@pytest.mark.integration
 @pytest.mark.timeout(90)
-class TestSideEffectEdits:
-    """Editing cells with file I/O side effects."""
+class TestGlobalRegistryInteraction:
+    """Test global registry/config patterns with cache invalidation."""
 
-    def test_file_write_edit_content(self, nb_runner, tmp_path):
-        """Edit what gets written to a file."""
-        out_path = str(tmp_path / "output.txt").replace("\\", "/")
+    def test_global_registry_edit(self, nb_runner):
+        """Editing a global list should propagate to downstream consumers."""
         nb_runner.create_notebook(
             [
-                f"path = '{out_path}'",
-                "with open(path, 'w') as f:\n    f.write('hello')",
-                "with open(path) as f:\n    content = f.read()\nprint(f'content = {content}')",
+                "REGISTRY = ['alpha', 'beta']",
+                "count = len(REGISTRY)\nnames = ', '.join(REGISTRY)",
+                "print(f'count={count},names={names}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "content = hello" in nb_runner.get_output(3)
+        out = nb_runner.get_output(3)
+        assert "count=2" in out
+        assert "names=alpha, beta" in out
 
-        # Edit what we write
-        nb_runner.set_cell_source(2, "with open(path, 'w') as f:\n    f.write('world')")
+        nb_runner.set_cell_source(1, "REGISTRY = ['alpha', 'beta', 'gamma', 'delta']")
         nb_runner.run_all()
-        assert "content = world" in nb_runner.get_output(3)
+        out = nb_runner.get_output(3)
+        assert "count=4" in out
 
-    def test_file_write_edit_path(self, nb_runner, tmp_path):
-        """Edit the output file path."""
-        path1 = str(tmp_path / "out1.txt").replace("\\", "/")
-        path2 = str(tmp_path / "out2.txt").replace("\\", "/")
+    def test_config_class_edit(self, nb_runner):
+        """Editing a config class should propagate."""
         nb_runner.create_notebook(
             [
-                f"path = '{path1}'",
-                "with open(path, 'w') as f:\n    f.write('data1')",
-                "with open(path) as f:\n    content = f.read()\nprint(f'content = {content}')",
+                (
+                    "class Config:\n"
+                    "    def __init__(self):\n"
+                    "        self.debug = False\n"
+                    "        self.level = 1\n"
+                    "cfg = Config()"
+                ),
+                "mode = 'debug' if cfg.debug else 'prod'\nlvl = cfg.level",
+                "info = f'{mode}:L{lvl}'",
+                "print(f'info={info}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "content = data1" in nb_runner.get_output(3)
+        out = nb_runner.get_output(4)
+        assert "info=prod:L1" in out
 
-        # Switch path
-        nb_runner.set_cell_source(1, f"path = '{path2}'")
-        nb_runner.set_cell_source(2, "with open(path, 'w') as f:\n    f.write('data2')")
         nb_runner.set_cell_source(
-            3,
-            "with open(path) as f:\n    content = f.read()\nprint(f'content = {content}')",
+            1,
+            (
+                "class Config:\n"
+                "    def __init__(self):\n"
+                "        self.debug = True\n"
+                "        self.level = 5\n"
+                "cfg = Config()"
+            ),
         )
         nb_runner.run_all()
-        assert "content = data2" in nb_runner.get_output(3)
+        out = nb_runner.get_output(4)
+        assert "info=debug:L5" in out
 
 
-# Global state & side-effect interaction tests.
-#
-# Tests that exercise global variables, print statements, accumulation
-# patterns, and other side-effecting code with cell edits.
-@pytest.mark.core
-@pytest.mark.timeout(30)
-class TestGlobalStateEdits:
-    """Global state manipulation + cell edits."""
+# Global state, singleton, registry, and mutable default argument patterns.
+# Tests tricky Python patterns that interact with caching in subtle ways.
+@pytest.mark.integration
+class TestSingletonPatterns:
+    """Test singleton-like patterns across cells."""
 
-    def test_global_dict_update(self, nb_runner):
-        """Update a global dict across cells, edit one update."""
+    def test_registry_pattern(self, nb_runner):
+        """Registry pattern: register handlers across cells."""
         nb_runner.create_notebook(
             [
-                "config = {}",
-                "config['a'] = 1",
-                "config['b'] = 2",
-                "total = config['a'] + config['b']\nprint(f'total = {total}')",
+                textwrap.dedent("""\
+                _registry = {}
+                def register(name):
+                    def decorator(fn):
+                        _registry[name] = fn
+                        return fn
+                    return decorator
+            """),
+                textwrap.dedent("""\
+                @register('add')
+                def add(a, b):
+                    return a + b
+
+                @register('mul')
+                def mul(a, b):
+                    return a * b
+            """),
+                textwrap.dedent("""\
+                result = _registry['add'](3, 4)
+                print(f"add={result} registered={sorted(_registry.keys())}")
+            """),
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        assert "total = 3" in nb_runner.get_output(4)
-
-        nb_runner.set_cell_source(2, "config['a'] = 100")
-        nb_runner.run_all()
-        assert "total = 102" in nb_runner.get_output(4)
-
-
-@pytest.mark.core
-@pytest.mark.timeout(30)
-class TestPrintOutputEdits:
-    """Print output + cell edits."""
-
-    def test_edit_print_format(self, nb_runner):
-        """Edit the format of a print statement."""
-        nb_runner.create_notebook(
-            [
-                "x = 42",
-                "print(f'The answer is {x}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "The answer is 42" in nb_runner.get_output(2)
-
-        nb_runner.set_cell_source(2, "print(f'x = {x}')")
-        nb_runner.run_all()
-        assert "x = 42" in nb_runner.get_output(2)
-
-    def test_multiple_prints_edit(self, nb_runner):
-        """Cell with multiple prints, edit one value."""
-        nb_runner.create_notebook(
-            [
-                "a = 1\nb = 2\nc = 3",
-                "print(f'a={a}')\nprint(f'b={b}')\nprint(f'c={c}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        output = nb_runner.get_output(2)
-        assert "a=1" in output
-        assert "b=2" in output
-        assert "c=3" in output
-
-        nb_runner.set_cell_source(1, "a = 10\nb = 20\nc = 30")
-        nb_runner.run_all()
-        output2 = nb_runner.get_output(2)
-        assert "a=10" in output2
-        assert "b=20" in output2
-        assert "c=30" in output2
-
-
-@pytest.mark.core
-@pytest.mark.timeout(30)
-class TestCounterPatterns:
-    """Counter / running total patterns + edits."""
-
-    def test_running_total(self, nb_runner):
-        """Running total across cells, edit one addition."""
-        nb_runner.create_notebook(
-            [
-                "total = 0",
-                "total = total + 10  # first add",
-                "total = total + 20  # second add",
-                "total = total + 30  # third add",
-                "print(f'total = {total}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "total = 60" in nb_runner.get_output(5)
-
-        nb_runner.set_cell_source(3, "total = total + 200  # second add (boosted)")
-        nb_runner.run_all()
-        assert "total = 240" in nb_runner.get_output(5)
-
-    def test_flag_based_flow(self, nb_runner):
-        """Flag variable controls flow, edit the flag."""
-        nb_runner.create_notebook(
-            [
-                "debug = True",
-                "label = str(debug)\nprint(f'label = {label}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "label = True" in nb_runner.get_output(2)
-
-        nb_runner.set_cell_source(1, "debug = False")
-        nb_runner.run_all()
-        assert "label = False" in nb_runner.get_output(2)
-
-
-@pytest.mark.core
-@pytest.mark.timeout(30)
-class TestClosureEdits:
-    """Closure/factory patterns + cell edits."""
-
-    def test_edit_closure_implementation(self, nb_runner):
-        """Edit the closure implementation itself."""
-        nb_runner.create_notebook(
-            [
-                "def make_op(n):\n    def op(x):\n        return x + n\n    return op",
-                "op = make_op(3)",
-                "result = op(10)\nprint(f'result = {result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result = 13" in nb_runner.get_output(3)
-
-        # Change closure to multiply
-        nb_runner.set_cell_source(1, "def make_op(n):\n    def op(x):\n        return x * n\n    return op")
-        nb_runner.run_all()
-        assert "result = 30" in nb_runner.get_output(3)
+        output = nb_runner.get_output(3)
+        assert "add=7" in output
+        assert "['add', 'mul']" in output
 
 
 # Global/nonlocal scope interaction patterns.
@@ -394,6 +379,75 @@ class TestGlobalNonlocalScope:
         assert "results=[10, 30, 60]" in nb_runner.get_output(2)
 
 
+# Module-level vs local scope interaction tests.
+# Tests that editing module-level constants/variables and local function
+# variables properly invalidates downstream cells.
+@pytest.mark.integration
+@pytest.mark.timeout(90)
+class TestModuleLocalScopeInteraction:
+    """Test module vs local scope patterns with cache invalidation."""
+
+    def test_module_constant_edit(self, nb_runner):
+        """Editing a module-level constant used inside a function should propagate."""
+        nb_runner.create_notebook(
+            [
+                "MULTIPLIER = 10",
+                "def scale(x):\n    return x * MULTIPLIER",
+                "result = scale(5)",
+                "print(f'result={result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(4)
+        assert "result=50" in out
+
+        nb_runner.set_cell_source(1, "MULTIPLIER = 100")
+        nb_runner.run_all()
+        out = nb_runner.get_output(4)
+        assert "result=500" in out
+
+    def test_global_dict_edit(self, nb_runner):
+        """Editing a global config dict used in functions should propagate."""
+        nb_runner.create_notebook(
+            [
+                "CONFIG = {'tax_rate': 0.1, 'discount': 0.05}",
+                "def compute_price(base):\n    tax = base * CONFIG['tax_rate']\n    disc = base * CONFIG['discount']\n    return base + tax - disc",
+                "price = compute_price(100)",
+                "print(f'price={price}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(4)
+        assert "price=105.0" in out
+
+        nb_runner.set_cell_source(1, "CONFIG = {'tax_rate': 0.2, 'discount': 0.1}")
+        nb_runner.run_all()
+        out = nb_runner.get_output(4)
+        assert "price=110.0" in out
+
+    def test_nested_function_scope_edit(self, nb_runner):
+        """Editing a closure variable captured from outer scope should propagate."""
+        nb_runner.create_notebook(
+            [
+                "base_offset = 5",
+                "def make_adder():\n    offset = base_offset\n    def add(x):\n        return x + offset\n    return add",
+                "adder = make_adder()\nresult = adder(10)",
+                "print(f'result={result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        out = nb_runner.get_output(4)
+        assert "result=15" in out
+
+        nb_runner.set_cell_source(1, "base_offset = 50")
+        nb_runner.run_all()
+        out = nb_runner.get_output(4)
+        assert "result=60" in out
+
+
 # Variable shadowing and scope interaction tests.
 #
 # Tests editing code that involves variable shadowing between
@@ -489,322 +543,51 @@ class TestVariableShadowingEdits:
         assert "result = changed-changed" in out2
 
 
-# Module-level vs local scope interaction tests.
-# Tests that editing module-level constants/variables and local function
-# variables properly invalidates downstream cells.
-@pytest.mark.integration
+@pytest.mark.mutations
 @pytest.mark.timeout(90)
-class TestModuleLocalScopeInteraction:
-    """Test module vs local scope patterns with cache invalidation."""
+class TestSideEffectEdits:
+    """Editing cells with file I/O side effects."""
 
-    def test_module_constant_edit(self, nb_runner):
-        """Editing a module-level constant used inside a function should propagate."""
+    def test_file_write_edit_content(self, nb_runner, tmp_path):
+        """Edit what gets written to a file."""
+        out_path = str(tmp_path / "output.txt").replace("\\", "/")
         nb_runner.create_notebook(
             [
-                "MULTIPLIER = 10",
-                "def scale(x):\n    return x * MULTIPLIER",
-                "result = scale(5)",
-                "print(f'result={result}')",
+                f"path = '{out_path}'",
+                "with open(path, 'w') as f:\n    f.write('hello')",
+                "with open(path) as f:\n    content = f.read()\nprint(f'content = {content}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "result=50" in out
+        assert "content = hello" in nb_runner.get_output(3)
 
-        nb_runner.set_cell_source(1, "MULTIPLIER = 100")
+        # Edit what we write
+        nb_runner.set_cell_source(2, "with open(path, 'w') as f:\n    f.write('world')")
         nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "result=500" in out
+        assert "content = world" in nb_runner.get_output(3)
 
-    def test_global_dict_edit(self, nb_runner):
-        """Editing a global config dict used in functions should propagate."""
+    def test_file_write_edit_path(self, nb_runner, tmp_path):
+        """Edit the output file path."""
+        path1 = str(tmp_path / "out1.txt").replace("\\", "/")
+        path2 = str(tmp_path / "out2.txt").replace("\\", "/")
         nb_runner.create_notebook(
             [
-                "CONFIG = {'tax_rate': 0.1, 'discount': 0.05}",
-                "def compute_price(base):\n    tax = base * CONFIG['tax_rate']\n    disc = base * CONFIG['discount']\n    return base + tax - disc",
-                "price = compute_price(100)",
-                "print(f'price={price}')",
+                f"path = '{path1}'",
+                "with open(path, 'w') as f:\n    f.write('data1')",
+                "with open(path) as f:\n    content = f.read()\nprint(f'content = {content}')",
             ]
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "price=105.0" in out
+        assert "content = data1" in nb_runner.get_output(3)
 
-        nb_runner.set_cell_source(1, "CONFIG = {'tax_rate': 0.2, 'discount': 0.1}")
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "price=110.0" in out
-
-    def test_nested_function_scope_edit(self, nb_runner):
-        """Editing a closure variable captured from outer scope should propagate."""
-        nb_runner.create_notebook(
-            [
-                "base_offset = 5",
-                "def make_adder():\n    offset = base_offset\n    def add(x):\n        return x + offset\n    return add",
-                "adder = make_adder()\nresult = adder(10)",
-                "print(f'result={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "result=15" in out
-
-        nb_runner.set_cell_source(1, "base_offset = 50")
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "result=60" in out
-
-
-# Variable shadowing and scope interaction tests.
-#
-# Tests where variables are overwritten in later cells,
-# edits change which version of a variable is used, and
-# scoping rules interact with caching.
-@pytest.mark.upstream
-@pytest.mark.timeout(45)
-class TestVariableOverwriting:
-    """Variable overwritten in subsequent cells."""
-
-    def test_overwrite_then_edit_first_def(self, nb_runner):
-        """Variable defined twice, edit first definition."""
-        nb_runner.create_notebook(
-            [
-                "x = 10",
-                "x = x + 5",  # now x = 15
-                "result = x * 2\nprint(f'result = {result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result = 30" in nb_runner.get_output(3)
-
-        # Edit first definition
-        nb_runner.set_cell_source(1, "x = 100")
-        nb_runner.run_all()
-        assert "result = 210" in nb_runner.get_output(3)
-
-    def test_three_overwrites_edit_middle(self, nb_runner):
-        """Variable overwritten 3 times, edit middle one."""
-        nb_runner.create_notebook(
-            [
-                "val = 1",
-                "val = val + 10",
-                "val = val * 2",
-                "print(f'val = {val}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        # val = (1+10)*2 = 22
-        assert "val = 22" in nb_runner.get_output(4)
-
-        # Edit middle
-        nb_runner.set_cell_source(2, "val = val + 100")
-        nb_runner.run_all()
-        # val = (1+100)*2 = 202
-        assert "val = 202" in nb_runner.get_output(4)
-
-
-@pytest.mark.upstream
-@pytest.mark.timeout(45)
-class TestMultipleVariables:
-    """Multiple variables with interleaved definitions."""
-
-    def test_introduce_new_variable(self, nb_runner):
-        """Introduce a new variable mid-notebook."""
-        nb_runner.create_notebook(
-            [
-                "x = 5",
-                "result = x * 2\nprint(f'result = {result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result = 10" in nb_runner.get_output(2)
-
-        # Add a multiplier variable
-        nb_runner.set_cell_source(1, "x = 5\nmultiplier = 10")
-        nb_runner.set_cell_source(2, "result = x * multiplier\nprint(f'result = {result}')")
-        nb_runner.run_all()
-        assert "result = 50" in nb_runner.get_output(2)
-
-
-# Global registry and config patterns interaction tests.
-# Tests editing shared state objects that downstream cells depend on.
-@pytest.mark.integration
-@pytest.mark.timeout(90)
-class TestGlobalRegistryInteraction:
-    """Test global registry/config patterns with cache invalidation."""
-
-    def test_global_registry_edit(self, nb_runner):
-        """Editing a global list should propagate to downstream consumers."""
-        nb_runner.create_notebook(
-            [
-                "REGISTRY = ['alpha', 'beta']",
-                "count = len(REGISTRY)\nnames = ', '.join(REGISTRY)",
-                "print(f'count={count},names={names}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(3)
-        assert "count=2" in out
-        assert "names=alpha, beta" in out
-
-        nb_runner.set_cell_source(1, "REGISTRY = ['alpha', 'beta', 'gamma', 'delta']")
-        nb_runner.run_all()
-        out = nb_runner.get_output(3)
-        assert "count=4" in out
-
-    def test_config_class_edit(self, nb_runner):
-        """Editing a config class should propagate."""
-        nb_runner.create_notebook(
-            [
-                (
-                    "class Config:\n"
-                    "    def __init__(self):\n"
-                    "        self.debug = False\n"
-                    "        self.level = 1\n"
-                    "cfg = Config()"
-                ),
-                "mode = 'debug' if cfg.debug else 'prod'\nlvl = cfg.level",
-                "info = f'{mode}:L{lvl}'",
-                "print(f'info={info}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "info=prod:L1" in out
-
+        # Switch path
+        nb_runner.set_cell_source(1, f"path = '{path2}'")
+        nb_runner.set_cell_source(2, "with open(path, 'w') as f:\n    f.write('data2')")
         nb_runner.set_cell_source(
-            1,
-            (
-                "class Config:\n"
-                "    def __init__(self):\n"
-                "        self.debug = True\n"
-                "        self.level = 5\n"
-                "cfg = Config()"
-            ),
+            3,
+            "with open(path) as f:\n    content = f.read()\nprint(f'content = {content}')",
         )
         nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "info=debug:L5" in out
-
-
-# Global state, singleton, registry, and mutable default argument patterns.
-# Tests tricky Python patterns that interact with caching in subtle ways.
-@pytest.mark.integration
-class TestSingletonPatterns:
-    """Test singleton-like patterns across cells."""
-
-    def test_registry_pattern(self, nb_runner):
-        """Registry pattern: register handlers across cells."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                _registry = {}
-                def register(name):
-                    def decorator(fn):
-                        _registry[name] = fn
-                        return fn
-                    return decorator
-            """),
-                textwrap.dedent("""\
-                @register('add')
-                def add(a, b):
-                    return a + b
-
-                @register('mul')
-                def mul(a, b):
-                    return a * b
-            """),
-                textwrap.dedent("""\
-                result = _registry['add'](3, 4)
-                print(f"add={result} registered={sorted(_registry.keys())}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        output = nb_runner.get_output(3)
-        assert "add=7" in output
-        assert "['add', 'mul']" in output
-
-
-@pytest.mark.integration
-class TestMutableDefaultArguments:
-    """Test caching with mutable default arguments."""
-
-    def test_mutable_default_list(self, nb_runner):
-        """Classic mutable default argument gotcha."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                def append_to(item, lst=None):
-                    if lst is None:
-                        lst = []
-                    lst.append(item)
-                    return lst
-            """),
-                textwrap.dedent("""\
-                r1 = append_to(1)
-                r2 = append_to(2)
-                r3 = append_to(3, [10, 20])
-                print(f"r1={r1} r2={r2} r3={r3}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        output = nb_runner.get_output(2)
-        assert "r1=[1]" in output
-        assert "r2=[2]" in output
-        assert "r3=[10, 20, 3]" in output
-
-
-# Tricky multi-cell variable shadowing, reassignment, deletion,
-# and scope interactions that stress the lineage tracker.
-@pytest.mark.integration
-class TestConditionalAssignment:
-    """Test conditional assignment patterns."""
-
-    def test_ternary_expression(self, nb_runner):
-        """Ternary expression across cells."""
-        nb_runner.create_notebook(
-            [
-                "threshold = 50",
-                "score = 75",
-                textwrap.dedent("""\
-                status = 'pass' if score >= threshold else 'fail'
-                print(status)
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "pass" in nb_runner.get_output(3)
-
-        nb_runner.set_cell_source(2, "score = 30")
-        nb_runner.run_all()
-        assert "fail" in nb_runner.get_output(3)
-
-    def test_or_default_pattern(self, nb_runner):
-        """x = val or default pattern."""
-        nb_runner.create_notebook(
-            [
-                "user_input = ''",
-                "name = user_input or 'Anonymous'",
-                "print(name)",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "Anonymous" in nb_runner.get_output(3)
-
-        nb_runner.set_cell_source(1, "user_input = 'Alice'")
-        nb_runner.run_all()
-        assert "Alice" in nb_runner.get_output(3)
+        assert "content = data2" in nb_runner.get_output(3)
