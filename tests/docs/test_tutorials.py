@@ -677,14 +677,24 @@ def test_doc_page(doc_path: Path, docs_coverage_recorder) -> None:
             "skipped_fences": result.skipped_fences,
         }
     )
-    # Pages that are entirely nb-cell / IPython-magic / illustrative-only
+    # Pages that are entirely nb-cell / IPython-magic / illustrative-only, or
+    # wait on a page edit (PENDING_FENCES),
     # may have 0 tested fences, which is expected (not a failure).
     auto_skips = sum(
         1
         for _, reason in result.skipped_fences
         if any(
             kw in reason.lower()
-            for kw in ("nb-cell", "ipython", "magic command", "kernel", "magic", "illustrative", "reference")
+            for kw in (
+                "nb-cell",
+                "ipython",
+                "magic command",
+                "kernel",
+                "magic",
+                "illustrative",
+                "reference",
+                "pending page edit",
+            )
         )
     )
     non_auto_total = result.total_fences - auto_skips

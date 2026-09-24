@@ -21,8 +21,10 @@ every push and pull request.
 (except `docs/superpowers/`), under `examples/`, and at the repository root
 that contains a ` ```python ` fence. For each page it:
 
-1. extracts the fences whose line starts with ` ```python `, in order;
-2. drops the fences marked to skip, joins the rest into one script and runs it
+1. extracts every ` ```python ` fence in order, including one indented in a
+   content tab, admonition or list item (its body is dedented);
+2. drops the fences marked to skip and those in `_harness.PENDING_FENCES`
+   (below), joins the rest into one script and runs it
    in a fresh namespace (top-level `await` works; `tests/docs/conftest.py`
    supplies SDK mocks);
 3. finds the `@cash.cache` functions and works out the hits and misses the
@@ -30,9 +32,9 @@ that contains a ` ```python ` fence. For each page it:
    from comments such as `# First call: cache miss` or `# cache hit`;
 4. compares that with each function's `cache_info()`.
 
-A fence indented inside a content tab (`=== "Decorator"`) or an admonition
-is not extracted, so it is not run. Keep an example that must be tested at
-the top level, or test it by hand.
+A page with a `{ .nb-cell }` fence or a `%magic` line runs instead in an
+in-process IPython shell with cash's magics loaded, one fence per cell, as a
+notebook would.
 
 ### Annotations
 
@@ -51,6 +53,28 @@ the run's summary.
 Run an example yourself before you paste it, and write the hit and miss
 comments next to the calls they describe.
 
+### Checking a badge
+
+`<!-- test:expect-badge first=EXECUTED rerun=CACHED -->` before a notebook
+cell asserts the badge on its first run and, with `rerun=`, on an immediate
+second run (CACHED, EXECUTED, MIXED or SKIPPED; a bare word means `first=`).
+Put it at the top of a stack of annotations: the other readers stop at a
+comment they do not know. The docs conftest caps `time.sleep` at 1 ms, so
+assert `rerun=CACHED` only on real compute or a `# @cash:persist` statement.
+
+`CASH_DOCS_RERUN_NB_CELLS=1` reruns every `{ .nb-cell }` fence that is not
+only imports and definitions, and fails when the rerun reads EXECUTED. It is
+opt-in while a few cells still fail it; mark a cell that really runs again
+with `<!-- test:expect-badge rerun=EXECUTED -->`.
+
+### Fences waiting on a page edit
+
+`_harness.PENDING_FENCES` lists fences that do not run as written, by page
+and the start of the fence's code, each with a reason. They are skipped until
+the page is fixed; then delete the entry. `test_harness.py` fails on an entry
+that matches no fence, so the list only shrinks. Do not add to it: fix the
+page, or give the fence a `test:skip` with a reason.
+
 ## Other checks
 
 - **Page checks** read the pages without running them: `test_doc_claims.py`
@@ -62,6 +86,12 @@ comments next to the calls they describe.
   `test_badge_images_fresh.py`, `test_brand_assets_fresh.py` and
   `test_try_cash_notebooks_in_sync.py` fail when a committed file no longer
   matches the script that builds it, and name the script to re-run.
+- **Example notebooks**: `test_example_notebooks.py` checks every notebook in
+  `examples/` for the standard setup cell and none of `%%time`,
+  `%load_ext cash`, debug toggles or mtime sleeps, and that the examples'
+  links into the docs resolve. With `CASH_RUN_EXAMPLE_NOTEBOOKS=1` (the
+  `example-notebooks` CI job) it also runs the allow-listed notebooks top to
+  bottom in real kernels, offline.
 - **Tables tied to data**: `test_benchmarks_table_matches_frozen_data.py`
   (the restore table in `docs/benchmarks.md`) and
   `test_cacheability_checker_matches.py` (the table in

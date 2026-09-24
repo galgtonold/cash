@@ -1,5 +1,6 @@
-# Binder environment for examples/try_cash_binder.ipynb (the "Try cash live" demo).
-# cash-lib[pandas] pulls cash plus pandas (and numpy transitively) + pyarrow;
-# matplotlib is used by the plotting cell and isn't part of any cash extra.
-cash-lib[pandas]
-matplotlib
+# Binder environment for examples/try_cash_binder.ipynb (the live feature tour).
+# cash-lib[pandas] pulls cash plus pandas, numpy and pyarrow. The pin is the
+# release this checkout describes (tests/docs/test_try_cash_notebooks_in_sync.py
+# checks it against src/cash/__init__.py), so the tour runs against the
+# version it was written for.
+cash-lib[pandas]~=0.11.0

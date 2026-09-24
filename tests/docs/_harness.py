@@ -14,9 +14,11 @@ Supports two execution paths:
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import linecache
 import operator
+import os
 import re
 import warnings
 from ast import PyCF_ALLOW_TOP_LEVEL_AWAIT
@@ -40,11 +42,10 @@ from tests.docs._annotations import (
 _ENV_ARTIFACT_WARNING_NAMES: frozenset[str] = frozenset({"CashNotebookDiscoveryWarning"})
 
 
-_FENCE_RE = re.compile(
-    r"^```python(?P<attrs>(?:\s+\{[^}]*\})?)\s*$"
-    r"(?P<body>.*?)^```\s*$",
-    re.MULTILINE | re.DOTALL,
-)
+# An opening ```python line, at any indent: fences nested in a content tab
+# (``=== "Notebook"``), an admonition or a list item are indented, and they
+# are as much a part of the page as the ones at column 0.
+_FENCE_OPEN_RE = re.compile(r"^(?P<indent>[ \t]*)```python(?P<attrs>(?:\s+\{[^}]*\})?)\s*$")
 
 
 @dataclass
@@ -59,14 +60,109 @@ class Fence:
     skip_reason: str | None = None
     expect_raises: bool = False
     expect_warning: bool = False
+    #: From ``<!-- test:expect-badge ... -->``: the badge the cell must show on
+    #: its first run (``"first"``) and when run again at once (``"rerun"``).
+    expect_badge: dict[str, str] = field(default_factory=dict)
 
     @property
     def is_nb_cell(self) -> bool:
         return ".nb-cell" in self.attrs
 
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+#: Fences that do not run as written and wait on an edit to their page (a
+#: setup line, or a ``test:skip`` with a reason). Until then the harness skips
+#: them with the reason given here. Keyed by the page's repository path and by
+#: the start of the fence's code, so an edit elsewhere on the page does not
+#: move the entry. ``test_harness.py`` fails on an entry that matches no fence,
+#: so the list only shrinks: when a page is fixed, delete its entries.
+PENDING_FENCES: dict[str, dict[str, str]] = {
+    "CHANGELOG.md": {
+        'if getattr(w.message, "code", None)': "fragment: w is a caught warning the entry does not create",
+    },
+    "docs/decorator.md": {
+        "%cash_stats": "a notebook magic on a decorator page: it sends the whole page through IPython",
+    },
+    "docs/for-coding-agents.md": {
+        "@cash.cache(assume_safe=True)": "fragment: needs `import cash` and a scikit-learn import",
+    },
+    "docs/tutorials/feature-guides/async-caching.md": {
+        "@cash.cache\nasync def make_iter": "top-level await: the page's later asyncio.run() then runs inside a loop",
+    },
+    "docs/tutorials/feature-guides/controlling-cache-behavior.md": {
+        "# @cash:persist\n# @cash:ttl=86400": "fragment: train_lightgbm, X and y are not defined",
+    },
+    "docs/why-cash.md": {
+        "import pickle, os": "illustrative: pd is not imported and large_file.csv does not exist",
+        "# IPython %store has no granularity": "illustrative: large_file.csv does not exist",
+        "%cash_on\n\ndf = pd.read_csv": "illustrative: large_file.csv does not exist",
+    },
+}
+
+
+def pending_reason(md_path: Path, code: str) -> str | None:
+    """The ``PENDING_FENCES`` reason for this fence, or ``None``."""
+    try:
+        rel = md_path.resolve().relative_to(_REPO_ROOT).as_posix()
+    except ValueError:
+        return None
+    body = code.lstrip("\n")
+    for prefix, reason in PENDING_FENCES.get(rel, {}).items():
+        if body.startswith(prefix):
+            return reason
+    return None
+
+
+_EXPECT_BADGE_RE = re.compile(r"<!--\s*test:expect-badge\b(?P<args>[^>]*?)\s*-->")
+BADGE_WORDS = frozenset({"CACHED", "EXECUTED", "MIXED", "SKIPPED"})
+
+
+def find_expect_badge_for_fence(lines: list[str], fence_start_line: int) -> dict[str, str]:
+    """Read a ``<!-- test:expect-badge ... -->`` above the fence at *fence_start_line*.
+
+    ``<!-- test:expect-badge EXECUTED -->`` sets the first run's badge;
+    ``first=`` and ``rerun=`` name either run, e.g.
+    ``<!-- test:expect-badge first=EXECUTED rerun=CACHED -->``. The walk passes
+    blank lines and other ``test:`` annotations. The other annotation finders
+    stop at a comment they do not know, so this one goes at the top of a stack.
+    """
+    i = fence_start_line - 2
+    while i >= 0:
+        line = lines[i].strip()
+        if line == "" or (line.startswith("<!--") and "test:" in line and "test:expect-badge" not in line):
+            i -= 1
+            continue
+        m = _EXPECT_BADGE_RE.match(line)
+        if not m:
+            return {}
+        expected: dict[str, str] = {}
+        for token in m.group("args").replace(",", " ").split():
+            key, _, word = token.rpartition("=")
+            key = key or "first"
+            if key not in ("first", "rerun") or word not in BADGE_WORDS:
+                raise ValueError(
+                    f"line {i + 1}: bad test:expect-badge token {token!r}; "
+                    f"use [first=|rerun=]{{{','.join(sorted(BADGE_WORDS))}}}"
+                )
+            expected[key] = word
+        return expected
+    return {}
+
+
+def _dedent_line(line: str, indent: int) -> str:
+    """Drop up to *indent* leading whitespace characters from *line*."""
+    k = 0
+    while k < indent and k < len(line) and line[k] in " \t":
+        k += 1
+    return line[k:]
+
+
 def extract_fences(md_path: Path) -> list[Fence]:
-    """Extract every ```python ... ``` fence from a markdown file in source order."""
+    """Extract every ```python ... ``` fence from a markdown file in source order.
+
+    Indented fences count too; their body is dedented by the fence's indent.
+    """
     text = md_path.read_text(encoding="utf-8")
     fences: list[Fence] = []
     # Walk line-by-line so we get accurate line numbers.
@@ -74,29 +170,35 @@ def extract_fences(md_path: Path) -> list[Fence]:
     i = 0
     while i < len(lines):
         line = lines[i]
-        m = re.match(r"^```python(?P<attrs>(?:\s+\{[^}]*\})?)\s*$", line)
+        m = _FENCE_OPEN_RE.match(line)
         if m:
             attrs = m.group("attrs").strip()
+            indent = len(m.group("indent"))
             start_line = i + 1  # 1-based
             body_lines: list[str] = []
             j = i + 1
-            while j < len(lines) and lines[j].rstrip() != "```":
-                body_lines.append(lines[j])
+            while j < len(lines) and lines[j].strip() != "```":
+                # Remove the fence's own indent, keeping the code's indentation.
+                body_lines.append(_dedent_line(lines[j], indent))
                 j += 1
             end_line = j + 1  # 1-based line of closing ```
             skip_ann = find_skip_for_fence(lines, start_line)
             expect_raises = find_expect_raises_for_fence(lines, start_line)
             expect_warning = find_expect_warning_for_fence(lines, start_line)
+            expect_badge = find_expect_badge_for_fence(lines, start_line)
+            code = "\n".join(body_lines)
+            pending = None if skip_ann else pending_reason(md_path, code)
             fences.append(
                 Fence(
-                    code="\n".join(body_lines),
+                    code=code,
                     line_start=start_line,
                     line_end=end_line,
                     attrs=attrs,
-                    skip=skip_ann is not None,
-                    skip_reason=skip_ann.reason if skip_ann else None,
+                    skip=skip_ann is not None or pending is not None,
+                    skip_reason=skip_ann.reason if skip_ann else (f"pending page edit: {pending}" if pending else None),
                     expect_raises=expect_raises,
                     expect_warning=expect_warning,
+                    expect_badge=expect_badge,
                 )
             )
             i = j + 1
@@ -141,6 +243,10 @@ def unexercised_cached_functions(namespace: dict[str, Any]) -> list[str]:
         if stats.get("hits", 0) == 0 and stats.get("misses", 0) == 0:
             out.append(name)
     return out
+
+
+class PageBadgeError(RuntimeError):
+    """Raised when a cell's badge is not the one its ``test:expect-badge`` names."""
 
 
 class PageWarningError(RuntimeError):
@@ -209,6 +315,60 @@ def _apply_inject_comments(script: str) -> str:
     return "".join(out)
 
 
+#: Every ``{ .nb-cell }`` fence runs a second time straight after its first
+#: run, and the rerun fails when its badge says EXECUTED: a cell run twice with
+#: nothing changed must take something from the cache. A cell that really does
+#: run again says so with ``<!-- test:expect-badge rerun=EXECUTED -->``.
+#: ``CASH_DOCS_RERUN_NB_CELLS=0`` turns the rerun off, for bisecting.
+_RERUN_NB_CELLS = os.environ.get("CASH_DOCS_RERUN_NB_CELLS") == "1"
+
+# The cell statuses cash records, in the words its badge shows.
+_BADGE_OF_STATUS = {"RESTORED": "CACHED", "COMPUTED": "EXECUTED", "SKIPPED": "SKIPPED", "MIXED": "MIXED"}
+
+
+_DEFINITIONS = (ast.Import, ast.ImportFrom, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+
+
+def _only_definitions(code: str) -> bool:
+    """True for a cell of imports, defs and magics only: it runs again by design."""
+    try:
+        tree = ast.parse(_strip_magic_lines(code))
+    except SyntaxError:
+        return False
+    return all(isinstance(node, _DEFINITIONS) for node in tree.body)
+
+
+def _cell_badge(magics: Any) -> str | None:
+    """The headline of the badge for the cell that just ran, or ``None`` if cash showed none."""
+    metrics = getattr(magics, "_last_cell_metrics", None) or {}
+    status = metrics.get("status")
+    return _BADGE_OF_STATUS.get(str(status), str(status)) if status else None
+
+
+def _run_checked_cell(shell: Any, magics: Any, code: str, f: Fence, md_path: Path) -> str | None:
+    """Run one fence as a cell, fail on an error or unexpected warning, return its badge."""
+    if magics is not None:
+        # A cell cash does not handle (a magic, caching off) leaves the last
+        # cell's metrics in place; clear them so its badge reads as none.
+        magics._last_cell_metrics = {**magics._last_cell_metrics, "status": None, "statements": []}
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", CashWarning)
+        cell_result = shell.run_cell(code, store_history=False)
+
+    if cell_result.error_before_exec is not None or cell_result.error_in_exec is not None:
+        if not f.expect_raises:
+            err = cell_result.error_before_exec or cell_result.error_in_exec
+            raise PageExecutionError(f"{md_path}: cell at line {f.line_start} failed: {type(err).__name__}: {err}")
+
+    cash_warns = _cash_warnings(caught)
+    if cash_warns and not f.expect_warning:
+        raise PageWarningError(
+            f"{md_path}: cell at line {f.line_start} emitted cash "
+            f"warning(s) with no test:expect-warning annotation:\n  " + "\n  ".join(cash_warns)
+        )
+    return _cell_badge(magics)
+
+
 def _run_page_ipy(
     md_path: Path,
     fences: list[Fence],
@@ -229,6 +389,7 @@ def _run_page_ipy(
     # Register Cash's magics on the shell so %cash_on / %cash_stats / etc. work.
     # The plain-exec conftest fixture patches Cash.register_magic to a no-op,
     # so we bypass that by importing and registering directly here.
+    magics = None
     try:
         import cash as _cash_mod
         from cash.notebook.ipython.magics import CashMagics
@@ -275,35 +436,35 @@ def _run_page_ipy(
                 indented = "\n".join("    " + line for line in code.splitlines())
                 code = f"try:\n{indented}\nexcept Exception:\n    pass\n"
 
-            with warnings.catch_warnings(record=True) as caught:
-                warnings.simplefilter("always", CashWarning)
-                cell_result = shell.run_cell(code, store_history=False)
-
-            if cell_result.error_before_exec is not None or cell_result.error_in_exec is not None:
-                if not f.expect_raises:
-                    err = cell_result.error_before_exec or cell_result.error_in_exec
-                    raise PageExecutionError(
-                        f"{md_path}: cell at line {f.line_start} failed: {type(err).__name__}: {err}"
+            runs = ["first"]
+            if "rerun" in f.expect_badge or (
+                _RERUN_NB_CELLS and f.is_nb_cell and not f.expect_raises and not _only_definitions(code)
+            ):
+                runs.append("rerun")
+            for run in runs:
+                badge = _run_checked_cell(shell, magics, code, f, md_path)
+                expected = f.expect_badge.get(run)
+                if expected is None and run == "rerun" and badge == "EXECUTED":
+                    expected = "CACHED, MIXED, SKIPPED or no badge"
+                if expected is not None and badge not in expected.split(", "):
+                    raise PageBadgeError(
+                        f"{md_path}: cell at line {f.line_start}, {run} run: the badge reads {badge or 'nothing'}, "
+                        f"the page expects {expected}"
                     )
 
-            cash_warns = _cash_warnings(caught)
-            if cash_warns and not f.expect_warning:
-                raise PageWarningError(
-                    f"{md_path}: cell at line {f.line_start} emitted cash "
-                    f"warning(s) with no test:expect-warning annotation:\n  " + "\n  ".join(cash_warns)
-                )
+                # Record the (start, end) range of this run's lines in the
+                # concatenated script (used below for expect-raises exclusion).
+                # A rerun is recorded again, so claim inference counts its calls.
+                fence_lines = f.code.count("\n") + 1
+                piece_start = _running_line
+                piece_end = _running_line + fence_lines - 1
+                if f.expect_raises:
+                    expect_raises_ranges.append((piece_start, piece_end))
+                # +2 for the "\n\n" separator added by "\n\n".join below.
+                _running_line = piece_end + 2
+                tested_code_pieces.append(f.code)  # raw (pre-inject) for AST claim inference
 
             result.tested_fences += 1
-            # Record the (start, end) range of this fence's lines in the
-            # concatenated script (used below for expect-raises exclusion).
-            fence_lines = f.code.count("\n") + 1
-            piece_start = _running_line
-            piece_end = _running_line + fence_lines - 1
-            if f.expect_raises:
-                expect_raises_ranges.append((piece_start, piece_end))
-            # +2 for the "\n\n" separator added by "\n\n".join below.
-            _running_line = piece_end + 2
-            tested_code_pieces.append(f.code)  # raw (pre-inject) for AST claim inference
 
         result.namespace = dict(shell.user_ns)
 
@@ -455,9 +616,12 @@ def run_page(
         if f.is_nb_cell:
             result.skipped_fences.append((f.line_start, "nb-cell: requires IPython kernel (PR2+ scope)"))
             continue
-        pad = max(0, f.line_start - sum(p.count("\n") + 2 for p in pieces) - 1)
-        # Compute the start line of this fence's body in the assembled script.
-        # The script line numbers match md line numbers because of padding.
+        # Pad with blank lines so each body line keeps its markdown line number
+        # in the assembled script (and in tracebacks). The next piece starts on
+        # the line after ``used``; the ``try:`` of an expect-raises wrapper
+        # takes the ```python line itself.
+        used = sum(p.count("\n") + 2 for p in pieces)
+        pad = max(0, f.line_start - used - (1 if f.expect_raises else 0))
         body_start = f.line_start + 1  # first body line (after the ```python line)
         body_end = f.line_end - 1  # last body line (before the closing ```)
         if f.expect_raises:
@@ -577,9 +741,6 @@ def run_page(
             raise ClaimMismatchError("\n".join(lines))
 
     return result
-
-
-import ast
 
 
 @dataclass
