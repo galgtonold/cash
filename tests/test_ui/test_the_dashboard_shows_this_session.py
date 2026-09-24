@@ -23,6 +23,7 @@ def analytics_home(tmp_path, monkeypatch):
 
 
 def test_the_dashboard_reads_the_events_this_session_recorded(analytics_home, cash_magics, cash_instance, monkeypatch):
+    import cash.core
     import cash.ui.dashboard as dashboard
 
     for i in range(3):
@@ -32,6 +33,8 @@ def test_the_dashboard_reads_the_events_this_session_recorded(analytics_home, ca
 
     shown = []
     monkeypatch.setattr(dashboard, "HAS_WIDGETS", True)
+    # show_stats() only draws the widgets inside a kernel; this test has none.
+    monkeypatch.setattr(cash.core, "_in_kernel", lambda: True)
     monkeypatch.setattr(dashboard, "show_analytics_dashboard", lambda mgr=None: shown.append(mgr))
     cash_instance.show_stats()
 
