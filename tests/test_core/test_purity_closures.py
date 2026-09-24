@@ -115,9 +115,9 @@ def test_closure_does_not_break_module_level_helpers(analyzer):
     assert hm_quals, f"module-level helper through closure not captured: {r.helper_resolution_paths}"
 
 
-def test_closure_helper_marked_pure_short_circuits(analyzer):
+def test_closure_helper_marked_pure_is_trusted(analyzer):
     """If a closure helper carries the _cash_pure attribute, the
-    analyzer trusts it (no recursion, no issues)."""
+    analyzer reports nothing for it; its code is still keyed."""
     import cash
 
     def make():

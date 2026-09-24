@@ -146,7 +146,7 @@ def announce(text):
 receipt = announce("model trained")    # badge: NOT CACHED - Calls @stateful function
 ```
 
-<!-- claim: cash/purity.py:stateful @ee349167, cash/analysis/cacheability_decision.py:decide_cacheability @420335a6 -->
+<!-- claim: cash/purity.py:stateful @f86f4e92, cash/analysis/cacheability_decision.py:decide_cacheability @420335a6 -->
 Without the marker, a slow `announce` call is cached and a re-run skips the
 message: cash does not look inside `announce` for a chat client. Three things to
 know:

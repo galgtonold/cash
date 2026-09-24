@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import functools
 from collections.abc import Callable
 from typing import Any, TypeVar
 
@@ -26,15 +25,16 @@ def pure(func: F) -> F:
     """Promise that a function has no side effects cash needs to know about.
 
     With ``@cash.cache``, cash trusts it: a cached function that calls it
-    is not warned about it. In a notebook, a
-    statement that calls a helper that writes a file caches only when the
-    helper is marked pure. It is a promise, not a check.
+    is not warned about it. Its code is still part of that function's key,
+    so editing it recomputes the function, as editing any helper does. In a
+    notebook, a statement that calls a helper that writes a file caches only
+    when the helper is marked pure. It is a promise, not a check.
 
     Args:
         func: The function to mark.
 
     Returns:
-        A wrapper that calls ``func`` and carries the mark.
+        ``func`` itself, marked.
 
     Example::
 
@@ -43,13 +43,7 @@ def pure(func: F) -> F:
             return x + y
     """
     setattr(func, _PURE_ATTR, True)
-
-    @functools.wraps(func)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        return func(*args, **kwargs)
-
-    setattr(wrapper, _PURE_ATTR, True)
-    return wrapper  # type: ignore[return-value]  # wrapper preserves F's signature via @wraps
+    return func
 
 
 def stateful(func: F) -> F:
@@ -57,14 +51,15 @@ def stateful(func: F) -> F:
 
     With ``@cash.cache``, the function (or a cached function that calls it)
     is reported with `CashImpurityWarning`, and with ``strict=True`` it is
-    refused. In a notebook, a statement that calls it is never cached, so
-    it runs every time.
+    refused. Its code is part of a caller's key, as any helper's is. In a
+    notebook, a statement that calls it is never cached, so it runs every
+    time.
 
     Args:
         func: The function to mark.
 
     Returns:
-        A wrapper that calls ``func`` and carries the mark.
+        ``func`` itself, marked.
 
     Example::
 
@@ -74,13 +69,7 @@ def stateful(func: F) -> F:
             return model.score(data)
     """
     setattr(func, _STATEFUL_ATTR, True)
-
-    @functools.wraps(func)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        return func(*args, **kwargs)
-
-    setattr(wrapper, _STATEFUL_ATTR, True)
-    return wrapper  # type: ignore[return-value]  # wrapper preserves F's signature via @wraps
+    return func
 
 
 def is_pure(func: Any) -> bool:

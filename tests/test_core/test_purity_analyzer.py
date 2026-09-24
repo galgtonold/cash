@@ -29,7 +29,7 @@ def test_pure_arithmetic_is_clean(analyzer):
     assert not r.issues
 
 
-def test_explicit_pure_short_circuits(analyzer):
+def test_explicit_pure_reports_nothing(analyzer):
     @pure
     def f():
         import os
@@ -265,7 +265,7 @@ def _marked_pure_callee(x):
 
 import cash as _cash  # noqa: E402
 
-_cash.pure(_marked_pure_callee)  # marks the function itself, not only a wrapper
+_cash.pure(_marked_pure_callee)  # marks the function itself
 
 
 def _marked_stateful_callee(x):
@@ -275,15 +275,45 @@ def _marked_stateful_callee(x):
 _cash.stateful(_marked_stateful_callee)
 
 
-def test_a_callee_marked_pure_short_circuits(analyzer):
-    """A callee marked pure (via _cash_pure attribute) is not recursed
-    into and does not contribute to issues."""
+def test_a_callee_marked_pure_is_keyed_but_not_reported(analyzer):
+    """A callee marked pure (via _cash_pure attribute) contributes no issues,
+    but its code is still walked for the cache key."""
 
     def main(x):
         return _marked_pure_callee(x)
 
     r = analyzer.analyze(main)
     assert not any(i.kind == ISSUE_IMPURE_CALL for i in r.issues)
+    assert any("_marked_pure_callee" in q for q in r.helper_source_hashes)
+
+
+def _shells_out(x):
+    import os
+
+    os.system("ls")
+    return x
+
+
+def _pure_over_shells_out(x):
+    return _shells_out(x)
+
+
+_cash.pure(_pure_over_shells_out)
+
+
+def test_a_helper_also_called_through_a_pure_one_is_still_reported(analyzer):
+    """The walk below a pure helper reports nothing; a helper it shares with
+    an unmarked caller is reported whichever of the two the walk reaches first."""
+
+    def direct_first(x):
+        return _shells_out(x) + _pure_over_shells_out(x)
+
+    def pure_first(x):
+        return _pure_over_shells_out(x) + _shells_out(x)
+
+    for main in (direct_first, pure_first):
+        r = analyzer.analyze(main)
+        assert any("os.system" in i.description for i in r.issues), (main.__name__, r.format())
 
 
 def test_a_callee_marked_stateful_propagates(analyzer):
