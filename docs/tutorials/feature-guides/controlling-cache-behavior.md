@@ -66,9 +66,8 @@ for example a read from a live source:
 live = fetch_price("AAPL")     # runs every time, nothing stored
 ```
 
-The badge shows a plain `EXECUTED` row. Put the comment on a line of its own:
-that way it also gives a random draw a new value each run
-(see [Randomness](../../known-limitations.md#randomness)).
+The badge shows a plain `EXECUTED` row. It also gives a random draw a new value
+each run (see [Randomness](../../known-limitations.md#randomness)).
 
 ## Keep a cheap result across restarts: `persist`
 
