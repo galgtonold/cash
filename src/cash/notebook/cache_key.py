@@ -294,8 +294,9 @@ def called_function_dependencies(
         for ref in code_obj.co_names:
             if ref in seen or ref in ("get_ipython", "__builtins__"):
                 continue
-            # Modules carry their own key component; builtins are constant.
-            if not is_module(ref) and not hasattr(builtins, ref):
+            # Builtins are constant. Modules carry their own key component,
+            # which is decided below: an attribute name is kept whatever it names.
+            if not hasattr(builtins, ref):
                 referenced.add(ref)
             if ref in attrs:
                 attribute_only.add(ref)
@@ -309,6 +310,10 @@ def called_function_dependencies(
     # ``forecast:ABSENT`` before its first run and ``forecast:<lineage>``
     # after, so the simulation never found the entry and re-ran it.
     attribute_only -= {ref for name in seen for ref in _global_names(code_of(name))}
+    # So is a module that shares an attribute's name: ``np.random`` keyed
+    # ``random:ABSENT`` until ``import random`` bound the module, and then
+    # dropped the component, so the call missed once.
+    referenced = {ref for ref in referenced if ref in attribute_only or not is_module(ref)}
     if used_virtual:
 
         def lineage(ref: str) -> str:

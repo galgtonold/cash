@@ -109,3 +109,51 @@ def test_a_statement_binding_a_name_its_callee_uses_as_a_string_hits_on_rerun(ca
     assert _statuses(cash_magics) == [CacheStatus.COMPUTED]
     run_cash_cell(cash_magics, "u, v = run(3)")
     assert _statuses(cash_magics) == [CacheStatus.RESTORED], "the first re-run missed"
+
+
+def test_a_module_named_like_an_attribute_keeps_the_constant():
+    """``np.random`` puts ``random`` in ``co_names`` as an attribute. Binding
+    the ``random`` module later (``import random`` for an unrelated draw)
+    dropped the component, so a seeded draw's key changed and missed once."""
+    import random
+
+    import numpy as np
+
+    ns = _ns("""
+def draw(seed):
+    return np.random.default_rng(seed).standard_normal(3)
+""")
+    ns["np"] = np
+    before = called_function_dependencies(["draw"], ns, {"np": "Lnp"})
+    ns["random"] = random
+    after = called_function_dependencies(["draw"], ns, {"np": "Lnp", "random": "Lrandom"})
+    assert before == after == ["default_rng:ABSENT", "random:ABSENT", "standard_normal:ABSENT"]
+
+
+def test_a_module_the_callee_reads_as_a_global_is_still_left_out():
+    """Control: a module read as a global carries its own component."""
+    import random
+
+    ns = _ns("""
+def draw():
+    return random.random()
+""")
+    ns["random"] = random
+    assert called_function_dependencies(["draw"], ns, {"random": "Lrandom"}) == []
+
+
+def test_a_seeded_draw_hits_after_an_unrelated_import_of_random(cash_magics):
+    """The same case run as cells."""
+    cash_magics.cash_on("")
+    cash_magics.badges.mode = "off"
+    run_cash_cell(
+        cash_magics,
+        "import time\nimport numpy as np\n"
+        # The sleep makes the call worth caching.
+        "def draw(seed):\n    time.sleep(0.05)\n    return np.random.default_rng(seed).standard_normal(3)",
+    )
+    run_cash_cell(cash_magics, "x = draw(42)")
+    assert _statuses(cash_magics) == [CacheStatus.COMPUTED]
+    run_cash_cell(cash_magics, "import random\nr = random.random()")
+    run_cash_cell(cash_magics, "x = draw(42)")
+    assert _statuses(cash_magics) == [CacheStatus.RESTORED], "the draw missed after `import random`"
