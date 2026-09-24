@@ -29,8 +29,9 @@ from ._types import (
     CellCheck,
     ClassificationResult,
     SimulationResult,
+    normalize_stmt,
 )
-from .virtual_lineage import VirtualLineage, normalize_stmt
+from .virtual_lineage import VirtualLineage
 
 __all__ = ["MismatchClassifier"]
 
@@ -250,12 +251,14 @@ class MismatchClassifier:
         if var_name not in self.tracking_state.executed_cell_codes:
             return False
         mem_code = self.tracking_state.executed_cell_codes[var_name]
-        if not self.virtual_lineage.is_valid_extension(
+        if not self.virtual_lineage.unsaved_edits.is_valid_extension(
             mem_code, actual_lineage, sim.virtual_lineage, required_dependency=var_name
         ):
             return False
         if sim.upstream_has_modifications:
-            code_still_in_notebook = self.virtual_lineage.code_exists_in_notebook(mem_code, notebook_cells)
+            code_still_in_notebook = self.virtual_lineage.unsaved_edits.code_exists_in_notebook(
+                mem_code, notebook_cells
+            )
             if code_still_in_notebook:
                 logger.debug("[UPSTREAM_DEBUG]   -> Valid extension (code still exists in notebook), keeping")
                 return True
@@ -759,7 +762,7 @@ class MismatchClassifier:
         trace_codes = self.virtual_lineage.build_simulation_trace_codes(sim.trace)
         tainted: set[str] = set()
         if not sim.upstream_has_modifications:
-            tainted = self.virtual_lineage.compute_tainted_vars_from_unsaved_edits(
+            tainted = self.virtual_lineage.unsaved_edits.compute_tainted_vars_from_unsaved_edits(
                 virtual_lineage,
                 sim.trace,
                 trace_codes,
@@ -770,13 +773,13 @@ class MismatchClassifier:
             broken_vars=set(),
             tainted_vars=tainted,
             trace_codes=trace_codes,
-            loop_derived_trust_overridden=self.virtual_lineage.check_loop_derived_trust_override(
+            loop_derived_trust_overridden=self.virtual_lineage.loop_rules.check_loop_derived_trust_override(
                 sim.upstream_has_modifications,
                 sim.vars_mutated_by_loops,
                 trace_codes,
             ),
         )
-        loop_var_input_lineages = self.virtual_lineage.build_loop_var_input_lineages(
+        loop_var_input_lineages = self.virtual_lineage.loop_rules.build_loop_var_input_lineages(
             sim.trace,
             sim.vars_derived_from_loops,
             virtual_lineage,
@@ -1024,7 +1027,7 @@ class MismatchClassifier:
                 if self._resolve_tainted_stmt(i, stmt_code, outputs, needed_outputs_pre, sim, result, scan):
                     continue
             elif not import_only(stmt_code):  # an import is re-run, never restored: see `import_only`
-                restored_vars, restore_time, saved_time = self.virtual_lineage.try_virtual_restore(
+                restored_vars, restore_time, saved_time = self.virtual_lineage.restorer.try_virtual_restore(
                     stmt_code,
                     outputs,
                     entry.inputs,

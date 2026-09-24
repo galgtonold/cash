@@ -30,7 +30,7 @@ from .._trace import trace_event
 from ..cache_key import called_function_globals, write_provenance_key
 from ..cache_status import CacheStatus
 from ..carrier_history import carrier_history_fingerprint
-from .virtual_lineage import key_lineages
+from ._types import key_lineages
 
 if TYPE_CHECKING:
     from .virtual_lineage import VirtualLineage

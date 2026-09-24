@@ -4,7 +4,9 @@ A check is a :class:`CellCheck`. :class:`VirtualLineage` simulates the cells
 above it into a :class:`SimulationResult`; :class:`MismatchClassifier` reads
 that and returns a :class:`ClassificationResult`; :class:`ReexecutionPlanner`
 reads both and returns the :class:`ReexecutionPlan`. Data one phase hands the
-next is a field here, not another parameter.
+next is a field here, not another parameter. A trace entry's input lineages
+(``InputHashes``) and the helpers that read them live here too, since every
+part of the package reads them.
 """
 
 from __future__ import annotations
@@ -12,8 +14,54 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from cash.control_markers import strip_markers
+
 if TYPE_CHECKING:
     from ...analysis.mutation_effects import CellEffects
+
+
+def normalize_stmt(s: str) -> str:
+    """Strip iteration-context comments and whitespace for code comparison."""
+    return strip_markers(s).strip()
+
+
+class InputHashes(dict):
+    """A trace entry's input lineages, plus what only its cache key reads.
+
+    ``input_hashes`` names the statement's own inputs, and other code copies
+    it as such (a restore records it as the variable's input lineages). Two
+    more things belong in the key, at the statement's position, but nowhere
+    else, so they ride alongside and are read back only when the key is
+    rebuilt from the trace: the globals a simulated-only callee reads (see
+    ``VirtualCallable``), and the hidden RNG variables the statement reads
+    (``lineage_formula.key_hidden_reads``).
+    """
+
+    __slots__ = ("callee_lineages", "hidden_lineages")
+
+    def __init__(
+        self,
+        own: dict[str, str],
+        callee_lineages: dict[str, str] | None = None,
+        hidden_lineages: dict[str, str | None] | None = None,
+    ) -> None:
+        super().__init__(own)
+        self.callee_lineages = callee_lineages or {}
+        self.hidden_lineages = hidden_lineages or {}
+
+
+def key_lineages(input_hashes: dict[str, str]) -> dict[str, str]:
+    """*input_hashes* plus the key-only lineages riding on it (``InputHashes``)."""
+    callee = getattr(input_hashes, "callee_lineages", None) or {}
+    hidden = {k: v for k, v in (getattr(input_hashes, "hidden_lineages", None) or {}).items() if v is not None}
+    return {**callee, **hidden, **input_hashes} if callee or hidden else input_hashes
+
+
+def key_inputs(inputs: set[str], input_hashes: dict[str, str]) -> set[str]:
+    """The names a trace entry's cache key reads: its inputs plus the hidden
+    variables riding on *input_hashes*, as the runtime keys it."""
+    hidden = getattr(input_hashes, "hidden_lineages", None)
+    return set(inputs) | set(hidden) if hidden else set(inputs)
 
 
 class SimulationCacheEntry(NamedTuple):

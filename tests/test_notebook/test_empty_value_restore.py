@@ -24,7 +24,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from cash.notebook.upstream import UpstreamChecker
-from cash.notebook.upstream.virtual_lineage import lineage_confirmed_vars
+from cash.notebook.upstream.cache_restore import lineage_confirmed_vars
 
 METADATA = {"output_lineages": {"rows": "h1"}, "execution_time": 1.0}
 

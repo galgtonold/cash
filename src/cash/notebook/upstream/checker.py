@@ -228,7 +228,7 @@ class UpstreamChecker:
                 logger.debug("[UPSTREAM_DEBUG]   cell_id: %s", cell_id)
 
         # A name the previous cell's forward probe held and no restore filled.
-        self.simulator.virtual_lineage.drop_probe_placeholders()
+        self.simulator.virtual_lineage.restorer.drop_probe_placeholders()
 
         # Resolve the notebook path ONCE for the whole cell check and
         # thread it through the analysis helpers + Phase 2, instead of each site

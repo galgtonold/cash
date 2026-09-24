@@ -52,13 +52,13 @@ def _restore_always_fails(mod, record) -> None:
     is destroyed. A suite that catches this but not ``upstream-dead`` is
     testing performance, not invalidation.
     """
-    original = mod.VirtualLineage.try_virtual_restore
+    original = mod.CacheRestorer.try_virtual_restore
 
     def never(self, *a, **kw):
         record()
         return set(), 0.0, 0.0
 
-    mod.VirtualLineage.try_virtual_restore = never
+    mod.CacheRestorer.try_virtual_restore = never
     del original
 
 
@@ -106,9 +106,9 @@ CATALOGUE: dict[str, Mutation] = {
         ),
         Mutation(
             name="restore-dead",
-            target="cash.notebook.upstream.virtual_lineage",
-            probe="VirtualLineage",
-            replaces=("VirtualLineage.try_virtual_restore",),
+            target="cash.notebook.upstream.cache_restore",
+            probe="CacheRestorer",
+            replaces=("CacheRestorer.try_virtual_restore",),
             description="virtual restore never succeeds; everything re-executes",
             apply=_restore_always_fails,
         ),

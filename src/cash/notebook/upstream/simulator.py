@@ -238,7 +238,7 @@ class NotebookSimulator:
         """Restore *stmt_code*'s outputs from the cache entry its simulated
         inputs key; the names restored (none when the entry is missing, stale
         or for other lineages)."""
-        restored, _restore_time, _saved_time = self.virtual_lineage.try_virtual_restore(
+        restored, _restore_time, _saved_time = self.virtual_lineage.restorer.try_virtual_restore(
             stmt_code, outputs, inputs, input_hashes, virtual_modules, expected_lineages
         )
         return restored
@@ -370,7 +370,7 @@ class NotebookSimulator:
             # A current-cell statement that is a cache hit restores what it
             # reads as well as what it writes: a broken ``df`` that the cell's
             # first ``df[...] = f(df)`` restores needs nothing upstream.
-            self.virtual_lineage.eliminate_broken_vars_via_current_cell_probe(
+            self.virtual_lineage.restorer.eliminate_broken_vars_via_current_cell_probe(
                 broken_vars,
                 notebook_cells,
                 current_cell_idx,
@@ -659,7 +659,7 @@ class NotebookSimulator:
         # such accumulators so they follow the baseline lineage-mismatch path
         # (which re-executes correctly); a constant-init accumulator keeps the
         # new trust so one-shot iterables are not re-drained.
-        externally_tainted = self.virtual_lineage.loop_accumulators_with_external_init(
+        externally_tainted = self.virtual_lineage.loop_rules.loop_accumulators_with_external_init(
             sim.vars_mutated_by_loops, sim.trace, sim.loop_target_vars
         )
         if externally_tainted:
@@ -673,7 +673,7 @@ class NotebookSimulator:
 
         # A loop whose data changed underneath it (a new file, not a code
         # edit) loses the trust, and so does everything built from it.
-        changed_loops = self.virtual_lineage.loops_reading_changed_data(
+        changed_loops = self.virtual_lineage.loop_rules.loops_reading_changed_data(
             sim.vars_mutated_by_loops,
             sim.trace,
             sim.loop_target_vars,

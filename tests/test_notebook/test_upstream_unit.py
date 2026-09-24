@@ -245,7 +245,7 @@ class TestForwardProbePopulatesState:
 
     def _make_checker(self):
         from cash.notebook._protocols import TrackingState
-        from cash.notebook.upstream.virtual_lineage import _FORWARD_PROBE_PLACEHOLDER
+        from cash.notebook.upstream.cache_restore import _FORWARD_PROBE_PLACEHOLDER
 
         mock_shell = MagicMock()
         mock_shell.user_ns = {}
@@ -275,7 +275,7 @@ class TestForwardProbePopulatesState:
         virtual_lineage = {"df": "lineage_hash_abc"}
         cells = ["x = 10", "df['col'] = x * 2"]
 
-        checker.simulator.virtual_lineage.eliminate_broken_vars_via_current_cell_probe(
+        checker.simulator.virtual_lineage.restorer.eliminate_broken_vars_via_current_cell_probe(
             broken,
             cells,
             1,
@@ -301,7 +301,7 @@ class TestForwardProbePopulatesState:
         virtual_lineage = {"df": "lineage_hash_abc"}
         cells = ["x = 10", "df['col'] = x * 2"]
 
-        checker.simulator.virtual_lineage.eliminate_broken_vars_via_current_cell_probe(
+        checker.simulator.virtual_lineage.restorer.eliminate_broken_vars_via_current_cell_probe(
             broken,
             cells,
             1,
@@ -328,7 +328,7 @@ class TestForwardProbePopulatesState:
         virtual_lineage = {"df": "lineage_hash_abc"}
         cells = ["x = 10", "df['col'] = x * 2"]
 
-        checker.simulator.virtual_lineage.eliminate_broken_vars_via_current_cell_probe(
+        checker.simulator.virtual_lineage.restorer.eliminate_broken_vars_via_current_cell_probe(
             broken,
             cells,
             1,

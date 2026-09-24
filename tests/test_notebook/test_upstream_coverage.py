@@ -23,7 +23,8 @@ import pytest
 from cash.notebook._protocols import TrackingState
 from cash.notebook.upstream import UpstreamChecker
 from cash.notebook.upstream._types import CellCheck, SimulationResult, TraceEntry
-from cash.notebook.upstream.virtual_lineage import VirtualLineage, lineage_conflict
+from cash.notebook.upstream.cache_restore import lineage_conflict
+from cash.notebook.upstream.virtual_lineage import VirtualLineage
 from cash.tracking.file_dep_snapshot import snapshot_file_deps
 
 # ---------------------------------------------------------------------------

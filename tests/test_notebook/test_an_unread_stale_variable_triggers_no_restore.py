@@ -71,7 +71,7 @@ class TestIssueReproduction(unittest.TestCase):
             required_inputs = {"ticker_stats"}
 
             # We also need try_virtual_restore to work so it reports success if attempted
-            with patch.object(self.checker.simulator.virtual_lineage, "try_virtual_restore") as mock_restore:
+            with patch.object(self.checker.simulator.virtual_lineage.restorer, "try_virtual_restore") as mock_restore:
                 mock_restore.return_value = ({"stats", "ticker_stats"}, 0.1, 0.1)
 
                 # Only the producer's simulation is stubbed; the cells parse

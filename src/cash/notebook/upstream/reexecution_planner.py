@@ -317,7 +317,7 @@ class ReexecutionPlanner:
             stmts_to_run_indices,
             restored_statements_info,
         )
-        skipped_metrics = self.virtual_lineage.collect_skipped_statement_metrics(
+        skipped_metrics = self.virtual_lineage.restorer.collect_skipped_statement_metrics(
             simulation_trace,
             stmts_to_run_indices,
             restored_statements_info,
@@ -330,7 +330,7 @@ class ReexecutionPlanner:
         )
 
         stmts_to_run_indices = self._schedule_loop_var_contexts(stmts_to_run_indices, simulation_trace)
-        stmts_to_run_indices = self.virtual_lineage.filter_accumulator_reinits(
+        stmts_to_run_indices = self.virtual_lineage.loop_rules.filter_accumulator_reinits(
             stmts_to_run_indices, simulation_trace, sim.vars_mutated_by_loops
         )
         stmts_to_run_indices = self._dedup_sorted_indices(stmts_to_run_indices)
@@ -357,7 +357,7 @@ class ReexecutionPlanner:
             except (SyntaxError, ValueError):
                 logger.debug("Failed to analyze statement for variable outputs: %.40s", stmt_code)
 
-        self.virtual_lineage.reapply_unsaved_extensions(
+        self.virtual_lineage.unsaved_edits.reapply_unsaved_extensions(
             broken_vars,
             vars_updated_by_trace,
             simulation_trace,

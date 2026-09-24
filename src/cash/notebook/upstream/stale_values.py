@@ -256,7 +256,7 @@ class StaleValueGuard:
                 if (
                     prod_code is not None
                     and not produced_by_current_cell
-                    and self.virtual_lineage.is_valid_extension(
+                    and self.virtual_lineage.unsaved_edits.is_valid_extension(
                         prod_code, recorded, virtual_lineage, required_dependency=var_name
                     )
                 ):
