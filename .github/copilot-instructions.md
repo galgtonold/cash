@@ -88,7 +88,7 @@ before touching it.
 
 **Every statement cache key goes through `compute_cache_key()` in
 `cash.notebook.cache_key`.** Never build a key anywhere else. The decorator's
-key has its own single builder, `RuntimeMixin._build_key` in
+key has its own single builder, `KeyBuilder.build` in
 `decorator/runtime.py`, which both a call and `explain()` use, so `explain()`
 predicts the key the call looks up.
 

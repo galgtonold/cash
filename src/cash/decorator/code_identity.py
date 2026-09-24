@@ -990,7 +990,7 @@ class CodeIdentity:
                 if not is_user_code_object(base):
                     continue
                 carriers.extend(vars(base).values())
-                # Same blind spot as _class_surface_parts: a field declaring
+                # Same blind spot as class_surface_parts: a field declaring
                 # default_factory has no class attribute to find in vars().
                 fields_map = getattr(base, "__dataclass_fields__", None)
                 if isinstance(fields_map, dict):

@@ -1,8 +1,8 @@
 """A global read by a HELPER must be re-checked in the helper's own module.
 
-`_fold_read_globals` runs twice: once for the decorated function, and once per
+`fold_read_globals` runs twice: once for the decorated function, and once per
 module-bounded helper on that helper's behalf. Both write their pre-call hash
-into the same flat `{name: ...}` scratch dict. `_learn_mutating_captures` then
+into the same flat `{name: ...}` scratch dict. `learn_mutating_captures` then
 re-hashed every entry out of the DECORATED function's ``__globals__`` -- where a
 helper's global does not exist. It hashed ``None``, saw a different digest, and
 concluded the call had mutated the global.

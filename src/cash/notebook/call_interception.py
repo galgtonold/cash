@@ -183,8 +183,8 @@ def interceptable(fn) -> bool:
     stateful callee and returned a stale value on the FIRST run (``[1, 1]``
     where plain Python gives ``[1, 2]``), because the second call in a loop hit
     the entry the first had just written. Nor cash's own instrumentation:
-    ``file_tracker`` replaces ``open``, ``pd.read_csv`` and friends with
-    tracking wrappers, which are plain functions; wrapping one means trying to
+    the file tracker wraps ``pd.read_csv`` and the other readers that raise
+    no audit event in tracking wrappers, which are plain functions; wrapping one means trying to
     cache a file handle. Nor IPython's ``open``: the kernel binds
     ``user_ns['open']`` to a plain-function wrapper of ``io.open``, so a bare
     ``open(p)`` in a cell was intercepted like a user function. Its 3 ms cost

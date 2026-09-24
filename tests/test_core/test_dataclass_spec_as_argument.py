@@ -9,7 +9,7 @@ model. Change one and the answer changes.
 ``@dataclass`` moves that declaration off the class attribute into
 ``__dataclass_fields__``; the attribute left behind is only the default value.
 ``__dataclass_fields__`` cannot be pickled -- ``Field.metadata`` is a
-``mappingproxy`` -- so the generic member fold in ``_class_surface_parts``
+``mappingproxy`` -- so the generic member fold in ``class_surface_parts``
 caught the ``TypeError``, folded nothing, and dropped it without a word.
 
 Measured before the fix: rewriting a field description left the digest

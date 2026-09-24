@@ -195,7 +195,7 @@ class FileDeps:
             return True  # nothing to check
 
         # Remote entries cost a network round trip each to check, so the check
-        # itself is worth measuring - see _warn_if_validation_is_expensive.
+        # itself is worth measuring - see warn_if_validation_is_expensive.
         #
         # Local ones are measured too, as what is left of the pass once the
         # remote resolutions are taken out. Hashing is not free either, and

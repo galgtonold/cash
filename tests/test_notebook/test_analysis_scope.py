@@ -112,7 +112,7 @@ for i in range(10):
 
 
 def test_class_keyword_base_is_input():
-    """A metaclass/keyword base expression is visited as an input (analysis.py 141)."""
+    """A metaclass/keyword base expression is visited as an input."""
     code = """
 class Widget(metaclass=RegistryMeta):
     pass

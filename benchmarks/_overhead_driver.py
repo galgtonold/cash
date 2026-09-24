@@ -3,7 +3,7 @@
 Spins up a fresh ``InteractiveShell`` per call, optionally enables cash,
 runs cells via ``shell.run_cell``, and times each one. Captures
 per-statement ``ProcessResult`` data when cash is enabled via a monkey-patch
-on ``StatementProcessor.process``.
+on ``StatementProcessor.process_statement``.
 """
 
 from __future__ import annotations

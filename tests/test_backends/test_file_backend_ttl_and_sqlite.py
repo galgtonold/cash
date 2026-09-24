@@ -14,7 +14,7 @@ def _backdate_sqlite_entry(db: SQLiteBackend, key: str, seconds: float) -> None:
     and machine load.
 
     SQLite needs the row edited directly: unlike the file backend, which honours
-    a caller-supplied ``created_at`` via ``setdefault``, ``SQLiteBackend._store``
+    a caller-supplied ``created_at`` via ``setdefault``, ``SQLiteBackend.set``
     assigns ``metadata['created_at'] = now`` unconditionally and checks expiry
     against the column, so there is no seam to pass a timestamp through.
 

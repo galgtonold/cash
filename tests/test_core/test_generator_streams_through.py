@@ -328,7 +328,7 @@ def test_a_cached_generator_consuming_another_one_streams(c):
 
 
 def test_argument_mutation_is_still_reported_for_a_generator(c):
-    """`_check_argument_mutation` used to run right after the call. It now runs
+    """`check_argument_mutation` used to run right after the call. It now runs
     at exhaustion, so it needs to be shown still running at all."""
 
     @c.cache

@@ -177,7 +177,7 @@ def test_self_reference_terminates(cash):
 
 # --- end to end, through a real cached call ----------------------------
 #
-# The unit tests above exercise ``_code_surface_hash``, which is the
+# The unit tests above exercise ``code_surface_hash``, which is the
 # ARGUMENT path. A class used in the function BODY is folded by a
 # different mechanism -- the purity analyzer's helper walk -- and an
 # earlier attempt at this fix passed every test above while leaving the

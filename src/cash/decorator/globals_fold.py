@@ -462,7 +462,7 @@ class GlobalsFold:
             # A pre-built user-class INSTANCE (or a container of them) is only
             # value-hashed above -- its class's method SOURCE is invisible to the
             # pickle, so editing a method served stale. Fold the class-graph
-            # source too (memoized per class; see _instance_class_source_parts).
+            # source too (memoized per class; see instance_class_source_parts).
             for item in iter_contained(v):
                 if is_user_class(type(item), own_pkg):
                     for cname, chash in self._code.instance_class_source_parts(item, own_pkg=own_pkg):

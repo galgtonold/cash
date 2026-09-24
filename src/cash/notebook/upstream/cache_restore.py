@@ -157,7 +157,7 @@ class CacheRestorer:
                     return set(), time_module.time() - start_time, 0.0
 
                 # 4. Success! Restore into shell.
-                # Cache stores variables under 'variables' key (see _store_in_cache)
+                # Cache stores variables under 'variables' key (see StatementStore._payload)
                 variables_to_restore = cached_data.get("variables", {})
                 restored_vars = self._restore_vars_from_cache(
                     variables_to_restore,

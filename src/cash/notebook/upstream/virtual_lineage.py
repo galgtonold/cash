@@ -3,7 +3,8 @@
 :meth:`VirtualLineage.simulate` replays the cells above the checked one into a
 :class:`SimulationResult`, starting from the first cell changed since the
 previous simulation (:class:`SimulationCache`). It also restores a statement
-from the cache for the later phases (``try_virtual_restore``).
+from the cache for the later phases through ``CacheRestorer.try_virtual_restore``
+(``cache_restore.py``).
 """
 
 from __future__ import annotations
@@ -857,7 +858,7 @@ class VirtualLineage:
 
         **This does NOT always match the runtime.** The simulator models every
         loop as one unit; ``ControlStructureProcessor`` only executes one as a
-        unit when ``ForLoopHandler._should_execute_loop_as_single_unit`` says
+        unit when ``single_unit_policy.should_run_as_single_unit`` says
         so (roughly ``n >= 125`` for a one-statement body). Below that the
         runtime decomposes per-iteration and writes per-iteration entries,
         while this method still models the whole loop.

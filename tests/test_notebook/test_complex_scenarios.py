@@ -41,13 +41,8 @@ c = Complex(10)
 res = c.compute()
 """
 
-    # Actual execution is better here to ensure analysis works on complex code
-    # But we need to be careful with environment.
-    # StatementProcessor._execute_statement uses exec(), so it should work if we don't mock it too much.
-    # However, StatementProcessor also does file tracking which might need mocking if we don't want real file access.
-
-    # Let's try running without patching _execute_statement to test real analysis+exec
-    # This requires the code to be valid and simple enough not to depend on external things.
+    # Real analysis and execution, nothing patched, so the code must be valid
+    # and depend on nothing outside the cell.
 
     # _PERSIST overrides the 10 ms min-execution-time floor so a class
     # definition (which runs instantly) is actually written to cache.

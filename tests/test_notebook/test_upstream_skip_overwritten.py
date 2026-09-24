@@ -1,7 +1,7 @@
 """
 Unit test: Backwards scan skips earlier definitions when variable is fully redefined.
 
-Tests the specific backwards-scan optimization in UpstreamChecker.simulate_upstream
+Tests the specific backwards-scan optimization in NotebookSimulator.simulate_upstream
 where outputs of scheduled-for-execution statements are removed from needed_vars,
 preventing unnecessary cascading to earlier statements.
 """

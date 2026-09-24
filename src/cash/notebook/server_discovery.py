@@ -69,8 +69,8 @@ class CashNotebookDiscoveryWarning(CashWarning):
 #   Overridden: via set_notebook_path() when a reliable path is available from
 #     another source (e.g., extracted from a VS Code cell-ID URI).
 #
-# Cross-module coupling: all callers (magics.py, upstream.py, utils.py)
-# share this module-level variable via the accessor functions below.
+# Cross-module coupling: all callers (magics.py, upstream/checker.py,
+# statement/file_deps.py) share this module-level variable via the accessor functions below.
 # Treat it as a single global instance — do not duplicate or shadow it.
 _cached_notebook_path: str | None = None
 _cached_notebook_path_time: float = 0.0

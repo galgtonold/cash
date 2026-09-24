@@ -180,7 +180,7 @@ def test_omitted_default_equals_explicit_default():
 def test_normalization_follows_a_redefined_default():
     """The signature memo must not pin the first definition's default.
 
-    `_normalize_call_args` applies defaults through a cached `inspect.Signature`.
+    `normalize_call_args` applies defaults through a cached `inspect.Signature`.
     Keyed by name alone it never noticed a redefinition, so `f(1)` kept folding
     the OLD default and no longer matched `f(1, n=<new default>)`.
     """

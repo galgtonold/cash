@@ -284,7 +284,7 @@ class CallEntries:
         ``file_deps``/``remote_deps`` are snapshotted (mtime/size/hash, or a
         remote validator token) into ONE ``auto_file_deps`` dict -- the exact
         field name and shape ``Cash``'s own decorator writes
-        (``_snapshot_tracked_deps`` in ``core.py``) -- rather than two bare
+        (``snapshot_tracked_deps`` in ``decorator/file_deps.py``) -- rather than two bare
         path lists. A bare list has nothing for :meth:`_auto_file_deps_fresh`
         to compare against; the snapshot is what makes this call's OWN hit
         path able to notice the file it read has since changed, not just

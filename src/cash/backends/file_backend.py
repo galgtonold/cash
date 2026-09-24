@@ -479,8 +479,9 @@ class FileBackend(CacheBackend):
         fd, tmp_path = create_temp_file(directory)
         try:
             # Through the descriptor it was created with: reopening the name
-            # goes through the file tracker's patched ``open``, and on Windows
-            # opening a file created a moment before is slow.
+            # would raise an ``open`` audit event for the file tracker to
+            # sort out, and on Windows opening a file created a moment before
+            # is slow.
             try:
                 write_all(fd, payload)
             finally:

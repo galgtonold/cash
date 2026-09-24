@@ -6,9 +6,7 @@ annotation, the ``@stateful`` registry, the forbidden-function scan, and
 the variable-lineage state into one verdict.
 
 The merge has five reason-sources.  The first that triggers wins; later
-sources are not consulted.  This matches the historical behavior of
-``StatementProcessor._check_skip_conditions`` and keeps the per-statement
-hot path short.
+sources are not consulted, which keeps the per-statement hot path short.
 
 Reason-source order (deterministic):
 

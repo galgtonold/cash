@@ -396,7 +396,7 @@ class ForLoopHandler:
         # reusing this iteration's target name would overwrite the entry
         # for the rest of this iteration, with nothing to restore it once
         # the inner loop ends. `loop_vars_scope`'s stack is popped when this
-        # iteration's body finishes, so `call_unit._loop_var_digest` reads
+        # iteration's body finishes, so `call_key._loop_var_digest` reads
         # the digest from there. The `variable_lineage` write below serves
         # bare-Name argument resolution in the base cache key
         # (`compute_cache_key`'s lineage ladder).

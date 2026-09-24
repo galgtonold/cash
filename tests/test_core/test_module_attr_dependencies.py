@@ -107,7 +107,7 @@ def test_installed_module_attrs_do_not_churn_the_key():
 
     This is the over-invalidation guard. Folding every module attribute would
     rope in things like ``os.environ``, making every call miss. Third-party and
-    stdlib contents are fixed for a given environment, so ``_is_user_module``
+    stdlib contents are fixed for a given environment, so ``is_user_module``
     excludes them.
     """
     import math

@@ -21,7 +21,7 @@ confirm at runtime instead of refusing it.
 Now the method-call rule only fires for methods that actually write (``append``,
 ``update``, ``sort`` … -- the table the purity analyzer uses for side effects).
 Everything else is provisional: folded, then demoted by
-``_learn_mutating_captures`` if calling the function is ever observed to move
+``learn_mutating_captures`` if calling the function is ever observed to move
 the value. The accumulator protection this rule exists for is unchanged, and
 the last two tests here pin it.
 """

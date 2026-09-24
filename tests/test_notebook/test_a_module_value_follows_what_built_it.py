@@ -2,7 +2,7 @@
 
 ``ModuleInvalidator`` keeps the lineage of a name bound from a module when
 none of the symbols it depends on changed ("granular preservation"). The
-dependency map came from ``FunctionTracker._collect_intra_refs``, which only
+dependency map came from ``FunctionTracker``, which only
 followed references OUT OF functions and classes. So in
 
     def build_table(): ...

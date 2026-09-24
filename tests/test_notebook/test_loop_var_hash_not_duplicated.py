@@ -3,9 +3,7 @@
 `compute_hash_full` on a loop target is deliberate and load-bearing: a sampled
 hash once collided two iterations onto one cache entry and produced a wrong
 result on the first run, so `for_handler._process_one_iteration` pays the full
-hash for every binding (`call_unit.py`'s module docstring records the incident
-and the measured costs -- 19ms for a 200k-row DataFrame against a 3ms cost
-floor).
+hash for every binding (the comment there says why).
 
 Paying it TWICE is not deliberate. `build_iteration_context` independently
 computed the same full hash for the same value, unaware that

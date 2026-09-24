@@ -1,10 +1,5 @@
 """Performance tests for `cash.object_hashing.estimate_object_size`.
 
-Originally tested `CashMagics._calculate_memory_size` (extracted to
-`object_hashing.calculate_memory_size` in step 1 of the magics deepening,
-then consolidated with the more sophisticated `_estimate_object_size`
-implementation that was duplicated inside `StatementProcessor`).
-
 Single canonical sizer; tests call the module function directly.
 """
 

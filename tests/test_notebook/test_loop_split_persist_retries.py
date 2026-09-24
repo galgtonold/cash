@@ -1,6 +1,6 @@
 """A loop-split verdict must survive a destination that is briefly locked (#74).
 
-``LoopSplitStore._persist`` wrote a tmp file and called ``os.replace``. On
+``LoopSplitStore`` wrote a tmp file and called ``os.replace``. On
 Windows that call is DENIED, not delayed, while any handle has the
 destination open -- and the surrounding ``except OSError`` swallowed it at
 debug level. Measured susceptible with a single reader handle held open:

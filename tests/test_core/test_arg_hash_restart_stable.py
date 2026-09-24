@@ -6,7 +6,7 @@ Under ``%cash_on`` a notebook variable (e.g. ``X_train``) carries a
 session and is NOT reproducible across a restart -- three separate wheel-venv
 sessions produced three different lineage hashes for a byte-identical
 ``X_train`` while its content hash was identical every time. The decorator's
-``_hash_arg_payload`` used to read ``arg._cash_lineage_hash`` before any content
+``ArgHasher.hash_payload`` used to read ``arg._cash_lineage_hash`` before any content
 hash, so after a kernel restart ``train_model(X_train, ...)`` computed a
 DIFFERENT cache key than the one it had stored (which DID persist to disk),
 missed with ``no_entry``, and re-trained the model the docs promise survives a
@@ -15,7 +15,7 @@ restart.
 The fix: content-authoritative builtin hashers (pandas / numpy / polars / ...)
 win over ``_cash_lineage_hash``. These tests pin both directions -- a volatile
 lineage attr must NOT move the key, and a real content change MUST move it --
-and are proven fails-without / passes-with by stashing only ``src/cash/core.py``.
+and fail without the fix.
 """
 
 from __future__ import annotations

@@ -63,7 +63,7 @@ def test_a_subclass_of_an_opaque_class_does_not_inherit_opacity():
 
     The first assertion is the control: it must stay True, or the second
     assertion (False) would pass for the wrong reason -- e.g. a broken
-    ``_is_opaque`` that simply always returns False.
+    ``is_opaque`` that simply always returns False.
     """
 
     @cash.opaque
@@ -126,13 +126,13 @@ def test_is_opaque_never_raises_on_an_unhashable_class():
 
 
 def test_an_instance_of_a_registered_type_is_opaque():
-    """Every test above passes ``_is_opaque`` a class directly, which only
+    """Every test above passes ``is_opaque`` a class directly, which only
     ever exercises the ``isinstance(obj, type)`` branch of ``target = obj if
     isinstance(obj, type) else type(obj)``. This is the one that exercises
-    the OTHER branch: ``_is_opaque``'s own docstring promises "a class, or
+    the OTHER branch: ``is_opaque``'s own docstring promises "a class, or
     an instance of one," and Task 4 needs that -- a callable object with a
-    marked class is yielded to ``_is_opaque`` as the INSTANCE, not
-    ``type(instance)`` (see ``_iter_code_carriers``'s ``callable(value)``
+    marked class is yielded to ``is_opaque`` as the INSTANCE, not
+    ``type(instance)`` (see ``iter_code_carriers``'s ``callable(value)``
     branch in the Task 4 plan).
     """
     c = CashCls()
@@ -326,7 +326,7 @@ def test_a_callable_instance_folds_its_class_code(c):
 
     The brief's walk yielded any ``callable(value)`` and returned. A callable
     INSTANCE has no ``__code__`` of its own -- its code lives on its class --
-    so ``_code_surface_hash`` returned None for it and it contributed nothing,
+    so ``code_surface_hash`` returned None for it and it contributed nothing,
     while the SAME class without ``__call__`` folded fine through the
     ``__dict__`` branch. Measured: adding ``__call__`` to a class removed that
     class from the key and additionally tripped the unhashable advisory.
@@ -669,7 +669,7 @@ def test_a_self_referential_container_argument_terminates(c):
 
 
 def test_the_advisory_ignores_a_stdlib_callable_object(c):
-    """`_is_user_code_object` answers "could not confirm -> user code", which is
+    """`is_user_code_object` answers "could not confirm -> user code", which is
     the right direction for deciding whether to HASH and the wrong one for
     deciding whether to WARN: a `functools.partial` and a `weakref.ref` have no
     `__qualname__` of their own, so neither can ever be confirmed and both were
@@ -702,7 +702,7 @@ def test_the_advisory_ignores_a_stdlib_callable_object(c):
 
 
 # ---------------------------------------------------------------------------
-# Code arriving as a parameter DEFAULT. `_serialize_args` canonicalises with
+# Code arriving as a parameter DEFAULT. `serialize_args` canonicalises with
 # `apply_defaults()`; the code channel did not, so the same logical call keyed
 # two different ways depending on whether the caller typed the argument.
 # ---------------------------------------------------------------------------
@@ -712,8 +712,8 @@ def _defaulted(c, schema, calls, name):
     """A cached function whose only link to *schema* is its parameter DEFAULT.
 
     Every version comes from one code object with one source text, so
-    ``_hash_callable_source`` cannot tell two of them apart, and
-    ``_fold_defaults`` pickles the default BY REFERENCE (module + qualname),
+    ``hash_callable_source`` cannot tell two of them apart, and
+    ``fold_defaults`` pickles the default BY REFERENCE (module + qualname),
     which is byte-identical across a same-module redefinition. The code channel
     is the only thing left that can see the difference -- which is what makes
     these two tests measure the fix rather than some other channel.
@@ -861,7 +861,7 @@ def test_an_unchanged_holder_still_collides(c):
 
 def test_an_opaque_base_does_not_move_its_subclass_digest(c, opaque_registry):
     """`mark_opaque(VendorBase)` is advertised as the escape hatch for a class
-    you cannot edit, but `_class_surface_parts` walked the whole MRO without
+    you cannot edit, but `class_surface_parts` walked the whole MRO without
     consulting it, so a vendor's own edit still churned every subclass key.
 
     Two controls, because the claim is a NEGATIVE: unmarked, the same edit must

@@ -891,7 +891,7 @@ class FileWriterScheduler:
     def _carrier_history_at(simulation_trace: list, index: int, carrier: str) -> str | None:
         """The history fingerprint of figure *carrier* at the writer at *index*,
         from the statements of the writer's cell that come before it -- the same
-        span the runtime took (``StatementProcessor._carrier_histories``)."""
+        span the runtime took (``StatementRecords._carrier_histories``)."""
         cell = simulation_trace[index].cell
         if cell == -1:
             return None

@@ -3,7 +3,7 @@
 Each entry maps a scenario name to a metrics_list that conforms to the
 input contract of cash.notebook.badge_renderer.view_builder
 .build_interactive_badge. Keys used are documented in
-cash.notebook.badge_renderer.view_builder._statement_row_from_metric.
+cash.notebook.badge_renderer.view_builder._statement_row.
 
 Timing values and cache_key prefixes are plausible-looking but
 hand-chosen — the rendered HTML structure is what matters for docs.

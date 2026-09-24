@@ -6,7 +6,7 @@ from cash.decorator.code_identity import is_user_code_module
 
 def test_a_fileless_module_counts_as_user_code():
     """A notebook cell's __main__ has no __file__. The existing
-    _is_user_module rejects it, which would make this whole feature a no-op
+    is_user_module rejects it, which would make this whole feature a no-op
     in the environment it exists for."""
     nb = types.ModuleType("nbmod")  # no __file__, like a notebook __main__
     assert is_user_code_module(nb) is True
@@ -52,7 +52,7 @@ def _exec_class(body: str, name: str = "S"):
     (inheriting the literal string ``'builtins'``, despite having nothing to
     do with it) and lands on ``None`` for a function (no such fallback
     exists for functions). Neither is registered in ``sys.modules`` either
-    way, so ``_is_user_code_object``'s ``sys.modules.get(obj.__module__)``
+    way, so ``is_user_code_object``'s ``sys.modules.get(obj.__module__)``
     step fails regardless of what ``__module__`` says. That is a real,
     Python-version-independent CPython quirk (confirmed identical on
     3.10/3.11/3.14) -- but it is a bare-dict-``exec`` artifact, not the
@@ -158,7 +158,7 @@ def test_it_never_raises_on_an_exotic_object():
 
 
 def test_source_less_classes_no_longer_collide_in_the_instance_channel():
-    """Regression: _user_class_source_hash returned sha256("type") for every
+    """Regression: user_class_source_hash returned sha256("type") for every
     class whose source could not be read, so two unrelated classes were
     indistinguishable in the instance channel."""
     c = CashCls()
@@ -196,11 +196,11 @@ def test_a_sentinel_data_attribute_hashes_identically_across_processes():
 
 
 def test_a_functools_wraps_decorated_method_body_edit_invalidates():
-    """Blocker 3 regression: _class_surface_parts walked the WRAPPER function
+    """Blocker 3 regression: class_surface_parts walked the WRAPPER function
     functools.wraps leaves behind, not the wrapped one -- so it hashed the
     wrapper's own fixed `return func(*args, **kwargs)` dispatch code, which
     does not change no matter what the wrapped body says. Needs source
-    retrieval to fail to even reach _class_surface_parts, hence _exec_class
+    retrieval to fail to even reach class_surface_parts, hence _exec_class
     rather than a real file-backed class."""
     body_template = (
         "import functools\n"

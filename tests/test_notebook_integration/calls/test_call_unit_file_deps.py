@@ -2,7 +2,7 @@
 
 The call runs inside the statement's ambient ``FileAccessTracker`` -- the
 same one ``@cash.cache`` already defends via ``core.py``'s
-``_propagate_file_deps_to_active_tracker``. Exactly one case is broken: the
+``propagate_file_deps_to_active_tracker``. Exactly one case is broken: the
 statement misses and re-executes, but the CALL inside it hits, so the file
 read the call depends on does not re-happen this run. Without this task's
 fix the statement's own tracker never sees it, so the statement's own entry

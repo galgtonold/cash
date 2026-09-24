@@ -1,4 +1,4 @@
-"""Tests for utility functions (utils.py) and data sources (data_source.py)."""
+"""Tests for notebook discovery (server_discovery.py) and data sources (data_source.py)."""
 
 import json
 import os

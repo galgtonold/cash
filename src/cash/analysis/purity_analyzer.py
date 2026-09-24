@@ -1222,12 +1222,13 @@ def _is_user_code(callee: Any, root_module: str | None) -> bool:
             return True
 
     # Never analyse cash's own code on a user's behalf. Under ``%cash_on``
-    # the file tracker replaces ``open`` and the pandas readers with cash
-    # shims, so a user function that reads a file resolves its callee to
-    # ``cash.tracking.file_tracker``. In a NORMAL install that lands in
-    # site-packages and the fallback below rejects it; in an EDITABLE
-    # install it does not, so the analyzer walked the shim and reported
-    # cash's own ``_tracker._track_path(...)`` as the user's side effect.
+    # the file tracker wraps the pandas readers (and the other readers that
+    # raise no audit event) in cash shims, so a user function that reads a
+    # file resolves its callee to ``cash.tracking.reader_patches``. In a
+    # NORMAL install that lands in site-packages and the fallback below
+    # rejects it; in an EDITABLE install it does not, so the analyzer would
+    # walk the shim and report cash's own tracker calls as the user's side
+    # effect.
     # The report is about the user's function, and cash's instrumentation
     # is never part of it. Placed after the shortcut above so cash
     # analysing its own functions still recurses.
@@ -1863,7 +1864,7 @@ class PurityAnalyzer:
 
             # Hash the NORMALIZED source for cache-key invalidation of
             # helpers. Root function's hash is captured separately by the
-            # decorator via _hash_callable_source - we record all walked
+            # decorator via hash_callable_source - we record all walked
             # callables here so the decorator can fold them into the state
             # hash uniformly. Normalizing means a comment or reformat in a
             # helper no longer invalidates its callers, which was the more

@@ -9,7 +9,7 @@ n=124 at 5ms = 0.62s of body work, and n=124 is below the single-unit
 threshold (125), so this is exactly the band that proposal targets.
 
 `_COST_FLOOR_S` is read as a module global at call time, so arm C flips it
-IN-KERNEL -- no source edit, and the full real path (key build, _storable,
+IN-KERNEL -- no source edit, and the full real path (key build, storable,
 backend.set, hit lookup, replay) is measured, not a proxy.
 """
 

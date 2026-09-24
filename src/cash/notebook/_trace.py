@@ -12,7 +12,8 @@ both sides read the same path.
 Usage (from a test): set ``CASH_TRACE_FILE`` *before* ``start_kernel`` (a cold
 kernel inherits it; the opt-in warm kernel, booted once per worker, will not —
 so trace with the default cold-kernel path). Then read/parse the JSONL file.
-The :func:`tests...conftest.capture_upstream_trace` helper wraps this.
+The ``upstream_trace`` fixture in ``tests/test_notebook_integration/conftest.py``
+wraps this.
 
 Zero-cost when off: a single ``os.environ.get`` per call, and the decision
 points instrumented are not hot loops. Never raises — tracing must never change

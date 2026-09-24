@@ -51,7 +51,7 @@ _PATH_KWARGS = ("filepath_or_buffer", "path_or_buf", "source", "input_file", "pa
 
 def _dispatch_track(path: Any) -> None:
     """Module-level tracker-dispatching shim. Custom handler factories
-    registered via :func:`cash.register_file_handler` receive this as
+    registered via :meth:`Cash.register_file_handler` receive this as
     their ``tracker_callback`` argument. The shim consults
     ``active_tracker`` at *call* time, so old-signature factories
     (whose wrappers do ``tracker_callback(path)``) transparently route

@@ -2,7 +2,7 @@
 
 A warm hit on a function receiving two million parsed rows took 8.4 s against a
 0.04 s body: Python-level walks over every element (`stable_key_repr`,
-`contains_set`, `_iter_code_carriers`) that can find nothing in
+`contains_set`, `iter_code_carriers`) that can find nothing in
 lists and tuples of primitives, then a pickle whose memo -- a dict entry per
 tuple and string -- was 80 % of what was left. Plain data is now proven so at C
 speed and pickled without the memo: 0.37 s. Without the memo the key is the

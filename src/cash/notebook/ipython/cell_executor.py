@@ -1193,7 +1193,7 @@ class CellExecutor:
         the live ``except`` block made Python implicitly chain the fresh (or
         IPython-raised) exception onto cash's internal one via ``__context__``,
         and IPython's ultratb then rendered cash's own frames
-        (``analysis.py``/``virtual_lineage.py``/``cell_executor.py``/
+        (``code_analyzer.py``/``virtual_lineage.py``/``cell_executor.py``/
         ``checker.py``) plus a spurious "During handling of the above exception,
         another exception occurred" banner — making a plain user typo look like
         cash crashed.  Running the dispatch here keeps the traceback as short and

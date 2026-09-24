@@ -403,7 +403,7 @@ def test_magics_page_states_the_right_count() -> None:
 # ``core.py,526`` and ``core.py,526,1503-1504`` -- comma-delimited, so a
 # colon-only pattern scored that page 1 when it really had 3, and the two it
 # missed were BOTH rotted (526 landed on a comment about backends; 1503-1504
-# inside _explain_call). A ratchet that under-counts reports progress it did
+# inside the explain code). A ratchet that under-counts reports progress it did
 # not make, so match ``.py`` followed by any digit/comma/hyphen run.
 #
 # Third form, found later in choosing-a-backend.md: the path and the line

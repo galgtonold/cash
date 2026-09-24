@@ -891,7 +891,7 @@ class ReexecutionPlanner:
         move the same NameError one statement up.
 
         **A producer that writes files is never added.**
-        ``_schedule_file_write_statements`` runs BEFORE this pass, so anything
+        ``FileWriterScheduler.schedule`` runs BEFORE this pass, so anything
         added here has already bypassed its scope and repeatability gates —
         re-firing a ``to_csv(..., mode='a')`` would duplicate a line on disk,
         which a kernel restart cannot undo. Skipping it can leave the fill

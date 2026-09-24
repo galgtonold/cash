@@ -1,4 +1,4 @@
-"""Tests for the CashWarning hierarchy and _warn_once dedup."""
+"""Tests for the CashWarning hierarchy and warn_once dedup."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from cash import (
     CashWarning,
 )
 
-# ``_warn_once`` takes a diagnostic code and a fix line as required keyword
+# ``warn_once`` takes a diagnostic code and a fix line as required keyword
 # arguments, and ``format_diagnostic`` rejects a code that is not registered --
 # so these tests pass a REAL one. A placeholder would raise before anything was
 # emitted, and what is under test here is the dedup and attribution contract,
@@ -28,7 +28,7 @@ def test_warning_classes_importable():
 
 
 def test_warn_once_dedupes_per_func_and_arg_type(tmp_path):
-    """`_warn_once` emits each (category, func_name, arg_type) at most once."""
+    """`warn_once` emits each (category, func_name, arg_type) at most once."""
     c = Cash(cache_dir=str(tmp_path), register_magic=False)
 
     with warnings.catch_warnings(record=True) as captured:
@@ -55,7 +55,7 @@ def test_warn_once_does_not_emit_when_already_seen(tmp_path):
 
 
 def test_warn_once_blames_the_nearest_frame_outside_cash(tmp_path):
-    """A direct `_warn_once` call is attributed to its caller's line: the
+    """A direct `warn_once` call is attributed to its caller's line: the
     blamed frame is the nearest one outside the cash package, whatever the
     depth it is called from."""
     c = Cash(cache_dir=str(tmp_path), register_magic=False)
@@ -145,7 +145,7 @@ def test_resolve_key_exception_emits_ineffective_warning(tmp_path):
     """The `except` branch in KeyBuilder.resolve (where key gen raises e.g.
     ValueError) also emits CashCacheIneffectiveWarning. We trigger it by
     registering a custom hasher that raises ValueError — TypeError would be
-    swallowed by _serialize_args's inner try/except, but ValueError is only
+    swallowed by serialize_args's inner try/except, but ValueError is only
     caught by KeyBuilder.resolve's outer except, which is the branch we want
     to exercise here.
     """

@@ -479,7 +479,7 @@ def test_normalization_is_memoized():
 def test_source_hash_memo_is_keyed_by_identity_not_value(tmp_path):
     """Two value-equal code objects must not share one memo entry.
 
-    ``_hash_callable_source`` memoizes its digest so a helper's source is not
+    ``hash_callable_source`` memoizes its digest so a helper's source is not
     re-read and re-tokenized on every cache hit. That memo must key on the
     code object's IDENTITY: ``CodeType`` implements ``__eq__``/``__hash__`` BY
     VALUE and ``co_filename`` is not part of it, so two functions from
@@ -493,7 +493,7 @@ def test_source_hash_memo_is_keyed_by_identity_not_value(tmp_path):
     Scope, honestly: no decorator behaviour is known to turn on that
     particular difference today. The decorator reads ``# @cash:`` in one
     place only -- honouring ``allow-random`` in
-    ``_warn_unseeded_randomness`` -- and reads the source directly rather
+    ``warn_unseeded_randomness`` -- and reads the source directly rather
     than through this digest.
 
     This test does NOT reproduce the failure that prompted identity keying.

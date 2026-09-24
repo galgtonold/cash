@@ -1,7 +1,7 @@
 """A global OR closure capture passed to a call must still invalidate.
 
 `GlobalsFold.read_global_data_names` folds module globals a function reads, so reassigning
-one invalidates. But it subtracted `_unsafe_uses_of`, which disqualified any
+one invalidates. But it subtracted `unsafe_uses_of`, which disqualified any
 name **passed as a bare argument to any call** — the callee might mutate it, and
 folding a mutated global would key the entry on the function's own output and
 miss forever.
@@ -210,7 +210,7 @@ def _define(c, ns: dict, src: str):
 
 # --- the same bug, one scope over: closure captures ------------------------ #
 #
-# `_fold_closure` shares `_unsafe_uses_of`, so a captured variable handed to a
+# `fold_closure` shares `unsafe_uses_of`, so a captured variable handed to a
 # call was excluded from the key for the same reason and went stale the same
 # way. Measured before the fix, with `data` captured and then rebound via
 # `nonlocal`: `sum(data)` STALE, `data[0] + data[1]` ok, `sum(v for v in data)`
@@ -295,7 +295,7 @@ def test_a_mutated_capture_converges_instead_of_missing_forever(c):
 
 
 def test_two_closures_from_one_factory_do_not_collide(c):
-    """`_fold_closure`'s original reason for existing, unaffected by the change.
+    """`fold_closure`'s original reason for existing, unaffected by the change.
 
     Two closures from the same factory share source AND qualname, so without
     the capture fold they collide on one key and return each other's results.

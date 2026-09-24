@@ -70,7 +70,7 @@ def test_cache_if_raise_async_appears_in_cache_info(tmp_path):
 
 
 def test_cache_info_warnings_deduped_per_func(tmp_path):
-    """_warn_once dedup means only one entry per (category, func, type) lands."""
+    """warn_once dedup means only one entry per (category, func, type) lands."""
     c = Cash(cache_dir=str(tmp_path), register_magic=False)
 
     def bad(_r):

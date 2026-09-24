@@ -425,7 +425,7 @@ def test_a_dunder_entry_in_loop_vars_cannot_reach_the_key():
 def test_a_depth_prefixed_dunder_entry_in_loop_vars_cannot_reach_the_key():
     """The same reorder channel, in the shape production actually sends it in:
     `loop_vars` entries are keyed ``"{depth}:{name}"``
-    (`StatementProcessor.current_loop_vars_for_call_key`), so a leaked dunder
+    (`CallRouting.current_loop_vars_for_call_key`), so a leaked dunder
     would arrive as `"0:__iterable_lineage__"`, which does NOT itself start
     with `"__"`.
 

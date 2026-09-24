@@ -621,7 +621,7 @@ def is_identity_fallback_hash(obj: Any, hash_value: str) -> bool:
 
     Exists for callers that need to know whether a ``compute_hash`` result
     can be trusted to change when the object's *content* changes -- e.g.
-    before/after mutation detection (``CallUnit._hash_args``). Content-hashed
+    before/after mutation detection (``hash_args`` in ``notebook/call_effects.py``). Content-hashed
     results reflect the object's data; an identity-hashed result reflects only
     ``id(obj)``, which is invariant across an in-place mutation, so a caller
     diffing two ``compute_hash`` snapshots across a mutation would otherwise

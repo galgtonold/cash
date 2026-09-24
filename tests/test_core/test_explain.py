@@ -99,7 +99,7 @@ def test_explain_unhashable_arg(tmp_path):
     assert e.would_hit is False
     assert e.reason == "key_uncomputable"
     assert e.cache_key is None
-    # _first_unhashable_arg_type uses __qualname__, which includes the
+    # first_unhashable_arg_type uses __qualname__, which includes the
     # enclosing function for locally-defined classes — match the suffix.
     assert e.details.get("arg_type", "").endswith("_Unpicklable")
 

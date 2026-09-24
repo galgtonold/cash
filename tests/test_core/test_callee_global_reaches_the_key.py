@@ -8,8 +8,8 @@ itself**, since calling the callee directly in the same run gave the new answer.
 
 A global can reach a cache key through three channels. Two of them worked:
 
-* the cached function's own globals (``_fold_read_globals``),
-* the globals its plain helpers read (``_fold_helper_read_globals``).
+* the cached function's own globals (``fold_read_globals``),
+* the globals its plain helpers read (``fold_helper_read_globals``).
 
 The third -- the globals a cached CALLEE reads -- was folded into that callee's
 own key and nowhere else, so the caller never saw it move.
