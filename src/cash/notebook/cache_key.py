@@ -17,7 +17,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple, Protocol, runtime_checkable
 
-from cash.notebook._memo import LruMemo
+from cash._memo import LruMemo
 from cash.notebook.lineage_store import resolve_lineage
 from cash.source_norm import unparse_without_docstrings
 

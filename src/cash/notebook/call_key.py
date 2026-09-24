@@ -26,11 +26,11 @@ from collections.abc import Callable, Mapping
 from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING, Any
 
+from cash._memo import LruMemo
 from cash.analysis.callee_effects import source_global_mutations
 from cash.analysis.namespace_effects import capturable_globals
 from cash.exceptions import SOURCE_RETRIEVAL_ERRORS
 from cash.install_paths import is_user_path
-from cash.notebook._memo import LruMemo
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.object_hashing import compute_hash, compute_hash_full, pandas_nbytes
 

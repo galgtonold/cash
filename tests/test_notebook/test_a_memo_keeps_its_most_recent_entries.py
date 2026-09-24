@@ -6,7 +6,7 @@ a long session with many redefined cells keeps producing new keys.
 
 import pytest
 
-from cash.notebook._memo import LruMemo
+from cash._memo import LruMemo
 from cash.notebook.statement.amplification import AmplificationGuard
 
 

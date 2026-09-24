@@ -21,8 +21,8 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from cash import cost_model
+from cash._memo import LruMemo
 from cash.backends.persistence_policy import PersistencePolicy, restore_kind
-from cash.notebook._memo import LruMemo
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON
 from cash.object_hashing import estimate_object_size
