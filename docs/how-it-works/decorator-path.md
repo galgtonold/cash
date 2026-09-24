@@ -24,7 +24,7 @@ The rest of this page explains each box. For the parameters (`ttl=`,
 
 ## The key
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._compute_cache_key @a3272962, cash/decorator/code_identity.py:CodeIdentityMixin.get_func_key @5014fa8b -->
+<!-- claim: cash/decorator/runtime.py:compute_cache_key @fe76bcca, cash/decorator/code_identity.py:func_key @7ed93e6b -->
 A key has four parts, joined by colons: `function:state:dynamic:args`.
 
 | Part | What it holds |
@@ -36,7 +36,7 @@ A key has four parts, joined by colons: `function:state:dynamic:args`.
 
 ## What goes into the state
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._build_key @bdf9b846, cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @070ed402, cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe -->
 The state starts from source code and then folds in, on every call, each input
 that can change the result without changing an argument:
 
@@ -53,20 +53,20 @@ that can change the result without changing an argument:
 | Environment reads | A digest of each `os.getenv("NAME")`, `os.environ["NAME"]` or `os.getcwd()` value the function, its helpers or the cached functions it calls read with the name written out. A new value is a new entry. |
 | The random seed | For a function seen drawing from the global `random` or `numpy.random` stream: which seed is in force. Re-seeding recomputes. |
 
-<!-- claim: cash/decorator/globals_fold.py:GlobalsFoldMixin._fold_read_globals @6c43e132 -->
+<!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @b96cfac7 -->
 Two limits. A global that cannot be hashed (a lock, a live connection) is left
 out with a [`KEY-UNHASHABLE-GLOBAL`](../warnings.md#key-unhashable-global)
 warning. And reachability is static: code picked at run time, from a dict or
 through `getattr`, is not seen. Name it with `depends_on=[...]`.
 
-<!-- claim: cash/decorator/rng.py:RngMixin._fold_rng_epoch @03b4b5de -->
+<!-- claim: cash/decorator/rng.py:RngWatch.fold_rng_epoch @52a28e20 -->
 An unseeded draw is not a change. The first value is stored and returned on
 every later call, with a [`RANDOM-UNSEEDED`](../warnings.md#random-unseeded)
 warning; `allow_random=True` accepts that on purpose.
 
 ## How arguments are hashed
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHashingMixin._hash_arg_payload @7bc7e4ca -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @c4f48efb -->
 Each argument is fingerprinted by the first rule that applies:
 
 1. A hasher you registered with `cash.register_hasher(T, fn, override=True)`.
@@ -87,7 +87,7 @@ registration.
 
 ## When there is no key
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._resolve_cache_key @ec66ad8d -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @b144476a -->
 If any part of the key cannot be built, the call runs uncached and Cash warns.
 It never caches under a partial key. The usual causes:
 
@@ -100,7 +100,7 @@ It never caches under a partial key. The usual causes:
 
 ## Files
 
-<!-- claim: cash/decorator/file_deps.py:FileDepsMixin._fold_declared_files @15becfc2, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @3dd62608 -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.fold_declared_files @5d8d7594, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @3dd62608 -->
 A file the body reads through a tracked reader, and every file named in
 `file_depends_on=`, is recorded with its content hash when the entry is
 written. Before a stored value is returned, each file is checked; if one
@@ -129,7 +129,7 @@ side effects and still caches:
 - a clock read or a fresh UUID warns
   [`KEY-AMBIENT-READ`](../warnings.md#key-ambient-read).
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._surface_purity @9fe07f2d -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @3f8526f2 -->
 One case raises instead: a body that picks code from a run-time value
 (`eval`, `exec`, `getattr(obj, name)()`, `importlib.import_module`) raises
 `CashImpureFunctionError`, because Cash cannot tell when that code changes.

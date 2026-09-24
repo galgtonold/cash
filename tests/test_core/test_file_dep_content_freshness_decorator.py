@@ -1,7 +1,7 @@
 """Regression: ``@cash.cache`` file-dep freshness must be content-authoritative.
 
 The notebook path got a content-hash freshness fallback first; the
-decorator path (``Cash._auto_file_deps_fresh``) still compared ``(mtime, size)``
+decorator path (``FileDeps.auto_file_deps_fresh``) still compared ``(mtime, size)``
 only, so it failed in both opposite directions:
 
 - **touch** (identical content + size, only the mtime bumped) spuriously

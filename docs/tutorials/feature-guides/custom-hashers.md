@@ -39,7 +39,7 @@ def evaluate(model, data):
     return model.weights @ data
 ```
 
-<!-- claim: cash/core.py:Cash.register_hasher @b8ede33d, cash/source_norm.py:callable_identity @f9ec85f7 -->
+<!-- claim: cash/core.py:Cash.register_hasher @f48a324b, cash/source_norm.py:callable_identity @f9ec85f7 -->
 From now on, every `MyModel` argument is identified by `hash_model(model)`. On
 your own `Cash(...)` instance, call `app.register_hasher(...)` instead.
 
@@ -141,7 +141,7 @@ cash.register_hasher(
 )
 ```
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHashingMixin._hash_arg_payload @7bc7e4ca -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @c4f48efb -->
 Your hasher then becomes the value's whole identity: two frames it hashes alike
 share one entry, and the second call gets the first one's result. Override only
 when you hold an identity the value itself does not show, such as a dataset

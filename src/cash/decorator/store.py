@@ -8,9 +8,8 @@ import hashlib
 import logging
 import pickle
 import time
-import weakref
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .._clock import perf_counter as _perf_counter
 from ..backends import CacheMetadata
@@ -22,6 +21,18 @@ from ..value_types import IMMUTABLE_PRIMS
 from .arg_hashing import LINEAGE_SRC_DECORATOR, LINEAGE_SRC_FROZEN
 from .cached_function import CachedFunction
 from .call_state import NO_WATCH
+from .explain import not_persisted_reason
+from .file_deps import snapshot_tracked_deps
+
+if TYPE_CHECKING:
+    from .backend_slot import BackendSlot
+    from .explain import MissHistory
+    from .file_deps import FileDeps
+    from .frozen import FrozenResults
+    from .purity_checks import PurityChecks
+    from .registry import FunctionRegistry
+    from .reporting import Notices
+    from .stored_keys import StoredKeyRecord
 
 logger = logging.getLogger(__name__)
 
@@ -33,16 +44,67 @@ STORE_FAILED_FIX = (
 
 
 #: Result types seen to refuse an attribute (dict, list, ndarray, ...): not
-#: tried again (`Cash._attach_lineage`). At most `UNTAGGABLE_TYPES_MAX`: a
+#: tried again (`ResultStore.attach_lineage`). At most `UNTAGGABLE_TYPES_MAX`: a
 #: class made per call would otherwise be held here for good.
 UNTAGGABLE_TYPES: set[type] = set()
 UNTAGGABLE_TYPES_MAX = 256
 
 
-class StoreMixin:
-    """Deciding whether and how to store a result, and tagging it with its lineage."""
+def lineage_hash(cache_key: str, auto_file_deps: dict | None) -> str:
+    """The lineage hash a result carries downstream.
 
-    def _store_refusal(
+    It is the producer's ``cache_key`` PLUS a fingerprint of the files the
+    producer read. The cache key alone omits file state (files invalidate
+    via a freshness re-stat, not via the key), so without this a downstream
+    function keyed on the lineage hash would return a STALE result after an
+    upstream file changed - the producer recomputes, but its new output
+    carries the same lineage hash as the old one. Folding the file deps in
+    gives a changed file a distinct lineage. No deps -> unchanged key.
+
+    The fingerprint is built from the recorded content ``hash`` plus the
+    size, NOT the mtime. Content is the authoritative freshness
+    signal everywhere else, and mtime is the untrustworthy one: keying
+    lineage on it would hand a touched-but-identical file a new lineage and
+    needlessly recompute every downstream consumer, while a same-size edit
+    under an indistinguishable mtime would reuse the old lineage and serve
+    stale. A snapshot with no ``hash`` falls back to the mtime so the
+    entry still keeps a stable lineage.
+    """
+    if not auto_file_deps:
+        return cache_key
+    fp = hashlib.sha256(
+        repr(sorted((p, d.get("hash") or d.get("mtime"), d.get("size")) for p, d in auto_file_deps.items())).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    return f"{cache_key}:fdeps:{fp}"
+
+
+class ResultStore:
+    """Deciding whether and how to store a result -- whole, or streamed in
+    chunks -- and tagging it with its lineage."""
+
+    def __init__(
+        self,
+        registry: FunctionRegistry,
+        backend_slot: BackendSlot,
+        frozen: FrozenResults,
+        files: FileDeps,
+        purity: PurityChecks,
+        misses: MissHistory,
+        notices: Notices,
+        stored_keys: StoredKeyRecord,
+    ) -> None:
+        self._registry = registry
+        self._backend_slot = backend_slot
+        self._frozen = frozen
+        self._files = files
+        self._purity = purity
+        self._misses = misses
+        self._notices = notices
+        self._stored_keys = stored_keys
+
+    def refusal(
         self,
         func: Callable,
         func_name: str,
@@ -55,9 +117,9 @@ class StoreMixin:
     ) -> str | None:
         """Why *res* must not be stored, or ``None`` to store it.
 
-        One decision for the sync, async and streaming paths, which used to
-        carry three copies of it -- and it now says WHY, because "not stored"
-        is the answer to the next call's "why did that miss?".
+        One decision for the sync, async and streaming paths, and it says WHY,
+        because "not stored" is the answer to the next call's "why did that
+        miss?".
         """
         # Skip the write exactly once when THIS call revealed that the
         # function draws: its key was built before we knew, so an entry stored
@@ -71,15 +133,15 @@ class StoreMixin:
             try:
                 refusal = None if cache_if(res) else "cache_if returned False"
             except Exception as e:  # noqa: BLE001 - user predicate
-                self._warn_cache_if_raised(func_name, e)
+                self._notices.cache_if_raised(func_name, e)
                 refusal = "cache_if raised"
         # After the body ran, before deciding to store: a provisional global
         # this call moved must stop being folded.
         if capture_watch is not NO_WATCH:
-            self._learn_mutating_captures(func, func_name, capture_watch)
-        if refusal is None and self._refuses_identity_coupled(func_name, res):
+            self._purity.learn_mutating_captures(func, func_name, capture_watch)
+        if refusal is None and self._purity.refuses_identity_coupled(func_name, res):
             refusal = "the result is tied to the identity of an object in memory"
-        if refusal is None and self._inputs_moved_during_call(func_name, tracker):
+        if refusal is None and self._files.inputs_moved_during_call(func_name, tracker):
             refusal = "a file it read changed while it ran"
         stale_memo = getattr(tracker, "stale_memo_reads", None)
         if refusal is None and stale_memo:
@@ -87,7 +149,7 @@ class StoreMixin:
                 f"a memoised helper handed it data read from an earlier version of "
                 f"{sorted(stale_memo)[0]}; a fresh process reads the file as it is now"
             )
-        if refusal is None and self._code_moved_since_keyed(func, func_name):
+        if refusal is None and self._files.code_moved_since_keyed(func, func_name):
             refusal = "its code changed on disk after this process keyed it"
         if refusal is None and observer is not None and observer.mock_called:
             # Wherever the mock sat -- below the library call the body makes,
@@ -96,7 +158,7 @@ class StoreMixin:
             # Not waivable: no audit makes a fake the answer.
             refusal = "a unittest.mock object was called while it ran, so the result may be a test's fake"
         mutated = observer.mutated_args if observer is not None else None
-        if refusal is None and mutated and self._purity_mode(func_name) != "silent":
+        if refusal is None and mutated and self._registry.purity_mode(func_name) != "silent":
             # A hit returns the stored value and leaves the caller's object as
             # it was, where this call changed it: downstream of the call, the
             # program then differs between a hit and a miss (`a -= a.mean()`,
@@ -109,37 +171,7 @@ class StoreMixin:
             )
         return refusal
 
-    @staticmethod
-    def _lineage_hash(cache_key: str, auto_file_deps: dict | None) -> str:
-        """The lineage hash a result carries downstream.
-
-        It is the producer's ``cache_key`` PLUS a fingerprint of the files the
-        producer read. The cache key alone omits file state (files invalidate
-        via a freshness re-stat, not via the key), so without this a downstream
-        function keyed on the lineage hash would return a STALE result after an
-        upstream file changed - the producer recomputes, but its new output
-        carries the same lineage hash as the old one. Folding the file deps in
-        gives a changed file a distinct lineage. No deps -> unchanged key.
-
-        The fingerprint is built from the recorded content ``hash`` plus the
-        size, NOT the mtime. Content is the authoritative freshness
-        signal everywhere else, and mtime is the untrustworthy one: keying
-        lineage on it would hand a touched-but-identical file a new lineage and
-        needlessly recompute every downstream consumer, while a same-size edit
-        under an indistinguishable mtime would reuse the old lineage and serve
-        stale. A snapshot with no ``hash`` falls back to the mtime so the
-        entry still keeps a stable lineage.
-        """
-        if not auto_file_deps:
-            return cache_key
-        fp = hashlib.sha256(
-            repr(sorted((p, d.get("hash") or d.get("mtime"), d.get("size")) for p, d in auto_file_deps.items())).encode(
-                "utf-8"
-            )
-        ).hexdigest()
-        return f"{cache_key}:fdeps:{fp}"
-
-    def _attach_lineage(
+    def attach_lineage(
         self,
         result: Any,
         cache_key: str,
@@ -166,29 +198,24 @@ class StoreMixin:
             # CASH_DEBUG every int result logged "Cannot attach
             # _cash_lineage_hash to int".
             return
-        frozen = self._is_frozen(func_name)
+        frozen = self._registry.is_frozen(func_name)
         if frozen and type(result) in (list, tuple, dict):
-            self._remember_frozen_container(result, func_name, self._lineage_hash(cache_key, auto_file_deps))
+            self._frozen.remember_container(result, func_name, lineage_hash(cache_key, auto_file_deps))
             return
         if frozen and type(result).__name__ == "ndarray" and (type(result).__module__ or "").startswith("numpy"):
             # An array cannot carry a tag, and read-only is a promise numpy
             # enforces: a write raises instead of going stale.
             try:
-                result.flags.writeable = False
-                self._frozen_arrays[id(result)] = [
-                    weakref.ref(result, lambda _r, k=id(result), m=self._frozen_arrays: m.pop(k, None)),
-                    func_name,
-                    None,
-                ]
+                self._frozen.remember_array(result, func_name)
             except (AttributeError, TypeError, ValueError):
                 pass
             return
         if not frozen and type(result) in UNTAGGABLE_TYPES:
             return
-        lineage = self._lineage_hash(cache_key, auto_file_deps)
+        lineage = lineage_hash(cache_key, auto_file_deps)
         try:
             # Say who wrote it: nothing will move this tag when the value is
-            # mutated, so `_hash_arg_payload` must not take it for the content
+            # mutated, so `ArgHasher.hash_payload` must not take it for the content
             # -- unless the function was declared frozen=True.
             try:
                 result._cash_lineage_src = LINEAGE_SRC_FROZEN if frozen else LINEAGE_SRC_DECORATOR
@@ -197,7 +224,7 @@ class StoreMixin:
                     result._cash_lineage_producer = func_name
             except (AttributeError, TypeError):
                 if frozen:
-                    self._warn_frozen_has_no_effect(func_name, result)
+                    self._frozen.warn_has_no_effect(func_name, result)
             type_name = type(result).__name__
             module = type(result).__module__ or ""
 
@@ -257,12 +284,11 @@ class StoreMixin:
         except (AttributeError, TypeError):
             logger.debug("Failed to attach lineage hash to %s result", type(result).__name__)
 
-    def _store_in_cache(
+    def store(
         self,
         cache_key: str,
         func_name: str,
         result: Any,
-        metadata: dict[str, Any] | None,
         ttl: int | None,
         state_hash: str,
         args_hash: str,
@@ -289,7 +315,7 @@ class StoreMixin:
             # process and the stored-key record know it.
             ttl_declared = ttl is not None or None
             if ttl is None:
-                ttl = self._tier_default_ttl()
+                ttl = self._backend_slot.tier_default_ttl()
             meta = CacheMetadata(
                 key=cache_key,
                 func_name=func_name,
@@ -312,7 +338,7 @@ class StoreMixin:
                 args_hash=args_hash,
                 state_hash=state_hash,
                 # Each entry: path -> {'mtime': float, 'size': int}.
-                # Validated on subsequent get() via _auto_file_deps_fresh.
+                # Validated on subsequent get() via FileDeps.auto_file_deps_fresh.
                 auto_file_deps=auto_file_deps or None,
                 rng_replay=rng_replay or None,
                 # Decorating a function IS the decision to cache it, however
@@ -327,24 +353,24 @@ class StoreMixin:
                 # than sharing it. Not for a `frozen=True` function: declaring
                 # a result frozen says it is not modified, and handing the same
                 # object back is what that promises for a result no pickle can
-                # copy at all. This used to ride on `decorator_entry`, which
-                # made `frozen=True` look undecorated to the rate ceiling and
-                # cost it disk persistence entirely.
-                copy_required=not self._is_frozen(func_name),
+                # copy at all. Kept apart from `decorator_entry`, so that
+                # `frozen=True` does not look undecorated to the rate ceiling
+                # and lose disk persistence.
+                copy_required=not self._registry.is_frozen(func_name),
             )
 
             # Kept, not a temporary: TieredBackend writes back where the value
             # landed, and "RAM only" is the answer to the next process's miss.
             meta_dict = meta.to_dict()
-            self.backend.set(cache_key, result, meta_dict, serializer=serializer)
+            self._backend_slot.backend.set(cache_key, result, meta_dict, serializer=serializer)
             # A tiered backend catches each tier's failure so one bad tier
             # cannot break a call; it reports them here instead, and a result
             # nothing could store is a STORE-FAILED like any other.
             store_errors = meta_dict.get("store_errors")
             if store_errors and not [t for t in (meta_dict.get("storage") or []) if t != "RAM"]:
                 raise CacheBackendError("; ".join(str(e) for e in store_errors))
-            not_persisted = self._not_persisted_reason(meta_dict, execution_time)
-            self._remember_outcome(
+            not_persisted = not_persisted_reason(meta_dict)
+            self._misses.remember_outcome(
                 cache_key,
                 {
                     "stored_at": time.time(),
@@ -352,15 +378,15 @@ class StoreMixin:
                     "not_persisted": not_persisted,
                 },
             )
-            ledger = functools.partial(self._flat_ledger, func_name)
+            ledger = functools.partial(self._misses.flat_ledger, func_name)
             if not_persisted is None:
                 self._stored_keys.note_stored(func_name, cache_key, ttl, ledger)
             else:
                 self._stored_keys.note_ram_only(func_name, cache_key, not_persisted, ledger)
         except (OSError, TypeError, pickle.PicklingError, RuntimeError, CacheBackendError) as e:
-            self._note_not_stored(cache_key, "the backend refused the write")
-            backend_name = type(self.backend).__name__
-            self._warn_once(
+            self._misses.note_not_stored(cache_key, "the backend refused the write")
+            backend_name = type(self._backend_slot.backend).__name__
+            self._notices.warn_once(
                 CashCacheStoreFailedWarning,
                 func_name,
                 "",
@@ -371,7 +397,7 @@ class StoreMixin:
                 fix=STORE_FAILED_FIX,
             )
 
-    def _warn_cache_if_bypassed(self, spec: CachedFunction, stacklevel: int | None = None) -> None:
+    def _warn_cache_if_bypassed(self, spec: CachedFunction) -> None:
         """One-shot: the result outgrew a single chunk, so cache_if cannot run.
 
         Applying it would mean materializing every chunk back into memory,
@@ -379,12 +405,12 @@ class StoreMixin:
 
         The fix line says **raise** the thresholds, and that direction is
         load-bearing. ``cache_if`` is consulted only in the ``chunk_index == 0``
-        branch of ``_stream_and_store`` -- the whole result fit one chunk -- and
-        this fires at ``chunk_index == 1``, once it did not. The message used to
-        advise *lowering* the thresholds, which produces more chunks and so
-        guarantees the very bypass it is warning about.
+        branch of ``ResultStore.stream_and_store`` -- the whole result fit one chunk -- and
+        this fires at ``chunk_index == 1``, once it did not. Lowering the
+        thresholds would produce more chunks and so guarantee the very bypass
+        it is warning about.
         """
-        self._warn_once(
+        self._notices.warn_once(
             CashCacheIneffectiveWarning,
             spec.name,
             "",
@@ -397,10 +423,9 @@ class StoreMixin:
             "result reaches, or return a list instead of an iterator, so "
             "the whole result arrives in one piece for the predicate to "
             "see.",
-            stacklevel=stacklevel,
         )
 
-    def _stream_and_store(
+    def stream_and_store(
         self,
         source,
         *,
@@ -431,8 +456,7 @@ class StoreMixin:
         that breaks out, or a producer that raises, leaves no entry -- a
         truncated result under the full result's key is a wrong answer, not a
         slow one. Chunks already flushed are removed on the way out. The cost
-        is real and accepted: draining eagerly used to leave a complete entry
-        behind even when the caller took two items, and it no longer does.
+        is real and accepted: a caller that takes two items leaves no entry.
 
         **Time is the producer's, not the wall clock.** Only the spans inside
         `next()` are summed, so a slow consumer cannot inflate the number the
@@ -451,8 +475,7 @@ class StoreMixin:
         try:
             # Entered ONCE. Per item we only suspend around the `yield`, which
             # is a ContextVar swap; `__enter__` reinstalls patches and rechecks
-            # the import hook, and paying that per item cost 5.1us each --
-            # measured 294ms -> 1521ms on a 200k-item iterator before this.
+            # the import hook, which costs microseconds per item.
             with tracker, observer:
                 while True:
                     started = _perf_counter()
@@ -483,18 +506,18 @@ class StoreMixin:
                         observer.resume(observer_token)
                         tracker.resume(tracker_token)
 
-            self._check_argument_mutation(func_name, args, kwargs, args_hash, observer)
-            self._report_observed_effects(func_name, observer)
-            self._credit_remembered_reads(func_name, tracker, args, kwargs)
-            auto_file_deps = self._snapshot_tracked_deps(tracker, spec.func.__module__)
+            self._purity.check_argument_mutation(func_name, args, kwargs, args_hash, observer)
+            self._purity.report_observed_effects(func_name, observer)
+            self._files.credit_remembered_reads(func_name, tracker, args, kwargs)
+            auto_file_deps = snapshot_tracked_deps(tracker, spec.func.__module__)
 
             if chunk_index == 0:
                 # Everything fit in one chunk, so cache_if can still see the
                 # whole result -- it gates STORAGE, never what the caller
                 # already received.
-                refusal = self._store_refusal(None, func_name, buffer, rng_new, cache_if, tracker, observer=observer)
+                refusal = self.refusal(None, func_name, buffer, rng_new, cache_if, tracker, observer=observer)
                 if refusal is not None:
-                    self._note_not_stored(cache_key, refusal)
+                    self._misses.note_not_stored(cache_key, refusal)
                 else:
                     if buffer:
                         self._write_one_chunk(cache_key, 0, buffer, ttl=ttl, execution_time=produced_seconds)
@@ -535,7 +558,7 @@ class StoreMixin:
                 # killed process can still leave some behind.
                 for index in range(chunk_index):
                     try:
-                        self.backend.delete(f"{cache_key}:chunk_{index}")
+                        self._backend_slot.backend.delete(f"{cache_key}:chunk_{index}")
                     except Exception:  # noqa: BLE001 - cleanup must not raise
                         logger.debug("[CORE] could not drop orphan chunk %d", index)
 
@@ -575,19 +598,17 @@ class StoreMixin:
             ttl=ttl,
         ).to_dict()
         try:
-            self.backend.set(chunk_key, chunk_buffer, chunk_metadata, serializer=serializer)
+            self._backend_slot.backend.set(chunk_key, chunk_buffer, chunk_metadata, serializer=serializer)
         except (OSError, TypeError, pickle.PicklingError, RuntimeError) as e:
-            backend_name = type(self.backend).__name__
-            self._warn_once(
+            backend_name = type(self._backend_slot.backend).__name__
+            self._notices.warn_once(
                 CashCacheStoreFailedWarning,
                 f"{cache_key}:chunk_{chunk_index}",
                 "",
-                # NOT "you will get a truncated iterator". ``_chunks_are_intact``
+                # NOT "you will get a truncated iterator". ``CallRunner._chunks_are_intact``
                 # probes every chunk and turns a manifest with a hole into a
                 # MISS, on both read paths, so the cost is a permanent recompute
-                # rather than a short answer. The locked re-read skipped that
-                # guard until 2026-09-06; do not re-introduce the truncation
-                # language here without first checking it is true again.
+                # rather than a short answer.
                 f"@cash.cache: backend {backend_name} failed to store "
                 f"chunk {chunk_index} of {cache_key} ({type(e).__name__}: {e}), "
                 f"so the entry can never be read back and every later call "
@@ -629,10 +650,10 @@ class StoreMixin:
                 n_chunks=manifest_data["n_chunks"],
                 auto_file_deps=auto_file_deps or None,
             ).to_dict()
-            self.backend.set(cache_key, manifest_data, metadata, serializer=serializer)
+            self._backend_slot.backend.set(cache_key, manifest_data, metadata, serializer=serializer)
         except (OSError, TypeError, pickle.PicklingError, RuntimeError) as e:
-            backend_name = type(self.backend).__name__
-            self._warn_once(
+            backend_name = type(self._backend_slot.backend).__name__
+            self._notices.warn_once(
                 CashCacheStoreFailedWarning,
                 func_name,
                 "",

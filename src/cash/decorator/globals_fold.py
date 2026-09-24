@@ -12,9 +12,9 @@ import sys
 import textwrap
 import types
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from ..dependency_state import ledger_note
+from ..dependency_state import SysModulesHelperResolver, ledger_note
 from ..effects import environment_component
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashImpurityWarning
 from ..purity_analyzer import (
@@ -30,8 +30,25 @@ from ..purity_analyzer import (
 )
 from ..source_norm import own_source
 from .call_state import CAPTURE_WATCH
-from .closure_fold import ClosureFoldMixin
-from .code_identity import CodeIdentityMixin
+from .closure_fold import iter_code_scopes, unsafe_uses_of, waived_use_filter
+from .code_identity import (
+    func_key,
+    hash_callable_source,
+    is_user_class,
+    is_user_module,
+    iter_contained,
+    own_package,
+    wraps_code,
+)
+
+if TYPE_CHECKING:
+    from ..dependency_state import DependencyStateHasher
+    from .arg_hashing import ArgHasher
+    from .closure_fold import HelperIdentity
+    from .code_identity import CodeIdentity
+    from .purity_checks import LearnedMutations
+    from .registry import FunctionRegistry
+    from .reporting import Notices
 
 # Two fix lines are shared by more than one emit site, because more than one
 # site tells the same story: a global whose value cannot be hashed is one
@@ -89,10 +106,92 @@ LOG_METHOD_NAMES = frozenset(
 )
 
 
-class GlobalsFoldMixin:
-    """The globals a function and its helpers read, folded into the state segment."""
+#: Dunder globals that are machine or import machinery, never user data.
+#:
+#: These are skipped: ``__file__`` and ``__name__`` differ per checkout and
+#: per invocation, so folding them would make a cache key un-shareable
+#: between two machines and between ``python job.py`` and ``python -m
+#: job``. Every other dunder is folded like any global, because a library
+#: declares its data that way too: a bumped ``__version__`` must invalidate
+#: what a report stamped with it.
+MACHINERY_DUNDERS = frozenset(
+    {
+        "__name__",
+        "__file__",
+        "__doc__",
+        "__package__",
+        "__loader__",
+        "__spec__",
+        "__builtins__",
+        "__path__",
+        "__cached__",
+        "__debug__",
+        "__annotations__",
+        "__dict__",
+        "__module__",
+        "__qualname__",
+    }
+)
 
-    def _fold_environment(self, func_name: str, state_hash: str) -> str:
+
+def stabilize_for_global_hash(v: Any, hash_callable, _depth: int = 0) -> Any:
+    """Rewrite *v* so callables (incl. lambdas held in containers) are
+    replaced by their source hash, making a container of callables hashable
+    and content-sensitive (dict-dispatch channel)."""
+    if _depth > 8:
+        return v
+    if callable(v) and not isinstance(v, type):
+        try:
+            return ("__cash_callable__", hash_callable(v))
+        except (OSError, TypeError, ValueError):
+            return ("__cash_callable__", getattr(v, "__qualname__", repr(v)))
+    if isinstance(v, dict):
+        return {k: stabilize_for_global_hash(val, hash_callable, _depth + 1) for k, val in v.items()}
+    if isinstance(v, (list, tuple)):
+        return type(v)(stabilize_for_global_hash(x, hash_callable, _depth + 1) for x in v)
+    return v
+
+
+class GlobalsFold:
+    """The module data a function and its helpers read, folded into the state
+    segment: globals, ``module.ATTR`` reads, data reached through local
+    bindings, what a library-made callable carries, and the environment."""
+
+    def __init__(
+        self,
+        args: ArgHasher,
+        code: CodeIdentity,
+        helpers: HelperIdentity,
+        registry: FunctionRegistry,
+        state_hasher: DependencyStateHasher,
+        mutations: LearnedMutations,
+        notices: Notices,
+    ) -> None:
+        self._args = args
+        self._code = code
+        self._helpers = helpers
+        self._registry = registry
+        self._state_hasher = state_hasher
+        self._mutations = mutations
+        self._notices = notices
+        # The same live re-resolution the state hasher does, for functions
+        # found inside data globals (`data_callable_identity`).
+        self._data_helper_resolver = SysModulesHelperResolver(helpers.identity)
+        # code object -> global names its decorator expressions read
+        self._decorator_names_cache: dict = {}
+        # code object -> tuple of global names it reads (global folding)
+        self._global_read_cache: dict = {}
+        # code object -> names folded only provisionally. See
+        # `read_global_data_names`. A missing entry means "unknown", which
+        # `fold_read_globals` treats as "watch everything".
+        self._provisional_global_cache: dict = {}
+        # (module_global, attribute) read pairs per code object; see
+        # `_read_module_attr_pairs`.
+        self._module_attr_cache: dict = {}
+        self._local_binding_cache: dict[Any, tuple | None] = {}
+        self._carrier_verdicts: dict[int, tuple[Any, bool]] = {}
+
+    def fold_environment(self, func_name: str, state_hash: str) -> str:
         """Fold the current value of every environment read into the key.
 
         ``os.environ["TENANT"]`` in a cached body served the first tenant's
@@ -117,47 +216,17 @@ class GlobalsFoldMixin:
         if func_name in visited:
             return set()
         visited.add(func_name)
-        report = self._purity_reports.get(func_name)
+        report = self._registry.purity_reports.get(func_name)
         found = set(getattr(report, "environment_reads", ()) or ())
-        for dep in self.graph.get_dependencies(func_name):
+        for dep in self._registry.graph.get_dependencies(func_name):
             found |= self._environment_reads(dep, visited)
         return found
 
-    #: Dunder globals that are machine or import machinery, never user data.
-    #:
-    #: Every dunder used to be skipped, which is right for these -- ``__file__``
-    #: and ``__name__`` differ per checkout and per invocation, so folding them
-    #: would make a cache key un-shareable between two machines and between
-    #: ``python job.py`` and ``python -m job``. It is wrong for the ones a
-    #: library actually declares: a bumped ``__version__`` invalidated
-    #: NOTHING, and a report stamped with the old version went on being
-    #: published through three further edits that each correctly invalidated
-    #: other stages. ``RELEASE`` and ``LEVEL`` in the same file were
-    #: tracked; only the dunder spelling was not.
-    _MACHINERY_DUNDERS = frozenset(
-        {
-            "__name__",
-            "__file__",
-            "__doc__",
-            "__package__",
-            "__loader__",
-            "__spec__",
-            "__builtins__",
-            "__path__",
-            "__cached__",
-            "__debug__",
-            "__annotations__",
-            "__dict__",
-            "__module__",
-            "__qualname__",
-        }
-    )
-
-    def _read_global_data_names(self, func: Callable) -> tuple[str, ...]:
+    def read_global_data_names(self, func: Callable) -> tuple[str, ...]:
         """Global names *func* references that are candidates for data-folding.
 
         ``co_names`` intersected with the function's globals, minus the import
-        machinery dunders (``_MACHINERY_DUNDERS``) and minus any global the
+        machinery dunders (``MACHINERY_DUNDERS``) and minus any global the
         function WRITES (``STORE_GLOBAL`` /
         ``DELETE_GLOBAL``). A written global is a side-effect accumulator (a
         ``global counter; counter += 1``) whose value drifts every call - folding
@@ -183,7 +252,7 @@ class GlobalsFoldMixin:
             return cached
         g = getattr(func, "__globals__", {}) or {}
 
-        scopes = tuple(ClosureFoldMixin._iter_code_scopes(code))
+        scopes = tuple(iter_code_scopes(code))
         written = {
             instr.argval
             for scope in scopes
@@ -194,48 +263,41 @@ class GlobalsFoldMixin:
             n
             for scope in scopes
             for n in (scope.co_names or ())
-            if n in g and n not in GlobalsFoldMixin._MACHINERY_DUNDERS and n not in written
+            if n in g and n not in MACHINERY_DUNDERS and n not in written
         }
         # A name spelled as a string reads the same global: `globals()["K"]`
         # is a LOAD_CONST, so `co_names` never had it and editing K served the
         # old answer -- 20 where an uncached run gives 500. The code channel already resolves string
-        # constants this way (`_referenced_user_code`); this is its data twin.
+        # constants this way (`CodeIdentity._code_ref_targets`); this is its data twin.
         # A string that merely happens to match a global costs a fold, never a
         # stale value.
         candidates |= {
             c
             for scope in scopes
             for c in (scope.co_consts or ())
-            if isinstance(c, str)
-            and c.isidentifier()
-            and c in g
-            and c not in GlobalsFoldMixin._MACHINERY_DUNDERS
-            and c not in written
+            if isinstance(c, str) and c.isidentifier() and c in g and c not in MACHINERY_DUNDERS and c not in written
         }
         # Also exclude globals the body mutates IN PLACE (``g['k'] += 1``,
         # ``g.append(...)``) - a STORE_GLOBAL-free accumulator that would
         # otherwise drift every call and cause a permanent miss.
         #
         # `hard` is that set: mutations visible in this function's own source.
-        # `provisional` is the weaker case the argument rule used to lump in with
-        # it - a name merely PASSED to a call. Those are folded (so a change
+        # `provisional` is the weaker case - a name merely PASSED to a call. Those are folded (so a change
         # invalidates) and confirmed at runtime by
-        # `_learn_mutating_captures`, which demotes any that the call is actually
+        # `PurityChecks.learn_mutating_captures`, which demotes any that the call is actually
         # observed to mutate.
         provisional: frozenset = frozenset()
         if candidates:
             try:
                 tree = ast.parse(textwrap.dedent(inspect.getsource(func)))
-                hard = ClosureFoldMixin._unsafe_uses_of(
+                hard = unsafe_uses_of(
                     tree,
                     candidates,
                     bare_args=False,
                     mutating_methods_only=True,
                 )
-                suspected = ClosureFoldMixin._unsafe_uses_of(tree, candidates) - hard
-                provisional = ClosureFoldMixin._unsafe_uses_of(
-                    tree, suspected, waived=ClosureFoldMixin._waived_use_filter(func)
-                )
+                suspected = unsafe_uses_of(tree, candidates) - hard
+                provisional = unsafe_uses_of(tree, suspected, waived=waived_use_filter(func))
                 # Suspected only on waived lines (`LEDGER.record(r)  #
                 # @cash:assume-safe`): the audited effect moves it on every
                 # call, so keying on it made every hit impossible and demoting
@@ -243,7 +305,7 @@ class GlobalsFoldMixin:
                 hard |= suspected - provisional
                 candidates -= hard
             except SOURCE_RETRIEVAL_ERRORS:
-                # No source: keep the old conservative answer. Without an AST
+                # No source: the conservative answer. Without an AST
                 # there is no way to tell a read from a mutation, and folding
                 # blind would risk the permanent-miss trap with nothing to
                 # learn from.
@@ -253,33 +315,13 @@ class GlobalsFoldMixin:
             self._global_read_cache[code] = names
             # Kept in lockstep with the names cache so the two can never
             # disagree about a code object. A MISSING entry is not "nothing is
-            # provisional" -- `_fold_read_globals` reads that as "watch every
+            # provisional" -- `GlobalsFold.fold_read_globals` reads that as "watch every
             # folded name", which costs an extra hash per miss and is the safe
             # direction.
             self._provisional_global_cache[code] = provisional
         return names
 
-    @staticmethod
-    def _stabilize_for_global_hash(v: Any, hash_callable, _depth: int = 0) -> Any:
-        """Rewrite *v* so callables (incl. lambdas held in containers) are
-        replaced by their source hash, making a container of callables hashable
-        and content-sensitive (dict-dispatch channel)."""
-        if _depth > 8:
-            return v
-        if callable(v) and not isinstance(v, type):
-            try:
-                return ("__cash_callable__", hash_callable(v))
-            except (OSError, TypeError, ValueError):
-                return ("__cash_callable__", getattr(v, "__qualname__", repr(v)))
-        if isinstance(v, dict):
-            return {
-                k: GlobalsFoldMixin._stabilize_for_global_hash(val, hash_callable, _depth + 1) for k, val in v.items()
-            }
-        if isinstance(v, (list, tuple)):
-            return type(v)(GlobalsFoldMixin._stabilize_for_global_hash(x, hash_callable, _depth + 1) for x in v)
-        return v
-
-    def _data_callable_identity(self, fn: Any) -> str:
+    def data_callable_identity(self, fn: Any) -> str:
         """A callable found INSIDE a data global, identified by what calling it runs.
 
         A registry -- ``STEPS = {"load": load_step}`` read by a cached
@@ -291,21 +333,20 @@ class GlobalsFoldMixin:
         as a call to it would; a plain function of the user's as its source
         plus its helpers, re-resolved live like any helper's.
         """
-        return self._data_callable_identity_of(fn)
-
-    def _data_callable_identity_of(self, fn: Any) -> str:
         if getattr(fn, "_cash_cached", False):
             inner = getattr(fn, "__wrapped__", None)
             if inner is not None:
-                name = self.get_func_key(inner)
-                if name in self.functions:
-                    if name not in self._populated:
-                        self._ensure_closure_analyzed(inner)
-                    return "cached:" + self._state_hasher.compute(name, own_source_override=self._pin_own_source(inner))
+                name = func_key(inner)
+                if name in self._registry.functions:
+                    if name not in self._registry.populated:
+                        self._registry.ensure_closure_analyzed(inner)
+                    return "cached:" + self._state_hasher.compute(
+                        name, own_source_override=self._code.pin_own_source(inner)
+                    )
                 fn = inner
         if not isinstance(fn, types.FunctionType):
-            return self._hash_callable_source(fn)
-        own = self._hash_helper_identity(fn)
+            return hash_callable_source(fn)
+        own = self._helpers.identity(fn)
 
         if not own_code_is_user(fn, getattr(fn, "__module__", None)):
             return own
@@ -319,7 +360,7 @@ class GlobalsFoldMixin:
         helpers = ",".join(f"{q}={live.get(q, h)}" for q, h in sorted(report.helper_source_hashes.items()))
         return hashlib.sha256(f"{own}|{helpers}".encode("utf-8")).hexdigest()
 
-    def _fold_read_globals(
+    def fold_read_globals(
         self,
         func: Callable,
         func_name: str,
@@ -333,7 +374,7 @@ class GlobalsFoldMixin:
         ``owner_code`` is the code object the DRIFT GUARD is recorded under.
         It defaults to *func*'s own, which is right when *func* is the cached
         function. When folding a HELPER's globals it must be the CACHED
-        function's code instead: `_learn_mutating_captures` records drift
+        function's code instead: `PurityChecks.learn_mutating_captures` records drift
         against the function whose call was observed, so looking it up under
         the helper's code would never find the entry, fold a drifting
         accumulator anyway, and miss forever.
@@ -345,7 +386,7 @@ class GlobalsFoldMixin:
         purity analyzer / dependency graph), and classes are excluded; unhashable
         data globals warn once and are skipped.
         """
-        names = self._read_global_data_names(func)
+        names = self.read_global_data_names(func)
         if extra_names:
             names = tuple(dict.fromkeys(names + extra_names))
         g = getattr(func, "__globals__", None)
@@ -356,15 +397,13 @@ class GlobalsFoldMixin:
         # globals, so bailing here skipped the module-attribute channel in
         # exactly the case it exists for.
         parts: list[tuple[str, str]] = []
-        own_pkg = self._own_package(func)
+        own_pkg = own_package(func)
         root_module = getattr(func, "__module__", None)
         code = getattr(func, "__code__", None)
         # A missing provisional entry means "unknown", not "none" -- watch every
-        # folded name rather than fold one blind (see `_read_global_data_names`).
+        # folded name rather than fold one blind (see `GlobalsFold.read_global_data_names`).
         provisional = self._provisional_global_cache.get(code)
-        learned_mutating = self._mutating_globals.get(
-            (owner_code if owner_code is not None else code, "global"), frozenset()
-        )
+        learned_mutating = self._mutations.of(owner_code if owner_code is not None else code, "global")
         watch: dict[str, str] = {}
         for name in names:
             if name not in g:
@@ -377,8 +416,8 @@ class GlobalsFoldMixin:
             if name in learned_mutating:
                 # Observed to drift as a result of calling this function. Folding
                 # it would key the entry on the function's own output and miss
-                # forever, which is the trap the old argument rule guarded --
-                # and the decorator has no perpetual-miss guard to catch it.
+                # forever, and the decorator has no perpetual-miss guard to
+                # catch it.
                 continue
             v = g[name]
             # Skip modules, classes, and plain callables (helpers/deps handled
@@ -386,23 +425,23 @@ class GlobalsFoldMixin:
             if isinstance(v, types.ModuleType) or isinstance(v, type):
                 continue
             if callable(v) and not isinstance(v, (dict, list, tuple, set)):
-                carried = self._carried_global_hash(v, root_module)
+                carried = self.carried_global_hash(v, root_module)
                 if carried is not None:
                     parts.append((f"{name}#carried", carried))
                     watch[name] = (carried, "carrier", (g, name), None)
                 continue
             try:
-                stabilized = self._stabilize_for_global_hash(v, self._data_callable_identity)
-                h = self._hash_arg_payload((stabilized,), {})
+                stabilized = stabilize_for_global_hash(v, self.data_callable_identity)
+                h = self._args.hash_payload((stabilized,), {})
                 parts.append((name, h))
                 # Free: this is the hash the key already needed. Keeping it is
                 # what makes the post-call check cost one hash instead of two.
                 if provisional is None or name in provisional:
                     # `g`, not the decorated function's globals: this may be a
-                    # helper's module (see `_fold_helper_read_globals`).
+                    # helper's module (see `GlobalsFold.fold_helper_read_globals`).
                     watch[name] = (h, "global", g, func)
             except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
-                self._warn_once(
+                self._notices.warn_once(
                     CashImpurityWarning,
                     func_name,
                     name,
@@ -417,19 +456,19 @@ class GlobalsFoldMixin:
             # value-hashed above -- its class's method SOURCE is invisible to the
             # pickle, so editing a method served stale. Fold the class-graph
             # source too (memoized per class; see _instance_class_source_parts).
-            for item in self._iter_contained(v):
-                if self._is_user_class(type(item), own_pkg):
-                    for cname, chash in self._instance_class_source_parts(item, own_pkg=own_pkg):
+            for item in iter_contained(v):
+                if is_user_class(type(item), own_pkg):
+                    for cname, chash in self._code.instance_class_source_parts(item, own_pkg=own_pkg):
                         parts.append((f"{name}#cls:{cname}", chash))
-                elif isinstance(item, type) and self._is_user_class(item, own_pkg):
+                elif isinstance(item, type) and is_user_class(item, own_pkg):
                     # The CLASS itself, not an instance of it: `TABLE = {"fast":
                     # impl.Fast}` pickles by reference, so editing `Fast.run`
                     # moved nothing while the same dict holding a FUNCTION was
                     # followed.
-                    surface = self._code_surface_hash(item)
+                    surface = self._code.code_surface_hash(item)
                     if surface is not None:
                         parts.append((f"{name}#cls:{item.__qualname__}", surface))
-        parts.extend(self._module_attr_parts(func, func_name, g, learned=learned_mutating, watch=watch))
+        parts.extend(self.module_attr_parts(func, func_name, g, learned=learned_mutating, watch=watch))
         pending = CAPTURE_WATCH.get()
         if pending is not None:
             pending.update(watch)
@@ -442,7 +481,7 @@ class GlobalsFoldMixin:
         payload = ":".join(f"{n}={h}" for n, h in sorted(parts))
         return hashlib.sha256(f"{state_hash}:globals:{payload}".encode("utf-8")).hexdigest()
 
-    def _fold_helper_read_globals(self, func: Callable, func_name: str, state_hash: str) -> str:
+    def fold_helper_read_globals(self, func: Callable, func_name: str, state_hash: str) -> str:
         """Fold globals the transitive HELPERS read, not just *func*'s own.
 
         A helper reading module state made its caller stale with no warning::
@@ -463,7 +502,7 @@ class GlobalsFoldMixin:
         ``SysModulesHelperResolver``: a redefined helper reads the redefined
         module's globals.
         """
-        report = self._purity_reports.get(func_name)
+        report = self._registry.purity_reports.get(func_name)
         if report is None or not (report.helper_resolution_paths or report.helper_objects):
             return state_hash
         owner_code = getattr(func, "__code__", None)
@@ -473,7 +512,7 @@ class GlobalsFoldMixin:
         seen: set = set()
         own_globals = getattr(func, "__globals__", None)
         if isinstance(own_globals, dict):
-            for name in self._read_global_data_names(func):
+            for name in self.read_global_data_names(func):
                 seen.add((id(own_globals), name))
         return self._fold_paths_read_globals(
             report,
@@ -512,7 +551,7 @@ class GlobalsFoldMixin:
                 continue
             if getattr(target, "__globals__", None) is None:
                 continue
-            state_hash = self._fold_read_globals(target, func_name, state_hash, owner_code=owner_code, seen=seen)
+            state_hash = self.fold_read_globals(target, func_name, state_hash, owner_code=owner_code, seen=seen)
         # A callable bound at a call site carries DATA besides its code: a
         # partial's arguments, a bound method's instance, a callable
         # instance's attributes. Its code is followed as a helper; this is the
@@ -540,7 +579,7 @@ class GlobalsFoldMixin:
             target = report.helper_objects[qual]()
             if target is None or target is func or getattr(target, "__globals__", None) is None:
                 continue
-            state_hash = self._fold_read_globals(
+            state_hash = self.fold_read_globals(
                 target,
                 func_name,
                 state_hash,
@@ -572,7 +611,7 @@ class GlobalsFoldMixin:
             callable(value)
             and not isinstance(value, (types.FunctionType, types.BuiltinFunctionType, type, types.ModuleType))
             and not is_mock(value)
-            and self._is_user_class(type(value), self._own_package(type(value)))
+            and is_user_class(type(value), own_package(type(value)))
         ):
             payload = value
         elif callable(value) and not is_mock(value) and held_partials(value):
@@ -583,12 +622,12 @@ class GlobalsFoldMixin:
         else:
             return None
         try:
-            stabilized = self._stabilize_for_global_hash(payload, self._data_callable_identity)
-            return self._hash_arg_payload((stabilized,), {})
+            stabilized = stabilize_for_global_hash(payload, self.data_callable_identity)
+            return self._args.hash_payload((stabilized,), {})
         except Exception:  # noqa: BLE001 - never break a call over this
             return None
 
-    def _carried_global_hash(self, value: Any, root_module: str | None) -> str | None:
+    def carried_global_hash(self, value: Any, root_module: str | None) -> str | None:
         """Hash of the data a LIBRARY-made callable carries, or None.
 
         ``SMOOTH = partial(ndimage.gaussian_filter, sigma=SIGMA)``, ``POLY =
@@ -606,7 +645,7 @@ class GlobalsFoldMixin:
 
         Some of these change when called -- a bound ``rng.normal`` advances
         its generator, ``np.vectorize`` fills a cache -- so every one is
-        watched by `_learn_mutating_captures`, which stops folding it after
+        watched by `PurityChecks.learn_mutating_captures`, which stops folding it after
         the first call that moved it (one extra miss, no warning: the user
         did not write the mutation).
         """
@@ -667,8 +706,8 @@ class GlobalsFoldMixin:
                     self._note_carrier_verdict(value, True)
             elif verdict[1] == "partials":
                 payload = ("wrapped partials", held_partials(value))
-            stabilized = self._stabilize_for_global_hash(payload, self._data_callable_identity)
-            return self._hash_arg_payload((stabilized,), {})
+            stabilized = stabilize_for_global_hash(payload, self.data_callable_identity)
+            return self._args.hash_payload((stabilized,), {})
         except Exception:  # noqa: BLE001 - unkeyable before, never break a call over it
             self._note_carrier_verdict(value, False)
             return None
@@ -715,13 +754,13 @@ class GlobalsFoldMixin:
         self._decorator_names_cache[code] = names
         return names
 
-    def _fold_dependency_read_globals(self, func: Callable, func_name: str, state_hash: str) -> str:
+    def fold_dependency_read_globals(self, func: Callable, func_name: str, state_hash: str) -> str:
         """Fold the globals the CACHED functions this one calls read.
 
         The third of the three channels a global can reach a key through, and
         the one that was missing. A cached function's own globals are folded by
-        ``_fold_read_globals``; its plain helpers' by
-        ``_fold_helper_read_globals``; a cached CALLEE's were folded into that
+        ``GlobalsFold.fold_read_globals``; its plain helpers' by
+        ``GlobalsFold.fold_helper_read_globals``; a cached CALLEE's were folded into that
         callee's key and nowhere else::
 
             # rules.py
@@ -756,27 +795,27 @@ class GlobalsFoldMixin:
         seen: set = set()
         own_globals = getattr(func, "__globals__", None)
         if isinstance(own_globals, dict):
-            for name in self._read_global_data_names(func):
+            for name in self.read_global_data_names(func):
                 seen.add((id(own_globals), name))
         visited = {func_name}
-        stack = sorted(self.graph.get_dependencies(func_name))
+        stack = sorted(self._registry.graph.get_dependencies(func_name))
         while stack:
             dep = stack.pop()
             if dep in visited:
                 continue
             visited.add(dep)
-            stack.extend(sorted(self.graph.get_dependencies(dep)))
-            dep_func = self.functions.get(dep)
+            stack.extend(sorted(self._registry.graph.get_dependencies(dep)))
+            dep_func = self._registry.functions.get(dep)
             if dep_func is None or getattr(dep_func, "__globals__", None) is None:
                 continue
-            state_hash = self._fold_read_globals(
+            state_hash = self.fold_read_globals(
                 dep_func,
                 func_name,
                 state_hash,
                 owner_code=owner_code,
                 seen=seen,
             )
-            dep_report = self._purity_reports.get(dep)
+            dep_report = self._registry.purity_reports.get(dep)
             if dep_report is not None and (dep_report.helper_resolution_paths or dep_report.helper_objects):
                 state_hash = self._fold_paths_read_globals(
                     dep_report,
@@ -792,7 +831,7 @@ class GlobalsFoldMixin:
         """``(module_global, attribute)`` pairs the body reads, from bytecode.
 
          ``import conf; conf.RATE`` compiles to ``LOAD_GLOBAL conf`` followed by
-         ``LOAD_ATTR RATE``. Only the *module* reaches ``_read_global_data_names``,
+         ``LOAD_ATTR RATE``. Only the *module* reaches ``GlobalsFold.read_global_data_names``,
          and modules are filtered out at fold time, so the attribute was never
          keyed on: ``conf.RATE`` went permanently stale while the equivalent
          ``from conf import RATE`` invalidated correctly. Two spellings of one
@@ -815,13 +854,13 @@ class GlobalsFoldMixin:
         # paired with every identifier-shaped constant in it; a pair that does
         # not exist is dropped at fold time by the getattr below.
         g = getattr(func, "__globals__", None) or {}
-        for scope in ClosureFoldMixin._iter_code_scopes(code):
+        for scope in iter_code_scopes(code):
             modules = [n for n in (scope.co_names or ()) if isinstance(g.get(n), types.ModuleType)]
             if modules:
                 for const in scope.co_consts or ():
                     if isinstance(const, str) and const.isidentifier():
                         pairs.update((m, const) for m in modules)
-        for scope in ClosureFoldMixin._iter_code_scopes(code):
+        for scope in iter_code_scopes(code):
             instrs = list(dis.get_instructions(scope))
             for prev, nxt in zip(instrs, instrs[1:]):
                 if prev.opname != "LOAD_GLOBAL":
@@ -903,7 +942,7 @@ class GlobalsFoldMixin:
             return []
 
         imports, attr_reads, bare_reads = plan
-        own_pkg = self._own_package(func)
+        own_pkg = own_package(func)
         root_module = getattr(func, "__module__", None)
         code = func.__code__
         cells = dict(zip(code.co_freevars or (), getattr(func, "__closure__", None) or ()))
@@ -927,14 +966,14 @@ class GlobalsFoldMixin:
             if callable(value) and not isinstance(value, (dict, list, tuple, set)):
                 return  # code: the helper walk follows it
             try:
-                stabilized = self._stabilize_for_global_hash(value, self._data_callable_identity)
-                parts.append((label, self._hash_arg_payload((stabilized,), {})))
+                stabilized = stabilize_for_global_hash(value, self.data_callable_identity)
+                parts.append((label, self._args.hash_payload((stabilized,), {})))
             except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
                 pass
 
         for name, attrs in attr_reads.items():
             obj = resolve(name)
-            if not isinstance(obj, types.ModuleType) or not self._is_user_module(obj, own_pkg):
+            if not isinstance(obj, types.ModuleType) or not is_user_module(obj, own_pkg):
                 continue
             for attr in sorted(attrs):
                 try:
@@ -948,7 +987,7 @@ class GlobalsFoldMixin:
                 fold(f"local:{name}", obj)
         return parts
 
-    def _module_attr_parts(
+    def module_attr_parts(
         self,
         func: Callable,
         func_name: str,
@@ -971,19 +1010,19 @@ class GlobalsFoldMixin:
         handled by the helper channel, the others carry no editable value) --
         except what a library-made callable was built with (``conf.SMOOTH =
         partial(gaussian_filter, sigma=...)``), which is folded when *watch*
-        is given, so the drift guard can see it too (`_carried_global_hash`).
+        is given, so the drift guard can see it too (`GlobalsFold.carried_global_hash`).
         *learned* is the drift guard's verdict: labels not to fold.
         """
         parts: list[tuple[str, str]] = []
-        own_pkg = self._own_package(func)
+        own_pkg = own_package(func)
         for mod_name, attr in self._read_module_attr_pairs(func):
             obj = g.get(mod_name)
-            is_mod = isinstance(obj, types.ModuleType) and self._is_user_module(obj, own_pkg)
+            is_mod = isinstance(obj, types.ModuleType) and is_user_module(obj, own_pkg)
             # ``Cfg.LIMIT`` -- a class constant read through the class NAME -- is
             # the same bytecode shape (LOAD_GLOBAL Cfg; LOAD_ATTR LIMIT) but was
             # skipped because ``Cfg`` is a class, not a module, so editing the
             # constant served stale. Fold user-class attributes too.
-            is_cls = isinstance(obj, type) and self._is_user_class(obj, own_pkg)
+            is_cls = isinstance(obj, type) and is_user_class(obj, own_pkg)
             if not (is_mod or is_cls):
                 continue
             try:
@@ -993,7 +1032,7 @@ class GlobalsFoldMixin:
             label = f"{mod_name}.{attr}"
             if isinstance(value, types.ModuleType) or isinstance(value, type):
                 continue
-            if is_cls and CodeIdentityMixin._wraps_code(value):
+            if is_cls and wraps_code(value):
                 # Read statically, a classmethod, property or cached_property is
                 # its descriptor, which is neither callable nor data: hashing it
                 # warned KEY-UNHASHABLE-GLOBAL for `A.make(v)`, whose code is
@@ -1006,7 +1045,7 @@ class GlobalsFoldMixin:
                 if not is_mod:
                     continue
                 if watch is not None and label not in learned:
-                    carried = self._carried_global_hash(value, getattr(func, "__module__", None))
+                    carried = self.carried_global_hash(value, getattr(func, "__module__", None))
                     if carried is not None:
                         parts.append((f"{label}#carried", carried))
                         watch[label] = (carried, "carrier", (vars(obj), attr), None)
@@ -1023,7 +1062,7 @@ class GlobalsFoldMixin:
                 helper_globals = getattr(value, "__globals__", None)
                 if not isinstance(helper_globals, dict):
                     continue
-                for inner in self._read_global_data_names(value):
+                for inner in self.read_global_data_names(value):
                     if inner not in helper_globals:
                         continue
                     iv = helper_globals[inner]
@@ -1031,22 +1070,22 @@ class GlobalsFoldMixin:
                         continue
                     if callable(iv) and not isinstance(iv, (dict, list, tuple, set)):
                         continue
-                    h = self._safe_global_hash(iv, func_name, f"{label}.{inner}")
+                    h = self.safe_global_hash(iv, func_name, f"{label}.{inner}")
                     if h is not None:
                         parts.append((f"{label}.{inner}", h))
                 continue
-            h = self._safe_global_hash(value, func_name, label)
+            h = self.safe_global_hash(value, func_name, label)
             if h is not None:
                 parts.append((label, h))
         return parts
 
-    def _safe_global_hash(self, value: Any, func_name: str, label: str) -> str | None:
+    def safe_global_hash(self, value: Any, func_name: str, label: str) -> str | None:
         """Hash *value* for the key, warning once and skipping if it cannot be."""
         try:
-            stabilized = self._stabilize_for_global_hash(value, self._data_callable_identity)
-            return self._hash_arg_payload((stabilized,), {})
+            stabilized = stabilize_for_global_hash(value, self.data_callable_identity)
+            return self._args.hash_payload((stabilized,), {})
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
-            self._warn_once(
+            self._notices.warn_once(
                 CashImpurityWarning,
                 func_name,
                 label,

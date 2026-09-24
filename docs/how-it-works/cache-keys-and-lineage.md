@@ -49,7 +49,7 @@ contiguous copy share a key. The dtypes are in a pandas key, so `int64` and
 For other types, register a hasher; see
 [custom hashers](../tutorials/feature-guides/custom-hashers.md).
 
-<!-- claim: cash/core.py:Cash.register_hasher @b8ede33d, cash/object_hashing.py:compute_hash @a7245478 -->
+<!-- claim: cash/core.py:Cash.register_hasher @f48a324b, cash/object_hashing.py:compute_hash @a7245478 -->
 === "Decorator"
 
     Registered hashers apply to call arguments. The order in which an argument

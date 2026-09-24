@@ -15,7 +15,7 @@ from cash.backends import (
 
 ## Writing a backend
 
-<!-- claim: cash/backends/_base.py:CacheBackend @67f61718 broad="the page documents the ABC as a whole contract" -->
+<!-- claim: cash/backends/_base.py:CacheBackend @9bfb8e26 broad="the page documents the ABC as a whole contract" -->
 Subclass `CacheBackend` and implement `get`, `set`, `delete`, `clear` and
 `list_entries`. Every other method has a default. The contract:
 

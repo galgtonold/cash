@@ -469,8 +469,8 @@ def _pipeline_cells(counter_file: str):
 
 
 def scenario_s1(py: Path, port: int) -> Result:
-    # Baseline flipped RED -> GREEN when the restart retrain was fixed (core.py
-    # _hash_arg_payload now keys a content-bearing argument on its stable
+    # Baseline flipped RED -> GREEN when the restart retrain was fixed
+    # (ArgHasher.hash_payload now keys a content-bearing argument on its stable
     # content hash, not the per-session _cash_lineage_hash). S2 stays RED, so
     # the harness is still non-vacuous.
     r = Result("S1", "restart survival of @cash.cache sklearn pipeline", "GREEN")

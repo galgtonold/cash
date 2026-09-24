@@ -79,7 +79,7 @@ def load_events():
     return pq.ParquetFile("data/events.parquet").read().to_pandas()
 ```
 
-<!-- claim: cash/decorator/file_deps.py:FileDepsMixin._track_declared_files @e10259dc -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.track_declared_files @4027a947 -->
 Pass one path or a list. Each file is recorded as if the body had read it, and
 is checked by content like an automatic read. A path that does not exist yet is
 recorded as absent, so creating the file later recomputes the call. Nothing
@@ -89,14 +89,14 @@ A URL (`s3://…`, `https://…`) is **not** a file here. It is treated as a loc
 path that does not exist, so the entry never notices the object changing. Use
 `RemoteFileDataSource` for remote data (below).
 
-<!-- claim: cash/data_source.py:FileDataSource @a09d1326 broad="the mtime contract is a property of the whole class" -->
+<!-- claim: cash/data_source.py:FileDataSource @69335436 broad="the content-digest contract is a property of the whole class" -->
 !!! note "`file_depends_on=` or `FileDataSource`?"
     `FileDataSource(path)` is the `DataSource` for `depends_on=` and
-    `dynamic_depends_on=`. It puts the file's **modification time** in the key,
-    so a `touch` recomputes, and on a file system with one-second timestamps a
-    quick same-size edit can be missed. `file_depends_on=` checks content. Use
-    `file_depends_on=` for a fixed path, and `FileDataSource` only when the path
-    depends on the arguments ([Dynamic dependencies](dynamic-dependencies.md)).
+    `dynamic_depends_on=`. It puts the file's **content digest** in the key,
+    the same check `file_depends_on=` gets, so a `touch` alone does not
+    recompute. Use `file_depends_on=` for a fixed path, and `FileDataSource`
+    only when the path depends on the arguments
+    ([Dynamic dependencies](dynamic-dependencies.md)).
 
 ## Remote objects: tracked by the store's own validator
 

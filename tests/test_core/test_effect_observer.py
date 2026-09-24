@@ -28,6 +28,7 @@ import warnings
 import pytest
 
 from cash import Cash
+from cash.decorator import purity_checks
 from cash.exceptions import CashImpurityWarning
 
 
@@ -386,21 +387,23 @@ def test_unmutated_arguments_of_awkward_types_do_not_look_mutated(tmp_path, valu
     assert not mutation, f"{type(value).__name__} looked mutated when it was not"
 
 
-def test_the_mutation_check_retires_itself_when_re_hashing_is_expensive(tmp_path):
+def test_the_mutation_check_retires_itself_when_re_hashing_is_expensive(tmp_path, monkeypatch):
     """A large argument must not be re-hashed on every miss forever.
 
     The budget is about repeat cost, not the first look: the first miss is
     still checked, and only then is the function retired.
     """
     c = _cash(tmp_path)
-    c._MUTATION_CHECK_BUDGET_S = 0.0  # make any re-hash "too expensive"
+    monkeypatch.setattr(purity_checks, "MUTATION_CHECK_BUDGET_S", 0.0)  # make any re-hash "too expensive"
 
     def reads(rows):
         return len(rows)
 
     _call_capturing(c, reads, [1, 2, 3])
     name = next(n for n in c.functions if n.endswith("reads"))
-    assert c._cached[name].mutation_check_retired, "an over-budget re-hash did not retire the check for that function"
+    assert c._registry.cached[name].mutation_check_retired, (
+        "an over-budget re-hash did not retire the check for that function"
+    )
 
 
 def test_an_argument_over_budget_for_the_key_is_not_hashed_again(tmp_path, monkeypatch):
@@ -409,10 +412,10 @@ def test_an_argument_over_budget_for_the_key_is_not_hashed_again(tmp_path, monke
     the key build had already emptied, so a miss on two million rows hashed
     them a second time after the body, every run."""
     c = _cash(tmp_path)
-    c._MUTATION_CHECK_BUDGET_S = 0.0  # any key's cost is over it
+    monkeypatch.setattr(purity_checks, "MUTATION_CHECK_BUDGET_S", 0.0)  # any key's cost is over it
     hashes = []
-    real = c._serialize_args
-    monkeypatch.setattr(c, "_serialize_args", lambda *a, **k: hashes.append(1) or real(*a, **k))
+    real = c._args.serialize_args
+    monkeypatch.setattr(c._args, "serialize_args", lambda *a, **k: hashes.append(1) or real(*a, **k))
 
     def reads(rows):
         return len(rows)

@@ -157,7 +157,7 @@ def note_untracked_read(path: Any, frame: Any) -> None:
         # A stat is 15us, and a loop re-reading one file pays it every time.
         # Reusing one taken in the last second can only be too OLD, and an old
         # stat that differs from the file makes a store refused, never a stale
-        # answer served (`Cash._credit_remembered_reads`).
+        # answer served (`FileDeps.credit_remembered_reads`).
         now = time.monotonic()
         seen = _untracked_stats.get(abs_path)
         if seen is not None and now - seen[0] < 1.0:

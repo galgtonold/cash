@@ -17,7 +17,7 @@ pd = pytest.importorskip("pandas")
 
 from cash import Cash
 from cash.backends import InMemoryBackend
-from cash.decorator.arg_hashing import ArgHashingMixin
+from cash.decorator import arg_hashing
 
 
 @pytest.fixture
@@ -61,7 +61,7 @@ def test_a_check_that_cannot_run_rehashes(total, monkeypatch):
     def broken(block):
         raise AttributeError("pandas moved its internals")
 
-    monkeypatch.setattr(ArgHashingMixin, "_block_refcount", staticmethod(broken))
+    monkeypatch.setattr(arg_hashing, "_block_refcount", broken)
     arr = np.array([[1.0, 2.0], [3.0, 4.0]])
     frame = pd.DataFrame(arr, copy=False)
     assert total(frame) == 10.0

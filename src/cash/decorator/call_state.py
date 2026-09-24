@@ -20,7 +20,7 @@ CACHE_MISS = object()
 class KeyBuildFailed(Exception):
     """Building a key met something it cannot key, and says what to tell the user.
 
-    Raised from inside a key build; `_resolve_cache_key` warns once with
+    Raised from inside a key build; `KeyBuilder.resolve` warns once with
     *code*, *message* and *fix*, and the call runs uncached -- never keyed
     without the part that failed, which would serve a stale result silently.
     """
@@ -33,7 +33,7 @@ class KeyBuildFailed(Exception):
 
 
 class UnhashableDefault(Exception):
-    """A parameter default could not be hashed; `_fold_defaults` has warned."""
+    """A parameter default could not be hashed; `ClosureFold.fold_defaults` has warned."""
 
 
 class UnhashableArgs(Exception):
@@ -41,7 +41,7 @@ class UnhashableArgs(Exception):
 
 
 class BuiltKey(NamedTuple):
-    """What `Cash._build_key` built: the key, two of its segments, and the
+    """What `KeyBuilder.build` built: the key, two of its segments, and the
     canonicalised arguments explain() reads frozen producers off."""
 
     cache_key: str
@@ -51,8 +51,8 @@ class BuiltKey(NamedTuple):
 
 
 class Call:
-    """One call's state, from the lookup (`Cash._lookup`) to the store
-    (`Cash._finish_miss`), shared by the sync and async wrappers."""
+    """One call's state, from the lookup (`CallRunner.lookup`) to the store
+    (`CallRunner.finish_miss`), shared by the sync and async wrappers."""
 
     __slots__ = (
         "args",
@@ -78,7 +78,7 @@ class Call:
 
 
 class BodyRun:
-    """What `Cash._body_scope` observed while the body ran, and what it returned."""
+    """What `CallRunner.body_scope` observed while the body ran, and what it returned."""
 
     __slots__ = ("tracker", "observer", "rng_pre", "res", "body_seconds", "saves_seconds", "rng_new")
 
@@ -103,7 +103,7 @@ def run_to_completion(make_coroutine: Callable[[], Any]) -> Any:
 PROCESS_STARTED = time.time()
 
 
-#: The stats wrapper's slot for the call it is running: `_log_decorator_call`
+#: The stats wrapper's slot for the call it is running: `CallLog.log`
 #: puts the call's entry there, and the stats wrapper counts it once the call
 #: returns or raises. Per context (thread or asyncio task), and set afresh by
 #: every cached call, so a nested call fills its own slot and never the
@@ -113,12 +113,12 @@ CALL_ENTRY: "contextvars.ContextVar[list | None]" = contextvars.ContextVar("_cas
 
 #: The capture watch of the key being built: {name: (pre-call hash, scope,
 #: owner_globals, owner)} for every provisional capture folded into it. Both
-#: `_fold_closure` and `_fold_read_globals` add to it; `_resolve_cache_key`
+#: `ClosureFold.fold_closure` and `GlobalsFold.fold_read_globals` add to it; `KeyBuilder.resolve`
 #: sets a fresh one per key and hands it back with the key, so two threads, or
 #: a cached call nested in another's key build, never share one.
 #:
 #: `owner_globals` is the mapping the pre-call hash was taken FROM, and it is
-#: not always the decorated function's own. `_fold_read_globals` also runs on
+#: not always the decorated function's own. `GlobalsFold.fold_read_globals` also runs on
 #: behalf of module-bounded HELPERS, so a global read by a helper in another
 #: module lands here under a bare name that does not exist in
 #: `func.__globals__` at all. Re-reading it there found None, hashed that, and
@@ -130,7 +130,7 @@ CALL_ENTRY: "contextvars.ContextVar[list | None]" = contextvars.ContextVar("_cas
 CAPTURE_WATCH: "contextvars.ContextVar[dict | None]" = contextvars.ContextVar("_cash_capture_watch", default=None)
 
 
-#: `_store_refusal` was not handed a capture watch (the streaming path).
+#: `ResultStore.refusal` was not handed a capture watch (the streaming path).
 NO_WATCH = object()
 
 

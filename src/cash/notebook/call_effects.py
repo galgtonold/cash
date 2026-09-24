@@ -121,7 +121,7 @@ def replay_deps(metadata: Mapping[str, Any]) -> None:
             # A remote entry must go back onto the remote channel --
             # routed to ``add_tracked`` it would enter the file set, be
             # stat'ed, and be dropped, same reasoning as
-            # ``core.py``'s ``_propagate_file_deps_to_active_tracker``.
+            # ``propagate_file_deps_to_active_tracker`` in decorator/file_deps.py.
             if isinstance(recorded, dict) and recorded.get("remote"):
                 tracker.add_tracked_remote(path)
             else:

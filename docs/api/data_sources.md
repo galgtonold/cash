@@ -12,7 +12,7 @@ through common readers (`open`, `pd.read_csv("s3://...")`). Declare a source
 only for what it cannot see; for a local file, `file_depends_on="path"` is
 shorter.
 
-<!-- claim: cash/data_source.py:FileDataSource @a09d1326 broad="the mtime contract is a property of the whole class", cash/remote_source.py:RemoteFileDataSource @2db689bf broad="the scheme list and validator contract are properties of the whole class" -->
+<!-- claim: cash/data_source.py:FileDataSource @69335436 broad="the content-token contract is a property of the whole class", cash/remote_source.py:RemoteFileDataSource @2db689bf broad="the scheme list and validator contract are properties of the whole class" -->
 ::: cash.FileDataSource
     options:
       members: false
@@ -27,7 +27,7 @@ def load_data():
     return pd.read_csv("data/input.csv")
 
 load_data()  # computes
-load_data()  # hit, until the file's modification time changes
+load_data()  # hit, until the file's content changes; a touch alone does not
 ```
 
 ::: cash.RemoteFileDataSource

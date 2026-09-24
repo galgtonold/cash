@@ -537,7 +537,7 @@ class CallUnit:
         # live stream sees no print -- the enclosing statement's own
         # entry would then be rewritten (on ITS next miss) from a
         # degraded observation that is missing both. Mirrors
-        # ``core.py``'s ``_propagate_file_deps_to_active_tracker``,
+        # ``propagate_file_deps_to_active_tracker`` in decorator/file_deps.py,
         # the ``@cash.cache`` decorator's defence against the same
         # failure mode.
         replay_deps(metadata)

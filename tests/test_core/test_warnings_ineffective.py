@@ -15,7 +15,7 @@ from cash import (
 # ``_warn_once`` takes a diagnostic code and a fix line as required keyword
 # arguments, and ``format_diagnostic`` rejects a code that is not registered --
 # so these tests pass a REAL one. A placeholder would raise before anything was
-# emitted, and what is under test here is the dedup and stacklevel contract,
+# emitted, and what is under test here is the dedup and attribution contract,
 # not the registry.
 CODED = {"code": "CACHE-THRASH", "fix": "raise max_cache_size."}
 
@@ -33,11 +33,11 @@ def test_warn_once_dedupes_per_func_and_arg_type(tmp_path):
 
     with warnings.catch_warnings(record=True) as captured:
         warnings.simplefilter("always")  # bypass Python's built-in dedup
-        c._warn_once(CashCacheIneffectiveWarning, "f", "MyType", "msg one", **CODED)
-        c._warn_once(CashCacheIneffectiveWarning, "f", "MyType", "msg one", **CODED)  # dup
-        c._warn_once(CashCacheIneffectiveWarning, "g", "MyType", "msg one", **CODED)  # new func
-        c._warn_once(CashCacheIneffectiveWarning, "f", "OtherType", "msg one", **CODED)  # new type
-        c._warn_once(CashCacheStoreFailedWarning, "f", "MyType", "msg one", **CODED)  # new category
+        c._notices.warn_once(CashCacheIneffectiveWarning, "f", "MyType", "msg one", **CODED)
+        c._notices.warn_once(CashCacheIneffectiveWarning, "f", "MyType", "msg one", **CODED)  # dup
+        c._notices.warn_once(CashCacheIneffectiveWarning, "g", "MyType", "msg one", **CODED)  # new func
+        c._notices.warn_once(CashCacheIneffectiveWarning, "f", "OtherType", "msg one", **CODED)  # new type
+        c._notices.warn_once(CashCacheStoreFailedWarning, "f", "MyType", "msg one", **CODED)  # new category
 
     # Expect 4 unique emissions
     assert len(captured) == 4, [str(w.message) for w in captured]
@@ -48,52 +48,24 @@ def test_warn_once_does_not_emit_when_already_seen(tmp_path):
     with warnings.catch_warnings(record=True) as captured:
         warnings.simplefilter("always")
         for _ in range(10):
-            c._warn_once(CashCacheIneffectiveWarning, "f", "X", "boom", **CODED)
+            c._notices.warn_once(CashCacheIneffectiveWarning, "f", "X", "boom", **CODED)
     assert len(captured) == 1
     assert "boom" in str(captured[0].message)
     assert captured[0].category is CashCacheIneffectiveWarning
 
 
-def test_warn_once_default_stacklevel_attributes_to_caller(tmp_path):
-    """The default stacklevel=5 attributes warnings emitted from
-    `_resolve_cache_key` (via the standard wrapper chain) to the user's
-    call site. Here we call `_warn_once` directly from this test, so
-    we expect the warning to be attributed to a frame inside `cash/decorator/reporting.py`
-    (the helper itself is 4 frames above us with the default stacklevel=5).
-
-    The point of this test is to lock in the contract: the default
-    stacklevel exists, callers can override it via keyword, and the
-    resulting `w.filename` reflects that choice.
-    """
+def test_warn_once_blames_the_nearest_frame_outside_cash(tmp_path):
+    """A direct `_warn_once` call is attributed to its caller's line: the
+    blamed frame is the nearest one outside the cash package, whatever the
+    depth it is called from."""
     c = Cash(cache_dir=str(tmp_path), register_magic=False)
 
     with warnings.catch_warnings(record=True) as captured:
         warnings.simplefilter("always")
-        # Direct call from this test frame: stacklevel=1 → blames the
-        # emit line in reporting.py (the line inside _warn_once).
-        c._warn_once(
-            CashCacheIneffectiveWarning,
-            "f",
-            "X",
-            "direct",
-            stacklevel=1,
-            **CODED,
-        )
-        # stacklevel=2 → blames this test's call line.
-        c._warn_once(
-            CashCacheIneffectiveWarning,
-            "g",
-            "X",
-            "from-test",
-            stacklevel=2,
-            **CODED,
-        )
+        c._notices.warn_once(CashCacheIneffectiveWarning, "g", "X", "from-test", **CODED)
 
-    assert len(captured) == 2
-    # First emission: stacklevel=1 → inside cash/decorator/reporting.py
-    assert captured[0].filename.endswith("reporting.py"), captured[0].filename
-    # Second emission: stacklevel=2 → this test file
-    assert captured[1].filename.endswith("test_warnings_ineffective.py"), captured[1].filename
+    assert len(captured) == 1
+    assert captured[0].filename.endswith("test_warnings_ineffective.py"), captured[0].filename
 
 
 class _Unpicklable:
@@ -148,10 +120,9 @@ def test_unpicklable_arg_different_func_emits_separately(tmp_path):
 
 
 def test_unpicklable_arg_warning_blames_user_call_site(tmp_path):
-    """The warning's filename should be this test file, not cash/core.py.
-    Locks in that _warn_once is called with the right stacklevel from
-    _resolve_cache_key (default stacklevel=5 covers
-    user -> stats_wrapper -> wrapper -> _resolve_cache_key -> _warn_once)."""
+    """The warning's filename should be this test file, not cash/core.py:
+    the frame blamed is the user's call, however deep in cash the warning
+    is raised."""
     c = Cash(cache_dir=str(tmp_path), register_magic=False)
 
     @c.cache
@@ -171,11 +142,11 @@ def test_unpicklable_arg_warning_blames_user_call_site(tmp_path):
 
 
 def test_resolve_key_exception_emits_ineffective_warning(tmp_path):
-    """The `except` branch in _resolve_cache_key (where key gen raises e.g.
+    """The `except` branch in KeyBuilder.resolve (where key gen raises e.g.
     ValueError) also emits CashCacheIneffectiveWarning. We trigger it by
     registering a custom hasher that raises ValueError — TypeError would be
     swallowed by _serialize_args's inner try/except, but ValueError is only
-    caught by _resolve_cache_key's outer except, which is the branch we want
+    caught by KeyBuilder.resolve's outer except, which is the branch we want
     to exercise here.
     """
 

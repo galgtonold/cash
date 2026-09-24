@@ -51,7 +51,7 @@ def test_sorting_the_argument_in_place_is_not_stored(c, n, frozen):
     rows = load(n)
     top(rows)
     assert _tail(rows) == without_cash, "the warm run skipped the in-place sort"
-    outcome = next(o for k, o in c._store_outcomes.items() if "top" in k)
+    outcome = next(o for k, o in c._misses.outcomes.items() if "top" in k)
     assert "in place" in (outcome.get("not_stored") or ""), outcome
 
 

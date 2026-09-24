@@ -131,10 +131,10 @@ def test_the_capture_fingerprint_is_stable_across_processes(tmp_path):
 
     script = tmp_path / "fp.py"
     script.write_text(
-        "from cash.core import Cash\n"
+        "from cash.decorator.code_identity import code_fingerprint\n"
         "def outer(k):\n"
         "    return lambda n: [x * k for x in range(n)]\n"
-        "print(Cash._code_fingerprint(outer(3).__code__))\n",
+        "print(code_fingerprint(outer(3).__code__))\n",
         encoding="utf-8",
     )
     runs = [

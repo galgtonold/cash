@@ -6,7 +6,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import types
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .. import _plain_data
 from ..dependency_state import EXPLAINING as _EXPLAINING
@@ -15,58 +15,77 @@ from ..exceptions import CashImpurityWarning
 from ..purity_analyzer import ISSUE_UNTRACKABLE_DEP, get_analyzer
 from ..source_norm import class_functions
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, PLAIN_SEQS
-from .arg_hashing import plain_census
-from .code_identity import CodeIdentityMixin
+from .arg_hashing import is_opaque, plain_census
+from .code_identity import is_user_code_object
+
+if TYPE_CHECKING:
+    from .code_identity import CodeIdentity
+    from .frozen import FrozenResults
+    from .globals_fold import GlobalsFold
 
 logger = logging.getLogger(__name__)
 
 
-class CodeArgsMixin:
-    """The code an argument carries, folded into the state segment."""
+def carrier_name(carrier: Any) -> str:
+    """A stable, address-free name for a code carrier.
 
-    @staticmethod
-    def _carrier_name(carrier: Any) -> str:
-        """A stable, address-free name for a code carrier.
+    ``__qualname__`` for anything that has one -- a class, a function.
+    Otherwise the carrier's TYPE, deliberately not ``repr()``: a
+    ``functools.partial`` reprs as ``functools.partial(<function f at
+    0x...>, 3)``, and that address is unique per object, so a
+    ``repr()``-derived key would make ``_warned_unhashable_code`` dedup
+    nothing (one warning per partial ever constructed, plus a global set
+    that grows without bound) and would make a folded part label differ
+    between two processes holding equal arguments.
+    """
+    name = getattr(carrier, "__qualname__", None) or getattr(carrier, "__name__", None)
+    if isinstance(name, str) and name:
+        return name
+    t = type(carrier)
+    return getattr(t, "__qualname__", None) or getattr(t, "__name__", None) or "?"
 
-        ``__qualname__`` for anything that has one -- a class, a function.
-        Otherwise the carrier's TYPE, deliberately not ``repr()``: a
-        ``functools.partial`` reprs as ``functools.partial(<function f at
-        0x...>, 3)``, and that address is unique per object, so a
-        ``repr()``-derived key would make ``_warned_unhashable_code`` dedup
-        nothing (one warning per partial ever constructed, plus a global set
-        that grows without bound) and would make a folded part label differ
-        between two processes holding equal arguments.
-        """
-        name = getattr(carrier, "__qualname__", None) or getattr(carrier, "__name__", None)
-        if isinstance(name, str) and name:
-            return name
-        t = type(carrier)
-        return getattr(t, "__qualname__", None) or getattr(t, "__name__", None) or "?"
 
-    @staticmethod
-    def _is_user_code_carrier(carrier: Any) -> bool:
-        """``_is_user_code_object`` for the ADVISORY rather than for hashing.
+def is_user_code_carrier(carrier: Any) -> bool:
+    """``is_user_code_object`` for the ADVISORY rather than for hashing.
 
-        ``_is_user_code_object`` answers "could not confirm reachability ->
-        treat as user code". That is the safe direction when deciding whether
-        to HASH something and the wrong one when deciding whether to WARN about
-        it: an object with no ``__qualname__`` of its own -- a
-        ``functools.partial``, a ``weakref.ref`` -- can never be confirmed, so
-        every single one was reported as un-hashable user code.
+    ``is_user_code_object`` answers "could not confirm reachability ->
+    treat as user code". That is the safe direction when deciding whether
+    to HASH something and the wrong one when deciding whether to WARN about
+    it: an object with no ``__qualname__`` of its own -- a
+    ``functools.partial``, a ``weakref.ref`` -- can never be confirmed, so
+    every single one was reported as un-hashable user code.
 
-        Judge such an object by what it WRAPS (``.func``, the same attribute
-        ``_class_surface_parts`` already follows for ``singledispatchmethod``
-        and ``cached_property``), else by its TYPE. Measured:
-        ``functools.partial(json.dumps)`` and ``weakref.ref(x)`` stop warning,
-        while ``functools.partial(<a user function>)`` still warns -- and it
-        must, because the wrapped body genuinely is absent from the key.
-        """
-        if getattr(carrier, "__qualname__", None) or getattr(carrier, "__name__", None):
-            return CodeIdentityMixin._is_user_code_object(carrier)
-        wrapped = getattr(carrier, "func", None)
-        if wrapped is not None:
-            return CodeIdentityMixin._is_user_code_object(wrapped)
-        return CodeIdentityMixin._is_user_code_object(type(carrier))
+    Judge such an object by what it WRAPS (``.func``, the same attribute
+    ``CodeIdentity.class_surface_parts`` already follows for ``singledispatchmethod``
+    and ``cached_property``), else by its TYPE. Measured:
+    ``functools.partial(json.dumps)`` and ``weakref.ref(x)`` stop warning,
+    while ``functools.partial(<a user function>)`` still warns -- and it
+    must, because the wrapped body genuinely is absent from the key.
+    """
+    if getattr(carrier, "__qualname__", None) or getattr(carrier, "__name__", None):
+        return is_user_code_object(carrier)
+    wrapped = getattr(carrier, "func", None)
+    if wrapped is not None:
+        return is_user_code_object(wrapped)
+    return is_user_code_object(type(carrier))
+
+
+class CodeArgs:
+    """The user code an argument carries -- a class, a function, an instance
+    of the user's own class -- folded into the state segment."""
+
+    def __init__(self, code: CodeIdentity, globals_fold: GlobalsFold, frozen: FrozenResults) -> None:
+        self._code = code
+        self._globals = globals_fold
+        self._frozen = frozen
+        # ``(class, is user code)`` per class id, for `_iter_attribute_carriers`:
+        # a list of 50k instances must not pay the verdict per element. The
+        # class is kept so a recycled id is never trusted. Bounded there.
+        self._attribute_walk_verdicts: dict[tuple[str, int], tuple[type, bool]] = {}
+        # Code carriers already reported (`_warn_unhashable_code_once`,
+        # `_warn_untrackable_in_carrier_once`): once per carrier and function.
+        self._warned_unhashable_code: set[tuple] = set()
+        self._warned_untrackable_carrier: set[tuple] = set()
 
     def _warn_untrackable_in_carrier_once(self, carrier: Any, func_name: str = "?", param: str | None = None) -> None:
         """Say once that code reached through an argument resolves a dependency
@@ -125,7 +144,7 @@ class CodeArgsMixin:
         """
         if _EXPLAINING.get():
             return
-        name = self._carrier_name(carrier)
+        name = carrier_name(carrier)
         inner = getattr(carrier, "func", None) or getattr(carrier, "__wrapped__", None)
         inner_name = (
             getattr(inner, "__qualname__", None) or getattr(inner, "__name__", None) if inner is not None else None
@@ -159,10 +178,10 @@ class CodeArgsMixin:
             fix,
         )
 
-    def _iter_code_carriers(self, value: Any, _depth: int = 0, _seen: set | None = None):
+    def iter_code_carriers(self, value: Any, _depth: int = 0, _seen: set | None = None):
         """Yield objects in *value* that carry user code.
 
-        Depth-bounded at 8, matching ``_stabilize_for_global_hash``. ``_seen``
+        Depth-bounded at 8, matching ``stabilize_for_global_hash``. ``_seen``
         guards self-referential containers, and doubles as a once-per-argument
         dedup for the classes yielded on behalf of instances: a list of 50k
         objects of one class must evaluate the user-code gate once, not 50k
@@ -176,19 +195,19 @@ class CodeArgsMixin:
         # argument. Returning before ``_seen`` is touched keeps a list of a
         # million numbers allocation-free; otherwise the id-set below would grow
         # to the container's length on every cached call. Mirrors
-        # ``_iter_contained``'s first line. See `CODELESS_PRIMS` for why this
+        # ``iter_contained``'s first line. See `CODELESS_PRIMS` for why this
         # is an exact-type test against a tuple rather than an isinstance.
         if type(value) in CODELESS_PRIMS:
             return
         # A frozen function's list/tuple/dict result is keyed by the call that
-        # produced it (`_remember_frozen_container`), code inside it included:
+        # produced it (`FrozenResults.remember_container`), code inside it included:
         # walking two million rows for functions was most of a hit's cost.
         # Checked BEFORE the plain-data census below, which is itself a walk:
         # in that order frozen=True on a list still cost a linear pass per call.
         if (
-            self._frozen_containers
-            and id(value) in self._frozen_containers
-            and self._frozen_containers[id(value)][0] is value
+            self._frozen.containers
+            and id(value) in self._frozen.containers
+            and self._frozen.containers[id(value)][0] is value
         ):
             return
         # Plain data carries no code (`_plain_data.is_plain`); walking two
@@ -215,10 +234,8 @@ class CodeArgsMixin:
             # ``__code__`` of its own -- its code lives on its class -- so
             # yielding the instance would fold NOTHING, while the identical
             # object WITHOUT ``__call__`` takes the instance branch below and
-            # folds its class. Measured before this branch existed: adding
-            # ``__call__`` to a class silently removed that class's code from
-            # the key, and the instance then also tripped the unhashable
-            # advisory. ``_is_opaque`` returns the same verdict for a class as
+            # folds its class: adding ``__call__`` to a class must not remove
+            # that class's code from the key. ``is_opaque`` returns the same verdict for a class as
             # for one of its instances, so routing the class here rather than
             # the instance leaves opacity unchanged.
             call = getattr(type(value), "__call__", None)
@@ -251,9 +268,9 @@ class CodeArgsMixin:
                     yield cls
             for k, v in value.items():
                 if type(k) not in CODELESS_PRIMS:
-                    yield from self._iter_code_carriers(k, _depth + 1, _seen)
+                    yield from self.iter_code_carriers(k, _depth + 1, _seen)
                 if type(v) not in CODELESS_PRIMS:
-                    yield from self._iter_code_carriers(v, _depth + 1, _seen)
+                    yield from self.iter_code_carriers(v, _depth + 1, _seen)
         elif isinstance(value, (list, tuple, set, frozenset)):
             if id(value) in _seen:
                 return
@@ -264,7 +281,7 @@ class CodeArgsMixin:
                     yield cls
             for v in value:
                 if type(v) not in CODELESS_PRIMS:
-                    yield from self._iter_code_carriers(v, _depth + 1, _seen)
+                    yield from self.iter_code_carriers(v, _depth + 1, _seen)
         else:
             # An instance contributes its class's code. Deliberately NOT gated
             # on ``hasattr(value, "__dict__")``: a class using ``__slots__``
@@ -293,7 +310,7 @@ class CodeArgsMixin:
         key = ("user-class", id(cls))
         verdict = self._attribute_walk_verdicts.get(key)
         if verdict is None or verdict[0] is not cls:
-            verdict = (cls, self._is_user_code_object(cls))
+            verdict = (cls, is_user_code_object(cls))
             if len(self._attribute_walk_verdicts) < 4096:
                 self._attribute_walk_verdicts[key] = verdict
         if not verdict[1]:
@@ -314,14 +331,14 @@ class CodeArgsMixin:
             return
         _seen.add(id(value))
         for v in held:
-            yield from self._iter_code_carriers(v, _depth + 1, _seen)
+            yield from self.iter_code_carriers(v, _depth + 1, _seen)
 
     def _instance_class_carrier(self, value: Any, _seen: set) -> type | None:
         """``type(value)`` if it is user code and not already seen this walk.
 
         Split out because three branches need it, and because the dedup is the
         difference between one user-code gate evaluation per ARGUMENT and one
-        per ELEMENT -- ``_is_user_code_object`` is a ``sys.modules`` lookup plus
+        per ELEMENT -- ``is_user_code_object`` is a ``sys.modules`` lookup plus
         a ``__qualname__`` walk, and a list of 50k instances of one class was
         paying it 50k times (measured: 50000 calls -> 1).
 
@@ -333,9 +350,9 @@ class CodeArgsMixin:
         if id(cls) in _seen:
             return None
         _seen.add(id(cls))
-        return cls if self._is_user_code_object(cls) else None
+        return cls if is_user_code_object(cls) else None
 
-    def _fold_code_args(self, args: tuple, kwargs: dict, state_hash: str, func_name: str = "?") -> str:
+    def fold_code_args(self, args: tuple, kwargs: dict, state_hash: str, func_name: str = "?") -> str:
         """Fold user code reached through the arguments into the key.
 
         ``args_hash`` is a digest of the PICKLED arguments, and pickle
@@ -352,32 +369,32 @@ class CodeArgsMixin:
         # A clock test double's date is the date, not code (`fake_clock`).
         fake_dates = _plain_data.fake_clock()[0]
         for param, value in (*((None, a) for a in args), *kwargs.items()):
-            for carrier in self._iter_code_carriers(value):
+            for carrier in self.iter_code_carriers(value):
                 if fake_dates and (type(carrier) in fake_dates or carrier in fake_dates):
                     continue
                 # Dedup ACROSS arguments too, not just within one walk:
                 # `f(a, b, c)` with three instances of one class reaches
-                # `_is_opaque` + `_code_surface_hash` once instead of three
+                # `is_opaque` + `CodeIdentity.code_surface_hash` once instead of three
                 # times. Safe by identity because every carrier is
                 # reachable from `args`/`kwargs` for this whole loop, so no
                 # id can be recycled underneath us.
                 if id(carrier) in seen_carriers:
                     continue
                 seen_carriers.add(id(carrier))
-                if self._is_opaque(carrier):
+                if is_opaque(carrier):
                     continue
-                digest = self._code_surface_hash(carrier)
+                digest = self._code.code_surface_hash(carrier)
                 if digest is not None:
-                    parts.append(f"{self._carrier_name(carrier)}:{digest}")
+                    parts.append(f"{carrier_name(carrier)}:{digest}")
                     # Its CODE is in the key; the globals that code reads
                     # were not. A callback reading a module
                     # constant served the old result after the constant
                     # changed, while the same read one call level deeper,
                     # or in the cached function itself, invalidated.
-                    if self._is_user_code_carrier(carrier):
+                    if is_user_code_carrier(carrier):
                         parts.extend(self._carrier_read_global_parts(carrier, func_name))
                         self._warn_untrackable_in_carrier_once(carrier, func_name, param)
-                elif self._is_user_code_carrier(carrier):
+                elif is_user_code_carrier(carrier):
                     # User code we could not hash: a C-extension type, an
                     # exotic descriptor, a ``functools.partial`` (whose
                     # wrapped function pickles by reference like any
@@ -395,7 +412,7 @@ class CodeArgsMixin:
         """Key parts for the module data a code carrier's functions read.
 
         The same channel the cached function's own globals go through
-        (`_read_global_data_names` + `_safe_global_hash`, plus the
+        (`GlobalsFold.read_global_data_names` + `GlobalsFold.safe_global_hash`, plus the
         ``module.ATTR`` fold), applied to code that arrived as an ARGUMENT: a
         function, a bound method's function, or a class's own methods -- which
         is how a callable instance's ``__call__`` is reached.
@@ -412,7 +429,7 @@ class CodeArgsMixin:
             if not isinstance(g, dict):
                 continue
             owner = getattr(fn, "__qualname__", "?")
-            for name in self._read_global_data_names(fn):
+            for name in self._globals.read_global_data_names(fn):
                 if name not in g:
                     continue
                 value = g[name]
@@ -420,9 +437,9 @@ class CodeArgsMixin:
                     continue
                 if callable(value) and not isinstance(value, (dict, list, tuple, set)):
                     continue
-                h = self._safe_global_hash(value, func_name, f"{owner}.{name}")
+                h = self._globals.safe_global_hash(value, func_name, f"{owner}.{name}")
                 if h is not None:
                     parts.append(f"argglobal:{owner}.{name}:{h}")
-            for label, h in self._module_attr_parts(fn, func_name, g):
+            for label, h in self._globals.module_attr_parts(fn, func_name, g):
                 parts.append(f"argglobal:{owner}:{label}:{h}")
         return parts

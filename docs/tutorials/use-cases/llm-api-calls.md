@@ -66,7 +66,7 @@ Make anything that changes the answer an **argument**, so it is in the key:
 `temperature`, `seed`, the system prompt, the model. A sampled call without a
 seed varies by design, so either give it a `ttl=` or leave it undecorated.
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._entry_expired @c72fd40d -->
+<!-- claim: cash/decorator/runtime.py:entry_expired @f9bb16b6 -->
 ```python
 @cash.cache(ttl=3600)   # the index behind it is refreshed hourly
 def web_search_with_llm(query):

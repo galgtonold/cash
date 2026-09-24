@@ -21,6 +21,7 @@ import pytest
 
 from cash import Cash
 from cash.decorator.arg_hashing import ARG_COST
+from cash.decorator.reporting import describe_call
 from cash.effectiveness import EffectivenessLedger
 
 pytestmark = [pytest.mark.core]
@@ -136,7 +137,7 @@ def test_the_payload_cost_of_a_list_argument_is_charged_to_it(tmp_path):
     """The list went into the payload as is: the per-argument timer saw a
     lookup that returned at once and blamed 0ms."""
     c = Cash(cache_dir=str(tmp_path / "cache"))
-    c._hash_arg_payload((_rows(100_000), 3), {})
+    c._args.hash_payload((_rows(100_000), 3), {})
     label, seconds, type_name, _producer, _old = ARG_COST.last
     assert (label, type_name) == ("#0", "list")
     assert seconds > 0.005
@@ -164,7 +165,7 @@ def test_a_worthwhile_single_call_is_not_reported():
 
 def test_the_hit_line_and_the_summary_show_what_the_lookup_cost(tmp_path):
     c = Cash(cache_dir=str(tmp_path / "cache"))
-    line = c._describe_call(
+    line = describe_call(
         {
             "func_name": "app.total",
             "cache_hit": True,
@@ -174,7 +175,7 @@ def test_the_hit_line_and_the_summary_show_what_the_lookup_cost(tmp_path):
         }
     )
     assert "the lookup took 1.07s; a net loss" in line
-    quiet = c._describe_call(
+    quiet = describe_call(
         {
             "func_name": "app.slow",
             "cache_hit": True,
@@ -193,7 +194,7 @@ def test_the_hit_line_and_the_summary_show_what_the_lookup_cost(tmp_path):
     from cash.decorator.cached_function import CachedFunction
 
     def account(name, stats):
-        c._cached[name] = CachedFunction(lambda: None, name, stats=stats)
+        c._registry.cached[name] = CachedFunction(lambda: None, name, stats=stats)
 
     account(
         "app.total",

@@ -54,8 +54,8 @@ def test_dataframe_arg_hash_ignores_volatile_lineage():
     _set_lineage(df_session1, "lineage_from_cold_session")
     _set_lineage(df_session2, "lineage_from_warm_session_totally_different")
 
-    h1 = c._hash_arg_payload((df_session1, 120), {})
-    h2 = c._hash_arg_payload((df_session2, 120), {})
+    h1 = c._args.hash_payload((df_session1, 120), {})
+    h2 = c._args.hash_payload((df_session2, 120), {})
     assert h1 == h2, "content-identical DataFrame must key stably across restart"
 
 
@@ -70,7 +70,7 @@ def test_dataframe_arg_hash_still_tracks_content_change():
     _set_lineage(df_a, "same_lineage")
     _set_lineage(df_b, "same_lineage")
 
-    assert c._hash_arg_payload((df_a,), {}) != c._hash_arg_payload((df_b,), {})
+    assert c._args.hash_payload((df_a,), {}) != c._args.hash_payload((df_b,), {})
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +87,7 @@ def test_series_arg_hash_ignores_volatile_lineage():
     _set_lineage(s1, "cold")
     _set_lineage(s2, "warm-different")
 
-    assert c._hash_arg_payload((s1,), {}) == c._hash_arg_payload((s2,), {})
+    assert c._args.hash_payload((s1,), {}) == c._args.hash_payload((s2,), {})
 
 
 def test_series_arg_hash_still_tracks_content_change():
@@ -99,7 +99,7 @@ def test_series_arg_hash_still_tracks_content_change():
     _set_lineage(s1, "x")
     _set_lineage(s2, "x")
 
-    assert c._hash_arg_payload((s1,), {}) != c._hash_arg_payload((s2,), {})
+    assert c._args.hash_payload((s1,), {}) != c._args.hash_payload((s2,), {})
 
 
 # ---------------------------------------------------------------------------
@@ -161,4 +161,4 @@ def test_custom_object_without_content_hasher_still_uses_lineage():
 
     # No builtin/registered hasher for Blob -> lineage is authoritative, so the
     # two share a key (the notebook lineage short-circuit is preserved).
-    assert c._hash_arg_payload((b1,), {}) == c._hash_arg_payload((b2,), {})
+    assert c._args.hash_payload((b1,), {}) == c._args.hash_payload((b2,), {})

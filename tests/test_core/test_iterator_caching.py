@@ -14,6 +14,7 @@ import warnings
 import pytest
 
 from cash import Cash, CashCacheIneffectiveWarning
+from cash.decorator.store import ResultStore
 
 
 def test_generator_function_caches(tmp_path):
@@ -815,7 +816,7 @@ def test_chunked_storage_works_under_use_locking(tmp_path):
     """When use_locking=True, a locked-path cache hit must return a proper
     iterator wrapper, not the raw manifest dict.
 
-    Regression test for the bug where _compute_with_lock returned
+    Regression test for the bug where CallRunner.compute_with_lock returned
     locked_data directly (the manifest dict) for chunked entries,
     bypassing the iterator_storage dispatch.
 
@@ -850,9 +851,9 @@ def test_chunked_storage_works_under_use_locking(tmp_path):
 
 
 def test_use_locking_dispatches_chunked_on_locked_hit(tmp_path):
-    """Surgical reproducer for the _compute_with_lock dispatch bug.
+    """Surgical reproducer for the CallRunner.compute_with_lock dispatch bug.
 
-    The bug: _compute_with_lock does a double-checked re-read after
+    The bug: CallRunner.compute_with_lock does a double-checked re-read after
     acquiring the lock. On a hit, it returned `locked_data` directly,
     bypassing the metadata['iterator_storage'] dispatch — for chunked
     entries the user got the raw manifest dict.
@@ -881,7 +882,7 @@ def test_use_locking_dispatches_chunked_on_locked_hit(tmp_path):
     # Force the locked path: the wrapper's first backend.get returns
     # (None, None), so the wrapper does NOT short-circuit at the hit
     # branch. It falls into the compute path, which under use_locking
-    # delegates to _compute_with_lock, which does its OWN backend.get
+    # delegates to CallRunner.compute_with_lock, which does its OWN backend.get
     # (the real one, not patched). The real one finds the entry. The
     # return value must be a proper iterator wrapper.
     real_get = c.backend.get
@@ -890,7 +891,7 @@ def test_use_locking_dispatches_chunked_on_locked_hit(tmp_path):
     def fake_get(key):
         call_count["n"] += 1
         # First call (from wrapper's unlocked hit check) returns miss.
-        # Subsequent calls (from _compute_with_lock's locked re-read,
+        # Subsequent calls (from CallRunner.compute_with_lock's locked re-read,
         # and from ChunkedCachedIterator's chunk reads) go to the
         # real backend.
         if call_count["n"] == 1:
@@ -1000,13 +1001,13 @@ def _cache_then_break_a_chunk(tmp_path, monkeypatch, *, use_locking):
 
     store = str(tmp_path / "store")
     written: list[str] = []
-    original = Cash._write_one_chunk
+    original = ResultStore._write_one_chunk
 
     def spy(self, cache_key, chunk_index, *args, **kwargs):
         written.append(f"{cache_key}:chunk_{chunk_index}")
         return original(self, cache_key, chunk_index, *args, **kwargs)
 
-    monkeypatch.setattr(Cash, "_write_one_chunk", spy)
+    monkeypatch.setattr(ResultStore, "_write_one_chunk", spy)
 
     counter = {"calls": 0}
     writer = Cash(backend=FileBackend(store, flush_interval=0), register_magic=False, use_locking=use_locking)
@@ -1021,7 +1022,7 @@ def _cache_then_break_a_chunk(tmp_path, monkeypatch, *, use_locking):
 
 
 def test_a_missing_chunk_recomputes_on_the_default_path(tmp_path, monkeypatch):
-    """The control. `_chunks_are_intact` treats a manifest missing a chunk as a
+    """The control. `CallRunner._chunks_are_intact` treats a manifest missing a chunk as a
     miss, so the caller gets the whole result rather than a short one.
 
     Without this arm the locking test below could pass because chunking never
@@ -1032,8 +1033,8 @@ def test_a_missing_chunk_recomputes_on_the_default_path(tmp_path, monkeypatch):
 
 
 def test_a_missing_chunk_recomputes_with_use_locking_too(tmp_path, monkeypatch):
-    """`_compute_with_lock`'s double-checked re-read went straight to
-    `_wrap_iterator_hit`, skipping the integrity guard — so with
+    """`CallRunner.compute_with_lock`'s double-checked re-read went straight to
+    `CallRunner._wrap_iterator_hit`, skipping the integrity guard — so with
     `use_locking=True` a manifest missing a chunk yielded a SHORT iterator and
     no recompute. Truncated data, silently: no error, no warning, and an empty
     or partial result is easy to mistake for a real one."""

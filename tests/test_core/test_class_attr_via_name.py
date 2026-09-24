@@ -85,15 +85,15 @@ def test_only_user_classes_are_folded():
     import collections
     import decimal
 
-    from cash import Cash
+    from cash.decorator.code_identity import is_user_class
 
     # stdlib / builtin classes -> excluded
-    assert Cash._is_user_class(decimal.Decimal) is False
-    assert Cash._is_user_class(collections.OrderedDict) is False
-    assert Cash._is_user_class(int) is False
+    assert is_user_class(decimal.Decimal) is False
+    assert is_user_class(collections.OrderedDict) is False
+    assert is_user_class(int) is False
 
     # a class defined in this test module resolves to a user module
-    assert Cash._is_user_class(_UserClassProbe) is True
+    assert is_user_class(_UserClassProbe) is True
 
 
 class _UserClassProbe:

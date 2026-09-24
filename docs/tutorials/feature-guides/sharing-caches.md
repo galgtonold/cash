@@ -36,7 +36,7 @@ export CASH_REDIS_PREFIX=team-analytics:
 Use `CASH_REDIS_PREFIX` (or `CASH_S3_PREFIX`) to keep projects apart in one
 store. [Choosing a backend](choosing-a-backend.md) compares the options.
 
-<!-- claim: cash/backends/_base.py:CacheBackend.lock @89b52144, cash/backends/redis_backend.py:RedisBackend.lock @cfdf2e01 -->
+<!-- claim: cash/backends/_base.py:CacheBackend.lock @2c1d7483, cash/backends/redis_backend.py:RedisBackend.lock @cfdf2e01 -->
 A RAM tier in front of the shared store serves repeat hits without a network
 round trip. The trade-off: `use_locking=True` then locks within each process
 only. Cross-process locking needs Redis as the backend itself; see

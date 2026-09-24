@@ -1,7 +1,7 @@
 import sys
 import types
 
-from cash.core import Cash
+from cash.decorator.code_identity import is_user_code_module
 
 
 def test_a_fileless_module_counts_as_user_code():
@@ -9,17 +9,17 @@ def test_a_fileless_module_counts_as_user_code():
     _is_user_module rejects it, which would make this whole feature a no-op
     in the environment it exists for."""
     nb = types.ModuleType("nbmod")  # no __file__, like a notebook __main__
-    assert Cash._is_user_code_module(nb) is True
+    assert is_user_code_module(nb) is True
 
 
 def test_builtins_are_not_user_code_despite_being_fileless():
     """The control that stops 'fileless means user code' from sweeping in
     every builtin type."""
-    assert Cash._is_user_code_module(sys.modules["builtins"]) is False
+    assert is_user_code_module(sys.modules["builtins"]) is False
 
 
 def test_stdlib_and_site_packages_are_still_excluded():
-    assert Cash._is_user_code_module(sys.modules["json"]) is False
+    assert is_user_code_module(sys.modules["json"]) is False
 
 
 import itertools
@@ -71,7 +71,7 @@ def _exec_class(body: str, name: str = "S"):
 
 def _code_surface_hash_in_subprocess(class_body: str) -> str:
     """Run *class_body* (defining a class named ``S``) in a FRESH interpreter
-    process and return ``c._code_surface_hash(S)`` as hex text.
+    process and return ``c._code.code_surface_hash(S)`` as hex text.
 
     Must be a genuinely separate process, not a loop in this one: a memory
     address leaked into the digest is invisible within a single process --
@@ -79,7 +79,7 @@ def _code_surface_hash_in_subprocess(class_body: str) -> str:
     heap to collide the way two SEPARATE interpreter invocations reliably
     expose (ASLR plus a freshly initialized allocator).
     """
-    script = "from cash import Cash\n" + class_body + "\nc = Cash()\nprint(c._code_surface_hash(S))\n"
+    script = "from cash import Cash\n" + class_body + "\nc = Cash()\nprint(c._code.code_surface_hash(S))\n"
     result = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
@@ -94,14 +94,14 @@ def test_two_different_source_less_classes_do_not_collide():
     c = CashCls()
     a = _exec_class("class S:\n    def r(self): return 'AAA'\n")
     b = _exec_class("class S:\n    def r(self): return 'BBB'\n")
-    assert c._code_surface_hash(a) != c._code_surface_hash(b)
+    assert c._code.code_surface_hash(a) != c._code.code_surface_hash(b)
 
 
 def test_editing_a_method_body_changes_the_hash():
     c = CashCls()
     v1 = _exec_class("class S:\n    def r(self): return 'V1'\n")
     v2 = _exec_class("class S:\n    def r(self): return 'V2'\n")
-    assert c._code_surface_hash(v1) != c._code_surface_hash(v2)
+    assert c._code.code_surface_hash(v1) != c._code.code_surface_hash(v2)
 
 
 def test_an_identical_redefinition_hashes_the_same():
@@ -109,28 +109,28 @@ def test_an_identical_redefinition_hashes_the_same():
     never caches."""
     c = CashCls()
     body = "class S:\n    def r(self): return 'V1'\n"
-    assert c._code_surface_hash(_exec_class(body)) == c._code_surface_hash(_exec_class(body))
+    assert c._code.code_surface_hash(_exec_class(body)) == c._code.code_surface_hash(_exec_class(body))
 
 
 def test_a_class_level_data_attribute_participates():
     c = CashCls()
     a = _exec_class("class S:\n    TOP_K = 7\n    def r(self): return 1\n")
     b = _exec_class("class S:\n    TOP_K = 9\n    def r(self): return 1\n")
-    assert c._code_surface_hash(a) != c._code_surface_hash(b)
+    assert c._code.code_surface_hash(a) != c._code.code_surface_hash(b)
 
 
 def test_a_plain_function_is_hashed_by_its_code():
     c = CashCls()
     f1 = _exec_class("def f(): return 'V1'", name="f")
     f2 = _exec_class("def f(): return 'V2'", name="f")
-    assert c._code_surface_hash(f1) != c._code_surface_hash(f2)
+    assert c._code.code_surface_hash(f1) != c._code.code_surface_hash(f2)
 
 
 def test_a_base_class_body_participates():
     c = CashCls()
     a = _exec_class("class B:\n    def helper(self): return 'V1'\nclass S(B):\n    pass\n")
     b = _exec_class("class B:\n    def helper(self): return 'V2'\nclass S(B):\n    pass\n")
-    assert c._code_surface_hash(a) != c._code_surface_hash(b)
+    assert c._code.code_surface_hash(a) != c._code.code_surface_hash(b)
 
 
 def test_a_third_party_class_returns_none():
@@ -139,22 +139,22 @@ def test_a_third_party_class_returns_none():
     import json.encoder
 
     c = CashCls()
-    assert c._code_surface_hash(json.encoder.JSONEncoder) is None
+    assert c._code.code_surface_hash(json.encoder.JSONEncoder) is None
 
 
 def test_it_never_raises_on_an_exotic_object():
     c = CashCls()
-    assert c._code_surface_hash(object()) is None
-    assert c._code_surface_hash(len) is None  # builtin, no __code__
+    assert c._code.code_surface_hash(object()) is None
+    assert c._code.code_surface_hash(len) is None  # builtin, no __code__
     # object() and len are both HASHABLE, so neither exercises the memo-read
     # path below -- they do not discriminate the Blocker-4 bug. A list, a
     # dict, and a set are unhashable, which is the common case for a cache
     # ARGUMENT (Task 4's consumption path): dict.get() raises TypeError on
     # them, and that lookup used to sit outside the try/except meant to catch
     # exactly this.
-    assert c._code_surface_hash([1, 2, 3]) is None
-    assert c._code_surface_hash({"a": 1}) is None
-    assert c._code_surface_hash({1, 2, 3}) is None
+    assert c._code.code_surface_hash([1, 2, 3]) is None
+    assert c._code.code_surface_hash({"a": 1}) is None
+    assert c._code.code_surface_hash({1, 2, 3}) is None
 
 
 def test_source_less_classes_no_longer_collide_in_the_instance_channel():
@@ -164,7 +164,7 @@ def test_source_less_classes_no_longer_collide_in_the_instance_channel():
     c = CashCls()
     a = _exec_class("class S:\n    def r(self): return 'AAA'\n")
     b = _exec_class("class S:\n    def r(self): return 'BBB'\n")
-    assert c._user_class_source_hash(a) != c._user_class_source_hash(b)
+    assert c._code.user_class_source_hash(a) != c._code.user_class_source_hash(b)
 
 
 def test_a_comprehension_in_a_method_hashes_identically_across_processes():
@@ -217,7 +217,7 @@ def test_a_functools_wraps_decorated_method_body_edit_invalidates():
     c = CashCls()
     v1 = _exec_class(body_template.format(value="V1"))
     v2 = _exec_class(body_template.format(value="V2"))
-    assert c._code_surface_hash(v1) != c._code_surface_hash(v2)
+    assert c._code.code_surface_hash(v1) != c._code.code_surface_hash(v2)
 
 
 def test_a_partialmethod_bound_argument_change_invalidates():
@@ -255,14 +255,14 @@ def test_a_partialmethod_bound_argument_change_invalidates():
 
     c = CashCls()
     same_a, same_b = _two_in_one_module(3, 3)
-    assert c._code_surface_hash(same_a) == c._code_surface_hash(same_b), (
+    assert c._code.code_surface_hash(same_a) == c._code.code_surface_hash(same_b), (
         "CONTROL: identical bound arguments in the same module must collide. "
         "If this fails, something other than the bound value is carrying the "
         "assertion below and the test proves nothing."
     )
 
     diff_a, diff_b = _two_in_one_module(3, 4)
-    assert c._code_surface_hash(diff_a) != c._code_surface_hash(diff_b)
+    assert c._code.code_surface_hash(diff_a) != c._code.code_surface_hash(diff_b)
 
 
 def test_a_frozenset_literal_in_a_method_hashes_identically_across_processes():
@@ -285,7 +285,7 @@ def test_a_frozenset_literal_in_a_method_hashes_identically_across_processes():
     "label,default",
     [
         # THE SHAPES THAT ACTUALLY REACH THE FALLBACK. `_value_identity` folds
-        # a default through `_hash_arg_payload` and only approximates what that
+        # a default through `ArgHasher.hash_payload` and only approximates what that
         # REFUSES, so a default has to be UNPICKLABLE to exercise the path at
         # all. Each of these produced 3 distinct digests in 3 fresh processes
         # before the fix, i.e. an entry that could never hit again after a
@@ -301,7 +301,7 @@ def test_a_frozenset_literal_in_a_method_hashes_identically_across_processes():
     ],
 )
 def test_an_unpicklable_default_hashes_identically_across_processes(label, default):
-    """A default `_hash_arg_payload` cannot pickle used to fall back to
+    """A default `ArgHasher.hash_payload` cannot pickle used to fall back to
     `repr()`, and `repr()` of a lambda or a Lock is a memory ADDRESS.
 
     Must run in SUBPROCESSES: an address leak is invisible within one process,
@@ -325,4 +325,4 @@ def test_an_edited_lambda_default_changes_the_hash():
     c = CashCls()
     a = _exec_class("class S:\n    def m(self, key=lambda r: r): return key\n")
     b = _exec_class("class S:\n    def m(self, key=lambda r: r.x): return key\n")
-    assert c._code_surface_hash(a) != c._code_surface_hash(b)
+    assert c._code.code_surface_hash(a) != c._code.code_surface_hash(b)

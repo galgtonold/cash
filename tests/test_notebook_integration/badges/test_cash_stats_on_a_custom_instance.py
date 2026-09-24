@@ -1,8 +1,8 @@
 """`%cash_stats` cannot see decorator hits on a custom Cash instance.
 
 `get_cash_instance` drains the notebook's own `Cash` or the module-level
-`cash._global_cash` singleton, and `Cash._decorator_call_log` is a per-instance
-list — so a `@c.cache` hit on a separately-constructed `c = cash.Cash()` is
+`cash._global_cash` singleton, and each instance keeps its own call log
+(`CallLog.entries`) — so a `@c.cache` hit on a separately-constructed `c = cash.Cash()` is
 never credited. That instance is the pattern several feature guides teach for
 `register_hasher`, custom backends and `file_depends_on`.
 

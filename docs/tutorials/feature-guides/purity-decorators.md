@@ -109,7 +109,7 @@ cash.stateful(pd.DataFrame.to_sql)   # writes to a database
 
 ## `cash.opaque`: leave a class out of the key
 
-<!-- claim: cash/__init__.py:opaque @679c15ff, cash/decorator/arg_hashing.py:ArgHashingMixin._is_opaque @338bc5d6 -->
+<!-- claim: cash/__init__.py:opaque @679c15ff, cash/decorator/arg_hashing.py:is_opaque @c98ecac3 -->
 A class or function of yours passed as an argument is keyed by its code, so an
 edit to it recomputes the call. For a class whose code does not affect the
 result (a marker type, a vendored class that changes for unrelated reasons),

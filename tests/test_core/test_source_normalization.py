@@ -13,6 +13,7 @@ import warnings
 
 import pytest
 
+from cash.decorator.code_identity import hash_callable_source
 from cash.source_norm import normalize_source_for_hash
 
 
@@ -514,8 +515,6 @@ def test_source_hash_memo_is_keyed_by_identity_not_value(tmp_path):
     import inspect
     import sys
 
-    from cash import Cash
-
     def load(name, body):
         path = tmp_path / (name + ".py")
         path.write_text(body, encoding="utf-8")
@@ -536,8 +535,7 @@ def test_source_hash_memo_is_keyed_by_identity_not_value(tmp_path):
         assert fn_a.__code__ is not fn_b.__code__
         assert normalize_source_for_hash(plain) != normalize_source_for_hash(annotated)
 
-        cash = Cash(register_magic=False)
-        assert cash._hash_callable_source(fn_a) != cash._hash_callable_source(fn_b), (
+        assert hash_callable_source(fn_a) != hash_callable_source(fn_b), (
             "the memo conflated two value-equal code objects with different sources"
         )
     finally:

@@ -70,13 +70,13 @@ def _widen_the_analysis_window(c, seconds=0.5):
     the step the fix serialises. On the unfixed code it splits the callers into
     two cache keys every time; on the fixed code they wait and share one.
     """
-    real = c._analyze_dependencies
+    real = c._runner._analyze_dependencies
 
     def slow(func):
         time.sleep(seconds)
         return real(func)
 
-    c._analyze_dependencies = slow
+    c._runner._analyze_dependencies = slow
 
 
 def _run_threads(fn, n):

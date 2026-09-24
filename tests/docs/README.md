@@ -102,7 +102,7 @@ page, or give the fence a `test:skip` with a reason.
 
 `test_no_line_pinned_source_references` fails a published page that cites a
 source line (`` `core.py:1234` ``). Name the symbol instead
-(`Cash._compute_with_lock`): it moves with the code and a claim anchor can
+(`CallRunner.compute_with_lock`): it moves with the code and a claim anchor can
 check it. The one allowed form pins the commit the line was read at,
 `` `src/cash/core.py:1234@8e5f4ce` ``, and
 `test_commit_pinned_references_resolve` checks that the commit and line exist.

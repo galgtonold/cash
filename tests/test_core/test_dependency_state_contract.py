@@ -66,7 +66,7 @@ def test_helper_token_format_is_helper_qual_hash(tmp_path):
     name = c.get_func_key(main)
     main(5)  # trigger analysis -> populates the purity report
 
-    report = c._purity_reports[name]
+    report = c._registry.purity_reports[name]
     assert report.helper_source_hashes, "fixture expected to capture hm.helper"
 
     import sys as _sys
@@ -79,7 +79,7 @@ def test_helper_token_format_is_helper_qual_hash(tmp_path):
         if callable(obj):
             live[qual] = hashlib.sha256(normalize_source_for_hash(inspect.getsource(obj)).encode("utf-8")).hexdigest()
 
-    no_defaults = c._hash_arg_payload((), {})
+    no_defaults = c._args.hash_payload((), {})
     parts = [c.source_hashes[name]]
     for qual in sorted(report.helper_source_hashes):
         if qual == name:

@@ -10,7 +10,7 @@ import logging
 import textwrap
 import types
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..analysis.annotations import parse_annotation_line
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
@@ -24,6 +24,11 @@ from ..tracking.randomness import (
     seed_epoch_component,
     seed_epochs,
 )
+
+if TYPE_CHECKING:
+    from .backend_slot import BackendSlot
+    from .registry import FunctionRegistry
+    from .reporting import Notices
 
 logger = logging.getLogger(__name__)
 
@@ -139,10 +144,55 @@ def read_seed(value: Any, path: tuple) -> Any:
     return value
 
 
-class RngMixin:
-    """The random-number generators a function draws from, as an input."""
+def rng_marker_key(func_name: str) -> str:
+    """Backend key for the "this function draws" verdict."""
+    return f"cash:rngdraw:{func_name}"
 
-    def _fold_rng_epoch(self, func_name: str, state_hash: str) -> str:
+
+def capture_rng_pre_state() -> dict | None:
+    """Snapshot the global RNG streams, or None if unavailable."""
+    try:
+        return capture_rng_state()
+    except (TypeError, AttributeError):  # pragma: no cover
+        return None
+
+
+def replay_rng_state(metadata: Any) -> None:
+    """Put the global RNG where the computed call left it (see
+    :meth:`RngWatch.replay_parts`), when it is where that call started."""
+    replay = getattr(metadata, "rng_replay", None) or {}
+    post, pre = replay.get("rng_post"), replay.get("rng_pre")
+    if not post or not pre:
+        return
+    try:
+        # Only the streams the body advanced, and only while each is where
+        # that body found it. Every other module is left alone: a process
+        # seeds `random` from the OS at import, so comparing all of them
+        # would refuse every replay.
+        advanced = rng_modules_changed(pre, post)
+        if not advanced:
+            return
+        live = capture_rng_state()
+        if any(m not in live for m in advanced):
+            return
+        if rng_modules_changed({m: pre[m] for m in advanced}, {m: live[m] for m in advanced}):
+            return
+        restore_rng_state({m: post[m] for m in advanced})
+    except Exception:  # noqa: BLE001 - a replay must never break a hit
+        logger.debug("[CORE] could not replay the RNG state of a hit", exc_info=True)
+
+
+class RngWatch:
+    """Global random number generators: the seed epoch in the key of a function
+    that draws, replaying where a hit leaves them, and the unseeded-randomness
+    warnings."""
+
+    def __init__(self, registry: FunctionRegistry, backend_slot: BackendSlot, notices: Notices) -> None:
+        self._registry = registry
+        self._backend_slot = backend_slot
+        self._notices = notices
+
+    def fold_rng_epoch(self, func_name: str, state_hash: str) -> str:
         """Fold the current seed epoch into the key, for RNG-drawing functions.
 
         A function that draws from the global stream has an input the key never
@@ -164,7 +214,7 @@ class RngMixin:
         draw has already been stored under an epoch-free key; the next call
         recomputes once and is stable from then on.
         """
-        cf = self._cached.get(func_name)
+        cf = self._registry.cached.get(func_name)
         modules = cf.rng_modules if cf is not None else None
         if modules is None:
             modules = self._load_rng_draw_marker(func_name)
@@ -174,11 +224,6 @@ class RngMixin:
         if not component:
             return state_hash
         return hashlib.sha256(f"{state_hash}{component}".encode("utf-8")).hexdigest()
-
-    @staticmethod
-    def _rng_marker_key(func_name: str) -> str:
-        """Backend key for the "this function draws" verdict."""
-        return f"cash:rngdraw:{func_name}"
 
     def _load_rng_draw_marker(self, func_name: str) -> set[str]:
         """Read the persisted draw verdict, caching the answer for this process.
@@ -194,12 +239,12 @@ class RngMixin:
         need the key it is supposed to inform). One backend read per function per
         process; misses are remembered as empty so it is not retried.
         """
-        cf = self._cached.get(func_name)
+        cf = self._registry.cached.get(func_name)
         if cf is not None and cf.rng_modules is not None:
             return cf.rng_modules
         modules: set[str] = set()
         try:
-            stored = self.backend.get(self._rng_marker_key(func_name))
+            stored = self._backend_slot.backend.get(rng_marker_key(func_name))
             # Backends answer with ``(metadata, value)``; unwrap before reading.
             # Treating the pair itself as the payload silently yielded an empty
             # set, so every restart re-learned nothing and the stale value came
@@ -217,11 +262,11 @@ class RngMixin:
     def _store_rng_draw_marker(self, func_name: str, modules: set[str]) -> None:
         """Persist the verdict so the next process applies it on its first call."""
         try:
-            self.backend.set(self._rng_marker_key(func_name), set(modules))
+            self._backend_slot.backend.set(rng_marker_key(func_name), set(modules))
         except Exception:  # noqa: BLE001 - best effort; correctness degrades to today's
             logger.debug("could not persist RNG draw marker for %s", func_name)
 
-    def _note_rng_draw(self, func_name: str, pre_state: dict | None) -> bool:
+    def note_draw(self, func_name: str, pre_state: dict | None) -> bool:
         """Record which global RNG modules *func_name* just advanced."""
         if pre_state is None:
             return False
@@ -234,7 +279,7 @@ class RngMixin:
         drew = {m for m in changed if m in pre_state}
         if not drew:
             return False
-        cf = self._cached.get(func_name)
+        cf = self._registry.cached.get(func_name)
         if cf is None:
             return False
         if cf.rng_modules is None:
@@ -252,15 +297,7 @@ class RngMixin:
         # write there would redraw and break the freeze-from-first-call contract.
         return bool(drew & set(seed_epochs()))
 
-    @staticmethod
-    def _capture_rng_pre_state() -> dict | None:
-        """Snapshot the global RNG streams, or None if unavailable."""
-        try:
-            return capture_rng_state()
-        except (TypeError, AttributeError):  # pragma: no cover
-            return None
-
-    def _rng_replay_parts(self, drew: bool, pre_state: dict | None) -> dict:
+    def replay_parts(self, drew: bool, pre_state: dict | None) -> dict:
         """What a later hit needs to leave the RNG where this call left it.
 
         A hit never runs the body, so the stream it advanced stays where it was
@@ -281,32 +318,7 @@ class RngMixin:
         except Exception:  # noqa: BLE001 - never break a call over this
             return {}
 
-    @staticmethod
-    def _replay_rng_state(metadata: Any) -> None:
-        """Put the global RNG where the computed call left it (see
-        :meth:`_rng_replay_parts`), when it is where that call started."""
-        replay = getattr(metadata, "rng_replay", None) or {}
-        post, pre = replay.get("rng_post"), replay.get("rng_pre")
-        if not post or not pre:
-            return
-        try:
-            # Only the streams the body advanced, and only while each is where
-            # that body found it. Every other module is left alone: a process
-            # seeds `random` from the OS at import, so comparing all of them
-            # would refuse every replay.
-            advanced = rng_modules_changed(pre, post)
-            if not advanced:
-                return
-            live = capture_rng_state()
-            if any(m not in live for m in advanced):
-                return
-            if rng_modules_changed({m: pre[m] for m in advanced}, {m: live[m] for m in advanced}):
-                return
-            restore_rng_state({m: post[m] for m in advanced})
-        except Exception:  # noqa: BLE001 - a replay must never break a hit
-            logger.debug("[CORE] could not replay the RNG state of a hit", exc_info=True)
-
-    def _warn_unseeded_randomness(
+    def warn_unseeded_randomness(
         self,
         func: Callable,
         func_name: str,
@@ -314,15 +326,14 @@ class RngMixin:
     ) -> None:
         """Warn once if *func*'s source draws from an unseeded RNG.
 
-        The decorator used to be completely silent here while the notebook path
-        warned, so ``@cash.cache`` would freeze a non-deterministic result
-        forever with nothing on screen to say so. The two paths now share ONE
-        detector — :class:`~cash.tracking.randomness.RandomnessDetector`, reused
+        Otherwise ``@cash.cache`` would freeze a non-deterministic result
+        forever with nothing on screen to say so. The decorator and the
+        notebook path share ONE detector — :class:`~cash.tracking.randomness.RandomnessDetector`, reused
         verbatim — so "what counts as unseeded" cannot drift between them.
 
         Runs at DECORATION time, once per function. The analysis is a pure
         function of the source, so there is no reason to pay for it per call,
-        and ``cache()`` already reads the source anyway (``_register_func`` ->
+        and ``cache()`` already reads the source anyway (``FunctionRegistry.register`` ->
         ``callable_identity``), which warms ``linecache`` for us.
 
         A fresh detector is used per function rather than one shared across the
@@ -371,7 +382,7 @@ class RngMixin:
         # check their bound value per call.
         seed_params = seed_parameters(src)
         if seed_params:
-            cf = self._cached.get(func_name)
+            cf = self._registry.cached.get(func_name)
             if cf is not None:
                 cf.seed_params = seed_params
 
@@ -403,11 +414,11 @@ class RngMixin:
             f"call - the RNG is never consulted again, so the value is frozen "
             f"and not reproducible across a cleared cache."
         )
-        # ``_warn_once`` keys on (category, func_name, "") -> one warning per
-        # decorated function for the life of this Cash instance, and it also
+        # ``Notices.warn_once`` gives one warning per decorated function for the life
+        # of this Cash instance, and it also
         # files the message into ``f.cache_info()['warnings']`` so it stays
         # discoverable if the user missed the stderr emission.
-        self._warn_once(
+        self._notices.warn_once(
             CashRandomnessWarning,
             func_name,
             "",
@@ -416,16 +427,9 @@ class RngMixin:
             fix="seed the RNG to make the value reproducible, leave the "
             "function undecorated for a genuinely fresh draw, or pass "
             "@cash.cache(allow_random=True) to keep it frozen on purpose.",
-            # 4, not 3: the chain from ``warnings.warn`` is
-            # ``warn_diagnostic_message -> _warn_once ->
-            # _warn_unseeded_randomness -> cache -> user``, so 3 blamed
-            # ``cache`` itself and printed a line inside core.py. Measured
-            # against a decoration on a known line; a reader whose warning
-            # points into Cash cannot act on it, which is the whole point of
-            # this diagnostic. Single caller, so the depth is fixed.,
         )
 
-    def _warn_if_seed_is_none(self, func: Callable, func_name: str, args: tuple, kwargs: dict) -> None:
+    def warn_if_seed_is_none(self, func: Callable, func_name: str, args: tuple, kwargs: dict) -> None:
         """RANDOM-UNSEEDED for a seed that is None in THIS call.
 
         The seed may be a parameter or read from one or from a module
@@ -436,7 +440,7 @@ class RngMixin:
         bound = None
         g = getattr(func, "__globals__", None) or {}
         for expr, (call, root, is_param, path) in sorted(
-            getattr(self._cached.get(func_name), "seed_params", {}).items()
+            getattr(self._registry.cached.get(func_name), "seed_params", {}).items()
         ):
             if is_param:
                 if bound is None:
@@ -461,7 +465,7 @@ class RngMixin:
                 if is_param and not path
                 else f"set {expr} to an integer, or pass the seed as an argument."
             )
-            self._warn_once(
+            self._notices.warn_once(
                 CashRandomnessWarning,
                 func_name,
                 f"seed-param:{expr}",
@@ -476,7 +480,7 @@ class RngMixin:
             )
             return
 
-    def _warn_unseeded_estimator_result(
+    def warn_unseeded_estimator_result(
         self,
         func_name: str,
         result: Any,
@@ -484,7 +488,7 @@ class RngMixin:
     ) -> None:
         """Warn when a cached function RETURNS an unseeded fitted estimator.
 
-        ``_warn_unseeded_randomness`` reads the source, and
+        ``RngWatch.warn_unseeded_randomness`` reads the source, and
         ``decorator.md`` is right that this hazard is invisible to it:
         randomness inside sklearn's compiled ``.fit()`` is not in any AST. The
         notebook's statement path solves that by asking the LIVE object
@@ -497,7 +501,7 @@ class RngMixin:
         recipe: a report would have called the model "completely stable across
         random seeds".
 
-        Same verdict rule as ``_unseeded_estimator_fits``: unseeded iff
+        Same verdict rule as ``unseeded_estimator_fits``: unseeded iff
         ``get_params()`` HAS ``random_state`` and it is ``None``. A seed of any
         kind, or no such parameter at all (``LinearRegression``), is silent.
         Any failure is silent too -- an advisory must never break a call.
@@ -505,11 +509,11 @@ class RngMixin:
         if allow_random:
             return
         # This runs on EVERY call, hits included, so it must stay cheap once it
-        # has had its say. `_warn_once` would dedupe the emission but not the
+        # has had its say. `Notices.warn_once` would dedupe the emission but not the
         # `get_params()` that precedes it, and sklearn's `get_params` walks the
         # signature -- a per-hit cost on exactly the functions people cache to
         # avoid paying for a fit. Check the same key first and leave.
-        if (CashRandomnessWarning, func_name, "_estimator_result", "RANDOM-UNSEEDED") in self._warning_keys_seen:
+        if self._notices.has_warned((CashRandomnessWarning, func_name, "_estimator_result", "RANDOM-UNSEEDED")):
             return
         get_params = getattr(result, "get_params", None)
         if get_params is None or not callable(get_params):
@@ -521,7 +525,7 @@ class RngMixin:
         except Exception:  # noqa: BLE001 - advisory only; never break a call
             return
 
-        self._warn_once(
+        self._notices.warn_once(
             CashRandomnessWarning,
             func_name,
             "_estimator_result",

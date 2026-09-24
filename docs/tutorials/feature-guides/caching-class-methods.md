@@ -18,7 +18,7 @@ The fix for both is to tell cash what identifies an instance.
 
 ## Register a hasher for the class
 
-<!-- claim: cash/core.py:Cash.register_hasher @b8ede33d, cash/decorator/arg_hashing.py:ArgHashingMixin._hash_arg_payload @7bc7e4ca -->
+<!-- claim: cash/core.py:Cash.register_hasher @f48a324b, cash/decorator/arg_hashing.py:ArgHasher.hash_payload @c4f48efb -->
 ```python
 import hashlib
 from cash import Cash

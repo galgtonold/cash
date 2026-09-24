@@ -39,13 +39,14 @@ notebook keys a statement on its source and the lineage of its inputs, and
 decides per statement whether to persist. They share the hashing helpers, the
 storage backends and the effect vocabulary (`effects.py`), not a key builder.
 
-- **`src/cash/core.py`**: the `Cash` class: registries, configuration, and the
-  `cache` decorator front with its wrappers.
-- **`src/cash/decorator/`**: what a cached call does, one concern per module:
-  the parts of its key (`code_identity`, `closure_fold`, `globals_fold`,
-  `code_args`, `arg_hashing`, `rng`, `file_deps`), the call itself (`runtime`,
-  `store`, `iterators`) and what the user is told (`explain`, `reporting`,
-  `purity_checks`).
+- **`src/cash/core.py`**: the `Cash` class and `@cash.cache`.
+- **`src/cash/decorator/`**: the objects `Cash.__init__` builds and wires together.
+  Each one takes what it uses as constructor arguments; there are no mixins and no
+  shared `self`. `FunctionRegistry` holds the cached functions and their analysis.
+  `KeyBuilder` and `CallRunner` (`runtime.py`) build the key and run a call.
+  `ResultStore` stores results, and `Explainer` answers `f.explain()`. The key
+  folds live in `closure_fold.py`, `globals_fold.py`, `code_args.py`,
+  `code_identity.py` and `arg_hashing.py`.
 - **`src/cash/backends/`**: storage backends. `factory.py` maps a `TierConfig.type`
   (`memory` / `file` / `sqlite` / `redis` / `s3` / `tiered`) to a class. The default is
   `TieredBackend([InMemoryBackend, FileBackend])`.

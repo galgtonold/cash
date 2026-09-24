@@ -30,7 +30,7 @@ cash keys each call on its arguments and on the function's source. Every result
 is written to disk, in a [`.cash/` folder](../decorator.md#where-results-are-stored)
 in your project, so the next run of the script gets a hit on the first call too.
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHashingMixin._hash_arg_payload @7bc7e4ca, cash/object_hashing.py:builtin_hash @bd4210c7 -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @c4f48efb, cash/object_hashing.py:builtin_hash @bd4210c7 -->
 Arguments do not need to be hashable: DataFrames and arrays are hashed by
 content, so an equal copy hits the same entry.
 
@@ -75,7 +75,7 @@ print(pipeline.cache_info())     # {'hits': 1, 'misses': 2, ...}
 
 The answer changed and `misses` went up.
 
-<!-- claim: cash/decorator/code_identity.py:CodeIdentityMixin._is_user_module @998fb383 -->
+<!-- claim: cash/decorator/code_identity.py:is_user_module @8bcf4264 -->
 This also works for helpers imported from other modules of your project. cash
 stops at installed code (`site-packages` and the standard library); if a
 third-party function matters to a result, name it with `depends_on=`.

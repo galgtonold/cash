@@ -25,9 +25,9 @@ from cash import Cash, CashImpurityWarning
 
 def test_shutdown_does_not_build_deferred_backend():
     c = Cash(cache_dir="./.cash/_t_shutdown_guard")
-    assert c._backend is None  # backend is lazy / deferred
+    assert c.backend_if_built is None  # backend is lazy / deferred
     c.shutdown()  # the atexit path
-    assert c._backend is None  # must NOT have been built
+    assert c.backend_if_built is None  # must NOT have been built
 
 
 def test_no_atexit_traceback_when_backend_never_built():

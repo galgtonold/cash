@@ -31,7 +31,9 @@ def test_each_code_is_shown_once(tmp_path):
         warnings.simplefilter("always")
         for _ in range(2):  # the second round is deduplicated
             for code in CODES:
-                c._warn_once(CashCacheIneffectiveWarning, name, "", "something happened.", code=code, fix="fix it.")
+                c._notices.warn_once(
+                    CashCacheIneffectiveWarning, name, "", "something happened.", code=code, fix="fix it."
+                )
 
     assert [w.message.code for w in rec] == list(CODES)
     assert [e["code"] for e in f.cache_info()["warnings"]] == list(CODES)

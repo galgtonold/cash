@@ -14,10 +14,8 @@ class StreamingCachedIterator:
     """Passes the producer's items through as they arrive, caching at the end.
 
     Returned on a MISS. `@cash.cache` should not change how a function
-    behaves, and for a generator it used to: cash drained the whole thing
-    before returning anything, so a streamed response arrived all at once
-    after the full latency. Measured on a token stream -- 494ms to first item
-    uncached, 2444ms cached, the entire completion in one go.
+    behaves: draining the generator before returning anything would make a
+    streamed response arrive all at once, after the full latency.
 
     Same surface as the replay iterator, deliberately: `send` and `throw`
     raise, because a cached generator cannot support them on the hit either.
@@ -35,7 +33,7 @@ class StreamingCachedIterator:
         return next(self._gen)
 
     def close(self):
-        """Abandon the stream. Nothing is cached -- see `_stream_and_store`."""
+        """Abandon the stream. Nothing is cached -- see `ResultStore.stream_and_store`."""
         self._gen.close()
 
     def send(self, value):
@@ -63,23 +61,23 @@ class ChunkedCachedIterator:
     replay of stored values, not a coroutine.
 
     Args:
-        cash: The owning `Cash` instance (used for backend access).
+        holder: What the chunks are read from: anything with a ``.backend``,
+            the owning `Cash`'s `BackendSlot`.
         cache_key: The canonical key under which the manifest is stored.
             Chunk keys are derived as ``f"{cache_key}:chunk_{i}"``.
         n_chunks: Total chunk count, taken from the manifest at construction.
 
     A chunk can go while the caller is still reading: another process clears
-    or rewrites the entry, or the RAM tier evicts it. ``_chunks_are_intact``
-    is checked at lookup, which is before that -- so a lost chunk used to end
-    the iteration, and the caller got a silent PREFIX (100 of 1000 items).
-    The rest is recomputed
+    or rewrites the entry, or the RAM tier evicts it. ``CallRunner._chunks_are_intact``
+    is checked at lookup, which is before that, and ending the iteration at a
+    lost chunk would hand the caller a silent PREFIX. The rest is recomputed
     from *recompute* instead, skipping what was already yielded; with no way
     to recompute, the loss is raised. A truncated answer is worse than a slow
     one.
     """
 
     __slots__ = (
-        "_cash",
+        "_holder",
         "_cache_key",
         "_n_chunks",
         "_chunk_index",
@@ -89,8 +87,8 @@ class ChunkedCachedIterator:
         "_yielded",
     )
 
-    def __init__(self, cash: Any, cache_key: str, n_chunks: int, recompute: Callable[[], Any] | None = None):
-        self._cash = cash
+    def __init__(self, holder: Any, cache_key: str, n_chunks: int, recompute: Callable[[], Any] | None = None):
+        self._holder = holder
         self._cache_key = cache_key
         self._n_chunks = n_chunks
         self._chunk_index = 0
@@ -118,7 +116,7 @@ class ChunkedCachedIterator:
             if self._chunk_index >= self._n_chunks:
                 raise StopIteration
             chunk_key = f"{self._cache_key}:chunk_{self._chunk_index}"
-            _, chunk = self._cash.backend.get(chunk_key)
+            _, chunk = self._holder.backend.get(chunk_key)
             self._chunk_index += 1
             if chunk is None:
                 # The chunk went while the caller was reading (see the class

@@ -49,7 +49,7 @@ load("labels")     # cache miss: different arguments
 load("features")   # cache miss: the version moved
 ```
 
-<!-- claim: cash/decorator/registry.py:RegistryMixin._resolve_dynamic_dependencies @1d703750, cash/data_source.py:DataSource.state_token @89498b3e -->
+<!-- claim: cash/decorator/registry.py:resolve_dynamic_dependencies @44d428bd, cash/data_source.py:DataSource.state_token @89498b3e -->
 A resolver may return one `DataSource`, a list of them, or `None` (no dynamic
 dependency for this call). You can also pass a list of resolvers; their sources
 are pooled. The order of the sources does not matter.
@@ -68,11 +68,12 @@ version, an ETag, a row count with a last-modified time, a digest.
 The same class works in `depends_on=[...]` when the source is fixed; see
 [Custom data sources](../../api/data_sources.md#custom-data-sources).
 
-<!-- claim: cash/data_source.py:FileDataSource @a09d1326 broad="the mtime contract is a property of the whole class" -->
+<!-- claim: cash/data_source.py:FileDataSource @69335436 broad="the content-digest contract is a property of the whole class" -->
 `FileDataSource(path)` is the built-in source for a file. Its token is the
-file's **modification time**, so a `touch` recomputes and a quick same-size edit
-on a file system with one-second timestamps can be missed. For a file cash can
-see, rely on automatic tracking or `file_depends_on=`, which check content.
+file's **content digest**, the same check an automatically tracked read gets:
+a `touch` that leaves the bytes alone keeps the entry, and an edit recomputes
+even when it leaves the timestamp where it was. The digest is remembered per
+file stat, so an unchanged file costs one `stat` per lookup.
 
 ## When the resolver fails
 
@@ -83,7 +84,7 @@ cash warns once per function
 value is never folded in as if there were no dependency. Wrap the value in a
 `DataSource`, as above.
 
-<!-- claim: cash/decorator/explain.py:ExplainMixin._explain_call @bd141dbf -->
+<!-- claim: cash/decorator/explain.py:Explainer.explain @4c427520 -->
 `f.explain(...)` reports such a call as `key_uncomputable`, with the reason.
 
 ## Combining with other options

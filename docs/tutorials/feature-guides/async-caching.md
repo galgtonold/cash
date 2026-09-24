@@ -27,7 +27,7 @@ async def main():
 asyncio.run(main())
 ```
 
-<!-- claim: cash/core.py:Cash._make_wrapper @8d59b655 -->
+<!-- claim: cash/core.py:Cash._make_wrapper @15a7974a -->
 Everything else works as on a sync function, because the code around the body
 is shared: `ttl=`, `depends_on=`, `dynamic_depends_on=`, `file_depends_on=`,
 file reads inside the body, `cache_if=`, the side-effect checks with `strict=`
@@ -36,7 +36,7 @@ and `f.explain()` are plain synchronous calls on an async function too.
 
 ## Concurrent awaits
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._single_flight @790b5e9b -->
+<!-- claim: cash/decorator/runtime.py:CallRunner.single_flight @dfba7161 -->
 By default, two tasks that await the same uncached key at once both run the
 body. With `Cash(use_locking=True)` they share one computation: the first runs
 the body, the others wait and read its result. This covers every event loop in
@@ -107,7 +107,7 @@ accept it.
 
 ## Limits
 
-<!-- claim: cash/core.py:Cash.cache @d8475d94 -->
+<!-- claim: cash/core.py:Cash.cache @df737927 -->
 - **Async generators are not cached.** An `async def` that uses `yield` is
   returned undecorated, with a warning
   ([`CACHE-ASYNC-GENERATOR`](../../warnings.md#cache-async-generator)). To cache

@@ -74,7 +74,7 @@ def frame():
 # such care -- it is the absolute side that moves with the host.
 def _cash(tmp_path, threshold=0.01):
     cash = Cash(cache_dir=str(tmp_path), register_magic=False)
-    cash._effectiveness = EffectivenessLedger(waste_threshold_seconds=threshold)
+    cash._calls.effectiveness = EffectivenessLedger(waste_threshold_seconds=threshold)
     return cash
 
 
@@ -137,7 +137,7 @@ def test_a_slow_first_call_does_not_convict_a_function_worth_caching(tmp_path, m
 
     cash = _cash(tmp_path)
     cash.register_hasher(Payload, _costly_hash)
-    analyze = cash._analyze_dependencies
+    analyze = cash._runner._analyze_dependencies
 
     def work(n):
         acc = 0
@@ -153,14 +153,14 @@ def test_a_slow_first_call_does_not_convict_a_function_worth_caching(tmp_path, m
         time.sleep(delay)
         return analyze(func)
 
-    monkeypatch.setattr(cash, "_analyze_dependencies", slow_analyze)
+    monkeypatch.setattr(cash._runner, "_analyze_dependencies", slow_analyze)
 
     @cash.cache
     def dominant(payload):
         return work(payload.n)
 
     assert _run(dominant, Payload(7), calls=3) == [], "one slow first call convicted it"
-    assert cash._effectiveness.final_verdicts() == []
+    assert cash._calls.effectiveness.final_verdicts() == []
 
 
 def test_the_body_time_reaches_the_entry(tmp_path, frame):
@@ -177,7 +177,7 @@ def test_the_body_time_reaches_the_entry(tmp_path, frame):
         return float(d["a"].sum())
 
     summarise(frame)
-    ledger = cash._effectiveness._ledgers
+    ledger = cash._calls.effectiveness._ledgers
     assert ledger, "the first (miss) call recorded nothing"
     (led,) = ledger.values()
     assert led.body_samples, "no body time observed on the miss"

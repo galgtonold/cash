@@ -136,7 +136,7 @@ class FileAccessTracker:
         # `credit_read_to_stack`): its recorded reads are live, not remembered.
         self.reading_codes: set[Any] = set()
         # Files a memo handed this block data from that was read from an
-        # EARLIER version of the file (see `Cash._credit_remembered_reads`).
+        # EARLIER version of the file (see `FileDeps.credit_remembered_reads`).
         self.stale_memo_reads: set[str] = set()
 
     def __enter__(self):

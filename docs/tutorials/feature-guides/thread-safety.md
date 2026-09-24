@@ -11,7 +11,7 @@ twice, which matters for a 30-second fit or a paid API call.
 
 ## `use_locking=True`: compute once
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._compute_with_lock @3b0babd9, cash/core.py:Cash.__init__ @9c872b72 -->
+<!-- claim: cash/decorator/runtime.py:CallRunner.compute_with_lock @b4c5c8c2, cash/core.py:Cash.__init__ @6199988d -->
 Turn on locking on the `Cash` instance. It is not a decorator parameter, and it
 applies to every function registered through that instance:
 
@@ -32,7 +32,7 @@ computes if the entry is still missing. The other callers wait for the lock,
 then read the stored result. The lock is per key, so calls with different
 arguments never wait for each other, and a hit takes no lock at all.
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._single_flight @790b5e9b -->
+<!-- claim: cash/decorator/runtime.py:CallRunner.single_flight @dfba7161 -->
 It works for `async def` functions too: concurrent awaits of one key, in any
 event loop of the process, wait for the first one and read its result. If the
 first caller stores nothing (it raised, or `cache_if` said no), the others
@@ -40,7 +40,7 @@ compute for themselves.
 
 ## Which lock spans what
 
-<!-- claim: cash/backends/_base.py:CacheBackend.lock @89b52144, cash/backends/redis_backend.py:RedisBackend.lock @cfdf2e01 -->
+<!-- claim: cash/backends/_base.py:CacheBackend.lock @2c1d7483, cash/backends/redis_backend.py:RedisBackend.lock @cfdf2e01 -->
 | Backend | Callers that share one computation |
 |---|---|
 | Any backend, including the default | threads and tasks in **one process** |

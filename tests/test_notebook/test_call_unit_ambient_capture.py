@@ -6,8 +6,8 @@ does not, because the callee never runs. ``CallUnit`` closes that gap on a
 hit by replaying what the ORIGINAL execution observed:
 
 * ``replay_deps`` re-declares the entry's recorded file/remote reads onto
-  the ambient tracker (``active_tracker``), mirroring ``core.py``'s
-  ``_propagate_file_deps_to_active_tracker`` -- the ``@cash.cache``
+  the ambient tracker (``active_tracker``), mirroring the decorator's
+  ``propagate_file_deps_to_active_tracker`` -- the ``@cash.cache``
   decorator's own defence against exactly this failure mode.
 * ``replay_output`` writes the entry's recorded stdout/stderr onto the
   live stream, reconstructing ``print(a); f(x); print(b)``'s interleaving.
@@ -23,7 +23,7 @@ itself performs a real, tracked read through the SAME monkey-patched
 ``open`` the ambient tracker observes -- so for local paths, the freshness
 re-check's own side effect already re-registers the dependency, independent
 of ``replay_deps``. That is harmless (it mirrors the decorator's own
-``_auto_file_deps_fresh`` -> ``_propagate_file_deps_to_active_tracker``
+``FileDeps.auto_file_deps_fresh`` -> ``propagate_file_deps_to_active_tracker``
 ordering, which has the identical property), but it means a LOCAL-only
 scenario cannot isolate ``replay_deps``'s specific contribution. The
 REMOTE channel has no such side effect (``remote_dep_is_fresh`` only asks

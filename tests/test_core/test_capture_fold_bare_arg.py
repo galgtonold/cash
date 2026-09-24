@@ -1,6 +1,6 @@
 """A global OR closure capture passed to a call must still invalidate.
 
-`_read_global_data_names` folds module globals a function reads, so reassigning
+`GlobalsFold.read_global_data_names` folds module globals a function reads, so reassigning
 one invalidates. But it subtracted `_unsafe_uses_of`, which disqualified any
 name **passed as a bare argument to any call** — the callee might mutate it, and
 folding a mutated global would key the entry on the function's own output and
@@ -21,7 +21,7 @@ with `.explain()` reporting `[HIT]`.
 Globals are folded now and the mutation question is answered by OBSERVATION:
 the value is hashed once for the key, then again after the body runs. Changed
 across the call => calling the function is what moves it => stop folding that
-one name. See `Cash._learn_mutating_globals`.
+one name. See `PurityChecks.learn_mutating_captures`.
 
 **The controls are the point of this file.** A "fix" that stopped folding
 globals entirely, or that folded them and never demoted an accumulator, would

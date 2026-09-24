@@ -10,7 +10,7 @@ import logging
 import textwrap
 import types
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .. import _plain_data
 from .._clock import perf_counter as _perf_counter
@@ -34,8 +34,17 @@ from ..purity_analyzer import (
     resolve_binding,
 )
 from ..value_types import IMMUTABLE_VALUE_TYPES, writable_types
-from .closure_fold import ClosureFoldMixin
-from .code_identity import CodeIdentityMixin
+from .closure_fold import is_immutable_capture, iter_code_scopes, unsafe_uses_of
+from .code_identity import func_key, is_user_module, own_package
+from .globals_fold import stabilize_for_global_hash
+
+if TYPE_CHECKING:
+    from ..config import CashConfig
+    from .arg_hashing import ArgHasher
+    from .frozen import FrozenResults
+    from .globals_fold import GlobalsFold
+    from .registry import FunctionRegistry
+    from .reporting import Notices
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +82,7 @@ def shares_memory(result, value) -> bool:
 def make_opaque_issue(func_name: str, opaque_list: str) -> Any:
     """Build a synthetic `PurityIssue` for opaque callees
     encountered in ``strict`` mode. Defined at module scope so the
-    ``_surface_purity`` import stays local."""
+    ``PurityChecks.surface_purity`` import stays local."""
 
     return PurityIssue(
         kind=ISSUE_IMPURE_CALL,
@@ -83,7 +92,7 @@ def make_opaque_issue(func_name: str, opaque_list: str) -> Any:
     )
 
 
-def format_issues_summary(func_name: str, issues: list[Any]) -> str:
+def format_issues_summary(issues: list[Any]) -> str:
     """Pretty-print a list of `PurityIssue` records, grouped
     by their ``where`` field. Used by both the warning body and the
     strict-mode exception body so users get the same diagnostic.
@@ -122,13 +131,119 @@ def static_effect_kinds(report: Any) -> set[str]:
     return kinds
 
 
-class PurityChecksMixin:
-    """Purity findings, observed effects and argument mutation, per cached function."""
+#: How deep into a returned container an argument is looked for.
+SHARED_RESULT_DEPTH = 2
 
-    #: How deep into a returned container an argument is looked for.
-    _SHARED_RESULT_DEPTH = 2
 
-    def _warn_shared_result(self, func, func_name: str, result, args, kwargs) -> None:
+def describe_scope_use(reader: Any, name: str, cached: Any) -> str:
+    """`` -- through `X.f()` in mod.helper (file:line)`` for the warning, or ``""``.
+
+    *reader* is the function whose read of *name* was watched: the cached
+    function, or a helper several calls below it. The move itself may be
+    deeper still (a method of the object), but this is the line in code the
+    user wrote that reaches it -- the first use that may mutate, the same
+    rule that made the name provisional. Only runs when warning.
+    """
+    if reader is None:
+        return ""
+    try:
+        lines, first = inspect.getsourcelines(reader)
+        filename = inspect.getsourcefile(reader) or inspect.getfile(reader)
+        source = textwrap.dedent("".join(lines))
+        tree = ast.parse(source)
+    except (*SOURCE_RETRIEVAL_ERRORS, SyntaxError):
+        return ""
+    best = None
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Call, ast.Assign, ast.AugAssign, ast.Delete)):
+            continue
+        if name not in unsafe_uses_of(node, {name}):
+            continue
+        if best is None or (node.lineno, node.col_offset) < (best.lineno, best.col_offset):
+            best = node
+    if best is None:
+        return ""
+    lineno = max(first, 1) - 1 + best.lineno
+    text = " ".join((ast.get_source_segment(source, best) or "").split())
+    if len(text) > 80:
+        text = text[:77] + "..."
+    inside = "" if reader is cached else f" in {func_key(reader)}"
+    return f" -- through `{text}`{inside} ({filename}:{lineno})"
+
+
+#: A re-hash costing more than this marks the function as not worth
+#: verifying again. Measured: ~7.4 ms for a 16 MB ndarray, so this is
+#: roughly a 100 MB argument. The first miss still gets checked -- the
+#: budget only stops a large argument from being re-hashed on every
+#: subsequent miss.
+MUTATION_CHECK_BUDGET_S = 0.05
+
+
+def helper_mutates_global(fn: Any, name: str) -> bool:
+    """Does *fn*'s own body rebind *name* or change it in place?"""
+    code = getattr(fn, "__code__", None)
+    if code is None:
+        return False
+
+    for scope in iter_code_scopes(code):
+        for instr in dis.get_instructions(scope):
+            if instr.opname in ("STORE_GLOBAL", "DELETE_GLOBAL") and instr.argval == name:
+                return True
+    try:
+        tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+    except SOURCE_RETRIEVAL_ERRORS + (SyntaxError,):
+        return False
+    return name in unsafe_uses_of(tree, frozenset({name}), bare_args=False, mutating_methods_only=True)
+
+
+class LearnedMutations:
+    """Names a call was OBSERVED to mutate, per ``(code object, scope)``.
+
+    Learned once, on the miss that saw it; from then on the closure and
+    globals folds stop folding those names, which would otherwise move the
+    key on every call.
+    """
+
+    def __init__(self) -> None:
+        self._by_code: dict[tuple[Any, str], set[str]] = {}
+
+    def of(self, code: Any, scope: str) -> frozenset[str] | set[str]:
+        """The names learned for *code* in *scope* ("closure" or "global")."""
+        return self._by_code.get((code, scope), frozenset())
+
+    def learn(self, code: Any, scope: str, name: str) -> None:
+        """Record that a call of *code* mutated *name* in *scope*."""
+        self._by_code.setdefault((code, scope), set()).add(name)
+
+
+class PurityChecks:
+    """What a cached function does besides returning its result: the static
+    purity findings, the effects and argument mutations a first call is seen to
+    make, and results that share state with the caller."""
+
+    def __init__(
+        self,
+        config: CashConfig,
+        registry: FunctionRegistry,
+        args: ArgHasher,
+        frozen: FrozenResults,
+        globals_fold: GlobalsFold,
+        mutations: LearnedMutations,
+        notices: Notices,
+    ) -> None:
+        self._config = config
+        self._registry = registry
+        self._args = args
+        self._frozen = frozen
+        self._globals = globals_fold
+        self._mutations = mutations
+        self._notices = notices
+        # Functions the STATIC pass already reported on. The runtime effect
+        # observer stays quiet for these: it would be a second warning about
+        # the same function, and the user has already been told.
+        self._static_flagged: set[str] = set()
+
+    def warn_shared_result(self, func, func_name: str, result, args, kwargs) -> None:
         """Say so when the result shares state with something the caller holds.
 
         A hit hands back a value rebuilt from the stored bytes, so what the
@@ -145,7 +260,7 @@ class PurityChecksMixin:
         argument (identity), or the result being one of the function's module
         globals (identity).
         """
-        if self._purity_mode(func_name) == "silent":
+        if self._registry.purity_mode(func_name) == "silent":
             return
         try:
             shared = self._shared_with(result, args, kwargs, func)
@@ -154,7 +269,7 @@ class PurityChecksMixin:
         if shared is None:
             return
         what, name = shared
-        self._warn_once(
+        self._notices.warn_once(
             CashImpurityWarning,
             func_name,
             "shared-result",
@@ -202,7 +317,7 @@ class PurityChecksMixin:
                 continue
             if value is result:
                 return "is the argument", name
-            if contains(result, value, self._SHARED_RESULT_DEPTH) and is_mutable(value):
+            if contains(result, value, SHARED_RESULT_DEPTH) and is_mutable(value):
                 return "holds the argument", name
             shared = shares_memory(result, value)
             if shared:
@@ -214,14 +329,14 @@ class PurityChecksMixin:
                     return "is the module global", name
         return None
 
-    def _learn_mutating_captures(self, func: Callable, func_name: str, watched: dict[str, tuple[str, str]]) -> None:
+    def learn_mutating_captures(self, func: Callable, func_name: str, watched: dict[str, tuple[str, str]]) -> None:
         """Demote any provisional global this call was OBSERVED to mutate.
 
-        A global merely *passed to a call* (`sum(G)`, `model.predict(G)`) used to
-        be dropped from the key outright, on the theory that the callee might
-        mutate it. That silently served stale values forever. Those
-        names are folded now, and confirmed here: hash them again once the body
-        has run and compare against the hash the key already needed.
+        A global merely *passed to a call* (`sum(G)`, `model.predict(G)`) might
+        be mutated by the callee, but dropping it from the key would serve
+        stale values forever. Such names are folded, and confirmed here: hash
+        them again once the body has run and compare against the hash the key
+        already needed.
 
         Changed across the call => calling this function is what moves the value,
         so folding it would key the entry on the function's own output and miss
@@ -254,20 +369,20 @@ class PurityChecksMixin:
                     cell = cells.get(name)
                     if cell is None:
                         continue
-                    after = self._hash_arg_payload((cell.cell_contents,), {})
+                    after = self._args.hash_payload((cell.cell_contents,), {})
                 elif scope == "carrier":
                     mapping, key = owner
                     if key not in mapping:
                         continue
-                    after = self._carried_global_hash(mapping[key], getattr(func, "__module__", None))
+                    after = self._globals.carried_global_hash(mapping[key], getattr(func, "__module__", None))
                 else:
                     # The mapping the BEFORE hash came from -- a helper's
                     # module, when this entry was folded on a helper's behalf.
                     g = owner if isinstance(owner, dict) else own_globals
                     if not isinstance(g, dict) or name not in g:
                         continue
-                    after = self._hash_arg_payload(
-                        (self._stabilize_for_global_hash(g[name], self._data_callable_identity),), {}
+                    after = self._args.hash_payload(
+                        (stabilize_for_global_hash(g[name], self._globals.data_callable_identity),), {}
                     )
             except Exception:  # noqa: BLE001 - unhashable NOW; treat as unchanged
                 continue
@@ -276,10 +391,10 @@ class PurityChecksMixin:
             if scope == "carrier":
                 # The library's own state (a generator advanced, a cache
                 # filled), not a mutation the user wrote: stop folding it.
-                self._mutating_globals.setdefault((code, "global"), set()).add(name)
+                self._mutations.learn(code, "global", name)
                 logger.debug("[CORE] %s: stopped keying what %s carries; calling it changes it", func_name, name)
                 continue
-            self._mutating_globals.setdefault((code, scope), set()).add(name)
+            self._mutations.learn(code, scope, name)
             if scope == "closure":
                 where = f"variable it captures '{name}'"
             else:
@@ -287,8 +402,8 @@ class PurityChecksMixin:
                 if module in MAIN_MODULE_NAMES and reader is not None:
                     module = resolve_main_module(reader)
                 where = f"module global '{module}.{name}'" if module else f"module global '{name}'"
-            site = PurityChecksMixin._describe_scope_use(reader, name, func)
-            self._warn_once(
+            site = describe_scope_use(reader, name, func)
+            self._notices.warn_once(
                 CashImpurityWarning,
                 func_name,
                 name,
@@ -302,43 +417,7 @@ class PurityChecksMixin:
                 "`# @cash:assume-safe` on the line named.",
             )
 
-    @staticmethod
-    def _describe_scope_use(reader: Any, name: str, cached: Any) -> str:
-        """`` -- through `X.f()` in mod.helper (file:line)`` for the warning, or ``""``.
-
-        *reader* is the function whose read of *name* was watched: the cached
-        function, or a helper several calls below it. The move itself may be
-        deeper still (a method of the object), but this is the line in code the
-        user wrote that reaches it -- the first use that may mutate, the same
-        rule that made the name provisional. Only runs when warning.
-        """
-        if reader is None:
-            return ""
-        try:
-            lines, first = inspect.getsourcelines(reader)
-            filename = inspect.getsourcefile(reader) or inspect.getfile(reader)
-            source = textwrap.dedent("".join(lines))
-            tree = ast.parse(source)
-        except (*SOURCE_RETRIEVAL_ERRORS, SyntaxError):
-            return ""
-        best = None
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.Call, ast.Assign, ast.AugAssign, ast.Delete)):
-                continue
-            if name not in ClosureFoldMixin._unsafe_uses_of(node, {name}):
-                continue
-            if best is None or (node.lineno, node.col_offset) < (best.lineno, best.col_offset):
-                best = node
-        if best is None:
-            return ""
-        lineno = max(first, 1) - 1 + best.lineno
-        text = " ".join((ast.get_source_segment(source, best) or "").split())
-        if len(text) > 80:
-            text = text[:77] + "..."
-        inside = "" if reader is cached else f" in {CodeIdentityMixin.get_func_key(reader)}"
-        return f" -- through `{text}`{inside} ({filename}:{lineno})"
-
-    def _refuses_identity_coupled(self, func_name: str, result: Any) -> bool:
+    def refuses_identity_coupled(self, func_name: str, result: Any) -> bool:
         """True when *result* must never be stored, because storing it would
         detach a library's global registry from the object the caller holds.
 
@@ -351,15 +430,15 @@ class PurityChecksMixin:
         figure.  The user then draws on their figure while ``plt.savefig()``
         writes the cache's private snapshot.
 
-        Checked here rather than inside ``_store_in_cache`` so the refusal
-        lands beside ``cache_if``, BEFORE ``_attach_lineage``: a value that is
+        Checked here rather than inside ``ResultStore.store`` so the refusal
+        lands beside ``cache_if``, BEFORE ``ResultStore.attach_lineage``: a value that is
         not stored must not carry a lineage hash pointing at an entry that was
         never written.
 
         KNOWN BOUNDARY: called at all four store sites (sync/async x
         non-iterator/single-chunk), which is every site where the value is in
         hand before anything is written.  A *multi*-chunk iterator is not
-        covered -- ``_stream_and_store`` has already written earlier chunks by the
+        covered -- ``ResultStore.stream_and_store`` has already written earlier chunks by the
         time any item could be inspected, so gating there would mean aborting
         mid-write and reclaiming them.  Reaching it needs a generator yielding
         enough Figures to cross ``chunk_max_bytes`` (or a million of them),
@@ -371,7 +450,7 @@ class PurityChecksMixin:
         reason = identity_coupled_reason("the returned value", result)
         if reason is None:
             return False
-        self._warn_once(
+        self._notices.warn_once(
             CashCacheIneffectiveWarning,
             func_name,
             "",
@@ -382,46 +461,37 @@ class PurityChecksMixin:
         )
         return True
 
-    #: A re-hash costing more than this marks the function as not worth
-    #: verifying again. Measured: ~7.4 ms for a 16 MB ndarray, so this is
-    #: roughly a 100 MB argument. The first miss still gets checked -- the
-    #: budget only stops a large argument from being re-hashed on every
-    #: subsequent miss.
-    _MUTATION_CHECK_BUDGET_S = 0.05
-
-    def _argument_snapshot(self, func_name: str, args: tuple, kwargs: dict) -> dict[str, str] | None:
+    def argument_snapshot(self, func_name: str, args: tuple, kwargs: dict) -> dict[str, str] | None:
         """``{parameter: hash}`` of the arguments that CAN change, before the body.
 
         An int, a str, a tuple of them: rebinding one inside the body (``n -=
         1``) is invisible to the caller, so they are left out, and most calls
-        snapshot nothing. What remains lets `_check_argument_mutation` name the
+        snapshot nothing. What remains lets `PurityChecks.check_argument_mutation` name the
         argument that moved. None when the check has been retired as too
         costly for this function, or nothing could be hashed.
         """
-        cf = self._cached.get(func_name)
+        cf = self._registry.cached.get(func_name)
         if cf is None or cf.mutation_check_retired:
             return None
         # The key was hashed a moment ago, on this thread: if that already cost
         # more than the check may, the check is retired before it pays -- a
         # miss on two million rows hashed them three times, once for the key,
         # once here and once after the body. Read from what
-        # `_note_arg_cost` kept: it has already taken `ARG_COST.last`.
+        # `ArgHasher.note_arg_cost` kept: it has already taken `ARG_COST.last`.
         cost = cf.arg_cost
-        if cost is not None and cost[2] > self._MUTATION_CHECK_BUDGET_S:
+        if cost is not None and cost[2] > MUTATION_CHECK_BUDGET_S:
             cf.mutation_check_retired = True
             return None
         started = _perf_counter()
         try:
-            canon_args, canon_kwargs = self._normalize_call_args(func_name, args, kwargs)
+            canon_args, canon_kwargs = self._args.normalize_call_args(func_name, args, kwargs)
         except Exception:  # noqa: BLE001 - best effort, like the check itself
             return None
         named = [(f"*args[{i}]", v) for i, v in enumerate(canon_args)] + list(canon_kwargs.items())
         snapshot: dict[str, str] = {}
         immutable = IMMUTABLE_VALUE_TYPES
         candidates = [
-            (name, value)
-            for name, value in named
-            if not (self._is_immutable_capture(value) or isinstance(value, immutable))
+            (name, value) for name, value in named if not (is_immutable_capture(value) or isinstance(value, immutable))
         ]
         if len(candidates) == 1:
             # The only argument that can change is the one that did: named by
@@ -429,14 +499,14 @@ class PurityChecksMixin:
             return {candidates[0][0]: ""}
         for name, value in candidates:
             try:
-                snapshot[name] = self._hash_arg_payload((value,), {})
+                snapshot[name] = self._args.hash_payload((value,), {})
             except Exception:  # noqa: BLE001 - unhashable: the whole-args check still runs
                 continue
-        if _perf_counter() - started > self._MUTATION_CHECK_BUDGET_S:
+        if _perf_counter() - started > MUTATION_CHECK_BUDGET_S:
             cf.mutation_check_retired = True
         return snapshot
 
-    def _argument_identities(self, func_name: str, args: tuple, kwargs: dict) -> dict[str, tuple[Any, list]]:
+    def argument_identities(self, func_name: str, args: tuple, kwargs: dict) -> dict[str, tuple[Any, list]]:
         """``{parameter: (value, identity snapshot)}`` for the plain lists and
         tuples a call receives, before the body runs.
 
@@ -447,7 +517,7 @@ class PurityChecksMixin:
         taken whatever the size (`_plain_data.identity_snapshot`).
         """
         try:
-            canon_args, canon_kwargs = self._normalize_call_args(func_name, args, kwargs)
+            canon_args, canon_kwargs = self._args.normalize_call_args(func_name, args, kwargs)
         except Exception:  # noqa: BLE001 - best effort, like the check itself
             return {}
         found: dict[str, tuple[Any, list]] = {}
@@ -459,7 +529,7 @@ class PurityChecksMixin:
                     found[name] = (value, snapshot)
         return found
 
-    def _check_argument_mutation(
+    def check_argument_mutation(
         self,
         func_name: str,
         args: tuple,
@@ -476,7 +546,7 @@ class PurityChecksMixin:
         cheapest way to find them is to look.
 
         The argument hash is already computed to build the cache key, so this
-        re-runs exactly that and compares. `_serialize_args` canonicalises
+        re-runs exactly that and compares. `ArgHasher.serialize_args` canonicalises
         (kwargs order included) and is deterministic on unchanged input, which
         is what makes a difference mean *mutation* rather than noise.
 
@@ -493,7 +563,7 @@ class PurityChecksMixin:
             ]
             if moved:
                 for name in moved:
-                    self._forget_frozen_container(identities[name][0])
+                    self._frozen.forget_container(identities[name][0])
                 observer.mutated_args = moved
                 observer.record(
                     "argument mutation",
@@ -501,18 +571,18 @@ class PurityChecksMixin:
                     f"the result was not stored, so this call runs every time",
                 )
                 return
-        cf = self._cached.get(func_name)
+        cf = self._registry.cached.get(func_name)
         if cf is None or cf.mutation_check_retired:
             return
         started = _perf_counter()
         try:
-            after = self._serialize_args(func_name, args, kwargs)
+            after = self._args.serialize_args(func_name, args, kwargs)
         except Exception:  # noqa: BLE001 - user arguments' hashing
             # Hashing is best-effort here. An argument that hashed once and
             # not twice (a generator drained by the body, say) is not evidence
             # of mutation, and must not be reported as such.
             return
-        if _perf_counter() - started > self._MUTATION_CHECK_BUDGET_S:
+        if _perf_counter() - started > MUTATION_CHECK_BUDGET_S:
             cf.mutation_check_retired = True
         if after is None or after == args_hash:
             return
@@ -531,10 +601,10 @@ class PurityChecksMixin:
             return []
         if len(before) == 1:
             return list(before)
-        now = self._argument_snapshot(func_name, args, kwargs) or {}
+        now = self.argument_snapshot(func_name, args, kwargs) or {}
         return [name for name, digest in before.items() if now.get(name) != digest]
 
-    def _make_effect_observer(self) -> EffectObserver:
+    def make_effect_observer(self) -> EffectObserver:
         """An :class:`EffectObserver` scoped to this instance's cache dir.
 
         Excluding the cache directory is load-bearing: cash writes the entry
@@ -542,10 +612,10 @@ class PurityChecksMixin:
         be observed writing a file and every one of them would warn.
         """
 
-        cache_dir = getattr(self.config, "cache_dir", None)
+        cache_dir = getattr(self._config, "cache_dir", None)
         return EffectObserver(exclude_under=cache_dir)
 
-    def _report_observed_effects(self, func_name: str, observer: EffectObserver | None) -> None:
+    def report_observed_effects(self, func_name: str, observer: EffectObserver | None) -> None:
         """Warn once when the first call did something a hit will not do.
 
         Silent when:
@@ -555,9 +625,8 @@ class PurityChecksMixin:
           effect alone (see ``EffectObserver.record_effect``).
         * the static findings already name that KIND of effect -- a write the
           analyzer listed is not news when the observer sees it too. Only the
-          kinds they cover are dropped. The whole warning used to be, so a
-          static finding about a log line hid a network read in the same
-          function: never reported in 30 starts.
+          kinds they cover are dropped, so a static finding about a log line
+          does not hide a network read in the same function.
         * nothing was observed -- which is *not* proof of purity. Only the
           path this call took was watched, so an effect behind a branch that
           did not run is unobserved. That is why this supplements the static
@@ -565,16 +634,16 @@ class PurityChecksMixin:
         """
         if observer is None or not observer.effects:
             return
-        if self._purity_mode(func_name) == "silent":
+        if self._registry.purity_mode(func_name) == "silent":
             return
         covered: set[str] = set()
-        if func_name in self._purity_static_flagged:
-            covered = static_effect_kinds(self._purity_reports.get(func_name))
+        if func_name in self._static_flagged:
+            covered = static_effect_kinds(self._registry.purity_reports.get(func_name))
         effects = [(kind, detail) for kind, detail in observer.effects if kind not in covered]
         if not effects:
             return
         summary = "\n".join(dict.fromkeys(f"  {kind}: {detail}" for kind, detail in effects))
-        self._warn_once(
+        self._notices.warn_once(
             CashImpurityWarning,
             func_name,
             "observed_effect",
@@ -608,7 +677,7 @@ class PurityChecksMixin:
         name = getattr(issue, "subject", "")
         if getattr(issue, "kind", None) != ISSUE_MUTABLE_GLOBAL or not name:
             return False
-        func = self.functions.get(func_name)
+        func = self._registry.functions.get(func_name)
         reader: Any = func
         where = getattr(issue, "where", "")
         if where in report.helper_resolution_paths:
@@ -618,7 +687,7 @@ class PurityChecksMixin:
         module_ns = getattr(reader, "__globals__", None)
         if not isinstance(module_ns, dict) or name not in module_ns:
             return False
-        if reader is not func and self._helper_mutates_global(reader, name):
+        if reader is not func and helper_mutates_global(reader, name):
             # The loader of a lazily filled settings dict (`_CFG.clear();
             # _CFG.update(...)`) "reads" it only to fill it: its writes are
             # findings of their own, and the dict is not its input. Reported
@@ -626,39 +695,20 @@ class PurityChecksMixin:
             # common settings pattern there is.
             return True
         try:
-            if name not in self._read_global_data_names(reader):
+            if name not in self._globals.read_global_data_names(reader):
                 return False
         except Exception:  # noqa: BLE001 - user source; a heuristic must not break a call
             return False
         value = module_ns[name]
         if isinstance(value, types.ModuleType):
             # `conf.RATE` reads of a module of the user's are folded by value
-            # (`_module_attr_parts`); "mutated elsewhere" is `conf.RATE = ...`.
-            return self._is_user_module(value, self._own_package(reader))
+            # (`GlobalsFold.module_attr_parts`); "mutated elsewhere" is `conf.RATE = ...`.
+            return is_user_module(value, own_package(reader))
         if isinstance(value, type):
             return False
         return not (callable(value) and not isinstance(value, (dict, list, tuple, set)))
 
-    @staticmethod
-    def _helper_mutates_global(fn: Any, name: str) -> bool:
-        """Does *fn*'s own body rebind *name* or change it in place?"""
-        code = getattr(fn, "__code__", None)
-        if code is None:
-            return False
-
-        for scope in ClosureFoldMixin._iter_code_scopes(code):
-            for instr in dis.get_instructions(scope):
-                if instr.opname in ("STORE_GLOBAL", "DELETE_GLOBAL") and instr.argval == name:
-                    return True
-        try:
-            tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
-        except SOURCE_RETRIEVAL_ERRORS + (SyntaxError,):
-            return False
-        return name in ClosureFoldMixin._unsafe_uses_of(
-            tree, frozenset({name}), bare_args=False, mutating_methods_only=True
-        )
-
-    def _surface_purity(
+    def surface_purity(
         self,
         func_name: str,
         report: PurityReport,
@@ -667,7 +717,7 @@ class PurityChecksMixin:
         """Turn a `PurityReport` into warnings or an exception.
 
         Called once per function on first call (after first
-        ``_analyze_dependencies``).
+        ``CallRunner._analyze_dependencies``).
 
         * ``warn`` (default): one-shot `CashImpurityWarning`
           summarising issues; also recorded in
@@ -682,9 +732,9 @@ class PurityChecksMixin:
         if any(getattr(i, "kind", None) == ISSUE_NETWORK_READ for i in issues):
             # Named statically, so the observer does not report the same read
             # as a connection -- whether or not the advisory below is shown.
-            self._purity_static_flagged.add(func_name)
-            cf = self._cached.get(func_name)
-            if self._effective_ttl(func_name, cf.ttl if cf is not None else None) is not None:
+            self._static_flagged.add(func_name)
+            cf = self._registry.cached.get(func_name)
+            if self._registry.effective_ttl(func_name, cf.ttl if cf is not None else None) is not None:
                 # `ttl=` is the answer to "how old may a fetched answer be":
                 # once one is set, the question has been answered.
                 issues = [i for i in issues if getattr(i, "kind", None) != ISSUE_NETWORK_READ]
@@ -699,7 +749,7 @@ class PurityChecksMixin:
         if mode == "silent":
             return
 
-        summary = format_issues_summary(func_name, issues)
+        summary = format_issues_summary(issues)
 
         # Untrackable-dependency patterns (eval/exec/compile, getattr(obj,name)()
         # dynamic dispatch, importlib.import_module) RAISE by default, even in
@@ -710,7 +760,7 @@ class PurityChecksMixin:
         # handled above) to cache anyway.
         untrackable = [i for i in issues if getattr(i, "kind", None) == ISSUE_UNTRACKABLE_DEP]
         if untrackable and mode != "strict":
-            untrackable_summary = format_issues_summary(func_name, untrackable)
+            untrackable_summary = format_issues_summary(untrackable)
             raise CashImpureFunctionError(
                 f"@cash.cache on {func_name}: a dependency is resolved from a "
                 f"runtime value, so cash cannot tell when it changes and a cached "
@@ -734,8 +784,8 @@ class PurityChecksMixin:
         ambient = [i for i in issues if getattr(i, "kind", None) == ISSUE_AMBIENT_READ]
         if ambient and mode != "strict":
             issues = [i for i in issues if getattr(i, "kind", None) != ISSUE_AMBIENT_READ]
-            self._purity_static_flagged.add(func_name)
-            self._warn_once(
+            self._static_flagged.add(func_name)
+            self._notices.warn_once(
                 CashImpurityWarning,
                 func_name,
                 "ambient",
@@ -744,7 +794,7 @@ class PurityChecksMixin:
                 f"UUID). That value is not part of the cache key, so the first "
                 f"call's answer is what every later call gets back -- in this "
                 f"process and in every process "
-                f"after it.\n{format_issues_summary(func_name, ambient)}",
+                f"after it.\n{format_issues_summary(ambient)}",
                 code="KEY-AMBIENT-READ",
                 fix="pass the value in as an argument -- `f(now=datetime.now())` "
                 "-- so it reaches the cache key and a new value means a new "
@@ -760,7 +810,7 @@ class PurityChecksMixin:
         remote = [i for i in issues if getattr(i, "kind", None) == ISSUE_NETWORK_READ]
         if remote and mode != "strict":
             issues = [i for i in issues if getattr(i, "kind", None) != ISSUE_NETWORK_READ]
-            self._warn_once(
+            self._notices.warn_once(
                 CashImpurityWarning,
                 func_name,
                 "network_read",
@@ -768,7 +818,7 @@ class PurityChecksMixin:
                 f"server or a database returned, and that answer is not part "
                 f"of the cache key. The first call's answer is what every later call gets "
                 f"back -- in this process and in every process after it -- "
-                f"until something changes the key.\n{format_issues_summary(func_name, remote)}",
+                f"until something changes the key.\n{format_issues_summary(remote)}",
                 code="KEY-NETWORK-READ",
                 fix="bound how old a served answer may be with ttl= -- "
                 "`@cash.cache(ttl=3600)` -- or pass what makes the answer new "
@@ -779,9 +829,9 @@ class PurityChecksMixin:
             )
         if not issues:
             return
-        summary = format_issues_summary(func_name, issues)
+        summary = format_issues_summary(issues)
 
-        self._purity_static_flagged.add(func_name)
+        self._static_flagged.add(func_name)
 
         if mode == "strict":
             raise CashImpureFunctionError(
@@ -791,7 +841,7 @@ class PurityChecksMixin:
                 f"have audited, or relax to assume_safe=True.\n{summary}"
             )
         # mode == "warn"
-        self._warn_once(
+        self._notices.warn_once(
             CashImpurityWarning,
             func_name,
             "purity",

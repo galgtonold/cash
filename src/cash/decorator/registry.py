@@ -6,32 +6,160 @@ from __future__ import annotations
 import hashlib
 import logging
 import sys
+import threading
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..analysis.code_analyzer import CodeAnalyzer
 from ..data_source import DataSource, state_token_of
 from ..exceptions import CashCacheIneffectiveWarning
+from ..graph import DependencyGraph
 from ..purity_analyzer import PurityReport, bindings_changed, get_analyzer, resolve_binding
-from ..source_norm import bytecode_identity, compiled_identity
-from .cached_function import PurityMode
+from ..source_norm import bytecode_identity, callable_identity, compiled_identity
+from .cached_function import CachedFunction, PurityMode
 from .call_state import KeyBuildFailed
+from .code_identity import func_key, hash_callable_source
+
+if TYPE_CHECKING:
+    from .reporting import Notices
 
 logger = logging.getLogger(__name__)
 
 
-class RegistryMixin:
-    """Dependencies between cached functions and their one-time analysis."""
+def resolve_dynamic_dependencies(
+    func_name: str,
+    dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None,
+    args: tuple,
+    kwargs: dict,
+) -> str:
+    """The digest of the DataSources *dynamic_depends_on* resolves to for
+    this call, or ``""`` with none. Raises `KeyBuildFailed` when a resolver
+    fails or returns something else: the call then has no key, never a key
+    without the dependency."""
+    if not dynamic_depends_on:
+        return ""
 
-    def _purity_mode(self, func_name: str) -> PurityMode:
-        cf = self._cached.get(func_name)
+    dynamic_state_parts = []
+    resolvers = dynamic_depends_on if isinstance(dynamic_depends_on, list) else [dynamic_depends_on]
+    fix = (
+        "fix the resolver -- it is called with exactly the same arguments "
+        "as the function -- so that it returns a DataSource, a list of "
+        "them, or None for no dependency."
+    )
+    for resolver in resolvers:
+        # Any failure makes the call unkeyable, never a key without the
+        # dependency: that key would keep hitting after the data changed.
+        try:
+            # Resolver receives the same args as the function
+            ds_result = resolver(*args, **kwargs)
+            dss = ds_result if isinstance(ds_result, list) else [ds_result]
+            for ds in dss:
+                if ds is None:
+                    continue
+                if not isinstance(ds, DataSource):
+                    raise KeyBuildFailed(
+                        "KEY-DYNAMIC-DEP-FAILED",
+                        f"@cash.cache on {func_name}: a dynamic_depends_on resolver "
+                        f"returned a {type(ds).__name__}, which is not a DataSource, "
+                        f"so cash cannot tell when it changes and the call ran uncached.",
+                        fix,
+                    )
+                dynamic_state_parts.append(state_token_of(ds))
+        except KeyBuildFailed:
+            raise
+        except Exception as e:  # noqa: BLE001 - any failure here is the resolver's
+            raise KeyBuildFailed(
+                "KEY-DYNAMIC-DEP-FAILED",
+                f"@cash.cache on {func_name}: dynamic_depends_on resolver raised "
+                f"{type(e).__name__} ({e}), so cash cannot tell whether that "
+                f"dependency changed and the call ran uncached.",
+                fix,
+            ) from e
+
+    if dynamic_state_parts:
+        # Sort to ensure deterministic order if multiple sources
+        return hashlib.sha256(":".join(sorted(dynamic_state_parts)).encode("utf-8")).hexdigest()
+    return ""
+
+
+def warn_inert_dependency(notices: Notices, func_name: str, dep: Callable[..., Any]) -> None:
+    """KEY-DEPENDS-ON-OPAQUE: a declared ``depends_on`` callable cash cannot read."""
+    notices.warn_once(
+        CashCacheIneffectiveWarning,
+        func_name,
+        "",
+        f"@cash.cache on {func_name}: depends_on={getattr(dep, '__qualname__', dep)!r} "
+        f"is a callable whose source cannot be read (builtin / C-extension), "
+        f"so the declaration is inert and changes to it will NOT "
+        f"invalidate the cache.",
+        code="KEY-DEPENDS-ON-OPAQUE",
+        fix="depend on something cash can read: pass the extension's "
+        "version in as an argument, or declare a DataSource whose "
+        "token is that version or build id.",
+    )
+
+
+class FunctionRegistry:
+    """The cached functions of one `Cash`, the dependencies between them, and
+    their one-time analysis: what the state segment of every key is built from."""
+
+    def __init__(self) -> None:
+        #: func_name -> its decoration's options and per-process state.
+        self.cached: dict[str, CachedFunction] = {}
+        #: func_name -> the decorated function.
+        self.functions: dict[str, Callable[..., Any]] = {}
+        #: func_name -> its source identity at decoration.
+        self.source_hashes: dict[str, str] = {}
+        #: DataSource id -> the source, from ``depends_on``.
+        self.data_sources: dict[str, DataSource] = {}
+        #: Edges from a cached function to what it calls or declares.
+        self.graph = DependencyGraph()
+        #: func_name -> its purity report. Helper source hashes from it fold
+        #: into the key's state hash, so cross-process helper edits invalidate.
+        self.purity_reports: dict[str, PurityReport] = {}
+        #: Functions whose purity findings have been *surfaced*, on their
+        #: first call.
+        self.analyzed: set[str] = set()
+        #: Functions whose graph edges and purity report are populated
+        #: (separate from `analyzed`: a dependency can be populated to
+        #: complete a parent's state hash long before it is called directly
+        #: and surfaced). Keeps the cache key stable from the first call.
+        self.populated: set[str] = set()
+        #: ONE lock for the one-time analysis, whatever function triggers it.
+        #:
+        #: The CACHE KEY depends on what the analysis populates (helper source
+        #: hashes, graph edges), so a thread that built a key while another was
+        #: still analysing would get a different key for the same call: an
+        #: entry no later run looks up, and under `use_locking=True` a second
+        #: execution, since each key is single-flighted on its own.
+        #:
+        #: RLock, not Lock: analysis walks the dependency graph and re-enters
+        #: this same guard for the callees it populates on the way.
+        #:
+        #: One lock rather than one per function, deliberately. Analysis of f
+        #: populates f's whole callee closure, so per-function locks could be
+        #: taken in two orders by two threads and deadlock. It is a one-time,
+        #: source-reading step measured in milliseconds; serialising unrelated
+        #: first calls behind it costs nothing worth a lock-ordering rule.
+        self.analysis_lock = threading.RLock()
+        self._effective_ttl_cache: dict[str, int | None] = {}
+        #: Declared plain-callable dependencies (``depends_on=[proxy_fn]``
+        #: where proxy_fn is NOT a decorated cached function): a source-hash
+        #: snapshot at registration, and a ``(module, attr_chain)`` path for
+        #: live re-resolution, so editing the dep on disk and reloading
+        #: invalidates the parent key.
+        self.declared_dep_snapshots: dict[str, str] = {}
+        self._declared_dep_paths: dict[str, tuple[str, tuple[str, ...]]] = {}
+
+    def purity_mode(self, func_name: str) -> PurityMode:
+        cf = self.cached.get(func_name)
         return cf.purity if cf is not None else "warn"
 
-    def _is_frozen(self, func_name: str | None) -> bool:
-        cf = self._cached.get(func_name) if func_name is not None else None
+    def is_frozen(self, func_name: str | None) -> bool:
+        cf = self.cached.get(func_name) if func_name is not None else None
         return cf is not None and cf.frozen
 
-    def _effective_ttl(self, func_name: str, own_ttl: int | None) -> int | None:
+    def effective_ttl(self, func_name: str, own_ttl: int | None) -> int | None:
         """The TTL actually used for *func_name*: the minimum of its own TTL and
         the TTLs of cached functions it (transitively) depends on.
 
@@ -58,66 +186,82 @@ class RegistryMixin:
         visited.add(func_name)
         out: list[int | None] = []
         for dep in self.graph.get_dependencies(func_name):
-            cf = self._cached.get(dep)
+            cf = self.cached.get(dep)
             if cf is not None:
                 out.append(cf.ttl)
                 out.extend(self._collect_dep_ttls(dep, visited))
         return out
 
+    def register(
+        self, cf: CachedFunction, depends_on: list[Callable[..., Any] | DataSource] | None
+    ) -> list[Callable[..., Any]]:
+        """Register *cf* and its ``depends_on``; return the declared callables
+        that are inert, for the caller to warn about (`warn_inert_dependency`)."""
+        func, func_name = cf.func, cf.name
+        previous = self.cached.get(func_name)
+        if previous is not None:
+            cf.carry_over(previous)
+        self.cached[func_name] = cf
+        self.functions[func_name] = func
+        new_hash = callable_identity(func)
+        old_hash = self.source_hashes.get(func_name)
+        if old_hash and old_hash != new_hash:
+            self.analyzed.discard(func_name)
+            self.populated.discard(func_name)
+        self.source_hashes[func_name] = new_hash
+        self.graph.add_node(func_name)
+        inert = self._register_static_dependencies(func_name, depends_on)
+        # A downstream that depends on this function inherits its TTL
+        # (effective TTL = min over the dependency closure).
+        self._effective_ttl_cache.clear()
+        return inert
+
     def _register_static_dependencies(
         self, func_name: str, depends_on: list[Callable[..., Any] | DataSource] | None
-    ) -> None:
+    ) -> list[Callable[..., Any]]:
+        """Record *func_name*'s ``depends_on``; return the declared callables
+        that are inert (see `_register_declared_callable_dep`)."""
+        inert: list[Callable[..., Any]] = []
         if not depends_on:
-            return
+            return inert
         for dep in depends_on:
             if isinstance(dep, DataSource):
                 dep_id = dep.get_id()
                 self.data_sources[dep_id] = dep
                 self.graph.add_dependency(func_name, dep_id)
             elif callable(dep):
-                dep_key = self.get_func_key(dep)
+                dep_key = func_key(dep)
                 self.graph.add_dependency(func_name, dep_key)
                 # A declared callable dep that is NOT a decorated cached function
                 # would contribute nothing to the state hash (the hasher only
                 # folds functions/data-sources), silently breaking the documented
                 # ``depends_on`` promise. Snapshot its source + a live
                 # resolution path so edits/reloads invalidate the parent key.
-                if dep_key not in self.functions:
-                    self._register_declared_callable_dep(dep, dep_key, func_name)
+                if dep_key not in self.functions and not self._register_declared_callable_dep(dep, dep_key):
+                    inert.append(dep)
+        return inert
 
-    def _register_declared_callable_dep(self, dep: Callable[..., Any], dep_key: str, func_name: str) -> None:
+    def _register_declared_callable_dep(self, dep: Callable[..., Any], dep_key: str) -> bool:
         """Record a plain-callable ``depends_on`` dependency's source identity.
 
         Stores a source-hash snapshot and a ``(module, attr_chain)`` path for
         live re-resolution (so an on-disk edit + ``importlib.reload`` is seen).
         If the dep has neither source nor bytecode (builtin / C-extension), its
         identity is only its ``module.qualname``, which a rebuilt extension
-        does not change: warn once that the declared dependency is inert
-        rather than silently ignore it.
+        does not change: nothing is recorded, and False says the declared
+        dependency is inert, for the caller to warn about.
         """
-        snapshot = self._hash_callable_source(dep)
+        snapshot = hash_callable_source(dep)
         if bytecode_identity(dep) is None and snapshot == compiled_identity(dep):
-            self._warn_once(
-                CashCacheIneffectiveWarning,
-                func_name,
-                "",
-                f"@cash.cache on {func_name}: depends_on={getattr(dep, '__qualname__', dep)!r} "
-                f"is a callable whose source cannot be read (builtin / C-extension), "
-                f"so the declaration is inert and changes to it will NOT "
-                f"invalidate the cache.",
-                code="KEY-DEPENDS-ON-OPAQUE",
-                fix="depend on something cash can read: pass the extension's "
-                "version in as an argument, or declare a DataSource whose "
-                "token is that version or build id.",
-            )
-            return
-        self._declared_dep_snapshots[dep_key] = snapshot
+            return False
+        self.declared_dep_snapshots[dep_key] = snapshot
         module = getattr(dep, "__module__", None)
         qualname = getattr(dep, "__qualname__", None) or getattr(dep, "__name__", None)
         if module and qualname and "<locals>" not in qualname:
             self._declared_dep_paths[dep_key] = (module, tuple(qualname.split(".")))
+        return True
 
-    def _resolve_declared_dep_hash(self, dep_key: str) -> str | None:
+    def resolve_declared_dep_hash(self, dep_key: str) -> str | None:
         """Re-resolve a declared plain-callable dep's live source hash.
 
         Walks the stored ``(module, attr_chain)`` path via ``sys.modules`` and
@@ -138,63 +282,11 @@ class RegistryMixin:
         if not callable(obj):
             return None
         try:
-            return self._hash_callable_source(obj)
+            return hash_callable_source(obj)
         except (OSError, TypeError, ValueError):
             return None
 
-    def _resolve_dynamic_dependencies(
-        self,
-        func_name: str,
-        dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None,
-        args: tuple,
-        kwargs: dict,
-    ) -> str:
-        if not dynamic_depends_on:
-            return ""
-
-        dynamic_state_parts = []
-        resolvers = dynamic_depends_on if isinstance(dynamic_depends_on, list) else [dynamic_depends_on]
-        fix = (
-            "fix the resolver -- it is called with exactly the same arguments "
-            "as the function -- so that it returns a DataSource, a list of "
-            "them, or None for no dependency."
-        )
-        for resolver in resolvers:
-            # Any failure makes the call unkeyable, never a key without the
-            # dependency: that key would keep hitting after the data changed.
-            try:
-                # Resolver receives the same args as the function
-                ds_result = resolver(*args, **kwargs)
-                dss = ds_result if isinstance(ds_result, list) else [ds_result]
-                for ds in dss:
-                    if ds is None:
-                        continue
-                    if not isinstance(ds, DataSource):
-                        raise KeyBuildFailed(
-                            "KEY-DYNAMIC-DEP-FAILED",
-                            f"@cash.cache on {func_name}: a dynamic_depends_on resolver "
-                            f"returned a {type(ds).__name__}, which is not a DataSource, "
-                            f"so cash cannot tell when it changes and the call ran uncached.",
-                            fix,
-                        )
-                    dynamic_state_parts.append(state_token_of(ds))
-            except KeyBuildFailed:
-                raise
-            except Exception as e:  # noqa: BLE001 - any failure here is the resolver's
-                raise KeyBuildFailed(
-                    "KEY-DYNAMIC-DEP-FAILED",
-                    f"@cash.cache on {func_name}: dynamic_depends_on resolver raised "
-                    f"{type(e).__name__} ({e}), so cash cannot tell whether that "
-                    f"dependency changed and the call ran uncached.",
-                    fix,
-                ) from e
-
-        if dynamic_state_parts:
-            # Sort to ensure deterministic order if multiple sources
-            return hashlib.sha256(":".join(sorted(dynamic_state_parts)).encode("utf-8")).hexdigest()
-        return ""
-
-    def _code_functions(self, func: Callable, func_name: str) -> list[Any]:
+    def code_functions(self, func: Callable, func_name: str) -> list[Any]:
         """The functions whose code a call of *func_name* runs, as far as cash
         follows it: its own, its helpers', and those of the cached functions it
         depends on, transitively."""
@@ -208,7 +300,7 @@ class RegistryMixin:
             seen_names.add(name)
             if fn is not None:
                 found.append(fn)
-            report = self._purity_reports.get(name)
+            report = self.purity_reports.get(name)
             if report is not None:
                 for ref in report.helper_objects.values():
                     helper = ref()
@@ -223,38 +315,16 @@ class RegistryMixin:
                     stack.append((dep, self.functions[dep]))
         return found
 
-    def _analyze_dependencies(self, func: Callable[..., Any]) -> None:
-        """Populate analysis for *func* + its transitive cached-dependency
-        closure, then surface *func*'s own purity issues.
-
-        Populating the WHOLE closure (not just *func*) before the first cache
-        key is computed is what keeps the key stable from the very first call.
-        The state hash folds in each dependency's purity-report
-        ``helper_source_hashes``; those used to be filled lazily on each
-        dependency's own first call, so the key deepened only after the chain
-        warmed - and a fresh process therefore missed the first call to every
-        cached function even though a valid entry was on disk.
-
-        Surfacing stays per-function: each dependency warns/raises on its OWN
-        first direct call, not here, so eager population doesn't change which
-        warnings fire or when.
-        """
-        self._ensure_closure_analyzed(func)
-        func_name = self.get_func_key(func)
-        report = self._purity_reports.get(func_name) or PurityReport()
-        mode = self._purity_mode(func_name)
-        self._surface_purity(func_name, report, mode)
-
-    def _ensure_closure_analyzed(self, func: Callable[..., Any]) -> None:
+    def ensure_closure_analyzed(self, func: Callable[..., Any]) -> None:
         """Populate graph edges + purity reports for *func* and every cached
         function transitively reachable from it, WITHOUT surfacing warnings.
 
-        Idempotent per source version (guarded by ``self._populated``). Always
+        Idempotent per source version (guarded by ``self.populated``). Always
         traverses the dependency edges - even when the root is already
         populated - so a dependency invalidated by a source edit gets
         re-populated. The local ``seen`` set bounds cyclic graphs.
 
-        Under ``self._analysis_lock`` because the CACHE KEY is built from what
+        Under ``self.analysis_lock`` because the CACHE KEY is built from what
         this populates. Concurrent first calls otherwise resolved two different
         keys for one call -- the threads that arrived mid-population, and the
         one doing it -- which is what made ``use_locking=True`` look like it
@@ -263,27 +333,27 @@ class RegistryMixin:
         ``explain()``, which populates the closure directly and would otherwise
         race it back apart.
         """
-        with self._analysis_lock:
+        with self.analysis_lock:
             self._ensure_closure_analyzed_locked(func)
 
     def _ensure_closure_analyzed_locked(self, func: Callable[..., Any]) -> None:
-        """The body of ``_ensure_closure_analyzed``, with the lock already held."""
+        """The body of ``FunctionRegistry.ensure_closure_analyzed``, with the lock already held."""
         stack = [func]
         seen: set[str] = set()
         while stack:
             f = stack.pop()
-            fname = self.get_func_key(f)
+            fname = func_key(f)
             if fname in seen:
                 continue
             seen.add(fname)
-            if fname not in self._populated:
-                self._populate_analysis(f, fname)
+            if fname not in self.populated:
+                self.populate(f, fname)
             for dep in self.graph.get_dependencies(fname):
                 dep_func = self.functions.get(dep)
                 if dep_func is not None:
                     stack.append(dep_func)
 
-    def _refresh_helper_bindings(self, func: Callable[..., Any], func_name: str) -> str | None:
+    def refresh_helper_bindings(self, func: Callable[..., Any], func_name: str) -> str | None:
         """Re-analyse any report whose call-site bindings moved; name a mock.
 
         Walks *func* and its cached-dependency closure. A report is built once
@@ -311,11 +381,11 @@ class RegistryMixin:
                 if name in seen:
                     continue
                 seen.add(name)
-                report = self._purity_reports.get(name)
+                report = self.purity_reports.get(name)
                 if report is not None and report.helper_bindings and bindings_changed(report):
-                    with self._analysis_lock:
-                        self._populate_analysis(f, name)
-                    report = self._purity_reports.get(name)
+                    with self.analysis_lock:
+                        self.populate(f, name)
+                    report = self.purity_reports.get(name)
                 if report is not None and report.unkeyable and reason is None:
                     reason = report.unkeyable[0]
                 for dep in self.graph.get_dependencies(name):
@@ -327,12 +397,12 @@ class RegistryMixin:
             logger.debug("[CORE] binding refresh failed for %s", func_name, exc_info=True)
             return None
 
-    def _populate_analysis(self, func: Callable[..., Any], func_name: str) -> None:
+    def populate(self, func: Callable[..., Any], func_name: str) -> None:
         """Record *func*'s cached-call graph edges and purity report (no
         surfacing). The analyzer caches by source hash globally, so this is
         cheap on repeated registrations.
         """
-        self._populated.add(func_name)
+        self.populated.add(func_name)
         called_names = CodeAnalyzer.find_called_functions(func, self.functions, include_references=True)
         for called in called_names:
             if called != func_name:
@@ -344,4 +414,4 @@ class RegistryMixin:
             # the user's compute still runs.
             logger.debug("Purity analyzer failed for %s: %s", func_name, e)
             report = PurityReport()
-        self._purity_reports[func_name] = report
+        self.purity_reports[func_name] = report

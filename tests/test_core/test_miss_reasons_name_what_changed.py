@@ -161,12 +161,12 @@ def test_a_real_edit_in_one_regime_is_still_a_content_change(tmp_path):
 
 
 def test_a_sampled_fingerprint_is_labelled_and_a_hit_says_it_trusts_timestamps():
-    from cash.core import Cash
     from cash.decorator.explain import describe_file_deps
+    from cash.decorator.reporting import describe_call
 
     shown = describe_file_deps({"big.npy": {"size": 3 << 28, "hash": "ab" * 32, "ctime_ns": 1, "sampled": True}})
     assert "sampled hash" in shown["big.npy"], shown
-    line = Cash._describe_call(
+    line = describe_call(
         {
             "func_name": "m.f",
             "cache_hit": True,

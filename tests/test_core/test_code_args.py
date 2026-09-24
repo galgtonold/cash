@@ -2,6 +2,7 @@ import pytest
 
 import cash
 from cash import Cash as CashCls
+from cash.decorator.arg_hashing import OPAQUE_TYPES, is_opaque
 
 
 def test_mark_opaque_records_the_type():
@@ -11,16 +12,14 @@ def test_mark_opaque_records_the_type():
         pass
 
     c.mark_opaque(Marker)
-    assert c._is_opaque(Marker) is True
+    assert is_opaque(Marker) is True
 
 
 def test_an_unmarked_type_is_not_opaque():
-    c = CashCls()
-
     class Other:
         pass
 
-    assert c._is_opaque(Other) is False
+    assert is_opaque(Other) is False
 
 
 def test_the_opaque_decorator_marks_and_returns_the_class():
@@ -29,7 +28,7 @@ def test_the_opaque_decorator_marks_and_returns_the_class():
         pass
 
     assert Decorated.__name__ == "Decorated"  # returns the class, not a wrapper
-    assert cash.Cash()._is_opaque(Decorated) is True
+    assert is_opaque(Decorated) is True
 
 
 def test_the_opaque_decorator_does_not_replace_the_class_object():
@@ -74,9 +73,8 @@ def test_a_subclass_of_an_opaque_class_does_not_inherit_opacity():
     class Derived(Base):
         pass
 
-    c = cash.Cash()
-    assert c._is_opaque(Base) is True  # control: the decorated class itself
-    assert c._is_opaque(Derived) is False  # the actual claim: no inheritance
+    assert is_opaque(Base) is True  # control: the decorated class itself
+    assert is_opaque(Derived) is False  # the actual claim: no inheritance
 
 
 def test_mark_opaque_does_not_cover_a_subclass():
@@ -97,12 +95,12 @@ def test_mark_opaque_does_not_cover_a_subclass():
         pass
 
     c.mark_opaque(Marker)
-    assert c._is_opaque(Marker) is True  # control: the registered type itself
-    assert c._is_opaque(SubMarker) is False  # the actual claim: no inheritance
+    assert is_opaque(Marker) is True  # control: the registered type itself
+    assert is_opaque(SubMarker) is False  # the actual claim: no inheritance
 
 
 def test_is_opaque_never_raises_on_an_unhashable_class():
-    """``target in Cash._OPAQUE_TYPES`` needs `target` to be hashable. A
+    """``target in OPAQUE_TYPES`` needs `target` to be hashable. A
     metaclass that defines ``__eq__`` without ``__hash__`` makes the CLASS
     ITSELF unhashable -- Python's data-model default, not just its
     instances -- which is a real, if unusual, class shape (some ORM/model
@@ -124,7 +122,7 @@ def test_is_opaque_never_raises_on_an_unhashable_class():
     with pytest.raises(TypeError):
         {Foo}  # confirms Foo really is unhashable before trusting the rest
 
-    assert cash.Cash()._is_opaque(Foo) is False
+    assert is_opaque(Foo) is False
 
 
 def test_an_instance_of_a_registered_type_is_opaque():
@@ -143,7 +141,7 @@ def test_an_instance_of_a_registered_type_is_opaque():
         pass
 
     c.mark_opaque(Marker)
-    assert c._is_opaque(Marker()) is True
+    assert is_opaque(Marker()) is True
 
 
 def test_an_instance_of_a_decorated_class_is_opaque():
@@ -153,7 +151,7 @@ def test_an_instance_of_a_decorated_class_is_opaque():
     class Decorated:
         pass
 
-    assert cash.Cash()._is_opaque(Decorated()) is True
+    assert is_opaque(Decorated()) is True
 
 
 # ---------------------------------------------------------------------------
@@ -225,15 +223,15 @@ def c(tmp_path):
 def opaque_registry():
     """Isolate the process-global opaque registry.
 
-    ``mark_opaque`` writes to ``Cash._OPAQUE_TYPES``, which every Cash instance
+    ``mark_opaque`` writes to ``OPAQUE_TYPES``, which every Cash instance
     in the process shares and nothing ever clears. The suite runs under
     ``--dist worksteal``, which splits ONE file across workers, so a leak here
     is a cross-test dependency that only appears under parallelism.
     """
-    saved = set(CashCls._OPAQUE_TYPES)
+    saved = set(OPAQUE_TYPES)
     yield
-    CashCls._OPAQUE_TYPES.clear()
-    CashCls._OPAQUE_TYPES.update(saved)
+    OPAQUE_TYPES.clear()
+    OPAQUE_TYPES.update(saved)
 
 
 def _counting(c, name="takes"):
@@ -385,9 +383,9 @@ def test_the_third_party_gate_is_measurable_not_merely_stable(c):
     import json.encoder
 
     base = "0" * 64
-    assert c._fold_code_args((json.encoder.JSONEncoder,), {}, base) == base
+    assert c._code_args.fold_code_args((json.encoder.JSONEncoder,), {}, base) == base
     nb = _nb_module()
-    assert c._fold_code_args((_define(nb, _V1),), {}, base) != base
+    assert c._code_args.fold_code_args((_define(nb, _V1),), {}, base) != base
 
 
 def test_a_comment_only_edit_does_not_invalidate(c):
@@ -457,7 +455,7 @@ def test_a_changed_closure_cell_does_NOT_invalidate(c):
 def test_explain_agrees_with_a_real_call_for_a_code_argument(c):
     """The two key-building paths must not disagree.
 
-    ``_resolve_cache_key`` and ``_explain_call`` each build a key from their
+    ``KeyBuilder.resolve`` and ``Explainer.explain`` each build a key from their
     own ``_state_hasher.compute`` chain. If only one folds code arguments,
     ``explain()`` reports ``no_entry`` for a call that in fact hits -- the
     silent-divergence failure this task is most likely to produce. The first
@@ -534,7 +532,7 @@ def test_ordinary_arguments_still_hit_warm_and_stay_silent(c):
 
 async def test_the_async_wrapper_folds_code_arguments_too(c):
     """The async wrapper is a second production entry point into the ONE
-    ``_resolve_cache_key`` the fold is wired into. Pinned separately because
+    ``KeyBuilder.resolve`` the fold is wired into. Pinned separately because
     "they share a helper" is an argument, not a measurement, and the async
     wrapper reaches that helper down its own path.
     """
@@ -664,9 +662,9 @@ def test_a_self_referential_container_argument_terminates(c):
     v1 = _define(nb, _V1)
     payload = [v1]
     payload.append(payload)
-    assert [x.__qualname__ for x in c._iter_code_carriers(payload)] == ["S"]
+    assert [x.__qualname__ for x in c._code_args.iter_code_carriers(payload)] == ["S"]
     base = "0" * 64
-    assert c._fold_code_args((payload,), {}, base) != base
+    assert c._code_args.fold_code_args((payload,), {}, base) != base
     assert len(calls) == 0  # nothing above should have called the function
 
 
@@ -788,9 +786,9 @@ def _holder_digests(c, prelude, body_a, body_b):
     """
     nb = _nb_module()
     _define(nb, prelude + body_a, name="Holder")
-    before = c._code_surface_hash(nb.Holder)
+    before = c._code.code_surface_hash(nb.Holder)
     _define(nb, prelude + body_b, name="Holder")
-    return before, c._code_surface_hash(nb.Holder)
+    return before, c._code.code_surface_hash(nb.Holder)
 
 
 _HOLDER_PRELUDE = (
@@ -844,9 +842,9 @@ def test_a_callable_instance_attribute_folds_state_and_class_code(c):
     nb = _nb_module()
     holder = "class Holder:\n    op = Op(2)\n"
     _define(nb, _HOLDER_PRELUDE + holder, name="Holder")
-    code_before = c._code_surface_hash(nb.Holder)
+    code_before = c._code.code_surface_hash(nb.Holder)
     _define(nb, edited + holder, name="Holder")
-    assert code_before != c._code_surface_hash(nb.Holder), "__call__ body is not folded"
+    assert code_before != c._code.code_surface_hash(nb.Holder), "__call__ body is not folded"
 
 
 def test_an_unchanged_holder_still_collides(c):
@@ -876,21 +874,23 @@ def test_an_opaque_base_does_not_move_its_subclass_digest(c, opaque_registry):
     )
     nb = _nb_module()
     _define(nb, body.format(v="V1", m=1), name="Derived")
-    unmarked_before = c._code_surface_hash(nb.Derived)
+    unmarked_before = c._code.code_surface_hash(nb.Derived)
     _define(nb, body.format(v="V2", m=1), name="Derived")
-    assert unmarked_before != c._code_surface_hash(nb.Derived), "control: an unmarked base edit must move the digest"
+    assert unmarked_before != c._code.code_surface_hash(nb.Derived), (
+        "control: an unmarked base edit must move the digest"
+    )
 
     nb2 = _nb_module()
     _define(nb2, body.format(v="V1", m=1), name="Derived")
     CashCls.mark_opaque(nb2.VendorBase)
-    marked_before = c._code_surface_hash(nb2.Derived)
+    marked_before = c._code.code_surface_hash(nb2.Derived)
     _define(nb2, body.format(v="V2", m=1), name="Derived")
     CashCls.mark_opaque(nb2.VendorBase)
-    assert marked_before == c._code_surface_hash(nb2.Derived), "an opaque base must not move its subclass's digest"
+    assert marked_before == c._code.code_surface_hash(nb2.Derived), "an opaque base must not move its subclass's digest"
 
     _define(nb2, body.format(v="V2", m=2), name="Derived")
     CashCls.mark_opaque(nb2.VendorBase)
-    assert marked_before != c._code_surface_hash(nb2.Derived), (
+    assert marked_before != c._code.code_surface_hash(nb2.Derived), (
         "control: the subclass's OWN edit must still move the digest"
     )
 
@@ -914,7 +914,7 @@ _VALUE_REPR_BODY = (
 
 
 def test_a_value_based_repr_on_an_unpicklable_default_still_invalidates(c):
-    """`_hash_arg_payload` refuses this default (a `threading.Lock` inside it),
+    """`ArgHasher.hash_payload` refuses this default (a `threading.Lock` inside it),
     so it reaches the fallback -- but its `__repr__` is VALUE-based,
     `Config(n=1)`, with no address in it.
 

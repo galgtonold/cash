@@ -160,7 +160,7 @@ def test_no_entry_is_left_under_the_epoch_free_key(_isolated_epochs, inst):
 
     # Simulate a restart: the observed-draw verdict is forgotten, the cache
     # is not. Then change the seed, as a user would.
-    for cf in inst._cached.values():
+    for cf in inst._registry.cached.values():
         cf.rng_modules = None
     _isolated_epochs["numpy.random"] = "epoch-B"
     np.random.seed(777)

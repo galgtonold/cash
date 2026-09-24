@@ -245,7 +245,7 @@ class CacheMetadata:
     copy_required: bool | None = None
 
     #: Where the global RNG stood before and after the call that computed this
-    #: entry, so a hit can leave it where the body did (``Cash._rng_replay_parts``).
+    #: entry, so a hit can leave it where the body did (``RngWatch.replay_parts``).
     rng_replay: dict[str, Any] | None = None
 
     force_persist: bool | None = None
@@ -490,7 +490,7 @@ class CacheBackend(ABC):
     def lock(self, key: str) -> contextlib.AbstractContextManager:
         """Return a context manager that single-flights computes for *key*.
 
-        Consumed by ``Cash._compute_with_lock`` when ``use_locking=True``:
+        Consumed by ``CallRunner.compute_with_lock`` when ``use_locking=True``:
         concurrent same-key callers serialize on this lock so the expensive
         miss→compute→store body runs once and the rest observe the stored
         result (double-checked inside the lock).

@@ -8,7 +8,7 @@ import json
 import logging
 import os
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .._clock import perf_counter as _perf_counter
 from .._paths import normalize_path
@@ -26,107 +26,152 @@ from ..tracking.read_credit import credited_reads
 from ..tracking.tracker_context import active_tracker
 from .code_identity import CODE_KEYED_STATS
 
+if TYPE_CHECKING:
+    from .registry import FunctionRegistry
+    from .reporting import Notices
+
 logger = logging.getLogger(__name__)
 
 
-class FileDepsMixin:
-    """Declared and tracked file dependencies of a cached function."""
+def snapshot_tracked_deps(tracker: Any, code_module: str | None = None) -> dict[str, dict[str, Any]] | None:
+    """Snapshot everything *tracker* saw this call read - local and remote.
 
-    def _fold_declared_files(self, func_name: str, state_hash: str) -> str:
+    Both land in one dict: they answer the same question ("did what this
+    call read change since?"), and every consumer already routes that
+    question through ``file_dep_is_fresh``, which branches on the entry.
+    Remote entries cost one metadata request each to snapshot; that is the
+    price of the read being tracked at all, and it is small against the
+    download the entry exists to avoid.
+    """
+
+    read_stats = getattr(tracker, "read_stats", {})
+    hashed_at = getattr(tracker, "read_hashed_at", {})
+    known = {
+        path: (read_stats[path], digest, hashed_at.get(path))
+        for path, digest in getattr(tracker, "read_digests", {}).items()
+        if path in read_stats
+    }
+    deps = snapshot_dependencies(
+        tracker.get_accessed_files(),
+        tracker.get_accessed_remote_urls(),
+        tracker.get_absent_files(),
+        known=known,
+    )
+    # A file beside the function's own code is part of this INSTALL, not a
+    # fixed location: record where it sits relative to the code, so another
+    # install or release checks its own copy.
+    return attach_code_relative(deps, code_module) or None
+
+
+def propagate_file_deps_to_active_tracker(metadata: CacheMetadata) -> None:
+    """Register this entry's recorded deps with the enclosing
+    ``FileAccessTracker`` (if any), so a cached function that calls this
+    one on a *hit* still inherits its dependencies. Best-effort: any
+    failure (no tracker active, import issue) is silently ignored."""
+    snap = getattr(metadata, "auto_file_deps", None)
+    if not snap:
+        return
+    try:
+        tracker = active_tracker.get()
+    except Exception:  # noqa: BLE001 - tracking is best-effort
+        return
+    if tracker is None:
+        return
+    for path, recorded in snap.items():
+        # A remote entry must go back onto the remote channel: routed to
+        # ``add_tracked`` it would enter the file set, be stat'ed, and be
+        # dropped - so the outer entry would silently lose the dependency.
+        if isinstance(recorded, dict) and recorded.get("remote"):
+            tracker.add_tracked_remote(path)
+        else:
+            # The file THIS process would read -- another install's copy
+            # would give the enclosing entry the writer's path.
+            # The hit just checked this file against the recorded hash, so
+            # that hash is the file as it is: no second read to take it.
+            digest = recorded.get("hash") if isinstance(recorded, dict) else None
+            tracker.add_tracked(dep_path_for_this_process(path, recorded), digest)
+
+
+def warn_if_validation_is_expensive(validation: Any, metadata: CacheMetadata) -> None:
+    """Say so when checking freshness costs a serious share of the saving.
+
+    A freshness check that has to ask the network is the one overhead a user
+    cannot see: it happens on the HIT path, where the badge shows a saving
+    and nothing shows what the saving cost to establish.
+    """
+    if not validation.count:
+        return
+
+    saved = metadata.execution_time
+    if validation_is_expensive(validation.seconds, saved):
+        warn_validation_cost_once(
+            metadata.func_name or "a cached call",
+            validation.count,
+            validation.seconds,
+            saved,
+        )
+
+
+def argument_paths(args: tuple, kwargs: dict) -> set[str]:
+    """The resolved paths among a call's arguments, one container deep."""
+
+    values: list[Any] = [*args, *kwargs.values()]
+    for value in list(values):
+        if isinstance(value, (list, tuple)) and len(value) <= 64:
+            values.extend(value)
+    found: set[str] = set()
+    for value in values:
+        if isinstance(value, os.PathLike) or (isinstance(value, str) and 0 < len(value) < 1024 and "\n" not in value):
+            try:
+                found.add(normalize_path(os.path.realpath(os.fspath(value))))
+            except (TypeError, ValueError, OSError):
+                continue
+    return found
+
+
+class FileDeps:
+    """The files a cached call depends on: declared with ``file_depends_on=``,
+    and read by the body or its helpers."""
+
+    def __init__(self, registry: FunctionRegistry, notices: Notices) -> None:
+        self._registry = registry
+        self._notices = notices
+
+    def fold_declared_files(self, func_name: str, state_hash: str) -> str:
         """Fold which files ``file_depends_on=`` names, as written, into the key.
 
         Their content is checked against the entry on lookup
-        (`_track_declared_files`); this is what makes adding, removing or
+        (`FileDeps.track_declared_files`); this is what makes adding, removing or
         re-pointing one a different key, since an entry that recorded file A
         would otherwise keep hitting after the declaration moved to file B.
         As written rather than absolute, so a relative path keys the same on
         every machine.
         """
-        cf = self._cached.get(func_name)
+        cf = self._registry.cached.get(func_name)
         declared = cf.declared_files if cf is not None else ()
         if not declared:
             return state_hash
         names = json.dumps(sorted(raw for raw, _ in declared))
         return hashlib.sha256(f"{state_hash}:files:{names}".encode()).hexdigest()
 
-    def _track_declared_files(self, tracker: Any, func_name: str) -> None:
+    def track_declared_files(self, tracker: Any, func_name: str) -> None:
         """Record *func_name*'s ``file_depends_on=`` paths on *tracker*.
 
         As reads, so the entry snapshots their content and every lookup checks
-        it with ``file_dep_is_fresh``, exactly like a file the body opened. They
-        used to become a ``FileDataSource`` in the key, keyed on the mtime
-        alone: a ``touch`` recomputed, and an edit that kept the mtime hit.
+        it with ``file_dep_is_fresh``, exactly like a file the body opened: a
+        ``touch`` does not recompute, and an edit that keeps the mtime does.
         Called inside the timed body, so the content hash is taken off the body
         time with the tracker's other read hashes.
         """
 
-        cf = self._cached.get(func_name)
+        cf = self._registry.cached.get(func_name)
         for _, path in cf.declared_files if cf is not None else ():
             if os.path.exists(path):
                 tracker.add_tracked(normalize_path(os.path.realpath(path)))
             else:
                 tracker.add_tracked_absent(normalize_path(path))
 
-    @staticmethod
-    def _snapshot_tracked_deps(tracker: Any, code_module: str | None = None) -> dict[str, dict[str, Any]] | None:
-        """Snapshot everything *tracker* saw this call read - local and remote.
-
-        Both land in one dict: they answer the same question ("did what this
-        call read change since?"), and every consumer already routes that
-        question through ``file_dep_is_fresh``, which branches on the entry.
-        Remote entries cost one metadata request each to snapshot; that is the
-        price of the read being tracked at all, and it is small against the
-        download the entry exists to avoid.
-        """
-
-        read_stats = getattr(tracker, "read_stats", {})
-        hashed_at = getattr(tracker, "read_hashed_at", {})
-        known = {
-            path: (read_stats[path], digest, hashed_at.get(path))
-            for path, digest in getattr(tracker, "read_digests", {}).items()
-            if path in read_stats
-        }
-        deps = snapshot_dependencies(
-            tracker.get_accessed_files(),
-            tracker.get_accessed_remote_urls(),
-            tracker.get_absent_files(),
-            known=known,
-        )
-        # A file beside the function's own code is part of this INSTALL, not a
-        # fixed location: record where it sits relative to the code, so another
-        # install or release checks its own copy.
-        return attach_code_relative(deps, code_module) or None
-
-    @staticmethod
-    def _propagate_file_deps_to_active_tracker(metadata: CacheMetadata) -> None:
-        """Register this entry's recorded deps with the enclosing
-        ``FileAccessTracker`` (if any), so a cached function that calls this
-        one on a *hit* still inherits its dependencies. Best-effort: any
-        failure (no tracker active, import issue) is silently ignored."""
-        snap = getattr(metadata, "auto_file_deps", None)
-        if not snap:
-            return
-        try:
-            tracker = active_tracker.get()
-        except Exception:  # noqa: BLE001 - tracking is best-effort
-            return
-        if tracker is None:
-            return
-        for path, recorded in snap.items():
-            # A remote entry must go back onto the remote channel: routed to
-            # ``add_tracked`` it would enter the file set, be stat'ed, and be
-            # dropped - so the outer entry would silently lose the dependency.
-            if isinstance(recorded, dict) and recorded.get("remote"):
-                tracker.add_tracked_remote(path)
-            else:
-                # The file THIS process would read -- another install's copy
-                # would give the enclosing entry the writer's path.
-                # The hit just checked this file against the recorded hash, so
-                # that hash is the file as it is: no second read to take it.
-                digest = recorded.get("hash") if isinstance(recorded, dict) else None
-                tracker.add_tracked(dep_path_for_this_process(path, recorded), digest)
-
-    def _auto_file_deps_fresh(self, metadata: CacheMetadata) -> bool:
+    def auto_file_deps_fresh(self, metadata: CacheMetadata) -> bool:
         """Return True if every file recorded in ``metadata.auto_file_deps``
         still matches on disk.
 
@@ -169,7 +214,7 @@ class FileDepsMixin:
         )
         if stale is not None:
             logger.debug("[FILE_DEP] stale (%s): %s", stale.reason, stale.path)
-        FileDepsMixin._warn_if_validation_is_expensive(validation, metadata)
+        warn_if_validation_is_expensive(validation, metadata)
         self._warn_if_local_validation_is_expensive(local_seconds, local_count, metadata)
         return fresh
 
@@ -201,7 +246,7 @@ class FileDepsMixin:
             return
         label = metadata.func_name or "a cached call"
         against = f", against {saved:.2f}s of compute it avoids" if saved and saved > 0 else ""
-        self._warn_once(
+        self._notices.warn_once(
             CashCacheIneffectiveWarning,
             label,
             "local-freshness-cost",
@@ -218,27 +263,7 @@ class FileDepsMixin:
             "COUNT.",
         )
 
-    @staticmethod
-    def _warn_if_validation_is_expensive(validation: Any, metadata: CacheMetadata) -> None:
-        """Say so when checking freshness costs a serious share of the saving.
-
-        A freshness check that has to ask the network is the one overhead a user
-        cannot see: it happens on the HIT path, where the badge shows a saving
-        and nothing shows what the saving cost to establish.
-        """
-        if not validation.count:
-            return
-
-        saved = metadata.execution_time
-        if validation_is_expensive(validation.seconds, saved):
-            warn_validation_cost_once(
-                metadata.func_name or "a cached call",
-                validation.count,
-                validation.seconds,
-                saved,
-            )
-
-    def _credit_remembered_reads(self, func_name: str, tracker: Any, args: tuple, kwargs: dict) -> None:
+    def credit_remembered_reads(self, func_name: str, tracker: Any, args: tuple, kwargs: dict) -> None:
         """Add the files a helper read in an EARLIER call to this call's inputs.
 
         A parse memoised with ``functools.lru_cache`` or a module dict: the
@@ -261,14 +286,14 @@ class FileDepsMixin:
         store is refused.
         """
 
-        func = self.functions.get(func_name)
+        func = self._registry.functions.get(func_name)
         if func is None or tracker is None:
             return
         live = getattr(tracker, "reading_codes", set())
         own = getattr(func, "__code__", None)
         have = tracker.get_accessed_files()
         arg_paths: set[str] | None = None
-        for fn in self._code_functions(func, func_name):
+        for fn in self._registry.code_functions(func, func_name):
             code = getattr(fn, "__code__", None)
             if code is None or code is own or code in live:
                 continue
@@ -276,7 +301,7 @@ class FileDepsMixin:
             if not remembered or remembered.keys() <= have:
                 continue
             if arg_paths is None:
-                arg_paths = self._argument_paths(args, kwargs)
+                arg_paths = argument_paths(args, kwargs)
             # Chosen BEFORE what is already tracked is taken away: `have` grows
             # as files are added, and a remainder that misses the arguments
             # would read as a memo of a fixed file.
@@ -287,26 +312,7 @@ class FileDepsMixin:
                 if then is not None and tracker.read_stats.get(path, then) != then:
                     tracker.stale_memo_reads.add(path)
 
-    @staticmethod
-    def _argument_paths(args: tuple, kwargs: dict) -> set[str]:
-        """The resolved paths among a call's arguments, one container deep."""
-
-        values: list[Any] = [*args, *kwargs.values()]
-        for value in list(values):
-            if isinstance(value, (list, tuple)) and len(value) <= 64:
-                values.extend(value)
-        found: set[str] = set()
-        for value in values:
-            if isinstance(value, os.PathLike) or (
-                isinstance(value, str) and 0 < len(value) < 1024 and "\n" not in value
-            ):
-                try:
-                    found.add(normalize_path(os.path.realpath(os.fspath(value))))
-                except (TypeError, ValueError, OSError):
-                    continue
-        return found
-
-    def _code_moved_since_keyed(self, func: Callable, func_name: str) -> bool:
+    def code_moved_since_keyed(self, func: Callable, func_name: str) -> bool:
         """Did a file this call's code came from change after its key was read?
 
         A function is keyed by the text of its file, read once per process;
@@ -327,7 +333,7 @@ class FileDepsMixin:
         """
         stats: dict[str, tuple[int, int] | None] = {}
         moved: list[str] = []
-        for fn in self._code_functions(func, func_name):
+        for fn in self._registry.code_functions(func, func_name):
             code = getattr(fn, "__code__", None)
             rec = CODE_KEYED_STATS.get(id(code)) if code is not None else None
             if rec is None or rec[0] is not code:
@@ -351,7 +357,7 @@ class FileDepsMixin:
         if not moved:
             return False
         shown = ", ".join(moved[:3]) + (f" and {len(moved) - 3} more" if len(moved) > 3 else "")
-        self._warn_once(
+        self._notices.warn_once(
             CashCacheStoreFailedWarning,
             func_name,
             "code_changed",
@@ -366,7 +372,7 @@ class FileDepsMixin:
         )
         return True
 
-    def _inputs_moved_during_call(self, func_name: str, tracker: Any) -> bool:
+    def inputs_moved_during_call(self, func_name: str, tracker: Any) -> bool:
         """Did a file this call read change before the call returned?
 
         The entry's file fingerprints are taken when it is STORED. A file
@@ -391,7 +397,7 @@ class FileDepsMixin:
         if not moved:
             return False
         shown = ", ".join(moved[:3]) + (f" and {len(moved) - 3} more" if len(moved) > 3 else "")
-        self._warn_once(
+        self._notices.warn_once(
             CashCacheStoreFailedWarning,
             func_name,
             "input_changed",

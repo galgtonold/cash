@@ -16,7 +16,8 @@ identical and True.
 
 The decorator used to have the same hole when a user wrote ``@cash.cache`` by
 hand (confirmed by the same probe). That is now closed
-— ``Cash._refuses_identity_coupled`` gates all four decorator store sites, with
+— ``PurityChecks.refuses_identity_coupled`` gates every decorator store, through
+``ResultStore.refusal``, with
 ``tests/test_core/test_decorator_identity_guard.py`` guarding it. This file
 still guards the path that applies caching *without the user asking*, which is
 the one that owes a higher duty of care.

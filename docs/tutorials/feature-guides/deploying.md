@@ -86,7 +86,7 @@ extra setup. Across hosts, point every host at a Redis or S3 backend; see
 [Sharing a cache](sharing-caches.md) for what makes keys match on two machines,
 and [Choosing a backend](choosing-a-backend.md) for the options.
 
-<!-- claim: cash/backends/_base.py:CacheBackend.lock @89b52144, cash/backends/redis_backend.py:RedisBackend.lock @cfdf2e01 -->
+<!-- claim: cash/backends/_base.py:CacheBackend.lock @2c1d7483, cash/backends/redis_backend.py:RedisBackend.lock @cfdf2e01 -->
 **Locking across processes needs Redis as the backend itself.**
 `use_locking=True` gives one computation per key within a process on every
 backend. Only a bare `RedisBackend` also locks across processes and hosts:
@@ -106,7 +106,7 @@ call with the same arguments at once, use a bare `RedisBackend`.
 - **Prove the tests, not the cache.** Run the suite once with `CASH_DISABLE=1`,
   and give each run its own cache folder. See
   [Testing your code](testing-your-code.md).
-- <!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._surface_purity @9fe07f2d -->
+- <!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @3f8526f2 -->
   **Fail the build on side effects.** `@cash.cache(strict=True)` raises
   `CashImpureFunctionError` on the first call of a function with a side effect
   cash would skip on a hit. It honours `# @cash:assume-safe` on lines you have
@@ -128,7 +128,7 @@ application's cache and configuration: the app's `cash.configure(...)` calls,
 its `[tool.cash]` table and its `CASH_*` variables all apply to your functions.
 Own a private instance instead:
 
-<!-- claim: cash/core.py:Cash.__init__ @9c872b72 -->
+<!-- claim: cash/core.py:Cash.__init__ @6199988d -->
 <!-- test:skip reason="illustrative: a two-file library layout" -->
 ```python
 # mylib/_cache.py

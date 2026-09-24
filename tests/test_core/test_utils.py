@@ -170,14 +170,39 @@ class TestFileDataSource:
     """Test the FileDataSource class."""
 
     def test_create_data_source(self, tmp_path):
-        """FileDataSource tracks a file by its mtime."""
+        """FileDataSource tracks a file by its content digest."""
         from cash.data_source import FileDataSource
+        from cash.tracking.file_dep_snapshot import file_content_hash
 
         f = tmp_path / "data.txt"
         f.write_text("hello", encoding="utf-8")
         ds = FileDataSource(str(f))
         assert ds.get_id().startswith("file:")
-        assert ds.state_token() == os.path.getmtime(f)
+        assert ds.state_token() == file_content_hash(str(f))
+
+    def test_touch_keeps_the_token(self, tmp_path):
+        """A new mtime over the same bytes is not a change."""
+        from cash.data_source import FileDataSource
+
+        f = tmp_path / "data.txt"
+        f.write_text("hello", encoding="utf-8")
+        ds = FileDataSource(str(f))
+        before = ds.state_token()
+        os.utime(f, (1_000_000, 1_000_000))
+        assert ds.state_token() == before
+
+    def test_edit_under_the_same_mtime_moves_the_token(self, tmp_path):
+        """An edit that leaves the mtime where it was is still a change."""
+        from cash.data_source import FileDataSource
+
+        f = tmp_path / "data.txt"
+        f.write_text("hello", encoding="utf-8")
+        st = os.stat(f)
+        ds = FileDataSource(str(f))
+        before = ds.state_token()
+        f.write_text("world", encoding="utf-8")
+        os.utime(f, ns=(st.st_atime_ns, st.st_mtime_ns))
+        assert ds.state_token() != before
 
     def test_detect_change(self, tmp_path):
         """The token moves when the file is modified."""
@@ -193,12 +218,12 @@ class TestFileDataSource:
         assert ds.state_token() != before
 
     def test_nonexistent_file(self, tmp_path):
-        """A missing file has the token 0.0."""
+        """A missing file has its own token."""
         from cash.data_source import FileDataSource
 
         ds = FileDataSource(str(tmp_path / "missing.txt"))
         assert ds.get_id().startswith("file:")
-        assert ds.state_token() == 0.0
+        assert ds.state_token() == "absent"
 
 
 class TestGetNotebookPathEdgeCases:

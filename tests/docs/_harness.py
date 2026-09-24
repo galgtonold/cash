@@ -642,7 +642,7 @@ def run_page(
     #
     # Measured on Linux, this page: ``f`` reports ``co_firstlineno = 45`` and
     # ``getsource`` returns ``async def demo_cached_await():`` — a DIFFERENT
-    # function. ``Cash._read_global_data_names`` excludes a global the body
+    # function. ``GlobalsFold.read_global_data_names`` excludes a global the body
     # mutates in place by AST-parsing that source; fed the wrong function it
     # sees no mutation, keeps the ``n`` counter foldable, and every call after
     # the first gets a new key. That is exactly the ``hits=0 misses=2`` that

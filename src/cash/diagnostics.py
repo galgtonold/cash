@@ -202,7 +202,7 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # hashed, so changing it invalidates nothing
         # -- NOTEBOOK: notebook-wide machinery, not one statement ---------------
         "NOTEBOOK-BAILOUT",  # cash hit an internal error, stepped aside, and
-        # ran the cell uncached; previously log-only
+        # ran the cell uncached
         "NOTEBOOK-CELL-SYNTAX",  # an upstream cell does not parse, so cells that
         # depend on it stop being tracked
         "NOTEBOOK-NOT-FOUND",  # no notebook path; upstream tracking is off
@@ -256,8 +256,8 @@ def format_diagnostic(code: str, what: str, fix: str) -> str:
           https://cash-lib.readthedocs.io/en/stable/warnings/#cache-thrash
 
     *what* is one sentence of what happened; *fix* is one imperative sentence.
-    Everything else belongs in the doc section, which is the whole point — the
-    message used to carry a paragraph because it had nowhere to point.
+    Everything else belongs in the doc section the link points at, so the
+    message stays short.
     """
     return f"[{code}] {what}\n  Fix: {fix}\n  {doc_url(code)}"
 
@@ -315,22 +315,21 @@ def warn_diagnostic_message(
     code: str,
     message: str,
     *,
-    stacklevel: int | None = None,
     fallback: tuple[str, int] | None = None,
 ) -> None:
     """Emit an already-rendered *message* carrying *code*.
 
-    ``Cash._warn_once`` renders with :func:`format_diagnostic` itself, because
+    ``Notices.warn_once`` renders with :func:`format_diagnostic` itself, because
     it files the same text into ``cache_info()['warnings']`` before emitting and
     the log and the terminal must not drift apart. This keeps the ``.code``
     attribute and the registry check for that path.
 
-    Blames the nearest frame outside Cash unless *stacklevel* overrides it, the
-    same as :func:`warn_diagnostic` -- or, with no frame of the user's on this
-    thread's stack (a pool worker), the ``(filename, lineno)`` in *fallback*.
+    Blames the nearest frame outside Cash, the same as :func:`warn_diagnostic`
+    -- or, with no frame of the user's on this thread's stack (a pool worker),
+    the ``(filename, lineno)`` in *fallback*.
     """
     if code not in DIAGNOSTIC_CODES:
         raise KeyError(f"unknown diagnostic code: {code!r}")
     instance = category(message)
     instance.code = code
-    _warn_at(instance, _user_frame_level() if stacklevel is None else stacklevel + 1, fallback)
+    _warn_at(instance, _user_frame_level(), fallback)

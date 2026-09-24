@@ -27,7 +27,7 @@ slow_square(1_000_000)   # cache hit: returns the stored result
 
 That is all the setup there is. A few rules hold for every cached function:
 
-<!-- claim: cash/decorator/store.py:StoreMixin._store_refusal @76b546c6, cash/backends/serialization.py:get_serializer @76cf2c1b -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @50f5a969, cash/backends/serialization.py:get_serializer @76cf2c1b -->
 - **Exceptions are never cached.** If the body raises, nothing is stored and the
   exception reaches you as usual. The next call runs the body again.
 - **A hit does not replay output.** Anything the body printed or logged appears
@@ -97,7 +97,7 @@ recompute, large, and rarely read. Set `max_cache_size` (or
 `CASH_MAX_CACHE_SIZE`) to a number of bytes or a size such as `"20GB"` to pin
 the disk cap.
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_clear @3135768f, cash/__main__.py:cmd_clear @a08b9044 -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_clear @0e137c19, cash/__main__.py:cmd_clear @a08b9044 -->
 **Clearing.** Pick the narrowest tool that does the job:
 
 | To remove | Run |
@@ -119,7 +119,7 @@ cache. Give it its own; see [Testing your code](tutorials/feature-guides/testing
 
 A script shows nothing by default. Use these to check that caching works.
 
-<!-- claim: cash/core.py:Cash.run_summary @8346c3db, cash/core.py:Cash._summary_reasons @30c139d9, cash/core.py:Cash._print_run_summary @f2a46f9f -->
+<!-- claim: cash/core.py:Cash.run_summary @340f2eac, cash/core.py:Cash._summary_reasons @30c139d9, cash/core.py:Cash._print_run_summary @f2a46f9f -->
 **A summary at exit.** `CASH_SUMMARY=1` prints one table to stderr when the
 process ends: hits and misses per function, the time saved, and why calls
 missed. Here, after `prices.csv` was edited and the global `THRESHOLD` changed:
@@ -144,7 +144,7 @@ is the folder this run actually used. The summary also lists results that were
 computed but not stored. It prints on any normal exit or uncaught exception,
 not when the process is killed. `summary=True` in code or config does the same.
 
-<!-- claim: cash/decorator/explain.py:describe_state_change @7b3bcda1, cash/decorator/explain.py:ExplainMixin._absent_entry_reason @69e58ae2 -->
+<!-- claim: cash/decorator/explain.py:describe_state_change @7b3bcda1, cash/decorator/explain.py:MissHistory.absent_entry_reason @d4759f47 -->
 **One line per call.** `CASH_DEBUG=1` logs every call to stderr, with cash's
 other debug records. `CASH_VERBOSE=1` gives only the call lines:
 
@@ -181,7 +181,7 @@ last use; `cash inspect --function NAME` lists one function's entries. See the
 With a bare `@cash.cache`, a call recomputes when any input below changed. The
 left column is tracked for you. The right column is not, and says what to do.
 
-<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe, cash/decorator/registry.py:RegistryMixin._analyze_dependencies @35b8b434, cash/decorator/globals_fold.py:GlobalsFoldMixin._fold_read_globals @6c43e132, cash/decorator/code_args.py:CodeArgsMixin._fold_code_args @1945cfc2 -->
+<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe, cash/decorator/runtime.py:CallRunner._analyze_dependencies @b5ed0470, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @b96cfac7, cash/decorator/code_args.py:CodeArgs.fold_code_args @3190707c -->
 | Tracked: a change recomputes | Not tracked: what to do |
 |---|---|
 | The **arguments**, by content and type. Equal values share an entry | **Library code** (`site-packages`, the standard library). Pin versions |
@@ -203,7 +203,7 @@ see [The decorator path](how-it-works/decorator-path.md).
 
 ## Parameters
 
-<!-- claim: cash/core.py:Cash.cache @d8475d94 -->
+<!-- claim: cash/core.py:Cash.cache @df737927 -->
 All parameters are keyword-only and optional:
 
 | Parameter | What it does |
@@ -232,7 +232,7 @@ def rates():
     return requests.get("https://api.example.com/rates").json()
 ```
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._entry_ttl @b7544486, cash/core.py:Cash.cleanup @b561dc3e -->
+<!-- claim: cash/decorator/backend_slot.py:BackendSlot.entry_ttl @2df81c87, cash/core.py:Cash.cleanup @b561dc3e -->
 After the ttl, the next call recomputes and replaces the entry. An entry keeps
 the ttl it was written with, and the decorator's current ttl applies too: the
 shorter one wins. So lengthening `ttl=60` to `ttl=3600` does not rescue entries
@@ -250,7 +250,7 @@ def parse_config():
     return yaml.safe_load(open("config.yaml"))
 ```
 
-<!-- claim: cash/decorator/file_deps.py:FileDepsMixin._track_declared_files @e10259dc -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.track_declared_files @4027a947 -->
 Use `file_depends_on=` for a file the body reads in a way cash cannot see (a C
 library, a subprocess). It is checked by content, like a tracked read. A URL is
 treated as a missing local file, so for `s3://` or `https://` data pass
@@ -285,7 +285,7 @@ def lookup(key):
     return cache_backend.get_or_none(key)
 ```
 
-<!-- claim: cash/decorator/store.py:StoreMixin._store_refusal @76b546c6 -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @50f5a969 -->
 The predicate runs after the body returns. It decides what is **written**, not
 what is served: a `None` stored before you added the predicate is still
 returned. Clear the function after adding or tightening one. If the predicate
@@ -295,7 +295,7 @@ result larger than one chunk the predicate cannot run
 
 ### `allow_random=`
 
-<!-- claim: cash/decorator/rng.py:RngMixin._warn_unseeded_randomness @2d41d2f7 -->
+<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @52f9e356 -->
 When the body draws from an unseeded random generator, cash warns
 ([`RANDOM-UNSEEDED`](warnings.md#random-unseeded)): the first draw is stored and
 every later call gets the same "random" value. The fix is a generator seeded
@@ -307,7 +307,7 @@ a miss.
 
 ### `frozen=` and large arguments
 
-<!-- claim: cash/decorator/frozen.py:FrozenMixin._audit_frozen @12932111, cash/decorator/frozen.py:FrozenMixin._warn_frozen_has_no_effect @f605e5d3 -->
+<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @07fb0ad3, cash/decorator/frozen.py:FrozenResults.warn_has_no_effect @46f8683e -->
 An argument is keyed by its content at the time of the call, so a big array or
 frame is hashed on every call it is passed to. When a result comes from another
 cached function and nothing changes it afterwards, say so on the producer:
@@ -336,7 +336,7 @@ did (a file written, a request sent, a line printed) does not happen again. On
 the first call, cash reads the function and its helpers and reports what a hit
 would skip or get wrong:
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._surface_purity @9fe07f2d, cash/purity_analyzer.py:DECORATOR_POLICY @44b8bc03, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @3f8526f2, cash/purity_analyzer.py:DECORATOR_POLICY @44b8bc03, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 | The body... | Cash |
 |---|---|
 | Writes, posts, prints to stdout, or changes state outside the function | Warns ([`IMPURE-SIDE-EFFECTS`](warnings.md#impure-side-effects)) and caches |
@@ -347,7 +347,7 @@ would skip or get wrong:
 
 Logging calls are not side effects for this purpose.
 
-<!-- claim: cash/effect_observer.py:EffectObserver @cbf80638 broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecksMixin._report_observed_effects @47196b48 -->
+<!-- claim: cash/effect_observer.py:EffectObserver @cbf80638 broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @5af70afb -->
 Cash also **watches the first call**. Library code is not read, so a
 `session.post` or an SDK request is invisible to the analysis above. While a
 miss runs, cash records file writes, outbound connections and subprocesses, and
@@ -384,7 +384,7 @@ To tell cash about a helper it cannot judge, mark it with `@cash.pure` or
 
 ## Methods on a cached function
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_info @72d8b303 -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_info @9b54927a -->
 **`f.cache_info()`** returns this process's counters:
 
 ```python
@@ -402,7 +402,7 @@ double.cache_info()
 warnings filter hid them. The counters belong to the wrapper, so they start at
 zero in each process.
 
-<!-- claim: cash/decorator/explain.py:ExplainMixin._explain_call @bd141dbf -->
+<!-- claim: cash/decorator/explain.py:Explainer.explain @4c427520 -->
 **`f.explain(*args, **kwargs)`** says whether that call would hit, and why. It
 does not run the function, change the counters or write anything:
 
@@ -436,7 +436,7 @@ for example in a test.
 
 ### Arguments cash cannot hash
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHashingMixin._hash_arg_payload @7bc7e4ca -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @c4f48efb -->
 An argument that cannot be pickled (a lock, an open file, a live connection, a
 closure) cannot be keyed. The call runs uncached and warns
 [`KEY-UNHASHABLE-ARG`](warnings.md#key-unhashable-arg); any other failure while

@@ -5,7 +5,7 @@
 
 ## Asking a decorated function
 
-<!-- claim: cash/decorator/explain.py:ExplainMixin._explain_call @bd141dbf -->
+<!-- claim: cash/decorator/explain.py:Explainer.explain @4c427520 -->
 `func.explain(*args, **kwargs)` answers "would a call with these arguments hit,
 and why?" without calling the function, changing its counters or writing
 anything:
@@ -45,7 +45,7 @@ The reason is `hit` or one of `no_entry`, `ttl_expired`, `file_changed`,
 changed or which argument type could not be hashed. The result is a
 [`CacheExplanation`](../api/cash.md).
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_info @72d8b303 -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_info @9b54927a -->
 `func.cache_info()` counts the hits and misses of this wrapper since it was
 created, with the reasons for the misses. `explain()` itself is not a call, so
 above it reports one miss and no hits. Its `total_time_saved` adds up the

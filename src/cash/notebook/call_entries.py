@@ -206,7 +206,7 @@ class CallEntries:
         call itself never re-checks would just make the STATEMENT re-declare
         a staleness nobody underneath it ever notices. ``_auto_file_deps_fresh``
         re-validates it through ``snapshot_is_fresh``, the check
-        ``Cash._auto_file_deps_fresh`` makes -- a stale entry is treated as a miss like any other,
+        ``FileDeps.auto_file_deps_fresh`` makes -- a stale entry is treated as a miss like any other,
         so it falls through to a genuine recompute (and gets overwritten
         under the same key) rather than being replayed.
         """
