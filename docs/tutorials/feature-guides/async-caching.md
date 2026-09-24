@@ -102,7 +102,7 @@ is stable and many small entries would cost more than one big one.
 A call to an HTTP or LLM client inside the body warns once, on the first call,
 that it opened a network connection
 ([`IMPURE-OBSERVED-EFFECTS`](../../warnings.md#impure-observed-effects)). See
-[LLM API calls](../use-cases/llm-api-calls.md) for how to
+[LLM API calls](../use-cases/llm-api-calls.md#what-you-will-see) for how to
 accept it.
 
 ## Limits

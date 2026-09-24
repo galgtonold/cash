@@ -221,7 +221,7 @@
     "audited": "2026-07-27"
   },
   "docs/tutorials/use-cases/data-engineering.md": {
-    "anchors": 1,
+    "anchors": 2,
     "audited": "2026-07-27"
   },
   "docs/tutorials/use-cases/data-science.md": {
@@ -233,7 +233,7 @@
     "audited": "2026-07-27"
   },
   "docs/tutorials/use-cases/scientific-computing.md": {
-    "anchors": 5,
+    "anchors": 2,
     "audited": "2026-07-27"
   },
   "docs/versioning.md": {
